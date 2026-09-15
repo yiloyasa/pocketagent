@@ -50,6 +50,22 @@ private val mdLinkPattern = Regex("\\[([^]]+)]\\((\\S+?)\\)")
 /** 裸 URL(http/https)。 */
 private val bareUrlPattern = Regex("https?://[^\\s)）\\]】,，。;；]+")
 
+/**
+ * 电脑上的文件路径:会话里 agent 常直接给路径(如 盘符冒号反斜杠 + 目录 + index.html)。
+ * 只认"盘符 + 反斜杠"或"Unix 绝对路径 + 带扩展名",避免把 a/b 这种普通文本当路径。
+ */
+private val pcPathPattern = Regex(
+    """[A-Za-z]:\\[^\s"'<>|?*`]+\.[A-Za-z0-9]{1,6}""" +
+        """|/(?:home|Users|opt|var|tmp|mnt|srv)/[^\s"'<>|?*`]+\.[A-Za-z0-9]{1,6}""",
+)
+
+/** 从正文里抽出电脑文件路径(去重,保持出现顺序)。 */
+fun extractPcPaths(text: String): List<String> =
+    pcPathPattern.findAll(text)
+        .map { it.value.trimEnd('.', ',', '。', '，', ')', '）') }
+        .distinct()
+        .toList()
+
 private fun inlineSpans(source: String): List<MarkdownSpan> {
     val linkRanges = mdLinkPattern.findAll(source).map { it.range.first to it.range.last }.toList()
     val bareRanges = bareUrlPattern.findAll(source)
@@ -57,7 +73,11 @@ private fun inlineSpans(source: String): List<MarkdownSpan> {
         .filter { m -> linkRanges.none { r -> m.range.first >= r.first && m.range.last <= r.second } }
         .map { it.range.first to it.range.last }
         .toList()
-    val linkLike = linkRanges + bareRanges
+    val pcRanges = pcPathPattern.findAll(source)
+        .filter { m -> bareRanges.none { r -> m.range.first in r.first..r.second } }
+        .map { it.range.first to it.range.last }
+        .toList()
+    val linkLike = linkRanges + bareRanges + pcRanges
     val markers = (boldPattern.findAll(source).map { it.range.first to it.range.last }
         .toList() + inlineCodePattern.findAll(source).map { it.range.first to it.range.last }.toList() + linkLike)
         .sortedBy { it.first }
@@ -82,6 +102,12 @@ private fun inlineSpans(source: String): List<MarkdownSpan> {
                     spans += MarkdownSpan(token)
                 }
             }
+            token.startsWith("/") || Regex("^[A-Za-z]:").containsMatchIn(token) ->
+                // 电脑文件路径:交给内置浏览器以 pc: 模式读取渲染
+                spans += MarkdownSpan(token, MarkdownSpanKind.LINK, "pc:" + token)
+            token.startsWith("/") || Regex("^[A-Za-z]:").containsMatchIn(token) ->
+                // 电脑文件路径:交给内置浏览器以 pc: 模式读取渲染
+                spans += MarkdownSpan(token, MarkdownSpanKind.LINK, "pc:" + token)
             else -> spans += MarkdownSpan(token, MarkdownSpanKind.LINK, token)
         }
         cursor = end + 1

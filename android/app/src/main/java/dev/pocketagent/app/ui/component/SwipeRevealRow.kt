@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -55,7 +56,7 @@ data class SwipeAction(
     val destructive: Boolean = false,
 )
 
-private val ACTION_WIDTH = 76.dp
+private val ACTION_WIDTH = 64.dp
 private val RevealSpring = spring<Float>(dampingRatio = 0.85f, stiffness = 500f)
 
 /**
@@ -97,6 +98,7 @@ fun SwipeRevealRow(
     onAction: (SwipeAction) -> Unit,
     modifier: Modifier = Modifier,
     rowBackground: Color = Pa.Card,
+    shape: Shape = RoundedCornerShape(18.dp),
     onClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     content: @Composable () -> Unit,
@@ -108,7 +110,9 @@ fun SwipeRevealRow(
 
     val density = LocalDensity.current
     val revealPx = with(density) { (ACTION_WIDTH * actions.size).toPx() }
-    val thresholdPx = revealPx * 0.4f
+    // 【手感】旧值 = 动作区总宽的 40%(4 个动作时约 121dp),用户得"滑到底"才认账,
+    // 松手还常常回弹。现在取 min(28%, 44dp):轻扫一小段就吸附全开,不再要求拖满。
+    val thresholdPx = minOf(revealPx * 0.28f, with(density) { 44.dp.toPx() })
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val offset = remember { Animatable(0f) }
@@ -117,6 +121,7 @@ fun SwipeRevealRow(
     // 互斥:本行不是当前展开项时回弹归位
     LaunchedEffect(isOpen) {
         if (!isOpen && offset.value != 0f) offset.animateTo(0f, RevealSpring)
+        if (isOpen && offset.value != -revealPx) offset.animateTo(-revealPx, RevealSpring)
     }
 
     Box(
@@ -133,7 +138,7 @@ fun SwipeRevealRow(
             },
     ) {
         // ---- 动作层(背景):尺寸跟随父容器,靠右铺满高度 ----
-        Box(Modifier.matchParentSize().clip(RoundedCornerShape(14.dp))) {
+        Box(Modifier.matchParentSize().clip(shape)) {
             Row(
                 Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
                 horizontalArrangement = Arrangement.End,
@@ -154,11 +159,11 @@ fun SwipeRevealRow(
                             Icon(
                                 painterResource(action.icon), null,
                                 tint = action.tint,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(16.dp),
                             )
                             Text(
                                 action.label,
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 color = action.tint,
                                 modifier = Modifier.padding(top = 4.dp),
                             )
@@ -169,11 +174,14 @@ fun SwipeRevealRow(
         }
 
         // ---- 内容层(前景):决定整体高度,不透明以盖住动作层 ----
+        // 【圆角修复】以前是裸 .background(rowBackground) —— 矩形底把卡片自身的
+        // 圆角盖掉了,列表看上去是一个个直角黑块。这里统一裁到同一 shape。
         Box(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = 64.dp)
                 .graphicsLayer { translationX = offset.value }
+                .clip(shape)
                 .background(rowBackground)
                 // 手势顺序很重要:先声明 tap,再声明 drag —— 后者在内层,
                 // PointerEventPass.Main 是「由内向外」派发,所以 drag 先拿到事件;

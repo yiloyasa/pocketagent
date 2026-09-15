@@ -129,6 +129,8 @@ fun ThreadsScreen(
     val undo = rememberUndoState()
     var showNewThread by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    // 电脑会话单独记录错误:拉不到时要能看见,而不是显示成「电脑里什么都没有」
+    var pcError by remember { mutableStateOf<String?>(null) }
     // 首次加载中:列表区显示骨架屏(设计规范 §2.3)。只在"列表还空着"时才出,
     // 切 tab 时旧数据仍在,不会因为刷新闪一下骨架。
     var loading by remember { mutableStateOf(true) }
@@ -168,21 +170,38 @@ fun ThreadsScreen(
                     .distinct().take(5).forEach { AgentConnection.addRecentWorkspace(it) }
 
                 val importedCodexIds = all.map { it.codexThreadId }.filter { it.isNotEmpty() }.toSet()
-                // 老版本 daemon 不带 codex_thread_id:退回"标题 + 工作目录"匹配,尽量不去重失败
+                // 老版本 daemon 不带 codex_thread_id:退回「标题 + 工作目录」匹配,尽量不去重失败
                 val localByTitle = all
                     .filter { it.workspace.isNotEmpty() }
                     .map { it.title.trim() to it.workspace.trim() }
                     .toSet()
+                // 手机端新建的会话标题(如「新会话 09-16 01:32」)与电脑端摘要标题完全不同,
+                // 只按标题去重会漏掉 —— 再放一条兜底:同目录且更新时间相差 2 分钟以内,
+                // 判定为同一条会话(手机刚建完,电脑侧 rollout 的时间戳几乎相同)。
+                val localByPlaceAndTime = all
+                    .filter { it.workspace.isNotEmpty() && it.updatedAtUnixMs > 0 }
+                    .map { Triple(it.workspace.trim().lowercase(), it.updatedAtUnixMs, it.title) }
                 pcThreads = if (showArchived) {
                     emptyList()
                 } else {
-                    AgentConnection.threadService()
-                        .listCodexThreads(ListCodexThreadsRequest.newBuilder().build())
-                        .threadsList
-                        .filter { c ->
-                            c.id !in importedCodexIds &&
-                                (c.title.trim() to c.cwd.trim()) !in localByTitle
-                        }
+                    try {
+                        val list = AgentConnection.threadService()
+                            .listCodexThreads(ListCodexThreadsRequest.newBuilder().build())
+                            .threadsList
+                            .filter { c ->
+                                if (c.id in importedCodexIds) return@filter false
+                                if ((c.title.trim() to c.cwd.trim()) in localByTitle) return@filter false
+                                localByPlaceAndTime.none { (ws, at, _) ->
+                                    ws == c.cwd.trim().lowercase() &&
+                                        kotlin.math.abs(at - c.updatedAtUnixMs) < 120_000
+                                }
+                            }
+                        pcError = null
+                        list
+                    } catch (e: Exception) {
+                        pcError = "读取电脑上的 codex 会话失败:" + (e.message ?: "连接失败")
+                        emptyList()
+                    }
                 }
                 loadError = null
             }
@@ -290,14 +309,17 @@ fun ThreadsScreen(
     val reconnectTick = AgentConnection.connectionEpoch.collectAsState().value
     LaunchedEffect(Unit, showArchived, reconnectTick) { refresh() }
 
-    // 列表一开始滚动就收起已展开的侧滑行,避免滑动过程中误触动作按钮
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (listState.isScrollInProgress) openKey.value = null
-    }
-
+    // 【不再"一滚动就收起"】旧实现会在拖拽结束的那一帧把刚滑开的行收回去,
+    // 看起来像"滑开了又自动弹回"。改为:纵向真正滚动超过一屏距离才收起(见 listState 监听无需)。
     // 左边缘右滑也能唤出侧边栏(问题 7)。挂在页面根节点上,子节点仍在命中链里,
     // 只有判定为"从左边缘起手的右滑"才会 consume,不会吃掉列表的点击。
-    Box(modifier.fillMaxSize().background(Pa.Bg).edgeSwipeToOpenDrawer { showDrawer = true }) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(Pa.Bg)
+            // 有行处于展开态时让位给"右滑收起动作":两者不再抢同一段手势
+            .edgeSwipeToOpenDrawer(enabled = openKey.value == null) { showDrawer = true },
+    ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             // ---- 大标题 + 工具按钮 ----
             Row(
@@ -366,11 +388,25 @@ fun ThreadsScreen(
                     )
                 }
                 rows.isEmpty() -> {
+                    Column(Modifier.fillMaxSize()) {
+                    pcError?.let { message ->
+                        Text(
+                            message,
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            fontSize = 12.sp,
+                            color = Pa.Red,
+                        )
+                    }
                     EmptyState(
                         iconRes = if (showArchived) R.drawable.ic_lucide_archive else R.drawable.ic_lucide_message_square,
                         title = if (showArchived) "没有归档的会话" else "还没有会话",
                         hint = if (showArchived) "左滑会话可恢复或删除" else "点右下角 + 开始你的第一个任务",
                     )
+                    }
                 }
                 else -> {
                     LazyColumn(

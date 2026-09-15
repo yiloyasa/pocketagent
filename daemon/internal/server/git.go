@@ -21,15 +21,41 @@ func gitOutput(ctx context.Context, repo string, args ...string) (string, error)
 	hidewin.Apply(cmd) // git.exe 是控制台程序,不隐藏会在用户桌面闪黑窗
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(out), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			// git 还没来得及输出就失败了。最常见的是**工作目录不存在/不可访问**
+			// (exec 在 chdir 阶段就报错,git 根本没启动),其次是机器上没装 git。
+			// 以前这里返回空字符串,手机端只能看到一句"git status 失败:"后面什么都没有。
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
 	return string(out), nil
+}
+
+// errText 把 git 的输出与 exec 的错误合成一句可读的话(两者都可能为空)。
+func errText(out string, err error) string {
+	o := strings.TrimSpace(out)
+	e := ""
+	if err != nil {
+		e = err.Error()
+	}
+	switch {
+	case o != "" && e != "":
+		return o + " (" + e + ")"
+	case o != "":
+		return o
+	case e != "":
+		return e
+	default:
+		return "未知错误"
+	}
 }
 
 func (s *Server) Status(ctx context.Context, req *pb.GitStatusRequest) (*pb.GitStatus, error) {
 	out, err := gitOutput(ctx, req.Repo, "status", "--porcelain=v1", "-b")
 	if err != nil {
-		return nil, errInvalidArg("git status 失败: " + out)
+		return nil, errInvalidArg("git status 失败: " + errText(out, err))
 	}
 	st := &pb.GitStatus{}
 	for _, line := range strings.Split(out, "\n") {
@@ -68,11 +94,11 @@ func (s *Server) Diff(ctx context.Context, req *pb.GitDiffRequest) (*pb.GitDiffR
 		statOut, err := gitOutput(ctx, req.Repo,
 			"show", "--stat", "--format=", "--no-color", req.Commit)
 		if err != nil {
-			return nil, errInvalidArg("git show 失败: " + statOut)
+			return nil, errInvalidArg("git show 失败: " + errText(statOut, err))
 		}
 		fullOut, err := gitOutput(ctx, req.Repo, "show", "--format=", "--no-color", req.Commit)
 		if err != nil {
-			return nil, errInvalidArg("git show 失败: " + fullOut)
+			return nil, errInvalidArg("git show 失败: " + errText(fullOut, err))
 		}
 		resp := &pb.GitDiffResponse{UnifiedDiff: fullOut}
 		for _, l := range strings.Split(statOut, "\n") {
@@ -96,7 +122,7 @@ func (s *Server) Diff(ctx context.Context, req *pb.GitDiffRequest) (*pb.GitDiffR
 	}
 	statOut, err := gitOutput(ctx, req.Repo, args...)
 	if err != nil {
-		return nil, errInvalidArg("git diff 失败: " + statOut)
+		return nil, errInvalidArg("git diff 失败: " + errText(statOut, err))
 	}
 	fullArgs := []string{"diff"}
 	if req.Staged {
@@ -107,7 +133,7 @@ func (s *Server) Diff(ctx context.Context, req *pb.GitDiffRequest) (*pb.GitDiffR
 	}
 	fullOut, err := gitOutput(ctx, req.Repo, fullArgs...)
 	if err != nil {
-		return nil, errInvalidArg("git diff 失败: " + fullOut)
+		return nil, errInvalidArg("git diff 失败: " + errText(fullOut, err))
 	}
 	resp := &pb.GitDiffResponse{UnifiedDiff: fullOut}
 	for _, l := range strings.Split(statOut, "\n") {
@@ -127,7 +153,7 @@ func (s *Server) Stage(ctx context.Context, req *pb.GitStageRequest) (*pb.Empty,
 		args = append(args, req.Paths...)
 	}
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
-		return nil, errInvalidArg(out)
+		return nil, errInvalidArg(errText(out, err))
 	}
 	return &pb.Empty{}, nil
 }
@@ -141,7 +167,7 @@ func (s *Server) Unstage(ctx context.Context, req *pb.GitUnstageRequest) (*pb.Em
 		args = append(args, req.Paths...)
 	}
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
-		return nil, errInvalidArg(out)
+		return nil, errInvalidArg(errText(out, err))
 	}
 	return &pb.Empty{}, nil
 }
@@ -150,12 +176,12 @@ func (s *Server) Commit(ctx context.Context, req *pb.GitCommitRequest) (*pb.GitC
 	if len(req.Paths) > 0 {
 		args := append([]string{"add", "--"}, req.Paths...)
 		if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
-			return nil, errInvalidArg(out)
+			return nil, errInvalidArg(errText(out, err))
 		}
 	}
 	out, err := gitOutput(ctx, req.Repo, "commit", "-m", req.Message)
 	if err != nil {
-		return nil, errInvalidArg("提交失败: " + out)
+		return nil, errInvalidArg("提交失败: " + errText(out, err))
 	}
 	hashOut, _ := gitOutput(ctx, req.Repo, "rev-parse", "--short", "HEAD")
 	return &pb.GitCommitResponse{
@@ -175,7 +201,7 @@ func (s *Server) Log(ctx context.Context, req *pb.GitLogRequest) (*pb.GitLogResp
 	}
 	out, err := gitOutput(ctx, req.Repo, args...)
 	if err != nil {
-		return nil, errInvalidArg("git log 失败: " + out)
+		return nil, errInvalidArg("git log 失败: " + errText(out, err))
 	}
 	resp := &pb.GitLogResponse{}
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
@@ -199,7 +225,7 @@ func (s *Server) Log(ctx context.Context, req *pb.GitLogRequest) (*pb.GitLogResp
 func (s *Server) ListBranches(ctx context.Context, req *pb.ListBranchesRequest) (*pb.ListBranchesResponse, error) {
 	out, err := gitOutput(ctx, req.Repo, "branch", "-a", "--format=%(refname:short)%1f%(HEAD)")
 	if err != nil {
-		return nil, errInvalidArg("git branch 失败: " + out)
+		return nil, errInvalidArg("git branch 失败: " + errText(out, err))
 	}
 	resp := &pb.ListBranchesResponse{}
 	for _, line := range strings.Split(out, "\n") {
@@ -221,14 +247,14 @@ func (s *Server) CheckoutBranch(ctx context.Context, req *pb.CheckoutBranchReque
 	}
 	args = append(args, req.Branch)
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
-		return nil, errInvalidArg(out)
+		return nil, errInvalidArg(errText(out, err))
 	}
 	return &pb.Empty{}, nil
 }
 
 func (s *Server) CreateBranch(ctx context.Context, req *pb.CreateBranchRequest) (*pb.Empty, error) {
 	if out, err := gitOutput(ctx, req.Repo, "branch", req.Name, req.FromBranch); err != nil {
-		return nil, errInvalidArg(out)
+		return nil, errInvalidArg(errText(out, err))
 	}
 	return &pb.Empty{}, nil
 }
@@ -243,7 +269,7 @@ func (s *Server) DiscardChanges(ctx context.Context, req *pb.DiscardChangesReque
 		args = append(args, req.Paths...)
 	}
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
-		return nil, errInvalidArg(out)
+		return nil, errInvalidArg(errText(out, err))
 	}
 	return &pb.Empty{}, nil
 }

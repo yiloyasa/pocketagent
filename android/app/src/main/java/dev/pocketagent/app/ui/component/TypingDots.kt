@@ -1,6 +1,6 @@
 package dev.pocketagent.app.ui.component
 
-import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.animateFloat
@@ -8,9 +8,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -28,26 +28,33 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * 「对方正在输入」三点跳动(three-dot bouncing)。
+ * 「电脑端正在思考」三点指示器。
  *
- * 【动效】每点沿抛物线 4x(1-x) 起落(0→1→0),三点半径 150ms 相位差,
- * 周期 420ms —— 比"光标闪烁"更接近真人打字的节奏感,也更安静。
- * 【无障碍】减弱动态效果时退化为静态三点(呼吸透明度都不做)。
+ * 【这一版的动效取向:克制】上一版是"抛跳"(位移 1.6×点径,线性 easing),
+ * 三点各自独立跳,视觉上显得歪斜、振幅过大,和 App 的静态卡片语言不搭。
+ * 现在改为**呼吸式**:
+ *  - 位移只留 2.5dp(点径的 0.5 倍),远看几乎不动,近看有轻微起伏;
+ *  - 主导变化是透明度 0.30 → 1.00 与缩放 0.82 → 1.00,像"脉冲"而不是"蹦跳";
+ *  - 周期拉到 1100ms、相位差 130ms,节奏舒缓,配 FastOutSlowIn 缓动;
+ *  - 对齐方式改成居中(Bottom 对齐会因位移把点推得高低不齐)。
  *
- * @param dotSize 圆点直径;消息气泡内默认 6dp,行内跟随用 4dp
+ * 【无障碍】减弱动态效果时退化为静态三点(只保留透明度差)。
  */
 @Composable
 fun TypingDots(
     modifier: Modifier = Modifier,
     dotSize: Dp = 6.dp,
-    color: Color = Pa.TextTertiary,
+    color: Color = Pa.Accent,
+    gap: Dp = 4.dp,
 ) {
     if (rememberReduceMotion()) {
         Row(modifier, verticalAlignment = Alignment.CenterVertically) {
             repeat(3) { i ->
-                if (i > 0) Spacer(Modifier.width(dotSize))
-                androidx.compose.foundation.layout.Box(
-                    Modifier.size(dotSize).background(color.copy(alpha = 0.45f), CircleShape),
+                if (i > 0) Spacer(Modifier.width(gap))
+                Box(
+                    Modifier
+                        .size(dotSize)
+                        .background(color.copy(alpha = if (i == 1) 0.9f else 0.45f), CircleShape),
                 )
             }
         }
@@ -60,28 +67,31 @@ fun TypingDots(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 420, easing = LinearEasing),
+                animation = tween(
+                    durationMillis = 1100,
+                    easing = FastOutSlowInEasing,
+                ),
                 repeatMode = RepeatMode.Restart,
-                initialStartOffset = StartOffset(i * 150),
+                initialStartOffset = StartOffset(i * 130),
             ),
             label = "dot$i",
         )
     }
 
-    Row(modifier, verticalAlignment = Alignment.Bottom) {
-        phases.forEachIndexed { i, o ->
-            if (i > 0) Spacer(Modifier.width(dotSize * 0.9f))
-            // 抛物线 4x(1-x):0 起步、中点最高、回落到 0,比 sin 更自然的"跳"
-            val lift = 4f * o.value * (1f - o.value)
-            val alpha = 0.55f + 0.45f * lift
-            androidx.compose.foundation.layout.Box(
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        phases.forEachIndexed { i, p ->
+            if (i > 0) Spacer(Modifier.width(gap))
+            // sin 曲线:0 → 1 → 0,比抛物线更平滑(两端导数为 0,没有生硬的起停)
+            val lift = sin(PI * p.value).toFloat()
+            Box(
                 Modifier
-                    .height(dotSize)
-                    .graphicsLayer {
-                        translationY = -lift * dotSize.toPx() * 1.6f
-                        this.alpha = alpha
-                    }
                     .size(dotSize)
+                    .graphicsLayer {
+                        translationY = -lift * dotSize.toPx() * 0.5f
+                        scaleX = 0.82f + 0.18f * lift
+                        scaleY = 0.82f + 0.18f * lift
+                        alpha = 0.30f + 0.70f * lift
+                    }
                     .background(color, CircleShape),
             )
         }

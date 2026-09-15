@@ -178,6 +178,7 @@ fun GitScreen(
             } catch (e: Exception) {
                 val msg = "${e.message}"
                 val lower = msg.lowercase()
+                notRepo = false
                 // 非仓库是常态而不是故障:给出友好空态,不刷红字。
                 // gRPC 会把 git 的 stderr 包在 status message 里,这里多匹配几种写法。
                 if (lower.contains("not a git repository") ||
@@ -328,22 +329,24 @@ fun GitScreen(
         ) {
             error?.let {
                 Text(
-                    it,
+                    it.removePrefix("INVALID_ARGUMENT: ").removePrefix("INTERNAL: "),
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(12.dp))
+                        .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
                         .padding(12.dp),
                     color = Pa.Red,
-                    fontSize = 13.sp,
+                    fontSize = 12.5.sp,
                 )
                 Spacer(Modifier.height(8.dp))
             }
 
             when {
+                // 有明确错误时不再同时摆一个"这里还不是 Git 仓库"的空态 —— 两者并排会让人分不清到底哪个是真的
+                error != null && status == null -> {}
                 notRepo -> EmptyState(
                     AppR.drawable.ic_lucide_git_branch,
-                    "这里还不是 Git 仓库",
-                    "在电脑上 git init 后,这里可以看状态、diff 和提交",
+                    "这个目录不是 Git 仓库",
+                    "换一个仓库目录,或在电脑上对该目录执行 git init",
                 )
                 status == null -> {}
                 else -> {
@@ -670,60 +673,18 @@ fun GitScreen(
     }
 
     // 切换仓库:已知工作区 + 手填路径(修复"看不到任何 git 内容")
+    // 仓库选择:与"新建对话选工作区"完全同款 —— 可以在手机上浏览整台电脑的目录,
+    // 不再只能从几个候选里挑或者手打路径。
     if (showRepoPicker) {
-        AlertDialog(
-            onDismissRequest = { showRepoPicker = false },
-            title = { Text("切换 Git 仓库", fontSize = 15.sp) },
-            text = {
-                Column {
-                    if (candidates.isEmpty()) {
-                        Text("没有已知的工作区目录", fontSize = 12.sp, color = Pa.TextTertiary)
-                    }
-                    candidates.forEach { c ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressable {
-                                    repo = c
-                                    showRepoPicker = false
-                                    refresh()
-                                }
-                                .padding(vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                c,
-                                Modifier.weight(1f),
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = if (c == repo) Pa.Accent else Pa.TextPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (c == repo) {
-                                Text("当前", fontSize = 10.sp, color = Pa.Accent)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        repoInput, { repoInput = it },
-                        label = { Text("或手填目录路径") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    TextButton(onClick = {
-                        val v = repoInput.trim()
-                        if (v.isNotBlank()) {
-                            repo = v
-                            showRepoPicker = false
-                            refresh()
-                        }
-                    }) { Text("使用该目录", color = Pa.Accent) }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showRepoPicker = false }) { Text("关闭") }
+        FolderPickerSheet(
+            onDismiss = { showRepoPicker = false },
+            onPick = { path ->
+                showRepoPicker = false
+                repo = path
+                repoInput = path
+                notRepo = false
+                error = null
+                refresh()
             },
         )
     }

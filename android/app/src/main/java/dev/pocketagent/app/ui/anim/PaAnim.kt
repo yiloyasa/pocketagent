@@ -171,9 +171,13 @@ fun EmptyState(iconRes: Int, title: String, hint: String, modifier: Modifier = M
  * 【起手区间是实测出来的】
  *  - 最左侧 ~24dp 是**系统返回手势区**(HyperOS 实测 x<24dp 的横滑直接退到桌面),
  *    那一段我们永远拿不到,所以不指望它;
- *  - 起手点放宽到 [edgeWidth](96dp,约屏幕宽度的 9%),"边缘往里一点"右滑即可唤出。
+ *  - 起手点放宽到 [edgeWidth](64dp,约屏幕宽度的 6%),"边缘往里一点"右滑即可唤出。
  *
- * 【为什么要用 Initial 传球(本轮修复"偶尔滑不动")】
+ * 【为什么不能更宽(与行内左滑的冲突)】96dp 时几乎盖住列表条目的左半边:
+ * 用户想左滑某行却在边缘起手 → 先被判成"右滑开抽屉"。现在收回 64dp,
+ * 并由调用方在**有行展开时**传 enabled=false,两种手势彻底分开。
+ *
+ * 【为什么要用 Initial 传球(修复"偶尔滑不动")】
  * 之前用 detectHorizontalDragGestures 挂在根节点,事件先给子节点(列表滚动、行内左滑),
  * 子节点一旦 consume,根节点的识别器就被取消 —— 表现就是"滑了没反应"。
  * 现在在 Initial 阶段监听:判定为右滑并 consume 之后,子节点再也收不到这段位移。
@@ -183,8 +187,8 @@ fun EmptyState(iconRes: Int, title: String, hint: String, modifier: Modifier = M
  */
 fun Modifier.edgeSwipeToOpenDrawer(
     enabled: Boolean = true,
-    edgeWidth: Dp = 96.dp,
-    threshold: Dp = 32.dp,
+    edgeWidth: Dp = 64.dp,
+    threshold: Dp = 28.dp,
     onOpen: () -> Unit,
 ): Modifier = composed {
     if (!enabled) return@composed this

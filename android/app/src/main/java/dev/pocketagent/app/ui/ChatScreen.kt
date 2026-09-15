@@ -449,6 +449,7 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
 private fun ContextWindowCard(
     model: ModelInfo?,
     contextWindow: Long,
+    windowIsFallback: Boolean,
     turnUsage: Usage?,
     totalUsage: Usage?,
     items: List<ChatItem>,
@@ -501,6 +502,7 @@ private fun ContextWindowCard(
                 usage = usage,
                 contextWindow = contextWindow,
                 estimatedTokens = if (showEstimate) estimated else 0L,
+                windowIsFallback = windowIsFallback,
             )
 
             Spacer(Modifier.height(16.dp))
@@ -556,8 +558,8 @@ private fun ContextWindowCard(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 13.dp, vertical = 10.dp),
                 ) {
                     TokenRow("输入", usage.inputTokens, contextWindow, Pa.Accent)
                     TokenRow("输出", usage.outputTokens, contextWindow, Pa.Green)
@@ -590,12 +592,6 @@ private fun ContextWindowCard(
                         fontSize = 11.5.sp,
                         color = Pa.TextPrimary,
                     )
-                    Text(
-                        "缓存读/写包含在「输入」内、思考包含在「输出」内,故不计入合计。",
-                        Modifier.padding(top = 3.dp),
-                        fontSize = 10.sp,
-                        color = Pa.TextTertiary,
-                    )
                 }
             }
 
@@ -616,6 +612,9 @@ private fun ContextWindowCard(
  * 会话内容的 token 估算(≈4 字符/token)。
  * 仅用于 daemon 尚未上报用量时的兜底展示,不作计费依据。
  */
+/** 电脑端没上报窗口时的兜底值(codex 常见 272K)。 */
+private const val DEFAULT_CONTEXT_WINDOW = 272_000L
+
 private fun estimateTokens(items: List<ChatItem>): Long {
     var chars = 0L
     items.forEach { chars += it.text.length + it.toolArgs.length }
@@ -623,7 +622,12 @@ private fun estimateTokens(items: List<ChatItem>): Long {
 }
 
 @Composable
-private fun ContextHero(usage: Usage?, contextWindow: Long, estimatedTokens: Long = 0) {
+private fun ContextHero(
+    usage: Usage?,
+    contextWindow: Long,
+    estimatedTokens: Long = 0,
+    windowIsFallback: Boolean = false,
+) {
     val isEstimate = usage == null && estimatedTokens > 0
     val input = if (isEstimate) estimatedTokens else (usage?.inputTokens ?: 0)
     val output = if (isEstimate) 0L else (usage?.outputTokens ?: 0)
@@ -641,13 +645,13 @@ private fun ContextHero(usage: Usage?, contextWindow: Long, estimatedTokens: Lon
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(18.dp))
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 if (usage == null && !isEstimate) "—" else String.format(java.util.Locale.US, "%,d", used),
-                fontSize = 26.sp,
+                fontSize = 21.sp,
                 color = Pa.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -665,7 +669,11 @@ private fun ContextHero(usage: Usage?, contextWindow: Long, estimatedTokens: Lon
             }
             Spacer(Modifier.width(6.dp))
             Text(
-                if (known) " / ${contextWindow / 1000}K tokens" else " tokens 已用",
+                when {
+                    !known -> " tokens 已用"
+                    windowIsFallback -> " / ${contextWindow / 1000}K tokens(默认窗口)"
+                    else -> " / ${contextWindow / 1000}K tokens"
+                },
                 Modifier.padding(bottom = 4.dp),
                 fontSize = 12.sp,
                 color = Pa.TextTertiary,
@@ -743,9 +751,9 @@ private fun ContextHero(usage: Usage?, contextWindow: Long, estimatedTokens: Lon
             )
         }
 
-        if (!known) {
+        if (!known || windowIsFallback) {
             Text(
-                "发一轮消息后,电脑端会随用量上报真实窗口大小。",
+                "窗口大小由电脑端随用量上报;当前按常见默认值估算,发一轮消息后会自动校准。",
                 Modifier.padding(top = 8.dp),
                 fontSize = 10.5.sp,
                 color = Pa.TextTertiary,
@@ -785,7 +793,7 @@ private fun TokenRow(label: String, value: Long, contextWindow: Long, color: Col
     val pct = if (contextWindow > 0) value.toFloat() / contextWindow * 100f else 0f
     val over = pct > 100f
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        Modifier.fillMaxWidth().padding(vertical = 3.5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, Modifier.width(46.dp), fontSize = 11.5.sp, color = Pa.TextSecondary)
@@ -827,9 +835,21 @@ private fun TokenRow(label: String, value: Long, contextWindow: Long, color: Col
  */
 @Composable
 private fun EstimateSection(items: List<ChatItem>) {
-    Text("构成估算", fontSize = 13.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(2.dp))
-    Text("按会话内容字符量估算(≈4 字符/token),仅供参考", fontSize = 10.sp, color = Pa.TextTertiary)
+    // 默认折叠:这一段的百分比是"内容构成"(按字符量),不是窗口占用,
+    // 之前和上面的 token 明细混在一起,容易被误读成"对话消息占了 100% 窗口"。
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().pressable(haptic = true) { expanded = !expanded },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("构成估算", Modifier.weight(1f), fontSize = 13.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+        Text(
+            if (expanded) "收起" else "按内容字符量,仅供参考",
+            fontSize = 10.5.sp,
+            color = Pa.TextTertiary,
+        )
+    }
+    if (!expanded) return
     Spacer(Modifier.height(10.dp))
     if (items.isEmpty()) {
         Text("暂无会话内容", fontSize = 11.sp, color = Pa.TextTertiary)
@@ -1016,7 +1036,11 @@ fun ChatScreen(
         ?: models.firstOrNull()
     // 窗口大小:模型列表值 与 daemon 随用量上报的真实值 取大;
     // 列表里大多数 codex 模型没有窗口数据,靠上报值兜底(切模型后仍可显示)。
-    val contextWindow = maxOf((effectiveModel?.contextWindow ?: 0).toLong(), st.liveContextWindow)
+    // 窗口大小:模型声明值 / daemon 上报值 / 兜底默认
+    // (之前三者都拿不到时整块面板恒显示"窗口未知 · 0%",看起来像坏了)
+    val reportedWindow = maxOf((effectiveModel?.contextWindow ?: 0).toLong(), st.liveContextWindow)
+    val contextWindow = if (reportedWindow > 0) reportedWindow else DEFAULT_CONTEXT_WINDOW
+    val windowIsFallback = reportedWindow <= 0
 
     /** 会话内无缝切换审批策略(codex 桌面端同步生效)。 */
     fun setApproval(id: String) {
@@ -1280,14 +1304,53 @@ fun ChatScreen(
                             fontSize = 15f * uiScale,
                             onOpenUrl = onOpenBrowser,
                         )
-                        // 会话输出可保存到手机(后台下载,任务中心可见)
-                        if (item.text.isNotBlank()) {
+                        // 消息里如果给了电脑上的文件路径,主操作是"打开预览 / 下载这个文件";
+                        // 没有路径才退回"把这段回复存成文件"。
+                        val pcFiles = remember(item.text) { extractPcPaths(item.text) }
+                        if (pcFiles.isNotEmpty()) {
+                            pcFiles.take(3).forEach { path ->
+                                val fileName = path.substringAfterLast('/').substringAfterLast('\\')
+                                Row(
+                                    Modifier.padding(top = 6.dp).fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Row(
+                                        Modifier.pressable(haptic = true) {
+                                            onOpenBrowser("pc:" + path)
+                                        },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            painterResource(AppR.drawable.ic_lucide_globe), null,
+                                            tint = Pa.AccentText, modifier = Modifier.size(13.dp),
+                                        )
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("打开 $fileName", fontSize = 10.5.sp, color = Pa.AccentText)
+                                    }
+                                    Spacer(Modifier.width(16.dp))
+                                    Row(
+                                        Modifier.pressable(haptic = true) {
+                                            PaDownloader.downloadFromPc(path, threadTitle, threadId)
+                                            Toast.makeText(ctx, "已开始下载到手机", Toast.LENGTH_SHORT).show()
+                                        },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            painterResource(AppR.drawable.ic_lucide_download), null,
+                                            tint = Pa.TextTertiary, modifier = Modifier.size(13.dp),
+                                        )
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("下载到手机", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                                    }
+                                }
+                            }
+                        } else if (item.text.isNotBlank()) {
                             Row(
                                 Modifier
                                     .padding(top = 4.dp)
                                     .pressable(haptic = true) {
                                         PaDownloader.saveTextAsFile(
-                                            "会话输出-%s-%d.md".format(
+                                            "回复-%s-%d.md".format(
                                                 threadId.take(6),
                                                 System.currentTimeMillis() % 100000,
                                             ),
@@ -1699,6 +1762,7 @@ fun ChatScreen(
         ContextWindowCard(
             model = effectiveModel,
             contextWindow = contextWindow,
+            windowIsFallback = windowIsFallback,
             turnUsage = st.turnUsage,
             totalUsage = st.totalUsage,
             items = st.items.toList(),

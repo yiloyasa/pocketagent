@@ -39,6 +39,12 @@ object TaskCenter {
         var read: Boolean = false,
         var startedAt: Long = System.currentTimeMillis(),
         var rounds: Int = 1,
+        /** 下载类:文件落在手机上的位置(content:// 可直接打开,或绝对路径)。 */
+        var localUri: String = "",
+        /** 下载类:来源会话名(展示"从哪个会话下载的")。 */
+        var sourceTitle: String = "",
+        /** 下载类:人类可读的大小,如 1.2MB。 */
+        var sizeText: String = "",
     )
 
     private var prefs: SharedPreferences? = null
@@ -129,16 +135,28 @@ object TaskCenter {
 
     fun updateDownload(id: String, progress: Float, detail: String = "") {
         val t = _tasks.value.firstOrNull { it.id == id } ?: return
-        t.progress = progress.coerceIn(0f, 1f)
+        // 【单调】分块下载的进度偶尔会因为重试/分片乱序而回退,表现为"进度条倒退"。
+        // 这里保证只增不减。
+        t.progress = maxOf(t.progress, progress.coerceIn(0f, 1f))
         if (detail.isNotEmpty()) t.detail = detail
         persist()
     }
 
-    fun finishDownload(id: String, ok: Boolean, detail: String = "") {
+    /** 下载完成:记录文件位置与大小,供列表点击打开。 */
+    fun finishDownload(id: String, ok: Boolean, detail: String = "", localUri: String = "", sizeText: String = "") {
         val t = _tasks.value.firstOrNull { it.id == id } ?: return
         t.status = if (ok) Status.DONE else Status.FAILED
         t.progress = if (ok) 1f else t.progress
         t.detail = detail
+        if (localUri.isNotEmpty()) t.localUri = localUri
+        if (sizeText.isNotEmpty()) t.sizeText = sizeText
+        persist()
+    }
+
+    /** 下载类任务登记时补来源会话。 */
+    fun annotateDownload(id: String, sourceTitle: String) {
+        val t = _tasks.value.firstOrNull { it.id == id } ?: return
+        if (sourceTitle.isNotEmpty()) t.sourceTitle = sourceTitle
         persist()
     }
 
@@ -211,6 +229,9 @@ object TaskCenter {
                     progress = f[7].toFloatOrNull() ?: 0f,
                     detail = f[8],
                     rounds = f[9].toIntOrNull() ?: 1,
+                    localUri = f.getOrNull(10).orEmpty(),
+                    sourceTitle = f.getOrNull(11).orEmpty(),
+                    sizeText = f.getOrNull(12).orEmpty(),
                 )
             }.getOrNull()
         }

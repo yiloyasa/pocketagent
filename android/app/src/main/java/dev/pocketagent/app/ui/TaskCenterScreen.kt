@@ -16,7 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -44,6 +55,7 @@ import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.delay
@@ -71,7 +83,7 @@ fun TaskCenterScreen(
     var showDrawer by remember { mutableStateOf(false) }
 
     val all by TaskCenter.tasks.collectAsState()
-    val shown = all.filter { it.kind == kindTab }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     val running = all.count { it.status == TaskCenter.Status.RUNNING }
     val failed = all.count { it.status == TaskCenter.Status.FAILED || it.status == TaskCenter.Status.INTERRUPTED }
@@ -147,42 +159,67 @@ fun TaskCenterScreen(
 
             Spacer(Modifier.height(6.dp))
 
-            // ---------- 列表 ----------
-            if (shown.isEmpty()) {
-                EmptyState(
-                    iconRes = R.drawable.ic_lucide_list_checks,
-                    title = if (kindTab == TaskCenter.Kind.MESSAGE) "还没有处理中的任务" else "还没有下载任务",
-                    hint = if (kindTab == TaskCenter.Kind.MESSAGE) {
-                        "在会话里发一条消息,这里会显示它的进度"
-                    } else {
-                        "下载电脑上的文件后,进度会汇总到这里"
-                    },
-                )
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 16.dp, end = 16.dp, top = 4.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(shown, key = { it.id }) { task ->
-                        TaskRow(
-                            task = task,
-                            onClick = {
-                                TaskCenter.markRead(task.id)
-                                if (task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty()) {
-                                    onOpenThread(task.threadId)
-                                }
-                            },
-                            onRemove = { TaskCenter.remove(task.id) },
-                            onRetry = {
-                                // 中断/失败的消息类任务:回到会话里重发即可 —— 这里只做"引路"
-                                if (task.threadId.isNotEmpty()) onOpenThread(task.threadId)
-                            },
-                        )
+            // ---------- 两个窗口:左右滑动切换(与顶部 chip 双向联动) ----------
+            val pager = rememberPagerState(pageCount = { 2 })
+            LaunchedEffect(kindTab) {
+                val target = if (kindTab == TaskCenter.Kind.MESSAGE) 0 else 1
+                if (pager.currentPage != target) pager.animateScrollToPage(target)
+            }
+            LaunchedEffect(pager.currentPage) {
+                val k = if (pager.currentPage == 0) TaskCenter.Kind.MESSAGE else TaskCenter.Kind.DOWNLOAD
+                if (kindTab != k) kindTab = k
+            }
+
+            HorizontalPager(
+                state = pager,
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
+                val pageKind = if (page == 0) TaskCenter.Kind.MESSAGE else TaskCenter.Kind.DOWNLOAD
+                val rows = all.filter { it.kind == pageKind }
+                if (rows.isEmpty()) {
+                    EmptyState(
+                        iconRes = R.drawable.ic_lucide_list_checks,
+                        title = if (pageKind == TaskCenter.Kind.MESSAGE) "还没有处理中的任务" else "还没有下载任务",
+                        hint = if (pageKind == TaskCenter.Kind.MESSAGE) {
+                            "在会话里发一条消息,这里会显示它的进度;左右滑动可切到文件下载"
+                        } else {
+                            "在会话里点文件旁的下载,进度会汇总到这里;左右滑动可切回消息处理"
+                        },
+                    )
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            start = 16.dp, end = 16.dp, top = 4.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(rows, key = { it.id }) { task ->
+                            TaskRow(
+                                task = task,
+                                onClick = {
+                                    TaskCenter.markRead(task.id)
+                                    if (task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty()) {
+                                        onOpenThread(task.threadId)
+                                    }
+                                },
+                                onRemove = { TaskCenter.remove(task.id) },
+                                onRetry = {
+                                    // 中断/失败的消息类任务:回到会话里重发即可 —— 这里只做"引路"
+                                    if (task.threadId.isNotEmpty()) onOpenThread(task.threadId)
+                                },
+                                onOpenFile = {
+                                    PaDownloader.openLocalFile(
+                                        ctx,
+                                        task.localUri,
+                                        task.title,
+                                        task.detail,
+                                    )
+                                },
+                            )
+                        }
+                        item { Spacer(Modifier.height(88.dp)) }
                     }
-                    item { Spacer(Modifier.height(88.dp)) }
                 }
             }
         }
@@ -261,6 +298,7 @@ private fun TaskRow(
     onClick: () -> Unit,
     onRemove: () -> Unit,
     onRetry: () -> Unit,
+    onOpenFile: (() -> Unit)? = null,
 ) {
     val accent = when (task.status) {
         TaskCenter.Status.RUNNING -> Pa.Accent
@@ -328,7 +366,15 @@ private fun TaskRow(
                         fontSize = 10.5.sp,
                         color = Pa.TextTertiary,
                     )
-                    if (task.detail.isNotEmpty()) {
+                    if (task.sourceTitle.isNotEmpty()) {
+                        Text(
+                            "  ·  来自「" + task.sourceTitle + "」",
+                            fontSize = 10.5.sp,
+                            color = Pa.TextTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (task.detail.isNotEmpty()) {
                         Text(
                             "  ·  " + task.detail,
                             fontSize = 10.5.sp,
@@ -338,10 +384,29 @@ private fun TaskRow(
                         )
                     }
                 }
+                if (task.sizeText.isNotEmpty() || task.localUri.isNotEmpty()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        listOf(task.sizeText, task.localUri)
+                            .filter { it.isNotEmpty() }
+                            .joinToString("  ·  "),
+                        fontSize = 9.5.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Spacer(Modifier.width(8.dp))
-            when (task.status) {
-                TaskCenter.Status.FAILED, TaskCenter.Status.INTERRUPTED ->
+            when {
+                task.status == TaskCenter.Status.DONE &&
+                    task.kind == TaskCenter.Kind.DOWNLOAD && onOpenFile != null ->
+                    IconActionButton(
+                        R.drawable.ic_lucide_globe, "打开文件", onOpenFile,
+                        bg = Color.Transparent, size = 34.dp, iconSize = 17.dp, tint = Pa.Accent,
+                    )
+                task.status == TaskCenter.Status.FAILED ||
+                    task.status == TaskCenter.Status.INTERRUPTED ->
                     IconActionButton(
                         R.drawable.ic_lucide_refresh_cw, "重试", onRetry,
                         bg = Color.Transparent, size = 34.dp, iconSize = 17.dp, tint = Pa.Accent,
@@ -355,20 +420,44 @@ private fun TaskRow(
         }
         if (task.status == TaskCenter.Status.RUNNING) {
             Spacer(Modifier.height(10.dp))
-            Box(
+            BoxWithConstraints(
                 Modifier
                     .fillMaxWidth()
                     .height(4.dp)
                     .background(Pa.Bg, RoundedCornerShape(50)),
             ) {
-                // 进度未知时用一条 30% 的"呼吸条",避免 0% 看起来像卡死
-                val frac = if (task.progress > 0f) task.progress.coerceIn(0.02f, 1f) else 0.3f
-                Box(
-                    Modifier
-                        .fillMaxWidth(frac)
-                        .fillMaxHeight()
-                        .background(accent, RoundedCornerShape(50)),
-                )
+                if (task.progress > 0f) {
+                    // 真实进度:任务层保证单调不减,不会出现"前进又倒退"
+                    Box(
+                        Modifier
+                            .fillMaxWidth(task.progress.coerceIn(0.02f, 1f))
+                            .fillMaxHeight()
+                            .background(accent, RoundedCornerShape(50)),
+                    )
+                } else {
+                    // 不确定进度:一条 32% 的条匀速往返 —— 明确表达"在跑,但算不出百分比",
+                    // 比固定 30% 停在原地更诚实
+                    val trackPx = with(LocalDensity.current) { maxWidth.toPx() }
+                    val transition = rememberInfiniteTransition(label = "indeterminate")
+                    val sweep by transition.animateFloat(
+                        initialValue = 0f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1250, easing = LinearEasing),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "sweep",
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.32f)
+                            .fillMaxHeight()
+                            .graphicsLayer {
+                                translationX = (trackPx * 0.68f) * sweep
+                            }
+                            .background(accent.copy(alpha = 0.85f), RoundedCornerShape(50)),
+                    )
+                }
             }
         }
     }
