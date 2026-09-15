@@ -1,5 +1,6 @@
 package dev.pocketagent.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -105,9 +106,15 @@ fun GitScreen(
     onOpenSettings: () -> Unit = {},
     onOpenTaskCenter: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
+    /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
+    onBackToHome: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
     var showDrawer by remember { mutableStateOf(false) }
+    // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
+    BackHandler(enabled = true) {
+        if (showDrawer) showDrawer = false else onBackToHome()
+    }
     val scope = rememberCoroutineScope()
     var repo by remember { mutableStateOf(workspacePath ?: "") }
     var status by remember { mutableStateOf<GitStatus?>(null) }

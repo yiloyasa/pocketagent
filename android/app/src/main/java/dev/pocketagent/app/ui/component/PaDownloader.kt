@@ -24,6 +24,9 @@ import java.io.OutputStream
  * 而我们要通过 gRPC 从电脑那台 daemon 取流,只能自己写。
  */
 object PaDownloader {
+
+    /** 单文件下载上限 512MB:足够装下 APK/安装包/文档,同时防止误触超大文件。 */
+    private const val MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024
     private var appCtx: Context? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val running = java.util.concurrent.atomic.AtomicInteger(0)
@@ -53,7 +56,12 @@ object PaDownloader {
                 var written = 0L
                 var total = 0L
                 val stream = AgentConnection.fileService().readFile(
-                    ReadFileRequest.newBuilder().setPath(remotePath).setMaxBytes(0).build(),
+                    ReadFileRequest.newBuilder()
+                        // 【必须显式给上限】max_bytes=0 在 daemon 侧表示「用服务端默认值」,
+                        // 而默认只有 2MB —— 下载 20MB 的 APK 会被静默截断成 2MB(用户看到的"大小不对")。
+                        .setPath(remotePath)
+                        .setMaxBytes(MAX_DOWNLOAD_BYTES)
+                        .build(),
                 )
                 while (stream.hasNext()) {
                     val chunk = stream.next()
@@ -141,13 +149,27 @@ object PaDownloader {
      * 打开已下载到手机的文件。
      * 有可处理的应用就直接打开;没有则退回"告知位置",而不是静默失败。
      */
-    fun openLocalFile(ctx: Context, uri: String, title: String, detail: String = "") {
+    fun openLocalFile(
+        ctx: Context,
+        uri: String,
+        title: String,
+        detail: String = "",
+        onOpenInBrowser: ((String) -> Unit)? = null,
+    ) {
         if (uri.isEmpty()) {
             android.widget.Toast.makeText(
                 ctx,
                 if (detail.isNotEmpty()) detail else "文件位置未知",
                 android.widget.Toast.LENGTH_LONG,
             ).show()
+            return
+        }
+        val ext = title.substringAfterLast('.', "").lowercase()
+        // 网页/文本/图片:交给 App 内置浏览器(用户明确要求不要跳外部 App)
+        if (onOpenInBrowser != null &&
+            ext in setOf("html", "htm", "txt", "md", "json", "log", "csv", "xml", "svg", "png", "jpg", "jpeg", "gif", "webp")
+        ) {
+            onOpenInBrowser(android.net.Uri.parse(uri).toString())
             return
         }
         val parsed = android.net.Uri.parse(uri)

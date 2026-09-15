@@ -1,5 +1,6 @@
 package dev.pocketagent.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -76,11 +77,16 @@ fun TaskCenterScreen(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onGoTab: (Int) -> Unit,
-    onOpenBrowser: () -> Unit = {},
+    onOpenBrowser: (String) -> Unit = {},
+    /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
+    onBackToHome: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var kindTab by remember { mutableStateOf(TaskCenter.Kind.MESSAGE) }
     var showDrawer by remember { mutableStateOf(false) }
+    BackHandler(enabled = true) {
+        if (showDrawer) showDrawer = false else onBackToHome()
+    }
 
     val all by TaskCenter.tasks.collectAsState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -209,11 +215,13 @@ fun TaskCenterScreen(
                                     if (task.threadId.isNotEmpty()) onOpenThread(task.threadId)
                                 },
                                 onOpenFile = {
+                                    // 网页/文本/图片 → 内置浏览器;APK → 系统安装器
                                     PaDownloader.openLocalFile(
-                                        ctx,
-                                        task.localUri,
-                                        task.title,
-                                        task.detail,
+                                        ctx = ctx,
+                                        uri = task.localUri,
+                                        title = task.title,
+                                        detail = task.detail,
+                                        onOpenInBrowser = onOpenBrowser,
                                     )
                                 },
                             )
@@ -256,7 +264,7 @@ fun TaskCenterScreen(
                 onOpenTerminal = onOpenTerminal,
                 onOpenSettings = onOpenSettings,
                 onOpenTaskCenter = {},
-                onOpenBrowser = { showDrawer = false; onOpenBrowser() },
+                onOpenBrowser = { showDrawer = false; onOpenBrowser("") },
             )
         }
     }
@@ -368,7 +376,7 @@ private fun TaskRow(
                     )
                     if (task.sourceTitle.isNotEmpty()) {
                         Text(
-                            "  ·  来自「" + task.sourceTitle + "」",
+                            "  ·  来自会话「" + task.sourceTitle + "」",
                             fontSize = 10.5.sp,
                             color = Pa.TextTertiary,
                             maxLines = 1,
@@ -384,11 +392,14 @@ private fun TaskRow(
                         )
                     }
                 }
-                if (task.sizeText.isNotEmpty() || task.localUri.isNotEmpty()) {
+                if (task.sizeText.isNotEmpty() || task.detail.isNotEmpty() || task.localUri.isNotEmpty()) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        listOf(task.sizeText, task.localUri)
-                            .filter { it.isNotEmpty() }
+                        listOf(
+                            task.sizeText,
+                            // detail 形如「已保存到「下载/PocketAgent/xxx」」,比 content:// 友好
+                            task.detail.ifEmpty { task.localUri },
+                        ).filter { it.isNotEmpty() }
                             .joinToString("  ·  "),
                         fontSize = 9.5.sp,
                         color = Pa.TextTertiary,
@@ -435,27 +446,36 @@ private fun TaskRow(
                             .background(accent, RoundedCornerShape(50)),
                     )
                 } else {
-                    // 不确定进度:一条 32% 的条匀速往返 —— 明确表达"在跑,但算不出百分比",
-                    // 比固定 30% 停在原地更诚实
+                    // 不确定进度:一道 40% 宽的高光匀速扫过(左→右循环,两端羽化),
+                    // 上一版"实心条来回弹"太像加载失败,这一版更接近系统级进度语言
                     val trackPx = with(LocalDensity.current) { maxWidth.toPx() }
                     val transition = rememberInfiniteTransition(label = "indeterminate")
                     val sweep by transition.animateFloat(
                         initialValue = 0f,
                         targetValue = 1f,
                         animationSpec = infiniteRepeatable(
-                            animation = tween(1250, easing = LinearEasing),
-                            repeatMode = RepeatMode.Reverse,
+                            animation = tween(1500, easing = LinearEasing),
+                            repeatMode = RepeatMode.Restart,
                         ),
                         label = "sweep",
                     )
                     Box(
                         Modifier
-                            .fillMaxWidth(0.32f)
+                            .fillMaxWidth(0.40f)
                             .fillMaxHeight()
                             .graphicsLayer {
-                                translationX = (trackPx * 0.68f) * sweep
+                                translationX = trackPx * 1.4f * sweep - trackPx * 0.40f
                             }
-                            .background(accent.copy(alpha = 0.85f), RoundedCornerShape(50)),
+                            .background(
+                                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                    listOf(
+                                        accent.copy(alpha = 0f),
+                                        accent.copy(alpha = 0.9f),
+                                        accent.copy(alpha = 0f),
+                                    ),
+                                ),
+                                RoundedCornerShape(50),
+                            ),
                     )
                 }
             }

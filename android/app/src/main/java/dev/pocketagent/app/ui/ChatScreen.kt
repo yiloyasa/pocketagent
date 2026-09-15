@@ -14,6 +14,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -62,6 +63,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
@@ -520,25 +522,23 @@ private fun ContextWindowCard(
 
             Spacer(Modifier.height(14.dp))
 
-            // ---------- 明细 ----------
+            // ---------- token 明细(输入 / 输出 / 缓存 / 合计 / 缓存命中) ----------
             if (usage == null && showEstimate) {
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 13.dp, vertical = 10.dp),
                 ) {
-                    TokenRow("估算输入", estimated, contextWindow, Pa.Accent)
-                    Spacer(Modifier.height(4.dp))
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-                    Spacer(Modifier.height(10.dp))
+                    TokenRow("输入", estimated, contextWindow, Pa.Accent)
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         "合计 ~${String.format(java.util.Locale.US, "%,d", estimated)} tokens",
                         fontSize = 11.5.sp,
                         color = Pa.TextPrimary,
                     )
                     Text(
-                        "由会话内容字符量估算(≈4 字符/token);daemon 下次上报后自动切换为真实值。",
+                        "由会话内容字符量估算(≈4 字符/token);电脑端下次上报后自动切换为真实值。",
                         Modifier.padding(top = 3.dp),
                         fontSize = 10.sp,
                         color = Pa.TextTertiary,
@@ -561,41 +561,39 @@ private fun ContextWindowCard(
                         .background(Pa.Card, RoundedCornerShape(16.dp))
                         .padding(horizontal = 13.dp, vertical = 10.dp),
                 ) {
+                    // 只列真实存在的维度:思考含在输出内、缓存读/写含在输入内,不重复计入合计
                     TokenRow("输入", usage.inputTokens, contextWindow, Pa.Accent)
                     TokenRow("输出", usage.outputTokens, contextWindow, Pa.Green)
-                    TokenRow("思考", usage.reasoningTokens, contextWindow, Pa.AccentText)
                     TokenRow("缓存读", usage.cacheReadTokens, contextWindow, Pa.Accent.copy(alpha = 0.55f))
                     TokenRow("缓存写", usage.cacheWriteTokens, contextWindow, Pa.TextTertiary)
 
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
 
                     val total = usage.inputTokens + usage.outputTokens
                     val hitRate = if (usage.inputTokens > 0) {
                         usage.cacheReadTokens.toFloat() / usage.inputTokens * 100f
                     } else -1f
-                    Text(
-                        buildString {
-                            append("合计 ")
-                            append(String.format(java.util.Locale.US, "%,d", total))
-                            append(" tokens")
-                            if (hitRate >= 0) {
-                                append(" · 缓存命中 ")
-                                append(String.format(java.util.Locale.US, "%.1f%%", hitRate))
-                            }
-                            if (usage.costUsd > 0) {
-                                append(" · 成本 $")
-                                append(String.format(java.util.Locale.US, "%.4f", usage.costUsd))
-                            }
-                        },
-                        fontSize = 11.5.sp,
-                        color = Pa.TextPrimary,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "合计 ${String.format(java.util.Locale.US, "%,d", total)} tokens",
+                            Modifier.weight(1f),
+                            fontSize = 12.sp,
+                            color = Pa.TextPrimary,
+                        )
+                        if (hitRate >= 0) {
+                            Text(
+                                "缓存命中 ${String.format(java.util.Locale.US, "%.1f%%", hitRate)}",
+                                fontSize = 11.sp,
+                                color = Pa.AccentText,
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
 
             EstimateSection(items)
         }
@@ -696,22 +694,25 @@ private fun ContextHero(
         Spacer(Modifier.height(12.dp))
 
         // 容量条:已用段 + 剩余段同框
-        Row(
+        // 【上一版为什么是黑条】内层用 weight(fill = false) 嵌套,没有确定宽度时会被测量成 0,
+        // 于是"占了 10%"在条上完全看不见。改用 Box + fillMaxWidth(比例) 分段,宽度是确定的。
+        Box(
             Modifier
                 .fillMaxWidth()
                 .height(10.dp)
-                .background(Pa.Bg, RoundedCornerShape(50)),
+                .background(Pa.Bg, RoundedCornerShape(50))
+                .clip(RoundedCornerShape(50)),
         ) {
             if (known && used > 0) {
                 Row(
                     Modifier
-                        .weight(ratio.coerceAtLeast(0.012f), fill = false)
+                        .fillMaxWidth(ratio.coerceIn(0.012f, 1f))
                         .fillMaxHeight(),
                 ) {
                     if (input > 0) {
                         Box(
                             Modifier
-                                .weight(input.toFloat() / used, fill = false)
+                                .fillMaxWidth(input.toFloat() / used)
                                 .fillMaxHeight()
                                 .background(Pa.Accent),
                         )
@@ -719,14 +720,13 @@ private fun ContextHero(
                     if (output > 0) {
                         Box(
                             Modifier
-                                .weight(output.toFloat() / used, fill = false)
+                                .fillMaxWidth(output.toFloat() / used)
                                 .fillMaxHeight()
                                 .background(Pa.Green),
                         )
                     }
                 }
             }
-            Spacer(Modifier.weight((1f - ratio).coerceAtLeast(0.001f)))
         }
 
         Spacer(Modifier.height(10.dp))
@@ -835,95 +835,109 @@ private fun TokenRow(label: String, value: Long, contextWindow: Long, color: Col
  */
 @Composable
 private fun EstimateSection(items: List<ChatItem>) {
-    // 默认折叠:这一段的百分比是"内容构成"(按字符量),不是窗口占用,
-    // 之前和上面的 token 明细混在一起,容易被误读成"对话消息占了 100% 窗口"。
-    var expanded by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().pressable(haptic = true) { expanded = !expanded },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("构成估算", Modifier.weight(1f), fontSize = 13.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
-        Text(
-            if (expanded) "收起" else "按内容字符量,仅供参考",
-            fontSize = 10.5.sp,
-            color = Pa.TextTertiary,
-        )
-    }
-    if (!expanded) return
-    Spacer(Modifier.height(10.dp))
-    if (items.isEmpty()) {
-        Text("暂无会话内容", fontSize = 11.sp, color = Pa.TextTertiary)
-        return
-    }
+    // 【为什么按"角色/工具名"分类】协议只给了整体 token 用量,没给逐项拆分;
+    // 这里按内容字符量(≈4 字符/token)粗估,回答"上下文都被谁占了"。
     var dialog = 0L      // 对话消息(user/assistant)
-    var thinking = 0L    // 思考过程
-    var tools = 0L       // 普通工具调用(含子 agent/技能,按工具名区分不出的归这里)
-    var mcp = 0L         // MCP 工具(名称以 mcp 开头或含 __ 分隔)
+    var thinking = 0L    // 思考过程 / 执行计划
+    var tools = 0L       // 普通工具调用
+    var mcp = 0L         // MCP 工具(mcp 前缀或 __ 分隔)
+    var skills = 0L      // 技能(skill 前缀)
+    var subagents = 0L   // 子 agent / 委派任务
     var other = 0L       // 其他事件
+
     items.forEach { it ->
-        val textLen = (it.text.length + it.toolArgs.length).toLong()
+        val chars = (it.text.length + it.toolArgs.length).toLong()
+        val name = it.toolName.lowercase()
         when {
             it.role == "user" || it.role == "assistant" -> dialog += it.text.length.toLong()
-            it.role == "thinking" -> thinking += it.text.length.toLong()
-            it.role == "tool" -> {
-                val isMcp = it.toolName.startsWith("mcp") || it.toolName.contains("__")
-                if (isMcp) mcp += textLen else tools += textLen
+            it.role == "thinking" || it.role == "plan" -> thinking += it.text.length.toLong()
+            it.role == "tool" -> when {
+                name.startsWith("mcp") || name.contains("__") -> mcp += chars
+                name.startsWith("skill") || name.contains("skill") -> skills += chars
+                name.contains("agent") || name.contains("delegate") || name.contains("spawn") -> subagents += chars
+                else -> tools += chars
             }
-            else -> other += textLen
+            else -> other += chars
         }
     }
-    val charTotal = (dialog + thinking + tools + mcp + other).coerceAtLeast(1L)
+
+    val totalChars = (dialog + thinking + tools + mcp + skills + subagents + other).coerceAtLeast(1L)
     data class Part(val label: String, val chars: Long, val color: Color)
     val parts = listOf(
         Part("对话消息", dialog, Pa.Accent),
         Part("思考", thinking, Pa.AccentText),
-        Part("工具/子agent/技能", tools, Pa.Green),
+        Part("工具调用", tools, Pa.Green),
         Part("MCP", mcp, Pa.Mcp),
+        Part("技能 skills", skills, Pa.Yellow),
+        Part("子 agent", subagents, Pa.Red),
         Part("其他", other, Pa.TextTertiary),
-    )
+    ).filter { it.chars > 0 }
 
-    // 堆叠条:段与段之间留 2dp 缝隙,避免同色相邻时糊成一块
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(10.dp)
-            .background(Pa.Bg, RoundedCornerShape(50)),
-    ) {
-        parts.forEach { p ->
-            if (p.chars > 0) {
-                Box(
-                    Modifier
-                        .weight(p.chars.toFloat() / charTotal, fill = false)
-                        .fillMaxHeight()
-                        .background(p.color, RoundedCornerShape(50)),
-                )
-                Spacer(Modifier.width(2.dp))
-            }
-        }
+    Text(
+        "内容构成占比",
+        fontSize = 13.sp,
+        color = Pa.TextPrimary,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Spacer(Modifier.height(8.dp))
+    if (items.isEmpty() || parts.isEmpty()) {
+        Text("暂无会话内容", fontSize = 11.sp, color = Pa.TextTertiary)
+        return
     }
-    Spacer(Modifier.height(12.dp))
+
     Column(
         Modifier
             .fillMaxWidth()
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 13.dp, vertical = 10.dp),
     ) {
         parts.forEach { p ->
-            val pct = p.chars.toFloat() / charTotal * 100f
+            val pct = p.chars.toFloat() / totalChars
             Row(
-                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                Modifier.fillMaxWidth().padding(vertical = 3.5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(8.dp).background(p.color, RoundedCornerShape(2.dp)))
-                Spacer(Modifier.width(9.dp))
-                Text(p.label, Modifier.weight(1f), fontSize = 11.5.sp, color = Pa.TextSecondary)
+                Box(Modifier.size(6.dp).background(p.color, RoundedCornerShape(2.dp)))
+                Spacer(Modifier.width(8.dp))
+                Text(p.label, Modifier.width(74.dp), fontSize = 11.sp, color = Pa.TextSecondary, maxLines = 1)
                 Text(
-                    String.format(java.util.Locale.US, "%.1f%%", pct),
+                    "~${String.format(java.util.Locale.US, "%,d", p.chars / 4)}",
+                    Modifier.width(56.dp),
                     fontSize = 11.sp,
+                    color = Pa.TextPrimary,
+                    textAlign = TextAlign.End,
+                )
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(5.dp)
+                        .background(Pa.Bg, RoundedCornerShape(50))
+                        .clip(RoundedCornerShape(50)),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(pct.coerceIn(0.01f, 1f))
+                            .fillMaxHeight()
+                            .background(p.color),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    String.format(java.util.Locale.US, "%.0f%%", pct * 100f),
+                    Modifier.width(34.dp),
+                    fontSize = 10.5.sp,
                     color = Pa.TextTertiary,
+                    textAlign = TextAlign.End,
                 )
             }
         }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "按内容字符量估算(≈4 字符/token),仅用于看比例;token 精确值见上方明细。",
+            fontSize = 9.5.sp,
+            color = Pa.TextTertiary,
+        )
     }
 }
 
@@ -945,11 +959,6 @@ val EFFORTS = listOf(
     EffortOption("xhigh", "极高"),
 )
 
-/**
- * 聊天页(全屏):流式事件实时上屏。
- * 顶栏 ☰ 打开**全局侧边栏**(与主页/会话/文件/Git 完全同款,左边缘右滑亦可唤出)。
- * 输入栏对标图五:第一行输入,第二行 [+ 附件][审批策略][模型·强度][发送]。
- */
 @Composable
 fun ChatScreen(
     threadId: String,
@@ -964,8 +973,6 @@ fun ChatScreen(
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
-    // 【返回键】APP 内返回上一层(会话 → 主页),而不是直接退回桌面
-    BackHandler(enabled = true) { onBack() }
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
     val st = remember(threadId) { TurnSession.state(threadId) }
     var input by remember { mutableStateOf("") }
@@ -974,6 +981,23 @@ fun ChatScreen(
     var showDrawer by remember { mutableStateOf(false) }
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
+    var showExport by remember { mutableStateOf(false) }
+    // 侧边栏用的最近会话:和模型/设置一起预取,打开抽屉时直接就是数据,不必等网络
+    var recentThreads by remember { mutableStateOf(listOf<PThread>()) }
+    var recentLoading by remember { mutableStateOf(true) }
+
+    // 【返回键】分层回退:面板/抽屉打开时先收面板,否则回会话列表(而不是直接退到桌面)。
+    // 必须放在这些状态声明之后 —— 放在函数开头会读不到下面声明的 showDrawer 等。
+    BackHandler(enabled = true) {
+        when {
+            showDrawer -> showDrawer = false
+            showExport -> showExport = false
+            showGitPanel -> showGitPanel = false
+            showContextCard -> showContextCard = false
+            showModelCard -> showModelCard = false
+            else -> onBack()
+        }
+    }
     var attachments by remember { mutableStateOf(listOf<Attachment>()) }
     var selectedAttachment by remember { mutableStateOf<Attachment?>(null) }
     var threadWorkspace by remember { mutableStateOf<String?>(null) }
@@ -1015,6 +1039,19 @@ fun ChatScreen(
         } catch (_: Exception) {
             // 电脑名取不到不影响聊天,侧边栏回退到通用文案
         }
+        try {
+            withContext(Dispatchers.IO) {
+                recentThreads = AgentConnection.threadService()
+                    .listThreads(
+                        ListThreadsRequest.newBuilder()
+                            .setIncludeArchived(false)
+                            .build())
+                    .threadsList
+            }
+        } catch (_: Exception) {
+            // 拉不到就显示空态,不影响当前会话
+        }
+        recentLoading = false
     }
 
     // 【会话级模型】进入会话时恢复该会话上次选定的模型;该会话没选过则用全局默认。
@@ -1211,6 +1248,12 @@ fun ChatScreen(
             IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
             Spacer(Modifier.width(14.dp))
             Text(threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
+            IconActionButton(
+                AppR.drawable.ic_lucide_download, "导出对话",
+                { showExport = true },
+                bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+            )
+            Spacer(Modifier.width(8.dp))
             Box(
                 Modifier
                     .size(14.dp)
@@ -1344,31 +1387,10 @@ fun ChatScreen(
                                     }
                                 }
                             }
-                        } else if (item.text.isNotBlank()) {
-                            Row(
-                                Modifier
-                                    .padding(top = 4.dp)
-                                    .pressable(haptic = true) {
-                                        PaDownloader.saveTextAsFile(
-                                            "回复-%s-%d.md".format(
-                                                threadId.take(6),
-                                                System.currentTimeMillis() % 100000,
-                                            ),
-                                            item.text,
-                                            threadId,
-                                        )
-                                        Toast.makeText(ctx, "已开始保存到手机", Toast.LENGTH_SHORT).show()
-                                    },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    painterResource(AppR.drawable.ic_lucide_download), null,
-                                    tint = Pa.TextTertiary, modifier = Modifier.size(13.dp),
-                                )
-                                Spacer(Modifier.width(5.dp))
-                                Text("保存到手机", fontSize = 10.sp, color = Pa.TextTertiary)
-                            }
                         }
+                        // 说明:以前每条回复下都挂一个"保存到手机",它保存的其实是**这段对话文本**,
+                        // 不是任何文件 —— 用户看到的"下载了对话内容"就是它。
+                        // 现在统一收到右上角「导出对话」里(可选多条),消息内只保留真正的文件操作。
                     }
                 }
             }
@@ -1685,35 +1707,55 @@ fun ChatScreen(
         }
     }
 
-    // ---- 侧边栏:与主页/会话/文件/Git 完全同款(全局导航),不再维护第二套设计 ----
+    // ---- 会话侧边栏:最近会话(搜索 + 最近使用时间)+ 底部全局入口 ----
     if (showDrawer) {
-        AppDrawer(
-            currentTab = 1,
-            hostTitle = hostName.ifBlank { "你电脑上的 agent" },
+        dev.pocketagent.app.ui.component.RecentThreadsDrawer(
+            currentThreadId = threadId,
+            threads = recentThreads,
+            loading = recentLoading,
             onClose = { showDrawer = false },
-            onGoTab = {
+            onOpenThread = { id ->
                 showDrawer = false
-                onGoTab(it)
+                if (id != threadId) onOpenThread(id)
+            },
+            // 会话页的抽屉里不再直接新建:要新建就去「全部会话」(那里有 + 与工作区选择)
+            onOpenAllThreads = {
+                showDrawer = false
+                onGoTab(1)
             },
             onOpenTerminal = {
                 showDrawer = false
                 onOpenTerminal()
             },
-            onOpenSettings = {
-                showDrawer = false
-                onOpenSettings()
-            },
             onOpenTaskCenter = {
                 showDrawer = false
                 onOpenTaskCenter()
             },
-            onNewThread = {
+            onOpenSettings = {
                 showDrawer = false
-                showNewThread = true
+                onOpenSettings()
             },
-            onOpenBrowser = {
-                showDrawer = false
-                onOpenBrowser("")
+        )
+    }
+
+    // 导出对话(可多选)
+    if (showExport) {
+        ExportChatSheet(
+            title = threadTitle,
+            items = st.items.toList(),
+            onDismiss = { showExport = false },
+            onExport = { text, count ->
+                showExport = false
+                PaDownloader.saveTextAsFile(
+                    "会话-%s-%s.txt".format(
+                        threadTitle.ifBlank { "未命名" }.take(20).replace(Regex("[\\\\/:*?\"<>|]"), "_"),
+                        java.text.SimpleDateFormat("MMdd-HHmm", java.util.Locale.getDefault())
+                            .format(java.util.Date()),
+                    ),
+                    text,
+                    threadId,
+                )
+                Toast.makeText(ctx, "已导出 $count 条消息,可在任务中心查看", Toast.LENGTH_SHORT).show()
             },
         )
     }
@@ -2345,5 +2387,164 @@ private fun InAppMarkdown(
         androidx.compose.ui.platform.LocalUriHandler provides handler,
     ) {
         MarkdownText(text, modifier, fontSize)
+    }
+}
+
+/**
+ * 导出对话面板:选消息 → 导出为 .txt(交给 PaDownloader 走后台下载 + 任务中心 + 用户数据管理)。
+ *
+ * 【为什么放这里】之前"保存到手机"散落在每条回复下面,用户根本分不清保存的是什么;
+ * 汇总成一个入口 + 明确的条数回执,才符合"下载的东西要看得见、找得到"。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ExportChatSheet(
+    title: String,
+    items: List<ChatItem>,
+    onDismiss: () -> Unit,
+    onExport: (text: String, count: Int) -> Unit,
+) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // 只导出有正文的对话消息(思考/工具另有开关,避免把日志塞进文档)
+    val exportable = remember(items) {
+        items.filter { (it.role == "user" || it.role == "assistant") && it.text.isNotBlank() }
+    }
+    var selected by remember(items) { mutableStateOf(exportable.indices.toSet()) }
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Pa.CardHigh,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp),
+        ) {
+            Text("导出对话", fontSize = 19.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                title.ifBlank { "未命名会话" } + " · 共 ${exportable.size} 条可导出消息",
+                fontSize = 11.5.sp,
+                color = Pa.TextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            // 全选 / 反选 / 清空
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ExportChip("全选") { selected = exportable.indices.toSet() }
+                Spacer(Modifier.width(8.dp))
+                ExportChip("反选") { selected = exportable.indices.toSet() - selected }
+                Spacer(Modifier.width(8.dp))
+                ExportChip("清空") { selected = emptySet() }
+                Spacer(Modifier.weight(1f))
+                Text("已选 ${selected.size}", fontSize = 11.5.sp, color = Pa.AccentText)
+            }
+
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.foundation.lazy.LazyColumn(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 340.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(exportable.size) { idx ->
+                    val chatItem = exportable[idx]
+                    val on = idx in selected
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .pressable(haptic = true) {
+                                selected = if (on) selected - idx else selected + idx
+                            }
+                            .background(if (on) Pa.AccentDim else Pa.Card, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // 选中框(自绘,避免再引入一个图标资源)
+                        Box(
+                            Modifier
+                                .size(16.dp)
+                                .background(if (on) Pa.Accent else Color.Transparent, RoundedCornerShape(5.dp))
+                                .border(1.dp, if (on) Pa.Accent else Pa.TextTertiary, RoundedCornerShape(5.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (on) {
+                                Icon(
+                                    painterResource(AppR.drawable.ic_lucide_check), null,
+                                    tint = Color.White, modifier = Modifier.size(11.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (chatItem.role == "user") "你" else "Agent",
+                                fontSize = 10.5.sp,
+                                color = if (chatItem.role == "user") Pa.AccentText else Pa.TextTertiary,
+                            )
+                            Text(
+                                chatItem.text.replace("\n", " ").take(80),
+                                fontSize = 12.5.sp,
+                                color = Pa.TextPrimary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .pressable(haptic = true) {
+                        if (selected.isEmpty()) return@pressable
+                        val sb = StringBuilder()
+                        sb.append("# ").append(title.ifBlank { "未命名会话" }).append("\n")
+                        sb.append("导出时间: ")
+                            .append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date()))
+                            .append("\n\n")
+                        exportable.filterIndexed { i, _ -> i in selected }.forEach { m ->
+                            sb.append(if (m.role == "user") "## 我" else "## Agent").append("\n")
+                            sb.append(m.text).append("\n\n")
+                        }
+                        onExport(sb.toString(), selected.size)
+                    }
+                    .background(
+                        if (selected.isEmpty()) Pa.Hover else Pa.Accent,
+                        RoundedCornerShape(14.dp),
+                    )
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (selected.isEmpty()) "请选择要导出的消息" else "导出 ${selected.size} 条消息(txt)",
+                    fontSize = 14.5.sp,
+                    color = if (selected.isEmpty()) Pa.TextTertiary else Color.White,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+    }
+}
+
+/** 导出面板上的小胶囊按钮。 */
+@Composable
+private fun ExportChip(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .pressable(haptic = true) { onClick() }
+            .background(Pa.Card, RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(label, fontSize = 12.sp, color = Pa.TextSecondary)
     }
 }

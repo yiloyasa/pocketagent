@@ -59,6 +59,7 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
 import dev.pocketagent.app.ui.theme.AgentTheme
@@ -121,7 +122,12 @@ private class SettingsSection(
  * 连接凭证照样走 setCredentials + connectWithFallback。
  */
 @Composable
-fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    /** 用内置浏览器查看已下载的网页/文本(由 MainActivity 提供导航)。 */
+    onOpenBrowser: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     var addr by remember { mutableStateOf(AgentConnection.configuredAddress()) }
@@ -142,6 +148,9 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     // 第二板块始终跟随"当前运行的 agent"
     val runningAgent = AgentConnection.selectedAgent
     val connectionError = AgentConnection.connError.collectAsState().value
+    // 用户数据管理用的下载清单(实时)
+    val allTasks by TaskCenter.tasks.collectAsState()
+    val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
     val listState = rememberLazyListState()
 
@@ -297,11 +306,18 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     // ---------------- 分区定义 ----------------
 
     val globalSections = listOf(
-        SettingsSection("connection") {
+        // 用户数据管理:连接地址 + 所有下载内容(原「连接」板块迁到这里统一管理)
+        SettingsSection("userdata") {
             SectionBlock(
-                icon = R.drawable.ic_lucide_globe,
-                title = "连接",
+                icon = R.drawable.ic_lucide_server,
+                title = "用户数据管理",
             ) {
+                Text(
+                    "连接地址",
+                    Modifier.padding(start = 3.dp, top = 6.dp, bottom = 2.dp),
+                    fontSize = 11.sp,
+                    color = Pa.TextTertiary,
+                )
                 val connState = AgentConnection.connState.collectAsState().value
                 val transport = AgentConnection.connTransport.collectAsState().value
                 val connAddr = AgentConnection.connAddress.collectAsState().value
@@ -389,6 +405,93 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     ),
                 )
                 Spacer(Modifier.height(4.dp))
+
+                // ---------- 下载内容:统一管理(查看 / 分享 / 删除) ----------
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "下载内容",
+                        Modifier.weight(1f),
+                        fontSize = 12.5.sp,
+                        color = Pa.TextPrimary,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        downloads.count { it.status == TaskCenter.Status.DONE }.toString() + " 个文件",
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                if (downloads.isEmpty()) {
+                    Text(
+                        "还没有下载内容。会话里点文件旁的「下载到手机」后会出现在这里。",
+                        Modifier.padding(vertical = 6.dp),
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                    )
+                } else {
+                    downloads.forEach { d ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    d.title.ifEmpty { "(未命名文件)" },
+                                    fontSize = 12.5.sp,
+                                    color = Pa.TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    listOf(
+                                        d.sizeText,
+                                        if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
+                                        statusLabel(d.status),
+                                    ).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                                    fontSize = 10.5.sp,
+                                    color = Pa.TextTertiary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (d.detail.isNotEmpty()) {
+                                    Text(
+                                        d.detail,
+                                        fontSize = 9.5.sp,
+                                        color = Pa.TextTertiary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            if (d.localUri.isNotEmpty()) {
+                                IconActionButton(
+                                    R.drawable.ic_lucide_globe, "用内置浏览器查看",
+                                    { onOpenBrowser(d.localUri) },
+                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                )
+                                IconActionButton(
+                                    R.drawable.ic_lucide_share_2, "分享",
+                                    { shareLocalFile(ctx, d.localUri) },
+                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                )
+                            }
+                            IconActionButton(
+                                R.drawable.ic_lucide_trash_2, "删除",
+                                {
+                                    deleteLocalFile(ctx, d.localUri)
+                                    TaskCenter.remove(d.id)
+                                    Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
+                                },
+                                bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                tint = Pa.TextTertiary,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
             }
         },
         SettingsSection("appearance") {
@@ -942,6 +1045,34 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             onDismiss = { showModelPicker = false },
         )
     }
+}
+
+/** 下载任务状态文案。 */
+private fun statusLabel(s: TaskCenter.Status): String = when (s) {
+    TaskCenter.Status.RUNNING -> "下载中"
+    TaskCenter.Status.DONE -> "已完成"
+    TaskCenter.Status.FAILED -> "失败"
+    TaskCenter.Status.CANCELED -> "已取消"
+    TaskCenter.Status.INTERRUPTED -> "已中断"
+}
+
+/** 分享已下载的文件(交给系统分享面板)。 */
+private fun shareLocalFile(ctx: android.content.Context, uri: String) {
+    if (uri.isEmpty()) return
+    runCatching {
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "*/*"
+            putExtra(android.content.Intent.EXTRA_STREAM, android.net.Uri.parse(uri))
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        ctx.startActivity(android.content.Intent.createChooser(intent, "分享文件"))
+    }
+}
+
+/** 删除手机上的文件(删不掉就忽略:任务项本身仍会移除)。 */
+private fun deleteLocalFile(ctx: android.content.Context, uri: String) {
+    if (uri.isEmpty()) return
+    runCatching { ctx.contentResolver.delete(android.net.Uri.parse(uri), null, null) }
 }
 
 /** 范围分段按钮(选中 = 蓝底白字)。 */

@@ -218,19 +218,21 @@ fun UndoBarHost(
                     modifier = Modifier.weight(1f),
                 )
 
-                if (!isError) {
+                // 已经撤销成功后,"撤销"按钮与进度条都没有存在的意义(用户看到"已恢复"却还能点撤销会困惑),
+                // 所以 feedback != null 时立刻收起,只留结果文案 1.2 秒。
+                if (!isError && feedback == null) {
                     Spacer(Modifier.width(8.dp))
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = feedback == null) {
+                            .clickable(enabled = true) {
                                 handled = true
                                 val scopeMarker = it0
                                 UndoScope.launch {
                                     val ok = runCatching { scopeMarker.onUndo() }.isSuccess
                                     feedback = if (ok) "已恢复" else "撤销失败，请重试"
                                     if (ok) {
-                                        delay(1500)
+                                        delay(1200)
                                         state.clear()
                                     }
                                 }
@@ -248,8 +250,8 @@ fun UndoBarHost(
                 }
             }
 
-            // 剩余时间进度线(错误态不显示)
-            if (!isError && !reduceMotion) {
+            // 剩余时间进度线(错误态与已撤销后都不显示)
+            if (!isError && !reduceMotion && feedback == null) {
                 Box(
                     Modifier
                         .align(Alignment.BottomStart)

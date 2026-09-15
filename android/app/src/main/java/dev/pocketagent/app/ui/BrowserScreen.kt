@@ -76,12 +76,14 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     var canGoForward by remember { mutableStateOf(false) }
     var loadingPc by remember { mutableStateOf(false) }
     var webRef by remember { mutableStateOf<WebView?>(null) }
+    // 手机视图(默认,注入 viewport + 字号保障) / 桌面视图(原样渲染,配桌面 UA)
+    var desktopView by remember { mutableStateOf(false) }
 
-    /** 把 HTML 直接喂给 WebView(不经过网络)。 */
+    /** 把 HTML 直接喂给 WebView(不经过网络),并做移动端适配。 */
     fun renderLocal(html: String, label: String) {
         pageTitle = label
         progress = 1f
-        webRef?.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+        webRef?.loadDataWithBaseURL(null, adaptForMobile(html), "text/html", "utf-8", null)
     }
 
     /** 读电脑上的文件并渲染。 */
@@ -216,6 +218,22 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 }, bg = Pa.Card, size = 34.dp, iconSize = 16.dp)
                 Spacer(Modifier.width(8.dp))
             }
+            IconActionButton(
+                if (desktopView) R.drawable.ic_lucide_smartphone else R.drawable.ic_lucide_monitor,
+                if (desktopView) "切到手机视图" else "切到桌面视图",
+                {
+                    desktopView = !desktopView
+                    val w = webRef ?: return@IconActionButton
+                    w.settings.loadWithOverviewMode = desktopView
+                    w.settings.useWideViewPort = true
+                    w.settings.userAgentString = if (desktopView) DESKTOP_UA else null
+                    val cur = input.trim()
+                    val pc = toPcPath(cur)
+                    if (pc != null) openPcFile(pc) else if (cur.isNotEmpty()) w.loadUrl(normalizeUrl(cur)) else w.reload()
+                },
+                bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+            )
+            Spacer(Modifier.width(8.dp))
             IconActionButton(R.drawable.ic_lucide_globe, "用系统浏览器打开", {
                 runCatching {
                     ctx.startActivity(
@@ -255,8 +273,14 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 WebView(context).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    // 手机视图:按设备宽度排版(配合注入的 viewport),不再"整页缩放进一屏"
                     settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
+                    settings.loadWithOverviewMode = false
+                    // 支持双指缩放(阅读小字/H5 页面很有用),但不显示那对丑陋的悬浮按钮
+                    settings.setSupportZoom(true)
+                    settings.builtInZoomControls = true
+                    settings.displayZoomControls = false
+                    settings.textZoom = 100
                     setBackgroundColor(0xFF0B0B0D.toInt())
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
@@ -316,6 +340,34 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         )
     }
 }
+
+/**
+ * 移动端适配:给页面补 viewport、兜底字号、并保证可以纵向滚动。
+ *
+ * 【为什么必须做】agent 生成的页面基本都是"桌面端写死的像素稿"(14px 正文 + 100vh 布局),
+ * 在手机 WebView 里要么字小到看不清,要么 body 被 overflow/height 锁死导致**完全不能下滑**。
+ * 这里只做三件不破坏原设计的事:补 viewport、兜底最小字号、解除高度锁。
+ */
+private fun adaptForMobile(html: String): String {
+    val head = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, " +
+        "maximum-scale=5, user-scalable=yes\">"
+    val css = "<style id=\"pa-mobile-adapt\">" +
+        "html{-webkit-text-size-adjust:100%;}" +
+        "html,body{overflow-y:auto !important;height:auto !important;min-height:100% !important;" +
+        "max-height:none !important;}" +
+        "body{font-size:max(16px,1em);line-height:1.6;}" +
+        "</style>"
+    val inject = head + css
+    return when {
+        html.contains("</head>") -> html.replaceFirst("</head>", inject + "</head>")
+        html.contains("<body") -> html.replaceFirst("<body", "<head>$inject</head><body")
+        else -> "<html><head>$inject</head><body>$html</body></html>"
+    }
+}
+
+private const val DESKTOP_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/126.0 Safari/537.36"
 
 /**
  * 判断输入是不是"电脑上的路径"。

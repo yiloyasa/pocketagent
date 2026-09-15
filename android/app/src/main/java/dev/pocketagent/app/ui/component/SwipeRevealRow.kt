@@ -109,7 +109,9 @@ fun SwipeRevealRow(
     }
 
     val density = LocalDensity.current
-    val revealPx = with(density) { (ACTION_WIDTH * actions.size).toPx() }
+    // 动作区最多占屏宽 72%:4 个动作 × 64dp 在窄屏上会顶到边界,露出没铺背景的黑块
+    val maxReveal = with(density) { 0.72f * android.content.res.Resources.getSystem().displayMetrics.widthPixels }
+    val revealPx = minOf(with(density) { (ACTION_WIDTH * actions.size).toPx() }, maxReveal)
     // 【手感】旧值 = 动作区总宽的 40%(4 个动作时约 121dp),用户得"滑到底"才认账,
     // 松手还常常回弹。现在取 min(28%, 44dp):轻扫一小段就吸附全开,不再要求拖满。
     val thresholdPx = minOf(revealPx * 0.28f, with(density) { 44.dp.toPx() })
@@ -137,16 +139,24 @@ fun SwipeRevealRow(
                 }
             },
     ) {
-        // ---- 动作层(背景):尺寸跟随父容器,靠右铺满高度 ----
-        Box(Modifier.matchParentSize().clip(shape)) {
+        // ---- 动作层(背景):整块铺底(含左侧空白区),避免左移后露出"未衔接的黑块" ----
+        Box(
+            Modifier
+                .matchParentSize()
+                .clip(shape)
+                .background(Pa.Card),
+        ) {
             Row(
-                Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(with(density) { revealPx.toDp() }),
                 horizontalArrangement = Arrangement.End,
             ) {
                 actions.forEach { action ->
                     Box(
                         Modifier
-                            .width(ACTION_WIDTH)
+                            .weight(1f, fill = true)
                             .fillMaxHeight()
                             .background(if (action.destructive) Pa.Red else Pa.AccentDim)
                             .clickable {

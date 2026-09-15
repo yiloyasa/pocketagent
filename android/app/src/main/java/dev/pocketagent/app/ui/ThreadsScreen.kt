@@ -3,6 +3,7 @@
 package dev.pocketagent.app.ui
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -70,6 +71,7 @@ import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.ThreadPins
+import dev.pocketagent.app.ui.component.shortWorkspace
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.Pa
@@ -103,6 +105,8 @@ fun ThreadsScreen(
     onOpenSettings: () -> Unit = {},
     onOpenTaskCenter: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
+    /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
+    onBackToHome: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -123,6 +127,10 @@ fun ThreadsScreen(
     var renamingId by remember { mutableStateOf<String?>(null) }
     var renameField by remember { mutableStateOf(TextFieldValue("")) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
+    BackHandler(enabled = true) {
+        if (showDrawer) showDrawer = false else onBackToHome()
+    }
     // 侧滑互斥:openKey 单值状态保证「任意时刻最多一行展开」
     val openKey = remember { mutableStateOf<Any?>(null) }
     val listState = rememberLazyListState()
@@ -333,6 +341,7 @@ fun ThreadsScreen(
                     Text("会话", fontSize = 30.sp, color = Pa.TextPrimary)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    IconActionButton(R.drawable.ic_lucide_refresh_cw, "刷新", { refresh() }, bg = Pa.Card)
                     IconActionButton(R.drawable.ic_lucide_square_terminal, "终端", onOpenTerminal)
                     IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings)
                 }
@@ -792,7 +801,8 @@ private fun ThreadCard(
             )
             if (t.workspace.isNotEmpty()) {
                 Text(
-                    "  ·  " + t.workspace.substringAfterLast('/').substringAfterLast('\\'),
+                    // 带上一级目录(盘符),否则 G:\试验区 只显示"试验区"看不出在哪个盘
+                    "  ·  " + shortWorkspace(t.workspace),
                     fontSize = 12.sp,
                     color = Pa.TextTertiary,
                     maxLines = 1,
@@ -836,7 +846,7 @@ private fun PcSessionCard(
             )
             if (info.cwd.isNotEmpty()) {
                 Text(
-                    "  ·  " + info.cwd.substringAfterLast('/').substringAfterLast('\\'),
+                    "  ·  " + shortWorkspace(info.cwd),
                     fontSize = 12.sp,
                     color = Pa.TextTertiary,
                     maxLines = 1,

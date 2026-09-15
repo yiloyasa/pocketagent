@@ -96,6 +96,10 @@ fun grayscale() = ColorMatrixColorFilter(ColorMatrix().apply { setToSaturation(0
 @Composable
 fun HomeScreen(
     currentTab: Int = 0,
+    /** 每次自增表示"请展开侧边栏"(由返回层级触发)。 */
+    openDrawerSignal: Int = 0,
+    /** 主页是返回层级的终点,这里仅保持签名一致(不拦截返回)。 */
+    onBackToHome: () -> Unit = {},
     onOpenThread: (String) -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -110,6 +114,11 @@ fun HomeScreen(
     var recent by remember { mutableStateOf(listOf<PThread>()) }
     var showManage by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
+
+    // 返回层级:从二级页面返回主页时自动展开侧边栏
+    LaunchedEffect(openDrawerSignal) {
+        if (openDrawerSignal > 0) showDrawer = true
+    }
     var multiAgent by remember { mutableStateOf(AgentConnection.multiAgent) }
     var reloadKey by remember { mutableStateOf(0) }
     var loadError by remember { mutableStateOf<String?>(null) }

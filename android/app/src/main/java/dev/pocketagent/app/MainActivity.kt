@@ -80,6 +80,12 @@ class MainActivity : ComponentActivity() {
 private fun RootNav() {
     val nav = rememberNavController()
     var tab by remember { mutableIntStateOf(0) }
+    // 二级页面按返回时:回到主页并自动展开侧边栏(用户定义的返回层级)
+    var openHomeDrawer by remember { mutableIntStateOf(0) }
+    val backToHome = {
+        tab = 0
+        openHomeDrawer += 1
+    }
     val context = LocalContext.current
     val view = LocalView.current
 
@@ -109,12 +115,14 @@ private fun RootNav() {
                 when (tab) {
                     0 -> HomeScreen(
                         currentTab = 0,
+                        openDrawerSignal = openHomeDrawer,
                         onOpenThread = { id -> nav.navigate("chat/$id") },
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
                         onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
+                        onBackToHome = backToHome,
                     )
                     1 -> ThreadsScreen(
                         currentTab = 1,
@@ -124,6 +132,7 @@ private fun RootNav() {
                         onOpenTaskCenter = openTaskCenter,
                         onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
+                        onBackToHome = backToHome,
                     )
                     2 -> FilesScreen(
                         initialPath = null,
@@ -132,6 +141,7 @@ private fun RootNav() {
                         onOpenTaskCenter = openTaskCenter,
                         onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
+                        onBackToHome = backToHome,
                     )
                     3 -> GitScreen(
                         workspacePath = null,
@@ -140,6 +150,7 @@ private fun RootNav() {
                         onOpenTaskCenter = openTaskCenter,
                         onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
+                        onBackToHome = backToHome,
                     )
                     else -> TaskCenterScreen(
                         currentTab = 4,
@@ -147,7 +158,11 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onGoTab = { tab = it },
-                        onOpenBrowser = { nav.navigate("browser") },
+                        // 下载项要用内置浏览器打开,所以这里需要带地址
+                        onOpenBrowser = { url ->
+                            nav.navigate("browser?url=" + android.net.Uri.encode(url))
+                        },
+                        onBackToHome = backToHome,
                     )
                 }
             }
@@ -183,7 +198,15 @@ private fun RootNav() {
                 onBack = { nav.popBackStack() },
             )
         }
-        composable("settings") { SettingsScreen(onBack = { nav.popBackStack() }) }
+        composable("settings") {
+            SettingsScreen(
+                onBack = { nav.popBackStack() },
+                // "用户数据管理"里可以直接用内置浏览器打开已下载的网页/文本
+                onOpenBrowser = { url ->
+                    nav.navigate("browser?url=" + android.net.Uri.encode(url))
+                },
+            )
+        }
     }
 }
 
