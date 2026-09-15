@@ -137,6 +137,7 @@ object AgentConnection {
             manualAddress = it.getString("manualAddr", "") ?: ""
             lastGoodAddr = it.getString("lastGoodAddr", "") ?: ""
             showThinkingState = it.getBoolean("showThinking", true)
+            drawerCollapsedState = it.getBoolean("drawerCollapsed", false)
             // 连接状态快照立即回显:探活完成前 UI 就能显示"上次连接"的通道与地址,
             // 而不是一片空白(状态本身仍是 checking,探活成功后转 ok)。
             if (lastGoodAddr.isNotBlank()) {
@@ -376,6 +377,18 @@ object AgentConnection {
         set(v) {
             multiAgentState = v
             prefs?.edit()?.putBoolean("multiAgent", v)?.apply()
+        }
+
+    /**
+     * 侧边栏折叠偏好(false=展开:图标+文字;true=收起:窄 rail 仅图标,长按看文字提示)。
+     * AppDrawer 读取并切换;重启后保留用户习惯。
+     */
+    private var drawerCollapsedState by mutableStateOf(false)
+    var drawerCollapsed: Boolean
+        get() = drawerCollapsedState
+        set(v) {
+            drawerCollapsedState = v
+            prefs?.edit()?.putBoolean("drawerCollapsed", v)?.apply()
         }
 
     fun currentAddress(): String = address

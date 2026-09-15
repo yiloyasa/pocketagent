@@ -10,11 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -93,6 +89,7 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -1211,22 +1208,29 @@ fun ChatScreen(
             }
             if (st.streaming) {
                 item(key = "streaming-bubble") {
-                    val blink by rememberInfiniteTransition(label = "caret").animateFloat(
-                        initialValue = 1f,
-                        targetValue = 0.15f,
-                        animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
-                        label = "caretAlpha",
-                    )
-                    Column(Modifier.fillMaxWidth()) {
-                        MarkdownText(
-                            st.streamText.ifEmpty { "…" },
-                            fontSize = 15f * uiScale,
-                        )
-                        Text(
-                            "▍",
-                            color = Pa.Accent.copy(alpha = blink),
-                            fontSize = (15 * uiScale).sp,
-                        )
+                    if (st.streamText.isEmpty()) {
+                        // 等待首个 token:三点跳动"正在输入"指示(替代旧的光标闪烁)
+                        Row(Modifier.fillMaxWidth()) {
+                            Box(
+                                Modifier
+                                    .background(Pa.Card, RoundedCornerShape(18.dp))
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                            ) {
+                                TypingDots()
+                            }
+                        }
+                    } else {
+                        // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
+                        Column(Modifier.fillMaxWidth()) {
+                            MarkdownText(
+                                st.streamText,
+                                fontSize = 15f * uiScale,
+                            )
+                            TypingDots(
+                                Modifier.padding(start = 2.dp, top = 6.dp),
+                                dotSize = 4.dp,
+                            )
+                        }
                     }
                 }
             }

@@ -2,7 +2,9 @@ package dev.pocketagent.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -45,18 +47,23 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaBadge
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.theme.Pa
+import kotlinx.coroutines.delay
 
 /** 侧边栏主导航项。 */
 private data class DrawerEntry(
@@ -122,6 +129,8 @@ fun AppDrawer(
     )
 
     val unread by TaskCenter.unreadCount.collectAsState()
+    // 折叠偏好:展开(图标+文字) / 收起(窄 rail 仅图标)。AgentConnection 内已持久化。
+    val collapsed = AgentConnection.drawerCollapsed
 
     // 遮罩:铺满整个屏幕(全屏点击区),淡入淡出
     Box(
@@ -145,14 +154,23 @@ fun AppDrawer(
                 .align(Alignment.CenterStart)
                 .fillMaxHeight(),
         ) {
+            // 折叠/展开宽度平滑过渡(rail 76dp ↔ 面板 330dp)
+            val panelWidth by animateDpAsState(
+                targetValue = if (collapsed) 76.dp else 330.dp,
+                animationSpec = tween(260),
+                label = "panelWidth",
+            )
             DrawerPanel(
+                modifier = Modifier.width(panelWidth),
                 currentTab = currentTab,
                 hostTitle = hostTitle,
                 unread = unread,
+                collapsed = collapsed,
                 onGoTab = { requestClose { onGoTab(it) } },
                 onOpenTerminal = { requestClose { onOpenTerminal() } },
                 onOpenSettings = { requestClose { onOpenSettings() } },
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
+                onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
                 onClose = { requestClose() },
             )
         }
@@ -162,18 +180,23 @@ fun AppDrawer(
 /**
  * 面板本体 —— 与遮罩解耦,方便单独调样式。
  *
- * 布局自上而下:品牌头(Logo + 名称 + 连接态胶囊) → 双快捷磁贴(终端 / 任务中心) →
- * 导航分组 → 更多分组 → 底部元信息(模型 + 版本)。
+ * 【双模式】collapsed=false 展开:品牌头 + 快捷磁贴 + 导航分组 + 底部元信息;
+ * collapsed=true 收起:76dp 窄 rail,仅图标垂直排列,点图标直接跳转,
+ * 长按图标浮出文字提示(Android 无悬停,长按为等价交互)。
+ * 宽度切换由外层 animateDpAsState 驱动,内容用 Crossfade 淡切,偏好已持久化。
  */
 @Composable
 private fun DrawerPanel(
+    modifier: Modifier = Modifier,
     currentTab: Int,
     hostTitle: String,
     unread: Int,
+    collapsed: Boolean,
     onGoTab: (Int) -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
+    onToggleCollapsed: () -> Unit,
     onClose: () -> Unit,
 ) {
     val connState = AgentConnection.connState.value
@@ -188,22 +211,36 @@ private fun DrawerPanel(
     )
 
     Column(
-        Modifier
-            .fillMaxWidth(0.86f)
-            .widthIn(max = 330.dp)
+        modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(topEnd = 30.dp, bottomEnd = 30.dp))
             .background(Pa.CardHigh)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp),
-        ) {
+        Crossfade(
+            targetState = collapsed,
+            animationSpec = tween(200),
+            label = "drawerMode",
+            modifier = Modifier.weight(1f),
+        ) { c ->
+            if (c) {
+                RailContent(
+                    currentTab = currentTab,
+                    unread = unread,
+                    onGoTab = onGoTab,
+                    onOpenTerminal = onOpenTerminal,
+                    onOpenSettings = onOpenSettings,
+                    onOpenTaskCenter = onOpenTaskCenter,
+                    onToggleCollapsed = onToggleCollapsed,
+                )
+            } else {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp),
+                ) {
             Spacer(Modifier.height(16.dp))
 
             // ---------- 品牌头 ----------
@@ -233,6 +270,11 @@ private fun DrawerPanel(
                     Spacer(Modifier.height(3.dp))
                     ConnectionPill(connected = connected, label = hostTitle, transport = transport)
                 }
+                IconActionButton(
+                    R.drawable.ic_lucide_chevron_left, "收起为图标栏", onToggleCollapsed,
+                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
+                )
+                Spacer(Modifier.width(2.dp))
                 IconActionButton(
                     R.drawable.ic_lucide_x, "关闭", onClose,
                     bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
@@ -286,25 +328,158 @@ private fun DrawerPanel(
             )
 
             Spacer(Modifier.height(14.dp))
+                } // 展开滚动内容
+            } // Crossfade 双模式
         }
 
-        // ---------- 底部元信息 ----------
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-        Row(
+        // ---------- 底部元信息(仅展开态;rail 态空间有限留白) ----------
+        if (!collapsed) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val model = AgentConnection.selectedModel
+                Text(
+                    model.takeIf { it.isNotEmpty() } ?: "跟随桌面配置",
+                    Modifier.weight(1f),
+                    fontSize = 10.5.sp,
+                    color = Pa.TextTertiary,
+                    maxLines = 1,
+                )
+                Text("v0.1.0", fontSize = 10.5.sp, color = Pa.TextTertiary)
+            }
+        }
+    }
+}
+
+/**
+ * 收起态窄 rail:仅图标垂直排列。点图标直接执行跳转;长按浮出文字提示。
+ */
+@Composable
+private fun RailContent(
+    currentTab: Int,
+    unread: Int,
+    onGoTab: (Int) -> Unit,
+    onOpenTerminal: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenTaskCenter: () -> Unit,
+    onToggleCollapsed: () -> Unit,
+) {
+    val entries = listOf(
+        DrawerEntry(R.drawable.ic_lucide_monitor, "主页", "agent 与最近任务", 0),
+        DrawerEntry(R.drawable.ic_lucide_message_square, "会话", "全部任务会话", 1),
+        DrawerEntry(R.drawable.ic_lucide_folder, "文件", "浏览电脑文件", 2),
+        DrawerEntry(R.drawable.ic_lucide_git_branch, "Git", "工作区版本管理", 3),
+    )
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(16.dp))
+        // Logo:点按展开完整面板(折叠态的"找回文字"入口)
+        Box(
             Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .size(46.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .pressable { onToggleCollapsed() },
+            contentAlignment = Alignment.Center,
         ) {
-            val model = AgentConnection.selectedModel
-            Text(
-                model.takeIf { it.isNotEmpty() } ?: "跟随桌面配置",
-                Modifier.weight(1f),
-                fontSize = 10.5.sp,
-                color = Pa.TextTertiary,
-                maxLines = 1,
+            Image(
+                bitmap = agentBitmap(R.mipmap.ic_launcher),
+                contentDescription = "展开侧边栏",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(46.dp),
             )
-            Text("v0.1.0", fontSize = 10.5.sp, color = Pa.TextTertiary)
+        }
+        Spacer(Modifier.height(16.dp))
+        RailIcon(R.drawable.ic_lucide_square_terminal, "终端", onClick = onOpenTerminal)
+        Spacer(Modifier.height(8.dp))
+        RailIcon(R.drawable.ic_lucide_list_checks, "任务中心", badge = unread, onClick = onOpenTaskCenter)
+        RailDivider()
+        entries.forEach { e ->
+            RailIcon(e.icon, e.title, selected = e.tab == currentTab) { onGoTab(e.tab) }
+        }
+        RailDivider()
+        RailIcon(R.drawable.ic_lucide_settings, "设置", onClick = onOpenSettings)
+        Spacer(Modifier.weight(1f))
+        RailIcon(R.drawable.ic_lucide_chevron_right, "展开", onClick = onToggleCollapsed)
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** rail 分隔细线。 */
+@Composable
+private fun RailDivider() {
+    Box(
+        Modifier
+            .padding(vertical = 8.dp)
+            .width(30.dp)
+            .height(1.dp)
+            .background(Pa.Separator),
+    )
+}
+
+/**
+ * rail 图标钮:44dp 圆角方块;选中态 AccentDim 底 + Accent 图标;
+ * 长按在右侧浮出文字提示(≈桌面 hover tooltip),1.5s 后自动消失。
+ */
+@Composable
+private fun RailIcon(
+    iconRes: Int,
+    label: String,
+    selected: Boolean = false,
+    badge: Int = 0,
+    onClick: () -> Unit,
+) {
+    var showTip by remember { mutableStateOf(false) }
+    LaunchedEffect(showTip) {
+        if (showTip) {
+            delay(1500)
+            showTip = false
+        }
+    }
+    Box {
+        Box(
+            Modifier
+                .size(44.dp)
+                .pressableLong(onClick = onClick, onLongPress = { showTip = true })
+                .background(if (selected) Pa.AccentDim else Color.Transparent, RoundedCornerShape(13.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (badge > 0) {
+                PaBadge(count = badge) {
+                    Icon(
+                        painterResource(iconRes), label,
+                        tint = if (selected) Pa.Accent else Pa.TextSecondary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            } else {
+                Icon(
+                    painterResource(iconRes), label,
+                    tint = if (selected) Pa.Accent else Pa.TextSecondary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        if (showTip) {
+            val tipOffset = with(LocalDensity.current) { IntOffset(10.dp.roundToPx(), 0) }
+            Popup(alignment = Alignment.CenterEnd, offset = tipOffset) {
+                Text(
+                    label,
+                    Modifier
+                        .background(Pa.TextPrimary, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    color = Pa.Bg,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
