@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 import androidx.core.graphics.drawable.toBitmap
@@ -98,6 +99,7 @@ fun HomeScreen(
     onOpenThread: (String) -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenTaskCenter: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -142,7 +144,11 @@ fun HomeScreen(
         )
     }
 
-    Column(modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()) {
+    // 左边缘右滑也能唤出侧边栏(问题 7),与左上角图标点按是同一个入口的两种手势
+    Column(
+        modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()
+            .edgeSwipeToOpenDrawer { showDrawer = true },
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -202,8 +208,11 @@ fun HomeScreen(
                                 rowAgents.forEach { a ->
                                     AgentTile(a) {
                                         if (a.available) {
-                                            AgentConnection.selectedAgent = a.id
-                                            onOpenTerminal()
+                                            // 选中 agent = 切换后端,不再自动跳进终端页。
+                                            // 终端只在用户主动点【终端】时打开,平时保持
+                                            // "无感":切换 agent 不打断当前界面。
+                                            AgentConnection.switchAgent(a.id)
+                                            Toast.makeText(ctx, "已切换到「${a.name}」", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(ctx, "「${a.name}」持续开发中,敬请期待", Toast.LENGTH_SHORT).show()
                                         }
@@ -256,7 +265,7 @@ fun HomeScreen(
                         shown.forEach { a ->
                             AgentTile(a) {
                                 if (a.available) {
-                                    AgentConnection.selectedAgent = a.id
+                                    AgentConnection.switchAgent(a.id)
                                 } else {
                                     Toast.makeText(ctx, "「${a.name}」持续开发中,敬请期待", Toast.LENGTH_SHORT).show()
                                 }
@@ -405,6 +414,7 @@ fun HomeScreen(
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
+            onOpenTaskCenter = onOpenTaskCenter,
         )
     }
 }

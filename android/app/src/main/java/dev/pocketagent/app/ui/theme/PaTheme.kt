@@ -31,6 +31,17 @@ object Pa {
     var Green by mutableStateOf(Color(0xFF32D74B)); private set
     var Red by mutableStateOf(Color(0xFFFF453A)); private set
     var Yellow by mutableStateOf(Color(0xFFFFD60A)); private set
+
+    // ---- 小字号文本专用变体(设计规范 §1.1 对比度审计 · 方案 A) ----
+    // 基础语义色用于图标/色块/进度条等图形元素(适用 3:1 非文本标准);
+    // 下面这组专供 11sp 及以下的文本,对比度均 ≥5.2:1,满足 WCAG AA 正常文本 4.5:1。
+    var AccentText by mutableStateOf(Color(0xFF7FC0FF)); private set
+    var GreenText by mutableStateOf(Color(0xFF5BE070)); private set
+    var RedText by mutableStateOf(Color(0xFFFF7A70)); private set
+
+    /** 数据可视化专用:上下文构成中的「MCP技能」段。两套主题共用。 */
+    var Mcp by mutableStateOf(Color(0xFFB584FF)); private set
+
     var IsDark by mutableStateOf(true); private set
 
     /** 应用深/浅两套色板(浅色 = 同一设计语言的反相:白底浅灰卡)。 */
@@ -42,12 +53,16 @@ object Pa {
             TextPrimary = Color(0xFFF2F2F4); TextSecondary = Color(0xFF98989F); TextTertiary = Color(0xFF5A5A60)
             Separator = Color(0xFF26262A); Green = Color(0xFF32D74B); Red = Color(0xFFFF453A)
             Yellow = Color(0xFFFFD60A)
+            AccentText = Color(0xFF7FC0FF); GreenText = Color(0xFF5BE070); RedText = Color(0xFFFF7A70)
+            Mcp = Color(0xFFB584FF)
         } else {
             Bg = Color(0xFFF6F6F8); Card = Color(0xFFFFFFFF); CardHigh = Color(0xFFF0F0F3)
             Hover = Color(0xFFE4E4E9); Accent = Color(0xFF2F7FE8); AccentDim = Color(0xFFD9E9FF)
             TextPrimary = Color(0xFF17171A); TextSecondary = Color(0xFF6A6A72); TextTertiary = Color(0xFF9E9EA6)
             Separator = Color(0xFFE6E6EB); Green = Color(0xFF1FA843); Red = Color(0xFFE5372B)
             Yellow = Color(0xFFC79400)
+            AccentText = Color(0xFF1F63C4); GreenText = Color(0xFF177C33); RedText = Color(0xFFC42B21)
+            Mcp = Color(0xFFB584FF)
         }
     }
 }

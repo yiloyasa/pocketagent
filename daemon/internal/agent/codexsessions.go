@@ -126,6 +126,19 @@ func scanFirstUserMessage(f *os.File) string {
 	return ""
 }
 
+// DeleteCodexSession 删除 codex 会话在电脑上的 rollout 文件。
+// 手机端"删除会话"若要真正落到电脑上,删除本地线程时需一并调用它。
+func DeleteCodexSession(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("空的 codex 会话 id")
+	}
+	path, err := FindCodexSession(id)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
 // FindCodexSession 按 id 定位 rollout 文件。
 func FindCodexSession(id string) (string, error) {
 	var hit string

@@ -64,4 +64,5 @@ message Usage {
   int64 cache_read_tokens = 3;
   int64 cache_write_tokens = 4;
   double cost_usd = 5;
+  int64 reasoning_tokens = 6; // 思考(推理)输出 token,codex reasoningOutputTokens
 }

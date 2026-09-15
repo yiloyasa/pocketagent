@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketagent.app.AgentConnection
+import dev.pocketagent.app.ui.component.TaskCenter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +40,18 @@ object TurnSession {
         val items = mutableStateListOf<ChatItem>()
         var streamText by mutableStateOf("")
         var thinkingText by mutableStateOf("")
+        /** 本轮 token 用量(上下文窗口交互卡用)。 */
+        var turnUsage by mutableStateOf<pocketagent.v1.Usage?>(null)
+        /** 本会话累计用量。 */
+        var totalUsage by mutableStateOf<pocketagent.v1.Usage?>(null)
+        /** daemon 随用量上报的真实上下文窗口大小(0=未知)。 */
+        var liveContextWindow by mutableStateOf(0L)
+        /** 当前执行计划(turn/plan/updated,"status|text" 列表);轮次结束落成计划卡。 */
+        var planSteps by mutableStateOf(listOf<String>())
+        /** 计划生成中的流式草稿(item/plan/delta)。 */
+        var planStream by mutableStateOf("")
+        /** 本轮实际生效的模型(codex 可能按桌面配置重定向)。 */
+        var runningModel by mutableStateOf("")
         var running by mutableStateOf(false)
         var streaming by mutableStateOf(false)
         var recovering by mutableStateOf(false)
@@ -65,6 +78,35 @@ object TurnSession {
         }
     }
 
+    /**
+     * 把累积中的思考文本落成时间线上的一张可折叠卡片。
+     *
+     * 思考总是发生在正文/工具调用之前,所以在"第一段正文出现""第一个工具调用"
+     * "本轮结束"三个时点各尝试提交一次即可;提交后 thinkingText 清空,
+     * 重复调用自然变成空操作。这样退出页面再回来也能看到完整的思考过程。
+     */
+    private fun commitThinking(st: State) {
+        val t = st.thinkingText
+        if (t.isBlank()) return
+        st.items.add(ChatItem("thinking", t.trim()))
+        st.thinkingText = ""
+    }
+
+    /**
+     * 把本轮流式更新的执行计划落成时间线上的一张步骤卡。
+     * 与思考同理:计划只发生在正文之前,轮次结束提交一次即可。
+     */
+    private fun commitPlan(st: State) {
+        val steps = st.planSteps
+        if (steps.isEmpty()) return
+        // 同一轮内已落过卡则原地更新(轮次只会提交一次,防御性写法)
+        val idx = st.items.indexOfLast { it.role == "plan" }
+        val card = ChatItem("plan", planSteps = steps)
+        if (idx >= 0) st.items[idx] = card else st.items.add(card)
+        st.planSteps = emptyList()
+        st.planStream = ""
+    }
+
     /** 发送一条消息并启动/接续后台轮次。 */
     fun send(threadId: String, text: String, attachments: List<Attachment> = emptyList()) {
         val st = state(threadId)
@@ -78,8 +120,14 @@ object TurnSession {
         st.pendingApproval = null
         st.thinkingText = ""
         st.streamText = ""
+        st.turnUsage = null
+        st.planSteps = emptyList()
+        st.planStream = ""
         // 前台保活:锁屏/切后台不被系统杀,任务流才能活着跑完
         AgentConnection.startTurnService()
+        // 【任务中心】登记这一轮消息处理 —— 之后退出聊天页也由 TaskCenter 持有引用,
+        // 侧边栏角标与任务中心列表由此得到数据来源(此前无人调用,角标恒 0)。
+        TaskCenter.trackMessage(threadId, text.replace('\n', ' ').take(24))
         // 附件已上传到电脑,把 PC 路径一并发给 agent,它会自己去读
         val attachNote = if (attachments.isEmpty()) "" else
             attachments.joinToString("\n") { "[附件已上传到电脑: ${it.pcPath}]" } + "\n\n"
@@ -142,16 +190,41 @@ object TurnSession {
                 var sawEnd = false
                 responseFlow.collect { ev ->
                     when (ev.msgCase) {
-                        TurnServerMessage.MsgCase.STARTED -> st.streaming = true
-                        TurnServerMessage.MsgCase.TEXT_DELTA -> st.streamText += ev.textDelta.delta
+                        TurnServerMessage.MsgCase.STARTED -> {
+                            st.streaming = true
+                            if (ev.started.modelId.isNotEmpty()) st.runningModel = ev.started.modelId
+                        }
+                        TurnServerMessage.MsgCase.TEXT_DELTA -> {
+                            // 正文开始 = 思考阶段结束,先把思考落成一张卡片
+                            commitThinking(st)
+                            st.streamText += ev.textDelta.delta
+                        }
                         TurnServerMessage.MsgCase.THINKING_DELTA -> st.thinkingText += ev.thinkingDelta.delta
                         TurnServerMessage.MsgCase.USAGE -> {
-                            // 用量显示在模型栏，不再挤占聊天时间线。
+                            // 用量进上下文窗口交互卡，不再挤占聊天时间线。
+                            st.turnUsage = ev.usage.usage
+                            st.totalUsage = ev.usage.totalUsage
+                            // codex 上报的真实窗口大小:模型列表没有各模型的窗口,
+                            // 切模型后上下文窗口靠这个继续显示。
+                            if (ev.usage.modelContextWindow > 0) {
+                                st.liveContextWindow = ev.usage.modelContextWindow
+                            }
                         }
                         TurnServerMessage.MsgCase.CODEX_EVENT -> {
                             st.codexEvents = (st.codexEvents + ev.codexEvent).takeLast(20)
-                            if (ev.codexEvent.kind == CodexEvent.Kind.ERROR) {
-                                st.errorMessage = ev.codexEvent.message
+                            val cev = ev.codexEvent
+                            when {
+                                cev.title == "执行计划更新" && cev.planStepsCount > 0 -> {
+                                    // 结构化步骤:实时替换当前计划,轮次结束落成卡片
+                                    st.planSteps = cev.planStepsList
+                                    st.planStream = ""
+                                }
+                                cev.title == "执行计划生成中" && cev.message.isNotBlank() -> {
+                                    st.planStream += cev.message
+                                }
+                            }
+                            if (cev.kind == CodexEvent.Kind.ERROR) {
+                                st.errorMessage = cev.message
                             }
                         }
                         TurnServerMessage.MsgCase.TOOL_CALL -> {
@@ -161,27 +234,45 @@ object TurnSession {
                                     st.items.add(ChatItem("assistant", st.streamText))
                                     st.streamText = ""
                                 }
+                                commitThinking(st)
                                 st.items.add(
                                     ChatItem(
                                         "tool",
-                                        toolName = tc.call.name,
+                                        toolName = tc.call.name.ifBlank { "工具" },
+                                        toolId = tc.call.id,
+                                        toolArgs = tc.call.jsonArgs,
                                         toolStatus = "running",
                                     ),
                                 )
                             } else {
-                                st.items.add(
-                                    ChatItem(
-                                        "tool",
-                                        toolName = tc.call.name,
-                                        text = (tc.result?.output ?: "").take(400),
-                                        toolStatus = if (tc.result?.ok == false) "failure" else "success",
-                                    ),
+                                val res = if (tc.hasResult()) tc.result else null
+                                // 结果回填到同一次调用的那张卡上(同一 id 原地更新),
+                                // 而不是再插一条新记录 —— 这样工具卡才是"一次调用一条"。
+                                val idx = st.items.indexOfLast { item ->
+                                    item.role == "tool" &&
+                                        (
+                                            (tc.call.id.isNotEmpty() && item.toolId == tc.call.id) ||
+                                                (tc.call.id.isEmpty() && item.toolStatus == "running")
+                                            )
+                                }
+                                val prev = if (idx >= 0) st.items[idx] else null
+                                val updated = ChatItem(
+                                    "tool",
+                                    toolName = tc.call.name.ifBlank { prev?.toolName ?: "工具" },
+                                    toolId = tc.call.id.ifBlank { prev?.toolId ?: "" },
+                                    toolArgs = tc.call.jsonArgs.ifBlank { prev?.toolArgs ?: "" },
+                                    toolElapsedMs = res?.elapsedMs ?: 0.0,
+                                    text = (res?.output ?: "").take(4000),
+                                    toolStatus = if (res?.ok == false) "failure" else "success",
                                 )
+                                if (idx >= 0) st.items[idx] = updated else st.items.add(updated)
                             }
                         }
                         TurnServerMessage.MsgCase.APPROVAL_REQUEST -> st.pendingApproval = ev.approvalRequest
                         TurnServerMessage.MsgCase.COMPLETED -> {
                             sawEnd = true
+                            commitThinking(st)
+                            commitPlan(st)
                             if (st.streamText.isNotEmpty()) {
                                 st.items.add(ChatItem("assistant", st.streamText))
                             }
@@ -195,10 +286,14 @@ object TurnSession {
                             st.approvalError = null
                             st.pendingApproval = null
                             st.replyCh = null
+                            // 任务中心:轮次正常结束 → 标记完成(有 ERROR 事件仍算失败)
+                            TaskCenter.finishMessage(threadId, ok = st.errorMessage == null)
                         }
                         TurnServerMessage.MsgCase.FAILED -> {
                             sawEnd = true
                             st.errorMessage = ev.failed.error.message.ifBlank { "任务失败" }
+                            commitThinking(st)
+                            commitPlan(st)
                             if (st.streamText.isNotEmpty()) {
                                 st.items.add(ChatItem("assistant", st.streamText))
                             }
@@ -208,6 +303,8 @@ object TurnSession {
                             st.recovering = false
                             st.pendingApproval = null
                             st.replyCh = null
+                            // 任务中心:轮次失败 → 标记失败并带上原因
+                            TaskCenter.finishMessage(threadId, ok = false, detail = st.errorMessage ?: "")
                         }
                         else -> {}
                     }
@@ -285,12 +382,15 @@ object TurnSession {
                     st.recovering = false
                     st.recoveryError = null
                     st.errorMessage = null
+                    // 任务中心:断流后从电脑端恢复成功 = 这一轮实际跑完了
+                    TaskCenter.finishMessage(threadId, ok = true, detail = "已从电脑端恢复结果")
                     maybeStopKeepAlive()
                 }
             }
             if (!recovered) {
                 st.recovering = false
                 st.recoveryError = "自动恢复超时，请手动刷新会话历史"
+                TaskCenter.finishMessage(threadId, ok = false, detail = "自动恢复超时")
                 maybeStopKeepAlive()
             }
         }

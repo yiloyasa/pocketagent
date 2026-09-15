@@ -8,13 +8,19 @@
 ' Win32_Process.Create asks the WMI service to spawn it, so the new process
 ' is owned by WmiPrvSE.exe and lives outside the task's job - it survives.
 '
-' Window: WMI-created processes get no console window, so nothing flashes on
-' the desktop; the batch file then starts the daemon hidden as well.
+' Window: see the 2026-09-15 note below.
 Dim sh, fso, here, cmdl, wmi, proc, rc
 Set sh  = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(WScript.ScriptFullName)
-cmdl = "cmd /c " & Chr(34) & here & "\watchdog.bat" & Chr(34)
+' 2026-09-15: action changed from "cmd /c watchdog.bat" to paguard.exe, a
+' GUI-subsystem Go binary. WMI-created CONSOLE processes DO get a visible
+' console in an interactive session (the old "no window" assumption was
+' wrong) - the old chain flashed a cmd window on the desktop once a minute.
+' paguard physically cannot create a console window; it probes the port
+' in-process and starts the daemon hidden via CREATE_NO_WINDOW.
+' watchdog.bat is kept for MANUAL use only (its console is fine interactively).
+cmdl = Chr(34) & here & "\paguard.exe" & Chr(34)
 
 On Error Resume Next
 Set wmi  = GetObject("winmgmts:\\.\root\cimv2")

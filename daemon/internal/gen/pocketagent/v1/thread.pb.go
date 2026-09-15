@@ -1672,19 +1672,22 @@ func (*TurnServerMessage_CodexEvent) isTurnServerMessage_Msg() {}
 // Codex app-server 的原生状态和错误事件。
 // 事件先实时发送给手机，再由最终 TurnFailed/TurnCompleted 收尾。
 type CodexEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          CodexEvent_Kind        `protobuf:"varint,1,opt,name=kind,proto3,enum=pocketagent.v1.CodexEvent_Kind" json:"kind,omitempty"`
-	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`                                        // CodexErrorInfo 或事件代码
-	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`                                      // 面向用户的标题
-	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`                                  // 面向用户的详细信息
-	Url           string                 `protobuf:"bytes,5,opt,name=url,proto3" json:"url,omitempty"`                                          // 上游 URL
-	HttpStatus    int32                  `protobuf:"varint,6,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`         // 上游 HTTP 状态
-	WillRetry     bool                   `protobuf:"varint,7,opt,name=will_retry,json=willRetry,proto3" json:"will_retry,omitempty"`            // Codex 是否会继续重试
-	Attempt       int32                  `protobuf:"varint,8,opt,name=attempt,proto3" json:"attempt,omitempty"`                                 // 若 Codex 提供重试次数
-	RetryAfterMs  int64                  `protobuf:"varint,9,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"` // 若 Codex 提供冷却时间
-	ThreadId      string                 `protobuf:"bytes,10,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
-	TurnId        string                 `protobuf:"bytes,11,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
-	RawJson       string                 `protobuf:"bytes,12,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"` // 诊断用原始参数, UI 默认不直接展示
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Kind         CodexEvent_Kind        `protobuf:"varint,1,opt,name=kind,proto3,enum=pocketagent.v1.CodexEvent_Kind" json:"kind,omitempty"`
+	Code         string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`                                        // CodexErrorInfo 或事件代码
+	Title        string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`                                      // 面向用户的标题
+	Message      string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`                                  // 面向用户的详细信息
+	Url          string                 `protobuf:"bytes,5,opt,name=url,proto3" json:"url,omitempty"`                                          // 上游 URL
+	HttpStatus   int32                  `protobuf:"varint,6,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`         // 上游 HTTP 状态
+	WillRetry    bool                   `protobuf:"varint,7,opt,name=will_retry,json=willRetry,proto3" json:"will_retry,omitempty"`            // Codex 是否会继续重试
+	Attempt      int32                  `protobuf:"varint,8,opt,name=attempt,proto3" json:"attempt,omitempty"`                                 // 若 Codex 提供重试次数
+	RetryAfterMs int64                  `protobuf:"varint,9,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"` // 若 Codex 提供冷却时间
+	ThreadId     string                 `protobuf:"bytes,10,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	TurnId       string                 `protobuf:"bytes,11,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	RawJson      string                 `protobuf:"bytes,12,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"` // 诊断用原始参数, UI 默认不直接展示
+	// turn/plan/updated 的执行计划步骤,每项格式 "status|text"
+	// (status: pending/in_progress/completed)。UI 渲染为步骤卡。
+	PlanSteps     []string `protobuf:"bytes,13,rep,name=plan_steps,json=planSteps,proto3" json:"plan_steps,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1801,6 +1804,13 @@ func (x *CodexEvent) GetRawJson() string {
 		return x.RawJson
 	}
 	return ""
+}
+
+func (x *CodexEvent) GetPlanSteps() []string {
+	if x != nil {
+		return x.PlanSteps
+	}
+	return nil
 }
 
 type TurnStarted struct {
@@ -2065,11 +2075,14 @@ func (x *ApprovalRequest) GetReason() string {
 }
 
 type UsageUpdate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Usage         *Usage                 `protobuf:"bytes,1,opt,name=usage,proto3" json:"usage,omitempty"`                             // 本 turn 累计
-	TotalUsage    *Usage                 `protobuf:"bytes,2,opt,name=total_usage,json=totalUsage,proto3" json:"total_usage,omitempty"` // 本 thread 累计
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Usage      *Usage                 `protobuf:"bytes,1,opt,name=usage,proto3" json:"usage,omitempty"`                             // 本 turn 累计
+	TotalUsage *Usage                 `protobuf:"bytes,2,opt,name=total_usage,json=totalUsage,proto3" json:"total_usage,omitempty"` // 本 thread 累计
+	// codex thread/tokenUsage/updated 上报的真实窗口大小;
+	// 模型列表拉不到各模型的窗口时,以这里为准(切模型后也能显示)。
+	ModelContextWindow int64 `protobuf:"varint,3,opt,name=model_context_window,json=modelContextWindow,proto3" json:"model_context_window,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UsageUpdate) Reset() {
@@ -2114,6 +2127,13 @@ func (x *UsageUpdate) GetTotalUsage() *Usage {
 		return x.TotalUsage
 	}
 	return nil
+}
+
+func (x *UsageUpdate) GetModelContextWindow() int64 {
+	if x != nil {
+		return x.ModelContextWindow
+	}
+	return 0
 }
 
 type TurnCompleted struct {
@@ -2385,7 +2405,7 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x06failed\x18\b \x01(\v2\x1a.pocketagent.v1.TurnFailedH\x00R\x06failed\x12=\n" +
 	"\vcodex_event\x18\t \x01(\v2\x1a.pocketagent.v1.CodexEventH\x00R\n" +
 	"codexEventB\x05\n" +
-	"\x03msg\"\x93\x04\n" +
+	"\x03msg\"\xb2\x04\n" +
 	"\n" +
 	"CodexEvent\x123\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1f.pocketagent.v1.CodexEvent.KindR\x04kind\x12\x12\n" +
@@ -2402,7 +2422,9 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\tthread_id\x18\n" +
 	" \x01(\tR\bthreadId\x12\x17\n" +
 	"\aturn_id\x18\v \x01(\tR\x06turnId\x12\x19\n" +
-	"\braw_json\x18\f \x01(\tR\arawJson\"\xa8\x01\n" +
+	"\braw_json\x18\f \x01(\tR\arawJson\x12\x1d\n" +
+	"\n" +
+	"plan_steps\x18\r \x03(\tR\tplanSteps\"\xa8\x01\n" +
 	"\x04Kind\x12\x1b\n" +
 	"\x17CODEX_EVENT_UNSPECIFIED\x10\x00\x12\t\n" +
 	"\x05ERROR\x10\x01\x12\x11\n" +
@@ -2434,11 +2456,12 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x125\n" +
 	"\x06action\x18\x02 \x01(\v2\x1d.pocketagent.v1.ToolCallBlockR\x06action\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"r\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xa4\x01\n" +
 	"\vUsageUpdate\x12+\n" +
 	"\x05usage\x18\x01 \x01(\v2\x15.pocketagent.v1.UsageR\x05usage\x126\n" +
 	"\vtotal_usage\x18\x02 \x01(\v2\x15.pocketagent.v1.UsageR\n" +
-	"totalUsage\"\xb5\x01\n" +
+	"totalUsage\x120\n" +
+	"\x14model_context_window\x18\x03 \x01(\x03R\x12modelContextWindow\"\xb5\x01\n" +
 	"\rTurnCompleted\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12?\n" +
 	"\ffinal_blocks\x18\x02 \x03(\v2\x1c.pocketagent.v1.ContentBlockR\vfinalBlocks\x12+\n" +

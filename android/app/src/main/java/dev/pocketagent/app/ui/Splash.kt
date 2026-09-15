@@ -8,8 +8,15 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -25,6 +32,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
@@ -39,14 +47,16 @@ import androidx.core.view.WindowCompat
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
- * 启动动效：
- * 白底中央逐字出现品牌字标，蓝色光晕在 agent 区域柔和扩散，
- * 完成后直接淡出交给主页，避免旧版“大 Pa 飞入字标”造成跳变。
+ * 启动动效(优化版):
+ *   1) 背景跟随当前主题(深色主题下不再闪一块白,消除"闪屏"感);
+ *   2) 字标先淡入并轻微放大"立住",再逐字打出品牌名,节奏均匀;
+ *   3) 到 "agent" 时蓝色光晕柔和扩散,底部一条进度线同步展开;
+ *   4) 收尾整屏淡出交接主页,全程无跳变。
  */
 private val PaFont = FontFamily(Font(R.font.poppins_bold))
-private val Ink = Color(0xFF0D0D0F)
 private const val FULL = "Pocket agent"
 
 @Composable
@@ -55,84 +65,122 @@ fun Splash(onDone: () -> Unit) {
     val view = LocalView.current
     var visible by remember { mutableStateOf(true) }
     var typed by remember { mutableIntStateOf(0) }
-    val textAlpha = remember { Animatable(0f) }
+
+    val markAlpha = remember { Animatable(0f) }
+    val markScale = remember { Animatable(0.92f) }
     val glow = remember { Animatable(0f) }
+    val sweep = remember { Animatable(0f) }
+
+    // 跟随主题取色:浅色主题近白、深色主题近黑,避免启动瞬间的色彩跳变
+    val bg = Pa.Bg
+    val ink = Pa.TextPrimary
 
     SideEffect {
         val window = (context as? Activity)?.window ?: return@SideEffect
-        window.statusBarColor = android.graphics.Color.WHITE
-        window.navigationBarColor = android.graphics.Color.WHITE
+        window.statusBarColor = bg.toArgb()
+        window.navigationBarColor = bg.toArgb()
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = true
-            isAppearanceLightNavigationBars = true
+            isAppearanceLightStatusBars = !Pa.IsDark
+            isAppearanceLightNavigationBars = !Pa.IsDark
         }
     }
 
     LaunchedEffect(Unit) {
-        delay(260)
-        textAlpha.animateTo(1f, tween(220, easing = FastOutSlowInEasing))
+        // 1) 字标先立住:淡入 + 轻微放大并行
+        launch { markAlpha.animateTo(1f, tween(340, easing = FastOutSlowInEasing)) }
+        markScale.animateTo(1f, tween(560, easing = FastOutSlowInEasing))
+        delay(140)
+
+        // 2) 逐字打出;到 "agent" 时触发光晕与进度线
+        val agentStart = FULL.indexOf("agent") + 1
+        val agentEnd = agentStart + "agent".length
         for (i in 1..FULL.length) {
             typed = i
-            delay(if (FULL[i - 1] == ' ') 150 else 72)
-            if (i == 6) {
-                glow.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
+            delay(if (FULL[i - 1] == ' ') 120 else 58)
+            if (i == agentStart) {
+                launch { glow.animateTo(1f, tween(1100, easing = FastOutSlowInEasing)) }
+                launch { sweep.animateTo(1f, tween(FULL.length * 58 + 200, easing = FastOutSlowInEasing)) }
+            }
+            if (i == agentEnd) {
+                // "agent" 打完再补一点光晕,形成收束感
+                launch { glow.animateTo(1f, tween(500, easing = FastOutSlowInEasing)) }
             }
         }
-        delay(520)
+        sweep.animateTo(1f, tween(320, easing = FastOutSlowInEasing))
+        delay(540)
+
+        // 3) 整屏淡出,交接主页
         visible = false
-        delay(260)
+        delay(300)
         onDone()
     }
 
-    AnimatedVisibility(visible = visible, exit = fadeOut(tween(260))) {
+    AnimatedVisibility(visible = visible, exit = fadeOut(tween(300))) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Color.White),
+                .background(bg),
             contentAlignment = Alignment.Center,
         ) {
+            // 蓝色光晕:在 "agent" 区域柔和扩散
             Box(
                 Modifier
-                    .size(220.dp)
-                    .alpha(glow.value * 0.82f)
+                    .size(240.dp)
+                    .alpha(glow.value * 0.85f)
                     .background(
                         Brush.radialGradient(
                             colors = listOf(
-                                Pa.Accent.copy(alpha = 0.42f),
-                                Pa.Accent.copy(alpha = 0.16f),
+                                Pa.Accent.copy(alpha = 0.45f),
+                                Pa.Accent.copy(alpha = 0.14f),
                                 Color.Transparent,
                             ),
                         ),
                     ),
             )
-            Text(
-                buildAnnotatedString {
-                    FULL.take(typed).forEachIndexed { index, c ->
-                        withStyle(
-                            SpanStyle(
-                                color = if (index < 7) Ink else Color(0xFF4A9DFF),
-                            ),
-                        ) {
-                            append(c.toString())
-                        }
-                    }
-                    if (typed < FULL.length) {
-                        withStyle(SpanStyle(color = Color(0xFF8DBEFF))) {
-                            append("▍")
-                        }
-                    }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.graphicsLayer {
+                    alpha = markAlpha.value
+                    scaleX = markScale.value
+                    scaleY = markScale.value
                 },
-                fontFamily = PaFont,
-                fontWeight = FontWeight.Bold,
-                fontSize = 34.sp,
-                modifier = Modifier
-                    .graphicsLayer {
-                        alpha = textAlpha.value
-                        val scale = 0.96f + 0.04f * textAlpha.value
-                        scaleX = scale
-                        scaleY = scale
+            ) {
+                Text(
+                    buildAnnotatedString {
+                        FULL.take(typed).forEachIndexed { index, c ->
+                            withStyle(
+                                SpanStyle(color = if (index < 7) ink else Pa.Accent),
+                            ) {
+                                append(c.toString())
+                            }
+                        }
+                        if (typed < FULL.length) {
+                            withStyle(SpanStyle(color = Pa.Accent.copy(alpha = 0.65f))) {
+                                append("▍")
+                            }
+                        }
                     },
-            )
+                    fontFamily = PaFont,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 34.sp,
+                )
+                Spacer(Modifier.height(16.dp))
+                // 进度线:随打字节奏展开,停留时收满
+                Box(
+                    Modifier
+                        .width(150.dp)
+                        .height(3.dp)
+                        .background(Pa.Hover, RoundedCornerShape(50)),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(sweep.value.coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(Pa.Accent, RoundedCornerShape(50)),
+                    )
+                }
+            }
         }
     }
 }

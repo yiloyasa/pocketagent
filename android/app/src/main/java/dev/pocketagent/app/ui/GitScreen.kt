@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,12 +37,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +57,29 @@ import pocketagent.v1.GitStatus
 import pocketagent.v1.GitStatusRequest
 
 /**
+ * 解析默认 Git 仓库:在 daemon 上报的工作区 + 最近工作区里,
+ * 优先挑一个"真的是 git 仓库"的目录,避免一进 Git 栏就是空态。
+ * 返回 (选中的仓库, 全部候选)。
+ */
+private suspend fun resolveGitRepo(): Pair<String, List<String>> = withContext(Dispatchers.IO) {
+    val info = runCatching {
+        AgentConnection.connectWithFallback()
+            ?: AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
+    }.getOrNull()
+    val cands = ((info?.workspacesList ?: emptyList()) + AgentConnection.recentWorkspaces.value)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+    val best = cands.firstOrNull { path ->
+        runCatching {
+            AgentConnection.gitService().status(GitStatusRequest.newBuilder().setRepo(path).build())
+            true
+        }.getOrDefault(false)
+    } ?: cands.firstOrNull().orEmpty()
+    best to cands
+}
+
+/**
  * Git 面板:状态 → diff → 提交,全部走 daemon 的 GitService(子进程调 git)。
  * 与其他页统一:纯黑背景 + 深灰圆角卡 + 细字标题头部。
  */
@@ -63,6 +89,7 @@ fun GitScreen(
     currentTab: Int = 3,
     onOpenTerminal: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenTaskCenter: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
     var showDrawer by remember { mutableStateOf(false) }
@@ -75,6 +102,10 @@ fun GitScreen(
     var commitMsg by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var notRepo by remember { mutableStateOf(false) }
+    // 仓库切换:Git 栏之前"点了没内容、也没交互",核心是仓库路径没解析好。
+    var showRepoPicker by remember { mutableStateOf(false) }
+    var repoInput by remember { mutableStateOf("") }
+    var candidates by remember { mutableStateOf(listOf<String>()) }
 
     fun refresh() {
         if (repo.isEmpty()) return
@@ -88,29 +119,45 @@ fun GitScreen(
                 notRepo = false
             } catch (e: Exception) {
                 val msg = "${e.message}"
-                // 非仓库是常态而不是故障:给出友好空态,不刷红字
-                if (msg.contains("not a git repository")) notRepo = true else error = msg
+                val lower = msg.lowercase()
+                // 非仓库是常态而不是故障:给出友好空态,不刷红字。
+                // gRPC 会把 git 的 stderr 包在 status message 里,这里多匹配几种写法。
+                if (lower.contains("not a git repository") ||
+                    lower.contains("not a git repo") ||
+                    lower.contains("不是 git")
+                ) {
+                    notRepo = true
+                } else {
+                    error = msg
+                }
             } finally {
                 busy = false
             }
         }
     }
 
-    LaunchedEffect(Unit) {
-        if (repo.isEmpty()) {
-            try {
-                val info = withContext(Dispatchers.IO) {
-                    AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
-                }
-                repo = info.workspacesList.firstOrNull().orEmpty()
-            } catch (e: Exception) {
-                error = "连不上 daemon:${e.message}"
-            }
+    /**
+     * 解析默认仓库:在 daemon 上报的工作区 + 最近工作区里,
+     * 优先挑一个"真的是 git 仓库"的目录,避免一进 Git 栏就是空态。
+     */
+    suspend fun resolveDefaultRepo(): Pair<String, List<String>> = resolveGitRepo()
+
+    // 断线重连后自动重取(之前只在首帧跑一次,连上后仍然空着)
+    val reconnectTick = AgentConnection.connectionEpoch.collectAsState().value
+    LaunchedEffect(reconnectTick) {
+        if (repo.isBlank()) {
+            val (best, all) = resolveDefaultRepo()
+            repo = best
+            candidates = all
         }
         refresh()
     }
 
-    Column(Modifier.fillMaxSize().background(Pa.Bg)) {
+    // 左边缘右滑也能唤出侧边栏(问题 7)
+    Column(
+        Modifier.fillMaxSize().background(Pa.Bg)
+            .edgeSwipeToOpenDrawer { showDrawer = true },
+    ) {
         // 头部与会话/文件页统一
         Row(
             Modifier
@@ -139,8 +186,26 @@ fun GitScreen(
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Pa.Accent)
                 Spacer(Modifier.width(12.dp))
             }
+            IconActionButton(AppR.drawable.ic_lucide_folder, "切换仓库", {
+                repoInput = repo
+                showRepoPicker = true
+            }, bg = Pa.Card)
+            Spacer(Modifier.width(10.dp))
             IconActionButton(AppR.drawable.ic_lucide_refresh_cw, "刷新", { refresh() }, bg = Pa.Card)
         }
+
+        // 当前仓库路径:一眼看到"在检查电脑上的哪个目录"
+        Text(
+            repo.ifBlank { "未解析到仓库目录,点右上角文件夹图标选一个" },
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 2.dp),
+            fontSize = 10.5.sp,
+            fontFamily = FontFamily.Monospace,
+            color = Pa.TextTertiary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
 
         Column(
             Modifier
@@ -334,6 +399,65 @@ fun GitScreen(
         )
     }
 
+    // 切换仓库:已知工作区 + 手填路径(修复"看不到任何 git 内容")
+    if (showRepoPicker) {
+        AlertDialog(
+            onDismissRequest = { showRepoPicker = false },
+            title = { Text("切换 Git 仓库", fontSize = 15.sp) },
+            text = {
+                Column {
+                    if (candidates.isEmpty()) {
+                        Text("没有已知的工作区目录", fontSize = 12.sp, color = Pa.TextTertiary)
+                    }
+                    candidates.forEach { c ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable {
+                                    repo = c
+                                    showRepoPicker = false
+                                    refresh()
+                                }
+                                .padding(vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                c,
+                                Modifier.weight(1f),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = if (c == repo) Pa.Accent else Pa.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (c == repo) {
+                                Text("当前", fontSize = 10.sp, color = Pa.Accent)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        repoInput, { repoInput = it },
+                        label = { Text("或手填目录路径") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    TextButton(onClick = {
+                        val v = repoInput.trim()
+                        if (v.isNotBlank()) {
+                            repo = v
+                            showRepoPicker = false
+                            refresh()
+                        }
+                    }) { Text("使用该目录", color = Pa.Accent) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showRepoPicker = false }) { Text("关闭") }
+            },
+        )
+    }
+
     if (showDrawer) {
         AppDrawer(
             currentTab = currentTab,
@@ -342,6 +466,7 @@ fun GitScreen(
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
+            onOpenTaskCenter = onOpenTaskCenter,
         )
     }
 }

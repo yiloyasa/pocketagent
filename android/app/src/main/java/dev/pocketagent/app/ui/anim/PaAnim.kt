@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -24,7 +25,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -32,6 +35,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
@@ -154,5 +159,79 @@ fun EmptyState(iconRes: Int, title: String, hint: String, modifier: Modifier = M
         Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(44.dp))
         Text(title, Modifier.padding(top = 14.dp), fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
         Text(hint, Modifier.padding(top = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * 左边缘右滑唤出侧边栏(问题 7:交互更顺滑)。
+ *
+ * 【起手区间是实测出来的】
+ *  - 最左侧 ~24dp 是**系统返回手势区**(HyperOS 实测 x<24dp 的横滑直接退到桌面),
+ *    那一段我们永远拿不到,所以不指望它;
+ *  - 起手点放宽到 [edgeWidth](64dp,约屏幕宽度的 6%),用户在"边缘往里一点"的位置
+ *    右滑即可唤出 —— 这个区间系统不抢、我们也不和行内左滑打架
+ *    (行内左滑从行中间起手,且只认"往左拉")。
+ *
+ * 【为什么不遮罩覆盖】把检测挂在页面根节点上,子节点仍在命中链里,点击不受影响;
+ * 只有判定确实是从左侧起手的右滑后,才 consume 事件。
+ */
+fun Modifier.edgeSwipeToOpenDrawer(
+    enabled: Boolean = true,
+    edgeWidth: Dp = 64.dp,
+    threshold: Dp = 64.dp,
+    onOpen: () -> Unit,
+): Modifier = composed {
+    if (!enabled) return@composed this
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val edgePx = with(density) { edgeWidth.toPx() }
+    val thresholdPx = with(density) { threshold.toPx() }
+    var accepted by remember { mutableStateOf(false) }
+    var travelled by remember { mutableStateOf(0f) }
+
+    this.pointerInput(edgePx, thresholdPx) {
+        // 注意:扩展函数不能写全限定名调用,必须靠上面的 import 直接引用
+        detectHorizontalDragGestures(
+            onDragStart = { offset ->
+                accepted = offset.x <= edgePx
+                travelled = 0f
+            },
+            onDragEnd = { accepted = false; travelled = 0f },
+            onDragCancel = { accepted = false; travelled = 0f },
+            onHorizontalDrag = { change, dragAmount ->
+                if (!accepted) return@detectHorizontalDragGestures
+                // 只认"往右拉"
+                if (dragAmount <= 0f) {
+                    accepted = false
+                    return@detectHorizontalDragGestures
+                }
+                travelled += dragAmount
+                change.consume()
+                if (travelled >= thresholdPx) {
+                    accepted = false
+                    travelled = 0f
+                    onOpen()
+                }
+            },
+        )
+    }
+}
+
+/**
+ * 系统「减弱动态效果」是否开启(开发者选项里的"动画时长缩放"设为 0)。
+ *
+ * 【设计规范 §1.5】开启时:骨架屏取消平移、撤销条取消进度线动画、
+ * 侧滑改为瞬时展开、抽屉取消滑入仅保留淡入。
+ */
+@Composable
+fun rememberReduceMotion(): Boolean {
+    val ctx = LocalContext.current
+    return remember(ctx) {
+        runCatching {
+            android.provider.Settings.Global.getFloat(
+                ctx.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
     }
 }

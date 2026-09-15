@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +74,7 @@ fun FilesScreen(
     currentTab: Int = 2,
     onOpenTerminal: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenTaskCenter: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
     var showDrawer by remember { mutableStateOf(false) }
@@ -162,6 +164,8 @@ fun FilesScreen(
 
     Scaffold(
         containerColor = Pa.Bg,
+        // 左边缘右滑也能唤出侧边栏(问题 7)
+        modifier = Modifier.edgeSwipeToOpenDrawer { showDrawer = true },
         topBar = {
             Row(
                 Modifier
@@ -333,6 +337,7 @@ fun FilesScreen(
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
+            onOpenTaskCenter = onOpenTaskCenter,
         )
     }
 

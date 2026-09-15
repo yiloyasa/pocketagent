@@ -172,6 +172,9 @@ message CodexEvent {
   string thread_id = 10;
   string turn_id = 11;
   string raw_json = 12;    // 诊断用原始参数, UI 默认不直接展示
+  // turn/plan/updated 的执行计划步骤,每项格式 "status|text"
+  // (status: pending/in_progress/completed)。UI 渲染为步骤卡。
+  repeated string plan_steps = 13;
 }
 
 message TurnStarted {
@@ -203,6 +206,9 @@ message ApprovalRequest {
 message UsageUpdate {
   Usage usage = 1;         // 本 turn 累计
   Usage total_usage = 2;   // 本 thread 累计
+  // codex thread/tokenUsage/updated 上报的真实窗口大小;
+  // 模型列表拉不到各模型的窗口时,以这里为准(切模型后也能显示)。
+  int64 model_context_window = 3;
 }
 
 message TurnCompleted {

@@ -73,6 +73,10 @@ object AgentConnection {
         connTransport.value = transportLabel(candidate)
         connAddress.value = candidate
         connError.value = null
+        // 持久化"最后一次连上"的快照:冷启动时 UI 能立即显示上次的通道/地址,
+        // 候选队列也把它排最前(同一网络下首次连接最快)。
+        prefs?.edit()?.putString("lastGoodAddr", candidate)?.apply()
+        lastGoodAddr = candidate
     }
 
     // ============ 最近工作区(新建会话/终端选目录用) ============
@@ -120,6 +124,8 @@ object AgentConnection {
             address = it.getString("addr", address) ?: address
             token = it.getString("token", "") ?: ""
             selectedModel = it.getString("model", "") ?: ""
+            defaultModel = selectedModel
+            selectedAgent = it.getString("agent", "codex") ?: "codex"
             selectedEffort = it.getString("effort", "") ?: ""
             uiTextScale = it.getFloat("uiTextScale", 1.0f)
             thinkTextScale = it.getFloat("thinkTextScale", 1.0f)
@@ -128,6 +134,15 @@ object AgentConnection {
             multiAgent = it.getBoolean("multiAgent", false)
             lastTailscaleAddr = it.getString("tsAddr", "") ?: ""
             lastLanAddr = it.getString("lanAddr", "") ?: ""
+            manualAddress = it.getString("manualAddr", "") ?: ""
+            lastGoodAddr = it.getString("lastGoodAddr", "") ?: ""
+            showThinkingState = it.getBoolean("showThinking", true)
+            // 连接状态快照立即回显:探活完成前 UI 就能显示"上次连接"的通道与地址,
+            // 而不是一片空白(状态本身仍是 checking,探活成功后转 ok)。
+            if (lastGoodAddr.isNotBlank()) {
+                connAddress.value = lastGoodAddr
+                connTransport.value = transportLabel(lastGoodAddr)
+            }
             recentWorkspaces.value = (it.getString("recentDirs", "") ?: "")
                 .split("\n").map { s -> s.trim() }.filter { s -> s.isNotEmpty() }
             dev.pocketagent.app.ui.theme.AgentTheme.mode = themeMode
@@ -139,6 +154,17 @@ object AgentConnection {
 
     /** daemon 上报的局域网地址(同一 WiFi 直连最快),持久化。 */
     @Volatile var lastLanAddr: String = ""
+
+    /** 最近一次成功连接的地址,持久化;冷启动时排在候选队列首位。 */
+    @Volatile private var lastGoodAddr: String = ""
+
+    /**
+     * 用户手填的兜底地址(设置页「连接」里填的那个)。
+     *
+     * 必须与 [address](当前生效地址)分开存:回退链命中候选后会把 [address] 改写成该候选,
+     * 若两者共用一个字段,用户手填的值会被覆盖 —— 之后一旦拔掉 USB,就再也回不到手填地址。
+     */
+    @Volatile var manualAddress: String = ""
 
     /** daemon 上报了局域网 IP 时记下来。 */
     fun rememberLanIp(ip: String) {
@@ -162,15 +188,48 @@ object AgentConnection {
         }
     }
 
+    /** USB 调试通道地址(adb reverse tcp:7246 后,手机本机端口即电脑 daemon)。 */
+    private const val USB_ADDR = "127.0.0.1:7246"
+
+    /** 回环候选超时:无隧道时本机端口无人监听,连接会被立刻拒绝(实测约 23ms)。 */
+    private const val USB_TIMEOUT_MS = 1500L
+
+    /** 其余候选超时:蜂窝下 Tailscale 走境外 DERP 中继,TCP 建立可能 3-5s。 */
+    private const val REMOTE_TIMEOUT_MS = 6000L
+
     /**
-     * 多候选自动回退连接:依次尝试 [当前地址 → USB 反向 → 局域网 → Tailscale]。
-     * 每个候选 6 秒:蜂窝网络下 Tailscale 走境外 DERP 中继,TCP 建立可能 3-5 秒,
-     * 之前 2.5 秒会误判成"连不上"。
+     * 候选地址顺序(回退原则的落点):
+     *   USB(adb reverse 反向隧道) → 局域网直连 → Tailscale → 用户手填地址(兜底)
+     *
+     * 【为什么 USB 不再做前置判定】
+     * 早先这里有一道 `if (isUsbDebugging())` 门槛,依据是 `UsbManager.deviceList.isNotEmpty()`。
+     * 但手机插在电脑上时是 USB 设备角色(UFP):真机 `dumpsys usb` 显示
+     * data_role=device / host_connected=false,此时 deviceList 必为空 —— 判定恒为 false,
+     * USB 候选从不进队列。(实测:USB 调试已开、`adb reverse tcp:7246` 已注册,
+     * App 仍显示「局域网直连」。)
+     *
+     * 语义上这道判定也是多余的:回环地址只有在电脑侧**确实存在 adb reverse 隧道**时才连得通,
+     * 而「有反向隧道」本身就等价于「正插着线通过电脑调试」。既然无隧道时回环是毫秒级失败,
+     * 把它放在队首的成本可忽略,比依赖不可靠的角色判定更稳。
+     */
+    fun candidateAddresses(): List<String> = buildList {
+        // 上次连成功的排最前:同一网络下冷启动直取熟路,免去逐个试错。
+        add(lastGoodAddr)
+        add(USB_ADDR)
+        add(lastLanAddr)
+        add(lastTailscaleAddr)
+        // 兜底用「用户手填地址」而不是 address:后者会被命中的候选覆盖,手填值会丢。
+        manualAddress.ifBlank { address }.let { if (it.isNotBlank()) add(it) }
+    }.filter { it.isNotBlank() }.distinct()
+
+    /**
+     * 多候选自动回退连接:依次尝试 [USB → 局域网 → Tailscale → 手填地址]。
+     * USB 候选用 [USB_TIMEOUT_MS](回环无隧道时毫秒级失败);
+     * 其余候选用 [REMOTE_TIMEOUT_MS]:蜂窝下 Tailscale 走境外 DERP 中继,
+     * TCP 建立可能 3-5 秒,超时取短了会误判成「连不上」。
      */
     fun connectWithFallback(): pocketagent.v1.HostInfo? {
-        val cands = listOf(address, "127.0.0.1:7246", lastLanAddr, lastTailscaleAddr)
-            .filter { it.isNotBlank() }
-            .distinct()
+        val cands = candidateAddresses()
         var lastFailure: ConnectionDiagnostic? = null
         connState.value = "checking"
         for (cand in cands) {
@@ -180,8 +239,10 @@ object AgentConnection {
                     persist()
                     shutdown()
                 }
+                val timeoutMs = if (cand == USB_ADDR) USB_TIMEOUT_MS else REMOTE_TIMEOUT_MS
                 val info = hostService()
-                    .withDeadlineAfter(6000, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .withWaitForReady() // 通道还在 CONNECTING 时等一等,而不是立刻报失败
+                    .withDeadlineAfter(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
                     .getHostInfo(GetHostInfoRequest.getDefaultInstance())
                 rememberTailscaleIp(info.tailscaleIpv4)
                 rememberLanIp(info.lanIpv4)
@@ -203,15 +264,67 @@ object AgentConnection {
     }
 
     private fun persist() {
-        prefs?.edit()?.putString("addr", address)?.putString("token", token)?.apply()
+        prefs?.edit()
+            ?.putString("addr", address)
+            ?.putString("manualAddr", manualAddress)
+            ?.putString("token", token)
+            ?.apply()
     }
 
     /** 设置页保存 token 时调用 */
     fun persistToken() = persist()
 
-    fun persistModel() = persist()
+    /** 兼容旧调用:等价于把当前 selectedModel 记为全局默认。 */
+    fun persistModel() = setGlobalModel(selectedModel)
 
     fun persistEffort() = persist()
+
+    // ============ 全局默认模型 vs 会话级模型 ============
+    // 区分两者,才能解决"在 A 会话切了模型,B 会话跟着变 / 退出再进被重置"。
+    //   defaultModel  —— 会话列表里选的"默认模型"(空 = 跟随桌面配置)
+    //   selectedModel —— 当前生效值(进入某会话时 = 该会话覆盖值 ?: defaultModel)
+    // 注意:属性名不能叫 globalModel —— 它会生成 setGlobalModel(String),
+    // 与下面的 fun setGlobalModel 构成 JVM 签名冲突。
+    @Volatile
+    var defaultModel: String = ""
+        private set
+
+    /** 设置全局默认模型并持久化(会话内的临时切换请用 setThreadModel)。 */
+    fun setGlobalModel(id: String) {
+        defaultModel = id
+        selectedModel = id
+        prefs?.edit()?.putString("model", id)?.apply()
+    }
+
+    // ============ 按会话记住模型 ============
+    // 修复:在会话里切过模型后,退出再进来又被重置成"跟随桌面配置"。
+    // 之前 selectedModel 是全局唯一值,被别处覆盖后就丢了会话级的意图;
+    // 这里按 threadId 单独记一份(空串也是有效值 = 用户明确选了"跟随桌面配置")。
+    private val threadModels = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** 读取该会话记住的模型;null = 该会话从未选过(用全局默认)。 */
+    fun threadModel(threadId: String): String? {
+        if (threadId.isBlank()) return null
+        threadModels[threadId]?.let { return it }
+        val raw = prefs?.getString("threadModel:$threadId", null) ?: return null
+        threadModels[threadId] = raw
+        return raw
+    }
+
+    /** 记住该会话选定的模型("" = 跟随桌面配置)。 */
+    fun setThreadModel(threadId: String, modelId: String) {
+        if (threadId.isBlank()) return
+        threadModels[threadId] = modelId
+        prefs?.edit()?.putString("threadModel:$threadId", modelId)?.apply()
+    }
+
+    /** 切换当前运行的 agent(设置页第二板块跟随它变化)。 */
+    fun switchAgent(agentId: String) {
+        val id = agentId.trim()
+        if (id.isEmpty()) return
+        selectedAgent = id
+        prefs?.edit()?.putString("agent", id)?.apply()
+    }
 
     fun setTextScale(ui: Float, think: Float) {
         uiTextScale = ui
@@ -240,6 +353,14 @@ object AgentConnection {
         }
     /** 会话内思考强度:空=跟随默认;low/medium/high/xhigh */
     var selectedEffort by mutableStateOf("")
+    /** 全局开关:会话中是否展示思考过程与执行步骤(关闭=只看正文和结果,数据仍在后台收集) */
+    private var showThinkingState by mutableStateOf(true)
+    var showThinking: Boolean
+        get() = showThinkingState
+        set(v) {
+            showThinkingState = v
+            prefs?.edit()?.putBoolean("showThinking", v)?.apply()
+        }
     /** 显示模式:system/light/dark(设置-外观) */
     private var themeModeState by mutableStateOf("system")
     var themeMode: String
@@ -259,16 +380,27 @@ object AgentConnection {
 
     fun currentAddress(): String = address
 
+    /**
+     * 用户在设置页配置的地址(手填优先),用于输入框回显。
+     * 与 [currentAddress] 区分:后者是回退链命中的「当前生效地址」,
+     * 走 USB 时会变成 127.0.0.1:7246,直接回显到输入框会让人以为手填值丢了。
+     * 实际生效地址走 [connAddress] 展示。
+     */
+    fun configuredAddress(): String = manualAddress.ifBlank { address }
+
     /** 切换目标主机(设置用),旧连接立即关闭;地址持久化。 */
     fun setAddress(addr: String) {
         if (addr == address && channel != null) return
         address = addr
+        manualAddress = addr
         persist()
         shutdown()
     }
 
     fun setCredentials(addr: String, newToken: String) {
-        address = addr.trim()
+        val trimmed = addr.trim()
+        address = trimmed
+        manualAddress = trimmed
         token = newToken.trim()
         persist()
         shutdown()
@@ -389,12 +521,15 @@ object AgentConnection {
                         // 下一轮探活只需保持已恢复状态，避免重复刷新页面。
                         connectionEpoch.value += 1
                         wasDown = false
+                        retryDelayMs = 1000L
                     }
-                    // 网络恢复事件立即唤醒；没有事件时采用 1/2/5/10 秒退避，
+                    // 网络恢复事件立即唤醒(原来只在"已连上"分支监听,断线期间
+                    // WiFi↔蜂窝切换最坏要干等 10 秒退避);没有事件时 1/2/5/10 秒退避,
                     // 避免 Tailscale DERP 抖动时每秒反复销毁连接。
-                    val wait = retryDelayMs
+                    kotlinx.coroutines.withTimeoutOrNull(retryDelayMs) {
+                        networkChanged.first()
+                    }
                     retryDelayMs = (retryDelayMs * 2).coerceAtMost(10_000L)
-                    delay(wait)
                 }
             }
         }

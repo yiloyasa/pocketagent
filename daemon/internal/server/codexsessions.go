@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
@@ -20,12 +21,35 @@ func (s *Server) ListCodexThreads(ctx context.Context, req *pb.ListCodexThreadsR
 			sessions = via
 		}
 	}
+	// 标题/目录兜底:app-server 有时只回 id(标题为空),这里用 rollout 扫描
+	// (首条用户消息 + 文件头 cwd)补齐 —— 保证"加载 codex 已有项目/任务时
+	// 能直接看到标题",而不是一片"(未命名会话)"。
+	scanned, scanErr := agent.ListCodexSessions()
 	if sessions == nil {
-		scanned, err := agent.ListCodexSessions()
-		if err != nil {
-			return nil, errInternal(err)
+		if scanErr != nil {
+			return nil, errInternal(scanErr)
 		}
 		sessions = scanned
+	} else if scanErr == nil {
+		byID := make(map[string]agent.CodexSessionInfo, len(scanned))
+		for _, ss := range scanned {
+			byID[ss.ID] = ss
+		}
+		for i := range sessions {
+			sc, ok := byID[sessions[i].ID]
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(sessions[i].Title) == "" {
+				sessions[i].Title = sc.Title
+			}
+			if sessions[i].Cwd == "" {
+				sessions[i].Cwd = sc.Cwd
+			}
+			if sessions[i].UpdatedAt.IsZero() {
+				sessions[i].UpdatedAt = sc.UpdatedAt
+			}
+		}
 	}
 	out := &pb.ListCodexThreadsResponse{}
 	for _, ss := range sessions {

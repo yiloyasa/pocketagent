@@ -6,18 +6,16 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
@@ -69,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
@@ -82,6 +81,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -119,16 +120,23 @@ import pocketagent.v1.ToolCallUpdate
 import pocketagent.v1.TurnClientMessage
 import pocketagent.v1.TurnInput
 import pocketagent.v1.TurnServerMessage
+import pocketagent.v1.Usage
 import pocketagent.v1.WriteFileRequest
 
-/** 一条聊天记录(用户/助手/工具过程)。 */
+/** 一条聊天记录(用户/助手/工具过程/思考过程/执行计划)。 */
 data class ChatItem(
-    val role: String, // user / assistant / tool / codex_event
+    val role: String, // user / assistant / tool / thinking / plan / codex_event
     val text: String = "",
     val toolName: String = "",
     val toolStatus: String = "", // running / success / failure
+    val toolId: String = "",
+    val toolArgs: String = "",
+    val toolElapsedMs: Double = 0.0,
+    val streaming: Boolean = false,
     val attachments: List<Attachment> = emptyList(),
     val codexEvent: CodexEvent? = null,
+    /** 执行计划步骤(turn/plan),每项 "status|text"。 */
+    val planSteps: List<String> = emptyList(),
 )
 
 /** 已上传到电脑的附件(手机 → daemon 工作区 .pocketagent-uploads)。 */
@@ -214,6 +222,628 @@ private fun CodexEventCard(event: CodexEvent) {
     }
 }
 
+/**
+ * 思考过程卡:可折叠。
+ * 流式时默认展开(边想边看),落定后默认收起(避免长思考淹没正文)。
+ */
+@Composable
+private fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
+    var expanded by remember(streaming) { mutableStateOf(streaming) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().pressable(haptic = true) { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "💭 思考过程" + if (streaming) " · 正在思考" else "",
+                Modifier.weight(1f),
+                fontSize = 11.5.sp,
+                color = Pa.Accent,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Text(if (expanded) "收起" else "展开", fontSize = 11.sp, color = Pa.TextTertiary)
+        }
+        if (expanded) {
+            Text(
+                text,
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                fontSize = (11.5f * scale).sp,
+                fontFamily = FontFamily.Monospace,
+                color = Pa.TextSecondary,
+            )
+        }
+    }
+}
+
+/**
+ * 执行计划卡:codex turn/plan 的步骤列表。
+ * 状态:completed=实心绿 / in_progress=蓝色(带呼吸)/ pending=空心灰;
+ * 流式阶段还可附带"生成中"的草稿文本。
+ */
+@Composable
+private fun PlanCard(steps: List<String>, draft: String, streaming: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "📋 执行计划" + if (streaming) " · 制定中" else "",
+                Modifier.weight(1f),
+                fontSize = 11.5.sp,
+                color = Pa.Accent,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        steps.forEach { raw ->
+            val status = raw.substringBefore('|')
+            val text = raw.substringAfter('|', "")
+            if (text.isNotBlank()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    val dotColor = when (status) {
+                        "completed" -> Pa.Green
+                        "in_progress" -> Pa.Accent
+                        else -> Pa.TextTertiary
+                    }
+                    Box(
+                        Modifier
+                            .padding(top = 4.dp)
+                            .size(7.dp)
+                            .background(dotColor, CircleShape),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text,
+                        fontSize = 12.sp,
+                        color = if (status == "pending") Pa.TextSecondary else Pa.TextPrimary,
+                    )
+                }
+            }
+        }
+        if (draft.isNotBlank() && steps.isEmpty()) {
+            Text(
+                draft,
+                fontSize = 11.5.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Pa.TextSecondary,
+            )
+        }
+    }
+}
+
+/**
+ * 工具调用卡:一次调用一张卡(同一 call id 原地更新),
+ * 展开可见调用的参数与输出,并显示耗时与成功/失败状态。
+ */
+@Composable
+private fun ToolCallCard(item: ChatItem, scale: Float) {
+    // 运行中默认展开(看得到正在干什么),结束后默认收起
+    var expanded by remember(item.toolId) { mutableStateOf(item.toolStatus == "running") }
+    val statusColor = when (item.toolStatus) {
+        "failure" -> Pa.Red
+        "success" -> Pa.Green
+        else -> Pa.Accent
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().pressable(haptic = true) { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(8.dp).background(statusColor, CircleShape))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                item.toolName.ifBlank { "工具" },
+                Modifier.weight(1f),
+                fontSize = (13 * scale).sp,
+                color = Pa.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (item.toolElapsedMs > 0) {
+                Text(
+                    String.format(java.util.Locale.US, "%.1fs", item.toolElapsedMs / 1000.0),
+                    fontSize = 10.5.sp,
+                    color = Pa.TextTertiary,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                when (item.toolStatus) {
+                    "failure" -> "失败"
+                    "success" -> "完成"
+                    else -> "运行中"
+                },
+                fontSize = 10.5.sp,
+                color = statusColor,
+            )
+        }
+        if (expanded) {
+            if (item.toolArgs.isNotBlank()) {
+                Text("参数", Modifier.padding(top = 8.dp), fontSize = 10.5.sp, color = Pa.TextTertiary)
+                Text(
+                    item.toolArgs,
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp)
+                        .background(Pa.Bg, RoundedCornerShape(8.dp))
+                        .padding(8.dp),
+                    fontSize = (10.5f * scale).sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Pa.TextPrimary,
+                )
+            }
+            if (item.text.isNotBlank()) {
+                Text(
+                    if (item.toolStatus == "failure") "错误" else "输出",
+                    Modifier.padding(top = 8.dp),
+                    fontSize = 10.5.sp,
+                    color = Pa.TextTertiary,
+                )
+                Text(
+                    item.text,
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp)
+                        .background(Pa.Bg, RoundedCornerShape(8.dp))
+                        .padding(8.dp),
+                    fontSize = (10.5f * scale).sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (item.toolStatus == "failure") Pa.Red else Pa.TextSecondary,
+                )
+            }
+            if (item.toolArgs.isBlank() && item.text.isBlank()) {
+                Text("等待结果…", Modifier.padding(top = 8.dp), fontSize = 11.sp, color = Pa.TextTertiary)
+            }
+        }
+    }
+}
+
+/**
+ * 上下文窗口明细 —— 点输入栏的"上下文"胶囊弹出(问题 11:替换旧样式)。
+ *
+ * 【为什么改】旧版是居中小弹窗 + 五条各自独立的细进度条:
+ * 内容本身就多(本轮用量 / 累计用量 / 构成估算),弹窗里要一直往下滚,
+ * 而且五条独立条形看不出"上下文整体被占了多满"。
+ *
+ * 【新结构】
+ *   1. 底部大卡片(ModalBottomSheet)—— 内容多时就该用竖向空间,而不是挤一个框。
+ *   2. 顶部「主视觉」把总量画成一条**容量条**:已用段(输入/输出)+ 剩余空间同框,
+ *      "还能装多少"一眼可见,比五个百分比数字直观得多。
+ *   3. 本轮 / 累计改成**分段切换**,不再上下堆两遍,少滚一半。
+ *
+ * 【口径】"合计"只算 输入 + 输出。缓存读/缓存写是输入的**子集**、思考是输出的子集,
+ * 若一并相加会把同一批 token 数两遍 —— 明细里照列(便于排查),但绝不参与合计。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContextWindowCard(
+    model: ModelInfo?,
+    contextWindow: Long,
+    turnUsage: Usage?,
+    totalUsage: Usage?,
+    items: List<ChatItem>,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var scopeTab by remember { mutableStateOf(0) } // 0 = 本轮, 1 = 本会话累计
+    val usage = if (scopeTab == 0) turnUsage else totalUsage
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Pa.CardHigh,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 18.dp),
+        ) {
+            // ---------- 标题行 ----------
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("上下文窗口", fontSize = 20.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        model?.displayName ?: "跟随桌面配置",
+                        fontSize = 11.5.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconActionButton(
+                    AppR.drawable.ic_lucide_x, "关闭", onDismiss,
+                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ---------- 主视觉:容量条 ----------
+            ContextHero(usage = usage, contextWindow = contextWindow)
+
+            Spacer(Modifier.height(16.dp))
+
+            // ---------- 本轮 / 累计 分段切换 ----------
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Pa.Bg, RoundedCornerShape(50))
+                    .padding(4.dp),
+            ) {
+                ScopeTab("本轮", scopeTab == 0, Modifier.weight(1f)) { scopeTab = 0 }
+                ScopeTab("本会话累计", scopeTab == 1, Modifier.weight(1f)) { scopeTab = 1 }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ---------- 明细 ----------
+            if (usage == null) {
+                Text(
+                    "暂无数据(尚未收到用量上报)",
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        .padding(14.dp),
+                    fontSize = 12.sp,
+                    color = Pa.TextTertiary,
+                )
+            } else {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                ) {
+                    TokenRow("输入", usage.inputTokens, contextWindow, Pa.Accent)
+                    TokenRow("输出", usage.outputTokens, contextWindow, Pa.Green)
+                    TokenRow("思考", usage.reasoningTokens, contextWindow, Pa.AccentText)
+                    TokenRow("缓存读", usage.cacheReadTokens, contextWindow, Pa.Accent.copy(alpha = 0.55f))
+                    TokenRow("缓存写", usage.cacheWriteTokens, contextWindow, Pa.TextTertiary)
+
+                    Spacer(Modifier.height(4.dp))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                    Spacer(Modifier.height(10.dp))
+
+                    val total = usage.inputTokens + usage.outputTokens
+                    val hitRate = if (usage.inputTokens > 0) {
+                        usage.cacheReadTokens.toFloat() / usage.inputTokens * 100f
+                    } else -1f
+                    Text(
+                        buildString {
+                            append("合计 ")
+                            append(String.format(java.util.Locale.US, "%,d", total))
+                            append(" tokens")
+                            if (hitRate >= 0) {
+                                append(" · 缓存命中 ")
+                                append(String.format(java.util.Locale.US, "%.1f%%", hitRate))
+                            }
+                            if (usage.costUsd > 0) {
+                                append(" · 成本 $")
+                                append(String.format(java.util.Locale.US, "%.4f", usage.costUsd))
+                            }
+                        },
+                        fontSize = 11.5.sp,
+                        color = Pa.TextPrimary,
+                    )
+                    Text(
+                        "缓存读/写包含在「输入」内、思考包含在「输出」内,故不计入合计。",
+                        Modifier.padding(top = 3.dp),
+                        fontSize = 10.sp,
+                        color = Pa.TextTertiary,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            EstimateSection(items)
+        }
+    }
+}
+
+/**
+ * 主视觉:一条"容量条"。
+ *
+ * 底槽 = 整个上下文窗口;填充 = 输入(蓝) + 输出(绿);剩下的深色部分就是**还能装多少**。
+ * 右侧百分比 = 占用 / 窗口。窗口未知时退化成"只用不占比",并明确提示去发一轮消息。
+ */
+@Composable
+private fun ContextHero(usage: Usage?, contextWindow: Long) {
+    val input = usage?.inputTokens ?: 0
+    val output = usage?.outputTokens ?: 0
+    val used = input + output
+    val known = contextWindow > 0
+    val ratio = if (known) (used.toFloat() / contextWindow).coerceIn(0f, 1f) else 0f
+    // 占用色:正常蓝,接近/超过窗口时转红,提示"该清上下文了"
+    val barColor = when {
+        !known -> Pa.Accent
+        ratio >= 0.9f -> Pa.Red
+        ratio >= 0.7f -> Pa.Yellow
+        else -> Pa.Accent
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(18.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                if (usage == null) "—" else String.format(java.util.Locale.US, "%,d", used),
+                fontSize = 26.sp,
+                color = Pa.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (known) " / ${contextWindow / 1000}K tokens" else " tokens 已用",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 12.sp,
+                color = Pa.TextTertiary,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (known) String.format(java.util.Locale.US, "%.1f%%", ratio * 100f) else "窗口未知",
+                Modifier
+                    .background(
+                        if (known) barColor.copy(alpha = 0.16f) else Pa.Hover,
+                        RoundedCornerShape(50),
+                    )
+                    .padding(horizontal = 9.dp, vertical = 3.dp),
+                fontSize = 11.sp,
+                color = if (known) barColor else Pa.TextTertiary,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // 容量条:已用段 + 剩余段同框
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(10.dp)
+                .background(Pa.Bg, RoundedCornerShape(50)),
+        ) {
+            if (known && used > 0) {
+                Row(
+                    Modifier
+                        .weight(ratio.coerceAtLeast(0.012f), fill = false)
+                        .fillMaxHeight(),
+                ) {
+                    if (input > 0) {
+                        Box(
+                            Modifier
+                                .weight(input.toFloat() / used, fill = false)
+                                .fillMaxHeight()
+                                .background(Pa.Accent),
+                        )
+                    }
+                    if (output > 0) {
+                        Box(
+                            Modifier
+                                .weight(output.toFloat() / used, fill = false)
+                                .fillMaxHeight()
+                                .background(Pa.Green),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.weight((1f - ratio).coerceAtLeast(0.001f)))
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // 图例:把"已用 / 剩余"翻译成人话
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LegendDot(Pa.Accent)
+            Text(
+                "输入 ${String.format(java.util.Locale.US, "%,d", input)}",
+                fontSize = 10.5.sp, color = Pa.TextSecondary,
+            )
+            Spacer(Modifier.width(12.dp))
+            LegendDot(Pa.Green)
+            Text(
+                "输出 ${String.format(java.util.Locale.US, "%,d", output)}",
+                fontSize = 10.5.sp, color = Pa.TextSecondary,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (known) "剩余 ${(contextWindow - used).coerceAtLeast(0) / 1000}K" else "",
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+        }
+
+        if (!known) {
+            Text(
+                "发一轮消息后,电脑端会随用量上报真实窗口大小。",
+                Modifier.padding(top = 8.dp),
+                fontSize = 10.5.sp,
+                color = Pa.TextTertiary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LegendDot(color: Color) {
+    Box(Modifier.size(7.dp).background(color, CircleShape))
+    Spacer(Modifier.width(5.dp))
+}
+
+/** 分段切换按钮(选中=蓝底白字)。 */
+@Composable
+private fun ScopeTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .pressable(haptic = true) { onClick() }
+            .background(if (selected) Pa.Accent else Color.Transparent, RoundedCornerShape(50))
+            .padding(vertical = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            fontSize = 12.5.sp,
+            color = if (selected) Color.White else Pa.TextSecondary,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+        )
+    }
+}
+
+/** 一行 token 维度:名称 · 数值 · 占比条 · 百分比。 */
+@Composable
+private fun TokenRow(label: String, value: Long, contextWindow: Long, color: Color) {
+    val pct = if (contextWindow > 0) value.toFloat() / contextWindow * 100f else 0f
+    val over = pct > 100f
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, Modifier.width(46.dp), fontSize = 11.5.sp, color = Pa.TextSecondary)
+        Text(
+            String.format(java.util.Locale.US, "%,d", value),
+            Modifier.width(68.dp),
+            fontSize = 11.5.sp,
+            color = Pa.TextPrimary,
+            textAlign = TextAlign.End,
+        )
+        Spacer(Modifier.width(10.dp))
+        Box(
+            Modifier
+                .weight(1f)
+                .height(6.dp)
+                .background(Pa.Bg, RoundedCornerShape(50)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth((pct / 100f).coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .background(if (over) Pa.Red else color, RoundedCornerShape(50)),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (over) "超窗" else String.format(java.util.Locale.US, "%.1f%%", pct),
+            Modifier.width(44.dp),
+            fontSize = 10.5.sp,
+            color = if (over) Pa.Red else Pa.TextTertiary,
+            textAlign = TextAlign.End,
+        )
+    }
+}
+
+/**
+ * 构成估算:按当前时间线各部分的文字量粗估 token(≈4 字符/token),
+ * 回答"上下文都被谁占了"。协议未提供逐项精确值,这里只是参考。
+ */
+@Composable
+private fun EstimateSection(items: List<ChatItem>) {
+    Text("构成估算", fontSize = 13.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(2.dp))
+    Text("按会话内容字符量估算(≈4 字符/token),仅供参考", fontSize = 10.sp, color = Pa.TextTertiary)
+    Spacer(Modifier.height(10.dp))
+    if (items.isEmpty()) {
+        Text("暂无会话内容", fontSize = 11.sp, color = Pa.TextTertiary)
+        return
+    }
+    var dialog = 0L      // 对话消息(user/assistant)
+    var thinking = 0L    // 思考过程
+    var tools = 0L       // 普通工具调用(含子 agent/技能,按工具名区分不出的归这里)
+    var mcp = 0L         // MCP 工具(名称以 mcp 开头或含 __ 分隔)
+    var other = 0L       // 其他事件
+    items.forEach { it ->
+        val textLen = (it.text.length + it.toolArgs.length).toLong()
+        when {
+            it.role == "user" || it.role == "assistant" -> dialog += it.text.length.toLong()
+            it.role == "thinking" -> thinking += it.text.length.toLong()
+            it.role == "tool" -> {
+                val isMcp = it.toolName.startsWith("mcp") || it.toolName.contains("__")
+                if (isMcp) mcp += textLen else tools += textLen
+            }
+            else -> other += textLen
+        }
+    }
+    val charTotal = (dialog + thinking + tools + mcp + other).coerceAtLeast(1L)
+    data class Part(val label: String, val chars: Long, val color: Color)
+    val parts = listOf(
+        Part("对话消息", dialog, Pa.Accent),
+        Part("思考", thinking, Pa.AccentText),
+        Part("工具/子agent/技能", tools, Pa.Green),
+        Part("MCP", mcp, Pa.Mcp),
+        Part("其他", other, Pa.TextTertiary),
+    )
+
+    // 堆叠条:段与段之间留 2dp 缝隙,避免同色相邻时糊成一块
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .background(Pa.Bg, RoundedCornerShape(50)),
+    ) {
+        parts.forEach { p ->
+            if (p.chars > 0) {
+                Box(
+                    Modifier
+                        .weight(p.chars.toFloat() / charTotal, fill = false)
+                        .fillMaxHeight()
+                        .background(p.color, RoundedCornerShape(50)),
+                )
+                Spacer(Modifier.width(2.dp))
+            }
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        parts.forEach { p ->
+            val pct = p.chars.toFloat() / charTotal * 100f
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(8.dp).background(p.color, RoundedCornerShape(2.dp)))
+                Spacer(Modifier.width(9.dp))
+                Text(p.label, Modifier.weight(1f), fontSize = 11.5.sp, color = Pa.TextSecondary)
+                Text(
+                    String.format(java.util.Locale.US, "%.1f%%", pct),
+                    fontSize = 11.sp,
+                    color = Pa.TextTertiary,
+                )
+            }
+        }
+    }
+}
+
 /** 审批策略选项(与 codex approvalPolicy 对齐)。 */
 val APPROVALS = listOf(
     Triple("untrusted", "仅信任", "白名单外的命令先批准"),
@@ -246,10 +876,13 @@ fun ChatScreen(
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    // 【返回键】APP 内返回上一层(会话 → 主页),而不是直接退回桌面
+    BackHandler(enabled = true) { onBack() }
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
     val st = remember(threadId) { TurnSession.state(threadId) }
     var input by remember { mutableStateOf("") }
     var showModelCard by remember { mutableStateOf(false) }
+    var showContextCard by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
@@ -285,6 +918,27 @@ fun ChatScreen(
             if (loadError == null) loadError = "无法加载模型列表：${e.message ?: "连接失败"}"
         }
     }
+
+    // 【会话级模型】进入会话时恢复该会话上次选定的模型;该会话没选过则用全局默认。
+    // 修复:selectedModel 过去是全局单值,在 A 会话切模型会污染 B 会话,
+    // 退出再进又被重置成"跟随桌面配置";现在按 threadId 单独记住。
+    LaunchedEffect(threadId) {
+        AgentConnection.selectedModel =
+            AgentConnection.threadModel(threadId) ?: AgentConnection.defaultModel
+    }
+
+    // 生效模型:会话选择 → codex 桌面默认 → 本轮实际运行 → 列表首个。
+    // 统一后,无论"跟随桌面配置"还是指定模型,上下文窗口都可查看、可点开明细。
+    val effectiveModelId = AgentConnection.selectedModel
+        .ifEmpty { codexSettings?.model.orEmpty() }
+        .ifEmpty { st.runningModel }
+    val effectiveModel = models.find { it.id == effectiveModelId }
+        ?: models.find { it.id == st.runningModel }
+        ?: models.find { it.id == "codex/default" }
+        ?: models.firstOrNull()
+    // 窗口大小:模型列表值 与 daemon 随用量上报的真实值 取大;
+    // 列表里大多数 codex 模型没有窗口数据,靠上报值兜底(切模型后仍可显示)。
+    val contextWindow = maxOf((effectiveModel?.contextWindow ?: 0).toLong(), st.liveContextWindow)
 
     /** 会话内无缝切换审批策略(codex 桌面端同步生效)。 */
     fun setApproval(id: String) {
@@ -470,27 +1124,7 @@ fun ChatScreen(
             Spacer(Modifier.width(14.dp))
         }
 
-        // ---- 💭 思考条(字号跟随"思考显示大小"设置)----
-        AnimatedVisibility(
-            visible = st.running && st.thinkingText.isNotEmpty(),
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut(),
-        ) {
-            Text(
-                "💭 " + st.thinkingText.takeLast(180),
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .background(Pa.Card, RoundedCornerShape(14.dp))
-                    .padding(10.dp),
-                fontSize = (11 * thinkScale).sp,
-                fontFamily = FontFamily.Monospace,
-                color = Pa.TextSecondary,
-                maxLines = 3,
-            )
-        }
-
-        // ---- 消息列表 ----
+        // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----
         LazyColumn(
             Modifier.weight(1f).padding(horizontal = 16.dp),
             state = listState,
@@ -539,43 +1173,17 @@ fun ChatScreen(
                             }
                         }
                     }
-                    "tool" -> {
-                        val toolStatus = item.toolStatus.ifBlank {
-                            if (item.text.isBlank()) "running" else "success"
-                        }
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(Pa.Card, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        when (toolStatus) {
-                                            "failure" -> Pa.Red
-                                            "success" -> Pa.Green
-                                            else -> Pa.Accent
-                                        },
-                                        CircleShape,
-                                    ),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(item.toolName, fontSize = (13 * uiScale).sp, color = Pa.TextPrimary)
-                            if (item.text.isNotEmpty() && AgentConnection.toolDetailsExpanded) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    item.text.replace("\n", " ").take(60),
-                                    Modifier.weight(1f),
-                                    fontSize = (12 * uiScale).sp,
-                                    color = Pa.TextSecondary,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    }
+                    // 思考过程:可折叠卡片(字号跟随"思考显示大小"设置);
+                    // 受全局"显示思考过程"开关控制,关闭时只看正文与结果
+                    "thinking" -> if (AgentConnection.showThinking) {
+                        ThinkingCard(item.text, thinkScale, streaming = false)
+                    } else Unit
+                    // 执行计划:步骤卡(同样受思考过程开关控制)
+                    "plan" -> if (AgentConnection.showThinking) {
+                        PlanCard(item.planSteps, draft = "", streaming = false)
+                    } else Unit
+                    // 工具调用:一次调用一条卡,含参数/输出/耗时,可展开看详情
+                    "tool" -> ToolCallCard(item, uiScale)
                     // 后台 Codex/MCP 事件只影响右上角状态点，不再把诊断卡片
                     // 连续插入会话正文。
                     "codex_event" -> Unit
@@ -585,6 +1193,20 @@ fun ChatScreen(
                         Modifier.fillMaxWidth(),
                         fontSize = 15f * uiScale,
                     )
+                }
+            }
+            // 流式思考:边想边展示,和落定的思考卡同款样式
+            if (st.running && AgentConnection.showThinking && st.thinkingText.isNotEmpty()) {
+                item(key = "streaming-thinking") {
+                    ThinkingCard(st.thinkingText, thinkScale, streaming = true)
+                }
+            }
+            // 流式执行计划:结构化步骤或生成中的草稿,边出边看
+            if (st.running && AgentConnection.showThinking &&
+                (st.planSteps.isNotEmpty() || st.planStream.isNotEmpty())
+            ) {
+                item(key = "streaming-plan") {
+                    PlanCard(st.planSteps, st.planStream, streaming = true)
                 }
             }
             if (st.streaming) {
@@ -776,31 +1398,55 @@ fun ChatScreen(
                             }
                         }
                     }
-                    Spacer(Modifier.weight(1f))
-                    // [模型 · 强度] 直显当前模型(点击弹卡面切换)
+                    // [上下文窗口] 常显(窗口未知也显示,点开可看用量);
+                    // 窗口大小 = 模型列表值与 daemon 上报的真实值取大。
                     Row(
                         Modifier
-                            .pressable { showModelCard = true }
-                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                            .pressable(haptic = true) { showContextCard = true }
+                            .background(Pa.CardHigh, RoundedCornerShape(50))
+                            .padding(horizontal = 9.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        val selectedModelInfo = models.find { it.id == AgentConnection.selectedModel }
-                        val contextLabel = selectedModelInfo?.contextWindow?.takeIf { it > 0 }?.let { "上下文 ${it / 1000}k" }
-                        contextLabel?.let {
-                            Text(it, fontSize = 10.5.sp, color = Pa.TextTertiary, maxLines = 1)
-                            Spacer(Modifier.width(5.dp))
-                        }
-                        val modelName = selectedModelInfo?.displayName
-                            ?: if (AgentConnection.selectedModel.isEmpty()) "跟随桌面" else AgentConnection.selectedModel.substringAfter('/')
-                        val effortLabel = EFFORTS.find { it.id == AgentConnection.selectedEffort }?.label
+                        Icon(
+                            painterResource(AppR.drawable.ic_lucide_cpu), null,
+                            tint = Pa.Accent, modifier = Modifier.size(12.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
                         Text(
-                            modelName + if (effortLabel != null && effortLabel != "默认") " · $effortLabel" else "",
+                            if (contextWindow > 0) "上下文 ${contextWindow / 1000}k" else "上下文",
+                            fontSize = 10.5.sp, color = Pa.TextSecondary, maxLines = 1,
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    // [模型 · 强度] 直显当前模型(点击弹卡面切换)。
+                    // weight(1f) + 省略号:模型名再长也只吃剩余空间,绝不挤压发送键。
+                    val modelName = effectiveModel?.displayName
+                        ?: if (AgentConnection.selectedModel.isEmpty()) "跟随桌面"
+                        else AgentConnection.selectedModel.substringAfter('/')
+                    val effortLabel = EFFORTS.find { it.id == AgentConnection.selectedEffort }?.label
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .pressable { showModelCard = true }
+                            .padding(horizontal = 4.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            modelName + if (!effortLabel.isNullOrBlank() && effortLabel != "默认") " · $effortLabel" else "",
+                            Modifier.weight(1f, fill = false),
                             fontSize = 11.5.sp,
                             color = Pa.TextSecondary,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Icon(
+                            painterResource(AppR.drawable.ic_lucide_chevron_right), null,
+                            tint = Pa.TextTertiary, modifier = Modifier.size(12.dp),
                         )
                     }
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(6.dp))
                     // [发送]
                     val canSend = !st.running && input.isNotBlank()
                     Box(
@@ -909,7 +1555,19 @@ fun ChatScreen(
     }
 
     if (showModelCard) {
-        ModelEffortCard(onDismiss = { showModelCard = false })
+        ModelEffortCard(threadId = threadId, onDismiss = { showModelCard = false })
+    }
+
+    // 上下文窗口明细:点输入栏"上下文"胶囊打开
+    if (showContextCard) {
+        ContextWindowCard(
+            model = effectiveModel,
+            contextWindow = contextWindow,
+            turnUsage = st.turnUsage,
+            totalUsage = st.totalUsage,
+            items = st.items.toList(),
+            onDismiss = { showContextCard = false },
+        )
     }
 }
 
@@ -918,7 +1576,7 @@ fun ChatScreen(
  * 居中卡片 + 限高可滚模型列表 + 思考强度胶囊 + 性能提示语。
  */
 @Composable
-fun ModelEffortCard(onDismiss: () -> Unit) {
+fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier
@@ -949,36 +1607,82 @@ fun ModelEffortCard(onDismiss: () -> Unit) {
                     emptyList()
                 }
             }
+
+            /**
+             * 选定模型:会话内选择只改"本会话"(空串="跟随桌面配置",也是有效选择),
+             * 不污染全局默认,也不影响其他会话。
+             */
+            fun pick(id: String) {
+                AgentConnection.selectedModel = id
+                if (threadId.isNotBlank()) {
+                    AgentConnection.setThreadModel(threadId, id)
+                } else {
+                    AgentConnection.setGlobalModel(id)
+                }
+            }
+
             Column(
                 Modifier
                     .fillMaxWidth()
                     .height(300.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
+                // 显式"跟随桌面配置"选项(空模型 id)
+                val followSelected = AgentConnection.selectedModel.isEmpty()
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { pick("") }
+                        .padding(horizontal = 4.dp, vertical = 11.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "跟随桌面配置",
+                            fontSize = 15.sp,
+                            color = if (followSelected) Pa.Accent else Pa.TextPrimary,
+                            maxLines = 1,
+                        )
+                        Text("使用电脑上 codex 当前的默认模型", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                    }
+                    if (followSelected) {
+                        Icon(
+                            painterResource(AppR.drawable.ic_lucide_check), null,
+                            tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
                 if (models.value.isEmpty()) {
                     Text("加载中…", fontSize = 13.sp, color = Pa.TextTertiary, modifier = Modifier.padding(8.dp))
                 }
                 models.value.forEach { m ->
-                    val selected = m.id == AgentConnection.selectedModel ||
-                        (AgentConnection.selectedModel.isEmpty() && m.id == "codex/default")
+                    val selected = m.id == AgentConnection.selectedModel
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .pressable {
-                                AgentConnection.selectedModel = m.id
-                                AgentConnection.persistModel()
-                            }
+                            .pressable { pick(m.id) }
                             .padding(horizontal = 4.dp, vertical = 11.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            m.displayName,
-                            Modifier.weight(1f),
-                            fontSize = 15.sp,
-                            color = if (selected) Pa.Accent else Pa.TextPrimary,
-                            maxLines = 1,
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                m.displayName,
+                                fontSize = 15.sp,
+                                color = if (selected) Pa.Accent else Pa.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (m.contextWindow > 0) {
+                                Text(
+                                    "上下文 ${m.contextWindow / 1000}k" +
+                                        if (m.supportsThinking) " · 支持思考" else "",
+                                    fontSize = 10.5.sp,
+                                    color = Pa.TextTertiary,
+                                )
+                            }
+                        }
                         if (selected) {
                             Icon(
                                 painterResource(AppR.drawable.ic_lucide_check), null,
@@ -1136,9 +1840,26 @@ private fun ApprovalSheet(
     }
 }
 
+/** 相对时间:几分钟前/几小时前/昨天/M月d日。 */
+internal fun relativeTime(unixMs: Long): String {
+    if (unixMs <= 0) return ""
+    val diff = System.currentTimeMillis() - unixMs
+    val min = diff / 60000
+    return when {
+        min < 1 -> "刚刚"
+        min < 60 -> "${min}分钟前"
+        min < 60 * 24 -> "${min / 60}小时前"
+        min < 60 * 48 -> "昨天"
+        else -> {
+            val d = java.text.SimpleDateFormat("M月d日", java.util.Locale.CHINA)
+            d.format(java.util.Date(unixMs))
+        }
+    }
+}
+
 /**
- * 聊天页侧边栏(对标图七):左上角 ☰ 弹出 ——
- * 顶部品牌行、新建对话、搜索框、历史会话列表、底部设置入口。
+ * 聊天页侧边栏:左上角 ☰ 弹出,从左侧滑入(方向跟随锚点位置)——
+ * 品牌行、新建对话、搜索框、历史会话列表(带相对时间)、底部设置入口。
  */
 @Composable
 fun ChatDrawer(
@@ -1148,6 +1869,8 @@ fun ChatDrawer(
     onOpenSettings: () -> Unit,
     onNewThread: () -> Unit,
 ) {
+    // 返回键先关侧边栏,而不是退出 APP
+    BackHandler(enabled = true) { onClose() }
     var threads by remember { mutableStateOf(listOf<PThread>()) }
     var loading by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
@@ -1175,70 +1898,79 @@ fun ChatDrawer(
     ) {
         AnimatedVisibility(
             visible = drawerVisible.targetState,
-            enter = slideInHorizontally(tween(260)) { it / 3 },
-            exit = slideOutHorizontally(tween(200)) { it / 3 },
+            enter = slideInHorizontally(tween(260)) { -it / 3 },
+            exit = slideOutHorizontally(tween(200)) { -it / 3 },
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxHeight(),
         ) {
             Column(
                 Modifier
-                    .fillMaxWidth(0.82f)
-                    .widthIn(max = 292.dp)
+                    .fillMaxWidth(0.84f)
+                    .widthIn(max = 300.dp)
                     .fillMaxHeight()
-                    .background(Pa.CardHigh, RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp))
+                    .background(Pa.CardHigh, RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp))
+                    .drawBehind {
+                        // 右缘发丝线:让面板和遮罩有清晰的分界
+                        drawLine(
+                            color = Pa.Separator,
+                            start = androidx.compose.ui.geometry.Offset(size.width - 0.5f, 0f),
+                            end = androidx.compose.ui.geometry.Offset(size.width - 0.5f, size.height),
+                            strokeWidth = 1f,
+                        )
+                    }
                     .statusBarsPadding()
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 14.dp),
             ) {
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(12.dp))
                 // 品牌行
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     androidx.compose.foundation.Image(
                         bitmap = agentBitmap(AppR.mipmap.ic_launcher),
                         contentDescription = null,
-                        modifier = Modifier.size(42.dp),
+                        modifier = Modifier.size(38.dp),
                         contentScale = ContentScale.Crop,
                     )
-                    Spacer(Modifier.width(16.dp))
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("PocketAgent", fontSize = 16.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
                         Text("你电脑上的 agent", fontSize = 10.5.sp, color = Pa.TextTertiary)
                     }
                     IconActionButton(
                         AppR.drawable.ic_lucide_x, "关闭", onClose,
-                        bg = Color.Transparent, size = 36.dp, iconSize = 17.dp,
+                        bg = Color.Transparent, size = 34.dp, iconSize = 16.dp,
                     )
                 }
                 Spacer(Modifier.height(14.dp))
-                // 新建对话
+                // 新建对话:品牌蓝实底,最醒目的主操作
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .pressable { onNewThread() }
-                        .background(Pa.AccentDim, RoundedCornerShape(14.dp))
+                        .pressable(haptic = true) { onNewThread() }
+                        .background(Pa.Accent, RoundedCornerShape(14.dp))
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_plus), null,
-                        tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                        tint = Color.White, modifier = Modifier.size(17.dp),
                     )
                     Spacer(Modifier.width(10.dp))
-                    Text("新建对话", fontSize = 14.5.sp, color = Pa.Accent, fontWeight = FontWeight.SemiBold)
+                    Text("新建对话", fontSize = 14.5.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.height(12.dp))
                 // 搜索
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        .background(Pa.Card, RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_search), null,
-                        tint = Pa.TextTertiary, modifier = Modifier.size(16.dp),
+                        tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
                     )
                     Spacer(Modifier.width(8.dp))
                     BasicTextField(
@@ -1257,10 +1989,13 @@ fun ChatDrawer(
                     )
                 }
                 Spacer(Modifier.height(14.dp))
-                Text("历史会话", fontSize = 11.sp, color = Pa.TextTertiary)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("历史会话", fontSize = 11.sp, color = Pa.TextTertiary, modifier = Modifier.weight(1f))
+                    Text("${threads.size}", fontSize = 11.sp, color = Pa.TextTertiary)
+                }
                 Spacer(Modifier.height(6.dp))
 
-                val filtered = threads.filter {
+                val filtered = threads.sortedByDescending { it.updatedAtUnixMs }.filter {
                     query.isBlank() || it.title.contains(query, ignoreCase = true)
                 }
                 LazyColumn(Modifier.weight(1f)) {
@@ -1273,48 +2008,90 @@ fun ChatDrawer(
                         }
                     }
                     items(filtered, key = { it.id }) { t ->
+                        val active = t.id == currentThreadId
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .pressable { onOpenThread(t.id) }
                                 .background(
-                                    if (t.id == currentThreadId) Pa.Hover else Color.Transparent,
+                                    if (active) Pa.Hover else Color.Transparent,
                                     RoundedCornerShape(12.dp),
                                 )
-                                .padding(horizontal = 10.dp, vertical = 11.dp),
+                                .padding(horizontal = 10.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            // 当前会话:左侧品牌蓝指示条
+                            Box(
+                                Modifier
+                                    .width(3.dp)
+                                    .height(30.dp)
+                                    .background(if (active) Pa.Accent else Color.Transparent, RoundedCornerShape(2.dp)),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Icon(
+                                painterResource(AppR.drawable.ic_lucide_message_square), null,
+                                tint = if (active) Pa.Accent else Pa.TextTertiary,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     t.title.ifEmpty { "(未命名)" },
                                     fontSize = 13.5.sp,
-                                    color = if (t.id == currentThreadId) Pa.Accent else Pa.TextPrimary,
+                                    color = if (active) Pa.Accent else Pa.TextPrimary,
                                     maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    "${t.messageCount} 条消息",
+                                    listOf(
+                                        relativeTime(t.updatedAtUnixMs),
+                                        "${t.messageCount} 条消息",
+                                    ).filter { it.isNotBlank() }.joinToString(" · "),
                                     fontSize = 10.sp, color = Pa.TextTertiary,
+                                    maxLines = 1,
                                 )
                             }
                         }
                     }
                 }
-                // 底部:设置入口
+                // 底部:设置入口 + 连接状态
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
                 Spacer(Modifier.height(6.dp))
+                val connSt = AgentConnection.connState.collectAsState().value
+                val connAddr = AgentConnection.connAddress.collectAsState().value
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .pressable { onOpenSettings() }
-                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                        .padding(horizontal = 10.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_settings), null,
-                        tint = Pa.TextSecondary, modifier = Modifier.size(18.dp),
+                        tint = Pa.TextSecondary, modifier = Modifier.size(17.dp),
                     )
                     Spacer(Modifier.width(10.dp))
-                    Text("设置", fontSize = 14.sp, color = Pa.TextSecondary)
+                    Text("设置", fontSize = 14.sp, color = Pa.TextSecondary, modifier = Modifier.weight(1f))
+                    // 迷你连接指示:绿点=已连,红点=断,灰点=检查中
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .background(
+                                when (connSt) {
+                                    "ok" -> Pa.Green
+                                    "down" -> Pa.Red
+                                    else -> Pa.TextTertiary
+                                },
+                                CircleShape,
+                            ),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        connAddr,
+                        fontSize = 9.5.sp, color = Pa.TextTertiary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 110.dp),
+                    )
                 }
                 Spacer(Modifier.height(4.dp))
             }
@@ -1328,6 +2105,8 @@ fun ChatDrawer(
  */
 @Composable
 fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
+    // 返回键先关 Git 侧栏
+    BackHandler(enabled = true) { onClose() }
     val scope = rememberCoroutineScope()
     var repo by remember { mutableStateOf(repoPath.orEmpty()) }
     var status by remember { mutableStateOf<pocketagent.v1.GitStatus?>(null) }
@@ -1349,13 +2128,33 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                 }
                 error = null; notRepo = false
             } catch (e: Exception) {
-                if ("${e.message}".contains("not a git repository")) notRepo = true else error = "${e.message}"
+                val lower = "${e.message}".lowercase()
+                if (lower.contains("not a git repository") ||
+                    lower.contains("not a git repo") ||
+                    lower.contains("不是 git")
+                ) {
+                    notRepo = true
+                } else {
+                    error = "${e.message}"
+                }
             } finally { busy = false }
         }
     }
 
     LaunchedEffect(repoPath) {
         repo = repoPath.orEmpty()
+        if (repo.isBlank()) {
+            // 会话没绑工作区时回退到 daemon 的默认工作区,尽量让 Git 栏有内容
+            repo = withContext(Dispatchers.IO) {
+                runCatching {
+                    AgentConnection.connectWithFallback()
+                        ?.workspacesList?.firstOrNull()
+                        ?: AgentConnection.hostService()
+                            .getHostInfo(GetHostInfoRequest.getDefaultInstance())
+                            .workspacesList.firstOrNull()
+                }.getOrNull().orEmpty()
+            }
+        }
         if (repo.isNotBlank()) {
             refresh()
         }
@@ -1370,12 +2169,14 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
             .background(Color.Black.copy(alpha = 0.45f))
             .pressable { onClose() },
     ) {
+        // 从左侧滑入:方向跟随触发按钮(输入栏的 Git 图标)所在的左侧,
+        // 与会话侧边栏(☰,同样在左)保持一致的出入场方向。
         AnimatedVisibility(
             visible = visibleState.targetState,
-            enter = slideInHorizontally(tween(260)) { it / 2 },
-            exit = slideOutHorizontally(tween(200)) { it / 2 },
+            enter = slideInHorizontally(tween(260)) { -it / 2 },
+            exit = slideOutHorizontally(tween(200)) { -it / 2 },
             modifier = Modifier
-                .align(Alignment.CenterEnd)
+                .align(Alignment.CenterStart)
                 .fillMaxHeight(),
         ) {
             Column(
@@ -1383,7 +2184,7 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                     .fillMaxWidth(0.86f)
                     .widthIn(max = 310.dp)
                     .fillMaxHeight()
-                    .background(Pa.CardHigh, RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp))
+                    .background(Pa.CardHigh, RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp))
                     .statusBarsPadding()
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp),

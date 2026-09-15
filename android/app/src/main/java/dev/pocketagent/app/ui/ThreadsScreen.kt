@@ -1,8 +1,9 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package dev.pocketagent.app.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +21,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -43,16 +49,28 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
+import dev.pocketagent.app.ui.component.PaSkeletonList
+import dev.pocketagent.app.ui.component.SkeletonKind
+import dev.pocketagent.app.ui.component.SwipeAction
+import dev.pocketagent.app.ui.component.SwipeRevealRow
+import dev.pocketagent.app.ui.component.UndoBarHost
+import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -82,6 +100,7 @@ fun ThreadsScreen(
     onOpenThread: (String) -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    onOpenTaskCenter: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -95,12 +114,22 @@ fun ThreadsScreen(
     var showPc by remember { mutableStateOf(false) } // "电脑"标签:列出 codex 已有会话
     var pcThreads by remember { mutableStateOf(listOf<CodexThreadInfo>()) }
     var importingId by remember { mutableStateOf("") }
-    var actionThread by remember { mutableStateOf<PThread?>(null) }
-    var renameThread by remember { mutableStateOf<PThread?>(null) }
-    var renameText by remember { mutableStateOf("") }
+    // 行内重命名:把该行原地换成输入框。
+    // 【关键】值由页面持有(单一真相),组件内部**不留任何副本** ——
+    // 之前用 String + 组件内 remember(TextFieldValue) 的写法,两边会各持一份、
+    // 互不同步(表现为"在下方输入框打的字进不到重命名框")。这里整条链路都用 TextFieldValue 贯通。
+    var renamingId by remember { mutableStateOf<String?>(null) }
+    var renameField by remember { mutableStateOf(TextFieldValue("")) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 侧滑互斥:openKey 单值状态保证「任意时刻最多一行展开」
+    val openKey = remember { mutableStateOf<Any?>(null) }
+    val listState = rememberLazyListState()
+    val undo = rememberUndoState()
     var showNewThread by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    // 首次加载中:列表区显示骨架屏(设计规范 §2.3)。只在"列表还空着"时才出,
+    // 切 tab 时旧数据仍在,不会因为刷新闪一下骨架。
+    var loading by remember { mutableStateOf(true) }
 
     fun refresh() = scope.launch {
         try {
@@ -113,12 +142,19 @@ fun ThreadsScreen(
                         .listCodexThreads(ListCodexThreadsRequest.newBuilder().build())
                         .threadsList
                 } else {
+                    // 修复:daemon 的 include_archived=true 是"活跃+已归档"的全量,
+                    // 所以这里拿全量后按状态自己分流 —— "已归档"只显示归档,
+                    // "活跃"只显示未归档,两边不再互相串台。
                     threads = AgentConnection.threadService()
                         .listThreads(
                             ListThreadsRequest.newBuilder()
-                                .setIncludeArchived(showArchived)
+                                .setIncludeArchived(true)
                                 .build())
                         .threadsList
+                        .filter { t ->
+                            if (showArchived) t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
+                            else t.status != ThreadStatus.THREAD_STATUS_ARCHIVED
+                        }
                     // 最近工作区跟随会话记录自动补全
                     threads.map { it.workspace }.filter { it.isNotEmpty() }
                         .distinct().take(5).forEach { AgentConnection.addRecentWorkspace(it) }
@@ -128,12 +164,110 @@ fun ThreadsScreen(
         } catch (e: Exception) {
             loadError = "会话列表加载失败：${e.message ?: "连接失败"}"
         }
+        loading = false
+    }
+
+    /**
+     * 删除会话(模块 1 + 模块 8):乐观移除 + 顶部可撤销入口。
+     * 5 秒内点「撤销」是**纯本地还原,必然成功**(不受断网影响);
+     * 只有过了撤销窗口才真正提交到 daemon。
+     */
+    fun deleteThreadOptimistic(t: PThread) {
+        val index = threads.indexOfFirst { it.id == t.id }
+        if (index < 0) return
+        openKey.value = null
+        threads = threads.toMutableList().also { it.removeAt(index) }
+        undo.show(
+            message = "已删除「${t.title.ifEmpty { "未命名" }}」",
+            onUndo = {
+                val cur = threads.toMutableList()
+                if (cur.none { it.id == t.id }) cur.add(index.coerceAtMost(cur.size), t)
+                threads = cur
+            },
+            onCommit = {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().deleteThread(
+                        DeleteThreadRequest.newBuilder().setThreadId(t.id).build())
+                }
+            },
+        )
+    }
+
+    /** 归档 / 取消归档:从当前视图移除 + 顶部可撤销(与删除共用同一套交互)。 */
+    fun archiveOptimistic(t: PThread) {
+        openKey.value = null
+        val before = threads
+        val target = t.status != ThreadStatus.THREAD_STATUS_ARCHIVED
+        threads = threads.filterNot { it.id == t.id }
+        undo.show(
+            message = (if (target) "已归档「" else "已恢复「") + t.title.ifEmpty { "未命名" } + "」",
+            onUndo = { threads = before },
+            onCommit = {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().archiveThread(
+                        ArchiveThreadRequest.newBuilder()
+                            .setThreadId(t.id).setArchived(target).build())
+                }
+            },
+        )
+    }
+
+    /** 删除"电脑"上的 codex 会话:先导入再删,daemon 会连带清掉电脑上的 rollout。 */
+    fun deletePcOptimistic(c: CodexThreadInfo) {
+        openKey.value = null
+        val before = pcThreads
+        pcThreads = pcThreads.filterNot { it.id == c.id }
+        undo.show(
+            message = "已删除 codex 会话「" + c.title.ifEmpty { "未命名会话" } + "」",
+            onUndo = { pcThreads = before },
+            onCommit = {
+                withContext(Dispatchers.IO) {
+                    val tid = AgentConnection.threadService()
+                        .importCodexThread(
+                            ImportCodexThreadRequest.newBuilder()
+                                .setCodexThreadId(c.id)
+                                .build())
+                        .threadId
+                    AgentConnection.threadService().deleteThread(
+                        DeleteThreadRequest.newBuilder().setThreadId(tid).build())
+                }
+            },
+        )
+    }
+
+    /** 提交行内重命名:空串视为取消;失败回滚标题。 */
+    fun commitRename(t: PThread) {
+        val title = renameField.text.trim()
+        renamingId = null
+        if (title.isEmpty() || title == t.title) return
+        val finalTitle = title.take(80)
+        val before = threads
+        threads = threads.map { if (it.id == t.id) it.toBuilder().setTitle(finalTitle).build() else it }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().renameThread(
+                        RenameThreadRequest.newBuilder()
+                            .setThreadId(t.id).setTitle(finalTitle).build())
+                }
+            } catch (e: Exception) {
+                threads = before
+                Toast.makeText(ctx, "重命名失败：${e.message ?: "连接失败"}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     val reconnectTick = AgentConnection.connectionEpoch.collectAsState().value
     LaunchedEffect(Unit, showArchived, showPc, reconnectTick) { refresh() }
 
-    Box(modifier.fillMaxSize().background(Pa.Bg)) {
+    // 列表一开始滚动就收起已展开的侧滑行,避免滑动过程中误触动作按钮
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) openKey.value = null
+    }
+
+    // 左边缘右滑也能唤出侧边栏(问题 7)。挂在页面根节点上,子节点仍在命中链里,
+    // 只有判定为"从左边缘起手的右滑"才会 consume,不会吃掉列表的点击。
+    Box(modifier.fillMaxSize().background(Pa.Bg).edgeSwipeToOpenDrawer { showDrawer = true }) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             // ---- 大标题 + 工具按钮 ----
             Row(
@@ -208,7 +342,7 @@ fun ThreadsScreen(
                     EmptyState(
                         iconRes = R.drawable.ic_lucide_folder,
                         title = "电脑上还没有 codex 会话",
-                        hint = "在电脑上用过 codex 后,这里会列出它的全部历史会话",
+                        hint = "在电脑上用过 codex 后,这里会列出它的全部历史会话;左滑可删除",
                     )
                 } else {
                     LazyColumn(
@@ -217,11 +351,21 @@ fun ThreadsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(pcThreads, key = { it.id }) { c ->
-                            PcSessionCard(
-                                info = c,
-                                importing = importingId == c.id,
+                            SwipeRevealRow(
+                                rowKey = c.id,
+                                openKey = openKey,
+                                actions = listOf(
+                                    SwipeAction(
+                                        "delete", "删除", R.drawable.ic_lucide_trash_2,
+                                        Color.White, destructive = true,
+                                    ),
+                                ),
+                                onAction = { a -> if (a.id == "delete") deletePcOptimistic(c) },
+                                rowBackground = Pa.Card,
                                 onClick = {
-                                    if (importingId.isEmpty()) {
+                                    if (openKey.value == c.id) {
+                                        openKey.value = null
+                                    } else if (importingId.isEmpty()) {
                                         importingId = c.id
                                         scope.launch {
                                             try {
@@ -246,30 +390,88 @@ fun ThreadsScreen(
                                         }
                                     }
                                 },
-                            )
+                            ) {
+                                PcSessionCard(info = c, importing = importingId == c.id)
+                            }
                         }
                         item { Spacer(Modifier.height(80.dp)) }
                     }
                 }
+            } else if (loading && threads.isEmpty()) {
+                // 骨架屏:形状与真实会话行逐项对位(SESSION_ROW = 圆头像 + 两行文本条)
+                PaSkeletonList(
+                    kind = SkeletonKind.SESSION_ROW,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
             } else if (threads.isEmpty()) {
                 EmptyState(
                     iconRes = R.drawable.ic_lucide_archive,
                     title = if (showArchived) "没有归档的会话" else "还没有会话",
-                    hint = if (showArchived) "长按会话可选择归档" else "点右下角 + 开始你的第一个任务",
+                    hint = if (showArchived) "左滑会话可恢复或删除" else "点右下角 + 开始你的第一个任务",
                 )
             } else {
                 LazyColumn(
                     Modifier.fillMaxSize(),
+                    state = listState,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(threads, key = { it.id }) { t ->
-                        ThreadCard(t, onClick = { onOpenThread(t.id) }, onLongPress = { actionThread = t })
+                        val archived = t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
+                        SwipeRevealRow(
+                            rowKey = t.id,
+                            openKey = openKey,
+                            actions = listOf(
+                                SwipeAction(
+                                    "archive",
+                                    if (archived) "恢复" else "归档",
+                                    R.drawable.ic_lucide_archive,
+                                    Pa.AccentText,
+                                ),
+                                SwipeAction(
+                                    "rename", "重命名",
+                                    R.drawable.ic_lucide_pencil, Pa.AccentText,
+                                ),
+                                SwipeAction(
+                                    "delete", "删除", R.drawable.ic_lucide_trash_2,
+                                    Color.White, destructive = true,
+                                ),
+                            ),
+                            onAction = { a ->
+                                when (a.id) {
+                                    "archive" -> archiveOptimistic(t)
+                                    "rename" -> {
+                                        renameField = TextFieldValue(
+                                            t.title,
+                                            selection = TextRange(0, t.title.length),
+                                        )
+                                        renamingId = t.id
+                                    }
+                                    "delete" -> deleteThreadOptimistic(t)
+                                }
+                            },
+                            rowBackground = Pa.Card,
+                            // 已展开时点内容 = 收起,未展开才进会话
+                            onClick = {
+                                if (openKey.value == t.id) openKey.value = null else onOpenThread(t.id)
+                            },
+                        ) {
+                            ThreadCard(
+                                t = t,
+                                renaming = renamingId == t.id,
+                                renameField = renameField,
+                                onRenameFieldChange = { renameField = it },
+                                onRenameCommit = { commitRename(t) },
+                            )
+                        }
                     }
                     item { Spacer(Modifier.height(80.dp)) }
                 }
             }
         }
+
+        // ---- 撤销条(模块 8):删除会话后顶部浮出,5 秒内可一键还原 ----
+        UndoBarHost(undo, Modifier.align(Alignment.TopCenter))
 
         // ---- FAB:圆形深灰卡 + 蓝色 + 号(弹出新建会话,可自选工作区) ----
         Box(
@@ -319,78 +521,10 @@ fun ThreadsScreen(
         )
     }
 
-    // 长按操作菜单
-    actionThread?.let { t ->
-        ModalBottomSheet(
-            onDismissRequest = { actionThread = null },
-            containerColor = Pa.CardHigh,
-            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        ) {
-            Text(
-                t.title.ifEmpty { "(未命名)" },
-                Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
-                fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1,
-            )
-            Spacer(Modifier.height(6.dp))
-            SheetAction(R.drawable.ic_lucide_pencil, "重命名") {
-                renameText = t.title
-                renameThread = t
-                actionThread = null
-            }
-            SheetAction(
-                R.drawable.ic_lucide_archive,
-                if (t.status == ThreadStatus.THREAD_STATUS_ARCHIVED) "恢复会话" else "归档",
-            ) {
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        AgentConnection.threadService().archiveThread(
-                            ArchiveThreadRequest.newBuilder()
-                                .setThreadId(t.id)
-                                .setArchived(t.status != ThreadStatus.THREAD_STATUS_ARCHIVED)
-                                .build())
-                    }
-                    refresh()
-                }
-                actionThread = null
-            }
-            SheetAction(R.drawable.ic_lucide_trash_2, "删除", tint = Pa.Red) {
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        AgentConnection.threadService().deleteThread(
-                            DeleteThreadRequest.newBuilder().setThreadId(t.id).build())
-                    }
-                    refresh()
-                }
-                actionThread = null
-            }
-            Spacer(Modifier.height(30.dp))
-        }
-    }
+    // 长按菜单已移除:重命名 / 归档 / 删除 全部收敛到左滑动作里,
+    // 一条交互路径比"长按弹一层、再点一次"更连贯(也为后续接入长按上下文菜单留位)。
 
-    // 重命名对话框
-    renameThread?.let { t ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { renameThread = null },
-            title = { Text("重命名会话", fontSize = 17.sp) },
-            text = {
-                OutlinedTextField(renameText, { renameText = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            AgentConnection.threadService().renameThread(
-                                RenameThreadRequest.newBuilder()
-                                    .setThreadId(t.id).setTitle(renameText.trim()).build())
-                        }
-                        renameThread = null
-                        refresh()
-                    }
-                }) { Text("保存", color = Pa.Accent) }
-            },
-            dismissButton = { TextButton(onClick = { renameThread = null }) { Text("取消") } },
-        )
-    }
+    // 重命名已改为「行内编辑」(见 ThreadCard 的 renaming 分支),不再使用对话框 —— 设计规范 §3.1
 
     if (showModels) {
         ModelPickerSheet(
@@ -408,6 +542,7 @@ fun ThreadsScreen(
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
+            onOpenTaskCenter = onOpenTaskCenter,
         )
     }
 }
@@ -481,22 +616,54 @@ private fun ConnectionCard(host: HostInfo?, onRetry: () -> Unit, modifier: Modif
     }
 }
 
-/** 会话卡片:标题 + 摘要行,按压缩放。 */
+/** 会话卡片:标题 + 摘要行。重命名时该行**原地**变成输入框(设计规范 §3.1,全程无对话框)。 */
 @Composable
-private fun ThreadCard(t: PThread, onClick: () -> Unit, onLongPress: () -> Unit) {
+private fun ThreadCard(
+    t: PThread,
+    renaming: Boolean,
+    renameField: TextFieldValue,
+    onRenameFieldChange: (TextFieldValue) -> Unit,
+    onRenameCommit: () -> Unit,
+) {
     Column(
         Modifier
             .fillMaxWidth()
-            .pressableLong(onClick = onClick, onLongPress = onLongPress)
+            // 不要在这里挂 clickable:手势由外层 SwipeRevealRow 独占,否则侧滑会被内层消费掉
             .background(Pa.Card, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
-        Text(
-            t.title.ifEmpty { "(未命名)" },
-            fontSize = 15.sp,
-            color = Pa.TextPrimary,
-            maxLines = 1,
-        )
+        if (renaming) {
+            val focus = remember { FocusRequester() }
+            val bringIntoView = remember { BringIntoViewRequester() }
+            LaunchedEffect(Unit) {
+                focus.requestFocus()
+                // 软键盘是异步弹出的:等它占好高度后再把这一行滚进可视区,
+                // 否则位于列表底部的条目会被输入法盖住(真机实测踩到过)。
+                kotlinx.coroutines.delay(320)
+                runCatching { bringIntoView.bringIntoView() }
+            }
+            OutlinedTextField(
+                // 受控组件:值完全由页面提供,内部不留副本 —— 保证与外部双向实时同步
+                value = renameField,
+                onValueChange = onRenameFieldChange,
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focus)
+                    .bringIntoViewRequester(bringIntoView),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onRenameCommit() }),
+            )
+        } else {
+            Text(
+                t.title.ifEmpty { "(未命名)" },
+                fontSize = 15.sp,
+                color = Pa.TextPrimary,
+                maxLines = 1,
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
             if (t.status == ThreadStatus.THREAD_STATUS_ARCHIVED) {
                 Text("已归档", fontSize = 10.sp, color = Pa.Accent)
@@ -520,13 +687,16 @@ private fun ThreadCard(t: PThread, onClick: () -> Unit, onLongPress: () -> Unit)
     }
 }
 
-/** "电脑"标签里的 codex 历史会话卡:点一下导入并打开。 */
+/** "电脑"标签里的 codex 历史会话卡:点一下导入并打开,左滑可删除(含电脑上的 rollout)。 */
 @Composable
-private fun PcSessionCard(info: CodexThreadInfo, importing: Boolean, onClick: () -> Unit) {
+private fun PcSessionCard(
+    info: CodexThreadInfo,
+    importing: Boolean,
+) {
     Column(
         Modifier
             .fillMaxWidth()
-            .pressable(onClick = onClick)
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable
             .background(Pa.Card, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
@@ -712,7 +882,8 @@ fun ModelPickerSheet(models: List<ModelInfo>, current: String, onDismiss: () -> 
                     Modifier
                         .fillMaxWidth()
                         .pressable {
-                            AgentConnection.selectedModel = m.id
+                            // 会话列表里的模型选择 = 全局默认(会话内的临时切换在聊天页)
+                            AgentConnection.setGlobalModel(m.id)
                             onDismiss()
                         }
                         .padding(horizontal = 16.dp, vertical = 14.dp),

@@ -269,8 +269,10 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 		event.Title = "执行计划更新"
 		steps := make([]string, 0, len(n.Plan))
 		for _, step := range n.Plan {
-			steps = append(steps, fmt.Sprintf("%s [%s]", step.Step, step.Status))
+			steps = append(steps, fmt.Sprintf("%s|%s", step.Status, step.Step))
 		}
+		// plan_steps 走结构化字段,手机端渲染为步骤卡;message 保留纯文本摘要。
+		event.PlanSteps = steps
 		event.Message = strings.Join(steps, "；")
 		if n.Explanation != nil && strings.TrimSpace(*n.Explanation) != "" {
 			if event.Message != "" {
@@ -401,17 +403,20 @@ func codexTokenUsageUpdate(raw json.RawMessage, threadID, turnID string) *pb.Usa
 		TurnID     string `json:"turnId"`
 		TokenUsage struct {
 			Last struct {
-				InputTokens       int64 `json:"inputTokens"`
-				CachedInputTokens int64 `json:"cachedInputTokens"`
-				CacheWriteTokens  int64 `json:"cacheWriteInputTokens"`
-				OutputTokens      int64 `json:"outputTokens"`
+				InputTokens           int64 `json:"inputTokens"`
+				CachedInputTokens     int64 `json:"cachedInputTokens"`
+				CacheWriteTokens      int64 `json:"cacheWriteInputTokens"`
+				OutputTokens          int64 `json:"outputTokens"`
+				ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
 			} `json:"last"`
 			Total struct {
-				InputTokens       int64 `json:"inputTokens"`
-				CachedInputTokens int64 `json:"cachedInputTokens"`
-				CacheWriteTokens  int64 `json:"cacheWriteInputTokens"`
-				OutputTokens      int64 `json:"outputTokens"`
+				InputTokens           int64 `json:"inputTokens"`
+				CachedInputTokens     int64 `json:"cachedInputTokens"`
+				CacheWriteTokens      int64 `json:"cacheWriteInputTokens"`
+				OutputTokens          int64 `json:"outputTokens"`
+				ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
 			} `json:"total"`
+			ModelContextWindow *int64 `json:"modelContextWindow"`
 		} `json:"tokenUsage"`
 	}
 	if json.Unmarshal(raw, &n) != nil {
@@ -423,18 +428,26 @@ func codexTokenUsageUpdate(raw json.RawMessage, threadID, turnID string) *pb.Usa
 	if n.TurnID != "" && turnID != "" && n.TurnID != turnID {
 		return nil
 	}
-	return &pb.UsageUpdate{
+	update := &pb.UsageUpdate{
 		Usage: &pb.Usage{
 			InputTokens:      n.TokenUsage.Last.InputTokens,
 			OutputTokens:     n.TokenUsage.Last.OutputTokens,
 			CacheReadTokens:  n.TokenUsage.Last.CachedInputTokens,
 			CacheWriteTokens: n.TokenUsage.Last.CacheWriteTokens,
+			ReasoningTokens:  n.TokenUsage.Last.ReasoningOutputTokens,
 		},
 		TotalUsage: &pb.Usage{
 			InputTokens:      n.TokenUsage.Total.InputTokens,
 			OutputTokens:     n.TokenUsage.Total.OutputTokens,
 			CacheReadTokens:  n.TokenUsage.Total.CachedInputTokens,
 			CacheWriteTokens: n.TokenUsage.Total.CacheWriteTokens,
+			ReasoningTokens:  n.TokenUsage.Total.ReasoningOutputTokens,
 		},
 	}
+	// 真实窗口大小随用量一起透传:模型列表拿不到各模型的窗口,
+	// 手机端"上下文窗口"卡以这里为准(切模型后也能立即显示)。
+	if n.TokenUsage.ModelContextWindow != nil {
+		update.ModelContextWindow = *n.TokenUsage.ModelContextWindow
+	}
+	return update
 }

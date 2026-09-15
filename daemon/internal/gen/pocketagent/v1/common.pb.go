@@ -556,6 +556,7 @@ type Usage struct {
 	CacheReadTokens  int64                  `protobuf:"varint,3,opt,name=cache_read_tokens,json=cacheReadTokens,proto3" json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64                  `protobuf:"varint,4,opt,name=cache_write_tokens,json=cacheWriteTokens,proto3" json:"cache_write_tokens,omitempty"`
 	CostUsd          float64                `protobuf:"fixed64,5,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`
+	ReasoningTokens  int64                  `protobuf:"varint,6,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"` // 思考(推理)输出 token,codex reasoningOutputTokens
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -625,6 +626,13 @@ func (x *Usage) GetCostUsd() float64 {
 	return 0
 }
 
+func (x *Usage) GetReasoningTokens() int64 {
+	if x != nil {
+		return x.ReasoningTokens
+	}
+	return 0
+}
+
 var File_v1_common_proto protoreflect.FileDescriptor
 
 const file_v1_common_proto_rawDesc = "" +
@@ -666,13 +674,14 @@ const file_v1_common_proto_rawDesc = "" +
 	"elapsed_ms\x18\x04 \x01(\x01R\telapsedMs\"A\n" +
 	"\rThinkingBlock\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1c\n" +
-	"\tsignature\x18\x02 \x01(\tR\tsignature\"\xc4\x01\n" +
+	"\tsignature\x18\x02 \x01(\tR\tsignature\"\xef\x01\n" +
 	"\x05Usage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x03R\vinputTokens\x12#\n" +
 	"\routput_tokens\x18\x02 \x01(\x03R\foutputTokens\x12*\n" +
 	"\x11cache_read_tokens\x18\x03 \x01(\x03R\x0fcacheReadTokens\x12,\n" +
 	"\x12cache_write_tokens\x18\x04 \x01(\x03R\x10cacheWriteTokens\x12\x19\n" +
-	"\bcost_usd\x18\x05 \x01(\x01R\acostUsdBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\bcost_usd\x18\x05 \x01(\x01R\acostUsd\x12)\n" +
+	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokensBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_common_proto_rawDescOnce sync.Once

@@ -34,8 +34,10 @@ import dev.pocketagent.app.ui.GitScreen
 import dev.pocketagent.app.ui.HomeScreen
 import dev.pocketagent.app.ui.SettingsScreen
 import dev.pocketagent.app.ui.Splash
+import dev.pocketagent.app.ui.TaskCenterScreen
 import dev.pocketagent.app.ui.TerminalScreen
 import dev.pocketagent.app.ui.ThreadsScreen
+import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaTheme
 import androidx.core.view.WindowCompat
@@ -44,6 +46,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AgentConnection.init(this)
+        TaskCenter.init(this) // 任务中心:恢复未读数与任务清单(杀进程不丢)
         AgentConnection.startAutoReconnect() // 断线自动重连(USB→Tailscale 回退),恢复后全局刷新
         enableEdgeToEdge()
         setContent {
@@ -92,6 +95,7 @@ private fun RootNav() {
     ) {
         composable("home") {
             // 【无底栏】主导航全部收进左上角图标弹出的侧边栏
+            val openTaskCenter = { tab = 4 }
             Box(Modifier.fillMaxSize()) {
                 when (tab) {
                     0 -> HomeScreen(
@@ -99,6 +103,7 @@ private fun RootNav() {
                         onOpenThread = { id -> nav.navigate("chat/$id") },
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
+                        onOpenTaskCenter = openTaskCenter,
                         onGoTab = { tab = it },
                     )
                     1 -> ThreadsScreen(
@@ -106,16 +111,26 @@ private fun RootNav() {
                         onOpenThread = { id -> nav.navigate("chat/$id") },
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
+                        onOpenTaskCenter = openTaskCenter,
                         onGoTab = { tab = it },
                     )
                     2 -> FilesScreen(
                         initialPath = null,
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
+                        onOpenTaskCenter = openTaskCenter,
                         onGoTab = { tab = it },
                     )
-                    else -> GitScreen(
+                    3 -> GitScreen(
                         workspacePath = null,
+                        onOpenTerminal = { nav.navigate("terminal") },
+                        onOpenSettings = { nav.navigate("settings") },
+                        onOpenTaskCenter = openTaskCenter,
+                        onGoTab = { tab = it },
+                    )
+                    else -> TaskCenterScreen(
+                        currentTab = 4,
+                        onOpenThread = { id -> nav.navigate("chat/$id") },
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onGoTab = { tab = it },

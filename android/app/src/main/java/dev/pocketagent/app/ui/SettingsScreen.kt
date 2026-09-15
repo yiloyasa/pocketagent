@@ -2,15 +2,18 @@ package dev.pocketagent.app.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,13 +22,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,10 +38,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
@@ -54,11 +63,20 @@ import pocketagent.v1.GetCodexSettingsRequest
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostInfo
 import pocketagent.v1.ListMcpServersRequest
+import pocketagent.v1.ListModelsRequest
+import pocketagent.v1.McpServerStatus
+import pocketagent.v1.ModelInfo
 import pocketagent.v1.SetCodexSettingsRequest
 
+/**
+ * 设置范围(三个板块,遵循回退原则):
+ *   GLOBAL  —— 对全局所有 Agent 与 APP 界面生效(连接 / 显示 / 阅读)
+ *   RUNNING —— 仅对"当前正在运行的 agent"生效,含它的专属设置
+ *   OTHER   —— 其他 agent:选中某个即切换到它,并自动跳到它的专属设置页
+ */
 enum class SettingsScope(val id: String, val label: String) {
     GLOBAL("global", "全局"),
-    CODEX("codex", "Codex"),
+    RUNNING("running", "当前 Agent"),
     OTHER("other", "其他 Agent"),
 }
 
@@ -69,22 +87,35 @@ private val OTHER_AGENT_OPTIONS = listOf(
     "hermes" to "Hermes",
 )
 
+/** agent id → 展示名(第一/第二板块标题、其他 agent 列表共用)。 */
+private val AGENT_DISPLAY = (listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS).toMap()
+
+private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
+
 /**
- * 设置 —— 分两大板块:
- *   全局:对所有 agent 与 APP 界面生效(连接 / 显示模式 / 外观与阅读)
- *   Codex:桌面端 agent 专属(权限与安全 / 模型与思考 / 账户 / MCP)
- *   更多:其他 agent 预留 / 关于
- * 行样式对标 Codex 桌面端:标题/描述 + 右侧控件。
+ * 设置页(问题 10:整体重设计)。
+ *
+ * 【这一版改了什么】
+ *  1. 顶栏从"小标题条"换成**大标题式页头**——与主页/会话页同级,统一视觉权重。
+ *  2. 分区标题从"浮在卡片外的图标行"改为**卡片内标题 + 分隔线**:
+ *     信息块之间的边界一眼可见,也不再因为父级 spacedBy 把"标题与卡片"撑开一大截。
+ *  3. 连接设置从两个 Material 默认输入框换成**自绘字段**(深底圆角 + 顶部小标签),
+ *     与整 app 的深色圆角语言一致,不再是一块突兀的白框。
+ *  4. 显示模式三个选项加**色板预览**(浅/深两块小色卡),不用读字就知道点下去长什么样。
+ *  5. 字号选项下面加**实时预览行**,调完立刻看到效果,而不是"保存后回聊天页才发现太小"。
+ *
+ * 【逻辑未变】审批/沙箱/模型/思考强度照样走 writeCodex 乐观更新 + 失败回滚;
+ * 连接凭证照样走 setCredentials + connectWithFallback。这次只动呈现层。
  */
 @Composable
 fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    var addr by remember { mutableStateOf(AgentConnection.currentAddress()) }
+    var addr by remember { mutableStateOf(AgentConnection.configuredAddress()) }
     var token by remember { mutableStateOf(AgentConnection.token) }
     var settings by remember { mutableStateOf<CodexSettings?>(null) }
     var settingsLoading by remember { mutableStateOf(true) }
-    var mcpList by remember { mutableStateOf(listOf<pocketagent.v1.McpServerStatus>()) }
+    var mcpList by remember { mutableStateOf(listOf<McpServerStatus>()) }
     var host by remember { mutableStateOf<HostInfo?>(null) }
     var showApprovalPreview by remember { mutableStateOf(false) }
     var connectionSaving by remember { mutableStateOf(false) }
@@ -92,8 +123,26 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var settingsFeedback by remember { mutableStateOf<String?>(null) }
     var selectedScope by remember { mutableStateOf(SettingsScope.GLOBAL) }
     var selectedOtherAgent by remember { mutableStateOf(OTHER_AGENT_OPTIONS.first().first) }
+    // 默认模型选择器(修复"模型与思考 · 默认模型"点不动、无法选择)
+    var showModelPicker by remember { mutableStateOf(false) }
+    var modelChoices by remember { mutableStateOf(listOf<ModelInfo>()) }
+    // 第二板块始终跟随"当前运行的 agent"
+    val runningAgent = AgentConnection.selectedAgent
     val connectionError = AgentConnection.connError.collectAsState().value
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
+
+    // 模型候选(默认模型选择器用)
+    LaunchedEffect(connectionEpoch) {
+        try {
+            withContext(Dispatchers.IO) {
+                modelChoices = AgentConnection.modelService()
+                    .listModels(ListModelsRequest.newBuilder().build())
+                    .modelsList
+            }
+        } catch (_: Exception) {
+            // 连不上时保持为空,选择器会给出提示
+        }
+    }
 
     fun showSettingsFeedback(message: String) {
         settingsFeedback = message
@@ -166,32 +215,74 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     }
 
     Column(modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()) {
+        // ---------- 页头:返回 + 大标题 ----------
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-            Spacer(Modifier.width(10.dp))
-            Text("设置", Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary)
+        }
+        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 10.dp)) {
+            Text("设置", fontSize = 30.sp, color = Pa.TextPrimary)
+            Text(
+                "连接 · 外观 · 各 Agent 的专属配置",
+                Modifier.padding(top = 2.dp),
+                fontSize = 12.sp,
+                color = Pa.TextTertiary,
+            )
         }
 
+        Spacer(Modifier.height(14.dp))
+
+        // ---------- 范围分段(全局 / 当前 Agent / 其他) ----------
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .background(Pa.Card, RoundedCornerShape(50))
+                .padding(4.dp),
+        ) {
+            val scopeTabs = listOf(
+                SettingsScope.GLOBAL to "全局",
+                SettingsScope.RUNNING to agentDisplay(runningAgent),
+                SettingsScope.OTHER to "其他 Agent",
+            )
+            scopeTabs.forEach { (scopeOption, label) ->
+                ScopeTab(
+                    label = label,
+                    selected = selectedScope == scopeOption,
+                    modifier = Modifier.weight(1f),
+                ) { selectedScope = scopeOption }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // ---------- 滚动内容 ----------
         Column(
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(22.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            Spacer(Modifier.height(10.dp))
+
             settingsError?.let { message ->
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(message, Modifier.weight(1f), fontSize = 12.sp, color = Pa.Red)
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_triangle_alert), null,
+                        tint = Pa.RedText, modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Text(message, Modifier.weight(1f), fontSize = 12.sp, color = Pa.RedText)
                     TextButton(onClick = {
                         settingsError = null
                         AgentConnection.connectionEpoch.value += 1
@@ -203,366 +294,730 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             settingsFeedback?.let { message ->
                 Text(
                     message,
-                    Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 6.dp),
                     fontSize = 12.sp,
                     color = when {
-                        message.contains("失败") -> Pa.Red
+                        message.contains("失败") -> Pa.RedText
                         message.contains("保存中") -> Pa.Accent
-                        else -> Pa.Green
+                        else -> Pa.GreenText
                     },
                 )
             }
 
-            SettingsGroupHeader("设置范围")
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                SettingsScope.entries.forEach { scopeOption ->
-                    val selected = selectedScope == scopeOption
+            if (selectedScope == SettingsScope.GLOBAL) {
+                // ==================== 全局 ====================
+                SettingsGroupHeader("对所有 Agent 与 APP 界面生效")
+
+                // ---- 连接 ----
+                SectionBlock(
+                    icon = R.drawable.ic_lucide_globe,
+                    title = "连接",
+                    desc = "daemon 地址与配对(外网用 Tailscale IP 直连)",
+                ) {
+                    val connState = AgentConnection.connState.collectAsState().value
+                    val transport = AgentConnection.connTransport.collectAsState().value
+                    val connAddr = AgentConnection.connAddress.collectAsState().value
+
+                    // 连接状态摘要:圆点 + 状态 + 传输方式
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(
+                                    when (connState) {
+                                        "ok" -> Pa.Green
+                                        "down" -> Pa.Red
+                                        else -> Pa.TextTertiary
+                                    },
+                                    CircleShape,
+                                ),
+                        )
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                when (connState) {
+                                    "ok" -> "已连接 · $transport"
+                                    "down" -> "未连接 · 自动重连中"
+                                    else -> "检查中…"
+                                },
+                                fontSize = 13.5.sp,
+                                color = Pa.TextPrimary,
+                            )
+                            Text(
+                                if (connState == "ok") connAddr else "每 5 秒自动重试 · USB → 局域网 → Tailscale 回退",
+                                fontSize = 10.5.sp,
+                                color = Pa.TextTertiary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                    Spacer(Modifier.height(12.dp))
+
+                    connectionError?.let { diagnostic ->
+                        Text(
+                            "${diagnostic.message}\n地址：${diagnostic.address}",
+                            Modifier
+                                .fillMaxWidth()
+                                .background(Pa.Bg, RoundedCornerShape(12.dp))
+                                .padding(11.dp),
+                            fontSize = 11.sp,
+                            color = Pa.RedText,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+
+                    SettingsTextField(
+                        value = addr,
+                        onValueChange = { addr = it },
+                        label = "地址 (host:port)",
+                        keyboardType = KeyboardType.Uri,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    SettingsTextField(
+                        value = token,
+                        onValueChange = { token = it },
+                        label = "配对 token(未配对留空)",
+                        password = true,
+                    )
+                    Spacer(Modifier.height(14.dp))
                     Box(
                         Modifier
-                            .weight(1f)
-                            .pressable { selectedScope = scopeOption }
+                            .fillMaxWidth()
+                            .pressable(enabled = !connectionSaving) {
+                                connectionSaving = true
+                                settingsError = null
+                                scope.launch {
+                                    val connected = try {
+                                        withContext(Dispatchers.IO) {
+                                            AgentConnection.setCredentials(addr, token)
+                                            AgentConnection.connectWithFallback()
+                                        }
+                                    } catch (e: Exception) {
+                                        settingsError = "连接失败：${e.message ?: "未知错误"}"
+                                        null
+                                    }
+                                    connectionSaving = false
+                                    if (connected != null) {
+                                        Toast.makeText(
+                                            ctx,
+                                            "连接成功 · ${AgentConnection.connTransport.value}",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    } else {
+                                        settingsError = AgentConnection.connError.value?.message
+                                            ?: "连接失败"
+                                    }
+                                }
+                            }
                             .background(
-                                if (selected) Pa.Accent else Pa.Card,
-                                RoundedCornerShape(12.dp),
+                                if (connectionSaving) Pa.Hover else Pa.Accent,
+                                RoundedCornerShape(14.dp),
                             )
-                            .padding(vertical = 10.dp),
+                            .padding(vertical = 13.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            scopeOption.label,
-                            fontSize = 12.sp,
-                            color = if (selected) Color.White else Pa.TextSecondary,
-                            maxLines = 1,
+                            if (connectionSaving) "连接中…" else "保存并测试连接",
+                            fontSize = 14.5.sp,
+                            color = if (connectionSaving) Pa.TextSecondary else Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                }
+
+                // ---- 显示模式 ----
+                SectionBlock(
+                    icon = R.drawable.ic_lucide_monitor,
+                    title = "显示模式",
+                    desc = "跟随系统 / 浅色 / 深色",
+                ) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        listOf(
+                            Triple("system", "跟随系统", 2),
+                            Triple("light", "浅色", 0),
+                            Triple("dark", "深色", 1),
+                        ).forEach { (id, label, variant) ->
+                            ThemeModeTile(
+                                label = label,
+                                variant = variant,
+                                selected = AgentConnection.themeMode == id,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                AgentConnection.themeMode = id
+                                dev.pocketagent.app.ui.theme.AgentTheme.mode = id
+                                showSettingsFeedback("显示模式已保存")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+
+                // ---- 外观与阅读 ----
+                SectionBlock(
+                    icon = R.drawable.ic_lucide_file_text,
+                    title = "外观与阅读",
+                    desc = "界面与思考内容的字号",
+                ) {
+                    SettingRow(title = "界面文字大小", desc = "聊天与列表文字")
+                    ChoicePills(
+                        options = listOf("0.9" to "小", "1.0" to "标准", "1.15" to "大"),
+                        selected = AgentConnection.uiTextScale.toString(),
+                        onPick = { v ->
+                            AgentConnection.setTextScale(v.toFloat(), AgentConnection.thinkTextScale)
+                            showSettingsFeedback("界面字号已保存")
+                        },
+                    )
+                    // 实时预览:改动立刻可见,不用回聊天页才发现不合适
+                    Text(
+                        "预览:这是一段界面文字,当前字号 ×" +
+                            String.format(java.util.Locale.US, "%.2f", AgentConnection.uiTextScale),
+                        Modifier
+                            .fillMaxWidth()
+                            .background(Pa.Bg, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        fontSize = (13 * AgentConnection.uiTextScale).sp,
+                        color = Pa.TextSecondary,
+                    )
+                    Spacer(Modifier.height(6.dp))
+
+                    SettingRow(title = "思考显示大小", desc = "💭 思考条文字", divider = true)
+                    ChoicePills(
+                        options = listOf("0.85" to "小", "1.0" to "标准", "1.25" to "大"),
+                        selected = AgentConnection.thinkTextScale.toString(),
+                        onPick = { v ->
+                            AgentConnection.setTextScale(AgentConnection.uiTextScale, v.toFloat())
+                            showSettingsFeedback("思考字号已保存")
+                        },
+                    )
+                    Spacer(Modifier.height(4.dp))
+
+                    SettingRow(
+                        title = "工具详情",
+                        desc = "控制普通会话中的工具卡片，审批弹窗始终独立折叠",
+                        divider = true,
+                    )
+                    ChoicePills(
+                        options = listOf("false" to "折叠", "true" to "展开"),
+                        selected = AgentConnection.toolDetailsExpanded.toString(),
+                        onPick = {
+                            AgentConnection.toolDetailsExpanded = it.toBoolean()
+                            showSettingsFeedback("工具详情设置已保存")
+                        },
+                    )
+                    Spacer(Modifier.height(4.dp))
+
+                    SettingRow(
+                        title = "显示思考过程",
+                        desc = "展示=流式显示💭思考与📋执行步骤；隐藏=只看对话结果",
+                        divider = true,
+                    )
+                    ChoicePills(
+                        options = listOf("true" to "展示", "false" to "隐藏"),
+                        selected = AgentConnection.showThinking.toString(),
+                        onPick = {
+                            AgentConnection.showThinking = it.toBoolean()
+                            showSettingsFeedback(
+                                if (it == "true") "将流式显示思考过程" else "将只显示对话结果",
+                            )
+                        },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+
+                // ---- 关于 ----
+                SettingsGroupHeader("设备与版本")
+                SectionBlock(
+                    icon = R.drawable.ic_lucide_info,
+                    title = "关于",
+                    desc = "当前连接的电脑与本机 App",
+                ) {
+                    SettingRow(
+                        title = host?.displayName ?: "…",
+                        desc = "电脑 · ${host?.os ?: ""}/${host?.arch ?: ""}",
+                        divider = true,
+                    )
+                    SettingRow(title = "PocketAgent", desc = "v0.1.0 · 复刻并超越 Mobile Codex")
+                }
+            }
+
+            if (selectedScope == SettingsScope.RUNNING) {
+                // ============ 当前 Agent(仅对该 agent 生效)============
+                SettingsGroupHeader("${agentDisplay(runningAgent)} · 仅对当前运行的 agent 生效")
+
+                if (runningAgent == "codex") {
+                    // ---- 权限与安全 ----
+                    SectionBlock(
+                        icon = R.drawable.ic_lucide_shield,
+                        title = "权限与安全",
+                        desc = "命令执行审批与文件访问范围(随每轮任务下发生效)",
+                    ) {
+                        SettingRow(
+                            title = "审批策略",
+                            desc = "agent 运行命令/写文件前是否先征求批准",
+                        )
+                        ChoicePills(
+                            options = listOf(
+                                "untrusted" to "仅信任",
+                                "on-request" to "按需询问",
+                                "never" to "完全访问",
+                            ),
+                            selected = settings?.approvalPolicy,
+                            onPick = { writeCodex(approval = it) },
+                            enabled = !settingsLoading,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        SettingRow(
+                            title = "沙箱模式",
+                            desc = "限制 agent 可触碰的文件与网络",
+                            divider = true,
+                        )
+                        ChoicePills(
+                            options = listOf(
+                                "read-only" to "只读",
+                                "workspace-write" to "工作区可写",
+                                "danger-full-access" to "完全访问",
+                            ),
+                            selected = settings?.sandbox,
+                            onPick = { writeCodex(sandbox = it) },
+                            enabled = !settingsLoading,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        SettingRow(
+                            title = "审批弹窗预览",
+                            desc = "看看 agent 请求执行命令时的弹窗长什么样、怎么操作",
+                            divider = true,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable(haptic = true) { showApprovalPreview = true }
+                                .background(Pa.Bg, RoundedCornerShape(13.dp))
+                                .padding(vertical = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("预览审批弹窗", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+
+                    // ---- 模型与思考 ----
+                    SectionBlock(
+                        icon = R.drawable.ic_lucide_cpu,
+                        title = "模型与思考",
+                        desc = "默认模型与思考强度(会话内可临时切换)",
+                    ) {
+                        val currentModelName = settings?.model?.takeIf { it.isNotEmpty() }
+                            ?.let { id -> modelChoices.find { it.id == id }?.displayName ?: id }
+                            ?: "跟随桌面配置"
+                        SettingRow(
+                            title = "默认模型",
+                            desc = currentModelName,
+                            divider = true,
+                        ) {
+                            Text(
+                                "选择",
+                                fontSize = 12.5.sp,
+                                color = Pa.AccentText,
+                                modifier = Modifier
+                                    .pressable(haptic = true) { showModelPicker = true }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                        SettingRow(title = "思考强度", desc = "推理投入,越高越慢越细")
+                        ChoicePills(
+                            options = listOf(
+                                "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高",
+                            ),
+                            selected = settings?.effort,
+                            onPick = { writeCodex(effort = it) },
+                            enabled = !settingsLoading,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+
+                    // ---- 账户 ----
+                    SectionBlock(
+                        icon = R.drawable.ic_lucide_user,
+                        title = "Codex 账户",
+                        desc = "桌面端登录的 ChatGPT 账号",
+                    ) {
+                        SettingRow(
+                            title = host?.displayName ?: "…",
+                            desc = "已登录 · 模型与用量走桌面端账号",
+                        )
+                    }
+
+                    // ---- MCP ----
+                    SectionBlock(
+                        icon = R.drawable.ic_lucide_server,
+                        title = "集成 · MCP 服务器",
+                        desc = "桌面端 codex 已配置的工具服务器",
+                    ) {
+                        if (mcpList.isEmpty()) {
+                            Text(
+                                if (settingsLoading) "加载中…" else "未获取到 MCP 列表",
+                                fontSize = 12.sp, color = Pa.TextTertiary,
+                                modifier = Modifier.padding(vertical = 12.dp),
+                            )
+                        } else {
+                            mcpList.forEachIndexed { index, m ->
+                                SettingRow(
+                                    title = m.name,
+                                    desc = "${m.tools} 个工具",
+                                    divider = index != mcpList.lastIndex,
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // 其他 agent 的专属设置:接入完成后在此填充。
+                    // 这是第二板块的"非 codex"分支,所以它天然只对当前运行的 agent 生效。
+                    SectionBlock(
+                        icon = R.drawable.ic_lucide_cpu,
+                        title = "${agentDisplay(runningAgent)} 的专属设置",
+                        desc = "仅对当前运行的 agent 生效",
+                    ) {
+                        SettingRow(title = "模型", desc = "该 Agent 的默认模型", divider = true)
+                        Text(
+                            "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
+                                "在此之前可先切到【其他 Agent】里换回 Codex。",
+                            fontSize = 12.sp, color = Pa.TextTertiary,
+                            modifier = Modifier.padding(vertical = 12.dp),
                         )
                     }
                 }
             }
 
-            if (selectedScope == SettingsScope.GLOBAL) {
-                // ==================== 全局板块 ====================
-                SettingsGroupHeader("全局 · 对所有 agent 与界面生效")
+            if (selectedScope == SettingsScope.OTHER) {
+                // ==================== 其他 Agent ====================
+                SettingsGroupHeader("其他 Agent · 独立配置入口")
 
-            // ---- 连接 ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_globe,
-                title = "连接",
-                desc = "daemon 地址与配对(外网用 Tailscale IP 直连)",
-            ) {
-                val connState = AgentConnection.connState.collectAsState().value
-                val transport = AgentConnection.connTransport.collectAsState().value
-                val connAddr = AgentConnection.connAddress.collectAsState().value
-                SettingRow(
-                    title = when (connState) {
-                        "ok" -> "已连接 · $transport"
-                        "down" -> "未连接 · 自动重连中"
-                        else -> "检查中…"
-                    },
-                    desc = if (connState == "ok") connAddr else "每 5 秒自动重试 · USB → 局域网 → Tailscale 回退",
-                    divider = true,
-                ) {}
-                connectionError?.let { diagnostic ->
-                    Text(
-                        "${diagnostic.message}\n地址：${diagnostic.address}",
-                        Modifier
-                            .fillMaxWidth()
-                            .background(Pa.CardHigh, RoundedCornerShape(10.dp))
-                            .padding(10.dp),
-                        fontSize = 11.sp,
-                        color = Pa.Red,
-                    )
-                }
-                OutlinedTextField(
-                    addr, { addr = it },
-                    label = { Text("地址 (host:port)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    token, { token = it },
-                    label = { Text("配对 token(未配对留空)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-                Spacer(Modifier.height(12.dp))
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable(enabled = !connectionSaving) {
-                            connectionSaving = true
-                            settingsError = null
-                            scope.launch {
-                                val connected = try {
-                                    withContext(Dispatchers.IO) {
-                                        AgentConnection.setCredentials(addr, token)
-                                        AgentConnection.connectWithFallback()
-                                    }
-                                } catch (e: Exception) {
-                                    settingsError = "连接失败：${e.message ?: "未知错误"}"
-                                    null
-                                }
-                                connectionSaving = false
-                                if (connected != null) {
-                                    Toast.makeText(
-                                        ctx,
-                                        "连接成功 · ${AgentConnection.connTransport.value}",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                } else {
-                                    settingsError = AgentConnection.connError.value?.message
-                                        ?: "连接失败"
-                                }
-                            }
-                        }
-                        .background(Pa.Accent, RoundedCornerShape(14.dp))
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center,
+                SectionBlock(
+                    icon = R.drawable.ic_lucide_cpu,
+                    title = "切换 Agent",
+                    desc = "选中一个即切换为当前 agent,并自动跳到它的专属设置",
                 ) {
-                    Text(
-                        if (connectionSaving) "连接中…" else "保存并测试连接",
-                        fontSize = 15.sp,
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
+                    SettingRow(
+                        title = "当前运行的 Agent",
+                        desc = agentDisplay(runningAgent) + " · 其设置不会与其他 agent 混用",
                     )
-                }
-            }
-
-            // ---- 显示模式 ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_monitor,
-                title = "显示模式",
-                desc = "跟随系统 / 浅色 / 深色",
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (id, label) ->
-                        val sel = AgentConnection.themeMode == id
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .pressable {
-                                    AgentConnection.themeMode = id
-                                    dev.pocketagent.app.ui.theme.AgentTheme.mode = id
-                                    showSettingsFeedback("显示模式已保存")
-                                }
-                                .background(if (sel) Pa.Accent else Pa.CardHigh, RoundedCornerShape(12.dp))
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(label, fontSize = 13.sp, color = if (sel) Color.White else Pa.TextSecondary)
-                        }
-                    }
-                }
-            }
-
-            // ---- 外观与阅读 ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_file_text,
-                title = "外观与阅读",
-                desc = "界面与思考内容的字号",
-            ) {
-                SettingRow(title = "界面文字大小", desc = "聊天与列表文字") {}
-                ChoicePills(
-                    options = listOf("0.9" to "小", "1.0" to "标准", "1.15" to "大"),
-                    selected = AgentConnection.uiTextScale.toString(),
-                    onPick = {
-                        v ->
-                        AgentConnection.setTextScale(v.toFloat(), AgentConnection.thinkTextScale)
-                        showSettingsFeedback("界面字号已保存")
-                    },
-                )
-                SettingRow(title = "思考显示大小", desc = "💭 思考条文字") {}
-                ChoicePills(
-                    options = listOf("0.85" to "小", "1.0" to "标准", "1.25" to "大"),
-                    selected = AgentConnection.thinkTextScale.toString(),
-                    onPick = {
-                        v ->
-                        AgentConnection.setTextScale(AgentConnection.uiTextScale, v.toFloat())
-                        showSettingsFeedback("思考字号已保存")
-                    },
-                )
-                SettingRow(title = "工具详情", desc = "控制普通会话中的工具卡片，审批弹窗始终独立折叠") {}
-                ChoicePills(
-                    options = listOf("false" to "折叠", "true" to "展开"),
-                    selected = AgentConnection.toolDetailsExpanded.toString(),
-                    onPick = {
-                        AgentConnection.toolDetailsExpanded = it.toBoolean()
-                        showSettingsFeedback("工具详情设置已保存")
-                    },
-                )
-            }
-            }
-
-            if (selectedScope == SettingsScope.CODEX) {
-                // ==================== Codex 板块 ====================
-                SettingsGroupHeader("Codex · 桌面端 agent 专属")
-
-            // ---- 权限与安全 ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_shield,
-                title = "权限与安全",
-                desc = "命令执行审批与文件访问范围(随每轮任务下发生效)",
-            ) {
-                SettingRow(
-                    title = "审批策略",
-                    desc = "agent 运行命令/写文件前是否先征求批准",
-                ) {}
-                ChoicePills(
-                    options = listOf(
-                        "untrusted" to "仅信任",
-                        "on-request" to "按需询问",
-                        "never" to "完全访问",
-                    ),
-                    selected = settings?.approvalPolicy,
-                    onPick = { writeCodex(approval = it) },
-                    enabled = !settingsLoading,
-                )
-                SettingRow(
-                    title = "沙箱模式",
-                    desc = "限制 agent 可触碰的文件与网络",
-                ) {}
-                ChoicePills(
-                    options = listOf(
-                        "read-only" to "只读",
-                        "workspace-write" to "工作区可写",
-                        "danger-full-access" to "完全访问",
-                    ),
-                    selected = settings?.sandbox,
-                    onPick = { writeCodex(sandbox = it) },
-                    enabled = !settingsLoading,
-                )
-                // 审批弹窗预览:提前认识这个界面怎么用
-                SettingRow(
-                    title = "审批弹窗预览",
-                    desc = "看看 agent 请求执行命令时的弹窗长什么样、怎么操作",
-                ) {}
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { showApprovalPreview = true },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Pa.Card),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        modifier = Modifier.weight(1f),
-                    ) { Text("预览审批弹窗", fontSize = 13.sp, color = Pa.TextPrimary) }
-                }
-            }
-
-            // ---- 模型与思考 ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_cpu,
-                title = "模型与思考",
-                desc = "默认模型与思考强度(会话内可临时切换)",
-            ) {
-                SettingRow(
-                    title = "默认模型",
-                    desc = settings?.model?.ifEmpty { "跟随桌面配置" } ?: "跟随桌面配置",
-                ) {}
-                SettingRow(title = "思考强度", desc = "推理投入,越高越慢越细") {}
-                ChoicePills(
-                    options = listOf(
-                        "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高",
-                    ),
-                    selected = settings?.effort,
-                    onPick = { writeCodex(effort = it) },
-                    enabled = !settingsLoading,
-                )
-            }
-
-            // ---- Codex 账户 ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_user,
-                title = "Codex 账户",
-                desc = "桌面端登录的 ChatGPT 账号",
-            ) {
-                SettingRow(
-                    title = host?.displayName ?: "…",
-                    desc = "已登录 · 模型与用量走桌面端账号",
-                ) {}
-            }
-
-            // ---- 集成 · MCP ----
-            SectionBlock(
-                icon = R.drawable.ic_lucide_server,
-                title = "集成 · MCP 服务器",
-                desc = "桌面端 codex 已配置的工具服务器",
-            ) {
-                if (mcpList.isEmpty()) {
+                    ChoicePills(
+                        options = OTHER_AGENT_OPTIONS,
+                        selected = runningAgent.takeIf { it != "codex" },
+                        onPick = { id ->
+                            selectedOtherAgent = id
+                            // 关键:切换 agent → 第二板块(当前 Agent)自动变成它的专属设置页
+                            AgentConnection.switchAgent(id)
+                            showSettingsFeedback("已切换到 ${agentDisplay(id)}")
+                            selectedScope = SettingsScope.RUNNING
+                        },
+                    )
                     Text(
-                        if (settingsLoading) "加载中…" else "未获取到 MCP 列表",
+                        "选择 ${OTHER_AGENT_OPTIONS.firstOrNull { it.first == selectedOtherAgent }?.second ?: "Agent"} " +
+                            "后会跳到它的专属设置页;模型、权限与工具设置随接入逐步补齐。",
                         fontSize = 12.sp, color = Pa.TextTertiary,
                         modifier = Modifier.padding(vertical = 6.dp),
                     )
-                } else {
-                    mcpList.forEach { m ->
-                        SettingRow(title = m.name, desc = "${m.tools} 个工具", divider = true) {}
+                    if (runningAgent != "codex") {
+                        Spacer(Modifier.height(4.dp))
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable(haptic = true) {
+                                    AgentConnection.switchAgent("codex")
+                                    showSettingsFeedback("已切换回 Codex")
+                                    selectedScope = SettingsScope.RUNNING
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_refresh_cw), null,
+                                tint = Pa.AccentText, modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("切回 Codex", fontSize = 12.5.sp, color = Pa.AccentText)
+                        }
                     }
+                    Spacer(Modifier.height(6.dp))
                 }
             }
-            }
-
-            if (selectedScope == SettingsScope.OTHER) {
-                // ==================== 其他 Agent 板块 ====================
-                SettingsGroupHeader("其他 Agent · 独立配置入口")
-
-            SectionBlock(
-                icon = R.drawable.ic_lucide_info,
-                title = "关于",
-                desc = "设备与工作区",
-            ) {
-                SettingRow(title = host?.displayName ?: "…", desc = "电脑 · ${host?.os ?: ""}/${host?.arch ?: ""}", divider = true) {}
-                SettingRow(title = "PocketAgent", desc = "v0.1.0 · 复刻并超越 Mobile Codex") {}
-            }
-
-            SectionBlock(
-                icon = R.drawable.ic_lucide_cpu,
-                title = "其他 agent",
-                desc = "OpenCode / Claude / Pi / Hermes / DSH / ZCode",
-            ) {
-                SettingRow(
-                    title = "当前 Agent",
-                    desc = "选择后，该 Agent 的设置不会混入 Codex 设置",
-                ) {}
-                ChoicePills(
-                    options = OTHER_AGENT_OPTIONS,
-                    selected = selectedOtherAgent,
-                    onPick = { selectedOtherAgent = it },
-                )
-                Text(
-                    "${OTHER_AGENT_OPTIONS.firstOrNull { it.first == selectedOtherAgent }?.second ?: "Agent"} " +
-                        "的模型、权限和工具设置将在对应接入完成后显示。",
-                    fontSize = 12.sp, color = Pa.TextTertiary,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-            }
-            }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
         }
     }
 
     if (showApprovalPreview) {
         ApprovalPreviewSheet(onDismiss = { showApprovalPreview = false })
     }
+
+    // 默认模型选择弹窗(修复"默认模型"点不动、无法选择)
+    if (showModelPicker) {
+        ModelPickerDialog(
+            models = modelChoices,
+            selected = settings?.model.orEmpty(),
+            onPick = {
+                writeCodex(model = it)
+                showModelPicker = false
+            },
+            onDismiss = { showModelPicker = false },
+        )
+    }
 }
 
-/** 设置页分组大标题。 */
+/** 范围分段按钮(选中 = 蓝底白字)。 */
+@Composable
+private fun ScopeTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .pressable(haptic = true) { onClick() }
+            .background(if (selected) Pa.Accent else Color.Transparent, RoundedCornerShape(50))
+            .padding(vertical = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            fontSize = 12.5.sp,
+            color = if (selected) Color.White else Pa.TextSecondary,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * 自绘输入框:顶部小标签 + 深底圆角输入区。
+ *
+ * 【为什么不用 OutlinedTextField】Material 默认描边框在纯黑页面上是一圈灰线,
+ * 和"深灰圆角卡"的语言不搭;而且自带的内边距会撑高整张卡。这里只用 [BasicTextField],
+ * 外观完全由我们控制。
+ */
+@Composable
+private fun SettingsTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    password: Boolean = false,
+    keyboardType: KeyboardType = KeyboardType.Text,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            Modifier.padding(start = 3.dp, bottom = 6.dp),
+            fontSize = 10.5.sp,
+            color = Pa.TextTertiary,
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(Pa.Bg, RoundedCornerShape(12.dp))
+                .padding(horizontal = 13.dp, vertical = 12.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (value.isEmpty()) {
+                Text("—", fontSize = 13.5.sp, color = Pa.TextTertiary)
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = TextStyle(color = Pa.TextPrimary, fontSize = 13.5.sp),
+                cursorBrush = SolidColor(Pa.Accent),
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * 显示模式磁贴。
+ *
+ * @param variant 0 = 浅色, 1 = 深色, 2 = 跟随系统(左浅右深)
+ *
+ * 【色板预览】用两块真实配色的方块拼出"点下去页面长什么样",
+ * 比一个文字标签直观得多,也回答了"跟随系统"到底跟的是什么。
+ */
+@Composable
+private fun ThemeModeTile(
+    label: String,
+    variant: Int,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val lightSwatch = Color(0xFFF6F6F8)
+    val darkSwatch = Color(0xFF151517)
+    val leftColor = if (variant == 1) darkSwatch else lightSwatch
+    val rightColor = if (variant == 0) lightSwatch else darkSwatch
+
+    Column(
+        modifier
+            .pressable(haptic = true) { onClick() }
+            .background(if (selected) Pa.AccentDim else Pa.Bg, RoundedCornerShape(14.dp))
+            .then(
+                if (selected) Modifier.border(1.dp, Pa.Accent, RoundedCornerShape(14.dp))
+                else Modifier,
+            )
+            .padding(vertical = 11.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row {
+            Box(
+                Modifier
+                    .size(15.dp)
+                    .background(leftColor, RoundedCornerShape(topStart = 5.dp, bottomStart = 5.dp)),
+            )
+            Box(
+                Modifier
+                    .size(15.dp)
+                    .background(rightColor, RoundedCornerShape(topEnd = 5.dp, bottomEnd = 5.dp)),
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(
+            label,
+            fontSize = 11.5.sp,
+            color = if (selected) Pa.AccentText else Pa.TextSecondary,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+        )
+    }
+}
+
+/**
+ * 默认模型选择弹窗:第一项固定为"跟随桌面配置"(空 id),
+ * 其余为 daemon 上报的可用模型;小字标出上下文窗口与是否支持思考。
+ */
+@Composable
+private fun ModelPickerDialog(
+    models: List<ModelInfo>,
+    selected: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Pa.CardHigh, RoundedCornerShape(22.dp))
+                .padding(20.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("选择默认模型", fontSize = 17.sp, color = Pa.TextPrimary)
+                IconActionButton(
+                    R.drawable.ic_lucide_x, "关闭", onDismiss,
+                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                ModelChoiceRow(
+                    title = "跟随桌面配置",
+                    subtitle = "使用电脑上当前 agent 的默认模型",
+                    selected = selected.isEmpty(),
+                    onClick = { onPick("") },
+                )
+                if (models.isEmpty()) {
+                    Text(
+                        "未获取到模型列表(请检查连接后重试)",
+                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+                models.forEach { m ->
+                    ModelChoiceRow(
+                        title = m.displayName.ifBlank { m.id },
+                        subtitle = buildString {
+                            if (m.contextWindow > 0) append("上下文 ${m.contextWindow / 1000}k")
+                            if (m.supportsThinking) {
+                                if (isNotEmpty()) append(" · ")
+                                append("支持思考")
+                            }
+                        },
+                        selected = selected == m.id,
+                        onClick = { onPick(m.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelChoiceRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(haptic = true) { onClick() }
+            .background(
+                if (selected) Pa.Hover else Color.Transparent,
+                RoundedCornerShape(12.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                fontSize = 15.sp,
+                color = if (selected) Pa.Accent else Pa.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotEmpty()) {
+                Text(subtitle, fontSize = 10.5.sp, color = Pa.TextTertiary)
+            }
+        }
+        if (selected) {
+            Icon(
+                painterResource(R.drawable.ic_lucide_check), null,
+                tint = Pa.Accent, modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+/** 设置页分组小标题:左侧一根蓝色短竖条 + 说明文字。 */
 @Composable
 fun SettingsGroupHeader(title: String) {
-    Column(Modifier.fillMaxWidth()) {
-        Spacer(Modifier.height(4.dp))
+    Row(
+        Modifier.fillMaxWidth().padding(start = 4.dp, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(3.dp).height(13.dp).background(Pa.Accent, RoundedCornerShape(50)))
+        Spacer(Modifier.width(8.dp))
         Text(
             title,
             fontSize = 12.sp,
-            color = Pa.Accent,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 4.dp),
+            color = Pa.TextSecondary,
+            fontWeight = FontWeight.Medium,
         )
     }
 }
@@ -592,7 +1047,7 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                 Text(
                     if (expanded) "收起" else "展开",
                     fontSize = 11.sp,
-                    color = Pa.Accent,
+                    color = Pa.AccentText,
                 )
                 IconActionButton(
                     if (expanded) R.drawable.ic_lucide_chevron_left else R.drawable.ic_lucide_chevron_right,
@@ -651,7 +1106,12 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
     }
 }
 
-/** 分区:图标+标题+描述 的分区头,内部一张行卡。 */
+/**
+ * 分区卡:图标 + 标题 + 描述 作为**卡片内页眉**,下方一条分隔线,再接设置行。
+ *
+ * 【与旧版的差别】旧版页眉浮在卡片外,父级 spacedBy 会把"页眉与卡片"之间也撑开,
+ * 视觉上页眉像是属于上一块内容的。收进卡片内部后层级关系明确。
+ */
 @Composable
 fun SectionBlock(
     icon: Int,
@@ -659,29 +1119,33 @@ fun SectionBlock(
     desc: String,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
-    // 整体包一层 Column:SectionBlock 作为父滚动 Column 的单个子项,
-    // 否则父级 spacedBy 会把 头/卡 之间也撑开 22dp
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(34.dp).background(Pa.Card, RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(painterResource(icon), null, tint = Pa.Accent, modifier = Modifier.size(17.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Column {
-                Text(title, fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
-                Text(desc, fontSize = 11.sp, color = Pa.TextTertiary)
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Column(
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(20.dp)),
+    ) {
+        Row(
             Modifier
                 .fillMaxWidth()
-                .background(Pa.Card, RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+                .padding(start = 14.dp, end = 14.dp, top = 13.dp, bottom = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                Modifier.size(31.dp).background(Pa.AccentDim, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(painterResource(icon), null, tint = Pa.Accent, modifier = Modifier.size(15.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 14.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+                if (desc.isNotEmpty()) {
+                    Text(desc, fontSize = 10.5.sp, color = Pa.TextTertiary)
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 2.dp)) {
             content()
         }
     }
@@ -693,24 +1157,29 @@ fun SettingRow(
     title: String,
     desc: String,
     divider: Boolean = false,
-    control: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    control: @Composable RowScope.() -> Unit = {},
 ) {
     Column {
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 13.5.sp, color = Pa.TextPrimary, maxLines = 1)
                 if (desc.isNotEmpty()) {
-                    Text(desc, fontSize = 11.sp, color = Pa.TextTertiary)
+                    Text(
+                        desc,
+                        Modifier.padding(top = 2.dp),
+                        fontSize = 10.5.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 2,
+                    )
                 }
             }
             control()
         }
         if (divider) {
-            Spacer(Modifier.height(8.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-        } else {
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -727,7 +1196,7 @@ fun ChoicePills(
         Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(top = 6.dp, bottom = 4.dp),
+            .padding(bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         options.forEach { (id, label) ->
@@ -735,25 +1204,15 @@ fun ChoicePills(
             Box(
                 Modifier
                     .pressable(enabled = enabled) { onPick(id) }
-                    .background(if (sel) Pa.Accent else Pa.CardHigh, RoundedCornerShape(50))
-                    .padding(horizontal = 13.dp, vertical = 7.dp),
+                    .background(if (sel) Pa.Accent else Pa.Hover, RoundedCornerShape(50))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
             ) {
-                Text(label, fontSize = 12.sp, color = if (sel) Color.White else Pa.TextSecondary)
+                Text(
+                    label,
+                    fontSize = 12.sp,
+                    color = if (sel) Color.White else Pa.TextSecondary,
+                )
             }
         }
-    }
-}
-
-/** 字号选项胶囊(选中=蓝底)。 */
-@Composable
-fun ScaleOption(label: String, value: Float, current: Float, onPick: (Float) -> Unit) {
-    val selected = kotlin.math.abs(current - value) < 0.01f
-    Box(
-        Modifier
-            .pressable { onPick(value) }
-            .background(if (selected) Pa.Accent else Pa.CardHigh, RoundedCornerShape(50))
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    ) {
-        Text(label, fontSize = 13.sp, color = if (selected) Color.White else Pa.TextSecondary)
     }
 }

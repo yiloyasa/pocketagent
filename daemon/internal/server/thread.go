@@ -69,8 +69,20 @@ func (s *Server) GetThread(ctx context.Context, req *pb.GetThreadRequest) (*pb.T
 }
 
 func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) (*pb.Empty, error) {
+	// 先取出来:若这个会话绑定了电脑上的 codex 线程,删除时要一并清掉它的 rollout,
+	// 否则手机端删了、桌面 codex 里还在(表现为"删除会话未成功运行")。
+	var codexID string
+	if t, ok := s.cfg.Store.Get(req.ThreadId); ok {
+		codexID = t.CodexThreadID
+	}
 	if err := s.cfg.Store.Delete(req.ThreadId); err != nil {
 		return nil, errInternal(err)
+	}
+	if codexID != "" {
+		if err := agent.DeleteCodexSession(codexID); err != nil {
+			// rollout 不存在 / 已被桌面端清理都属正常,记日志但不让删除失败
+			log.Printf("删除 codex 会话 %s 的 rollout 失败: %v", codexID, err)
+		}
 	}
 	return &pb.Empty{}, nil
 }
