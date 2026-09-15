@@ -10,10 +10,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,9 +26,14 @@ import dev.pocketagent.app.ui.theme.Pa
 
 enum class MarkdownLineKind { PARAGRAPH, HEADING, BULLET, CODE }
 
-enum class MarkdownSpanKind { TEXT, BOLD, INLINE_CODE }
+enum class MarkdownSpanKind { TEXT, BOLD, INLINE_CODE, LINK }
 
-data class MarkdownSpan(val text: String, val kind: MarkdownSpanKind = MarkdownSpanKind.TEXT)
+data class MarkdownSpan(
+    val text: String,
+    val kind: MarkdownSpanKind = MarkdownSpanKind.TEXT,
+    /** kind=LINK 时的目标地址(裸 URL 与 [文本](URL) 都会填上)。 */
+    val url: String = "",
+)
 
 data class MarkdownLine(
     val kind: MarkdownLineKind,
@@ -35,9 +44,22 @@ data class MarkdownLine(
 private val boldPattern = Regex("\\*\\*(.+?)\\*\\*|__(.+?)__")
 private val inlineCodePattern = Regex("`([^`]+)`")
 
+/** [文本](地址) 形式;地址里允许出现空格以外的常见字符。 */
+private val mdLinkPattern = Regex("\\[([^]]+)]\\((\\S+?)\\)")
+
+/** 裸 URL(http/https)。 */
+private val bareUrlPattern = Regex("https?://[^\\s)）\\]】,，。;；]+")
+
 private fun inlineSpans(source: String): List<MarkdownSpan> {
+    val linkRanges = mdLinkPattern.findAll(source).map { it.range.first to it.range.last }.toList()
+    val bareRanges = bareUrlPattern.findAll(source)
+        // 被 [文本](URL) 覆盖的裸 URL 不重复处理
+        .filter { m -> linkRanges.none { r -> m.range.first >= r.first && m.range.last <= r.second } }
+        .map { it.range.first to it.range.last }
+        .toList()
+    val linkLike = linkRanges + bareRanges
     val markers = (boldPattern.findAll(source).map { it.range.first to it.range.last }
-        .toList() + inlineCodePattern.findAll(source).map { it.range.first to it.range.last }.toList())
+        .toList() + inlineCodePattern.findAll(source).map { it.range.first to it.range.last }.toList() + linkLike)
         .sortedBy { it.first }
     if (markers.isEmpty()) return listOf(MarkdownSpan(source))
 
@@ -52,6 +74,15 @@ private fun inlineSpans(source: String): List<MarkdownSpan> {
                 spans += MarkdownSpan(token.drop(2).dropLast(2), MarkdownSpanKind.BOLD)
             }
             token.startsWith("`") -> spans += MarkdownSpan(token.drop(1).dropLast(1), MarkdownSpanKind.INLINE_CODE)
+            token.startsWith("[") -> {
+                val m = mdLinkPattern.find(token)
+                if (m != null) {
+                    spans += MarkdownSpan(m.groupValues[1], MarkdownSpanKind.LINK, m.groupValues[2])
+                } else {
+                    spans += MarkdownSpan(token)
+                }
+            }
+            else -> spans += MarkdownSpan(token, MarkdownSpanKind.LINK, token)
         }
         cursor = end + 1
     }
@@ -100,6 +131,13 @@ private fun MarkdownLine.annotated(): AnnotatedString = buildAnnotatedString {
         when (span.kind) {
             MarkdownSpanKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(span.text) }
             MarkdownSpanKind.INLINE_CODE -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Pa.Accent)) { append(span.text) }
+            // 链接走 LinkAnnotation:点击由 LocalUriHandler 处理 —— 聊天页会把它接到内置浏览器上
+            MarkdownSpanKind.LINK -> withLink(
+                LinkAnnotation.Url(
+                    span.url,
+                    TextLinkStyles(style = SpanStyle(color = Pa.Accent, textDecoration = TextDecoration.Underline)),
+                ),
+            ) { append(span.text) }
             MarkdownSpanKind.TEXT -> append(span.text)
         }
     }

@@ -25,9 +25,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import dev.pocketagent.app.ui.BrowserScreen
 import dev.pocketagent.app.ui.ChatScreen
 import dev.pocketagent.app.ui.FilesScreen
 import dev.pocketagent.app.ui.GitScreen
@@ -37,7 +40,10 @@ import dev.pocketagent.app.ui.Splash
 import dev.pocketagent.app.ui.TaskCenterScreen
 import dev.pocketagent.app.ui.TerminalScreen
 import dev.pocketagent.app.ui.ThreadsScreen
+import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.ThreadPins
+import dev.pocketagent.app.ui.component.ThreadUsageStore
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaTheme
 import androidx.core.view.WindowCompat
@@ -47,6 +53,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         AgentConnection.init(this)
         TaskCenter.init(this) // 任务中心:恢复未读数与任务清单(杀进程不丢)
+        ThreadUsageStore.init(this) // 会话上下文用量缓存:重开会话时回显
+        ThreadPins.init(this) // 会话置顶偏好
+        PaDownloader.init(this) // 下载到手机(会话输出/电脑文件)
         AgentConnection.startAutoReconnect() // 断线自动重连(USB→Tailscale 回退),恢复后全局刷新
         enableEdgeToEdge()
         setContent {
@@ -104,6 +113,7 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
+                        onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
                     )
                     1 -> ThreadsScreen(
@@ -112,6 +122,7 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
+                        onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
                     )
                     2 -> FilesScreen(
@@ -119,6 +130,7 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
+                        onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
                     )
                     3 -> GitScreen(
@@ -126,6 +138,7 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
+                        onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
                     )
                     else -> TaskCenterScreen(
@@ -134,6 +147,7 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onGoTab = { tab = it },
+                        onOpenBrowser = { nav.navigate("browser") },
                     )
                 }
             }
@@ -144,9 +158,31 @@ private fun RootNav() {
                 onBack = { nav.popBackStack() }, // 修复返回键无效
                 onOpenThread = { id -> nav.navigate("chat/$id") { launchSingleTop = true } },
                 onOpenSettings = { nav.navigate("settings") },
+                onOpenTerminal = { nav.navigate("terminal") },
+                onOpenTaskCenter = {
+                    tab = 4
+                    nav.popBackStack("home", inclusive = false)
+                },
+                onGoTab = { t ->
+                    tab = t
+                    nav.popBackStack("home", inclusive = false)
+                },
+                onOpenBrowser = { url ->
+                    nav.navigate("browser?url=" + android.net.Uri.encode(url))
+                },
             )
         }
         composable("terminal") { TerminalScreen(onBack = { nav.popBackStack() }) }
+        // 内置浏览器:会话里的链接与"网页"入口都来这里
+        composable(
+            route = "browser?url={url}",
+            arguments = listOf(navArgument("url") { type = NavType.StringType; defaultValue = "" }),
+        ) { entry ->
+            BrowserScreen(
+                initialUrl = entry.arguments?.getString("url").orEmpty(),
+                onBack = { nav.popBackStack() },
+            )
+        }
         composable("settings") { SettingsScreen(onBack = { nav.popBackStack() }) }
     }
 }

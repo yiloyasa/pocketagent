@@ -64,6 +64,7 @@ fun TaskCenterScreen(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onGoTab: (Int) -> Unit,
+    onOpenBrowser: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var kindTab by remember { mutableStateOf(TaskCenter.Kind.MESSAGE) }
@@ -100,14 +101,7 @@ fun TaskCenterScreen(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Image(
-                    bitmap = agentBitmap(R.mipmap.ic_launcher),
-                    contentDescription = "菜单",
-                    modifier = Modifier
-                        .size(46.dp)
-                        .pressable { showDrawer = true },
-                    contentScale = ContentScale.Crop,
-                )
+                IconActionButton(R.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
                 Text(
                     "任务中心",
                     Modifier.weight(1f).padding(start = 12.dp),
@@ -225,6 +219,7 @@ fun TaskCenterScreen(
                 onOpenTerminal = onOpenTerminal,
                 onOpenSettings = onOpenSettings,
                 onOpenTaskCenter = {},
+                onOpenBrowser = { showDrawer = false; onOpenBrowser() },
             )
         }
     }
@@ -276,7 +271,7 @@ private fun TaskRow(
     }
     val icon = when (task.kind) {
         TaskCenter.Kind.MESSAGE -> R.drawable.ic_lucide_message_square
-        TaskCenter.Kind.DOWNLOAD -> R.drawable.ic_lucide_arrow_up
+        TaskCenter.Kind.DOWNLOAD -> R.drawable.ic_lucide_download
     }
     val statusText = when (task.status) {
         TaskCenter.Status.RUNNING -> "进行中"

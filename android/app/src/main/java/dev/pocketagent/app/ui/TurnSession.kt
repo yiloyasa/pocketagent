@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.ThreadUsageStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -69,7 +70,17 @@ object TurnSession {
     /** app 级作用域:导航离开聊天页也不会取消协程。 */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    fun state(threadId: String): State = states.getOrPut(threadId) { State() }
+    fun state(threadId: String): State = states.getOrPut(threadId) {
+        State().also { fresh ->
+            // 会话用量像缓存一样回显:daemon 的历史接口不带用量,只靠内存的话
+            // 每次重开会话上下文窗口都会归零(用户反馈的核心问题)。
+            ThreadUsageStore.load(threadId)?.let { snap ->
+                fresh.turnUsage = snap.turn
+                fresh.totalUsage = snap.total
+                fresh.liveContextWindow = snap.contextWindow
+            }
+        }
+    }
 
     /** 全部轮次都结束(没有任何线程在跑)才停保活服务。 */
     private fun maybeStopKeepAlive() {
@@ -120,7 +131,8 @@ object TurnSession {
         st.pendingApproval = null
         st.thinkingText = ""
         st.streamText = ""
-        st.turnUsage = null
+        // 注意:这里**不重置** turnUsage —— 新一轮上报到达前,上下文窗口继续显示
+        // 上一次的用量(否则发完消息面板立刻变成 0%,看起来像数据丢了)。
         st.planSteps = emptyList()
         st.planStream = ""
         // 前台保活:锁屏/切后台不被系统杀,任务流才能活着跑完
@@ -209,6 +221,13 @@ object TurnSession {
                             if (ev.usage.modelContextWindow > 0) {
                                 st.liveContextWindow = ev.usage.modelContextWindow
                             }
+                            // 落盘缓存:重开该会话时先回显,不再从 0% 开始
+                            ThreadUsageStore.save(
+                                threadId,
+                                ev.usage.usage,
+                                ev.usage.totalUsage,
+                                st.liveContextWindow,
+                            )
                         }
                         TurnServerMessage.MsgCase.CODEX_EVENT -> {
                             st.codexEvents = (st.codexEvents + ev.codexEvent).takeLast(20)

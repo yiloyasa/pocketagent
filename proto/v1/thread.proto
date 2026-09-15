@@ -71,6 +71,9 @@ message Thread {
   int64 created_at_unix_ms = 7;
   int64 updated_at_unix_ms = 8;
   int32 message_count = 9;
+  // 桥接的 codex 线程 id:非空表示本会话来自电脑上的 codex 会话。
+  // 手机端用它把"活跃"与"电脑"两处同一个会话合并成一条(不去重会出现两份)。
+  string codex_thread_id = 10;
 }
 
 enum ThreadStatus {

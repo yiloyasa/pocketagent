@@ -22,6 +22,9 @@ func threadToPB(t *store.Thread) *pb.Thread {
 		ModelId: t.ModelID, Status: t.Status,
 		CreatedAtUnixMs: t.CreatedAt, UpdatedAtUnixMs: t.UpdatedAt,
 		MessageCount: int32(len(t.Messages)),
+		// 把桥接的 codex 线程 id 透出:手机端据此把"活跃"与"电脑"里的
+		// 同一个会话合并为一条(否则会显示两份)。
+		CodexThreadId: t.CodexThreadID,
 	}
 }
 

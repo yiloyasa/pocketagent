@@ -88,7 +88,9 @@ import androidx.compose.runtime.collectAsState
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
@@ -236,8 +238,13 @@ private fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
             Modifier.fillMaxWidth().pressable(haptic = true) { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                painterResource(AppR.drawable.ic_lucide_brain), null,
+                tint = Pa.Accent, modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(6.dp))
             Text(
-                "💭 思考过程" + if (streaming) " · 正在思考" else "",
+                "思考过程" + if (streaming) " · 正在思考" else "",
                 Modifier.weight(1f),
                 fontSize = 11.5.sp,
                 color = Pa.Accent,
@@ -275,8 +282,13 @@ private fun PlanCard(steps: List<String>, draft: String, streaming: Boolean) {
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                painterResource(AppR.drawable.ic_lucide_list_checks), null,
+                tint = Pa.Accent, modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(6.dp))
             Text(
-                "📋 执行计划" + if (streaming) " · 制定中" else "",
+                "执行计划" + if (streaming) " · 制定中" else "",
                 Modifier.weight(1f),
                 fontSize = 11.5.sp,
                 color = Pa.Accent,
@@ -445,6 +457,10 @@ private fun ContextWindowCard(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var scopeTab by remember { mutableStateOf(0) } // 0 = 本轮, 1 = 本会话累计
     val usage = if (scopeTab == 0) turnUsage else totalUsage
+    // daemon 还没上报过用量时的兜底:按会话内容字符量估一个占用,
+    // 面板不会再显示"0%"或"暂无数据"这种看起来像坏了的状态。
+    val estimated = remember(items) { estimateTokens(items) }
+    val showEstimate = usage == null && estimated > 0
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -481,7 +497,11 @@ private fun ContextWindowCard(
             Spacer(Modifier.height(14.dp))
 
             // ---------- 主视觉:容量条 ----------
-            ContextHero(usage = usage, contextWindow = contextWindow)
+            ContextHero(
+                usage = usage,
+                contextWindow = contextWindow,
+                estimatedTokens = if (showEstimate) estimated else 0L,
+            )
 
             Spacer(Modifier.height(16.dp))
 
@@ -499,7 +519,30 @@ private fun ContextWindowCard(
             Spacer(Modifier.height(14.dp))
 
             // ---------- 明细 ----------
-            if (usage == null) {
+            if (usage == null && showEstimate) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                ) {
+                    TokenRow("估算输入", estimated, contextWindow, Pa.Accent)
+                    Spacer(Modifier.height(4.dp))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "合计 ~${String.format(java.util.Locale.US, "%,d", estimated)} tokens",
+                        fontSize = 11.5.sp,
+                        color = Pa.TextPrimary,
+                    )
+                    Text(
+                        "由会话内容字符量估算(≈4 字符/token);daemon 下次上报后自动切换为真实值。",
+                        Modifier.padding(top = 3.dp),
+                        fontSize = 10.sp,
+                        color = Pa.TextTertiary,
+                    )
+                }
+            } else if (usage == null) {
                 Text(
                     "暂无数据(尚未收到用量上报)",
                     Modifier
@@ -569,10 +612,21 @@ private fun ContextWindowCard(
  * 底槽 = 整个上下文窗口;填充 = 输入(蓝) + 输出(绿);剩下的深色部分就是**还能装多少**。
  * 右侧百分比 = 占用 / 窗口。窗口未知时退化成"只用不占比",并明确提示去发一轮消息。
  */
+/**
+ * 会话内容的 token 估算(≈4 字符/token)。
+ * 仅用于 daemon 尚未上报用量时的兜底展示,不作计费依据。
+ */
+private fun estimateTokens(items: List<ChatItem>): Long {
+    var chars = 0L
+    items.forEach { chars += it.text.length + it.toolArgs.length }
+    return chars / 4
+}
+
 @Composable
-private fun ContextHero(usage: Usage?, contextWindow: Long) {
-    val input = usage?.inputTokens ?: 0
-    val output = usage?.outputTokens ?: 0
+private fun ContextHero(usage: Usage?, contextWindow: Long, estimatedTokens: Long = 0) {
+    val isEstimate = usage == null && estimatedTokens > 0
+    val input = if (isEstimate) estimatedTokens else (usage?.inputTokens ?: 0)
+    val output = if (isEstimate) 0L else (usage?.outputTokens ?: 0)
     val used = input + output
     val known = contextWindow > 0
     val ratio = if (known) (used.toFloat() / contextWindow).coerceIn(0f, 1f) else 0f
@@ -592,11 +646,23 @@ private fun ContextHero(usage: Usage?, contextWindow: Long) {
     ) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
-                if (usage == null) "—" else String.format(java.util.Locale.US, "%,d", used),
+                if (usage == null && !isEstimate) "—" else String.format(java.util.Locale.US, "%,d", used),
                 fontSize = 26.sp,
                 color = Pa.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
             )
+            if (isEstimate) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "估算",
+                    Modifier
+                        .padding(bottom = 4.dp)
+                        .background(Pa.Hover, RoundedCornerShape(50))
+                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                    fontSize = 9.5.sp,
+                    color = Pa.TextSecondary,
+                )
+            }
             Spacer(Modifier.width(6.dp))
             Text(
                 if (known) " / ${contextWindow / 1000}K tokens" else " tokens 已用",
@@ -861,8 +927,8 @@ val EFFORTS = listOf(
 
 /**
  * 聊天页(全屏):流式事件实时上屏。
- * 顶栏 ☰ 打开侧边栏(会话列表/搜索/新建);输入栏对标图五:
- * 第一行输入,第二行 [+ 附件][审批策略][模型·强度][发送]。
+ * 顶栏 ☰ 打开**全局侧边栏**(与主页/会话/文件/Git 完全同款,左边缘右滑亦可唤出)。
+ * 输入栏对标图五:第一行输入,第二行 [+ 附件][审批策略][模型·强度][发送]。
  */
 @Composable
 fun ChatScreen(
@@ -870,6 +936,11 @@ fun ChatScreen(
     onBack: () -> Unit = {},
     onOpenThread: (String) -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onOpenTerminal: () -> Unit = {},
+    onOpenTaskCenter: () -> Unit = {},
+    onGoTab: (Int) -> Unit = {},
+    /** 打开内置浏览器(带地址);传空串表示只打开浏览器首页。 */
+    onOpenBrowser: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
@@ -890,6 +961,8 @@ fun ChatScreen(
     var models by remember { mutableStateOf(listOf<ModelInfo>()) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var reloadToken by remember { mutableStateOf(0) }
+    // 侧边栏品牌行的电脑名(与其他页面一致)
+    var hostName by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
 
@@ -913,6 +986,14 @@ fun ChatScreen(
             }
         } catch (e: Exception) {
             if (loadError == null) loadError = "无法加载模型列表：${e.message ?: "连接失败"}"
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                hostName = AgentConnection.hostService()
+                    .getHostInfo(GetHostInfoRequest.getDefaultInstance()).displayName
+            }
+        } catch (_: Exception) {
+            // 电脑名取不到不影响聊天,侧边栏回退到通用文案
         }
     }
 
@@ -1088,7 +1169,14 @@ fun ChatScreen(
         st.errorMessage != null ||
         connSt == "down"
 
-    Column(Modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Pa.Bg)
+            .statusBarsPadding()
+            // 与其余页面统一:左边缘右滑也能唤出侧边栏
+            .edgeSwipeToOpenDrawer { showDrawer = true },
+    ) {
         // ---- 顶栏:☰ 侧边栏(会话列表/搜索)+ 标题 + 状态点 ----
         Row(
             Modifier
@@ -1185,11 +1273,40 @@ fun ChatScreen(
                     // 连续插入会话正文。
                     "codex_event" -> Unit
                     "usage" -> Unit
-                    else -> MarkdownText(
-                        item.text,
-                        Modifier.fillMaxWidth(),
-                        fontSize = 15f * uiScale,
-                    )
+                    else -> Column(Modifier.fillMaxWidth()) {
+                        InAppMarkdown(
+                            text = item.text,
+                            modifier = Modifier.fillMaxWidth(),
+                            fontSize = 15f * uiScale,
+                            onOpenUrl = onOpenBrowser,
+                        )
+                        // 会话输出可保存到手机(后台下载,任务中心可见)
+                        if (item.text.isNotBlank()) {
+                            Row(
+                                Modifier
+                                    .padding(top = 4.dp)
+                                    .pressable(haptic = true) {
+                                        PaDownloader.saveTextAsFile(
+                                            "会话输出-%s-%d.md".format(
+                                                threadId.take(6),
+                                                System.currentTimeMillis() % 100000,
+                                            ),
+                                            item.text,
+                                            threadId,
+                                        )
+                                        Toast.makeText(ctx, "已开始保存到手机", Toast.LENGTH_SHORT).show()
+                                    },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    painterResource(AppR.drawable.ic_lucide_download), null,
+                                    tint = Pa.TextTertiary, modifier = Modifier.size(13.dp),
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text("保存到手机", fontSize = 10.sp, color = Pa.TextTertiary)
+                            }
+                        }
+                    }
                 }
             }
             // 流式思考:边想边展示,和落定的思考卡同款样式
@@ -1222,9 +1339,11 @@ fun ChatScreen(
                     } else {
                         // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
                         Column(Modifier.fillMaxWidth()) {
-                            MarkdownText(
-                                st.streamText,
+                            InAppMarkdown(
+                                text = st.streamText,
+                                modifier = Modifier.fillMaxWidth(),
                                 fontSize = 15f * uiScale,
+                                onOpenUrl = onOpenBrowser,
                             )
                             TypingDots(
                                 Modifier.padding(start = 2.dp, top = 6.dp),
@@ -1503,22 +1622,35 @@ fun ChatScreen(
         }
     }
 
-    // ---- 侧边栏(图七):会话列表 + 搜索 + 新建 ----
+    // ---- 侧边栏:与主页/会话/文件/Git 完全同款(全局导航),不再维护第二套设计 ----
     if (showDrawer) {
-        ChatDrawer(
-            currentThreadId = threadId,
+        AppDrawer(
+            currentTab = 1,
+            hostTitle = hostName.ifBlank { "你电脑上的 agent" },
             onClose = { showDrawer = false },
-            onOpenThread = {
+            onGoTab = {
                 showDrawer = false
-                if (it != threadId) onOpenThread(it)
+                onGoTab(it)
+            },
+            onOpenTerminal = {
+                showDrawer = false
+                onOpenTerminal()
             },
             onOpenSettings = {
                 showDrawer = false
                 onOpenSettings()
             },
+            onOpenTaskCenter = {
+                showDrawer = false
+                onOpenTaskCenter()
+            },
             onNewThread = {
                 showDrawer = false
                 showNewThread = true
+            },
+            onOpenBrowser = {
+                showDrawer = false
+                onOpenBrowser("")
             },
         )
     }
@@ -1861,247 +1993,6 @@ internal fun relativeTime(unixMs: Long): String {
     }
 }
 
-/**
- * 聊天页侧边栏:左上角 ☰ 弹出,从左侧滑入(方向跟随锚点位置)——
- * 品牌行、新建对话、搜索框、历史会话列表(带相对时间)、底部设置入口。
- */
-@Composable
-fun ChatDrawer(
-    currentThreadId: String,
-    onClose: () -> Unit,
-    onOpenThread: (String) -> Unit,
-    onOpenSettings: () -> Unit,
-    onNewThread: () -> Unit,
-) {
-    // 返回键先关侧边栏,而不是退出 APP
-    BackHandler(enabled = true) { onClose() }
-    var threads by remember { mutableStateOf(listOf<PThread>()) }
-    var loading by remember { mutableStateOf(true) }
-    var query by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        try {
-            withContext(Dispatchers.IO) {
-                threads = AgentConnection.threadService()
-                    .listThreads(ListThreadsRequest.newBuilder().build())
-                    .threadsList
-            }
-        } catch (_: Exception) {}
-        loading = false
-    }
-
-    // 入场:从左侧滑入(用 MutableTransitionState 使首帧即播动画)
-    val drawerVisible = remember { androidx.compose.animation.core.MutableTransitionState(false) }
-    drawerVisible.targetState = true
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.55f))
-            .pressable { onClose() },
-    ) {
-        AnimatedVisibility(
-            visible = drawerVisible.targetState,
-            enter = slideInHorizontally(tween(260)) { -it / 3 },
-            exit = slideOutHorizontally(tween(200)) { -it / 3 },
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxHeight(),
-        ) {
-            Column(
-                Modifier
-                    .fillMaxWidth(0.84f)
-                    .widthIn(max = 300.dp)
-                    .fillMaxHeight()
-                    .background(Pa.CardHigh, RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp))
-                    .drawBehind {
-                        // 右缘发丝线:让面板和遮罩有清晰的分界
-                        drawLine(
-                            color = Pa.Separator,
-                            start = androidx.compose.ui.geometry.Offset(size.width - 0.5f, 0f),
-                            end = androidx.compose.ui.geometry.Offset(size.width - 0.5f, size.height),
-                            strokeWidth = 1f,
-                        )
-                    }
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 14.dp),
-            ) {
-                Spacer(Modifier.height(12.dp))
-                // 品牌行
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.foundation.Image(
-                        bitmap = agentBitmap(AppR.mipmap.ic_launcher),
-                        contentDescription = null,
-                        modifier = Modifier.size(38.dp),
-                        contentScale = ContentScale.Crop,
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("PocketAgent", fontSize = 16.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
-                        Text("你电脑上的 agent", fontSize = 10.5.sp, color = Pa.TextTertiary)
-                    }
-                    IconActionButton(
-                        AppR.drawable.ic_lucide_x, "关闭", onClose,
-                        bg = Color.Transparent, size = 34.dp, iconSize = 16.dp,
-                    )
-                }
-                Spacer(Modifier.height(14.dp))
-                // 新建对话:品牌蓝实底,最醒目的主操作
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable(haptic = true) { onNewThread() }
-                        .background(Pa.Accent, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painterResource(AppR.drawable.ic_lucide_plus), null,
-                        tint = Color.White, modifier = Modifier.size(17.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text("新建对话", fontSize = 14.5.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(Modifier.height(12.dp))
-                // 搜索
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painterResource(AppR.drawable.ic_lucide_search), null,
-                        tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        modifier = Modifier.weight(1f),
-                        textStyle = TextStyle(fontSize = 13.5.sp, color = Pa.TextPrimary),
-                        cursorBrush = SolidColor(Pa.Accent),
-                        singleLine = true,
-                        decorationBox = { inner ->
-                            Box {
-                                if (query.isEmpty()) Text("搜索会话", fontSize = 13.5.sp, color = Pa.TextTertiary)
-                                inner()
-                            }
-                        },
-                    )
-                }
-                Spacer(Modifier.height(14.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("历史会话", fontSize = 11.sp, color = Pa.TextTertiary, modifier = Modifier.weight(1f))
-                    Text("${threads.size}", fontSize = 11.sp, color = Pa.TextTertiary)
-                }
-                Spacer(Modifier.height(6.dp))
-
-                val filtered = threads.sortedByDescending { it.updatedAtUnixMs }.filter {
-                    query.isBlank() || it.title.contains(query, ignoreCase = true)
-                }
-                LazyColumn(Modifier.weight(1f)) {
-                    if (loading) {
-                        item {
-                            Text(
-                                "读取中…", Modifier.padding(8.dp),
-                                fontSize = 12.sp, color = Pa.TextTertiary,
-                            )
-                        }
-                    }
-                    items(filtered, key = { it.id }) { t ->
-                        val active = t.id == currentThreadId
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressable { onOpenThread(t.id) }
-                                .background(
-                                    if (active) Pa.Hover else Color.Transparent,
-                                    RoundedCornerShape(12.dp),
-                                )
-                                .padding(horizontal = 10.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // 当前会话:左侧品牌蓝指示条
-                            Box(
-                                Modifier
-                                    .width(3.dp)
-                                    .height(30.dp)
-                                    .background(if (active) Pa.Accent else Color.Transparent, RoundedCornerShape(2.dp)),
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_message_square), null,
-                                tint = if (active) Pa.Accent else Pa.TextTertiary,
-                                modifier = Modifier.size(15.dp),
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    t.title.ifEmpty { "(未命名)" },
-                                    fontSize = 13.5.sp,
-                                    color = if (active) Pa.Accent else Pa.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    listOf(
-                                        relativeTime(t.updatedAtUnixMs),
-                                        "${t.messageCount} 条消息",
-                                    ).filter { it.isNotBlank() }.joinToString(" · "),
-                                    fontSize = 10.sp, color = Pa.TextTertiary,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    }
-                }
-                // 底部:设置入口 + 连接状态
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-                Spacer(Modifier.height(6.dp))
-                val connSt = AgentConnection.connState.collectAsState().value
-                val connAddr = AgentConnection.connAddress.collectAsState().value
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable { onOpenSettings() }
-                        .padding(horizontal = 10.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painterResource(AppR.drawable.ic_lucide_settings), null,
-                        tint = Pa.TextSecondary, modifier = Modifier.size(17.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text("设置", fontSize = 14.sp, color = Pa.TextSecondary, modifier = Modifier.weight(1f))
-                    // 迷你连接指示:绿点=已连,红点=断,灰点=检查中
-                    Box(
-                        Modifier
-                            .size(7.dp)
-                            .background(
-                                when (connSt) {
-                                    "ok" -> Pa.Green
-                                    "down" -> Pa.Red
-                                    else -> Pa.TextTertiary
-                                },
-                                CircleShape,
-                            ),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        connAddr,
-                        fontSize = 9.5.sp, color = Pa.TextTertiary,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 110.dp),
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-        }
-    }
-}
 
 /**
  * 会话页右侧 Git 侧栏:该会话所在项目(daemon 工作区)的版本管理 ——
@@ -2262,7 +2153,7 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                         }
                         Spacer(Modifier.height(8.dp))
                         if (st.changesList.isEmpty()) {
-                            Text("工作区干净 ✨", Modifier.padding(vertical = 20.dp), fontSize = 13.sp, color = Pa.TextSecondary)
+                            Text("工作区干净", Modifier.padding(vertical = 20.dp), fontSize = 13.sp, color = Pa.TextSecondary)
                         }
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(st.changesList, key = { it.path }) { c ->
@@ -2365,5 +2256,30 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
             },
             dismissButton = { androidx.compose.material3.TextButton(onClick = { showCommit = false }) { Text("取消") } },
         )
+    }
+}
+
+/**
+ * MarkdownText 的内置浏览器版:把 Compose 的 UriHandler 换成"打开内置浏览器"。
+ * Compose 1.7 的 LinkAnnotation 默认走 LocalUriHandler(系统浏览器),这里接管掉。
+ */
+@Composable
+private fun InAppMarkdown(
+    text: String,
+    modifier: Modifier = Modifier,
+    fontSize: Float = 15f,
+    onOpenUrl: (String) -> Unit,
+) {
+    val handler = remember(onOpenUrl) {
+        object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) {
+                onOpenUrl(uri)
+            }
+        }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalUriHandler provides handler,
+    ) {
+        MarkdownText(text, modifier, fontSize)
     }
 }

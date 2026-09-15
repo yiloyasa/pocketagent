@@ -75,6 +75,7 @@ fun FilesScreen(
     onOpenTerminal: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenTaskCenter: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
     var showDrawer by remember { mutableStateOf(false) }
@@ -174,14 +175,7 @@ fun FilesScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Image(
-                    bitmap = agentBitmap(AppR.mipmap.ic_launcher),
-                    contentDescription = "菜单",
-                    modifier = Modifier
-                        .size(40.dp)
-                        .pressable { showDrawer = true },
-                    contentScale = ContentScale.Crop,
-                )
+                IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
                 if (!showRoots) {
                 IconActionButton(
                     AppR.drawable.ic_lucide_chevron_left, "上级",
@@ -338,6 +332,7 @@ fun FilesScreen(
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
             onOpenTaskCenter = onOpenTaskCenter,
+            onOpenBrowser = { onOpenBrowser() },
         )
     }
 

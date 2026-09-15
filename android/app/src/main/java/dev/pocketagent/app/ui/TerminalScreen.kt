@@ -373,29 +373,75 @@ class TerminalBridge(private val cwd: String = "") {
     private val rows = 24
 
     /** 页面就绪前的输出先攒在这里,ready 后一次性 flush(否则提示符会在 xterm 初始化前丢失)。 */
-    private val pendingOutput = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val pendingOutput = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+    private var pendingBytes = 0
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     @Volatile private var terminalWebView: WebView? = null
     @Volatile private var pageReady = false
     val state = MutableStateFlow("connecting")
     val error = MutableStateFlow<String?>(null)
 
+    // ---- 输出合批(性能) ----
+    // daemon 是"每读一块就 Send 一次",ls -R 这类命令会瞬间制造上千条消息;
+    // 逐条过 JS 桥(evaluateJavascript)是终端卡顿的主因。
+    // 这里把字节攒进缓冲,每 ~16ms(一帧)合批写一次:base64 只编一次、JS 桥只过一次。
+    private val batchLock = Any()
+    private val batchBuf = java.io.ByteArrayOutputStream()
+    @Volatile private var batchScheduled = false
+    private val flushRunnable = Runnable { flushBatch() }
+    private val batchWindowMs = 16L
+
+    private fun appendOutput(bytes: ByteArray) {
+        synchronized(batchLock) { batchBuf.write(bytes) }
+        if (!batchScheduled) {
+            batchScheduled = true
+            mainHandler.postDelayed(flushRunnable, batchWindowMs)
+        }
+    }
+
+    private fun flushBatch() {
+        val payload: ByteArray? = synchronized(batchLock) {
+            batchScheduled = false
+            if (batchBuf.size() == 0) {
+                null
+            } else {
+                val b = batchBuf.toByteArray()
+                batchBuf.reset()
+                b
+            }
+        }
+        if (payload != null && payload.isNotEmpty()) {
+            evalWrite(Base64.encodeToString(payload, Base64.NO_WRAP))
+        }
+    }
+
+    /** 未就绪时入队,并设上限:超出丢最旧,避免长时间未就绪时无限堆积。 */
+    private fun queuePending(bytes: ByteArray) {
+        pendingOutput.offer(bytes)
+        pendingBytes += bytes.size
+        while (pendingBytes > 512 * 1024) {
+            val oldest = pendingOutput.poll() ?: break
+            pendingBytes -= oldest.size
+        }
+    }
+
     fun bindWebView(view: WebView) {
         terminalWebView = view
     }
 
     fun onPageReady() {
-        android.util.Log.i("PaTerm", "page ready, pending=${pendingOutput.size}")
+        android.util.Log.i("PaTerm", "page ready, pending=${pendingOutput.size} chunks / ${pendingBytes}B")
         pageReady = true
-        val flush = ArrayList<String>()
+        // 攒下的历史输出合并成一次写入,而不是 N 次 JS 调用
+        val merged = java.io.ByteArrayOutputStream()
         while (true) {
-            val b64 = pendingOutput.poll() ?: break
-            flush.add(b64)
+            val b = pendingOutput.poll() ?: break
+            merged.write(b)
         }
-        if (flush.isNotEmpty()) {
-            mainHandler.post {
-                flush.forEach(::evalWrite)
-            }
+        pendingBytes = 0
+        if (merged.size() > 0) {
+            val b64 = Base64.encodeToString(merged.toByteArray(), Base64.NO_WRAP)
+            mainHandler.post { evalWrite(b64) }
         }
     }
 
@@ -455,12 +501,12 @@ class TerminalBridge(private val cwd: String = "") {
                         state.value = "connected"
                     }
                     TerminalServerMessage.MsgCase.OUTPUT -> {
-                        val b64 = Base64.encodeToString(value.output.data.toByteArray(), Base64.NO_WRAP)
-                        android.util.Log.i("PaTerm", "output ${value.output.data.size()}B ready=$pageReady")
+                        val bytes = value.output.data.toByteArray()
                         if (pageReady) {
-                            mainHandler.post { evalWrite(b64) }
+                            // 合批:不再逐块过 JS 桥,也不逐块打日志
+                            appendOutput(bytes)
                         } else {
-                            pendingOutput.offer(b64)
+                            queuePending(bytes)
                         }
                     }
                     TerminalServerMessage.MsgCase.EXIT -> {
@@ -540,6 +586,8 @@ class TerminalBridge(private val cwd: String = "") {
     fun close() {
         if (closed) return
         closed = true
+        // 收尾前把还没写出的合批输出刷掉,避免最后几行(如退出提示)丢失
+        mainHandler.post { flushBatch() }
         val observer = requestObserver
         requestObserver = null
         // 先显式关闭服务端 PTY，再结束 gRPC 流，避免切换目录后旧 shell

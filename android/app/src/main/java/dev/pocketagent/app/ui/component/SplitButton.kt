@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -134,25 +137,27 @@ fun SplitButton(
 
         if (open) {
             Popup(
-                alignment = Alignment.TopStart,
+                // 贴在"下拉箭头"正下方、右对齐:是按钮的附属菜单,不再整宽铺满下方
+                alignment = Alignment.TopEnd,
                 offset = androidx.compose.ui.unit.IntOffset(0, menuTopPx),
                 onDismissRequest = { open = false },
                 properties = PopupProperties(focusable = true),
             ) {
                 Column(
                     Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 320.dp)
+                        .widthIn(min = 176.dp, max = 264.dp)
+                        .heightIn(max = 288.dp)
                         .verticalScroll(rememberScrollState())
                         .background(Pa.CardHigh, RoundedCornerShape(14.dp))
-                        .padding(vertical = 6.dp),
+                        .border(1.dp, Pa.Separator, RoundedCornerShape(14.dp))
+                        .padding(vertical = 5.dp),
                 ) {
                     options.forEachIndexed { i, opt ->
                         if (i > 0) {
                             Box(
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp)
+                                    .padding(horizontal = 10.dp)
                                     .height(1.dp)
                                     .background(Pa.Separator),
                             )
@@ -164,19 +169,26 @@ fun SplitButton(
                                     open = false
                                     opt.onClick()
                                 }
-                                .padding(horizontal = 14.dp, vertical = 11.dp),
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     opt.title,
-                                    fontSize = 14.sp,
+                                    fontSize = 13.5.sp,
                                     color = if (opt.selected) Pa.Accent else Pa.TextPrimary,
                                     fontWeight = if (opt.selected) FontWeight.Medium else FontWeight.Normal,
+                                    maxLines = 1,
                                 )
                                 if (opt.desc.isNotEmpty()) {
                                     Spacer(Modifier.height(1.dp))
-                                    Text(opt.desc, fontSize = 11.sp, color = Pa.TextSecondary)
+                                    Text(
+                                        opt.desc,
+                                        fontSize = 10.5.sp,
+                                        color = Pa.TextTertiary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
                             if (opt.selected) {
@@ -185,7 +197,7 @@ fun SplitButton(
                                     painterResource(R.drawable.ic_lucide_check),
                                     contentDescription = null,
                                     tint = Pa.Accent,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(15.dp),
                                 )
                             }
                         }

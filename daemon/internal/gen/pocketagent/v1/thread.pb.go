@@ -595,8 +595,11 @@ type Thread struct {
 	CreatedAtUnixMs int64                  `protobuf:"varint,7,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
 	UpdatedAtUnixMs int64                  `protobuf:"varint,8,opt,name=updated_at_unix_ms,json=updatedAtUnixMs,proto3" json:"updated_at_unix_ms,omitempty"`
 	MessageCount    int32                  `protobuf:"varint,9,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// 桥接的 codex 线程 id:非空表示本会话来自电脑上的 codex 会话。
+	// 手机端用它把"活跃"与"电脑"两处同一个会话合并成一条(不去重会出现两份)。
+	CodexThreadId string `protobuf:"bytes,10,opt,name=codex_thread_id,json=codexThreadId,proto3" json:"codex_thread_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Thread) Reset() {
@@ -690,6 +693,13 @@ func (x *Thread) GetMessageCount() int32 {
 		return x.MessageCount
 	}
 	return 0
+}
+
+func (x *Thread) GetCodexThreadId() string {
+	if x != nil {
+		return x.CodexThreadId
+	}
+	return ""
 }
 
 type CreateThreadRequest struct {
@@ -2333,7 +2343,7 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\rThreadMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x124\n" +
 	"\x06blocks\x18\x02 \x03(\v2\x1c.pocketagent.v1.ContentBlockR\x06blocks\x12+\n" +
-	"\x12created_at_unix_ms\x18\x03 \x01(\x03R\x0fcreatedAtUnixMs\"\xb0\x02\n" +
+	"\x12created_at_unix_ms\x18\x03 \x01(\x03R\x0fcreatedAtUnixMs\"\xd8\x02\n" +
 	"\x06Thread\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1c\n" +
@@ -2343,7 +2353,9 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x06status\x18\x06 \x01(\x0e2\x1c.pocketagent.v1.ThreadStatusR\x06status\x12+\n" +
 	"\x12created_at_unix_ms\x18\a \x01(\x03R\x0fcreatedAtUnixMs\x12+\n" +
 	"\x12updated_at_unix_ms\x18\b \x01(\x03R\x0fupdatedAtUnixMs\x12#\n" +
-	"\rmessage_count\x18\t \x01(\x05R\fmessageCount\"d\n" +
+	"\rmessage_count\x18\t \x01(\x05R\fmessageCount\x12&\n" +
+	"\x0fcodex_thread_id\x18\n" +
+	" \x01(\tR\rcodexThreadId\"d\n" +
 	"\x13CreateThreadRequest\x12\x1c\n" +
 	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x19\n" +

@@ -202,11 +202,13 @@ func (x *GitFileChange) GetWorktreeStatus() string {
 }
 
 type GitDiffRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Repo          string                 `protobuf:"bytes,1,opt,name=repo,proto3" json:"repo,omitempty"`
-	Staged        bool                   `protobuf:"varint,2,opt,name=staged,proto3" json:"staged,omitempty"`
-	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`                                      // 空 = 全部
-	ContextLines  int32                  `protobuf:"varint,4,opt,name=context_lines,json=contextLines,proto3" json:"context_lines,omitempty"` // 0 = 默认 3
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Repo         string                 `protobuf:"bytes,1,opt,name=repo,proto3" json:"repo,omitempty"`
+	Staged       bool                   `protobuf:"varint,2,opt,name=staged,proto3" json:"staged,omitempty"`
+	Path         string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`                                      // 空 = 全部
+	ContextLines int32                  `protobuf:"varint,4,opt,name=context_lines,json=contextLines,proto3" json:"context_lines,omitempty"` // 0 = 默认 3
+	// 非空 = 查看某个提交的 patch(git show <commit>);此时忽略 staged。
+	Commit        string `protobuf:"bytes,5,opt,name=commit,proto3" json:"commit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -267,6 +269,13 @@ func (x *GitDiffRequest) GetContextLines() int32 {
 		return x.ContextLines
 	}
 	return 0
+}
+
+func (x *GitDiffRequest) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
 }
 
 type GitDiffResponse struct {
@@ -1053,12 +1062,13 @@ const file_v1_git_proto_rawDesc = "" +
 	"\rGitFileChange\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12#\n" +
 	"\rstaged_status\x18\x02 \x01(\tR\fstagedStatus\x12'\n" +
-	"\x0fworktree_status\x18\x03 \x01(\tR\x0eworktreeStatus\"u\n" +
+	"\x0fworktree_status\x18\x03 \x01(\tR\x0eworktreeStatus\"\x8d\x01\n" +
 	"\x0eGitDiffRequest\x12\x12\n" +
 	"\x04repo\x18\x01 \x01(\tR\x04repo\x12\x16\n" +
 	"\x06staged\x18\x02 \x01(\bR\x06staged\x12\x12\n" +
 	"\x04path\x18\x03 \x01(\tR\x04path\x12#\n" +
-	"\rcontext_lines\x18\x04 \x01(\x05R\fcontextLines\"Y\n" +
+	"\rcontext_lines\x18\x04 \x01(\x05R\fcontextLines\x12\x16\n" +
+	"\x06commit\x18\x05 \x01(\tR\x06commit\"Y\n" +
 	"\x0fGitDiffResponse\x12!\n" +
 	"\funified_diff\x18\x01 \x01(\tR\vunifiedDiff\x12#\n" +
 	"\rchanged_files\x18\x02 \x03(\tR\fchangedFiles\";\n" +

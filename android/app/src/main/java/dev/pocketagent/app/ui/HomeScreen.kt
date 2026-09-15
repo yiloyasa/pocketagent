@@ -100,6 +100,7 @@ fun HomeScreen(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -154,15 +155,8 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 左上角:App 图标 = 菜单入口(点开承载其他功能的侧边栏)
-            Image(
-                bitmap = agentBitmap(R.mipmap.ic_launcher),
-                contentDescription = "菜单",
-                modifier = Modifier
-                    .size(46.dp)
-                    .pressable { showDrawer = true },
-                contentScale = ContentScale.Crop,
-            )
+            // 左上角:菜单入口(全 App 统一用汉堡图标;品牌 logo 只出现在侧边栏与启动页)
+            IconActionButton(R.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
             // 右上角:设置
             IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings, bg = Pa.Card)
         }
@@ -415,6 +409,7 @@ fun HomeScreen(
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
             onOpenTaskCenter = onOpenTaskCenter,
+            onOpenBrowser = { onOpenBrowser() },
         )
     }
 }

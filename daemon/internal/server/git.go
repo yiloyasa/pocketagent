@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
@@ -62,6 +63,27 @@ func parseBranchHeader(st *pb.GitStatus, h string) {
 }
 
 func (s *Server) Diff(ctx context.Context, req *pb.GitDiffRequest) (*pb.GitDiffResponse, error) {
+	// 指定提交 = 看该 commit 的 patch(git show),用于历史列表点进去看改动
+	if req.Commit != "" {
+		statOut, err := gitOutput(ctx, req.Repo,
+			"show", "--stat", "--format=", "--no-color", req.Commit)
+		if err != nil {
+			return nil, errInvalidArg("git show 失败: " + statOut)
+		}
+		fullOut, err := gitOutput(ctx, req.Repo, "show", "--format=", "--no-color", req.Commit)
+		if err != nil {
+			return nil, errInvalidArg("git show 失败: " + fullOut)
+		}
+		resp := &pb.GitDiffResponse{UnifiedDiff: fullOut}
+		for _, l := range strings.Split(statOut, "\n") {
+			l = strings.TrimSpace(l)
+			if l != "" && !strings.HasPrefix(l, "changed,") && strings.Contains(l, "|") {
+				resp.ChangedFiles = append(resp.ChangedFiles, strings.TrimSpace(strings.SplitN(l, "|", 2)[0]))
+			}
+		}
+		return resp, nil
+	}
+
 	args := []string{"diff", "--stat"}
 	if req.Staged {
 		args = append(args, "--cached")
@@ -161,8 +183,14 @@ func (s *Server) Log(ctx context.Context, req *pb.GitLogRequest) (*pb.GitLogResp
 		if len(f) != 5 {
 			continue
 		}
+		// %at 是 Unix 秒:之前解析完丢弃了,手机端历史列表因此没有时间
+		var ts int64
+		if sec, convErr := strconv.ParseInt(f[3], 10, 64); convErr == nil {
+			ts = sec * 1000
+		}
 		resp.Commits = append(resp.Commits, &pb.GitCommitInfo{
 			Hash: f[0], ShortHash: f[1], Author: f[2], Message: f[4],
+			TimestampUnixMs: ts,
 		})
 	}
 	return resp, nil

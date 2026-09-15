@@ -44,6 +44,8 @@ message GitDiffRequest {
   bool staged = 2;
   string path = 3;             // 空 = 全部
   int32 context_lines = 4;     // 0 = 默认 3
+  // 非空 = 查看某个提交的 patch(git show <commit>);此时忽略 staged。
+  string commit = 5;
 }
 message GitDiffResponse {
   string unified_diff = 1;

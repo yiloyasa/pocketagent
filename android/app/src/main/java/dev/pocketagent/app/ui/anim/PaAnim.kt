@@ -7,7 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -35,7 +36,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
@@ -163,56 +166,56 @@ fun EmptyState(iconRes: Int, title: String, hint: String, modifier: Modifier = M
 }
 
 /**
- * 左边缘右滑唤出侧边栏(问题 7:交互更顺滑)。
+ * 左边缘右滑唤出侧边栏。
  *
  * 【起手区间是实测出来的】
  *  - 最左侧 ~24dp 是**系统返回手势区**(HyperOS 实测 x<24dp 的横滑直接退到桌面),
  *    那一段我们永远拿不到,所以不指望它;
- *  - 起手点放宽到 [edgeWidth](64dp,约屏幕宽度的 6%),用户在"边缘往里一点"的位置
- *    右滑即可唤出 —— 这个区间系统不抢、我们也不和行内左滑打架
- *    (行内左滑从行中间起手,且只认"往左拉")。
+ *  - 起手点放宽到 [edgeWidth](96dp,约屏幕宽度的 9%),"边缘往里一点"右滑即可唤出。
  *
- * 【为什么不遮罩覆盖】把检测挂在页面根节点上,子节点仍在命中链里,点击不受影响;
- * 只有判定确实是从左侧起手的右滑后,才 consume 事件。
+ * 【为什么要用 Initial 传球(本轮修复"偶尔滑不动")】
+ * 之前用 detectHorizontalDragGestures 挂在根节点,事件先给子节点(列表滚动、行内左滑),
+ * 子节点一旦 consume,根节点的识别器就被取消 —— 表现就是"滑了没反应"。
+ * 现在在 Initial 阶段监听:判定为右滑并 consume 之后,子节点再也收不到这段位移。
+ *
+ * 【误触保护】纵向位移明显大于横向 → 判定为滚动列表,立即放弃;
+ * 起手后往左拉 → 判定为行内左滑,立即放弃。两者都不 consume。
  */
 fun Modifier.edgeSwipeToOpenDrawer(
     enabled: Boolean = true,
-    edgeWidth: Dp = 64.dp,
-    threshold: Dp = 64.dp,
+    edgeWidth: Dp = 96.dp,
+    threshold: Dp = 32.dp,
     onOpen: () -> Unit,
 ): Modifier = composed {
     if (!enabled) return@composed this
     val density = androidx.compose.ui.platform.LocalDensity.current
     val edgePx = with(density) { edgeWidth.toPx() }
     val thresholdPx = with(density) { threshold.toPx() }
-    var accepted by remember { mutableStateOf(false) }
-    var travelled by remember { mutableStateOf(0f) }
 
     this.pointerInput(edgePx, thresholdPx) {
-        // 注意:扩展函数不能写全限定名调用,必须靠上面的 import 直接引用
-        detectHorizontalDragGestures(
-            onDragStart = { offset ->
-                accepted = offset.x <= edgePx
-                travelled = 0f
-            },
-            onDragEnd = { accepted = false; travelled = 0f },
-            onDragCancel = { accepted = false; travelled = 0f },
-            onHorizontalDrag = { change, dragAmount ->
-                if (!accepted) return@detectHorizontalDragGestures
-                // 只认"往右拉"
-                if (dragAmount <= 0f) {
-                    accepted = false
-                    return@detectHorizontalDragGestures
-                }
-                travelled += dragAmount
-                change.consume()
-                if (travelled >= thresholdPx) {
-                    accepted = false
-                    travelled = 0f
+        awaitEachGesture {
+            // Initial 传球:在子节点(列表滚动/行内左滑)之前拿到事件,起点稍偏也不会被吃掉
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (down.position.x > edgePx) return@awaitEachGesture
+            var horizontal = 0f
+            var vertical = 0f
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                horizontal += change.positionChange().x
+                vertical += kotlin.math.abs(change.positionChange().y)
+                // 明显往左:是行内左滑,不是开抽屉
+                if (horizontal < -thresholdPx) break
+                // 纵向占主导:交给列表去滚动
+                if (vertical > thresholdPx && vertical > kotlin.math.abs(horizontal)) break
+                if (horizontal >= thresholdPx) {
+                    change.consume()
                     onOpen()
+                    break
                 }
-            },
-        )
+            }
+        }
     }
 }
 

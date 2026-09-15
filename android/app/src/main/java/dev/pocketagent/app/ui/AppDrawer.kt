@@ -93,6 +93,10 @@ fun AppDrawer(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit = {},
+    /** 传了就显示"新建对话"主操作(聊天页用;其余页面各有自己的新建入口)。 */
+    onNewThread: (() -> Unit)? = null,
+    /** 传了就显示"网页"快捷磁贴(内置浏览器)。 */
+    onOpenBrowser: (() -> Unit)? = null,
 ) {
     val reduceMotion = rememberReduceMotion()
 
@@ -171,6 +175,8 @@ fun AppDrawer(
                 onOpenSettings = { requestClose { onOpenSettings() } },
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
                 onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
+                onNewThread = onNewThread,
+                onOpenBrowser = onOpenBrowser,
                 onClose = { requestClose() },
             )
         }
@@ -197,6 +203,8 @@ private fun DrawerPanel(
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
     onToggleCollapsed: () -> Unit,
+    onNewThread: (() -> Unit)? = null,
+    onOpenBrowser: (() -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val connState = AgentConnection.connState.value
@@ -213,8 +221,9 @@ private fun DrawerPanel(
     Column(
         modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(topEnd = 30.dp, bottomEnd = 30.dp))
-            .background(Pa.CardHigh)
+            .clip(RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp))
+            // 与页面同族的 Pa.Card(而非更亮的 CardHigh):侧边栏不再比页面"亮一档"
+            .background(Pa.Card)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -233,6 +242,8 @@ private fun DrawerPanel(
                     onOpenSettings = onOpenSettings,
                     onOpenTaskCenter = onOpenTaskCenter,
                     onToggleCollapsed = onToggleCollapsed,
+                    onNewThread = onNewThread,
+                    onOpenBrowser = onOpenBrowser,
                 )
             } else {
                 Column(
@@ -241,47 +252,67 @@ private fun DrawerPanel(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 18.dp),
                 ) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
 
-            // ---------- 品牌头 ----------
+            // ---------- 品牌头(收敛版:小 logo + 名称 + 连接胶囊一行放下) ----------
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Logo 外圈带一圈 AccentDim 光环,提升"品牌位"的体量感
                 Box(
                     Modifier
-                        .size(54.dp)
-                        .background(Pa.AccentDim, RoundedCornerShape(17.dp)),
+                        .size(40.dp)
+                        .background(Pa.AccentDim, RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Image(
                         bitmap = agentBitmap(R.mipmap.ic_launcher),
                         contentDescription = null,
-                        modifier = Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)),
+                        modifier = Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)),
                         contentScale = ContentScale.Crop,
                     )
                 }
-                Spacer(Modifier.width(13.dp))
+                Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         "PocketAgent",
-                        fontSize = 18.sp,
+                        fontSize = 16.sp,
                         color = Pa.TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Spacer(Modifier.height(3.dp))
+                    Spacer(Modifier.height(2.dp))
                     ConnectionPill(connected = connected, label = hostTitle, transport = transport)
                 }
                 IconActionButton(
                     R.drawable.ic_lucide_chevron_left, "收起为图标栏", onToggleCollapsed,
-                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
+                    bg = Color.Transparent, size = 34.dp, iconSize = 17.dp,
                 )
                 Spacer(Modifier.width(2.dp))
                 IconActionButton(
                     R.drawable.ic_lucide_x, "关闭", onClose,
-                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
+                    bg = Color.Transparent, size = 34.dp, iconSize = 17.dp,
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(14.dp))
+
+            // ---------- 新建对话(仅聊天页传入了该回调) ----------
+            if (onNewThread != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable(haptic = true) { onNewThread() }
+                        .background(Pa.Accent, RoundedCornerShape(14.dp))
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_plus), null,
+                        tint = Color.White, modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("新建对话", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(12.dp))
+            }
 
             // ---------- 快捷磁贴:终端 / 任务中心(带未读角标) ----------
             Row(
@@ -302,6 +333,16 @@ private fun DrawerPanel(
                     badge = unread,
                     modifier = Modifier.weight(1f),
                     onClick = onOpenTaskCenter,
+                )
+            }
+            if (onOpenBrowser != null) {
+                Spacer(Modifier.height(10.dp))
+                QuickTile(
+                    icon = R.drawable.ic_lucide_globe,
+                    title = "网页",
+                    hint = "内置浏览器",
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onOpenBrowser,
                 )
             }
 
@@ -367,6 +408,8 @@ private fun RailContent(
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
     onToggleCollapsed: () -> Unit,
+    onNewThread: (() -> Unit)? = null,
+    onOpenBrowser: (() -> Unit)? = null,
 ) {
     val entries = listOf(
         DrawerEntry(R.drawable.ic_lucide_monitor, "主页", "agent 与最近任务", 0),
@@ -397,6 +440,14 @@ private fun RailContent(
             )
         }
         Spacer(Modifier.height(16.dp))
+        if (onNewThread != null) {
+            RailIcon(R.drawable.ic_lucide_plus, "新建对话", onClick = onNewThread)
+            Spacer(Modifier.height(8.dp))
+        }
+        if (onOpenBrowser != null) {
+            RailIcon(R.drawable.ic_lucide_globe, "网页", onClick = onOpenBrowser)
+            Spacer(Modifier.height(8.dp))
+        }
         RailIcon(R.drawable.ic_lucide_square_terminal, "终端", onClick = onOpenTerminal)
         Spacer(Modifier.height(8.dp))
         RailIcon(R.drawable.ic_lucide_list_checks, "任务中心", badge = unread, onClick = onOpenTaskCenter)
@@ -533,7 +584,7 @@ private fun QuickTile(
     Column(
         modifier
             .pressable(haptic = true) { onClick() }
-            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .background(Pa.CardHigh, RoundedCornerShape(16.dp))
             .padding(horizontal = 12.dp, vertical = 11.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -610,7 +661,7 @@ private fun DrawerItem(
             Box(
                 Modifier
                     .size(36.dp)
-                    .background(if (selected) Pa.AccentDim else Pa.Card, RoundedCornerShape(11.dp)),
+                    .background(if (selected) Pa.AccentDim else Pa.CardHigh, RoundedCornerShape(11.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

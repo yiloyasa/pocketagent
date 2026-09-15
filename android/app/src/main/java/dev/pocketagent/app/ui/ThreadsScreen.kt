@@ -69,6 +69,7 @@ import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
+import dev.pocketagent.app.ui.component.ThreadPins
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.Pa
@@ -101,6 +102,7 @@ fun ThreadsScreen(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit = {},
     onOpenTaskCenter: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -108,12 +110,12 @@ fun ThreadsScreen(
     val ctx = LocalContext.current
     var threads by remember { mutableStateOf(listOf<PThread>()) }
     var host by remember { mutableStateOf<HostInfo?>(null) }
-    var showModels by remember { mutableStateOf(false) }
-    var models by remember { mutableStateOf(listOf<ModelInfo>()) }
     var showArchived by remember { mutableStateOf(false) }
-    var showPc by remember { mutableStateOf(false) } // "电脑"标签:列出 codex 已有会话
+    // 电脑上**尚未导入**的 codex 会话:导入过的会以本地会话身份出现,不会在这里重复一条。
     var pcThreads by remember { mutableStateOf(listOf<CodexThreadInfo>()) }
     var importingId by remember { mutableStateOf("") }
+    // 置顶(本地偏好):置顶项排在最前
+    var pinned by remember { mutableStateOf(ThreadPins.all()) }
     // 行内重命名:把该行原地换成输入框。
     // 【关键】值由页面持有(单一真相),组件内部**不留任何副本** ——
     // 之前用 String + 组件内 remember(TextFieldValue) 的写法,两边会各持一份、
@@ -131,39 +133,63 @@ fun ThreadsScreen(
     // 切 tab 时旧数据仍在,不会因为刷新闪一下骨架。
     var loading by remember { mutableStateOf(true) }
 
+    /** 置顶键:优先用 codex 线程 id,保证"电脑里的那条"导入前后是同一个键。 */
+    fun pinKey(local: PThread?, codexId: String?): String =
+        codexId?.takeIf { it.isNotEmpty() }
+            ?: local?.codexThreadId?.takeIf { it.isNotEmpty() }
+            ?: local?.id.orEmpty()
+
+    /**
+     * 拉取会话列表。
+     * 【统一数据源】"活跃"与"电脑"本来就是同一批 codex 会话:
+     * 本地列表里 codex_thread_id 非空的就是"电脑上的那条",所以电脑列表要
+     * 剔除这些 id,两处不再各显示一条;同时**每次都刷新两个列表**,
+     * 避免删掉一条后电脑列表还是旧缓存(点开报"无法打开")。
+     */
     fun refresh() = scope.launch {
         try {
             withContext(Dispatchers.IO) {
                 host = AgentConnection.connectWithFallback()
                     ?: AgentConnection.hostService()
                         .getHostInfo(GetHostInfoRequest.getDefaultInstance())
-                if (showPc) {
-                    pcThreads = AgentConnection.threadService()
+                // daemon 的 include_archived=true 是"活跃+已归档"的全量,这里自己分流
+                val all = AgentConnection.threadService()
+                    .listThreads(
+                        ListThreadsRequest.newBuilder()
+                            .setIncludeArchived(true)
+                            .build())
+                    .threadsList
+                threads = all.filter { t ->
+                    if (showArchived) t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
+                    else t.status != ThreadStatus.THREAD_STATUS_ARCHIVED
+                }
+                // 最近工作区跟随会话记录自动补全
+                threads.map { it.workspace }.filter { it.isNotEmpty() }
+                    .distinct().take(5).forEach { AgentConnection.addRecentWorkspace(it) }
+
+                val importedCodexIds = all.map { it.codexThreadId }.filter { it.isNotEmpty() }.toSet()
+                // 老版本 daemon 不带 codex_thread_id:退回"标题 + 工作目录"匹配,尽量不去重失败
+                val localByTitle = all
+                    .filter { it.workspace.isNotEmpty() }
+                    .map { it.title.trim() to it.workspace.trim() }
+                    .toSet()
+                pcThreads = if (showArchived) {
+                    emptyList()
+                } else {
+                    AgentConnection.threadService()
                         .listCodexThreads(ListCodexThreadsRequest.newBuilder().build())
                         .threadsList
-                } else {
-                    // 修复:daemon 的 include_archived=true 是"活跃+已归档"的全量,
-                    // 所以这里拿全量后按状态自己分流 —— "已归档"只显示归档,
-                    // "活跃"只显示未归档,两边不再互相串台。
-                    threads = AgentConnection.threadService()
-                        .listThreads(
-                            ListThreadsRequest.newBuilder()
-                                .setIncludeArchived(true)
-                                .build())
-                        .threadsList
-                        .filter { t ->
-                            if (showArchived) t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
-                            else t.status != ThreadStatus.THREAD_STATUS_ARCHIVED
+                        .filter { c ->
+                            c.id !in importedCodexIds &&
+                                (c.title.trim() to c.cwd.trim()) !in localByTitle
                         }
-                    // 最近工作区跟随会话记录自动补全
-                    threads.map { it.workspace }.filter { it.isNotEmpty() }
-                        .distinct().take(5).forEach { AgentConnection.addRecentWorkspace(it) }
                 }
                 loadError = null
             }
         } catch (e: Exception) {
             loadError = "会话列表加载失败：${e.message ?: "连接失败"}"
         }
+        pinned = ThreadPins.all()
         loading = false
     }
 
@@ -189,6 +215,8 @@ fun ThreadsScreen(
                     AgentConnection.threadService().deleteThread(
                         DeleteThreadRequest.newBuilder().setThreadId(t.id).build())
                 }
+                // 删除会连带清掉电脑上的 rollout:立刻刷新,电脑列表里那条也随之消失
+                refresh()
             },
         )
     }
@@ -208,6 +236,7 @@ fun ThreadsScreen(
                         ArchiveThreadRequest.newBuilder()
                             .setThreadId(t.id).setArchived(target).build())
                 }
+                refresh()
             },
         )
     }
@@ -231,6 +260,7 @@ fun ThreadsScreen(
                     AgentConnection.threadService().deleteThread(
                         DeleteThreadRequest.newBuilder().setThreadId(tid).build())
                 }
+                refresh()
             },
         )
     }
@@ -258,7 +288,7 @@ fun ThreadsScreen(
     }
 
     val reconnectTick = AgentConnection.connectionEpoch.collectAsState().value
-    LaunchedEffect(Unit, showArchived, showPc, reconnectTick) { refresh() }
+    LaunchedEffect(Unit, showArchived, reconnectTick) { refresh() }
 
     // 列表一开始滚动就收起已展开的侧滑行,避免滑动过程中误触动作按钮
     LaunchedEffect(listState.isScrollInProgress) {
@@ -276,30 +306,11 @@ fun ThreadsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Image(
-                        bitmap = agentBitmap(R.mipmap.ic_launcher),
-                        contentDescription = "菜单",
-                        modifier = Modifier.size(46.dp).pressable { showDrawer = true },
-                        contentScale = ContentScale.Crop,
-                    )
+                    IconActionButton(R.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
                     Spacer(Modifier.width(12.dp))
                     Text("会话", fontSize = 30.sp, color = Pa.TextPrimary)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    IconActionButton(R.drawable.ic_lucide_cpu, "模型", {
-                        showModels = true
-                        scope.launch {
-                            models = try {
-                                withContext(Dispatchers.IO) {
-                                    AgentConnection.modelService()
-                                        .listModels(ListModelsRequest.newBuilder().build())
-                                        .modelsList
-                                }
-                            } catch (e: Exception) {
-                                emptyList()
-                            }
-                        }
-                    })
                     IconActionButton(R.drawable.ic_lucide_square_terminal, "终端", onOpenTerminal)
                     IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings)
                 }
@@ -327,145 +338,192 @@ fun ThreadsScreen(
                 }
             }
 
-            // ---- 过滤 chips:活跃 / 已归档 / 电脑(codex 已有会话) ----
+            // ---- 过滤 chips:全部 / 已归档(电脑上未导入的 codex 会话合并在"全部"里) ----
             Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp)) {
-                FilterChip2("活跃", !showArchived && !showPc) { showArchived = false; showPc = false }
+                FilterChip2("全部", !showArchived) { showArchived = false }
                 Spacer(Modifier.width(8.dp))
-                FilterChip2("已归档", showArchived && !showPc) { showArchived = true; showPc = false }
-                Spacer(Modifier.width(8.dp))
-                FilterChip2("电脑", showPc) { showPc = true }
+                FilterChip2("已归档", showArchived) { showArchived = true }
             }
 
-            // ---- 会话列表 ----
-            if (showPc) {
-                if (pcThreads.isEmpty()) {
-                    EmptyState(
-                        iconRes = R.drawable.ic_lucide_folder,
-                        title = "电脑上还没有 codex 会话",
-                        hint = "在电脑上用过 codex 后,这里会列出它的全部历史会话;左滑可删除",
+            // ---- 会话列表:本地会话 + 电脑上未导入的 codex 会话,合成一条流 ----
+            // "活跃"和"电脑"本来就是同一批 codex 会话,这里不再分两个标签页;
+            // 置顶项恒排最前,其余按更新时间倒序。
+            val pinnedKeys = pinned
+            val rows: List<SessionRow> = buildList {
+                threads.forEach { add(SessionRow.Local(it, pinKey(it, null))) }
+                if (!showArchived) pcThreads.forEach { add(SessionRow.Pc(it)) }
+            }.sortedWith(
+                compareByDescending<SessionRow> { it.pinKey in pinnedKeys }
+                    .thenByDescending { it.sortKey },
+            )
+
+            when {
+                loading && rows.isEmpty() -> {
+                    // 骨架屏:形状与真实会话行逐项对位(SESSION_ROW = 圆头像 + 两行文本条)
+                    PaSkeletonList(
+                        kind = SkeletonKind.SESSION_ROW,
+                        modifier = Modifier.padding(horizontal = 16.dp),
                     )
-                } else {
+                }
+                rows.isEmpty() -> {
+                    EmptyState(
+                        iconRes = if (showArchived) R.drawable.ic_lucide_archive else R.drawable.ic_lucide_message_square,
+                        title = if (showArchived) "没有归档的会话" else "还没有会话",
+                        hint = if (showArchived) "左滑会话可恢复或删除" else "点右下角 + 开始你的第一个任务",
+                    )
+                }
+                else -> {
                     LazyColumn(
                         Modifier.fillMaxSize(),
+                        state = listState,
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(pcThreads, key = { it.id }) { c ->
-                            SwipeRevealRow(
-                                rowKey = c.id,
-                                openKey = openKey,
-                                actions = listOf(
-                                    SwipeAction(
-                                        "delete", "删除", R.drawable.ic_lucide_trash_2,
-                                        Color.White, destructive = true,
-                                    ),
-                                ),
-                                onAction = { a -> if (a.id == "delete") deletePcOptimistic(c) },
-                                rowBackground = Pa.Card,
-                                onClick = {
-                                    if (openKey.value == c.id) {
-                                        openKey.value = null
-                                    } else if (importingId.isEmpty()) {
-                                        importingId = c.id
-                                        scope.launch {
-                                            try {
-                                                val tid = withContext(Dispatchers.IO) {
-                                                    AgentConnection.threadService()
-                                                        .importCodexThread(
-                                                            ImportCodexThreadRequest.newBuilder()
-                                                                .setCodexThreadId(c.id)
-                                                                .build())
-                                                        .threadId
+                        items(
+                            items = rows,
+                            key = { r ->
+                                when (r) {
+                                    is SessionRow.Local -> "l-${r.t.id}"
+                                    is SessionRow.Pc -> "p-${r.c.id}"
+                                }
+                            },
+                        ) { row ->
+                            when (row) {
+                                is SessionRow.Local -> {
+                                    val t = row.t
+                                    val archived = t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
+                                    val isPinned = row.pinKey in pinnedKeys
+                                    SwipeRevealRow(
+                                        rowKey = t.id,
+                                        openKey = openKey,
+                                        actions = listOf(
+                                            SwipeAction(
+                                                "pin",
+                                                if (isPinned) "取消置顶" else "置顶",
+                                                R.drawable.ic_lucide_pin,
+                                                Pa.AccentText,
+                                            ),
+                                            SwipeAction(
+                                                "archive",
+                                                if (archived) "恢复" else "归档",
+                                                R.drawable.ic_lucide_archive,
+                                                Pa.AccentText,
+                                            ),
+                                            SwipeAction(
+                                                "rename", "重命名",
+                                                R.drawable.ic_lucide_pencil, Pa.AccentText,
+                                            ),
+                                            SwipeAction(
+                                                "delete", "删除", R.drawable.ic_lucide_trash_2,
+                                                Color.White, destructive = true,
+                                            ),
+                                        ),
+                                        onAction = { a ->
+                                            when (a.id) {
+                                                "pin" -> {
+                                                    ThreadPins.toggle(row.pinKey)
+                                                    pinned = ThreadPins.all()
+                                                    openKey.value = null
+                                                    Toast.makeText(
+                                                        ctx,
+                                                        if (isPinned) "已取消置顶" else "已置顶",
+                                                        Toast.LENGTH_SHORT,
+                                                    ).show()
                                                 }
-                                                onOpenThread(tid)
-                                            } catch (e: Exception) {
-                                                Toast.makeText(
-                                                    ctx,
-                                                    "打开电脑会话失败：${e.message ?: "连接失败"}",
-                                                    Toast.LENGTH_SHORT,
-                                                ).show()
-                                            } finally {
-                                                importingId = ""
+                                                "archive" -> archiveOptimistic(t)
+                                                "rename" -> {
+                                                    renameField = TextFieldValue(
+                                                        t.title,
+                                                        selection = TextRange(0, t.title.length),
+                                                    )
+                                                    renamingId = t.id
+                                                }
+                                                "delete" -> deleteThreadOptimistic(t)
                                             }
-                                        }
+                                        },
+                                        rowBackground = Pa.Card,
+                                        // 已展开时点内容 = 收起,未展开才进会话
+                                        onClick = {
+                                            if (openKey.value == t.id) openKey.value = null else onOpenThread(t.id)
+                                        },
+                                    ) {
+                                        ThreadCard(
+                                            t = t,
+                                            pinned = isPinned,
+                                            renaming = renamingId == t.id,
+                                            renameField = renameField,
+                                            onRenameFieldChange = { renameField = it },
+                                            onRenameCommit = { commitRename(t) },
+                                        )
                                     }
-                                },
-                            ) {
-                                PcSessionCard(info = c, importing = importingId == c.id)
+                                }
+                                is SessionRow.Pc -> {
+                                    val c = row.c
+                                    val isPinned = row.pinKey in pinnedKeys
+                                    SwipeRevealRow(
+                                        rowKey = c.id,
+                                        openKey = openKey,
+                                        actions = listOf(
+                                            SwipeAction(
+                                                "pin",
+                                                if (isPinned) "取消置顶" else "置顶",
+                                                R.drawable.ic_lucide_pin,
+                                                Pa.AccentText,
+                                            ),
+                                            SwipeAction(
+                                                "delete", "删除", R.drawable.ic_lucide_trash_2,
+                                                Color.White, destructive = true,
+                                            ),
+                                        ),
+                                        onAction = { a ->
+                                            when (a.id) {
+                                                "pin" -> {
+                                                    ThreadPins.toggle(row.pinKey)
+                                                    pinned = ThreadPins.all()
+                                                    openKey.value = null
+                                                }
+                                                "delete" -> deletePcOptimistic(c)
+                                            }
+                                        },
+                                        rowBackground = Pa.Card,
+                                        onClick = {
+                                            if (openKey.value == c.id) {
+                                                openKey.value = null
+                                            } else if (importingId.isEmpty()) {
+                                                importingId = c.id
+                                                scope.launch {
+                                                    try {
+                                                        val tid = withContext(Dispatchers.IO) {
+                                                            AgentConnection.threadService()
+                                                                .importCodexThread(
+                                                                    ImportCodexThreadRequest.newBuilder()
+                                                                        .setCodexThreadId(c.id)
+                                                                        .build())
+                                                                .threadId
+                                                        }
+                                                        onOpenThread(tid)
+                                                    } catch (e: Exception) {
+                                                        // 会话文件可能已被删掉:刷新一次列表,让它自动消失
+                                                        Toast.makeText(
+                                                            ctx,
+                                                            "打开电脑会话失败：${e.message ?: "连接失败"}",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                        refresh()
+                                                    } finally {
+                                                        importingId = ""
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    ) {
+                                        PcSessionCard(info = c, importing = importingId == c.id)
+                                    }
+                                }
                             }
                         }
                         item { Spacer(Modifier.height(80.dp)) }
                     }
-                }
-            } else if (loading && threads.isEmpty()) {
-                // 骨架屏:形状与真实会话行逐项对位(SESSION_ROW = 圆头像 + 两行文本条)
-                PaSkeletonList(
-                    kind = SkeletonKind.SESSION_ROW,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            } else if (threads.isEmpty()) {
-                EmptyState(
-                    iconRes = R.drawable.ic_lucide_archive,
-                    title = if (showArchived) "没有归档的会话" else "还没有会话",
-                    hint = if (showArchived) "左滑会话可恢复或删除" else "点右下角 + 开始你的第一个任务",
-                )
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    state = listState,
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(threads, key = { it.id }) { t ->
-                        val archived = t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
-                        SwipeRevealRow(
-                            rowKey = t.id,
-                            openKey = openKey,
-                            actions = listOf(
-                                SwipeAction(
-                                    "archive",
-                                    if (archived) "恢复" else "归档",
-                                    R.drawable.ic_lucide_archive,
-                                    Pa.AccentText,
-                                ),
-                                SwipeAction(
-                                    "rename", "重命名",
-                                    R.drawable.ic_lucide_pencil, Pa.AccentText,
-                                ),
-                                SwipeAction(
-                                    "delete", "删除", R.drawable.ic_lucide_trash_2,
-                                    Color.White, destructive = true,
-                                ),
-                            ),
-                            onAction = { a ->
-                                when (a.id) {
-                                    "archive" -> archiveOptimistic(t)
-                                    "rename" -> {
-                                        renameField = TextFieldValue(
-                                            t.title,
-                                            selection = TextRange(0, t.title.length),
-                                        )
-                                        renamingId = t.id
-                                    }
-                                    "delete" -> deleteThreadOptimistic(t)
-                                }
-                            },
-                            rowBackground = Pa.Card,
-                            // 已展开时点内容 = 收起,未展开才进会话
-                            onClick = {
-                                if (openKey.value == t.id) openKey.value = null else onOpenThread(t.id)
-                            },
-                        ) {
-                            ThreadCard(
-                                t = t,
-                                renaming = renamingId == t.id,
-                                renameField = renameField,
-                                onRenameFieldChange = { renameField = it },
-                                onRenameCommit = { commitRename(t) },
-                            )
-                        }
-                    }
-                    item { Spacer(Modifier.height(80.dp)) }
                 }
             }
         }
@@ -526,14 +584,6 @@ fun ThreadsScreen(
 
     // 重命名已改为「行内编辑」(见 ThreadCard 的 renaming 分支),不再使用对话框 —— 设计规范 §3.1
 
-    if (showModels) {
-        ModelPickerSheet(
-            models = models,
-            current = AgentConnection.selectedModel,
-            onDismiss = { showModels = false },
-        )
-    }
-
     if (showDrawer) {
         AppDrawer(
             currentTab = currentTab,
@@ -543,7 +593,26 @@ fun ThreadsScreen(
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
             onOpenTaskCenter = onOpenTaskCenter,
+            onOpenBrowser = { onOpenBrowser() },
         )
+    }
+}
+
+/**
+ * 会话列表的一行:本地会话 或 电脑上未导入的 codex 会话。
+ * 合成一条流之后,置顶/排序才有统一的依据。
+ */
+private sealed class SessionRow {
+    abstract val sortKey: Long
+    abstract val pinKey: String
+
+    class Local(val t: PThread, override val pinKey: String) : SessionRow() {
+        override val sortKey: Long get() = t.updatedAtUnixMs
+    }
+
+    class Pc(val c: CodexThreadInfo) : SessionRow() {
+        override val sortKey: Long get() = c.updatedAtUnixMs
+        override val pinKey: String get() = c.id
     }
 }
 
@@ -620,6 +689,7 @@ private fun ConnectionCard(host: HostInfo?, onRetry: () -> Unit, modifier: Modif
 @Composable
 private fun ThreadCard(
     t: PThread,
+    pinned: Boolean = false,
     renaming: Boolean,
     renameField: TextFieldValue,
     onRenameFieldChange: (TextFieldValue) -> Unit,
@@ -657,12 +727,21 @@ private fun ThreadCard(
                 keyboardActions = KeyboardActions(onDone = { onRenameCommit() }),
             )
         } else {
-            Text(
-                t.title.ifEmpty { "(未命名)" },
-                fontSize = 15.sp,
-                color = Pa.TextPrimary,
-                maxLines = 1,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (pinned) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_pin), "已置顶",
+                        tint = Pa.AccentText, modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    t.title.ifEmpty { "(未命名)" },
+                    fontSize = 15.sp,
+                    color = Pa.TextPrimary,
+                    maxLines = 1,
+                )
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
             if (t.status == ThreadStatus.THREAD_STATUS_ARCHIVED) {
@@ -842,85 +921,6 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
     }
 }
 
-/**
- * 模型选择抽屉 —— 严格对标参考图 1:
- * 深色圆角抽屉 + 拖动条 + 居中标题 + 左上 X + 勾选列表 + 底部"上下文长度"行。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ModelPickerSheet(models: List<ModelInfo>, current: String, onDismiss: () -> Unit) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        dragHandle = {
-            Box(
-                Modifier.padding(top = 10.dp).width(40.dp).height(4.dp)
-                    .background(Pa.Hover, CircleShape),
-            )
-        },
-    ) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-            IconActionButton(
-                R.drawable.ic_lucide_x, "关闭", onDismiss,
-                modifier = Modifier.align(Alignment.CenterStart),
-                bg = Color.Transparent,
-                size = 40.dp,
-            )
-            Text("选择模型", Modifier.align(Alignment.Center), fontSize = 17.sp, color = Pa.TextPrimary)
-        }
-        Spacer(Modifier.height(8.dp))
-
-        val display = models.ifEmpty {
-            listOf(ModelInfo.newBuilder().setId("loading").setDisplayName("加载中(首次会拉起 codex)").build())
-        }
-        LazyColumn(Modifier.padding(horizontal = 8.dp)) {
-            items(display, key = { it.id }) { m ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable {
-                            // 会话列表里的模型选择 = 全局默认(会话内的临时切换在聊天页)
-                            AgentConnection.setGlobalModel(m.id)
-                            onDismiss()
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(m.displayName, Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
-                    if (m.id == current || (current.isEmpty() && m.id == "codex/default")) {
-                        Icon(
-                            painterResource(R.drawable.ic_lucide_check), null,
-                            tint = Pa.TextPrimary, modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        val ctx = models.firstOrNull {
-            it.id == current || (current.isEmpty() && it.id == "codex/default")
-        }?.contextWindow ?: 0
-        if (ctx > 0) {
-            HorizontalDivider(
-                color = Pa.Separator,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("上下文长度", fontSize = 16.sp, color = Pa.TextPrimary)
-                Text("${ctx / 1024}K", fontSize = 15.sp, color = Pa.TextSecondary)
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
 
 /** 小过滤 chip(活跃/已归档)。 */
 @Composable
