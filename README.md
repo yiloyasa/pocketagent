@@ -86,8 +86,16 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - 终端 resize 未随 fit 插件回传真实行列(P0 固定 80x24)
 - P0 明文传输(gRPC plaintext);P1 上 TLS 自签 + 配对码换长期 token
 - 修改 proto 后需同步两处:重新生成 Go(`protoc` 命令见 daemon 目录)并复制到 `android/app/src/main/proto/v1/`
-- **迁移遗留(2026-09-15)**:daemon 守护用的计划任务仍指向旧路径
-  `C:\dev\pocketagent\daemon\watchdog_hidden.vbs`。该路径已不存在,**daemon 自动重启当前失效**,
-  需到「任务计划程序」把操作路径改为 `G:\项目1\pocketagent\daemon\watchdog_hidden.vbs`。
-  两个守护脚本已改写为位置无关(`%~dp0` 与 `WScript.ScriptFullName` 取自身目录),
-  以后再整体搬移不需要再改脚本。
+- **迁移遗留(2026-09-15,已修复)**:daemon 守护用的计划任务 `\PocketAgentDaemonGuard`
+  (每 1 分钟触发)原先指向已删除的旧路径 `C:\dev\pocketagent\daemon\watchdog_hidden.vbs`,
+  于是每次触发都弹「Windows Script Host:系统找不到指定的文件」错误框,且 daemon 自动重启失效。
+  现已重定向到 `G:\项目1\pocketagent\daemon\watchdog_hidden.vbs`。
+- **守护脚本踩过三个坑(已修,改动见提交 6ea9f9b)**:
+  1. `watchdog.bat` 必须 **CRLF 行尾 + 纯 ASCII 注释**。cmd.exe 按系统 ANSI/GBK 码页解析 .bat,
+     LF 行尾或中文注释会让它错乱(实测 exit 255、`if` 块整段不执行)。
+  2. 两个脚本已改为位置无关(`%~dp0` / `WScript.ScriptFullName` 取自身目录),
+     以后再整体搬移不需要再改脚本。
+  3. **计划任务会把动作进程放进 job object,动作退出时连带杀掉子进程**,
+     所以 `WshShell.Run` 根本拉不起 daemon(实测 Run 返回 0 但子进程从未运行)。
+     改用 `Win32_Process.Create` 让 WMI 服务派生,进程归属 `WmiPrvSE.exe`、脱离该 job;
+     实测计划任务触发后 4s 内 daemon 起来并持续监听 `0.0.0.0:7246`。
