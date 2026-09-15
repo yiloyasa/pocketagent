@@ -1,0 +1,221 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+import "v1/common.proto";
+
+// ============ 会话(Thread)服务:聊天 + agent 执行 ============
+
+service ThreadService {
+  rpc CreateThread(CreateThreadRequest) returns (Thread);
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+  rpc GetThread(GetThreadRequest) returns (Thread);
+  rpc DeleteThread(DeleteThreadRequest) returns (Empty);
+  rpc ArchiveThread(ArchiveThreadRequest) returns (Thread);
+  rpc RenameThread(RenameThreadRequest) returns (Thread);
+  rpc SetThreadGoal(SetThreadGoalRequest) returns (Thread); // 常驻目标/上下文说明
+  rpc CompactThread(CompactThreadRequest) returns (Empty);  // 历史压缩,省 token
+
+  // 核心:执行一轮 agent。客户端 → 服务端:用户输入/中途补充/审批应答;
+  // 服务端 → 客户端:文本增量/工具调用/审批请求/turn 结束。
+  rpc StartTurn(stream TurnClientMessage) returns (stream TurnServerMessage);
+
+  rpc CancelTurn(CancelTurnRequest) returns (Empty);
+
+  // 历史消息(打开旧会话时拉取)
+  rpc GetThreadHistory(GetThreadHistoryRequest) returns (GetThreadHistoryResponse);
+
+  // 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
+  rpc ListCodexThreads(ListCodexThreadsRequest) returns (ListCodexThreadsResponse);
+  rpc ImportCodexThread(ImportCodexThreadRequest) returns (ImportCodexThreadResponse);
+}
+
+message ListCodexThreadsRequest {}
+message CodexThreadInfo {
+  string id = 1;            // codex 线程 id(rollout 文件名里的 uuid)
+  string title = 2;         // 首条用户消息摘要
+  string cwd = 3;           // 会话工作目录
+  int64 updated_at_unix_ms = 4;
+}
+message ListCodexThreadsResponse { repeated CodexThreadInfo threads = 1; }
+
+message ImportCodexThreadRequest { string codex_thread_id = 1; }
+message ImportCodexThreadResponse { string thread_id = 2; }
+
+message GetThreadHistoryRequest {
+  string thread_id = 1;
+  int32 limit = 2;   // 0 = 全部
+}
+
+message GetThreadHistoryResponse {
+  repeated ThreadMessage messages = 1;
+}
+
+message ThreadMessage {
+  string role = 1;               // user / assistant
+  repeated ContentBlock blocks = 2;
+  int64 created_at_unix_ms = 3;
+}
+
+message Thread {
+  string id = 1;
+  string title = 2;            // 自动摘要标题
+  string workspace = 3;        // 绑定的工作区路径
+  string goal = 4;             // 常驻目标
+  string model_id = 5;
+  ThreadStatus status = 6;
+  int64 created_at_unix_ms = 7;
+  int64 updated_at_unix_ms = 8;
+  int32 message_count = 9;
+}
+
+enum ThreadStatus {
+  THREAD_STATUS_UNSPECIFIED = 0;
+  THREAD_STATUS_IDLE = 1;
+  THREAD_STATUS_RUNNING = 2;
+  THREAD_STATUS_WAITING_APPROVAL = 3;
+  THREAD_STATUS_ARCHIVED = 4;
+}
+
+message CreateThreadRequest {
+  string workspace = 1;
+  string title = 2;
+  string model_id = 3;   // 空 = 用默认模型
+}
+
+message ListThreadsRequest {
+  bool include_archived = 1;
+  int32 limit = 2;       // 0 = 全部
+}
+message ListThreadsResponse { repeated Thread threads = 1; }
+
+message GetThreadRequest { string thread_id = 1; }
+message DeleteThreadRequest { string thread_id = 1; }
+message ArchiveThreadRequest { string thread_id = 1; bool archived = 2; }
+message RenameThreadRequest { string thread_id = 1; string title = 2; }
+message SetThreadGoalRequest { string thread_id = 1; string goal = 2; }
+message CompactThreadRequest { string thread_id = 1; }
+
+// ---- Turn 双向流 ----
+
+message TurnClientMessage {
+  oneof msg {
+    TurnInput input = 1;              // 开场:用户本轮输入
+    TurnSupplement supplement = 2;    // 中途补充信息
+    ApprovalDecision approval = 3;    // 审批应答
+    CancelSignal cancel = 4;
+  }
+}
+
+message TurnInput {
+  string thread_id = 1;
+  repeated ContentBlock blocks = 2;   // 文本/图片混合输入
+  bool background = 3;                // 后台跑,完成走推送
+  // 每轮覆盖(可选):切换模型/思考强度,只影响本轮及之后
+  string model_id = 4;                // "codex/gpt-5.4" 风格;空=沿用
+  string effort = 5;                  // low/medium/high/xhigh;空=沿用
+}
+
+message TurnSupplement {
+  repeated ContentBlock blocks = 1;
+}
+
+message ApprovalDecision {
+  string request_id = 1;
+  bool approved = 2;
+  string note = 3;  // 拒绝时的说明,agent 可见
+}
+
+message CancelSignal { string reason = 1; }
+
+message TurnServerMessage {
+  oneof msg {
+    TurnStarted started = 1;
+    TextDelta text_delta = 2;         // 流式文本增量
+    ThinkingDelta thinking_delta = 3;
+    ToolCallUpdate tool_call = 4;     // 工具调用开始/结果
+    ApprovalRequest approval_request = 5;
+    UsageUpdate usage = 6;
+    TurnCompleted completed = 7;
+    TurnFailed failed = 8;
+    CodexEvent codex_event = 9;       // Codex 原生错误/重试/状态事件
+  }
+}
+
+// Codex app-server 的原生状态和错误事件。
+// 事件先实时发送给手机，再由最终 TurnFailed/TurnCompleted 收尾。
+message CodexEvent {
+  enum Kind {
+    CODEX_EVENT_UNSPECIFIED = 0;
+    ERROR = 1;
+    RETRY_STARTED = 2;
+    RETRY_STOPPED = 3;
+    STATUS = 4;
+    WARNING = 5;
+    MODEL_REROUTED = 6;
+    RATE_LIMIT = 7;
+    CONTEXT_COMPACTED = 8;
+  }
+  Kind kind = 1;
+  string code = 2;          // CodexErrorInfo 或事件代码
+  string title = 3;        // 面向用户的标题
+  string message = 4;      // 面向用户的详细信息
+  string url = 5;           // 上游 URL
+  int32 http_status = 6;    // 上游 HTTP 状态
+  bool will_retry = 7;      // Codex 是否会继续重试
+  int32 attempt = 8;        // 若 Codex 提供重试次数
+  int64 retry_after_ms = 9; // 若 Codex 提供冷却时间
+  string thread_id = 10;
+  string turn_id = 11;
+  string raw_json = 12;    // 诊断用原始参数, UI 默认不直接展示
+}
+
+message TurnStarted {
+  string turn_id = 1;
+  string model_id = 2;
+}
+
+message TextDelta { string delta = 1; }
+message ThinkingDelta { string delta = 1; }
+
+message ToolCallUpdate {
+  enum Phase {
+    UNSPECIFIED = 0;
+    STARTED = 1;    // 已发起(有 id+name+args)
+    FINISHED = 2;   // 已有结果
+  }
+  Phase phase = 1;
+  ToolCallBlock call = 2;
+  ToolResultBlock result = 3;
+}
+
+message ApprovalRequest {
+  string request_id = 1;
+  // 需要审批的动作描述,如即将执行的命令 / 将写入的文件
+  ToolCallBlock action = 2;
+  string reason = 3;   // agent 给出的理由
+}
+
+message UsageUpdate {
+  Usage usage = 1;         // 本 turn 累计
+  Usage total_usage = 2;   // 本 thread 累计
+}
+
+message TurnCompleted {
+  string turn_id = 1;
+  repeated ContentBlock final_blocks = 2; // 完整最终消息(增量重组成)
+  Usage usage = 3;
+  int64 elapsed_ms = 4;
+}
+
+message TurnFailed {
+  string turn_id = 1;
+  Error error = 2;
+  string partial_text = 3; // 失败前已生成的文本
+}
+
+message CancelTurnRequest { string thread_id = 1; }

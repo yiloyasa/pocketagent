@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+// ============ 通用类型(全协议共享)============
+
+message Empty {}
+
+message Error {
+  string code = 1;      // 机器可读错误码,如 "PERMISSION_DENIED"
+  string message = 2;   // 人类可读描述
+  bool retryable = 3;
+  int32 http_status = 4; // 上游 HTTP 状态,例如 503
+  string url = 5;        // 上游请求地址(若 Codex 提供)
+  string details = 6;    // 额外诊断信息
+}
+
+// 会话内容块:消息由块序列构成(对齐 Claude/OpenAI 的 content blocks)
+message ContentBlock {
+  oneof block {
+    TextBlock text = 1;
+    ImageBlock image = 2;
+    ToolCallBlock tool_call = 3;
+    ToolResultBlock tool_result = 4;
+    ThinkingBlock thinking = 5;
+  }
+}
+
+message TextBlock {
+  string text = 1;
+}
+
+message ImageBlock {
+  bytes data = 1;        // 原始图片字节
+  string media_type = 2; // "image/png" 等
+}
+
+message ToolCallBlock {
+  string id = 1;         // 工具调用 ID,结果回填用
+  string name = 2;       // "shell" / "read_file" / ...
+  string json_args = 3;  // 参数,JSON 字符串
+}
+
+message ToolResultBlock {
+  string call_id = 1;
+  bool ok = 2;
+  string output = 3;     // 文本输出(截断后)
+  double elapsed_ms = 4;
+}
+
+message ThinkingBlock {
+  string text = 1;
+  string signature = 2; // 服务端签名,回传模型用
+}
+
+// Token 用量统计
+message Usage {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  int64 cache_read_tokens = 3;
+  int64 cache_write_tokens = 4;
+  double cost_usd = 5;
+}

@@ -1,0 +1,23 @@
+# 统一换行符策略：仓库内一律 LF，避免 Windows/macOS 协作时整文件 diff 抖动
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则 cmd.exe 解析异常
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制文件：禁止任何换行符转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.ttf   binary
+*.otf   binary
+*.jar   binary
+*.exe   binary
+*.zip   binary
+*.apk   binary
+
+# 生成代码：diff 时标记为生成物，降低 review 噪音
+daemon/internal/gen/**  linguist-generated=true
+android/app/src/main/proto/** linguist-vendored=true
+codex-schema/**         linguist-vendored=true

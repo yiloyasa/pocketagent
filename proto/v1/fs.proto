@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+import "v1/common.proto";
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+// ============ 文件系统服务(原作叫 EnvironmentService)============
+
+service FileSystemService {
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  // "此电脑":返回所有盘符/挂载点
+  rpc ListRoots(ListRootsRequest) returns (ListRootsResponse);
+  // 大文件分块流
+  rpc ReadFile(ReadFileRequest) returns (stream FileChunk);
+  rpc WriteFile(WriteFileRequest) returns (Empty);          // 整写
+  rpc ReadFileDiff(ReadFileDiffRequest) returns (FileDiff); // 未保存改动 vs git HEAD
+  rpc CreateDirectory(CreateDirectoryRequest) returns (Empty);
+  rpc DeleteEntry(DeleteEntryRequest) returns (Empty);
+  rpc MoveEntry(MoveEntryRequest) returns (Empty);
+  // 内容搜索(内置 ripgrep 语义,子串或正则)
+  rpc SearchContent(SearchContentRequest) returns (stream SearchMatch);
+}
+
+message ListRootsRequest {}
+message ListRootsResponse {
+  repeated DirectoryEntry roots = 1;
+}
+
+message ListDirectoryRequest {
+  string path = 1;
+  bool include_hidden = 2;
+}
+message ListDirectoryResponse {
+  repeated DirectoryEntry entries = 1;
+}
+message DirectoryEntry {
+  string name = 1;
+  string path = 2;      // 绝对路径
+  bool is_dir = 3;
+  int64 size_bytes = 4;
+  int64 modified_unix_ms = 5;
+}
+
+message ReadFileRequest {
+  string path = 1;
+  int64 max_bytes = 2;  // 0 = 服务端默认上限(如 2MB),超出报错
+}
+message FileChunk {
+  bytes data = 1;
+  int64 total_size = 2; // 仅首块携带
+  bool text = 3;        // UTF-8 文本可直显,否则当二进制
+}
+
+message WriteFileRequest {
+  string path = 1;
+  bytes data = 2;
+  bool create = 3;   // 不存在则创建
+  bool truncate = 4; // 覆盖写
+}
+
+message ReadFileDiffRequest { string path = 1; }
+message FileDiff {
+  string unified_diff = 1;  // git diff 格式
+  bool has_changes = 2;
+}
+
+message CreateDirectoryRequest { string path = 1; }
+
+message DeleteEntryRequest {
+  string path = 1;
+  bool recursive = 2;
+}
+
+message MoveEntryRequest {
+  string from_path = 1;
+  string to_path = 2;
+}
+
+message SearchContentRequest {
+  string root = 1;
+  string query = 2;
+  bool regex = 3;
+  string glob = 4;      // 文件名过滤,如 "*.go"
+  int32 max_results = 5; // 0 = 服务端默认(200)
+}
+message SearchMatch {
+  string path = 1;
+  int32 line_number = 2;
+  string line_text = 3;
+}

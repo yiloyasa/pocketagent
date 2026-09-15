@@ -1,0 +1,64 @@
+# ============================================================
+# PocketAgent .gitignore
+# 原则：只提交「重建不出来」的东西（源码、协议、资源、脚本）。
+#       凡是能由源码重新生成的、或运行时产生的，一律不入库。
+# ============================================================
+
+# ---------- 构建产物 ----------
+build/
+.gradle/
+.kotlin/
+*.apk
+*.aab
+*.ap_
+*.dex
+intermediates/
+
+# ---------- 编译出的可执行文件 ----------
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# ---------- 日志 ----------
+*.log
+
+# ---------- 运行时数据 ----------
+.pocketagentd/
+.pocketagent-uploads/
+resumetest-thread.json
+
+# ---------- 调试产物（截图 / UI dump）----------
+# 验证过程中产生的界面截图与 uiautomator dump，可随时重新生成
+android/_verify-*
+android/device-*
+android/_tap*
+_verify-*.png
+_verify-*.xml
+
+# ---------- 文档临时抽帧 ----------
+# 从参考视频抽取的帧，仅用于分析过程
+docs/_video_frames/
+docs/_video_frames_ref/
+
+# ---------- Android Studio / IntelliJ ----------
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ---------- Node（备用）----------
+node_modules/
+
+# ---------- 操作系统 ----------
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---------- 例外：Gradle Wrapper 必须入库 ----------
+# 没有它 ./gradlew 无法自举，构建会直接失败
+!gradle/wrapper/gradle-wrapper.jar

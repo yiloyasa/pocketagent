@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+// ============ 主机/会话服务:发现、认证、心跳 ============
+
+service HostService {
+  // 局域网发现后的第一问:你是谁、你能干什么
+  rpc GetHostInfo(GetHostInfoRequest) returns (HostInfo);
+  // 配对码换长期 token
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+  // 主机状态推送(daemon 侧工作区变化、模型就绪、更新可用等)
+  rpc WatchEvents(WatchEventsRequest) returns (stream HostEvent);
+}
+
+message GetHostInfoRequest {}
+
+message HostInfo {
+  string host_id = 1;        // 稳定随机 ID
+  string display_name = 2;   // 主机名,如 "YANZI-PC"
+  string os = 3;             // windows / darwin / linux
+  string arch = 4;           // amd64 / arm64
+  string daemon_version = 5;
+  repeated string workspaces = 6; // 已注册的工作区绝对路径
+  repeated string capabilities = 7; // terminal / fs / git / agent / browser ...
+  bool auth_required = 8;    // 是否必须先 Authorize
+  string default_shell = 9;  // "powershell" / "bash" ...
+  // 主机的 Tailscale IPv4(100.x.y.z),装了 Tailscale 才有;
+  // 手机在外面(4G/其他 WiFi)时用这个地址直连,无需公网
+  string tailscale_ipv4 = 10;
+  // 主机的局域网 IPv4(192.168.x.x 等):同一 WiFi 下直连最快,
+  // 不依赖 Tailscale 的 DERP 中继
+  string lan_ipv4 = 11;
+}
+
+message AuthorizeRequest {
+  oneof method {
+    string pair_code = 1;  // 手机扫二维码/手输的 6 位配对码
+    string token = 2;      // 已配对过的长期 token 续期
+  }
+  string device_name = 3;  // "Pixel 9" 之类,便于主机端管理
+}
+
+message AuthorizeResponse {
+  string token = 1;        // 长期访问 token
+  int64 expires_at_unix = 2; // 0 = 永不过期
+}
+
+message PingRequest { int64 client_time_unix_ms = 1; }
+message PingResponse {
+  int64 server_time_unix_ms = 1;
+  string status = 2; // "ok" / "busy" / "degraded"
+}
+
+message WatchEventsRequest {}
+
+message HostEvent {
+  int64 timestamp_unix_ms = 1;
+  oneof event {
+    WorkspaceChanged workspace_changed = 2;
+    ModelReady model_ready = 3;
+    UpdateAvailable update_available = 4;
+    TurnFinishedNotification turn_finished = 5; // 后台 turn 完成(推送场景)
+  }
+}
+
+message WorkspaceChanged { repeated string workspaces = 1; }
+message ModelReady { repeated string model_ids = 1; }
+message UpdateAvailable { string version = 1; string notes_url = 2; }
+message TurnFinishedNotification {
+  string thread_id = 1;
+  string summary = 2; // 一句话结果摘要,可直接进通知栏
+}

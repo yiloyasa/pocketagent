@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+import "v1/common.proto";
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+// ============ Git 服务:全部以子进程调 git 实现,简单可靠 ============
+
+service GitService {
+  rpc Status(GitStatusRequest) returns (GitStatus);
+  rpc Diff(GitDiffRequest) returns (GitDiffResponse);
+  rpc Stage(GitStageRequest) returns (Empty);
+  rpc Unstage(GitUnstageRequest) returns (Empty);
+  rpc Commit(GitCommitRequest) returns (GitCommitResponse);
+  rpc Log(GitLogRequest) returns (GitLogResponse);
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
+  rpc CheckoutBranch(CheckoutBranchRequest) returns (Empty);
+  rpc CreateBranch(CreateBranchRequest) returns (Empty);
+  rpc DiscardChanges(DiscardChangesRequest) returns (Empty); // 危险操作,app 端二次确认
+}
+
+message GitStatusRequest { string repo = 1; }
+
+message GitStatus {
+  string branch = 1;
+  string upstream = 2;         // "origin/main"
+  bool ahead = 3;
+  bool behind = 4;
+  repeated GitFileChange changes = 5;
+}
+
+message GitFileChange {
+  string path = 1;
+  string staged_status = 2;    // git 状态码:"", "M", "A", "D", "??"...
+  string worktree_status = 3;
+}
+
+message GitDiffRequest {
+  string repo = 1;
+  bool staged = 2;
+  string path = 3;             // 空 = 全部
+  int32 context_lines = 4;     // 0 = 默认 3
+}
+message GitDiffResponse {
+  string unified_diff = 1;
+  repeated string changed_files = 2;
+}
+
+message GitStageRequest {
+  string repo = 1;
+  repeated string paths = 2;   // 空 = 全部 (-A)
+}
+message GitUnstageRequest {
+  string repo = 1;
+  repeated string paths = 2;
+}
+
+message GitCommitRequest {
+  string repo = 1;
+  string message = 2;
+  repeated string paths = 3;   // 先 stage 这些路径再提交;空 = 提交已暂存
+}
+message GitCommitResponse {
+  string commit_hash = 1;
+  string summary = 2;
+}
+
+message GitLogRequest {
+  string repo = 1;
+  int32 limit = 2;             // 默认 50
+  string path = 3;             // 只看某文件历史
+}
+message GitLogResponse { repeated GitCommitInfo commits = 1; }
+message GitCommitInfo {
+  string hash = 1;
+  string short_hash = 2;
+  string author = 3;
+  string message = 4;
+  int64 timestamp_unix_ms = 5;
+}
+
+message ListBranchesRequest { string repo = 1; }
+message ListBranchesResponse {
+  repeated GitBranch branches = 1;
+}
+message GitBranch {
+  string name = 1;
+  bool is_current = 2;
+  bool is_remote = 3;
+}
+
+message CheckoutBranchRequest {
+  string repo = 1;
+  string branch = 2;
+  bool create = 3;   // 不存在则基于当前 HEAD 创建
+}
+message CreateBranchRequest {
+  string repo = 1;
+  string name = 2;
+  string from_branch = 3; // 空 = 当前 HEAD
+}
+message DiscardChangesRequest {
+  string repo = 1;
+  repeated string paths = 2; // 空 = 全部丢弃(!)
+}

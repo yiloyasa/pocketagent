@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+import "v1/common.proto";
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+// ============ 模型服务:BYOK,多提供商 ============
+
+service ModelService {
+  // daemon 检测到的可用模型(来自配置的 API keys)
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // 设置默认模型 / 测试连通
+  rpc SetDefaultModel(SetDefaultModelRequest) returns (Empty);
+  rpc TestModel(TestModelRequest) returns (TestModelResponse);
+
+  // ---- Codex 桌面端设置(桥接 codex app-server)----
+  rpc GetCodexSettings(GetCodexSettingsRequest) returns (CodexSettings);
+  rpc SetCodexSettings(SetCodexSettingsRequest) returns (CodexSettings);
+  // MCP 服务器状态(对应 codex 的 MCP 配置)
+  rpc ListMcpServers(ListMcpServersRequest) returns (ListMcpServersResponse);
+}
+
+message GetCodexSettingsRequest {}
+
+message CodexSettings {
+  string approval_policy = 1; // untrusted / on-request / never
+  string sandbox = 2;         // read-only / workspace-write / danger-full-access
+  string account = 3;         // 登录账号(如 Codex · xxx@qq.com)
+  string model = 4;           // 默认模型 slug(空=跟随桌面)
+  string effort = 5;          // 默认思考强度
+}
+
+message SetCodexSettingsRequest {
+  string approval_policy = 1;
+  string sandbox = 2;
+  string model = 3;
+  string effort = 4;
+}
+
+message ListMcpServersRequest {}
+
+message McpServerStatus {
+  string name = 1;
+  int32 tools = 2;      // 已注册工具数
+  string status = 3;    // ready / starting / failed(尽力而为)
+}
+
+message ListMcpServersResponse {
+  repeated McpServerStatus servers = 1;
+}
+
+message ListModelsRequest {}
+message ListModelsResponse { repeated ModelInfo models = 1; }
+
+message ModelInfo {
+  string id = 1;              // "anthropic/claude-sonnet-4" 风格
+  string provider = 2;        // anthropic / openai-compatible / ollama
+  string display_name = 3;
+  int32 context_window = 4;
+  bool supports_thinking = 5;
+  bool supports_images = 6;
+  bool available = 7;         // key 已配置且连通
+}
+
+message SetDefaultModelRequest { string model_id = 1; }
+
+message TestModelRequest {
+  string model_id = 1;
+  string prompt = 2;   // 默认 "ping"
+}
+message TestModelResponse {
+  bool ok = 1;
+  string reply = 2;
+  int64 latency_ms = 3;
+  string error = 4;
+}

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <link rel="stylesheet" href="vendor/xterm/xterm.css">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      position: fixed;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+    }
+    #terminal {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      padding: 4px 6px;
+    }
+    #terminal .xterm, #terminal .xterm-viewport { height: 100%; }
+    /* 禁掉页面级滚动/回弹,滚动手势交给 xterm */
+    #terminal, #terminal .xterm, #terminal .xterm-viewport {
+      touch-action: none;
+      overscroll-behavior: contain;
+    }
+    #terminal .xterm-viewport { scrollbar-width: none; }
+    #terminal .xterm-viewport::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="terminal"></div>
+  <script>
+    // 【竞态修复】gRPC 输出可能先于本页加载完成到达。
+    // 先挂一个带缓冲的 termWrite,term 就绪后无缝切换为真实现并 flush。
+    window._termQueue = [];
+    window.termWrite = function (b64) { window._termQueue.push(b64); };
+  </script>
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/xterm-addon-fit.js"></script>
+  <script>
+    (function () {
+      var term = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", monospace',
+        theme: {
+          background: '#000000',
+          foreground: '#e7eaf0',
+          cursor: '#72b7ff',
+          selectionBackground: '#264f78',
+        },
+        scrollback: 5000,
+        convertEol: false,
+        allowProposedApi: true,
+      });
+
+      term.open(document.getElementById('terminal'));
+      var fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      window.termWrite = function (b64) {
+        // base64 → Uint8Array → xterm(保持字节精确,ANSI 序列原样透传)
+        var bin = atob(b64), arr = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        term.write(arr);
+      };
+      // flush 竞态期间积压的输出
+      while (window._termQueue.length) {
+        window.termWrite(window._termQueue.shift());
+      }
+
+      // 按键/粘贴输入 → Android 桥 → gRPC
+      term.onData(function (data) {
+        if (window.AndroidTerm) AndroidTerm.onKey(data);
+      });
+
+      // 【布局竞态修复】WebView 的 AndroidView 首次布局完成前 #terminal 高度≈0,
+      // 过早 fit 会得到 1 行 0 高的终端(黑屏元凶)。用 ResizeObserver 等到
+      // 容器有真实高度再做 fit;之后尺寸变化(旋转/分屏)自动跟随。
+      var el = document.getElementById('terminal');
+      var reported = false;
+      if (window.AndroidTerm) AndroidTerm.report('BOOT h=' + el.clientHeight);
+      function fitAndReport() {
+        if (el.clientHeight < 80) {
+          if (window.AndroidTerm) AndroidTerm.report('GUARD h=' + el.clientHeight);
+          return;
+        }
+        try { fitAddon.fit(); } catch (e) {
+          if (window.AndroidTerm) AndroidTerm.report('FIT-ERR ' + e);
+          return;
+        }
+        if (reported) return;
+        reported = true;
+        try {
+          var vp = document.querySelector('.xterm-viewport');
+          var info = JSON.stringify({
+            rows: term.rows, cols: term.cols,
+            vpH: vp ? vp.clientHeight : -1,
+            docH: document.documentElement.clientHeight,
+          });
+          if (window.AndroidTerm) AndroidTerm.report(info);
+        } catch (e) {
+          if (window.AndroidTerm) AndroidTerm.report('ERR ' + e);
+        }
+        if (window.AndroidTerm) {
+          AndroidTerm.ready();
+          AndroidTerm.resize(term.cols, term.rows);
+        }
+      }
+      if (window.ResizeObserver) new ResizeObserver(fitAndReport).observe(el);
+      setTimeout(fitAndReport, 300);
+      setTimeout(fitAndReport, 1000);
+      window.addEventListener('resize', fitAndReport);
+    })();
+  </script>
+</body>
+</html>

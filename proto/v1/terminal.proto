@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package pocketagent.v1;
+
+import "v1/common.proto";
+
+option java_multiple_files = true;
+
+option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
+
+// ============ 终端服务:真 PTY,多路会话 ============
+
+service TerminalService {
+  // 双向流:Open → Input*/Resize* → Output*/Exit,Close 任意方向
+  rpc Attach(stream TerminalClientMessage) returns (stream TerminalServerMessage);
+  rpc ListTerminals(ListTerminalsRequest) returns (ListTerminalsResponse);
+  rpc CloseTerminal(CloseTerminalRequest) returns (Empty);
+}
+
+message TerminalClientMessage {
+  oneof msg {
+    OpenTerminal open = 1;
+    TerminalInput input = 2;
+    TerminalResize resize = 3;
+  }
+}
+
+message OpenTerminal {
+  string session_id = 1;   // 客户端生成,幂等重连用
+  string cwd = 2;          // 工作目录,空 = 默认
+  string shell = 3;        // 空 = 主机默认 shell
+  int32 cols = 4;
+  int32 rows = 5;
+  string env_json = 6;     // 附加环境变量 {"KEY":"VAL"}
+}
+
+message TerminalInput { bytes data = 1; }        // 原始击键序列(UTF-8/ANSI)
+message TerminalResize { int32 cols = 1; int32 rows = 2; }
+
+message TerminalServerMessage {
+  oneof msg {
+    TerminalOpened opened = 1;
+    TerminalOutput output = 2;
+    TerminalExit exit = 3;
+    TerminalError error = 4;
+  }
+}
+
+message TerminalOpened {
+  string session_id = 1;
+  string shell = 2;       // 实际启动的 shell
+  string cwd = 3;
+}
+
+message TerminalOutput { bytes data = 1; }       // 原始 PTY 输出(含 ANSI)
+
+message TerminalExit {
+  string session_id = 1;
+  int32 code = 2;
+}
+
+message TerminalError {
+  string session_id = 1;
+  string message = 2;
+}
+
+message ListTerminalsRequest {}
+message ListTerminalsResponse {
+  repeated TerminalSessionInfo sessions = 1;
+}
+message TerminalSessionInfo {
+  string session_id = 1;
+  string shell = 2;
+  string cwd = 3;
+  int64 opened_at_unix_ms = 4;
+  bool alive = 5;
+}
+
+message CloseTerminalRequest { string session_id = 1; }
