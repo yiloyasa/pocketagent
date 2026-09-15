@@ -24,20 +24,23 @@ pocketagent/
 
 ## 快速开始(P0 骨架)
 
-> ⚠️ 仓库实际位于 `C:\dev\pocketagent`(protoc 和 Android Gradle Plugin 在 Windows 上
-> 不支持中文路径;`G:\项目1\pocketagent` 是指向它的 junction,两边都能访问)。
+> 仓库实体位于 `G:\项目1\pocketagent`。2026-09-15 已从 `C:\dev\pocketagent` 整体迁移,
+> 原 junction 已解除,C 盘不再保留副本。
+>
+> 关于中文路径:`android/gradle.properties` 已配置 `android.overridePathCheck=true`,
+> 配合 `org.gradle.jvmargs` 里的 `-Dfile.encoding=UTF-8`,AGP 的非 ASCII 路径检查实际已关闭。
+> 迁移后在 `G:\项目1\pocketagent\android` 实测 `./gradlew assembleDebug` 构建成功(4m13s,41 任务)。
+> 因此原本「必须挂 ASCII 短路径」的前提已不成立,无需再建 junction。
 
 ### 1. 启动 daemon(在电脑上)
 
 ```bash
-cd C:\dev\pocketagent\daemon
+cd G:\项目1\pocketagent\daemon
 # 无任何 key 也能跑(echo 模式,全链路可联调):
 go run ./cmd/pocketagentd -addr :7246 -workspace "你的项目目录"
 
 # 桥接桌面端 Codex(和原作 Mobile Codex 同款架构,已装 codex CLI 且登录即用):
-set CODEX_BIN=G:\Claude Code
-ode_modules\@openai\codex
-ode_modules\@openai\codex-win32-x64endor_64-pc-windows-msvcin\codex.exe
+set CODEX_BIN=G:\Claude Code\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe
 go run ./cmd/pocketagentd -addr :7246
 
 # 或者接直连大模型(BYOK,不经 codex):
@@ -49,7 +52,7 @@ go run ./cmd/pocketagentd -addr :7246
 ### 2. 安装手机 app
 
 ```bash
-cd C:\dev\pocketagentndroid
+cd G:\项目1\pocketagent\android
 ./gradlew assembleDebug
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -83,3 +86,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 - 终端 resize 未随 fit 插件回传真实行列(P0 固定 80x24)
 - P0 明文传输(gRPC plaintext);P1 上 TLS 自签 + 配对码换长期 token
 - 修改 proto 后需同步两处:重新生成 Go(`protoc` 命令见 daemon 目录)并复制到 `android/app/src/main/proto/v1/`
+- **迁移遗留(2026-09-15)**:daemon 守护用的计划任务仍指向旧路径
+  `C:\dev\pocketagent\daemon\watchdog_hidden.vbs`。该路径已不存在,**daemon 自动重启当前失效**,
+  需到「任务计划程序」把操作路径改为 `G:\项目1\pocketagent\daemon\watchdog_hidden.vbs`。
+  两个守护脚本已改写为位置无关(`%~dp0` 与 `WScript.ScriptFullName` 取自身目录),
+  以后再整体搬移不需要再改脚本。
