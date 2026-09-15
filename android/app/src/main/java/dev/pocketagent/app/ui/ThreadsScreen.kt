@@ -7,6 +7,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
@@ -127,9 +129,11 @@ fun ThreadsScreen(
     var renamingId by remember { mutableStateOf<String?>(null) }
     var renameField by remember { mutableStateOf(TextFieldValue("")) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 侧边栏跟手:与主页/会话页同一套 controller
+    val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
     BackHandler(enabled = true) {
-        if (showDrawer) showDrawer = false else onBackToHome()
+        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
     }
     // 侧滑互斥:openKey 单值状态保证「任意时刻最多一行展开」
     val openKey = remember { mutableStateOf<Any?>(null) }
@@ -326,7 +330,11 @@ fun ThreadsScreen(
             .fillMaxSize()
             .background(Pa.Bg)
             // 有行处于展开态时让位给"右滑收起动作":两者不再抢同一段手势
-            .edgeSwipeToOpenDrawer(enabled = openKey.value == null) { showDrawer = true },
+            .edgeSwipeToOpenDrawer(
+            enabled = openKey.value == null,
+            onDragFraction = drawerCtrl::onDrag,
+            onRelease = drawerCtrl::onRelease,
+        ),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             // ---- 大标题 + 工具按钮 ----
@@ -336,7 +344,7 @@ fun ThreadsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    IconActionButton(R.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
+                    IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
                     Spacer(Modifier.width(12.dp))
                     Text("会话", fontSize = 30.sp, color = Pa.TextPrimary)
                 }
@@ -419,7 +427,12 @@ fun ThreadsScreen(
                 }
                 else -> {
                     LazyColumn(
-                        Modifier.fillMaxSize(),
+                        Modifier
+                            .fillMaxSize()
+                            // 点空白处收起已展开的行(列表条目之间的空隙与底部留白都算)
+                            .pointerInput(Unit) {
+                                detectTapGestures { if (openKey.value != null) openKey.value = null }
+                            },
                         state = listState,
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -489,7 +502,10 @@ fun ThreadsScreen(
                                         rowBackground = Pa.Card,
                                         // 已展开时点内容 = 收起,未展开才进会话
                                         onClick = {
-                                            if (openKey.value == t.id) openKey.value = null else onOpenThread(t.id)
+                                            // 任何一行处于展开态时,点击(包括点别的行)先收起 —— iOS 式行为,
+                                            // 避免"想收起却误进会话"
+                                            if (openKey.value != null) openKey.value = null
+                                            else onOpenThread(t.id)
                                         },
                                     ) {
                                         ThreadCard(
@@ -532,7 +548,7 @@ fun ThreadsScreen(
                                         },
                                         rowBackground = Pa.Card,
                                         onClick = {
-                                            if (openKey.value == c.id) {
+                                            if (openKey.value != null) {
                                                 openKey.value = null
                                             } else if (importingId.isEmpty()) {
                                                 importingId = c.id
@@ -629,11 +645,12 @@ fun ThreadsScreen(
 
     // 重命名已改为「行内编辑」(见 ThreadCard 的 renaming 分支),不再使用对话框 —— 设计规范 §3.1
 
-    if (showDrawer) {
+    if (drawerCtrl.visible) {
         AppDrawer(
             currentTab = currentTab,
             hostTitle = host?.displayName ?: "未连接电脑",
-            onClose = { showDrawer = false },
+            progress = drawerCtrl.progress,
+            onClose = { drawerCtrl.close() },
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },

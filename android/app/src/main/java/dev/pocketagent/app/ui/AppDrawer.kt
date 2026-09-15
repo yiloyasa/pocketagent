@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -97,6 +98,11 @@ fun AppDrawer(
     onNewThread: (() -> Unit)? = null,
     /** 传了就显示"网页"快捷磁贴(内置浏览器)。 */
     onOpenBrowser: (() -> Unit)? = null,
+    /**
+     * 跟手进度(0..1)。传了就用它驱动遮罩与面板位移,不再播入场动画 ——
+     * 手指在哪面板就在哪,松手由调用方吸附。
+     */
+    progress: Float? = null,
 ) {
     val reduceMotion = rememberReduceMotion()
 
@@ -126,11 +132,13 @@ fun AppDrawer(
     BackHandler(enabled = true) { requestClose() }
 
     val shown = visibleState.targetState || visibleState.currentState
-    val scrimAlpha by animateFloatAsState(
+    val animatedScrim by animateFloatAsState(
         targetValue = if (shown) 1f else 0f,
         animationSpec = tween(220),
         label = "drawerScrim",
     )
+    // 跟手时进度由外部给,否则走内部动画
+    val scrimAlpha = progress ?: animatedScrim
 
     val unread by TaskCenter.unreadCount.collectAsState()
     // 折叠偏好:展开(图标+文字) / 收起(窄 rail 仅图标)。AgentConnection 内已持久化。
@@ -145,10 +153,25 @@ fun AppDrawer(
             .pressable(scaleDown = 1f) { requestClose() },
     ) {
         // 动效:减弱动态效果时退化为纯淡入(不移位)
-        val enter = if (reduceMotion) fadeIn(tween(120))
-        else fadeIn(tween(180)) + slideInHorizontally(tween(280)) { -it }
-        val exit = if (reduceMotion) fadeOut(tween(100))
-        else fadeOut(tween(160)) + slideOutHorizontally(tween(220)) { -it }
+        val enter = when {
+            progress != null -> androidx.compose.animation.EnterTransition.None
+            reduceMotion -> fadeIn(tween(120))
+            else -> fadeIn(tween(180)) + slideInHorizontally(tween(280)) { -it }
+        }
+        val exit = when {
+            progress != null -> androidx.compose.animation.ExitTransition.None
+            reduceMotion -> fadeOut(tween(100))
+            else -> fadeOut(tween(160)) + slideOutHorizontally(tween(220)) { -it }
+        }
+
+        // 跟手时:整体位移 = 面板宽 × (1 - 进度)
+        val screenPx = with(LocalDensity.current) {
+            android.content.res.Resources.getSystem().displayMetrics.widthPixels.toFloat()
+        }
+        val followOffset = if (progress != null) {
+            val panelPx = screenPx * (if (AgentConnection.drawerCollapsed) 0.24f else 0.86f)
+            -panelPx * (1f - progress)
+        } else 0f
 
         AnimatedVisibility(
             visibleState = visibleState,
@@ -156,7 +179,8 @@ fun AppDrawer(
             exit = exit,
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .fillMaxHeight(),
+                .fillMaxHeight()
+                .graphicsLayer { translationX = followOffset },
         ) {
             // 折叠/展开宽度平滑过渡(rail 76dp ↔ 面板 330dp)
             val panelWidth by animateDpAsState(

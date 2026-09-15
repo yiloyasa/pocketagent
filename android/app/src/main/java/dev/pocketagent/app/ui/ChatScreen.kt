@@ -94,6 +94,7 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
+import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -979,6 +980,8 @@ fun ChatScreen(
     var showModelCard by remember { mutableStateOf(false) }
     var showContextCard by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 侧边栏跟手:手势与面板共用同一个进度(0..1),手指在哪面板就在哪
+    val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
@@ -990,7 +993,7 @@ fun ChatScreen(
     // 必须放在这些状态声明之后 —— 放在函数开头会读不到下面声明的 showDrawer 等。
     BackHandler(enabled = true) {
         when {
-            showDrawer -> showDrawer = false
+            drawerCtrl.visible -> drawerCtrl.close()
             showExport -> showExport = false
             showGitPanel -> showGitPanel = false
             showContextCard -> showContextCard = false
@@ -1236,7 +1239,10 @@ fun ChatScreen(
             .background(Pa.Bg)
             .statusBarsPadding()
             // 与其余页面统一:左边缘右滑也能唤出侧边栏
-            .edgeSwipeToOpenDrawer { showDrawer = true },
+            .edgeSwipeToOpenDrawer(
+                        onDragFraction = drawerCtrl::onDrag,
+                        onRelease = drawerCtrl::onRelease,
+                    ),
     ) {
         // ---- 顶栏:☰ 侧边栏(会话列表/搜索)+ 标题 + 状态点 ----
         Row(
@@ -1245,7 +1251,7 @@ fun ChatScreen(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
+            IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
             Spacer(Modifier.width(14.dp))
             Text(threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
             IconActionButton(
@@ -1708,31 +1714,34 @@ fun ChatScreen(
     }
 
     // ---- 会话侧边栏:最近会话(搜索 + 最近使用时间)+ 底部全局入口 ----
-    if (showDrawer) {
+    if (drawerCtrl.visible) {
         dev.pocketagent.app.ui.component.RecentThreadsDrawer(
             currentThreadId = threadId,
             threads = recentThreads,
             loading = recentLoading,
-            onClose = { showDrawer = false },
+            dragProgress = drawerCtrl.progress,
+            onDragClose = drawerCtrl::onDragClose,
+            onReleaseClose = { drawerCtrl.close() },
+            onClose = { drawerCtrl.close() },
             onOpenThread = { id ->
-                showDrawer = false
+                drawerCtrl.close()
                 if (id != threadId) onOpenThread(id)
             },
             // 会话页的抽屉里不再直接新建:要新建就去「全部会话」(那里有 + 与工作区选择)
             onOpenAllThreads = {
-                showDrawer = false
+                drawerCtrl.close()
                 onGoTab(1)
             },
             onOpenTerminal = {
-                showDrawer = false
+                drawerCtrl.close()
                 onOpenTerminal()
             },
             onOpenTaskCenter = {
-                showDrawer = false
+                drawerCtrl.close()
                 onOpenTaskCenter()
             },
             onOpenSettings = {
-                showDrawer = false
+                drawerCtrl.close()
                 onOpenSettings()
             },
         )
@@ -1747,7 +1756,7 @@ fun ChatScreen(
             onExport = { text, count ->
                 showExport = false
                 PaDownloader.saveTextAsFile(
-                    "会话-%s-%s.txt".format(
+                    "会话-%s-%s.md".format(
                         threadTitle.ifBlank { "未命名" }.take(20).replace(Regex("[\\\\/:*?\"<>|]"), "_"),
                         java.text.SimpleDateFormat("MMdd-HHmm", java.util.Locale.getDefault())
                             .format(java.util.Date()),
@@ -2424,29 +2433,44 @@ private fun ExportChatSheet(
                 .navigationBarsPadding()
                 .padding(bottom = 16.dp),
         ) {
-            Text("导出对话", fontSize = 19.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(2.dp))
-            Text(
-                title.ifBlank { "未命名会话" } + " · 共 ${exportable.size} 条可导出消息",
-                fontSize = 11.5.sp,
-                color = Pa.TextTertiary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-
-            Spacer(Modifier.height(12.dp))
-            // 全选 / 反选 / 清空
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ExportChip("全选") { selected = exportable.indices.toSet() }
-                Spacer(Modifier.width(8.dp))
-                ExportChip("反选") { selected = exportable.indices.toSet() - selected }
-                Spacer(Modifier.width(8.dp))
-                ExportChip("清空") { selected = emptySet() }
-                Spacer(Modifier.weight(1f))
-                Text("已选 ${selected.size}", fontSize = 11.5.sp, color = Pa.AccentText)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "导出对话",
+                        fontSize = 19.sp,
+                        color = Pa.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        title.ifBlank { "未命名会话" } + " · 已选 " + selected.size + " / " + exportable.size + " 条",
+                        fontSize = 11.5.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // 右上角:选择方式的拆分按钮(主按钮=全选,下拉=全选/反选/清空)
+                dev.pocketagent.app.ui.component.SplitButton(
+                    label = "选择",
+                    mainLabel = "全选",
+                    compact = true,
+                    onMainClick = { selected = exportable.indices.toSet() },
+                    options = listOf(
+                        dev.pocketagent.app.ui.component.SplitOption(
+                            "全选", "选中全部 " + exportable.size + " 条",
+                        ) { selected = exportable.indices.toSet() },
+                        dev.pocketagent.app.ui.component.SplitOption(
+                            "反选", "已选的反过来",
+                        ) { selected = exportable.indices.toSet() - selected },
+                        dev.pocketagent.app.ui.component.SplitOption(
+                            "清空", "一条都不选",
+                        ) { selected = emptySet() },
+                    ),
+                )
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             androidx.compose.foundation.lazy.LazyColumn(
                 Modifier
                     .fillMaxWidth()
@@ -2462,7 +2486,15 @@ private fun ExportChatSheet(
                             .pressable(haptic = true) {
                                 selected = if (on) selected - idx else selected + idx
                             }
-                            .background(if (on) Pa.AccentDim else Pa.Card, RoundedCornerShape(12.dp))
+                            .background(
+                                if (on) Pa.Accent.copy(alpha = 0.20f) else Pa.Card,
+                                RoundedCornerShape(12.dp),
+                            )
+                            .border(
+                                if (on) 1.dp else 0.dp,
+                                if (on) Pa.Accent else androidx.compose.ui.graphics.Color.Transparent,
+                                RoundedCornerShape(12.dp),
+                            )
                             .padding(horizontal = 11.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -2526,7 +2558,7 @@ private fun ExportChatSheet(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    if (selected.isEmpty()) "请选择要导出的消息" else "导出 ${selected.size} 条消息(txt)",
+                    if (selected.isEmpty()) "请选择要导出的消息" else "导出 " + selected.size + " 条消息(Markdown)",
                     fontSize = 14.5.sp,
                     color = if (selected.isEmpty()) Pa.TextTertiary else Color.White,
                     fontWeight = FontWeight.Medium,

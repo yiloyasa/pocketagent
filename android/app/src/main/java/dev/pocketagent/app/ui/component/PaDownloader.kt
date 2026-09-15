@@ -164,12 +164,10 @@ object PaDownloader {
             ).show()
             return
         }
-        val ext = title.substringAfterLast('.', "").lowercase()
-        // 网页/文本/图片:交给 App 内置浏览器(用户明确要求不要跳外部 App)
-        if (onOpenInBrowser != null &&
-            ext in setOf("html", "htm", "txt", "md", "json", "log", "csv", "xml", "svg", "png", "jpg", "jpeg", "gif", "webp")
-        ) {
-            onOpenInBrowser(android.net.Uri.parse(uri).toString())
+        // 类型判定统一走 FileKind(网页/文本/图片 → 内置浏览器;其余交系统)
+        val kind = fileKindOf(title)
+        if (kind.browserViewable && onOpenInBrowser != null) {
+            onOpenInBrowser(uri)
             return
         }
         val parsed = android.net.Uri.parse(uri)
@@ -190,32 +188,8 @@ object PaDownloader {
         }
     }
 
-    /** 常见后缀 → MIME,让系统能挑对打开方式。 */
-    private fun mimeOf(name: String): String {
-        val ext = name.substringAfterLast('.', "").lowercase()
-        return when (ext) {
-            "apk" -> "application/vnd.android.package-archive"
-            "pdf" -> "application/pdf"
-            "png" -> "image/png"
-            "jpg", "jpeg" -> "image/jpeg"
-            "gif" -> "image/gif"
-            "webp" -> "image/webp"
-            "mp4" -> "video/mp4"
-            "mp3" -> "audio/mpeg"
-            "zip" -> "application/zip"
-            "txt", "md", "log", "csv" -> "text/plain"
-            "html", "htm" -> "text/html"
-            "json" -> "application/json"
-            "doc" -> "application/msword"
-            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            "xls" -> "application/vnd.ms-excel"
-            "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            "ppt" -> "application/vnd.ms-powerpoint"
-            "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            else -> android.webkit.MimeTypeMap.getSingleton()
-                .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
-        }
-    }
+    /** 后缀 → MIME:统一由 FileKind 提供,避免两处清单走偏。 */
+    private fun mimeOf(name: String): String = fileKindOf(name).mime
 
     private fun fmt(bytes: Long): String = when {
         bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1fMB", bytes / 1048576f)

@@ -60,6 +60,8 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
 import dev.pocketagent.app.ui.theme.AgentTheme
@@ -305,193 +307,55 @@ fun SettingsScreen(
 
     // ---------------- 分区定义 ----------------
 
+    // 二级页状态:设置页的"一级导航、二级编辑"结构(不引入导航组件,保持设置页自洽)
+    var subPage by remember { mutableStateOf<String?>(null) }
+
+    // 一级页要显示的连接现状(行右侧那个值)
+    val connStateTop = AgentConnection.connState.collectAsState().value
+    val connTransportTop = AgentConnection.connTransport.collectAsState().value
+    val connSummary = when (connStateTop) {
+        "ok" -> "已连接 · " + connTransportTop.ifEmpty { "直连" }
+        "down" -> "未连接"
+        else -> "检查中"
+    }
+
+    if (subPage == "userdata") {
+        UserDataPage(
+            onBack = { subPage = null },
+            addr = addr,
+            onAddr = { addr = it },
+            token = token,
+            onToken = { token = it },
+            connectionSaving = connectionSaving,
+            errorMessage = connectionError?.message,
+            errorAddress = connectionError?.address.orEmpty(),
+            onSaveAndTest = { saveAndTestConnection() },
+            onSaveOnly = { saveCredentialsOnly() },
+            onRescan = { rescanCandidates() },
+            onOpenBrowser = onOpenBrowser,
+        )
+        return
+    }
+
     val globalSections = listOf(
         // 用户数据管理:连接地址 + 所有下载内容(原「连接」板块迁到这里统一管理)
+        // 用户数据管理:一级页只留一行(参考主流设置页的信息架构:一级做导航,二级做编辑),
+        // 连接表单与下载清单都收进二级页,首屏不再被输入框淹没。
         SettingsSection("userdata") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_server,
-                title = "用户数据管理",
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Pa.Card, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp),
             ) {
-                Text(
-                    "连接地址",
-                    Modifier.padding(start = 3.dp, top = 6.dp, bottom = 2.dp),
-                    fontSize = 11.sp,
-                    color = Pa.TextTertiary,
+                SettingRow(
+                    title = "用户数据管理",
+                    desc = "连接地址 · 下载内容",
+                    icon = R.drawable.ic_lucide_server,
+                    value = connSummary,
+                    chevron = true,
+                    onClick = { subPage = "userdata" },
                 )
-                val connState = AgentConnection.connState.collectAsState().value
-                val transport = AgentConnection.connTransport.collectAsState().value
-                val connAddr = AgentConnection.connAddress.collectAsState().value
-
-                // 连接状态摘要:圆点 + 状态 + 传输方式
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier
-                            .size(8.dp)
-                            .background(
-                                when (connState) {
-                                    "ok" -> Pa.Green
-                                    "down" -> Pa.Red
-                                    else -> Pa.TextTertiary
-                                },
-                                CircleShape,
-                            ),
-                    )
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            when (connState) {
-                                "ok" -> "已连接 · $transport"
-                                "down" -> "未连接 · 自动重连中"
-                                else -> "检查中…"
-                            },
-                            fontSize = 13.5.sp,
-                            color = Pa.TextPrimary,
-                        )
-                        Text(
-                            if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
-                            fontSize = 10.5.sp,
-                            color = Pa.TextTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-                Spacer(Modifier.height(12.dp))
-
-                connectionError?.let { diagnostic ->
-                    Text(
-                        "${diagnostic.message}\n地址：${diagnostic.address}",
-                        Modifier
-                            .fillMaxWidth()
-                            .background(Pa.Bg, RoundedCornerShape(12.dp))
-                            .padding(11.dp),
-                        fontSize = 11.sp,
-                        color = Pa.RedText,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                }
-
-                SettingsTextField(
-                    value = addr,
-                    onValueChange = { addr = it },
-                    label = "地址 (host:port)",
-                    keyboardType = KeyboardType.Uri,
-                )
-                Spacer(Modifier.height(10.dp))
-                SettingsTextField(
-                    value = token,
-                    onValueChange = { token = it },
-                    label = "配对 token(未配对留空)",
-                    password = true,
-                )
-                Spacer(Modifier.height(14.dp))
-
-                // 拆分按钮:主=保存并测试;下拉=仅保存 / 重扫候选 / 清空输入
-                SplitButton(
-                    label = if (connectionSaving) "连接中…" else "保存并测试连接",
-                    onMainClick = { saveAndTestConnection() },
-                    options = listOf(
-                        SplitOption("仅保存凭证", "不立即测试,交给自动重连接管") { saveCredentialsOnly() },
-                        SplitOption("重新扫描候选地址", "USB → 局域网 → Tailscale 依次尝试") { rescanCandidates() },
-                        SplitOption("清空输入", "重置地址与 token 输入框") {
-                            addr = ""
-                            token = ""
-                            showSettingsFeedback("已清空输入")
-                        },
-                    ),
-                )
-                Spacer(Modifier.height(4.dp))
-
-                // ---------- 下载内容:统一管理(查看 / 分享 / 删除) ----------
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "下载内容",
-                        Modifier.weight(1f),
-                        fontSize = 12.5.sp,
-                        color = Pa.TextPrimary,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        downloads.count { it.status == TaskCenter.Status.DONE }.toString() + " 个文件",
-                        fontSize = 11.sp,
-                        color = Pa.TextTertiary,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                if (downloads.isEmpty()) {
-                    Text(
-                        "还没有下载内容。会话里点文件旁的「下载到手机」后会出现在这里。",
-                        Modifier.padding(vertical = 6.dp),
-                        fontSize = 11.sp,
-                        color = Pa.TextTertiary,
-                    )
-                } else {
-                    downloads.forEach { d ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    d.title.ifEmpty { "(未命名文件)" },
-                                    fontSize = 12.5.sp,
-                                    color = Pa.TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    listOf(
-                                        d.sizeText,
-                                        if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
-                                        statusLabel(d.status),
-                                    ).filter { it.isNotEmpty() }.joinToString("  ·  "),
-                                    fontSize = 10.5.sp,
-                                    color = Pa.TextTertiary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if (d.detail.isNotEmpty()) {
-                                    Text(
-                                        d.detail,
-                                        fontSize = 9.5.sp,
-                                        color = Pa.TextTertiary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                            if (d.localUri.isNotEmpty()) {
-                                IconActionButton(
-                                    R.drawable.ic_lucide_globe, "用内置浏览器查看",
-                                    { onOpenBrowser(d.localUri) },
-                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                )
-                                IconActionButton(
-                                    R.drawable.ic_lucide_share_2, "分享",
-                                    { shareLocalFile(ctx, d.localUri) },
-                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                )
-                            }
-                            IconActionButton(
-                                R.drawable.ic_lucide_trash_2, "删除",
-                                {
-                                    deleteLocalFile(ctx, d.localUri)
-                                    TaskCenter.remove(d.id)
-                                    Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
-                                },
-                                bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                tint = Pa.TextTertiary,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
             }
         },
         SettingsSection("appearance") {
@@ -1334,7 +1198,11 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
 }
 
 /**
- * 分区卡:图标 + 标题 作为**卡片内页眉**,下方一条分隔线,再接设置行。
+ * 设置分组:标题在**卡片外**(灰色小字 + 小图标),卡片内是一行行设置条目。
+ *
+ * 【为什么改成这样】参考主流 App 的设置页(账户/应用/关于 分组):一级页面只做"识别 + 导航",
+ * 组标题轻、行内容重,视线自然落在每行的当前值上;原先"卡内大页眉 + 分隔线"的写法
+ * 让每张卡都像一段新章节,页面被切得很碎,也显得笨重。
  */
 @Composable
 fun SectionBlock(
@@ -1342,28 +1210,30 @@ fun SectionBlock(
     title: String,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(20.dp)),
-    ) {
+    Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 14.dp, end = 14.dp, top = 13.dp, bottom = 11.dp),
+            Modifier.padding(start = 18.dp, top = 12.dp, bottom = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier.size(31.dp).background(Pa.AccentDim, RoundedCornerShape(10.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(painterResource(icon), null, tint = Pa.Accent, modifier = Modifier.size(15.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(title, fontSize = 14.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+            Icon(
+                painterResource(icon), null,
+                tint = Pa.TextTertiary,
+                modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                title,
+                fontSize = 12.sp,
+                color = Pa.TextTertiary,
+                fontWeight = FontWeight.Medium,
+            )
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 2.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Pa.Card, RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 2.dp),
+        ) {
             content()
         }
     }
@@ -1375,15 +1245,34 @@ fun SettingRow(
     title: String,
     desc: String = "",
     divider: Boolean = false,
+    /** 行首小图标(参考主流设置页:每行一个线性图标,便于扫读)。 */
+    icon: Int? = null,
+    /** 右侧"当前值"文字(如 深色 / 简体中文 / v0.1.0),点击行时一眼看到现状。 */
+    value: String? = null,
+    /** 行尾 chevron,表示"点进去还有内容"。 */
+    chevron: Boolean = false,
+    /** 传了就是可点击的导航行。 */
+    onClick: (() -> Unit)? = null,
     control: @Composable RowScope.() -> Unit = {},
 ) {
     Column {
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 11.dp),
+            Modifier
+                .fillMaxWidth()
+                .then(if (onClick != null) Modifier.pressable(haptic = true) { onClick() } else Modifier)
+                .padding(vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (icon != null) {
+                Icon(
+                    painterResource(icon), null,
+                    tint = Pa.TextSecondary,
+                    modifier = Modifier.size(17.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+            }
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 13.5.sp, color = Pa.TextPrimary, maxLines = 1)
+                Text(title, fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1)
                 if (desc.isNotEmpty()) {
                     Text(
                         desc,
@@ -1394,10 +1283,276 @@ fun SettingRow(
                     )
                 }
             }
+            if (value != null) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    value,
+                    fontSize = 12.5.sp,
+                    color = Pa.TextTertiary,
+                    maxLines = 1,
+                )
+            }
             control()
+            if (chevron) {
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    painterResource(R.drawable.ic_lucide_chevron_right), null,
+                    tint = Pa.TextTertiary,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
         }
         if (divider) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+        }
+    }
+}
+
+/**
+ * 二级页:用户数据管理 —— 连接地址 + 全部下载内容。
+ *
+ * 【设计取向】一级页只显示"已连接 · 局域网直连"这一个结论,编辑动作全部收进来;
+ * 下载内容在这里统一管理(查看 / 分享 / 删除),并标出文件类型(安装包/文本/Markdown…),
+ * 与任务中心用同一套 [fileKindOf] 判定,两处显示不会打架。
+ */
+@Composable
+private fun UserDataPage(
+    onBack: () -> Unit,
+    addr: String,
+    onAddr: (String) -> Unit,
+    token: String,
+    onToken: (String) -> Unit,
+    connectionSaving: Boolean,
+    errorMessage: String?,
+    errorAddress: String,
+    onSaveAndTest: () -> Unit,
+    onSaveOnly: () -> Unit,
+    onRescan: () -> Unit,
+    onOpenBrowser: (String) -> Unit,
+) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val allTasks by TaskCenter.tasks.collectAsState()
+    val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
+    val connState = AgentConnection.connState.collectAsState().value
+    val transport = AgentConnection.connTransport.collectAsState().value
+    val connAddr = AgentConnection.connAddress.collectAsState().value
+
+    Column(Modifier.fillMaxSize()) {
+        // ---------- 顶栏:返回 + 标题 ----------
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "用户数据管理",
+                Modifier.weight(1f),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = Pa.TextPrimary,
+            )
+        }
+
+        androidx.compose.foundation.lazy.LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 16.dp, end = 16.dp, bottom = 28.dp,
+            ),
+        ) {
+            // ---------- 连接 ----------
+            item {
+                SectionBlock(icon = R.drawable.ic_lucide_globe, title = "连接") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(
+                                    when (connState) {
+                                        "ok" -> Pa.Green
+                                        "down" -> Pa.Red
+                                        else -> Pa.TextTertiary
+                                    },
+                                    CircleShape,
+                                ),
+                        )
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                when (connState) {
+                                    "ok" -> "已连接 · " + transport
+                                    "down" -> "未连接 · 自动重连中"
+                                    else -> "检查中…"
+                                },
+                                fontSize = 13.5.sp,
+                                color = Pa.TextPrimary,
+                            )
+                            Text(
+                                if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
+                                fontSize = 10.5.sp,
+                                color = Pa.TextTertiary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (errorMessage != null) {
+                        Text(
+                            errorMessage + (if (errorAddress.isNotEmpty()) "\n地址:" + errorAddress else ""),
+                            Modifier
+                                .fillMaxWidth()
+                                .background(Pa.Bg, RoundedCornerShape(12.dp))
+                                .padding(11.dp),
+                            fontSize = 11.sp,
+                            color = Pa.Red,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    SettingsTextField(
+                        value = addr,
+                        onValueChange = onAddr,
+                        label = "地址 (host:port)",
+                        keyboardType = KeyboardType.Uri,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    SettingsTextField(
+                        value = token,
+                        onValueChange = onToken,
+                        label = "配对 token(未配对留空)",
+                        password = true,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    SplitButton(
+                        label = if (connectionSaving) "连接中…" else "保存并测试连接",
+                        onMainClick = onSaveAndTest,
+                        options = listOf(
+                            SplitOption("仅保存凭证", "不立即测试,交给自动重连接管") { onSaveOnly() },
+                            SplitOption("重新扫描候选地址", "USB → 局域网 → Tailscale 依次尝试") { onRescan() },
+                            SplitOption("清空输入", "重置地址与 token") {
+                                onAddr(""); onToken("")
+                            },
+                        ),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+
+            // ---------- 下载内容 ----------
+            item {
+                SectionBlock(
+                    icon = R.drawable.ic_lucide_download,
+                    title = "下载内容 · " + downloads.count { it.status == TaskCenter.Status.DONE } + " 个文件",
+                ) {
+                    if (downloads.isEmpty()) {
+                        Text(
+                            "还没有下载内容。会话里点文件旁的「下载到手机」后会出现在这里。",
+                            Modifier.padding(vertical = 14.dp),
+                            fontSize = 11.5.sp,
+                            color = Pa.TextTertiary,
+                        )
+                    } else {
+                        downloads.forEach { d ->
+                            val kind = fileKindOf(d.title)
+                            Column {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(34.dp)
+                                            .background(kind.color.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            painterResource(R.drawable.ic_lucide_file_text), null,
+                                            tint = kind.color,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                    Spacer(Modifier.width(11.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                d.title.ifEmpty { "(未命名文件)" },
+                                                Modifier.weight(1f, fill = false),
+                                                fontSize = 13.sp,
+                                                color = Pa.TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                kind.label,
+                                                Modifier
+                                                    .background(kind.color.copy(alpha = 0.18f), RoundedCornerShape(50))
+                                                    .padding(horizontal = 6.dp, vertical = 1.dp),
+                                                fontSize = 9.5.sp,
+                                                color = kind.color,
+                                            )
+                                        }
+                                        Text(
+                                            listOf(
+                                                d.sizeText,
+                                                if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
+                                                statusLabel(d.status),
+                                            ).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                                            Modifier.padding(top = 2.dp),
+                                            fontSize = 10.5.sp,
+                                            color = Pa.TextTertiary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        if (d.detail.isNotEmpty()) {
+                                            Text(
+                                                d.detail,
+                                                fontSize = 9.5.sp,
+                                                color = Pa.TextTertiary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                    if (d.localUri.isNotEmpty()) {
+                                        IconActionButton(
+                                            R.drawable.ic_lucide_globe, "查看",
+                                            {
+                                                PaDownloader.openLocalFile(
+                                                    ctx = ctx, uri = d.localUri, title = d.title,
+                                                    detail = d.detail, onOpenInBrowser = onOpenBrowser,
+                                                )
+                                            },
+                                            bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                        )
+                                        IconActionButton(
+                                            R.drawable.ic_lucide_share_2, "分享",
+                                            { shareLocalFile(ctx, d.localUri) },
+                                            bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                        )
+                                    }
+                                    IconActionButton(
+                                        R.drawable.ic_lucide_trash_2, "删除",
+                                        {
+                                            deleteLocalFile(ctx, d.localUri)
+                                            TaskCenter.remove(d.id)
+                                            Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
+                                        },
+                                        bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                        tint = Pa.TextTertiary,
+                                    )
+                                }
+                                Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

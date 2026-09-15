@@ -12,7 +12,9 @@ import (
 )
 
 const (
-	defaultReadLimit  = 2 * 1024 * 1024 // 单文件读取上限 2MB
+	// 单文件读取:未指定 max_bytes 时的默认上限(要能装下 APK/安装包,手机端下载依赖它)
+	defaultReadLimit  = 512 * 1024 * 1024 // 512MB
+	hardReadLimit     = 1024 * 1024 * 1024 // 1GB 硬上限,防止误触超大文件
 	defaultSearchHits = 200
 )
 
@@ -60,15 +62,27 @@ func (s *Server) ListDirectory(ctx context.Context, req *pb.ListDirectoryRequest
 }
 
 func (s *Server) ReadFile(req *pb.ReadFileRequest, stream pb.FileSystemService_ReadFileServer) error {
+	// 【曾经的 bug】原实现是 `limit > defaultReadLimit → limit = defaultReadLimit`,
+	// 也就是"客户端要得越多、反而被砍回默认值(2MB)" —— 20MB 的 APK 因此永远只能下载 2MB。
+	// 正确语义:未指定用默认;指定了就尊重它,只在超过硬上限时才夹紧。
 	limit := req.MaxBytes
-	if limit <= 0 || limit > defaultReadLimit {
+	if limit <= 0 {
 		limit = defaultReadLimit
+	}
+	if limit > hardReadLimit {
+		limit = hardReadLimit
 	}
 	f, err := os.Open(req.Path)
 	if err != nil {
 		return errInvalidArg("打开文件失败: " + err.Error())
 	}
 	defer f.Close()
+
+	// 文件真实大小:首块要把它带给客户端,否则进度条分母会退化成"首块长度"
+	var fileSize int64
+	if st, statErr := f.Stat(); statErr == nil {
+		fileSize = st.Size()
+	}
 
 	buf := make([]byte, 64*1024)
 	first := true
@@ -84,7 +98,7 @@ func (s *Server) ReadFile(req *pb.ReadFileRequest, stream pb.FileSystemService_R
 				return nil
 			}
 			if err := stream.Send(&pb.FileChunk{
-				Data: chunk, TotalSize: totalIf(first, int64(len(chunk))), Text: first && utf8.Valid(chunk),
+				Data: chunk, TotalSize: totalIf(first, fileSize), Text: first && utf8.Valid(chunk),
 			}); err != nil {
 				return err
 			}

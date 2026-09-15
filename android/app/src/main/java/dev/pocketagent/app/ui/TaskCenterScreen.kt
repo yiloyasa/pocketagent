@@ -58,6 +58,8 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -84,8 +86,10 @@ fun TaskCenterScreen(
 ) {
     var kindTab by remember { mutableStateOf(TaskCenter.Kind.MESSAGE) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 侧边栏跟手:与主页/会话页同一套 controller
+    val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     BackHandler(enabled = true) {
-        if (showDrawer) showDrawer = false else onBackToHome()
+        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
     }
 
     val all by TaskCenter.tasks.collectAsState()
@@ -111,7 +115,10 @@ fun TaskCenterScreen(
             .fillMaxSize()
             .background(Pa.Bg)
             // 左边缘右滑唤出侧边栏(问题 7)
-            .edgeSwipeToOpenDrawer { showDrawer = true },
+            .edgeSwipeToOpenDrawer(
+                        onDragFraction = drawerCtrl::onDrag,
+                        onRelease = drawerCtrl::onRelease,
+                    ),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             // ---------- 顶栏:与其他页一致,App 图标 = 菜单入口 ----------
@@ -119,7 +126,7 @@ fun TaskCenterScreen(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconActionButton(R.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
+                IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
                 Text(
                     "任务中心",
                     Modifier.weight(1f).padding(start = 12.dp),
@@ -205,8 +212,21 @@ fun TaskCenterScreen(
                                 task = task,
                                 onClick = {
                                     TaskCenter.markRead(task.id)
-                                    if (task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty()) {
-                                        onOpenThread(task.threadId)
+                                    when {
+                                        // 消息处理 → 回到那个会话
+                                        task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty() ->
+                                            onOpenThread(task.threadId)
+                                        // 下载项 → 点整行走"查看"(网页/文本/图片进内置浏览器,
+                                        // 安装包/文档交给系统),不再只能点右上角那个小图标
+                                        task.kind == TaskCenter.Kind.DOWNLOAD &&
+                                            task.status == TaskCenter.Status.DONE &&
+                                            task.localUri.isNotEmpty() -> PaDownloader.openLocalFile(
+                                            ctx = ctx,
+                                            uri = task.localUri,
+                                            title = task.title,
+                                            detail = task.detail,
+                                            onOpenInBrowser = onOpenBrowser,
+                                        )
                                     }
                                 },
                                 onRemove = { TaskCenter.remove(task.id) },
@@ -255,16 +275,17 @@ fun TaskCenterScreen(
         }
 
         // ---------- 侧边栏(与其他 tab 一致) ----------
-        if (showDrawer) {
+        if (drawerCtrl.visible) {
             AppDrawer(
                 currentTab = currentTab,
                 hostTitle = "本机任务",
-                onClose = { showDrawer = false },
+                progress = drawerCtrl.progress,
+            onClose = { drawerCtrl.close() },
                 onGoTab = { onGoTab(it) },
                 onOpenTerminal = onOpenTerminal,
                 onOpenSettings = onOpenSettings,
                 onOpenTaskCenter = {},
-                onOpenBrowser = { showDrawer = false; onOpenBrowser("") },
+                onOpenBrowser = { drawerCtrl.close(); onOpenBrowser("") },
             )
         }
     }
@@ -319,6 +340,10 @@ private fun TaskRow(
         TaskCenter.Kind.MESSAGE -> R.drawable.ic_lucide_message_square
         TaskCenter.Kind.DOWNLOAD -> R.drawable.ic_lucide_download
     }
+    // 下载项按文件类型着色并标出类型(用户反馈:只显示"2.0MB"看不出这是什么文件)
+    val kind = if (task.kind == TaskCenter.Kind.DOWNLOAD) fileKindOf(task.title) else null
+    val iconTint = kind?.color ?: accent
+    val iconBg = kind?.color?.copy(alpha = 0.16f) ?: Pa.CardHigh
     val statusText = when (task.status) {
         TaskCenter.Status.RUNNING -> "进行中"
         TaskCenter.Status.DONE -> "已完成"
@@ -336,10 +361,10 @@ private fun TaskRow(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(36.dp).background(Pa.CardHigh, RoundedCornerShape(11.dp)),
+                Modifier.size(36.dp).background(iconBg, RoundedCornerShape(11.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(painterResource(icon), null, tint = accent, modifier = Modifier.size(17.dp))
+                Icon(painterResource(icon), null, tint = iconTint, modifier = Modifier.size(17.dp))
             }
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
@@ -352,6 +377,17 @@ private fun TaskRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (kind != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            kind.label,
+                            Modifier
+                                .background(kind.color.copy(alpha = 0.18f), RoundedCornerShape(50))
+                                .padding(horizontal = 6.dp, vertical = 1.dp),
+                            fontSize = 9.5.sp,
+                            color = kind.color,
+                        )
+                    }
                     if (task.rounds > 1) {
                         Spacer(Modifier.width(6.dp))
                         Text(
@@ -396,7 +432,7 @@ private fun TaskRow(
                     Spacer(Modifier.height(2.dp))
                     Text(
                         listOf(
-                            task.sizeText,
+                            task.sizeText.ifEmpty { task.sizeText },
                             // detail 形如「已保存到「下载/PocketAgent/xxx」」,比 content:// 友好
                             task.detail.ifEmpty { task.localUri },
                         ).filter { it.isNotEmpty() }

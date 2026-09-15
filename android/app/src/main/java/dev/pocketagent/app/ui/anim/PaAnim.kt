@@ -189,12 +189,20 @@ fun Modifier.edgeSwipeToOpenDrawer(
     enabled: Boolean = true,
     edgeWidth: Dp = 64.dp,
     threshold: Dp = 28.dp,
-    onOpen: () -> Unit,
+    /** 旧式用法:滑够阈值就立即打开(面板自己播动画)。 */
+    onOpen: (() -> Unit)? = null,
+    /** 跟手用法:拖动中实时上报 0..1 进度,由调用方驱动面板位移。 */
+    onDragFraction: ((Float) -> Unit)? = null,
+    /** 跟手用法:松手时告知是否应展开到底。 */
+    onRelease: ((Boolean) -> Unit)? = null,
 ): Modifier = composed {
     if (!enabled) return@composed this
     val density = androidx.compose.ui.platform.LocalDensity.current
     val edgePx = with(density) { edgeWidth.toPx() }
     val thresholdPx = with(density) { threshold.toPx() }
+    // 进入"跟手"的门槛:8dp。比放弃阈值(28dp)小得多 ——
+    // 手指一动面板就跟,同时给纵向滚动/行内左滑留出判定的余地。
+    val startPx = with(density) { 8.dp.toPx() }
 
     this.pointerInput(edgePx, thresholdPx) {
         awaitEachGesture {
@@ -203,21 +211,34 @@ fun Modifier.edgeSwipeToOpenDrawer(
             if (down.position.x > edgePx) return@awaitEachGesture
             var horizontal = 0f
             var vertical = 0f
+            var tracking = false
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 horizontal += change.positionChange().x
                 vertical += kotlin.math.abs(change.positionChange().y)
-                // 明显往左:是行内左滑,不是开抽屉
-                if (horizontal < -thresholdPx) break
-                // 纵向占主导:交给列表去滚动
-                if (vertical > thresholdPx && vertical > kotlin.math.abs(horizontal)) break
-                if (horizontal >= thresholdPx) {
-                    change.consume()
-                    onOpen()
-                    break
+                if (!tracking) {
+                    // 明显往左:是行内左滑,不是开抽屉
+                    if (horizontal < -thresholdPx) break
+                    // 纵向占主导:交给列表去滚动
+                    if (vertical > thresholdPx && vertical > kotlin.math.abs(horizontal)) break
+                    if (horizontal >= startPx) tracking = true
                 }
+                if (tracking) {
+                    change.consume()
+                    val frac = (horizontal / size.width.toFloat()).coerceIn(0f, 1f)
+                    if (onDragFraction != null) {
+                        onDragFraction(frac)
+                    } else if (horizontal >= thresholdPx) {
+                        onOpen?.invoke()
+                        break
+                    }
+                }
+            }
+            if (tracking) {
+                val frac = (horizontal / size.width.toFloat()).coerceIn(0f, 1f)
+                onRelease?.invoke(frac > 0.33f)
             }
         }
     }

@@ -82,9 +82,11 @@ fun FilesScreen(
     onGoTab: (Int) -> Unit = {},
 ) {
     var showDrawer by remember { mutableStateOf(false) }
+    // 侧边栏跟手:与主页/会话页同一套 controller
+    val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
     BackHandler(enabled = true) {
-        if (showDrawer) showDrawer = false else onBackToHome()
+        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
     }
     val scope = rememberCoroutineScope()
     var path by remember { mutableStateOf(initialPath ?: "") }
@@ -173,7 +175,10 @@ fun FilesScreen(
     Scaffold(
         containerColor = Pa.Bg,
         // 左边缘右滑也能唤出侧边栏(问题 7)
-        modifier = Modifier.edgeSwipeToOpenDrawer { showDrawer = true },
+        modifier = Modifier.edgeSwipeToOpenDrawer(
+                        onDragFraction = drawerCtrl::onDrag,
+                        onRelease = drawerCtrl::onRelease,
+                    ),
         topBar = {
             Row(
                 Modifier
@@ -182,7 +187,7 @@ fun FilesScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
+                IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
                 if (!showRoots) {
                 IconActionButton(
                     AppR.drawable.ic_lucide_chevron_left, "上级",
@@ -330,11 +335,12 @@ fun FilesScreen(
         )
     }
 
-    if (showDrawer) {
+    if (drawerCtrl.visible) {
         AppDrawer(
             currentTab = currentTab,
             hostTitle = "文件",
-            onClose = { showDrawer = false },
+            progress = drawerCtrl.progress,
+            onClose = { drawerCtrl.close() },
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },

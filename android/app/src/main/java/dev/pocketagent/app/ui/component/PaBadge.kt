@@ -47,18 +47,18 @@ fun PaBadge(
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = 1.dp, y = (-1).dp)
-                    .heightIn(min = 14.dp)
-                    .widthIn(min = 14.dp)
+                    .offset(x = 3.dp, y = (-3).dp)
+                    .heightIn(min = 12.dp)
+                    .widthIn(min = 12.dp)
                     .background(Pa.Red, CircleShape)
-                    .border(1.5.dp, outline, CircleShape)
-                    .padding(horizontal = 3.5.dp)
+                    .border(1.dp, outline, CircleShape)
+                    .padding(horizontal = 3.dp)
                     .semantics { contentDescription = "任务中心，$count 条未处理" },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label,
-                    fontSize = 9.sp,
+                    fontSize = 8.sp,
                     color = Color.White,
                     fontWeight = FontWeight.Medium,
                 )

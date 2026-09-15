@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,7 +37,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -76,15 +79,22 @@ fun RecentThreadsDrawer(
     onOpenTerminal: () -> Unit,
     onOpenTaskCenter: () -> Unit,
     onOpenSettings: () -> Unit,
+    /** 跟手进度(0..1)。由页面手势驱动;传了就不播内部入场动画。 */
+    dragProgress: Float? = null,
+    /** 面板内水平拖动:正数=向左拖(关闭),交给页面按进度吸附。 */
+    onDragClose: ((Float) -> Unit)? = null,
+    onReleaseClose: ((Boolean) -> Unit)? = null,
 ) {
     val config = LocalConfiguration.current
     val panelWidth = (config.screenWidthDp * 0.84f).coerceAtMost(340f).dp
+    val panelWidthPx = with(LocalDensity.current) { panelWidth.toPx() }
 
-    // 展开动画:位移 + 遮罩同一进度(比 animateFloatAsState 更跟手,也不会"先亮后面板才到")
-    val progress = remember { Animatable(0f) }
+    // 跟手时进度由页面给;没有外部进度时自己播入场动画(保持组件可独立使用)
+    val inner = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        progress.animateTo(1f, spring(dampingRatio = 0.9f, stiffness = 700f))
+        if (dragProgress == null) inner.animateTo(1f, spring(dampingRatio = 0.9f, stiffness = 700f))
     }
+    val progress = dragProgress ?: inner.value
 
     var query by remember { mutableStateOf("") }
     val filtered = remember(threads, query) {
@@ -100,7 +110,7 @@ fun RecentThreadsDrawer(
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = progress.value * 0.55f }
+                .graphicsLayer { alpha = progress * 0.55f }
                 .background(Color.Black)
                 .clickable { onClose() },
         )
@@ -109,9 +119,19 @@ fun RecentThreadsDrawer(
             Modifier
                 .width(panelWidth)
                 .fillMaxHeight()
-                .graphicsLayer { translationX = -panelWidth.toPx() * (1f - progress.value) }
+                .graphicsLayer { translationX = -panelWidth.toPx() * (1f - progress) }
                 .clip(RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp))
                 .background(Pa.Card)
+                // 面板打开后在面板上向左拖也能跟手关闭(与边缘手势共用同一进度)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = { onReleaseClose?.invoke(false) },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            onDragClose?.invoke(dragAmount / panelWidthPx)
+                        },
+                    )
+                }
                 .statusBarsPadding()
                 .navigationBarsPadding(),
         ) {

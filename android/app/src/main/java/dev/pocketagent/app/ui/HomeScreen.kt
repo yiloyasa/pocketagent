@@ -114,10 +114,12 @@ fun HomeScreen(
     var recent by remember { mutableStateOf(listOf<PThread>()) }
     var showManage by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 侧边栏跟手(与会话页同一套 controller)
+    val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
 
     // 返回层级:从二级页面返回主页时自动展开侧边栏
     LaunchedEffect(openDrawerSignal) {
-        if (openDrawerSignal > 0) showDrawer = true
+        if (openDrawerSignal > 0) drawerCtrl.open()
     }
     var multiAgent by remember { mutableStateOf(AgentConnection.multiAgent) }
     var reloadKey by remember { mutableStateOf(0) }
@@ -157,7 +159,10 @@ fun HomeScreen(
     // 左边缘右滑也能唤出侧边栏(问题 7),与左上角图标点按是同一个入口的两种手势
     Column(
         modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()
-            .edgeSwipeToOpenDrawer { showDrawer = true },
+            .edgeSwipeToOpenDrawer(
+                        onDragFraction = drawerCtrl::onDrag,
+                        onRelease = drawerCtrl::onRelease,
+                    ),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -165,7 +170,7 @@ fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 左上角:菜单入口(全 App 统一用汉堡图标;品牌 logo 只出现在侧边栏与启动页)
-            IconActionButton(R.drawable.ic_lucide_menu, "菜单", { showDrawer = true }, bg = Pa.Card)
+            IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
             // 右上角:设置
             IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings, bg = Pa.Card)
         }
@@ -409,11 +414,12 @@ fun HomeScreen(
     }
 
     // 左上角图标 → 侧边栏(主导航)
-    if (showDrawer) {
+    if (drawerCtrl.visible) {
         AppDrawer(
             currentTab = currentTab,
             hostTitle = host?.displayName ?: "未连接电脑",
-            onClose = { showDrawer = false },
+            progress = drawerCtrl.progress,
+            onClose = { drawerCtrl.close() },
             onGoTab = { onGoTab(it) },
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },

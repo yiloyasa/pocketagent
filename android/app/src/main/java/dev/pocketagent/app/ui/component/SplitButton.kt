@@ -68,32 +68,44 @@ fun SplitButton(
     modifier: Modifier = Modifier,
     caption: String? = null,
     mainLabel: String? = null,
+    /** 紧凑模式:高度 34dp、宽度自适应 —— 用于弹窗右上角等"按钮不该占一行"的场景。 */
+    compact: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
     // chevron_right 旋转 90° 即指向下;展开时转到 270° 指向上
     val chevron by animateFloatAsState(if (open) 270f else 90f, tween(180), label = "chevron")
     val density = LocalDensity.current
-    val menuTopPx = with(density) { 58.dp.roundToPx() } // 按钮高 52 + 间隙 6
+    val buttonHeight = if (compact) 34.dp else 52.dp
+    val corner = if (compact) RoundedCornerShape(10.dp) else RoundedCornerShape(14.dp)
+    val menuTopPx = with(density) { (buttonHeight + 6.dp).roundToPx() }
 
     Box(modifier) {
         Row(
             Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .background(Pa.Card, RoundedCornerShape(14.dp)),
+                .then(if (compact) Modifier else Modifier.fillMaxWidth())
+                .height(buttonHeight)
+                .background(Pa.Card, corner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // ---- 主按钮区:执行默认操作 ----
             Row(
                 Modifier
-                    .weight(1f)
+                    .then(if (compact) Modifier else Modifier.weight(1f))
                     .pressable(haptic = true) { onMainClick() }
-                    .padding(start = 14.dp, end = 6.dp),
+                    .padding(
+                        start = if (compact) 11.dp else 14.dp,
+                        end = if (compact) 4.dp else 6.dp,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(label, fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1)
-                    if (caption != null) {
+                Column(if (compact) Modifier else Modifier.weight(1f)) {
+                    Text(
+                        label,
+                        fontSize = if (compact) 12.5.sp else 14.sp,
+                        color = Pa.TextPrimary,
+                        maxLines = 1,
+                    )
+                    if (caption != null && !compact) {
                         Spacer(Modifier.height(1.dp))
                         Text(
                             caption,
@@ -104,10 +116,10 @@ fun SplitButton(
                     }
                 }
                 if (mainLabel != null) {
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
                     Text(
                         mainLabel,
-                        fontSize = 11.sp,
+                        fontSize = if (compact) 10.5.sp else 11.sp,
                         color = Pa.Accent,
                         fontWeight = FontWeight.Medium,
                     )
@@ -116,13 +128,13 @@ fun SplitButton(
             Box(
                 Modifier
                     .width(1.dp)
-                    .height(24.dp)
+                    .height(if (compact) 16.dp else 24.dp)
                     .background(Pa.Separator),
             )
             // ---- 下拉触发区 ----
             Box(
                 Modifier
-                    .size(width = 44.dp, height = 52.dp)
+                    .size(width = if (compact) 30.dp else 44.dp, height = buttonHeight)
                     .pressable(haptic = true) { open = !open },
                 contentAlignment = Alignment.Center,
             ) {
@@ -130,7 +142,7 @@ fun SplitButton(
                     painterResource(R.drawable.ic_lucide_chevron_right),
                     contentDescription = "更多选项",
                     tint = Pa.TextSecondary,
-                    modifier = Modifier.size(16.dp).rotate(chevron),
+                    modifier = Modifier.size(if (compact) 13.dp else 16.dp).rotate(chevron),
                 )
             }
         }
@@ -145,7 +157,7 @@ fun SplitButton(
             ) {
                 Column(
                     Modifier
-                        .widthIn(min = 176.dp, max = 264.dp)
+                        .widthIn(min = if (compact) 140.dp else 176.dp, max = 264.dp)
                         .heightIn(max = 288.dp)
                         .verticalScroll(rememberScrollState())
                         .background(Pa.CardHigh, RoundedCornerShape(14.dp))
