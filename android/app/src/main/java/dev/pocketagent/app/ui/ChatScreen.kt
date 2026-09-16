@@ -1027,7 +1027,9 @@ fun ChatScreen(
                     .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
             }
         } catch (e: Exception) {
-            loadError = "无法加载模型设置：${e.message ?: "连接失败"}"
+            // 不覆盖已有提示:离线快照的黄条比这里的红条更有信息量(真机验证发现
+            // 两个并行加载共用 loadError,后完成者会把"离线:显示的是本地记录"顶掉)
+            if (loadError == null) loadError = "无法加载模型设置：${e.message ?: "连接失败"}"
         }
         try {
             withContext(Dispatchers.IO) {
@@ -1216,6 +1218,8 @@ fun ChatScreen(
             }
             st.historyLoaded = true
             offlineSnapshot = false
+            // 恢复在线后撤掉残留的离线提示
+            if (loadError?.startsWith("离线") == true) loadError = null
         } catch (e: Exception) {
             // 连不上:有快照就渲染快照并标明,没有才报错(保持原行为)。
             val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.loadMessages(threadId)
