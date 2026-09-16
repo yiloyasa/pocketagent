@@ -113,10 +113,6 @@ fun GitScreen(
     var showDrawer by remember { mutableStateOf(false) }
     // 侧边栏跟手:与主页/会话页同一套 controller
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
-    // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
-    BackHandler(enabled = true) {
-        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
-    }
     val scope = rememberCoroutineScope()
     var repo by remember { mutableStateOf(workspacePath ?: "") }
     var status by remember { mutableStateOf<GitStatus?>(null) }
@@ -140,6 +136,28 @@ fun GitScreen(
     var newBranch by remember { mutableStateOf("") }
     var pendingDiscard by remember { mutableStateOf<String?>(null) }
     var pendingCheckout by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * 【返回层级 · 分级回退】Git 页里叠了 6 个层:仓库选择 / 提交 / 建分支 /
+     * diff 查看 / 丢弃确认 / 切分支确认 / 侧边栏。之前的 BackHandler 只认
+     * "抽屉 vs 回主页",任何一个弹层开着按返回都会直接跳回主页,把用户正在
+     * 做的事全丢掉。这里按从外向内的顺序逐层消费,全部关掉才回主板块。
+     *  @return true = 已被消费
+     */
+    fun backOneLevel(): Boolean = when {
+        showRepoPicker -> { showRepoPicker = false; true }
+        showCommit -> { showCommit = false; true }
+        showCreateBranch -> { showCreateBranch = false; true }
+        diff != null -> { diff = null; true }
+        pendingDiscard != null -> { pendingDiscard = null; true }
+        pendingCheckout != null -> { pendingCheckout = null; true }
+        drawerCtrl.visible -> { drawerCtrl.close(); true }
+        else -> false
+    }
+
+    BackHandler(enabled = true) {
+        if (!backOneLevel()) onBackToHome()
+    }
 
     /** 看某个文件的未暂存/已暂存 diff。 */
     fun openFileDiff(path: String, staged: Boolean) {

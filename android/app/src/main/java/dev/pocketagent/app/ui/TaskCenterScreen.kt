@@ -91,8 +91,13 @@ fun TaskCenterScreen(
     var showDrawer by remember { mutableStateOf(false) }
     // 侧边栏跟手:与主页/会话页同一套 controller
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
+    // 【返回层级 · 分级回退】抽屉 → 页签(文件下载→消息处理)→ 主板块。
     BackHandler(enabled = true) {
-        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
+        when {
+            drawerCtrl.visible -> drawerCtrl.close()
+            kindTab != TaskCenter.Kind.MESSAGE -> kindTab = TaskCenter.Kind.MESSAGE
+            else -> onBackToHome()
+        }
     }
 
     val all by TaskCenter.tasks.collectAsState()

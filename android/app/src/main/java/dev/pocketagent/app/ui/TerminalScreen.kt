@@ -164,6 +164,17 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
         }
     }
 
+    // 【返回层级 · 分级回退】先关子面板(选目录 / 目录树),都关了才离开终端页。
+    // 之前这一页完全没有 BackHandler,而 WebView 会自己吞掉返回键 ——
+    // 结果是打开着"切换目录"抽屉按返回,整个终端页被 pop 掉。
+    androidx.activity.compose.BackHandler(enabled = showDirPicker || showBrowser) {
+        when {
+            // 目录树是叠在选目录抽屉之上的,先收它
+            showBrowser -> showBrowser = false
+            else -> showDirPicker = false
+        }
+    }
+
     Column(Modifier.fillMaxSize().background(Pa.Bg)) {
         // 头部与会话/设置页统一:返回钮 + 标题 + 目录 + 状态点
         Row(
@@ -173,7 +184,14 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            IconActionButton(AppR.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
+            IconActionButton(AppR.drawable.ic_lucide_chevron_left, "返回", {
+                // 顶栏返回钮与系统返回键同一套层级,避免"按钮回一级、按键回到底"的割裂
+                when {
+                    showBrowser -> showBrowser = false
+                    showDirPicker -> showDirPicker = false
+                    else -> onBack()
+                }
+            }, bg = Pa.Card)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("终端", fontSize = 16.sp, color = Pa.TextPrimary)
@@ -384,18 +402,39 @@ class TerminalBridge(private val cwd: String = "") {
     // ---- 输出合批(性能) ----
     // daemon 是"每读一块就 Send 一次",ls -R 这类命令会瞬间制造上千条消息;
     // 逐条过 JS 桥(evaluateJavascript)是终端卡顿的主因。
-    // 这里把字节攒进缓冲,每 ~16ms(一帧)合批写一次:base64 只编一次、JS 桥只过一次。
+    //
+    // 【第二轮优化 · 解决"上下滑动严重卡顿"】
+    // 第一轮只做到"每 16ms 合批一次",但 evaluateJavascript 是**同步跨进程调用**,
+    // 它在 UI 线程上执行,每帧一次仍然会打断滚动手势 —— 表现为手指在拖,
+    // 屏幕一顿一顿。这里做两件事:
+    //   1. 不再固定 16ms,改成**自适应**:积压越多间隔越长(16→48ms),
+    //      用一点延迟换 UI 线程的连续性;输出少时保持低延迟;
+    //   2. 单次投递上限 64KB,超长输出拆帧发,避免一次 evaluateJavascript
+    //      卡住半秒(一个 base64 字符串几十万字符,JS 侧 atob 也要时间)。
     private val batchLock = Any()
     private val batchBuf = java.io.ByteArrayOutputStream()
     @Volatile private var batchScheduled = false
     private val flushRunnable = Runnable { flushBatch() }
-    private val batchWindowMs = 16L
+    private val batchWindowMinMs = 16L
+    private val batchWindowMaxMs = 48L
+    /** 单次投递给 JS 的字节上限(拆帧,避免一次性卡住 UI 线程) */
+    private val batchChunkBytes = 64 * 1024
 
     private fun appendOutput(bytes: ByteArray) {
-        synchronized(batchLock) { batchBuf.write(bytes) }
+        val backlog: Int
+        synchronized(batchLock) {
+            batchBuf.write(bytes)
+            backlog = batchBuf.size()
+        }
         if (!batchScheduled) {
             batchScheduled = true
-            mainHandler.postDelayed(flushRunnable, batchWindowMs)
+            // 积压越多 → 帧窗口越长:保证每帧只做一次跨进程调用,而不是被刷屏打散
+            val window = when {
+                backlog > 256 * 1024 -> batchWindowMaxMs
+                backlog > 64 * 1024 -> 32L
+                else -> batchWindowMinMs
+            }
+            mainHandler.postDelayed(flushRunnable, window)
         }
     }
 
@@ -405,14 +444,34 @@ class TerminalBridge(private val cwd: String = "") {
             if (batchBuf.size() == 0) {
                 null
             } else {
-                val b = batchBuf.toByteArray()
-                batchBuf.reset()
-                b
+                // 一次最多取 chunkBytes,剩余留在缓冲里等下一帧(避免单次调用过长)
+                val total = batchBuf.size()
+                if (total > batchChunkBytes) {
+                    val all = batchBuf.toByteArray()
+                    val head = all.copyOfRange(0, batchChunkBytes)
+                    batchBuf.reset()
+                    batchBuf.write(all, batchChunkBytes, all.size - batchChunkBytes)
+                    head
+                } else {
+                    val b = batchBuf.toByteArray()
+                    batchBuf.reset()
+                    b
+                }
             }
         }
         if (payload != null && payload.isNotEmpty()) {
             evalWrite(Base64.encodeToString(payload, Base64.NO_WRAP))
         }
+        // 还有残留就立刻续下一帧,别等下一次输出到达
+        val more = synchronized(batchLock) {
+            if (batchBuf.size() > 0 && !batchScheduled) {
+                batchScheduled = true
+                true
+            } else {
+                false
+            }
+        }
+        if (more) mainHandler.post(flushRunnable)
     }
 
     /** 未就绪时入队,并设上限:超出丢最旧,避免长时间未就绪时无限堆积。 */

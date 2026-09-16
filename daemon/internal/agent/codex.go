@@ -40,6 +40,12 @@ type CodexProvider struct {
 	sandbox        string
 	desktopModel   string
 	desktopEffort  string
+	// 行为与降噪(第 27 轮新增)。与上面 4 项同样只作用于本 daemon 拉起的
+	// app-server 子进程内存态 —— 不写 config.toml,不影响用户桌面端。
+	hideAgentReasoning    bool
+	modelVerbosity        string
+	modelReasoningSummary string
+	disablePasteBurst     bool
 	// 标题同步:codex 自动命名线程时回调(server 层落库,双端可见)
 	TitleHandler func(codexThreadID, title string)
 	// 我们的 threadID → codex threadId + 加载它的子进程代号。真正的事实来源是
@@ -718,6 +724,73 @@ func (p *CodexProvider) SetDesktopSettings(approvalPolicy, sandbox, model, effor
 			}
 		}
 	}()
+}
+
+// SetBehaviorSettings 保存"行为与降噪"设置(第 27 轮新增)。
+//
+// 【为什么单独一个方法】上面 4 项是安全/模型类、每轮 turn/start 都要带;
+// 这 4 项是纯 UX 偏好,只走 config/value/write 打到本 daemon 的子进程即可,
+// 不必污染每轮的 startParams。两者生命周期不同,分开更清楚。
+//
+// 【同样不落盘】和 SetDesktopSettings 一致:只作用于 daemon 拉起的 app-server
+// 子进程内存态。用户桌面端完全不受影响 —— 这是本项目从第一天起就守的红线。
+func (p *CodexProvider) SetBehaviorSettings(
+	hideAgentReasoning bool,
+	modelVerbosity, modelReasoningSummary string,
+	disablePasteBurst bool,
+) {
+	p.setMu.Lock()
+	p.hideAgentReasoning = hideAgentReasoning
+	if modelVerbosity != "" {
+		p.modelVerbosity = modelVerbosity
+	}
+	if modelReasoningSummary != "" {
+		p.modelReasoningSummary = modelReasoningSummary
+	}
+	p.disablePasteBurst = disablePasteBurst
+	bar, verbosity, summary, burst :=
+		p.hideAgentReasoning, p.modelVerbosity, p.modelReasoningSummary, p.disablePasteBurst
+	p.setMu.Unlock()
+
+	go func() {
+		if p.client == nil {
+			return
+		}
+		for _, kv := range []struct{ k, v string }{
+			{"hide_agent_reasoning", boolStr(bar)},
+			{"model_verbosity", verbosity},
+			{"model_reasoning_summary", summary},
+			{"disable_paste_burst", boolStr(burst)},
+		} {
+			if kv.v == "" {
+				continue
+			}
+			if _, err := p.client.Call("config/value/write", map[string]interface{}{
+				"keyPath":         kv.k,
+				"value":           kv.v,
+				"expectedVersion": nil,
+			}); err != nil {
+				// 老版本 codex 不认这些键:报错只打日志。这是**预期内**的,
+				// 不写入磁盘配置文件 → 不会像当年改 config.toml 那样破坏桌面端。
+				log.Printf("[codex] config/value/write %s 失败(老版本可能不支持,可忽略): %v", kv.k, err)
+			}
+		}
+	}()
+}
+
+// BehaviorSettings 读取"行为与降噪"设置(供 GetCodexSettings 回显)。
+func (p *CodexProvider) BehaviorSettings() (hideAgentReasoning bool, modelVerbosity, modelReasoningSummary string, disablePasteBurst bool) {
+	p.setMu.Lock()
+	defer p.setMu.Unlock()
+	return p.hideAgentReasoning, p.modelVerbosity, p.modelReasoningSummary, p.disablePasteBurst
+}
+
+// boolStr 把 bool 转成 config/value/write 需要的 TOML 字面量。
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // DesktopSettings 读取。

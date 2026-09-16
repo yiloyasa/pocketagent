@@ -102,6 +102,27 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
 
     LaunchedEffect(Unit) { loadRoots() }
 
+    /**
+     * 【返回层级 · 第一级】层级选择器内部:先进了多层文件夹就逐级往上,
+     * 已经在盘符列表(最顶层)才把返回交给下一级 —— 关掉整个选择器。
+     * 和"文件"页共用同一套坐标规则。
+     */
+    fun goUpOneLevel(): Boolean {
+        if (showRoots) return false
+        val norm = path.replace('/', '\\').trimEnd('\\')
+        val idx = norm.lastIndexOf('\\')
+        when {
+            idx > 2 -> loadDir(norm.substring(0, idx) + "\\")
+            idx == 2 -> loadDir(norm + "\\")
+            else -> loadRoots()
+        }
+        return true
+    }
+
+    // ModalBottomSheet 自身的返回处理是"直接关闭",会吞掉第一级层级。
+    // 这里用优先级更高的 BackHandler 先吃掉,退到顶层后才放行给 onDismiss。
+    androidx.activity.compose.BackHandler(enabled = !showRoots) { goUpOneLevel() }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
@@ -121,21 +142,14 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                 if (!showRoots) {
                     IconActionButton(
                         R.drawable.ic_lucide_chevron_left, "上级",
-                        {
-                            val norm = path.replace('/', '\\').trimEnd('\\')
-                            val idx = norm.lastIndexOf('\\')
-                            when {
-                                idx > 2 -> loadDir(norm.substring(0, idx) + "\\")
-                                idx == 2 -> loadDir(norm + "\\")
-                                else -> loadRoots()
-                            }
-                        },
+                        { goUpOneLevel() },
                         bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
                     )
                     Spacer(Modifier.width(10.dp))
                 }
                 Text(
                     if (showRoots) "此电脑" else path,
+                    Modifier.weight(1f),
                     fontSize = 12.sp, color = Pa.TextTertiary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )

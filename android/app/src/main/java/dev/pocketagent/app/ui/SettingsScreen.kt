@@ -27,6 +27,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -198,20 +200,41 @@ fun SettingsScreen(
     }
 
     /**
-     * 桌面端设置写入:审批/沙箱/默认模型/思考强度四件套。
+     * 桌面端设置写入:审批/沙箱/默认模型/思考强度 + 行为与降噪四件套。
      * daemon 每轮 turn/start 显式携带(codex 会话内真实生效),
      * 绝不改写桌面全局 config.toml。
+     *
+     * 所有参数为 null 表示"不改这一项" —— 与既有四件套同一套语义,
+     * 保证不会把用户没碰过的设置清空。
      */
-    fun writeCodex(approval: String? = null, sandbox: String? = null, model: String? = null, effort: String? = null) {
+    fun writeCodex(
+        approval: String? = null,
+        sandbox: String? = null,
+        model: String? = null,
+        effort: String? = null,
+        hideReasoning: Boolean? = null,
+        verbosity: String? = null,
+        reasoningSummary: String? = null,
+        pasteBurst: Boolean? = null,
+    ) {
         val previous = settings ?: CodexSettings.getDefaultInstance()
         val optimistic = previous.toBuilder()
         approval?.let { optimistic.setApprovalPolicy(it) }
         sandbox?.let { optimistic.setSandbox(it) }
         model?.let { optimistic.setModel(it) }
         effort?.let { optimistic.setEffort(it) }
+        hideReasoning?.let { optimistic.setHideAgentReasoning(it) }
+        verbosity?.let { optimistic.setModelVerbosity(it) }
+        reasoningSummary?.let { optimistic.setModelReasoningSummary(it) }
+        pasteBurst?.let { optimistic.setDisablePasteBurst(it) }
         val next = optimistic.build()
         settings = next
         settingsError = null
+        // 【双写:daemon + 本地】daemon 的 codex 设置决定电脑侧默认模型;
+        // 但侧边栏底部、会话页模型条读的是 AgentConnection.selectedModel
+        // —— 两个存储原本互不通信,导致"设置选了 DeepSeek、侧栏还显示跟随桌面配置"。
+        // 这里把最终值同步到本地一份,新会话按它初始化。
+        model?.let { AgentConnection.setGlobalModel(it) }
         showSettingsFeedback("保存中…")
         scope.launch {
             try {
@@ -222,6 +245,10 @@ fun SettingsScreen(
                             .setSandbox(next.sandbox)
                             .setModel(next.model)
                             .setEffort(next.effort)
+                            .setHideAgentReasoning(next.hideAgentReasoning)
+                            .setModelVerbosity(next.modelVerbosity)
+                            .setModelReasoningSummary(next.modelReasoningSummary)
+                            .setDisablePasteBurst(next.disablePasteBurst)
                             .build())
                 }
                 showSettingsFeedback("已保存")
@@ -232,6 +259,14 @@ fun SettingsScreen(
             }
         }
     }
+
+    /**
+     * AgentPage 用的写入器。注意 [CodexWriter.onCommit] 必须在每次重组时
+     * 重新指向最新的 [writeCodex] —— 它闭包里捕获了 `settings` 快照,
+     * 一旦漏更新,连点两次设置会以过期快照做乐观更新。
+     */
+    val codexWriter = remember { CodexWriter() }
+    codexWriter.onCommit = ::writeCodex
 
     /** 连接 · 主操作:保存凭证并立即测试。 */
     fun saveAndTestConnection() {
@@ -330,11 +365,27 @@ fun SettingsScreen(
             modelChoices = modelChoices,
             mcpList = mcpList,
             host = host,
-            writeCodex = { a, s, m, e -> writeCodex(a, s, m, e) },
+            writeCodex = codexWriter,
             onFeedback = { showSettingsFeedback(it) },
             onShowModelPicker = { showModelPicker = true },
             onShowApprovalPreview = { showApprovalPreview = true },
         )
+        // 【必须在 return 之前渲染】AgentPage 是二级页,上面 return 之后下面的
+        // 一级页渲染点永远不会执行 —— 预览按钮点了没反应/要退出二级页才冒出来的根因。
+        if (showApprovalPreview) {
+            ApprovalPreviewSheet(onDismiss = { showApprovalPreview = false })
+        }
+        if (showModelPicker) {
+            ModelPickerDialog(
+                models = modelChoices,
+                selected = settings?.model.orEmpty(),
+                onPick = {
+                    writeCodex(model = it)
+                    showModelPicker = false
+                },
+                onDismiss = { showModelPicker = false },
+            )
+        }
         return
     }
 
@@ -793,6 +844,57 @@ private fun AppearancePage(
 /**
  * 二级页:Agent 与模型 —— 切换 Agent + 当前 agent(codex)的专属设置。
  */
+/**
+ * Codex 设置写入器。
+ *
+ * 【为什么用类而不是函数类型】Kotlin 的**函数类型形参不允许命名实参**
+ * ("Named arguments are prohibited for function types"),而这里从 4 个参数
+ * 涨到 8 个之后,`writeCodex(null, null, "gpt-5", null)` 这种全 null 位置实参
+ * 已经无法看出在改哪一项 —— 极容易把 effort 写进 model 位。
+ * 换成一个带具名方法的类,调用处就能写 `writeCodex.model(id)` /
+ * `writeCodex.effort(id)`,编译期就不会串位。
+ */
+class CodexWriter(
+    private val approval: String? = null,
+    private val sandbox: String? = null,
+    private val model: String? = null,
+    private val effort: String? = null,
+    private val hideReasoning: Boolean? = null,
+    private val verbosity: String? = null,
+    private val reasoningSummary: String? = null,
+    private val pasteBurst: Boolean? = null,
+) {
+    /** 显式构造一个"只改某一项"的写入器;其余项带 null 表示不动。 */
+    fun copy(
+        approval: String? = this.approval,
+        sandbox: String? = this.sandbox,
+        model: String? = this.model,
+        effort: String? = this.effort,
+        hideReasoning: Boolean? = this.hideReasoning,
+        verbosity: String? = this.verbosity,
+        reasoningSummary: String? = this.reasoningSummary,
+        pasteBurst: Boolean? = this.pasteBurst,
+    ) = CodexWriter(
+        approval, sandbox, model, effort,
+        hideReasoning, verbosity, reasoningSummary, pasteBurst,
+    )
+
+    /**
+     * 真正落库。全参数为 null 表示"不改任何一项" —— 与既有四件套同一套语义,
+     * 保证不会把用户没碰过的设置清空。
+     */
+    fun commit() = onCommit(
+        approval, sandbox, model, effort,
+        hideReasoning, verbosity, reasoningSummary, pasteBurst,
+    )
+
+    /** 由调用方注入的实际写入实现(乐观更新 + gRPC + 失败回滚)。 */
+    var onCommit: (
+        String?, String?, String?, String?,
+        Boolean?, String?, String?, Boolean?,
+    ) -> Unit = { _, _, _, _, _, _, _, _ -> }
+}
+
 @Composable
 private fun AgentPage(
     onBack: () -> Unit,
@@ -802,7 +904,7 @@ private fun AgentPage(
     modelChoices: List<ModelInfo>,
     mcpList: List<McpServerStatus>,
     host: HostInfo?,
-    writeCodex: (approval: String?, sandbox: String?, model: String?, effort: String?) -> Unit,
+    writeCodex: CodexWriter,
     onFeedback: (String) -> Unit,
     onShowModelPicker: () -> Unit,
     onShowApprovalPreview: () -> Unit,
@@ -848,14 +950,14 @@ private fun AgentPage(
                     mainLabel = approvalOptions[approvalIdx].second,
                     onMainClick = {
                         val next = approvalOptions[(approvalIdx + 1) % approvalOptions.size]
-                        writeCodex(next.first, null, null, null)
+                        writeCodex.copy(approval = next.first).commit()
                     },
                     options = approvalOptions.map { (id, label, desc) ->
                         SplitOption(
                             title = label,
                             desc = desc,
                             selected = settings?.approvalPolicy == id,
-                        ) { writeCodex(id, null, null, null) }
+                        ) { writeCodex.copy(approval = id).commit() }
                     },
                 )
                 Spacer(Modifier.height(8.dp))
@@ -874,14 +976,14 @@ private fun AgentPage(
                     mainLabel = sandboxOptions[sandboxIdx].second,
                     onMainClick = {
                         val next = sandboxOptions[(sandboxIdx + 1) % sandboxOptions.size]
-                        writeCodex(null, next.first, null, null)
+                        writeCodex.copy(sandbox = next.first).commit()
                     },
                     options = sandboxOptions.map { (id, label, desc) ->
                         SplitOption(
                             title = label,
                             desc = desc,
                             selected = settings?.sandbox == id,
-                        ) { writeCodex(null, id, null, null) }
+                        ) { writeCodex.copy(sandbox = id).commit() }
                     },
                 )
                 Spacer(Modifier.height(10.dp))
@@ -921,7 +1023,7 @@ private fun AgentPage(
                                 "跟随桌面配置",
                                 "使用电脑上当前 agent 的默认模型",
                                 selected = settings?.model.isNullOrEmpty(),
-                            ) { writeCodex(null, null, "", null) },
+                            ) { writeCodex.copy(model = "").commit() },
                         )
                         if (modelChoices.isEmpty()) {
                             add(SplitOption("未获取到模型列表", "请检查连接后重试") { })
@@ -938,7 +1040,7 @@ private fun AgentPage(
                                             }
                                         },
                                         selected = settings?.model == m.id,
-                                    ) { writeCodex(null, null, m.id, null) },
+                                    ) { writeCodex.copy(model = m.id).commit() },
                                 )
                             }
                         }
@@ -947,11 +1049,16 @@ private fun AgentPage(
                 Spacer(Modifier.height(8.dp))
 
                 // 思考强度
+                // 【第 27 轮补齐】官方枚举还有 none(完全关闭推理,最快)
+                // 与 max(比 xhigh 更强)。这两档是否可用取决于模型,
+                // 所以文案里点明"需模型支持",避免用户选了没反应以为是 bug。
                 val effortOptions = listOf(
+                    Triple("none", "关闭", "不做推理,最快(需模型支持)"),
                     Triple("low", "低", "最快,浅推理"),
                     Triple("medium", "中", "速度与深度平衡"),
                     Triple("high", "高", "更慢,更细"),
                     Triple("xhigh", "极高", "最慢,最细"),
+                    Triple("max", "最高", "超过极高(需模型支持)"),
                 )
                 val effortIdx = effortOptions
                     .indexOfFirst { it.first == settings?.effort }
@@ -961,14 +1068,110 @@ private fun AgentPage(
                     mainLabel = effortOptions[effortIdx].second,
                     onMainClick = {
                         val next = effortOptions[(effortIdx + 1) % effortOptions.size]
-                        writeCodex(null, null, null, next.first)
+                        writeCodex.copy(effort = next.first).commit()
                     },
                     options = effortOptions.map { (id, label, desc) ->
                         SplitOption(
                             title = label,
                             desc = desc,
                             selected = settings?.effort == id,
-                        ) { writeCodex(null, null, null, id) }
+                        ) { writeCodex.copy(effort = id).commit() }
+                    },
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+
+            SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "行为与降噪") {
+                Spacer(Modifier.height(10.dp))
+                // 【边界说明】这些偏好只作用于"从 App 发起的任务"。
+                // daemon 把它们写进自己拉起的 app-server 子进程内存态,
+                // 不会改写用户桌面 codex 的 config.toml。
+                Text(
+                    "仅影响从 App 发起的任务,不改动电脑上的 Codex 配置。",
+                    fontSize = 11.sp, color = Pa.TextTertiary,
+                    modifier = Modifier.padding(bottom = 10.dp),
+                )
+
+                SettingRow(
+                    title = "隐藏推理过程",
+                    desc = "不再推送思考事件,只留结论(手机端刷屏最少)",
+                    divider = true,
+                    control = {
+                        Switch(
+                            checked = settings?.hideAgentReasoning == true,
+                            onCheckedChange = { writeCodex.copy(hideReasoning = it).commit() },
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = Pa.Accent,
+                                uncheckedTrackColor = Pa.Hover,
+                                uncheckedBorderColor = Color.Transparent,
+                            ),
+                        )
+                    },
+                )
+
+                val verbosityOptions = listOf(
+                    Triple("low", "精简", "直给结论,少展开解释"),
+                    Triple("medium", "适中", "默认,结论与说明平衡"),
+                    Triple("high", "详细", "展开更多背景与推导"),
+                )
+                val verbosityIdx = verbosityOptions
+                    .indexOfFirst { it.first == settings?.modelVerbosity }
+                    .coerceAtLeast(0)
+                SplitButton(
+                    label = "回答详略",
+                    mainLabel = verbosityOptions[verbosityIdx].second,
+                    onMainClick = {
+                        val next = verbosityOptions[(verbosityIdx + 1) % verbosityOptions.size]
+                        writeCodex.copy(verbosity = next.first).commit()
+                    },
+                    options = verbosityOptions.map { (id, label, desc) ->
+                        SplitOption(
+                            title = label,
+                            desc = desc,
+                            selected = settings?.modelVerbosity == id,
+                        ) { writeCodex.copy(verbosity = id).commit() }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+
+                val summaryOptions = listOf(
+                    Triple("concise", "精简", "思考摘要只留关键结论"),
+                    Triple("detailed", "详细", "保留较完整的推理脉络"),
+                )
+                val summaryIdx = summaryOptions
+                    .indexOfFirst { it.first == settings?.modelReasoningSummary }
+                    .coerceAtLeast(0)
+                SplitButton(
+                    label = "思考摘要",
+                    mainLabel = summaryOptions[summaryIdx].second,
+                    onMainClick = {
+                        val next = summaryOptions[(summaryIdx + 1) % summaryOptions.size]
+                        writeCodex.copy(reasoningSummary = next.first).commit()
+                    },
+                    options = summaryOptions.map { (id, label, desc) ->
+                        SplitOption(
+                            title = label,
+                            desc = desc,
+                            selected = settings?.modelReasoningSummary == id,
+                        ) { writeCodex.copy(reasoningSummary = id).commit() }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+
+                SettingRow(
+                    title = "粘贴长文本不中断",
+                    desc = "粘贴大段代码时不触发爆破检测,避免被截断",
+                    divider = false,
+                    control = {
+                        Switch(
+                            checked = settings?.disablePasteBurst == true,
+                            onCheckedChange = { writeCodex.copy(pasteBurst = it).commit() },
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = Pa.Accent,
+                                uncheckedTrackColor = Pa.Hover,
+                                uncheckedBorderColor = Color.Transparent,
+                            ),
+                        )
                     },
                 )
                 Spacer(Modifier.height(6.dp))
@@ -1316,8 +1519,11 @@ fun SettingRow(
     chevron: Boolean = false,
     /** 传了就是可点击的导航行。 */
     onClick: (() -> Unit)? = null,
+    /** 【显式命名】加个名字,Switch 这种"当前值即控件"的开关可以在语义上
+     *  顶掉右侧 value 文字位,不会被 Compose 误判成两个挨着的内容。 */
     control: @Composable RowScope.() -> Unit = {},
 ) {
+
     Column {
         Row(
             Modifier

@@ -64,8 +64,15 @@ type CodexSettings struct {
 	Account        string                 `protobuf:"bytes,3,opt,name=account,proto3" json:"account,omitempty"`                                     // 登录账号(如 Codex · xxx@qq.com)
 	Model          string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`                                         // 默认模型 slug(空=跟随桌面)
 	Effort         string                 `protobuf:"bytes,5,opt,name=effort,proto3" json:"effort,omitempty"`                                       // 默认思考强度
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ---- 行为与降噪(第 27 轮新增,字段号从 6 起,旧字段语义一字未动) ----
+	// 【边界】这些值只作用于 daemon 拉起的 app-server 子进程(内存态,不落盘),
+	// 因此只影响从 App 发起的任务,绝不会改写用户桌面 codex 的 config.toml。
+	HideAgentReasoning    bool   `protobuf:"varint,6,opt,name=hide_agent_reasoning,json=hideAgentReasoning,proto3" json:"hide_agent_reasoning,omitempty"`         // 隐藏推理过程事件
+	ModelVerbosity        string `protobuf:"bytes,7,opt,name=model_verbosity,json=modelVerbosity,proto3" json:"model_verbosity,omitempty"`                        // low / medium / high
+	ModelReasoningSummary string `protobuf:"bytes,8,opt,name=model_reasoning_summary,json=modelReasoningSummary,proto3" json:"model_reasoning_summary,omitempty"` // concise / detailed
+	DisablePasteBurst     bool   `protobuf:"varint,9,opt,name=disable_paste_burst,json=disablePasteBurst,proto3" json:"disable_paste_burst,omitempty"`            // 粘贴长文本时不触发爆破检测
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *CodexSettings) Reset() {
@@ -133,14 +140,47 @@ func (x *CodexSettings) GetEffort() string {
 	return ""
 }
 
+func (x *CodexSettings) GetHideAgentReasoning() bool {
+	if x != nil {
+		return x.HideAgentReasoning
+	}
+	return false
+}
+
+func (x *CodexSettings) GetModelVerbosity() string {
+	if x != nil {
+		return x.ModelVerbosity
+	}
+	return ""
+}
+
+func (x *CodexSettings) GetModelReasoningSummary() string {
+	if x != nil {
+		return x.ModelReasoningSummary
+	}
+	return ""
+}
+
+func (x *CodexSettings) GetDisablePasteBurst() bool {
+	if x != nil {
+		return x.DisablePasteBurst
+	}
+	return false
+}
+
 type SetCodexSettingsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ApprovalPolicy string                 `protobuf:"bytes,1,opt,name=approval_policy,json=approvalPolicy,proto3" json:"approval_policy,omitempty"`
 	Sandbox        string                 `protobuf:"bytes,2,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	Model          string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
 	Effort         string                 `protobuf:"bytes,4,opt,name=effort,proto3" json:"effort,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// 空 = 不改动该项(与既有 4 个字段同一套"非空才覆盖"语义)
+	HideAgentReasoning    bool   `protobuf:"varint,5,opt,name=hide_agent_reasoning,json=hideAgentReasoning,proto3" json:"hide_agent_reasoning,omitempty"`
+	ModelVerbosity        string `protobuf:"bytes,6,opt,name=model_verbosity,json=modelVerbosity,proto3" json:"model_verbosity,omitempty"`
+	ModelReasoningSummary string `protobuf:"bytes,7,opt,name=model_reasoning_summary,json=modelReasoningSummary,proto3" json:"model_reasoning_summary,omitempty"`
+	DisablePasteBurst     bool   `protobuf:"varint,8,opt,name=disable_paste_burst,json=disablePasteBurst,proto3" json:"disable_paste_burst,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *SetCodexSettingsRequest) Reset() {
@@ -199,6 +239,34 @@ func (x *SetCodexSettingsRequest) GetEffort() string {
 		return x.Effort
 	}
 	return ""
+}
+
+func (x *SetCodexSettingsRequest) GetHideAgentReasoning() bool {
+	if x != nil {
+		return x.HideAgentReasoning
+	}
+	return false
+}
+
+func (x *SetCodexSettingsRequest) GetModelVerbosity() string {
+	if x != nil {
+		return x.ModelVerbosity
+	}
+	return ""
+}
+
+func (x *SetCodexSettingsRequest) GetModelReasoningSummary() string {
+	if x != nil {
+		return x.ModelReasoningSummary
+	}
+	return ""
+}
+
+func (x *SetCodexSettingsRequest) GetDisablePasteBurst() bool {
+	if x != nil {
+		return x.DisablePasteBurst
+	}
+	return false
 }
 
 type ListMcpServersRequest struct {
@@ -682,18 +750,26 @@ var File_v1_model_proto protoreflect.FileDescriptor
 const file_v1_model_proto_rawDesc = "" +
 	"\n" +
 	"\x0ev1/model.proto\x12\x0epocketagent.v1\x1a\x0fv1/common.proto\"\x19\n" +
-	"\x17GetCodexSettingsRequest\"\x9a\x01\n" +
+	"\x17GetCodexSettingsRequest\"\xdd\x02\n" +
 	"\rCodexSettings\x12'\n" +
 	"\x0fapproval_policy\x18\x01 \x01(\tR\x0eapprovalPolicy\x12\x18\n" +
 	"\asandbox\x18\x02 \x01(\tR\asandbox\x12\x18\n" +
 	"\aaccount\x18\x03 \x01(\tR\aaccount\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12\x16\n" +
-	"\x06effort\x18\x05 \x01(\tR\x06effort\"\x8a\x01\n" +
+	"\x06effort\x18\x05 \x01(\tR\x06effort\x120\n" +
+	"\x14hide_agent_reasoning\x18\x06 \x01(\bR\x12hideAgentReasoning\x12'\n" +
+	"\x0fmodel_verbosity\x18\a \x01(\tR\x0emodelVerbosity\x126\n" +
+	"\x17model_reasoning_summary\x18\b \x01(\tR\x15modelReasoningSummary\x12.\n" +
+	"\x13disable_paste_burst\x18\t \x01(\bR\x11disablePasteBurst\"\xcd\x02\n" +
 	"\x17SetCodexSettingsRequest\x12'\n" +
 	"\x0fapproval_policy\x18\x01 \x01(\tR\x0eapprovalPolicy\x12\x18\n" +
 	"\asandbox\x18\x02 \x01(\tR\asandbox\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\x12\x16\n" +
-	"\x06effort\x18\x04 \x01(\tR\x06effort\"\x17\n" +
+	"\x06effort\x18\x04 \x01(\tR\x06effort\x120\n" +
+	"\x14hide_agent_reasoning\x18\x05 \x01(\bR\x12hideAgentReasoning\x12'\n" +
+	"\x0fmodel_verbosity\x18\x06 \x01(\tR\x0emodelVerbosity\x126\n" +
+	"\x17model_reasoning_summary\x18\a \x01(\tR\x15modelReasoningSummary\x12.\n" +
+	"\x13disable_paste_burst\x18\b \x01(\bR\x11disablePasteBurst\"\x17\n" +
 	"\x15ListMcpServersRequest\"S\n" +
 	"\x0fMcpServerStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +

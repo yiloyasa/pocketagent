@@ -274,68 +274,190 @@ private fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
  * 状态:completed=实心绿 / in_progress=蓝色(带呼吸)/ pending=空心灰;
  * 流式阶段还可附带"生成中"的草稿文本。
  */
+/**
+ * 执行计划面板(会话上方,可展开/收起)。
+ *
+ * 【为什么要做成面板而不是时间线卡片】
+ * 计划卡原来跟着消息流走:跑完就滚出屏幕,想回头核对"还剩哪几步"要翻半天;
+ * 而且它和"正在做什么"是同一件事 —— 应该是**常驻的**上下文,不是一次性输出。
+ * 现在:未完成时它就是进度条(标题行直接显示 n/m),完成后自动收起成一行,
+ * 点一下展开看全部步骤,再点收起。收起状态不占屏幕,展开状态不丢上下文。
+ *
+ * 【流式排版】草稿原文是一大段没有结构的文字,这里按空行/序号/短横线切段,
+ * 每段单独一行、行距拉开,读到哪一步一眼能分清 —— 只改排版,不动整体结构。
+ */
 @Composable
-private fun PlanCard(steps: List<String>, draft: String, streaming: Boolean) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                painterResource(AppR.drawable.ic_lucide_list_checks), null,
-                tint = Pa.Accent, modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "执行计划" + if (streaming) " · 制定中" else "",
-                Modifier.weight(1f),
-                fontSize = 11.5.sp,
-                color = Pa.Accent,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        steps.forEach { raw ->
+private fun PlanPanel(
+    steps: List<String>,
+    draft: String,
+    running: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    // 解析步骤:同一条"steps 尚未生成、只有草稿"的阶段由 draft 兜底
+    val parsed = remember(steps) {
+        steps.mapNotNull { raw ->
             val status = raw.substringBefore('|')
-            val text = raw.substringAfter('|', "")
-            if (text.isNotBlank()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    verticalAlignment = Alignment.Top,
+            val text = raw.substringAfter('|', "").trim()
+            if (text.isBlank()) null else status to text
+        }
+    }
+    val done = parsed.count { it.first == "completed" }
+    val total = parsed.size
+    val current = parsed.firstOrNull { it.first == "in_progress" }?.second
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Pa.Card, RoundedCornerShape(14.dp))
+                .pressable { onToggle() }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+        ) {
+            // ---- 标题行:总是可见(收起时就是全部) ----
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    painterResource(AppR.drawable.ic_lucide_list_checks), null,
+                    tint = if (running) Pa.Accent else Pa.Green,
+                    modifier = Modifier.size(13.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    when {
+                        running && total > 0 -> "执行计划 · $done/$total"
+                        running -> "执行计划 · 制定中"
+                        total > 0 && done == total -> "执行计划 · 已完成 $total 步"
+                        total > 0 -> "执行计划 · 完成 $done/$total"
+                        else -> "执行计划"
+                    },
+                    Modifier.weight(1f),
+                    fontSize = 11.5.sp,
+                    color = if (running) Pa.Accent else Pa.TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // 收起时把"当前这一步"直接显示在标题行 —— 不展开也知道在干什么
+                if (!expanded && current != null) {
+                    Text(
+                        current,
+                        Modifier.widthIn(max = 150.dp),
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Icon(
+                    painterResource(
+                        if (expanded) AppR.drawable.ic_lucide_chevron_up
+                        else AppR.drawable.ic_lucide_chevron_down,
+                    ),
+                    null,
+                    tint = Pa.TextTertiary,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+
+            // ---- 进度条:有步骤时画一条细线,一眼看出大概还剩多少 ----
+            if (total > 0) {
+                Spacer(Modifier.height(7.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(Pa.Hover, RoundedCornerShape(2.dp)),
                 ) {
-                    val dotColor = when (status) {
-                        "completed" -> Pa.Green
-                        "in_progress" -> Pa.Accent
-                        else -> Pa.TextTertiary
-                    }
                     Box(
                         Modifier
-                            .padding(top = 4.dp)
-                            .size(7.dp)
-                            .background(dotColor, CircleShape),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text,
-                        fontSize = 12.sp,
-                        color = if (status == "pending") Pa.TextSecondary else Pa.TextPrimary,
+                            .fillMaxWidth(if (total == 0) 0f else done.toFloat() / total)
+                            .height(3.dp)
+                            .background(if (running) Pa.Accent else Pa.Green, RoundedCornerShape(2.dp)),
                     )
                 }
             }
+
+            // ---- 展开区:完整步骤 + 生成中的草稿 ----
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                if (parsed.isEmpty()) {
+                    // 还没有结构化步骤:把草稿按可读段落排版
+                    PlanDraftText(draft)
+                } else {
+                    parsed.forEach { (status, text) ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            val dotColor = when (status) {
+                                "completed" -> Pa.Green
+                                "in_progress" -> Pa.Accent
+                                else -> Pa.TextTertiary
+                            }
+                            Box(
+                                Modifier
+                                    .padding(top = 4.dp)
+                                    .size(7.dp)
+                                    .background(dotColor, CircleShape),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text,
+                                Modifier.weight(1f),
+                                fontSize = 12.sp,
+                                color = if (status == "pending") Pa.TextSecondary else Pa.TextPrimary,
+                            )
+                        }
+                    }
+                    // 步骤已出但仍在跑:把最新草稿附在下面(可能是下一步的说明)
+                    if (running && draft.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        PlanDraftText(draft)
+                    }
+                }
+            }
         }
-        if (draft.isNotBlank() && steps.isEmpty()) {
-            Text(
-                draft,
-                fontSize = 11.5.sp,
-                fontFamily = FontFamily.Monospace,
-                color = Pa.TextSecondary,
-            )
+    }
+}
+
+/**
+ * 计划草稿的可读排版。
+ *
+ * 【问题】daemon 推来的草稿是模型原样吐出的自由文本,可能是一整段流水句,
+ * 直接 Text() 出来就是"一大坨字",读不出层次。
+ * 【做法】按空行切段;段内若以 `1.` `-` `*` `•` 或 `第n步` 开头,提成独立条目;
+ * 条目之间用固定行距隔开,序号行稍亮、普通行稍暗。**不改内容,只改落版**。
+ */
+@Composable
+private fun PlanDraftText(draft: String) {
+    val lines = remember(draft) {
+        draft.split("\n")
+            .flatMap { it.split(Regex("(?<=[。;；])\\s*(?=\\d+[.、])")) }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        lines.forEach { line ->
+            val isItem = Regex("^(\\d+[.、)]|[-*•]|第\\s*\\d+\\s*步)").containsMatchIn(line)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                if (isItem) {
+                    Box(
+                        Modifier
+                            .padding(top = 5.dp)
+                            .size(4.dp)
+                            .background(Pa.AccentDim, CircleShape),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                }
+                Text(
+                    line,
+                    Modifier.weight(1f),
+                    fontSize = 11.5.sp,
+                    lineHeight = 17.sp,
+                    color = if (isItem) Pa.TextSecondary else Pa.TextTertiary,
+                )
+            }
         }
     }
 }
@@ -986,6 +1108,14 @@ fun ChatScreen(
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    // 【执行计划面板】任务完成后计划卡不再散落在时间线里,而是收进会话上方
+    // 一个可展开/收起的面板:默认收起(顶部只留一行进度摘要),点开看完整步骤。
+    var planPanelOpen by remember { mutableStateOf(false) }
+    // 最近一次计划的步骤(时间线里落定的 + 正在流式的,取最新的一份)
+    val latestPlan = remember(st.items, st.planSteps) {
+        st.items.lastOrNull { it.role == "plan" && it.planSteps.isNotEmpty() }?.planSteps
+            ?: st.planSteps
+    }
     // 侧边栏用的最近会话:和模型/设置一起预取,打开抽屉时直接就是数据,不必等网络
     var recentThreads by remember { mutableStateOf(listOf<PThread>()) }
     var recentLoading by remember { mutableStateOf(true) }
@@ -999,6 +1129,8 @@ fun ChatScreen(
             showGitPanel -> showGitPanel = false
             showContextCard -> showContextCard = false
             showModelCard -> showModelCard = false
+            // 计划面板展开时,返回先收起面板(它是最贴近"当前屏幕状态"的一层)
+            planPanelOpen -> planPanelOpen = false
             else -> onBack()
         }
     }
@@ -1285,7 +1417,12 @@ fun ChatScreen(
         ) {
             IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
             Spacer(Modifier.width(14.dp))
-            Text(threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
+            // 【必须显式 Ellipsis】Modifier.weight(1f) 已把宽度约束死,默认
+        // TextOverflow.Clip 会"干净地"切掉尾巴且不画省略号,看起来像文字坏了。
+        Text(
+            threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
             // 终止正在跑的轮次(用户反馈:任务跑飞了没法自己停)
             if (st.running) {
                 IconActionButton(
@@ -1354,6 +1491,20 @@ fun ChatScreen(
             }
         }
 
+        // ---- 执行计划面板 ----
+        // 【用户诉求】计划不再随时间线滚走:未完成时在时间线原位置仍能看到步骤,
+        // 跑完之后那张卡不移除,而是把它**提到会话上方**收成一个可展开的面板,
+        // 需要回顾时点开,不需要时收起只留一行进度摘要。
+        if (latestPlan.isNotEmpty() && AgentConnection.showThinking) {
+            PlanPanel(
+                steps = latestPlan,
+                draft = if (st.running) st.planStream else "",
+                running = st.running,
+                expanded = planPanelOpen,
+                onToggle = { planPanelOpen = !planPanelOpen },
+            )
+        }
+
         // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----
         LazyColumn(
             Modifier.weight(1f).padding(horizontal = 16.dp),
@@ -1413,10 +1564,9 @@ fun ChatScreen(
                     "thinking" -> if (AgentConnection.showThinking) {
                         ThinkingCard(item.text, thinkScale, streaming = false)
                     } else Unit
-                    // 执行计划:步骤卡(同样受思考过程开关控制)
-                    "plan" -> if (AgentConnection.showThinking) {
-                        PlanCard(item.planSteps, draft = "", streaming = false)
-                    } else Unit
+                    // 执行计划:已提到会话上方的可折叠面板里(见 PlanPanel),
+                    // 时间线里不再重复一张卡 —— 避免同一步骤在屏幕上有两份。
+                    "plan" -> Unit
                     // 工具调用:一次调用一条卡,含参数/输出/耗时,可展开看详情
                     "tool" -> ToolCallCard(item, uiScale)
                     // 后台 Codex/MCP 事件只影响右上角状态点，不再把诊断卡片
@@ -1472,14 +1622,8 @@ fun ChatScreen(
                     ThinkingCard(st.thinkingText, thinkScale, streaming = true)
                 }
             }
-            // 流式执行计划:结构化步骤或生成中的草稿,边出边看
-            if (st.running && AgentConnection.showThinking &&
-                (st.planSteps.isNotEmpty() || st.planStream.isNotEmpty())
-            ) {
-                item(key = "streaming-plan") {
-                    PlanCard(st.planSteps, st.planStream, streaming = true)
-                }
-            }
+            // 流式执行计划:已由上方 PlanPanel 承担(它同时兼做收起的进度条),
+            // 这里不再重复渲染,否则同一步骤会出现两份。
             if (st.streaming) {
                 item(key = "streaming-bubble") {
                     if (st.streamText.isEmpty()) {
@@ -1818,6 +1962,7 @@ fun ChatScreen(
         ExportChatSheet(
             title = threadTitle,
             items = st.items.toList(),
+            threadId = threadId,
             onDismiss = { showExport = false },
             onExport = { text, count ->
                 showExport = false
@@ -2476,6 +2621,7 @@ private fun InAppMarkdown(
 private fun ExportChatSheet(
     title: String,
     items: List<ChatItem>,
+    threadId: String,
     onDismiss: () -> Unit,
     onExport: (text: String, count: Int) -> Unit,
 ) {
@@ -2484,7 +2630,27 @@ private fun ExportChatSheet(
     val exportable = remember(items) {
         items.filter { (it.role == "user" || it.role == "assistant") && it.text.isNotBlank() }
     }
-    var selected by remember(items) { mutableStateOf(exportable.indices.toSet()) }
+    // 【修复"只能导出 3 条"】原来的数据源是内存里的 st.items —— 它受
+    // ChatScreen 那条 `!st.running && (st.items.isEmpty() || ...)` 门控,
+    // 而且打开旧会话时可能只装了最近几轮。这里在打开面板时从 daemon
+    // 拉一次**全量历史**(limit=0),用它做导出的真源。
+    var full by remember(threadId) { mutableStateOf<List<ChatItem>?>(null) }
+    LaunchedEffect(threadId) {
+        if (threadId.isBlank()) return@LaunchedEffect
+        full = runCatching {
+            withContext(Dispatchers.IO) {
+                AgentConnection.threadService()
+                    .getThreadHistory(
+                        GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build(),
+                    )
+                    .messagesList
+            }.let { historyToChatItems(it) }
+                .filter { (it.role == "user" || it.role == "assistant") && it.text.isNotBlank() }
+        }.getOrNull()
+    }
+    // 历史拉回来之前先用内存里的,拉到之后无缝换成全量(两边都以"有正文的对话消息"为准)
+    val source = full ?: exportable
+    var selected by remember(source) { mutableStateOf(source.indices.toSet()) }
 
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -2509,7 +2675,8 @@ private fun ExportChatSheet(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        title.ifBlank { "未命名会话" } + " · 已选 " + selected.size + " / " + exportable.size + " 条",
+                        title.ifBlank { "未命名会话" } + " · 已选 " + selected.size + " / " + source.size + " 条" +
+                            if (full == null) "(正在读取全部历史…)" else "",
                         fontSize = 11.5.sp,
                         color = Pa.TextTertiary,
                         maxLines = 1,
@@ -2519,7 +2686,7 @@ private fun ExportChatSheet(
                 // 右上角:选择方式的拆分按钮。主按钮随当前选择**实时变化**
                 // (全选后显示"已全选"、清空后显示"未选"、部分选中显示"已选 n"),
                 // 主按钮点击 = 全选/清空来回切换(修复"反选后右上角没反应"的观感)。
-                val allSelected = selected.size == exportable.size && selected.isNotEmpty()
+                val allSelected = selected.size == source.size && selected.isNotEmpty()
                 dev.pocketagent.app.ui.component.SplitButton(
                     label = "选择",
                     mainLabel = when {
@@ -2529,16 +2696,16 @@ private fun ExportChatSheet(
                     },
                     compact = true,
                     onMainClick = {
-                        selected = if (allSelected) emptySet() else exportable.indices.toSet()
+                        selected = if (allSelected) emptySet() else source.indices.toSet()
                     },
                     options = listOf(
                         dev.pocketagent.app.ui.component.SplitOption(
-                            "全选", "选中全部 " + exportable.size + " 条",
+                            "全选", "选中全部 " + source.size + " 条",
                             selected = allSelected,
-                        ) { selected = exportable.indices.toSet() },
+                        ) { selected = source.indices.toSet() },
                         dev.pocketagent.app.ui.component.SplitOption(
                             "反选", "已选的反过来",
-                        ) { selected = exportable.indices.toSet() - selected },
+                        ) { selected = source.indices.toSet() - selected },
                         dev.pocketagent.app.ui.component.SplitOption(
                             "清空", "一条都不选",
                             selected = selected.isEmpty(),
@@ -2554,8 +2721,8 @@ private fun ExportChatSheet(
                     .heightIn(max = 340.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(exportable.size) { idx ->
-                    val chatItem = exportable[idx]
+                items(source.size) { idx ->
+                    val chatItem = source[idx]
                     val on = idx in selected
                     Row(
                         Modifier

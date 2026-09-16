@@ -171,23 +171,32 @@ fun EmptyState(iconRes: Int, title: String, hint: String, modifier: Modifier = M
  * 【起手区间是实测出来的】
  *  - 最左侧 ~24dp 是**系统返回手势区**(HyperOS 实测 x<24dp 的横滑直接退到桌面),
  *    那一段我们永远拿不到,所以不指望它;
- *  - 起手点放宽到 [edgeWidth](64dp,约屏幕宽度的 6%),"边缘往里一点"右滑即可唤出。
+ *  - 起手点放宽到 [edgeWidth](80dp,约屏宽 8%),"边缘往里一点"右滑即可唤出。
  *
  * 【为什么不能更宽(与行内左滑的冲突)】96dp 时几乎盖住列表条目的左半边:
- * 用户想左滑某行却在边缘起手 → 先被判成"右滑开抽屉"。现在收回 64dp,
+ * 用户想左滑某行却在边缘起手 → 先被判成"右滑开抽屉"。现在收到 80dp,
  * 并由调用方在**有行展开时**传 enabled=false,两种手势彻底分开。
+ *
+ * 【灵敏度调优(修复"还是不够灵敏")】三处放宽,针对实测的三种失败场景:
+ *  1. 起手点偏内(>64dp)直接判定失败 → 命中带从 64dp 放宽到 80dp
+ *     (系统吃掉 24dp 后,可用带从 ~40dp 增至 ~56dp);
+ *  2. 手指轻微上下抖,纵向位移累计超过 28dp 就永久 break →
+ *     改为**按比例判定**(纵向 > 横向 1.6 倍且 > 32dp 才让给滚动),
+ *     单纯增大的纵向绝对值不再误杀;
+ *  3. 松手必须横拖满 33% 屏宽(约 120dp)才吸附展开,轻扫必回弹 →
+ *     阈值降到 18% 屏宽,并叠加"速度够快也算数"(快扫是小位移的常见形态)。
  *
  * 【为什么要用 Initial 传球(修复"偶尔滑不动")】
  * 之前用 detectHorizontalDragGestures 挂在根节点,事件先给子节点(列表滚动、行内左滑),
  * 子节点一旦 consume,根节点的识别器就被取消 —— 表现就是"滑了没反应"。
  * 现在在 Initial 阶段监听:判定为右滑并 consume 之后,子节点再也收不到这段位移。
  *
- * 【误触保护】纵向位移明显大于横向 → 判定为滚动列表,立即放弃;
+ * 【误触保护】纵向位移明显压过横向 → 判定为滚动列表,立即放弃;
  * 起手后往左拉 → 判定为行内左滑,立即放弃。两者都不 consume。
  */
 fun Modifier.edgeSwipeToOpenDrawer(
     enabled: Boolean = true,
-    edgeWidth: Dp = 64.dp,
+    edgeWidth: Dp = 80.dp,
     threshold: Dp = 28.dp,
     /** 旧式用法:滑够阈值就立即打开(面板自己播动画)。 */
     onOpen: (() -> Unit)? = null,
@@ -200,9 +209,18 @@ fun Modifier.edgeSwipeToOpenDrawer(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val edgePx = with(density) { edgeWidth.toPx() }
     val thresholdPx = with(density) { threshold.toPx() }
+    // 纵向否决:要求"纵向 > 横向 * 1.6 且纵向 > 32dp"才让给列表滚动。
+    // 原来只看纵向绝对值(>28dp),手指轻微抖动累计到 28dp 就永久放弃 —— 这是
+    // "滑不动"的头号原因。改成比例判定后,只要整体是横向意图就继续跟手。
+    val verticalGiveUpPx = with(density) { 32.dp.toPx() }
+    val verticalRatio = 1.6f
     // 进入"跟手"的门槛:8dp。比放弃阈值(28dp)小得多 ——
     // 手指一动面板就跟,同时给纵向滚动/行内左滑留出判定的余地。
     val startPx = with(density) { 8.dp.toPx() }
+    // 松手吸附:位移过 18% 屏宽就展开;不足但有明显右扫速度(v>700px/s)也展开,
+    // 照顾"快速轻扫"——这种手势位移天然小,原来卡在 33% 门槛上必然回弹。
+    val settleFraction = 0.18f
+    val flingVelocityPx = with(density) { 700.dp.toPx() }
 
     this.pointerInput(edgePx, thresholdPx) {
         awaitEachGesture {
@@ -212,17 +230,26 @@ fun Modifier.edgeSwipeToOpenDrawer(
             var horizontal = 0f
             var vertical = 0f
             var tracking = false
+            var lastVelocityX = 0f
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 horizontal += change.positionChange().x
                 vertical += kotlin.math.abs(change.positionChange().y)
+                // 【速度兜底】positionChange 只看位移,拿不到速度;用位移/事件间隔自己算。
+                // 快扫的位移天然小,只靠位移阈值会把"快速轻扫"判成回弹。
+                val dtMs = (change.uptimeMillis - down.uptimeMillis).coerceAtLeast(1L)
+                lastVelocityX = horizontal / (dtMs / 1000f)
                 if (!tracking) {
                     // 明显往左:是行内左滑,不是开抽屉
                     if (horizontal < -thresholdPx) break
-                    // 纵向占主导:交给列表去滚动
-                    if (vertical > thresholdPx && vertical > kotlin.math.abs(horizontal)) break
+                    // 纵向明显压过横向:交给列表去滚动(按比例,不看纵向绝对值)
+                    if (vertical > verticalGiveUpPx &&
+                        vertical > kotlin.math.abs(horizontal) * verticalRatio
+                    ) {
+                        break
+                    }
                     if (horizontal >= startPx) tracking = true
                 }
                 if (tracking) {
@@ -238,7 +265,7 @@ fun Modifier.edgeSwipeToOpenDrawer(
             }
             if (tracking) {
                 val frac = (horizontal / size.width.toFloat()).coerceIn(0f, 1f)
-                onRelease?.invoke(frac > 0.33f)
+                onRelease?.invoke(frac > settleFraction || lastVelocityX > flingVelocityPx)
             }
         }
     }

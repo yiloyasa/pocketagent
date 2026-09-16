@@ -59,6 +59,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
@@ -131,15 +132,24 @@ fun ThreadsScreen(
     var showDrawer by remember { mutableStateOf(false) }
     // 侧边栏跟手:与主页/会话页同一套 controller
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
-    // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
+    // 新建会话面板(返回键要用,声明必须早于 BackHandler)
+    var showNewThread by remember { mutableStateOf(false) }
+    // 【返回层级 · 分级回退】抽屉 → 正在重命名 → 新建面板 → 归档筛选 → 主板块。
+    // 之前只有"抽屉/回主页"两级:在"已归档"里按返回会直接跳回主页,
+    // 重命名框开着也会被判为"该回主板块"。
     BackHandler(enabled = true) {
-        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
+        when {
+            drawerCtrl.visible -> drawerCtrl.close()
+            renamingId != null -> renamingId = null
+            showNewThread -> showNewThread = false
+            showArchived -> showArchived = false
+            else -> onBackToHome()
+        }
     }
     // 侧滑互斥:openKey 单值状态保证「任意时刻最多一行展开」
     val openKey = remember { mutableStateOf<Any?>(null) }
     val listState = rememberLazyListState()
     val undo = rememberUndoState()
-    var showNewThread by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     // 列表是否是"离线快照"渲染的(决定错误条的颜色:离线用提示色而非报错色)
     var offline by remember { mutableStateOf(false) }
@@ -851,9 +861,11 @@ private fun ThreadCard(
                 }
                 Text(
                     t.title.ifEmpty { "(未命名)" },
+                    Modifier.weight(1f),
                     fontSize = 15.sp,
                     color = Pa.TextPrimary,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -896,9 +908,11 @@ private fun PcSessionCard(
     ) {
         Text(
             info.title.ifEmpty { "(未命名会话)" },
+            Modifier.fillMaxWidth(),
             fontSize = 15.sp,
             color = Pa.TextPrimary,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
             Text(

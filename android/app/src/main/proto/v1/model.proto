@@ -32,6 +32,13 @@ message CodexSettings {
   string account = 3;         // 登录账号(如 Codex · xxx@qq.com)
   string model = 4;           // 默认模型 slug(空=跟随桌面)
   string effort = 5;          // 默认思考强度
+  // ---- 行为与降噪(第 27 轮新增,字段号从 6 起,旧字段语义一字未动) ----
+  // 【边界】这些值只作用于 daemon 拉起的 app-server 子进程(内存态,不落盘),
+  // 因此只影响从 App 发起的任务,绝不会改写用户桌面 codex 的 config.toml。
+  bool hide_agent_reasoning = 6;      // 隐藏推理过程事件
+  string model_verbosity = 7;         // low / medium / high
+  string model_reasoning_summary = 8; // concise / detailed
+  bool disable_paste_burst = 9;       // 粘贴长文本时不触发爆破检测
 }
 
 message SetCodexSettingsRequest {
@@ -39,6 +46,11 @@ message SetCodexSettingsRequest {
   string sandbox = 2;
   string model = 3;
   string effort = 4;
+  // 空 = 不改动该项(与既有 4 个字段同一套"非空才覆盖"语义)
+  bool hide_agent_reasoning = 5;
+  string model_verbosity = 6;
+  string model_reasoning_summary = 7;
+  bool disable_paste_burst = 8;
 }
 
 message ListMcpServersRequest {}

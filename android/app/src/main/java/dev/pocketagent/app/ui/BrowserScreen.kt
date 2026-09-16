@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,6 +93,11 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     //   localUri 非空 = 正在看手机上的文件(已在本地,可分享)。
     var pcPath by remember { mutableStateOf("") }
     var localUri by remember { mutableStateOf("") }
+
+    // 【返回层级 · 分级回退】页面内还有历史 → 先网页后退;退无可退 → 才离开浏览器。
+    // 之前没有 BackHandler,系统返回键会直接 pop 掉整个路由,导致用户
+    // 在一个网页里点了两个链接后按返回,期望回上一页却直接回到了会话。
+    BackHandler(enabled = canGoBack) { webRef?.goBack() }
 
     /** 把 HTML 直接喂给 WebView(不经过网络);手机视图下做移动端适配。 */
     fun renderLocal(html: String, label: String) {

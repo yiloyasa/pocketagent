@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,7 +54,11 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.component.FileKind
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PreviewMode
+import dev.pocketagent.app.ui.component.SwipeAction
+import dev.pocketagent.app.ui.component.SwipeRevealRow
+import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.rememberUndoState
 import androidx.compose.ui.graphics.Color
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
@@ -62,7 +67,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pocketagent.v1.CreateDirectoryRequest
+import pocketagent.v1.DeleteEntryRequest
 import pocketagent.v1.DirectoryEntry
+import pocketagent.v1.MoveEntryRequest
 import pocketagent.v1.WriteFileRequest
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.ListDirectoryRequest
@@ -89,10 +96,6 @@ fun FilesScreen(
     var showDrawer by remember { mutableStateOf(false) }
     // 侧边栏跟手:与主页/会话页同一套 controller
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
-    // 返回层级:抽屉开着先关抽屉,否则回到主页并展开侧边栏(而不是直接退回桌面)
-    BackHandler(enabled = true) {
-        if (drawerCtrl.visible) drawerCtrl.close() else onBackToHome()
-    }
     val scope = rememberCoroutineScope()
     var path by remember { mutableStateOf(initialPath ?: "") }
     var showRoots by remember { mutableStateOf(initialPath.isNullOrEmpty()) }
@@ -102,6 +105,13 @@ fun FilesScreen(
     var showCreate by remember { mutableStateOf(false) } // 新建文件/文件夹
     // 不能内置预览的文件(旧版 Office / 压缩包 / 音视频):点它时给一个"下载到手机"的引导
     var askDownload by remember { mutableStateOf<DirectoryEntry?>(null) }
+    // 【文件管理】沿用会话列表的左滑范式:同一时刻最多一行展开
+    val openKey = remember { mutableStateOf<Any?>(null) }
+    val listState = rememberLazyListState()
+    val undo = rememberUndoState()
+    var renaming by remember { mutableStateOf<DirectoryEntry?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var pendingDelete by remember { mutableStateOf<DirectoryEntry?>(null) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
 
     fun loadDir(p: String) {
@@ -126,6 +136,67 @@ fun FilesScreen(
         }
     }
 
+    /** 删除(目录递归删)。撤销时按原名重建 —— 目录只能重建空壳,
+     *  撤销条文案里如实说明,不做假的"已完整恢复"。 */
+    fun deleteEntry(e: DirectoryEntry) {
+        val parent = path
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.fileService().deleteEntry(
+                        DeleteEntryRequest.newBuilder()
+                            .setPath(e.path)
+                            .setRecursive(e.isDir)
+                            .build(),
+                    )
+                }
+                openKey.value = null
+                loadDir(parent)
+                undo.show(
+                    message = if (e.isDir) "已删除文件夹 ${e.name}(只能恢复空目录)"
+                    else "已删除 ${e.name}",
+                    onUndo = {
+                        withContext(Dispatchers.IO) {
+                            if (e.isDir) {
+                                AgentConnection.fileService().createDirectory(
+                                    CreateDirectoryRequest.newBuilder().setPath(e.path).build())
+                            } else {
+                                AgentConnection.fileService().writeFile(
+                                    WriteFileRequest.newBuilder()
+                                        .setPath(e.path)
+                                        .setData(com.google.protobuf.ByteString.EMPTY)
+                                        .setCreate(true).setTruncate(true).build())
+                            }
+                        }
+                        loadDir(parent)
+                    },
+                )
+            } catch (ex: Exception) {
+                error = "删除失败:${ex.message}"
+            }
+        }
+    }
+
+    /** 重命名:daemon 没有独立 Rename,用 MoveEntry(同目录 old→new)实现。 */
+    fun renameEntry(e: DirectoryEntry, newName: String) {
+        val sep = if (e.path.contains('/') && !e.path.contains('\\')) "/" else "\\"
+        val parent = e.path.substringBeforeLast(sep, "")
+        val target = if (parent.isEmpty()) newName else parent + sep + newName
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.fileService().moveEntry(
+                        MoveEntryRequest.newBuilder()
+                            .setFromPath(e.path).setToPath(target).build())
+                }
+                openKey.value = null
+                loadDir(path)
+            } catch (ex: Exception) {
+                error = "重命名失败:${ex.message}"
+            }
+        }
+    }
+
     fun loadRoots(preserveError: String? = null) {
         loading = true
         scope.launch {
@@ -143,6 +214,35 @@ fun FilesScreen(
             } finally {
                 loading = false
             }
+        }
+    }
+
+    /**
+     * 【返回层级 · 第一级】目录树里往上退一层。
+     *  C:\dev\x -> C:\dev;C:\dev -> C:\(盘根仍是目录);C:\ -> 此电脑(盘符列表)。
+     * 顶栏的"上级"按钮与系统返回键共用这一份逻辑,避免两处规则漂移。
+     *  @return true = 本次返回已被消费(停在本页);false = 已经在最顶层(此电脑),
+     *          交给下一级(回到主板块)处理。
+     */
+    fun goUpOneLevel(): Boolean {
+        if (showRoots) return false
+        val norm = path.replace('/', '\\').trimEnd('\\')
+        val idx = norm.lastIndexOf('\\')
+        when {
+            idx > 2 -> loadDir(norm.substring(0, idx) + "\\")
+            idx == 2 -> loadDir(norm + "\\")
+            else -> loadRoots()
+        }
+        return true
+    }
+
+    // 【返回层级 · 分级回退】抽屉 → 当前目录的上级 → 主板块(主页并展开侧边栏)。
+    // 之前只有两级(抽屉/主页),进了多层目录按返回会直接跳回主页,把浏览位置丢掉。
+    BackHandler(enabled = true) {
+        when {
+            drawerCtrl.visible -> drawerCtrl.close()
+            goUpOneLevel() -> Unit
+            else -> onBackToHome()
         }
     }
 
@@ -198,16 +298,7 @@ fun FilesScreen(
                 if (!showRoots) {
                 IconActionButton(
                     AppR.drawable.ic_lucide_chevron_left, "上级",
-                    {
-                        // C:\dev\x -> C:\dev;C:\dev -> C:\(盘根仍是目录);C:\ -> 此电脑
-                        val norm = path.replace('/', '\\').trimEnd('\\')
-                        val idx = norm.lastIndexOf('\\')
-                        when {
-                            idx > 2 -> loadDir(norm.substring(0, idx) + "\\")
-                            idx == 2 -> loadDir(norm + "\\")
-                            else -> loadRoots()
-                        }
-                    },
+                    { goUpOneLevel() },
                     bg = Pa.Card,
                 )
                     Spacer(Modifier.width(10.dp))
@@ -248,7 +339,8 @@ fun FilesScreen(
             }
         },
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
+        Box(Modifier.padding(pad).fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
             if (path.isNotEmpty()) {
                 Text(
                     path,
@@ -268,29 +360,55 @@ fun FilesScreen(
             // 之前没加 weight 导致列表不滚动、看不到全部
             LazyColumn(
                 Modifier.weight(1f).padding(horizontal = 16.dp),
+                state = listState,
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
                 items(entries, key = { it.path }) { e ->
                     val kind = if (e.isDir) null else fileKindOf(e.name)
+                    // 【文件管理】左滑出「重命名 / 删除」,与会话列表同一套交互。
+                    // 行内容里不能挂 clickable(容器独占手势),所以点击走 onClick 参数。
+                    SwipeRevealRow(
+                        rowKey = e.path,
+                        openKey = openKey,
+                        shape = RoundedCornerShape(14.dp),
+                        actions = listOf(
+                            SwipeAction(
+                                "rename", "重命名", AppR.drawable.ic_lucide_pencil,
+                                Pa.TextPrimary,
+                            ),
+                            SwipeAction(
+                                "delete", "删除", AppR.drawable.ic_lucide_trash_2,
+                                androidx.compose.ui.graphics.Color.White, destructive = true,
+                            ),
+                        ),
+                        onAction = { a ->
+                            when (a.id) {
+                                "rename" -> {
+                                    renameText = e.name
+                                    renaming = e
+                                }
+                                "delete" -> pendingDelete = e
+                            }
+                        },
+                        onClick = {
+                            when {
+                                e.isDir -> loadDir(e.path)
+                                // 【能力矩阵分派】能内置渲染的一律交给内置浏览器 ——
+                                // Office / PDF / Markdown / 图片 / 网页 都能排版展示,
+                                // 比在这个弹层里塞纯文本好得多。
+                                kind?.preview == PreviewMode.IN_APP -> onOpenBrowser(
+                                    // 【带上目录条目的 size/mtime】内置浏览器据此生成预览缓存键 ——
+                                    // 文件在电脑上被改过 → mtime 变 → 键变 → 自动重拉,不会看到旧内容。
+                                    "pc:" + e.path + "?_pas=" + e.sizeBytes + "&_pam=" + e.modifiedUnixMs,
+                                )
+                                // 内置不了(旧版 Office / 压缩包 / 音视频)才引导下载
+                                else -> askDownload = e
+                            }
+                        },
+                    ) {
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .background(Pa.Card, RoundedCornerShape(14.dp))
-                            .clickable {
-                                when {
-                                    e.isDir -> loadDir(e.path)
-                                    // 【能力矩阵分派】能内置渲染的一律交给内置浏览器 ——
-                                    // Office / PDF / Markdown / 图片 / 网页 都能排版展示,
-                                    // 比在这个弹层里塞纯文本好得多。
-                                    kind?.preview == PreviewMode.IN_APP -> onOpenBrowser(
-                                        // 【带上目录条目的 size/mtime】内置浏览器据此生成预览缓存键 ——
-                                        // 文件在电脑上被改过 → mtime 变 → 键变 → 自动重拉,不会看到旧内容。
-                                        "pc:" + e.path + "?_pas=" + e.sizeBytes + "&_pam=" + e.modifiedUnixMs,
-                                    )
-                                    // 内置不了(旧版 Office / 压缩包 / 音视频)才引导下载
-                                    else -> askDownload = e
-                                }
-                            }
                             .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -334,9 +452,82 @@ fun FilesScreen(
                             )
                         }
                     }
+                    }
                 }
             }
         }
+            // 撤销条浮在内容之上(删除后给一次反悔机会)
+            UndoBarHost(undo, Modifier.align(Alignment.TopCenter))
+        }
+    }
+
+    // 滚动中收起已展开的行,避免滑动过程中误触
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) openKey.value = null
+    }
+
+    // 重命名:daemon 无独立 Rename,用 MoveEntry 同目录改名
+    renaming?.let { e ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { renaming = null }) {
+            Column(
+                Modifier
+                    .background(Pa.CardHigh, RoundedCornerShape(20.dp))
+                    .padding(20.dp)
+                    .fillMaxWidth(),
+            ) {
+                Text("重命名", fontSize = 17.sp, color = Pa.TextPrimary)
+                Text(
+                    (if (e.isDir) "文件夹 · " else "文件 · ") + e.name,
+                    fontSize = 11.sp, color = Pa.TextTertiary,
+                    modifier = Modifier.padding(top = 2.dp, bottom = 10.dp), maxLines = 1,
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    label = { Text("新名称", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 14.dp),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
+                ) {
+                    androidx.compose.material3.TextButton(onClick = { renaming = null }) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            val n = renameText.trim()
+                            if (n.isNotEmpty() && n != e.name) renameEntry(e, n)
+                            renaming = null
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Pa.Accent),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text("确定", color = androidx.compose.ui.graphics.Color(0xFF0B0B0D)) }
+                }
+            }
+        }
+    }
+
+    // 删除确认:目录是递归删除,后果不可逆,必须二次确认
+    pendingDelete?.let { e ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(if (e.isDir) "删除这个文件夹?" else "删除这个文件?", fontSize = 15.sp) },
+            text = {
+                Text(
+                    if (e.isDir) "${e.name}\n\n文件夹内的全部内容都会一并删除,且无法恢复。"
+                    else "${e.name}\n\n删除后无法恢复。",
+                    fontSize = 12.5.sp, color = Pa.TextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteEntry(e)
+                    pendingDelete = null
+                }) { Text("删除", color = Pa.Red) }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
     }
 
     // 不能内置预览时的引导:说清楚为什么,并给一步到位的下载动作

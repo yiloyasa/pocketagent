@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/agent"
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
 func (s *Server) ListModels(ctx context.Context, _ *pb.ListModelsRequest) (*pb.ListModelsResponse, error) {
@@ -79,6 +79,12 @@ func (s *Server) GetCodexSettings(ctx context.Context, _ *pb.GetCodexSettingsReq
 	out.Account = p.Account()
 	out.Model = s.cfg.Store.DefaultModelID()
 	out.Effort = s.cfg.Store.DefaultEffort()
+	// 行为与降噪:直接回显 provider 内存态(不读磁盘,不影响桌面端)
+	bar, verbosity, summary, burst := p.BehaviorSettings()
+	out.HideAgentReasoning = bar
+	out.ModelVerbosity = verbosity
+	out.ModelReasoningSummary = summary
+	out.DisablePasteBurst = burst
 	return out, nil
 }
 
@@ -86,6 +92,16 @@ func (s *Server) SetCodexSettings(ctx context.Context, req *pb.SetCodexSettingsR
 	p := s.codexProvider()
 	if p != nil {
 		p.SetDesktopSettings(req.ApprovalPolicy, req.Sandbox, req.Model, req.Effort)
+		// 行为与降噪:新字段与旧字段同一条路径 —— 只作用于本 daemon 的子进程。
+		// 【兼容】老 App 不传这些字段时它们是零值,这里只在"真的带了值"时才调用,
+		// 避免把用户已设置好的偏好清零。
+		if req.HideAgentReasoning || req.ModelVerbosity != "" ||
+			req.ModelReasoningSummary != "" || req.DisablePasteBurst {
+			p.SetBehaviorSettings(
+				req.HideAgentReasoning, req.ModelVerbosity,
+				req.ModelReasoningSummary, req.DisablePasteBurst,
+			)
+		}
 	}
 	if req.Model != "" {
 		_ = s.cfg.Store.SetDefaultModelID(req.Model)
