@@ -44,6 +44,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.theme.Pa
@@ -86,6 +87,11 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     var lastLocal by remember { mutableStateOf<Pair<String, String>?>(null) }
     // WebView 出厂 UA:切回手机视图时显式还原(见文件头注释)
     var defaultUa by remember { mutableStateOf("") }
+    // 【当前正在看的本地文件】—— 顶栏的"下载到手机/分享"要据此决定动作:
+    //   pcPath 非空 = 正在看电脑上的文件(可下载);
+    //   localUri 非空 = 正在看手机上的文件(已在本地,可分享)。
+    var pcPath by remember { mutableStateOf("") }
+    var localUri by remember { mutableStateOf("") }
 
     /** 把 HTML 直接喂给 WebView(不经过网络);手机视图下做移动端适配。 */
     fun renderLocal(html: String, label: String) {
@@ -119,7 +125,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
             mLower.startsWith("text/html") || lower.endsWith(".html") || lower.endsWith(".htm") ->
                 renderLocal(String(bytes, Charsets.UTF_8), name)
             else -> {
-                val structured = PcFilePreview.render(lower, bytes)
+                val structured = PcFilePreview.render(ctx, lower, bytes)
                 when {
                     structured != null -> renderLocal(structured, name)
                     PcFilePreview.isBinary(lower) || mLower.endsWith("octet-stream") ->
@@ -134,12 +140,20 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     fun openPcFile(path: String) {
         input = path
         loadingPc = true
+        pcPath = path
+        localUri = ""
         pageTitle = path.substringAfterLast('/').substringAfterLast('\\')
         scope.launch {
             try {
                 val bytes = withContext(Dispatchers.IO) {
                     val stream = AgentConnection.fileService().readFile(
-                        ReadFileRequest.newBuilder().setPath(path).setMaxBytes(0).build(),
+                        // 【必须显式给上限】max_bytes=0 表示"用服务端默认值",而默认只有 2MB ——
+                        // 大一点的 xlsx/docx/pdf 会被静默截断,解析器拿到的就是半截 zip,
+                        // 表现成"表格里没有可显示的数据"。这里按预览需要给足 64MB。
+                        ReadFileRequest.newBuilder()
+                            .setPath(path)
+                            .setMaxBytes(MAX_PREVIEW_BYTES)
+                            .build(),
                     )
                     val buf = java.io.ByteArrayOutputStream()
                     while (stream.hasNext()) buf.write(stream.next().data.toByteArray())
@@ -159,6 +173,8 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     fun openLocalUri(uri: String) {
         input = uri
         loadingPc = true
+        localUri = uri
+        pcPath = ""
         // 【文件名来源】优先用任务中心那条下载记录的原文件名(用户看到的那个名字),
         // 其次 ContentResolver 的 DISPLAY_NAME,最后才用 uri 末段。
         // 名称 + MIME 共同决定渲染分支(md/xlsx/docx…),拿不到后缀就会退化成纯文本。
@@ -256,7 +272,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
             }, bg = Pa.Card)
         }
 
-        // ---------- 第二行:标题 + 前进/后退 + 手机/桌面切换 + 外部打开 ----------
+        // ---------- 第二行:标题 + 下载/分享 + 前进/后退 + 手机/桌面切换 + 外部打开 ----------
         Row(
             Modifier
                 .fillMaxWidth()
@@ -285,6 +301,29 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 IconActionButton(R.drawable.ic_lucide_chevron_right, "前进", {
                     webRef?.goForward()
                 }, bg = Pa.Card, size = 34.dp, iconSize = 16.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            // 【下载入口】浏览电脑上的文件时给一个明确的"存到手机"按钮。
+            // 会话正文里不再放下载按钮(用户要求只留"在浏览器打开"),
+            // 所以这里是 pc 文件唯一的下载入口 —— 必须显眼,用品牌色。
+            if (pcPath.isNotEmpty()) {
+                IconActionButton(
+                    R.drawable.ic_lucide_download, "下载到手机",
+                    {
+                        PaDownloader.downloadFromPc(pcPath, pageTitle)
+                        android.widget.Toast.makeText(ctx, "已开始下载到手机", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    bg = Pa.Accent, tint = androidx.compose.ui.graphics.Color.White,
+                    size = 34.dp, iconSize = 16.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            if (localUri.isNotEmpty()) {
+                IconActionButton(
+                    R.drawable.ic_lucide_share_2, "分享",
+                    { PaDownloader.shareLocalFile(ctx, localUri, pageTitle) },
+                    bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+                )
                 Spacer(Modifier.width(8.dp))
             }
             IconActionButton(
@@ -380,8 +419,11 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                             if (isRemote(url)) {
                                 input = url.orEmpty()
-                                // 离开本地渲染页时清掉缓存(切换视图不再错误复用旧内容)
+                                // 离开本地渲染页时清掉缓存(切换视图不再错误复用旧内容),
+                                // 同时清掉"正在看的本地文件",避免下载按钮指向已经翻页的文件
                                 lastLocal = null
+                                pcPath = ""
+                                localUri = ""
                             }
                             canGoBack = view?.canGoBack() ?: false
                             canGoForward = view?.canGoForward() ?: false
@@ -462,6 +504,13 @@ private fun adaptForMobile(html: String): String {
 private const val DESKTOP_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
         "Chrome/126.0 Safari/537.36"
+
+/**
+ * 内置预览时单次读取电脑文件的上限。
+ * 之前传 0(服务端默认 2MB),大文件会被静默截断 → 解析器拿到半截 zip,
+ * 表现成"表格里没有可显示的数据"。64MB 足够覆盖常规办公文档。
+ */
+private const val MAX_PREVIEW_BYTES = 64L * 1024 * 1024
 
 /**
  * 地址栏该不该跟着 WebView 的回调走。

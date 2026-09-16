@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  分享本地文件时对外暴露的路径白名单。
+  Q 及以上下载走 MediaStore(content://),本来就能直接授权;
+  这里主要覆盖低版本落到 App 外部目录时的 file:// 情况。
+-->
+<paths>
+    <external-files-path name="downloads" path="Download/" />
+    <files-path name="internal" path="." />
+    <cache-path name="cache" path="." />
+</paths>

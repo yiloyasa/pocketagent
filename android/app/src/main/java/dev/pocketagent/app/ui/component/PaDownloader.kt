@@ -99,7 +99,10 @@ object PaDownloader {
         scope.launch {
             var sink: OutputStream? = null
             try {
-                val target = createSink(ctx, safeName, "text/plain")
+                // 【MIME 必须按名字给】之前这里硬编码 text/plain,MediaStore 会据此
+                // 把 DISPLAY_NAME 补成 ".md.txt" —— 文件名和内容对不上,
+                // 分享出去对方也认不出是 Markdown。统一走 FileKind。
+                val target = createSink(ctx, safeName, mimeOf(safeName))
                 sink = target.first
                 val bytes = text.toByteArray()
                 sink.write(bytes)
@@ -146,8 +149,11 @@ object PaDownloader {
     }
 
     /**
-     * 打开已下载到手机的文件。
-     * 有可处理的应用就直接打开;没有则退回"告知位置",而不是静默失败。
+     * 打开已下载到手机的文件 —— 按 [FileKind.preview] 三态分派。
+     *
+     *  · IN_APP   → 交给内置浏览器(网页/文本/Markdown/图片/Office/PDF 都能渲染);
+     *  · SYSTEM   → 交给系统应用(安装包/旧版 Office/音视频);
+     *  · SAVE_ONLY→ 没有承接方,明确告知保存位置,而不是静默失败。
      */
     fun openLocalFile(
         ctx: Context,
@@ -157,35 +163,61 @@ object PaDownloader {
         onOpenInBrowser: ((String) -> Unit)? = null,
     ) {
         if (uri.isEmpty()) {
-            android.widget.Toast.makeText(
-                ctx,
-                if (detail.isNotEmpty()) detail else "文件位置未知",
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
+            toast(ctx, if (detail.isNotEmpty()) detail else "文件位置未知")
             return
         }
-        // 类型判定统一走 FileKind(网页/文本/图片 → 内置浏览器;其余交系统)
         val kind = fileKindOf(title)
-        if (kind.browserViewable && onOpenInBrowser != null) {
+        if (kind.preview == PreviewMode.IN_APP && onOpenInBrowser != null) {
             onOpenInBrowser(uri)
             return
         }
-        val parsed = android.net.Uri.parse(uri)
-        val mime = mimeOf(title)
+        if (kind.preview == PreviewMode.SAVE_ONLY) {
+            toast(ctx, "这个格式没有可打开的应用\n已保存到:${detail.ifEmpty { uri }}")
+            return
+        }
         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-            setDataAndType(parsed, mime)
+            setDataAndType(android.net.Uri.parse(uri), kind.mime)
             addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
             ctx.startActivity(intent)
         } catch (_: Exception) {
-            android.widget.Toast.makeText(
-                ctx,
-                "没有可打开该类型的应用\n已保存到:$uri",
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
+            toast(ctx, "手机上还没有能打开 ${kind.label} 的应用\n已保存到:${detail.ifEmpty { uri }}")
         }
+    }
+
+    /**
+     * 分享手机上的文件。
+     * 【为什么不用 FileProvider 转一道】下载走的是 MediaStore,拿到的已经是
+     * `content://media/...` 这种可授权的 URI,直接带上读权限即可;
+     * 低版本(<Q)落到 App 外部目录时才是 `file://`,那种情况由 Provider 兜底。
+     */
+    fun shareLocalFile(ctx: Context, uri: String, title: String = "") {
+        if (uri.isEmpty()) return
+        val kind = fileKindOf(title)
+        runCatching {
+            val parsed = android.net.Uri.parse(uri)
+            val safe = if (parsed.scheme == "file") {
+                androidx.core.content.FileProvider.getUriForFile(
+                    ctx,
+                    ctx.packageName + ".fileprovider",
+                    java.io.File(parsed.path ?: return),
+                )
+            } else {
+                parsed
+            }
+            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = kind.mime
+                putExtra(android.content.Intent.EXTRA_STREAM, safe)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            ctx.startActivity(android.content.Intent.createChooser(intent, "分享文件"))
+        }.onFailure { toast(ctx, "分享失败:${it.message ?: "未知错误"}") }
+    }
+
+    private fun toast(ctx: Context, msg: String) {
+        android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
     }
 
     /** 后缀 → MIME:统一由 FileKind 提供,避免两处清单走偏。 */

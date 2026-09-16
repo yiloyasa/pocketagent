@@ -1000,18 +1000,6 @@ private fun statusLabel(s: TaskCenter.Status): String = when (s) {
 }
 
 /** 分享已下载的文件(交给系统分享面板)。 */
-private fun shareLocalFile(ctx: android.content.Context, uri: String) {
-    if (uri.isEmpty()) return
-    runCatching {
-        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-            type = "*/*"
-            putExtra(android.content.Intent.EXTRA_STREAM, android.net.Uri.parse(uri))
-            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        ctx.startActivity(android.content.Intent.createChooser(intent, "分享文件"))
-    }
-}
-
 /** 删除手机上的文件(删不掉就忽略:任务项本身仍会移除)。 */
 private fun deleteLocalFile(ctx: android.content.Context, uri: String) {
     if (uri.isEmpty()) return
@@ -1543,7 +1531,7 @@ private fun UserDataPage(
                                 )
                                 IconActionButton(
                                     R.drawable.ic_lucide_share_2, "分享",
-                                    { shareLocalFile(ctx, d.localUri) },
+                                    { PaDownloader.shareLocalFile(ctx, d.localUri, d.title) },
                                     bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
                                 )
                             }

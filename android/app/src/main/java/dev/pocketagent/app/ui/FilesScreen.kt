@@ -50,6 +50,11 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.component.FileKind
+import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PreviewMode
+import dev.pocketagent.app.ui.component.fileKindOf
+import androidx.compose.ui.graphics.Color
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
@@ -76,7 +81,7 @@ fun FilesScreen(
     onOpenTerminal: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenTaskCenter: () -> Unit = {},
-    onOpenBrowser: () -> Unit = {},
+    onOpenBrowser: (String) -> Unit = {},
     /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
     onBackToHome: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
@@ -94,8 +99,10 @@ fun FilesScreen(
     var entries by remember { mutableStateOf(listOf<DirectoryEntry>()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var preview by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showCreate by remember { mutableStateOf(false) } // 新建文件/文件夹
+    // 不能内置预览的文件(旧版 Office / 压缩包 / 音视频):点它时给一个"下载到手机"的引导
+    var askDownload by remember { mutableStateOf<DirectoryEntry?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     fun loadDir(p: String) {
         loading = true
@@ -264,36 +271,23 @@ fun FilesScreen(
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
                 items(entries, key = { it.path }) { e ->
+                    val kind = if (e.isDir) null else fileKindOf(e.name)
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .background(Pa.Card, RoundedCornerShape(14.dp))
                             .clickable {
-                                if (e.isDir) loadDir(e.path) else {
-                                    scope.launch {
-                                        try {
-                                            val sb = StringBuilder()
-                                            var isText = true
-                                            withContext(Dispatchers.IO) {
-                                                val it2 = AgentConnection.fileService().readFile(
-                                                    ReadFileRequest.newBuilder()
-                                                        .setPath(e.path)
-                                                        .setMaxBytes(256 * 1024)
-                                                        .build())
-                                                while (it2.hasNext()) {
-                                                    val c = it2.next()
-                                                    if (c.totalSize > 0) isText = c.text
-                                                    if (c.text) sb.append(String(c.data.toByteArray(), Charsets.UTF_8))
-                                                }
-                                            }
-                                            preview = e.name to (if (isText) sb.toString() else "(二进制文件,不支持预览)")
-                                        } catch (ex: Exception) {
-                                            preview = e.name to "读取失败:${ex.message}"
-                                        }
-                                    }
+                                when {
+                                    e.isDir -> loadDir(e.path)
+                                    // 【能力矩阵分派】能内置渲染的一律交给内置浏览器 ——
+                                    // Office / PDF / Markdown / 图片 / 网页 都能排版展示,
+                                    // 比在这个弹层里塞纯文本好得多。
+                                    kind?.preview == PreviewMode.IN_APP -> onOpenBrowser("pc:" + e.path)
+                                    // 内置不了(旧版 Office / 压缩包 / 音视频)才引导下载
+                                    else -> askDownload = e
                                 }
                             }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
@@ -301,13 +295,39 @@ fun FilesScreen(
                                 if (e.isDir) AppR.drawable.ic_lucide_folder else AppR.drawable.ic_lucide_file_text,
                             ),
                             null,
-                            tint = if (e.isDir) Pa.Accent else Pa.TextSecondary,
+                            tint = if (e.isDir) Pa.Accent else (kind?.color ?: Pa.TextSecondary),
                             modifier = Modifier.size(20.dp),
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(e.name, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                e.name, fontSize = 14.sp, color = Pa.TextPrimary,
+                                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                            if (!e.isDir) {
+                                Text(
+                                    listOfNotNull(
+                                        formatSize(e.sizeBytes),
+                                        kind?.takeIf { it != FileKind.OTHER }?.label,
+                                        if (kind?.preview == PreviewMode.IN_APP) "可预览" else "需下载打开",
+                                    ).joinToString("  ·  "),
+                                    fontSize = 10.5.sp, color = Pa.TextTertiary, maxLines = 1,
+                                )
+                            }
+                        }
                         if (!e.isDir) {
-                            Text(formatSize(e.sizeBytes), fontSize = 11.sp, color = Pa.TextTertiary)
+                            // 每一行都能单独下载到手机(不必先进浏览器)
+                            IconActionButton(
+                                AppR.drawable.ic_lucide_download, "下载到手机",
+                                {
+                                    PaDownloader.downloadFromPc(e.path)
+                                    android.widget.Toast.makeText(
+                                        ctx, "已开始下载 " + e.name, android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
+                                bg = Color.Transparent, size = 34.dp, iconSize = 16.dp,
+                                tint = Pa.TextSecondary,
+                            )
                         }
                     }
                 }
@@ -315,23 +335,30 @@ fun FilesScreen(
         }
     }
 
-    preview?.let { (name, content) ->
+    // 不能内置预览时的引导:说清楚为什么,并给一步到位的下载动作
+    askDownload?.let { e ->
+        val k = fileKindOf(e.name)
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { preview = null },
-            title = { Text(name, fontSize = 15.sp, maxLines = 1) },
+            onDismissRequest = { askDownload = null },
+            title = { Text(e.name, fontSize = 15.sp, maxLines = 1) },
             text = {
-                // 【修复】预览可滚动
                 Text(
-                    content.take(30000),
-                    Modifier
-                        .height(420.dp)
-                        .verticalScroll(rememberScrollState()),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = Pa.TextPrimary,
+                    "${k.label} 这个格式没法在 App 内排版展示。\n" +
+                        "下载到手机后,可以用系统里对应的应用打开。",
+                    fontSize = 12.5.sp,
+                    color = Pa.TextSecondary,
                 )
             },
-            confirmButton = { TextButton(onClick = { preview = null }) { Text("关闭") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    PaDownloader.downloadFromPc(e.path)
+                    android.widget.Toast.makeText(
+                        ctx, "已开始下载 " + e.name, android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                    askDownload = null
+                }) { Text("下载到手机") }
+            },
+            dismissButton = { TextButton(onClick = { askDownload = null }) { Text("取消") } },
         )
     }
 
@@ -345,7 +372,7 @@ fun FilesScreen(
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
             onOpenTaskCenter = onOpenTaskCenter,
-            onOpenBrowser = { onOpenBrowser() },
+            onOpenBrowser = { onOpenBrowser("") },
         )
     }
 

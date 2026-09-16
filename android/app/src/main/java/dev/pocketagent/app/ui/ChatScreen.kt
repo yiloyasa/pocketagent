@@ -1378,8 +1378,8 @@ fun ChatScreen(
                                 onOpenUrl = onOpenBrowser,
                             )
                         }
-                        // 消息里如果给了电脑上的文件路径,唯一的动作是"用浏览器打开";
-                        // 「下载到手机」已收进左上角菜单 → 任务中心(用户明确要求移除)。
+                        // 消息里如果给了电脑上的文件路径,唯一的动作是"用浏览器打开"
+                        // —— 会话正文只负责展示输出;要存到手机,在浏览器顶栏点"下载到手机"。
                         val pcFiles = remember(item.text) { extractPcPaths(item.text) }
                         if (pcFiles.isNotEmpty()) {
                             pcFiles.take(3).forEach { path ->

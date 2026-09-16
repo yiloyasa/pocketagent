@@ -139,7 +139,10 @@ private fun RootNav() {
                         onOpenTerminal = { nav.navigate("terminal") },
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
-                        onOpenBrowser = { nav.navigate("browser") },
+                        // 文件浏览器现在把支持预览的文件交给内置浏览器,所以要能带地址
+                        onOpenBrowser = { url ->
+                            nav.navigate("browser?url=" + android.net.Uri.encode(url))
+                        },
                         onGoTab = { tab = it },
                         onBackToHome = backToHome,
                     )
