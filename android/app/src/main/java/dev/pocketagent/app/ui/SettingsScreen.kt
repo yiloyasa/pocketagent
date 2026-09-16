@@ -278,7 +278,7 @@ fun SettingsScreen(
         settingsError = null
         scope.launch {
             val connected = try {
-                withContext(Dispatchers.IO) { AgentConnection.connectWithFallback() }
+                withContext(Dispatchers.IO) { AgentConnection.connectWithFallback(freshChannel = true) }
             } catch (e: Exception) {
                 settingsError = "重扫失败：${e.message ?: "未知错误"}"
                 null
@@ -1395,6 +1395,18 @@ private fun UserDataPage(
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val allTasks by TaskCenter.tasks.collectAsState()
     val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
+    // 旧版本下载条目是 10 字段格式,没有 localUri → 查看/分享图标被门控隐藏。
+    // 进页面按文件名反向找回本地路径,找回后 attachLocalUriIfEmpty→persist()
+    // 会重新发射列表,图标随之出现。legacyTried 记录已尝试的 id,防止重组时反复查 MediaStore。
+    val legacyTried = remember { mutableSetOf<String>() }
+    LaunchedEffect(downloads) {
+        for (d in downloads) {
+            if (d.status != TaskCenter.Status.DONE || d.localUri.isNotEmpty()) continue
+            if (!legacyTried.add(d.id)) continue
+            val uri = withContext(Dispatchers.IO) { PaDownloader.resolveLocalUri(ctx, d.title) }
+            if (uri.isNotEmpty()) TaskCenter.attachLocalUriIfEmpty(d.id, uri)
+        }
+    }
     val connState = AgentConnection.connState.collectAsState().value
     val transport = AgentConnection.connTransport.collectAsState().value
     val connAddr = AgentConnection.connAddress.collectAsState().value

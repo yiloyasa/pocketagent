@@ -97,6 +97,20 @@ fun TaskCenterScreen(
 
     val all by TaskCenter.tasks.collectAsState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    // 旧版本下载条目无 localUri:进任务中心时按文件名找回本地路径,
+    // DONE 行的「打开文件」才能正常走 openLocalFile(列表元素原地改+persist 重发射,
+    // List.equals 按元素比较 → LaunchedEffect 不会因此重启,legacyTried 双保险防重查)。
+    val legacyTried = remember { mutableSetOf<String>() }
+    LaunchedEffect(all) {
+        for (t in all) {
+            if (t.kind != TaskCenter.Kind.DOWNLOAD || t.status != TaskCenter.Status.DONE) continue
+            if (t.localUri.isNotEmpty() || !legacyTried.add(t.id)) continue
+            val uri = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                dev.pocketagent.app.ui.component.PaDownloader.resolveLocalUri(ctx, t.title)
+            }
+            if (uri.isNotEmpty()) TaskCenter.attachLocalUriIfEmpty(t.id, uri)
+        }
+    }
 
     val running = all.count { it.status == TaskCenter.Status.RUNNING }
     val failed = all.count { it.status == TaskCenter.Status.FAILED || it.status == TaskCenter.Status.INTERRUPTED }

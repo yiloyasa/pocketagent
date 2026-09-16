@@ -30,7 +30,7 @@ enum class PreviewMode {
  * 展示标签 / 徽标配色 / 预览能力 / MIME。
  *
  * 【细分原则】同一族格式只要"能力"不同就必须拆开:
- *   .docx(能解析)与 .doc(OLE 二进制,只能交给系统)不是一回事;
+ *   .docx(能解析)与 .doc(旧版二进制,走 OfficeLegacy 提取文字)不是一回事;
  *   .xlsx(能解析)与 .xls(需要 BIFF 解析)也不是一回事。
  * label 会直接画在徽标上,控制在 6 个汉字以内。
  */
@@ -68,8 +68,8 @@ enum class FileKind(
     /** OOXML Word(.docx):解析 word/document.xml 出段落与表格。 */
     DOCX("Word", Pa.Accent, PreviewMode.IN_APP, MIME_DOCX, R.drawable.ic_lucide_file_text),
 
-    /** 旧版 Word(.doc):OLE 复合文档 + FIB/分片表,内置解析性价比极低 → 交系统应用。 */
-    DOC("Word 旧版", Pa.TextSecondary, PreviewMode.SYSTEM, "application/msword", R.drawable.ic_lucide_file_text),
+    /** 旧版 Word(.doc):OfficeLegacy 提取正文文字(OLE2 容器 + FIB/分片表),排版不还原。 */
+    DOC("Word 旧版", Pa.TextSecondary, PreviewMode.IN_APP, "application/msword", R.drawable.ic_lucide_file_text),
 
     /** RTF:剥掉控制字后按富文本段落渲染。 */
     RTF("RTF", Pa.TextSecondary, PreviewMode.IN_APP, "application/rtf", R.drawable.ic_lucide_file_text),
@@ -89,8 +89,8 @@ enum class FileKind(
     /** OOXML PowerPoint(.pptx):按页抽标题 + 正文要点(纯文本大纲,不带版式)。 */
     PPTX("演示", Pa.Yellow, PreviewMode.IN_APP, MIME_PPTX, R.drawable.ic_lucide_presentation),
 
-    /** 旧版 PowerPoint(.ppt):二进制记录流,交系统应用。 */
-    PPT("演示 旧版", Pa.Yellow, PreviewMode.SYSTEM, "application/vnd.ms-powerpoint", R.drawable.ic_lucide_presentation),
+    /** 旧版 PowerPoint(.ppt):OfficeLegacy 走记录流抽每页「标题 + 要点」,大纲预览。 */
+    PPT("演示 旧版", Pa.Yellow, PreviewMode.IN_APP, "application/vnd.ms-powerpoint", R.drawable.ic_lucide_presentation),
 
     /** OpenDocument 演示(.odp)。 */
     ODP("演示", Pa.Yellow, PreviewMode.IN_APP, MIME_ODP, R.drawable.ic_lucide_presentation),

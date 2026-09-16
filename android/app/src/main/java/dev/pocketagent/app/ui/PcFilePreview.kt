@@ -24,8 +24,8 @@ import java.util.zip.ZipInputStream
  * 【文字必须完整】之前 td 上写了 max-width + ellipsis,长文本被截成"…2…"。
  * 现在换行显示,配合横向滚动容器。
  *
- * 【覆盖矩阵】xlsx / xls / ods / csv / tsv → 表格;docx / odt / rtf → 文档;
- * pptx / odp → 演示大纲;pdf → 逐页位图;zip / jar → 条目列表;
+ * 【覆盖矩阵】xlsx / xls / ods / csv / tsv → 表格;docx / doc / odt / rtf → 文档;
+ * pptx / ppt / odp → 演示大纲;pdf → 逐页位图;zip / jar → 条目列表;
  * md / txt / json / xml / 源码 → 排版页 / 等宽页;html / 图片 → WebView 原生渲染。
  */
 object PcFilePreview {
@@ -58,6 +58,8 @@ object PcFilePreview {
             n.endsWith(".xls") -> guard(pal) { xls(bytes, pal) }
             n.endsWith(".ods") || n.endsWith(".fods") -> guard(pal) { odf(bytes, pal) }
             n.endsWith(".docx") || n.endsWith(".docm") -> guard(pal) { docx(bytes, pal) }
+            n.endsWith(".doc") || n.endsWith(".dot") -> guard(pal) { docLegacy(bytes, pal) }
+            n.endsWith(".ppt") -> guard(pal) { pptLegacy(bytes, pal) }
             n.endsWith(".rtf") -> guard(pal) { rtf(bytes, pal) }
             n.endsWith(".odt") || n.endsWith(".fodt") -> guard(pal) { odf(bytes, pal) }
             n.endsWith(".pptx") || n.endsWith(".pptm") -> guard(pal) { pptx(bytes, pal) }
@@ -77,7 +79,7 @@ object PcFilePreview {
     fun isBinary(fileName: String): Boolean {
         val ext = fileName.substringAfterLast('.', "").lowercase()
         return ext in setOf(
-            "doc", "ppt", "dot", "apk", "apks", "xapk", "exe", "dll", "so", "dylib",
+            "apk", "apks", "xapk", "exe", "dll", "so", "dylib",
             "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "class", "db", "sqlite",
             "mp3", "wav", "flac", "aac", "ogg", "m4a", "mp4", "mkv", "mov", "avi", "webm",
             "psd", "ttf", "otf", "woff", "woff2", "bin", "dat", "pak",
@@ -973,6 +975,55 @@ object PcFilePreview {
             val m = if (i in 0x80..0x9F) map[i - 0x80] else i
             (if (m < 0) i else m).toChar()
         }
+    }
+
+    // ---------------------------------------------------------------- DOC / PPT(97-2003 旧版)
+
+    /** 单个旧版 Word 最多渲染多少段。 */
+    private const val MAX_DOC_PARAS = 1500
+
+    /** .doc:OfficeLegacy 提取正文文字,按文档页渲染;解析不了给可读错误页(还能下载后交系统打开)。 */
+    private fun docLegacy(bytes: ByteArray, pal: Pal): String {
+        val paras = OfficeLegacy.docParagraphs(bytes)
+            ?: return errorHtml("不是可识别的 Word 97-2003 文档(或已加密),可下载后用系统应用打开", pal)
+        val sb = StringBuilder(header("文档预览", pal))
+        sb.append("""<div class="doc">""")
+        var shown = 0
+        for (p in paras) {
+            if (shown >= MAX_DOC_PARAS) break
+            sb.append("<p>").esc(p).append("</p>")
+            shown++
+        }
+        sb.append("</div>")
+        if (paras.size > shown) sb.append(note("正文较长,只显示前 $shown 段", pal))
+        sb.append(note("旧版 Word 按纯文字提取,不含图片、表格线与排版。", pal))
+        return sb.toString()
+    }
+
+    /** .ppt:每页抽「标题 + 要点」,复用 pptx 的幻灯片卡片样式。 */
+    private fun pptLegacy(bytes: ByteArray, pal: Pal): String {
+        val slides = OfficeLegacy.pptSlides(bytes)
+            ?: return errorHtml("不是可识别的 PowerPoint 97-2003 文档(或已加密),可下载后用系统应用打开", pal)
+        if (slides.isEmpty()) return errorHtml("幻灯片里没有可提取的文字(可能是纯图片版式)", pal)
+        val sb = StringBuilder(header("演示文稿预览", pal))
+        sb.append("""<div class="doc">""")
+        var shown = 0
+        for ((i, s) in slides.withIndex()) {
+            if (shown >= MAX_SLIDES) break
+            shown++
+            sb.append("""<div class="slide"><div class="slideno">第 """).append(i + 1).append(" 页</div>")
+            if (s.title.isNotBlank()) sb.append("""<div class="slidetitle">""").esc(s.title).append("</div>")
+            if (s.bullets.isNotEmpty()) {
+                sb.append("<ul>")
+                s.bullets.forEach { sb.append("<li>").esc(it).append("</li>") }
+                sb.append("</ul>")
+            }
+            sb.append("</div>")
+        }
+        sb.append("</div>")
+        if (slides.size > shown) sb.append(note("只显示前 $shown 页", pal))
+        sb.append(note("演示文稿按「标题 + 要点」提取文字,不含图片、图表与动画。", pal))
+        return sb.toString()
     }
 
     // ---------------------------------------------------------------- PPTX

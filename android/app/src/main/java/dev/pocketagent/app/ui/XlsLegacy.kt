@@ -7,7 +7,7 @@ package dev.pocketagent.app.ui
  * 用户遇到老文件就只剩"下载后用 WPS 打开"一条路,和 .xlsx 的体验落差太大。
  *
  * 【两层结构】
- *  1. [Cfb] —— OLE2 复合文档(CFB)读取器:定位并取出内部的 "Workbook" 流;
+ *  1. [CfbReader] —— OLE2 复合文档(CFB)读取器:定位并取出内部的 "Workbook" 流;
  *  2. [biffSheets] —— BIFF8 记录流解析:BOF/BOUNDSHEET/SST/LABELSST/NUMBER/RK/MULRK/
  *     FORMULA/BOOLERR → 单元格矩阵。
  *
@@ -23,10 +23,23 @@ internal object XlsLegacy {
 
     /** @return 解析结果;null 表示不是可识别的 BIFF 工作簿。 */
     fun parse(bytes: ByteArray, maxRows: Int): List<Sheet>? = runCatching {
-        val cfb = Cfb(bytes)
+        val cfb = CfbReader(bytes)
         val stream = cfb.openStream("Workbook") ?: cfb.openStream("Book") ?: return null
-        biffSheets(stream, maxRows)
+        biffSheets(scanForWorkbook(stream), maxRows)
     }.getOrNull()
+
+    /** 少数文件把 xls 包在别的流里:扫 BOF(0x0809) 找 Workbook 全局子流。 */
+    private fun scanForWorkbook(b: ByteArray): ByteArray {
+        var p = 0
+        while (p + 8 < b.size) {
+            if (u16At(b, p) == 0x0809) {
+                val ver = u16At(b, p + 4)
+                if (ver == 0x0600 || ver == 0x0500) return b.copyOfRange(p, b.size)
+            }
+            p += 128
+        }
+        return b
+    }
 
     // ------------------------------------------------------------------ BIFF8
 
@@ -391,187 +404,5 @@ internal object XlsLegacy {
         )
         val mapped = if (cp in 0x80..0x9F) map[cp - 0x80] else cp
         (if (mapped < 0) cp else mapped).toChar()
-    }
-
-    // ------------------------------------------------------------------ OLE2 / CFB
-
-    /**
-     * OLE2 复合文档读取器(MS-CFB)。
-     * 只需要"按名字取出一个流",所以省掉了写支持与目录树遍历 —— 直接扫平铺的目录项。
-     */
-    private class Cfb(private val d: ByteArray) {
-        private val sectorSize: Int
-        private val miniSectorSize: Int
-        private val miniCutoff: Int
-        private val fat: IntArray
-        private val miniFat: IntArray
-        private val entries = ArrayList<Entry>()
-        private val miniStream: ByteArray
-
-        class Entry(val name: String, val type: Int, val start: Int, val size: Long)
-
-        init {
-            require(d.size >= 512) { "文件太小" }
-            val magic = intArrayOf(0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1)
-            for (k in magic.indices) require((d[k].toInt() and 0xFF) == magic[k]) { "不是 OLE2 复合文档" }
-            val sShift = u16(0x1E)
-            require(sShift in 7..12) { "非法扇区大小" }
-            sectorSize = 1 shl sShift
-            miniSectorSize = 1 shl u16(0x20)
-            miniCutoff = i32(0x38)
-            val fatCount = i32(0x2C)
-            val dirStart = i32(0x30)
-            val miniFatStart = i32(0x3C)
-            val miniFatCount = i32(0x40)
-            val difatStart = i32(0x44)
-            val difatCount = i32(0x48)
-
-            // ---- DIFAT → FAT 扇区列表 ----
-            val fatSecs = ArrayList<Int>()
-            for (k in 0 until 109) {
-                val sid = i32(0x4C + k * 4)
-                if (sid >= 0) fatSecs.add(sid)
-            }
-            var difat = difatStart
-            var guard = 0
-            while (difat >= 0 && guard++ <= difatCount + 1) {
-                val base = sectorOffset(difat)
-                val per = sectorSize / 4 - 1
-                for (k in 0 until per) {
-                    val sid = i32(base + k * 4)
-                    if (sid >= 0) fatSecs.add(sid)
-                }
-                difat = i32(base + per * 4)
-            }
-
-            // ---- FAT ----
-            val per = sectorSize / 4
-            val fatArr = IntArray(maxOf(0, fatCount) * per)
-            var w = 0
-            for (s in fatSecs) {
-                if (w + per > fatArr.size) break
-                val base = sectorOffset(s)
-                for (k in 0 until per) fatArr[w++] = i32(base + k * 4)
-            }
-            fat = fatArr
-
-            // ---- MiniFAT ----
-            val mf = ArrayList<Int>()
-            if (miniFatStart >= 0 && miniFatCount > 0) {
-                for (s in chain(miniFatStart, -1)) {
-                    val base = sectorOffset(s)
-                    for (k in 0 until per) mf.add(i32(base + k * 4))
-                }
-            }
-            miniFat = mf.toIntArray()
-
-            // ---- 目录项 ----
-            val dirBytes = readChain(dirStart, -1)
-            var p = 0
-            while (p + 128 <= dirBytes.size) {
-                val nameLen = u16At(dirBytes, p + 0x40)
-                val type = dirBytes[p + 0x42].toInt() and 0xFF
-                val start = i32At(dirBytes, p + 0x74)
-                val size = i64At(dirBytes, p + 0x78)
-                if (type != 0 && nameLen in 2..64) {
-                    val nm = String(dirBytes, p, nameLen - 2, Charsets.UTF_16LE)
-                    entries.add(Entry(nm, type, start, size))
-                }
-                p += 128
-            }
-
-            // ---- 迷你流(根目录项描述的流) ----
-            val root = entries.firstOrNull { it.type == 5 }
-            miniStream = if (root != null && root.size > 0) readChain(root.start, root.size) else ByteArray(0)
-        }
-
-        fun openStream(name: String): ByteArray? {
-            val e = entries.firstOrNull { it.name.equals(name, ignoreCase = true) && it.type == 2 } ?: return null
-            val s = if (e.size < miniCutoff) readMini(e.start, e.size) else readChain(e.start, e.size)
-            return if (name.equals("Workbook", true) && s.size > 8 && u16At(s, 0) != 0x0809) {
-                // 极少数文件把 xls 包在别的流里,做一次浅层兜底扫描
-                scanForWorkbook(s)
-            } else {
-                s
-            }
-        }
-
-        /** 在流内部扫 BOF(0x0809) 记录,找 Workbook 全局子流。 */
-        private fun scanForWorkbook(b: ByteArray): ByteArray {
-            var p = 0
-            while (p + 8 < b.size) {
-                if (u16At(b, p) == 0x0809) {
-                    val ver = u16At(b, p + 4)
-                    if (ver == 0x0600 || ver == 0x0500) return b.copyOfRange(p, b.size)
-                }
-                p += 128
-            }
-            return b
-        }
-
-        private fun sectorOffset(sid: Int): Int = 512 + sid * sectorSize
-
-        /** 沿 FAT 链读取(limit<0 表示读到链尾)。 */
-        private fun chain(start: Int, limit: Long): List<Int> {
-            val out = ArrayList<Int>()
-            var sid = start
-            var guard = 0
-            val budget = if (limit > 0) ((limit / sectorSize) + 2) else Int.MAX_VALUE.toLong()
-            while (sid >= 0 && sid < fat.size && guard++ < 1_000_000 && out.size <= budget) {
-                out.add(sid)
-                sid = fat[sid]
-            }
-            return out
-        }
-
-        private fun readChain(start: Int, size: Long): ByteArray {
-            val secs = chain(start, size)
-            val bos = java.io.ByteArrayOutputStream()
-            for (s in secs) {
-                val base = sectorOffset(s)
-                if (base < 0 || base >= d.size) break
-                bos.write(d, base, minOf(sectorSize, d.size - base))
-                if (size > 0 && bos.size() >= size) break
-            }
-            val b = bos.toByteArray()
-            return if (size in 1..b.size.toLong()) b.copyOf(size.toInt()) else b
-        }
-
-        private fun readMini(start: Int, size: Long): ByteArray {
-            val bos = java.io.ByteArrayOutputStream()
-            var sid = start
-            var guard = 0
-            val limit = (size / miniSectorSize + 2).toInt()
-            while (sid >= 0 && sid < miniFat.size && guard++ < 1_000_000 && guard <= limit) {
-                val base = sid * miniSectorSize
-                if (base >= miniStream.size) break
-                bos.write(miniStream, base, minOf(miniSectorSize, miniStream.size - base))
-                if (bos.size() >= size) break
-                sid = miniFat[sid]
-            }
-            val b = bos.toByteArray()
-            return if (size in 1..b.size.toLong()) b.copyOf(size.toInt()) else b
-        }
-
-        private fun u16(o: Int) = u16At(d, o)
-        private fun i32(o: Int) = i32At(d, o)
-
-        private fun u16At(b: ByteArray, o: Int): Int =
-            if (o + 1 < b.size) (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) else -1
-
-        private fun i32At(b: ByteArray, o: Int): Int =
-            if (o + 3 < b.size) {
-                (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or
-                    ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
-            } else {
-                -1
-            }
-
-        private fun i64At(b: ByteArray, o: Int): Long {
-            if (o + 7 >= b.size) return -1
-            var v = 0L
-            for (k in 7 downTo 0) v = (v shl 8) or (b[o + k].toLong() and 0xFF)
-            return v
-        }
     }
 }

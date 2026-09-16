@@ -258,6 +258,42 @@ object PaDownloader {
     }
 
     /**
+     * 按文件名在「下载/PocketAgent」里找回文件 —— 旧版本的历史条目没存 localUri
+     * (早期 finishDownload 不落盘这个字段),但文件多半还躺在原处。
+     * 找到就返回可打开的 URI(条目由调用方补回,查看/分享图标随之恢复);
+     * 找不到(已删除/改名)返回空串。同名多个时取最近添加的一个。
+     */
+    fun resolveLocalUri(ctx: Context, fileName: String): String {
+        if (fileName.isBlank()) return ""
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val sel =
+                    "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH}=?"
+                ctx.contentResolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.MediaColumns._ID),
+                    sel,
+                    arrayOf(fileName, Environment.DIRECTORY_DOWNLOADS + "/PocketAgent/"),
+                    MediaStore.MediaColumns.DATE_ADDED + " DESC",
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        val id = c.getLong(0)
+                        android.content.ContentUris
+                            .withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                            .toString()
+                    } else {
+                        ""
+                    }
+                } ?: ""
+            } else {
+                val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                val f = dir?.let { java.io.File(it, fileName) }
+                if (f != null && f.exists()) android.net.Uri.fromFile(f).toString() else ""
+            }
+        }.getOrDefault("")
+    }
+
+    /**
      * 分享手机上的文件。
      * 【为什么不用 FileProvider 转一道】下载走的是 MediaStore,拿到的已经是
      * `content://media/...` 这种可授权的 URI,直接带上读权限即可;

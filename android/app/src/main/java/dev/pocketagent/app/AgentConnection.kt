@@ -229,10 +229,15 @@ object AgentConnection {
      * 其余候选用 [REMOTE_TIMEOUT_MS]:蜂窝下 Tailscale 走境外 DERP 中继,
      * TCP 建立可能 3-5 秒,超时取短了会误判成「连不上」。
      */
-    fun connectWithFallback(): pocketagent.v1.HostInfo? {
+    fun connectWithFallback(freshChannel: Boolean = false): pocketagent.v1.HostInfo? {
         val cands = candidateAddresses()
         var lastFailure: ConnectionDiagnostic? = null
         connState.value = "checking"
+        // freshChannel=true(连接已判死/用户显式重试):强制丢弃旧通道再回退。
+        // OkHttp 半死态:daemon 被反复杀死后通道对象未 shutdown、判活认为健康,
+        // 但底层连接已坏不再自愈;候选地址没变时旧逻辑会复用死通道 → 只能冷启动恢复。
+        // 默认 false:HomeScreen 等导航刷新不动可能仍在服务的通道。
+        if (freshChannel) recycleChannel("回退连接前强制重建传输")
         for (cand in cands) {
             try {
                 if (cand != address) {
@@ -494,6 +499,22 @@ object AgentConnection {
         }
     }
 
+    /**
+     * 无条件丢弃当前 gRPC 通道,下次 [channel] 调用时重建全新传输。
+     * 治愈 OkHttp 传输的 UNAVAILABLE 半死态:daemon 被反复杀死后,通道对象本身
+     * 未 shutdown/terminated([channel] 的判活认为它健康),但底层连接已坏且不再
+     * 重试;[shutdown] 又只在「地址变化」时才被调用,候选地址不变时这条死通道
+     * 会被一直复用,表现为 UNAVAILABLE 直到冷启动。回退连接前调用本函数即可自愈。
+     */
+    fun recycleChannel(reason: String) {
+        synchronized(this) {
+            val old = channel ?: return
+            channel = null
+            Log.w(TAG, "回收 gRPC 通道: $reason")
+            old.shutdownNow()
+        }
+    }
+
     // ================= 自动重连 =================
     // 拔 USB/WiFi 抖动/Tailscale 重连后,app 之前只会显示"未连接"等手动重试。
     // 这里在后台周期探活:断了就走多候选回退(127.0.0.1 USB→Tailscale),
@@ -536,7 +557,7 @@ object AgentConnection {
                 } else {
                     wasDown = true
                     connState.value = "down"
-                    if (connectWithFallback() != null) {
+                    if (connectWithFallback(freshChannel = true) != null) {
                         // connectWithFallback 已经完成一次断→通状态切换；
                         // 下一轮探活只需保持已恢复状态，避免重复刷新页面。
                         connectionEpoch.value += 1

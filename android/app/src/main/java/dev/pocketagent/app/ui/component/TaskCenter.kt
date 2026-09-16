@@ -163,6 +163,19 @@ object TaskCenter {
         persist()
     }
 
+    /**
+     * 旧版条目补文件位置:早期版本 localUri 不落盘,升级后历史条目全都丢了
+     * "文件在哪" —— 查看/分享图标因此集体消失。按文件名在「下载/PocketAgent」
+     * 里找回来后调用这里,**只填空值**(不覆盖新版本的真相)。
+     */
+    fun attachLocalUriIfEmpty(id: String, uri: String) {
+        if (uri.isEmpty()) return
+        val t = _tasks.value.firstOrNull { it.id == id } ?: return
+        if (t.localUri.isNotEmpty()) return
+        t.localUri = uri
+        persist()
+    }
+
     // ---------------------------------------------------------------- 已读与检索
 
     fun markRead(id: String) {
@@ -264,7 +277,18 @@ object TaskCenter {
     private fun restore() {
         val p = prefs ?: return
         val raw = p.getString("tasks", "") ?: ""
-        val list = raw.split("\n").mapNotNull { line ->
+        _tasks.value = parseTasks(raw)
+        // 未读数以持久化值为准(任务清单可能被裁剪)
+        _unreadCount.value = maxOf(p.getInt("unread", 0), _tasks.value.count { !it.read })
+    }
+
+    /**
+     * 持久化文本 → 任务清单(纯函数,单测直接喂旧格式)。
+     * 【向后兼容】10 字段是 localUri 落盘前的旧格式;11-13 字段(来源会话/大小)
+     * 逐个可缺 —— `getOrNull + orEmpty`,老行不丢,新字段缺席也不炸。
+     */
+    internal fun parseTasks(raw: String): List<Task> =
+        raw.split("\n").mapNotNull { line ->
             if (line.isBlank()) return@mapNotNull null
             val f = line.split("\u0001")
             if (f.size < 10) return@mapNotNull null
@@ -288,8 +312,4 @@ object TaskCenter {
                 )
             }.getOrNull()
         }
-        _tasks.value = list
-        // 未读数以持久化值为准(任务清单可能被裁剪)
-        _unreadCount.value = maxOf(p.getInt("unread", 0), list.count { !it.read })
-    }
 }

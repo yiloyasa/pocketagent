@@ -377,7 +377,7 @@ object TurnSession {
                 if (recovered) break
                 delay(if (i == 0) 800 else 5000)
                 val snapshot = try {
-                    if (AgentConnection.connectWithFallback() == null) continue
+                    if (AgentConnection.connectWithFallback(freshChannel = true) == null) continue
                     val history = AgentConnection.threadService().getThreadHistory(
                         GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build(),
                     ).messagesList
