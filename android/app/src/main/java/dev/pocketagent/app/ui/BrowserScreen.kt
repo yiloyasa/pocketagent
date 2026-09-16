@@ -111,11 +111,16 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         val mLower = mime.lowercase()
         when {
             mLower.startsWith("text/markdown") || lower.endsWith(".md") || lower.endsWith(".markdown") ->
-                renderLocal(PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name), name)
+                renderLocal(
+                    PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name, Pa.IsDark),
+                    name,
+                )
             mLower.startsWith("image/") || lower.endsWith(".png") || lower.endsWith(".jpg") ||
                 lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") ->
                 renderLocal(
-                    "<body style=\"margin:0;background:#0b0b0d;display:flex;align-items:center;" +
+                    "<body style=\"margin:0;background:" +
+                        (if (Pa.IsDark) "#0b0b0d" else "#ffffff") +
+                        ";display:flex;align-items:center;" +
                         "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
                         "max-height:100vh\" src=\"data:image/png;base64," +
                         android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP) +
@@ -125,11 +130,12 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
             mLower.startsWith("text/html") || lower.endsWith(".html") || lower.endsWith(".htm") ->
                 renderLocal(String(bytes, Charsets.UTF_8), name)
             else -> {
-                val structured = PcFilePreview.render(ctx, lower, bytes)
+                // 【预览配色跟主题走】否则浅色主题下打开文件,预览却是黑底
+                val structured = PcFilePreview.render(ctx, lower, bytes, Pa.IsDark)
                 when {
                     structured != null -> renderLocal(structured, name)
                     PcFilePreview.isBinary(lower) || mLower.endsWith("octet-stream") ->
-                        renderLocal(binaryPage(name, bytes.size.toLong()), name)
+                        renderLocal(binaryPage(name, bytes.size.toLong(), pcPath.isNotEmpty()), name)
                     else -> renderLocal(textPage(String(bytes, Charsets.UTF_8)), name)
                 }
             }
@@ -409,12 +415,37 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
                     settings.textZoom = 100
-                    setBackgroundColor(0xFF0B0B0D.toInt())
+                    setBackgroundColor(if (Pa.IsDark) 0xFF0B0B0D.toInt() else 0xFFFFFFFF.toInt())
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
                             request: android.webkit.WebResourceRequest,
-                        ): Boolean = false // 站内跳转都留在内置浏览器
+                        ): Boolean {
+                            // 【页内动作按钮】二进制提示页把「下载到手机 / 用系统应用打开」
+                            // 做成链接,靠这个伪协议回传给原生层执行 —— 否则用户只能看着
+                            // 一句"不支持预览"和一个死掉的下载图标。
+                            val url = request.url.toString()
+                            if (!url.startsWith("pa-action://")) return false
+                            when (url.removePrefix("pa-action://")) {
+                                "download" -> {
+                                    if (pcPath.isNotEmpty()) {
+                                        PaDownloader.downloadFromPc(pcPath, pageTitle)
+                                        android.widget.Toast.makeText(
+                                            ctx, "已开始下载到手机", android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                                "open" -> {
+                                    PaDownloader.openLocalFile(
+                                        ctx = ctx,
+                                        uri = localUri,
+                                        title = pageTitle,
+                                        onOpenInBrowser = null,
+                                    )
+                                }
+                            }
+                            return true
+                        }
 
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                             if (isRemote(url)) {
@@ -559,63 +590,102 @@ private fun extForMime(mime: String): String = when {
     }
 }
 
+/** 内置页面(起始页 / 失败页 / 纯文本 / 二进制提示)的配色 —— 统一跟 App 主题走。
+ *
+ *  【为什么单独抽出来】这几个页面原本各自写死黑底浅字,浅色主题下点开文件会突然变黑,
+ *  和系统里的查看器一对比就像两个 App。现在所有内置页共用一套取值,只改一处。 */
+private class Pal(
+    val bg: String, val fg: String, val heading: String,
+    val muted: String, val subtle: String, val card: String, val hint: String,
+)
+
+private fun pal(): Pal = if (Pa.IsDark) Pal(
+    bg = "#0b0b0d", fg = "#e6e6e6", heading = "#ffffff",
+    muted = "#b9b9c0", subtle = "#9a9aa2", card = "#17171a", hint = "#7a7a82",
+) else Pal(
+    bg = "#ffffff", fg = "#1c1c1e", heading = "#111113",
+    muted = "#5f5f68", subtle = "#75757e", card = "#f4f4f6", hint = "#8e8e96",
+)
+
 /** 起始页:不再是一张白纸。 */
-private fun startPage(): String = """
-    <body style="margin:0;background:#0b0b0d;color:#e6e6e6;font:14px/1.7 system-ui,-apple-system,sans-serif">
+private fun startPage(): String {
+    val p = pal()
+    return """
+    <body style="margin:0;background:${p.bg};color:${p.fg};font:14px/1.7 system-ui,-apple-system,sans-serif">
       <div style="padding:22px 18px">
-        <div style="font-size:19px;font-weight:600;color:#ffffff">内置浏览器</div>
-        <div style="color:#9a9aa2;margin-top:6px;font-size:12.5px">
+        <div style="font-size:19px;font-weight:600;color:${p.heading}">内置浏览器</div>
+        <div style="color:${p.subtle};margin-top:6px;font-size:12.5px">
           会话里 agent 生成的网页、报告、图片都在这台电脑上,可以直接在 App 内打开。
         </div>
-        <div style="margin-top:18px;background:#17171a;border-radius:14px;padding:14px">
+        <div style="margin-top:18px;background:${p.card};border-radius:14px;padding:14px">
           <div style="color:#4c8dff;font-weight:600;font-size:13px">怎么用</div>
-          <div style="margin-top:8px;color:#b9b9c0;font-size:12.5px">
+          <div style="margin-top:8px;color:${p.muted};font-size:12.5px">
             · 在会话里点那条文件路径,自动在这里打开<br>
             · 也可以把路径粘到上面的地址栏,例如
-              <span style="color:#e6e6e6">G:\试验区\heart-site\index.html</span><br>
+              <span style="color:${p.fg}">G:\试验区\heart-site\index.html</span><br>
             · 公网地址直接输入,或用它搜索
           </div>
         </div>
       </div>
     </body>
 """.trimIndent()
+}
 
 /** 失败页:明确告诉用户哪一步失败了。 */
-private fun errorPage(target: String, reason: String): String = """
-    <body style="margin:0;background:#0b0b0d;color:#e6e6e6;font:14px/1.7 system-ui,-apple-system,sans-serif">
+private fun errorPage(target: String, reason: String): String {
+    val p = pal()
+    return """
+    <body style="margin:0;background:${p.bg};color:${p.fg};font:14px/1.7 system-ui,-apple-system,sans-serif">
       <div style="padding:22px 18px">
         <div style="color:#ff6b6b;font-size:17px;font-weight:600">打不开这个页面</div>
-        <div style="margin-top:10px;color:#b9b9c0;font-size:13px">${escapeHtml(reason)}</div>
-        <div style="margin-top:14px;background:#17171a;border-radius:12px;padding:12px;
-                    font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:#9a9aa2">
+        <div style="margin-top:10px;color:${p.muted};font-size:13px">${escapeHtml(reason)}</div>
+        <div style="margin-top:14px;background:${p.card};border-radius:12px;padding:12px;
+                    font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:${p.subtle}">
           ${escapeHtml(target)}
         </div>
-        <div style="margin-top:14px;color:#7a7a82;font-size:12px">
+        <div style="margin-top:14px;color:${p.hint};font-size:12px">
           若这是电脑上的文件,请确认路径存在、且电脑端 agent 正在运行。
         </div>
       </div>
     </body>
 """.trimIndent()
+}
 
 /** 纯文本页(等宽、可换行)。 */
-private fun textPage(text: String): String =
-    "<body style=\"margin:0;background:#0b0b0d;color:#e6e6e6;" +
+private fun textPage(text: String): String {
+    val p = pal()
+    return "<body style=\"margin:0;background:${p.bg};color:${p.fg};" +
         "font:13px/1.6 ui-monospace,Menlo,Consolas,monospace\"><pre style=\"" +
         "white-space:pre-wrap;word-break:break-word;padding:14px;margin:0\">" +
         escapeHtml(text) + "</pre></body>"
+}
 
-/** 二进制文件提示页:不再把乱码倒进 <pre>。 */
-private fun binaryPage(name: String, size: Long): String = """
-    <body style="margin:0;background:#0b0b0d;color:#e6e6e6;font:14px/1.7 system-ui,-apple-system,sans-serif">
-      <div style="padding:22px 18px">
-        <div style="font-size:17px;font-weight:600;color:#ffffff">这个格式不适合在线预览</div>
-        <div style="margin-top:10px;color:#b9b9c0;font-size:13px">
-          ${escapeHtml(name)}($size)是二进制文件(老版 Office/PDF/压缩包等),
-          在浏览器里只能看到乱码。可以下载到手机后用对应应用打开。
+/** 二进制文件提示页:不只说「不行」,还把下一步动作直接给出来。 */
+private fun binaryPage(name: String, size: Long, canDownload: Boolean): String {
+    val p = pal()
+    val btn = "display:inline-block;padding:11px 18px;border-radius:12px;" +
+        "font-size:14px;font-weight:600;text-decoration:none;margin:0 10px 10px 0"
+    val buttons = buildString {
+        if (canDownload) {
+            append("<a style=\"" + btn + ";background:#4a9dff;color:#ffffff\" " +
+                "href=\"pa-action://download\">下载到手机</a>")
+        }
+        append("<a style=\"" + btn + ";background:${p.card};color:${p.fg}\" " +
+            "href=\"pa-action://open\">用系统应用打开</a>")
+    }
+    return """
+    <body style="margin:0;background:${p.bg};color:${p.fg};font:14px/1.7 system-ui,-apple-system,sans-serif">
+      <div style="padding:26px 18px">
+        <div style="font-size:17px;font-weight:600;color:${p.heading}">这个格式不适合在线预览</div>
+        <div style="margin-top:10px;color:${p.muted};font-size:13px">
+          ${escapeHtml(name)}( ${humanSize(size)} ) 是二进制文件(安装包 / 老版 Office / 压缩包等),
+          在浏览器里只能看到乱码。下载到手机后用对应应用打开,或直接交给手机上已装的应用。
         </div>
+        <div style="margin-top:22px">$buttons</div>
       </div>
     </body>
-""".trimIndent().replace("($size)", "( ${humanSize(size)} )")
+    """.trimIndent()
+}
 
 private fun escapeHtml(s: String): String = s
     .replace("&", "&amp;")

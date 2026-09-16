@@ -89,6 +89,24 @@ private val OTHER_AGENT_OPTIONS = listOf(
 /** agent id → 展示名(二级页标题、agent 列表共用)。 */
 private val AGENT_DISPLAY = (listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS).toMap()
 
+/**
+ * agent id → 品牌图标:与主页网格用的是**同一组 drawable**,
+ * 不再用 cpu 线性图标占位(用户反馈:设置里的 Agent 图标和主页对不上)。
+ * 主页叫 claude-code,这里历史上叫 claude,两个 id 都映射到同一张图。
+ */
+private val AGENT_ICON = mapOf(
+    "codex" to R.drawable.agent_codex,
+    "opencode" to R.drawable.agent_opencode,
+    "claude" to R.drawable.agent_claudecode,
+    "claude-code" to R.drawable.agent_claudecode,
+    "pi" to R.drawable.agent_pi,
+    "hermes" to R.drawable.agent_hermes,
+    "dsh" to R.drawable.agent_dsh,
+    "zcode" to R.drawable.agent_zcode,
+)
+
+private fun agentIcon(id: String): Int? = AGENT_ICON[id]
+
 private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
 
 /**
@@ -552,20 +570,20 @@ fun SettingsScreen(
 @Composable
 private fun GroupLabel(icon: Int, title: String) {
     Row(
-        Modifier.padding(start = 18.dp, top = 12.dp, bottom = 7.dp),
+        Modifier.padding(start = 14.dp, top = 18.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(icon), null,
-            tint = Pa.TextTertiary,
-            modifier = Modifier.size(13.dp),
+            tint = Pa.TextSecondary,
+            modifier = Modifier.size(15.dp),
         )
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(7.dp))
         Text(
             title,
-            fontSize = 12.sp,
-            color = Pa.TextTertiary,
-            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+            color = Pa.TextSecondary,
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -796,7 +814,10 @@ private fun AgentPage(
                 SettingRow(
                     title = name,
                     desc = if (runningAgent == id) "当前运行中" else "点击切换到此 Agent",
-                    icon = R.drawable.ic_lucide_cpu,
+                    // 品牌图标原样显示(不染灰),尺寸大一档与 14sp 标题对齐
+                    icon = agentIcon(id),
+                    iconTint = null,
+                    iconSize = 22.dp,
                     chevron = true,
                     divider = i != agentChoices.lastIndex,
                     onClick = {
@@ -1274,6 +1295,10 @@ fun SettingRow(
     divider: Boolean = false,
     /** 行首小图标(参考主流设置页:每行一个线性图标,便于扫读)。 */
     icon: Int? = null,
+    /** 图标着色。传 null 表示原样显示(用于 Agent 品牌 PNG,不能被染成灰色)。 */
+    iconTint: Color? = Pa.TextSecondary,
+    /** 图标尺寸;品牌图标比 17dp 的线性图标大一档才协调。 */
+    iconSize: androidx.compose.ui.unit.Dp = 17.dp,
     /** 右侧"当前值"文字(如 深色 / 简体中文 / v0.1.0),点击行时一眼看到现状。 */
     value: String? = null,
     /** 行尾 chevron,表示"点进去还有内容"。 */
@@ -1287,24 +1312,24 @@ fun SettingRow(
             Modifier
                 .fillMaxWidth()
                 .then(if (onClick != null) Modifier.pressable(haptic = true) { onClick() } else Modifier)
-                .padding(vertical = 13.dp),
+                .padding(vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (icon != null) {
                 Icon(
                     painterResource(icon), null,
-                    tint = Pa.TextSecondary,
-                    modifier = Modifier.size(17.dp),
+                    tint = iconTint ?: Color.Unspecified,
+                    modifier = Modifier.size(iconSize),
                 )
                 Spacer(Modifier.width(12.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1)
+                Text(title, fontSize = 15.sp, color = Pa.TextPrimary, maxLines = 1)
                 if (desc.isNotEmpty()) {
                     Text(
                         desc,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 10.5.sp,
+                        fontSize = 12.sp,
                         color = Pa.TextTertiary,
                         maxLines = 2,
                     )
@@ -1314,7 +1339,7 @@ fun SettingRow(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     value,
-                    fontSize = 12.5.sp,
+                    fontSize = 13.5.sp,
                     color = Pa.TextTertiary,
                     maxLines = 1,
                 )
@@ -1469,7 +1494,7 @@ private fun UserDataPage(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Icon(
-                                    painterResource(R.drawable.ic_lucide_file_text), null,
+                                    painterResource(kind.iconRes), null,
                                     tint = kind.color,
                                     modifier = Modifier.size(16.dp),
                                 )

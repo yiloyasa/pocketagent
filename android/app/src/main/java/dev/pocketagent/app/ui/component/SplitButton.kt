@@ -75,7 +75,7 @@ fun SplitButton(
     // chevron_right 旋转 90° 即指向下;展开时转到 270° 指向上
     val chevron by animateFloatAsState(if (open) 270f else 90f, tween(180), label = "chevron")
     val density = LocalDensity.current
-    val buttonHeight = if (compact) 34.dp else 52.dp
+    val buttonHeight = if (compact) 34.dp else 48.dp
     val corner = if (compact) RoundedCornerShape(10.dp) else RoundedCornerShape(14.dp)
     val menuTopPx = with(density) { (buttonHeight + 6.dp).roundToPx() }
 
@@ -101,7 +101,7 @@ fun SplitButton(
                 Column(if (compact) Modifier else Modifier.weight(1f)) {
                     Text(
                         label,
-                        fontSize = if (compact) 12.5.sp else 14.sp,
+                        fontSize = if (compact) 12.5.sp else 15.sp,
                         color = Pa.TextPrimary,
                         maxLines = 1,
                     )
@@ -109,7 +109,7 @@ fun SplitButton(
                         Spacer(Modifier.height(1.dp))
                         Text(
                             caption,
-                            fontSize = 11.sp,
+                            fontSize = 12.5.sp,
                             color = Pa.TextSecondary,
                             maxLines = 1,
                         )
@@ -119,7 +119,7 @@ fun SplitButton(
                     Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
                     Text(
                         mainLabel,
-                        fontSize = if (compact) 10.5.sp else 11.sp,
+                        fontSize = if (compact) 10.5.sp else 13.sp,
                         color = Pa.Accent,
                         fontWeight = FontWeight.Medium,
                     )
@@ -187,7 +187,7 @@ fun SplitButton(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     opt.title,
-                                    fontSize = 13.5.sp,
+                                    fontSize = 14.5.sp,
                                     color = if (opt.selected) Pa.Accent else Pa.TextPrimary,
                                     fontWeight = if (opt.selected) FontWeight.Medium else FontWeight.Normal,
                                     maxLines = 1,
@@ -196,7 +196,7 @@ fun SplitButton(
                                     Spacer(Modifier.height(1.dp))
                                     Text(
                                         opt.desc,
-                                        fontSize = 10.5.sp,
+                                        fontSize = 11.5.sp,
                                         color = Pa.TextTertiary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,

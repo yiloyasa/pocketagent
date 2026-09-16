@@ -335,12 +335,13 @@ private fun TaskRow(
         TaskCenter.Status.CANCELED -> Pa.TextTertiary
         TaskCenter.Status.INTERRUPTED -> Pa.Yellow
     }
-    val icon = when (task.kind) {
-        TaskCenter.Kind.MESSAGE -> R.drawable.ic_lucide_message_square
-        TaskCenter.Kind.DOWNLOAD -> R.drawable.ic_lucide_download
-    }
     // 下载项按文件类型着色并标出类型(用户反馈:只显示"2.0MB"看不出这是什么文件)
     val kind = if (task.kind == TaskCenter.Kind.DOWNLOAD) fileKindOf(task.title) else null
+    val icon = when (task.kind) {
+        TaskCenter.Kind.MESSAGE -> R.drawable.ic_lucide_message_square
+        // 【按文件类型出图】下载项不再一律用"下载"图标 —— 用户一眼要认出这是表格/网页/安装包
+        TaskCenter.Kind.DOWNLOAD -> kind?.iconRes ?: R.drawable.ic_lucide_download
+    }
     val iconTint = kind?.color ?: accent
     val iconBg = kind?.color?.copy(alpha = 0.16f) ?: Pa.CardHigh
     val statusText = when (task.status) {
