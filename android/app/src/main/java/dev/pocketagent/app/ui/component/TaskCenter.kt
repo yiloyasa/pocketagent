@@ -2,6 +2,9 @@ package dev.pocketagent.app.ui.component
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,20 +35,36 @@ object TaskCenter {
         val id: String,
         val threadId: String,
         val kind: Kind,
-        var title: String,
-        var status: Status,
-        var progress: Float = 0f,
-        var detail: String = "",
-        var read: Boolean = false,
-        var startedAt: Long = System.currentTimeMillis(),
-        var rounds: Int = 1,
+        title: String,
+        status: Status,
+        progress: Float = 0f,
+        detail: String = "",
+        read: Boolean = false,
+        startedAt: Long = System.currentTimeMillis(),
+        rounds: Int = 1,
         /** 下载类:文件落在手机上的位置(content:// 可直接打开,或绝对路径)。 */
-        var localUri: String = "",
+        localUri: String = "",
         /** 下载类:来源会话名(展示"从哪个会话下载的")。 */
-        var sourceTitle: String = "",
+        sourceTitle: String = "",
         /** 下载类:人类可读的大小,如 1.2MB。 */
-        var sizeText: String = "",
-    )
+        sizeText: String = "",
+    ) {
+        var title: String by mutableStateOf(title)
+        var status: Status by mutableStateOf(status)
+        var progress: Float by mutableStateOf(progress)
+        var detail: String by mutableStateOf(detail)
+        var read: Boolean by mutableStateOf(read)
+        var startedAt: Long by mutableStateOf(startedAt)
+        var rounds: Int by mutableStateOf(rounds)
+        var localUri: String by mutableStateOf(localUri)
+        var sourceTitle: String by mutableStateOf(sourceTitle)
+        var sizeText: String by mutableStateOf(sizeText)
+    }
+    // 【为什么用 mutableStateOf 委托】本对象对任务的修改全是"原地改字段"(updateDownload/
+    // finishDownload/markRead/attachLocalUriIfEmpty...),而 _tasks 是 StateFlow<List<Task>>:
+    // StateFlow 按元素 equals 决定是否发射,列表实例换了但元素还是同一批 → 永远不发射,
+    // UI 读到的字段值就一直是旧的。字段改成快照状态后,写入即通知正在组合中读取它的
+    // Composable,不再依赖列表发射。
 
     private var prefs: SharedPreferences? = null
 
