@@ -203,6 +203,9 @@ object TaskCenter {
                 t.id, t.threadId, t.kind.name, t.title, t.status.name,
                 if (t.read) "1" else "0", t.startedAt.toString(),
                 t.progress.toString(), t.detail, t.rounds.toString(),
+                // 【修复】localUri/sourceTitle/sizeText 之前没落盘:杀进程重启后
+                // 所有下载项都丢了"文件在哪" → 用户数据管理里查看/分享图标集体消失。
+                t.localUri, t.sourceTitle, t.sizeText,
             ).joinToString("\u0001") { it.replace("\u0001", " ").replace("\n", " ") }
         }
         p.edit().putString("tasks", text).putInt("unread", _unreadCount.value).apply()

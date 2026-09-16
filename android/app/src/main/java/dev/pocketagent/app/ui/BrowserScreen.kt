@@ -44,6 +44,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -53,16 +55,18 @@ import pocketagent.v1.ReadFileRequest
 /**
  * 内置浏览器。
  *
- * 【能打开三类东西】
+ * 【能打开四类东西】
  *  1. 公网地址 —— 正常 http(s) 加载;
- *  2. **电脑上的文件** —— 会话里 agent 生成的页面/报告在电脑上,手机浏览器够不到那个盘符;
- *     这里走 daemon 的 ReadFile 把内容取回来,再用 `loadDataWithBaseURL` 就地渲染
- *     (html 直接渲染;图片转 data URL;其余当等宽文本)。
- *     入口写法:`pc:G:\试验区\heart-site\index.html`——会话里点路径会自动转成这个形式;
- *  3. 空地址 —— 显示内置起始页,不再是一张白板。
+ *  2. **电脑上的文件**(`pc:G:\...\index.html`)—— 走 daemon ReadFile 取回后渲染:
+ *     html 直接渲染;xlsx/docx/csv 由 [PcFilePreview] 解析成表格/文档;md 渲染成排版页;
+ *     图片转 data URL;其余文本等宽显示;二进制给提示页;
+ *  3. **手机上的文件**(`content://…`)—— 任务中心/用户数据管理里点"查看"进来的
+ *     已下载文件,经 ContentResolver 读取后走同一条渲染管线;
+ *  4. 空地址 —— 内置起始页。
  *
- * 【为什么之前是白板】没传地址时既不 loadUrl 也不给占位页,WebView 就是一张白纸;
- * 另外页面容器用 fillMaxSize 在 Column 里会把高度撑到超出,顶栏被挤出可视区。
+ * 【视图切换不空白】本地渲染的页面缓存原始 HTML(lastLocal),手机/桌面切换时
+ * 就地按新视图重排,不再回电脑重读;UA 用捕获到的默认值显式还原(置 null 在
+ * 部分 WebView 版本上会让页面加载异常 → 切回手机视图白屏)。
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -78,12 +82,52 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     var webRef by remember { mutableStateOf<WebView?>(null) }
     // 手机视图(默认,注入 viewport + 字号保障) / 桌面视图(原样渲染,配桌面 UA)
     var desktopView by remember { mutableStateOf(false) }
+    // 本地渲染内容的缓存:rawHtml to label。视图切换时用它就地重排(不回源重读)。
+    var lastLocal by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // WebView 出厂 UA:切回手机视图时显式还原(见文件头注释)
+    var defaultUa by remember { mutableStateOf("") }
 
-    /** 把 HTML 直接喂给 WebView(不经过网络),并做移动端适配。 */
+    /** 把 HTML 直接喂给 WebView(不经过网络);手机视图下做移动端适配。 */
     fun renderLocal(html: String, label: String) {
         pageTitle = label
         progress = 1f
-        webRef?.loadDataWithBaseURL(null, adaptForMobile(html), "text/html", "utf-8", null)
+        lastLocal = html to label
+        val body = if (desktopView) html else adaptForMobile(html)
+        webRef?.loadDataWithBaseURL(null, body, "text/html", "utf-8", null)
+    }
+
+    /** 按类型把字节渲染成页面(电脑文件与手机本地文件共用一条管线)。
+     *  @param mime content:// 的真实 MIME(可为空)。**优先按 MIME 判定**:
+     *  MediaStore 会给下载文件按 MIME 补后缀(md 常被存成 `xxx.md.txt`),
+     *  只看后缀会把 Markdown 当纯文本渲染。 */
+    fun renderBytes(name: String, bytes: ByteArray, mime: String = "") {
+        val lower = name.lowercase()
+        val mLower = mime.lowercase()
+        when {
+            mLower.startsWith("text/markdown") || lower.endsWith(".md") || lower.endsWith(".markdown") ->
+                renderLocal(PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name), name)
+            mLower.startsWith("image/") || lower.endsWith(".png") || lower.endsWith(".jpg") ||
+                lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") ->
+                renderLocal(
+                    "<body style=\"margin:0;background:#0b0b0d;display:flex;align-items:center;" +
+                        "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
+                        "max-height:100vh\" src=\"data:image/png;base64," +
+                        android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP) +
+                        "\"></body>",
+                    name,
+                )
+            mLower.startsWith("text/html") || lower.endsWith(".html") || lower.endsWith(".htm") ->
+                renderLocal(String(bytes, Charsets.UTF_8), name)
+            else -> {
+                val structured = PcFilePreview.render(lower, bytes)
+                when {
+                    structured != null -> renderLocal(structured, name)
+                    PcFilePreview.isBinary(lower) || mLower.endsWith("octet-stream") ->
+                        renderLocal(binaryPage(name, bytes.size.toLong()), name)
+                    else -> renderLocal(textPage(String(bytes, Charsets.UTF_8)), name)
+                }
+            }
+        }
     }
 
     /** 读电脑上的文件并渲染。 */
@@ -101,28 +145,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     while (stream.hasNext()) buf.write(stream.next().data.toByteArray())
                     buf.toByteArray()
                 }
-                val lower = path.lowercase()
-                when {
-                    lower.endsWith(".html") || lower.endsWith(".htm") ->
-                        renderLocal(String(bytes, Charsets.UTF_8), path)
-                    lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
-                        lower.endsWith(".gif") || lower.endsWith(".webp") ->
-                        renderLocal(
-                            "<body style=\"margin:0;background:#0b0b0d;display:flex;align-items:center;" +
-                                "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
-                                "max-height:100vh\" src=\"data:image/png;base64," +
-                                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP) +
-                                "\"></body>",
-                            path,
-                        )
-                    else -> renderLocal(
-                        "<body style=\"margin:0;background:#0b0b0d;color:#e6e6e6;" +
-                            "font:13px/1.6 ui-monospace,Menlo,Consolas,monospace\"><pre style=\"" +
-                            "white-space:pre-wrap;word-break:break-word;padding:14px;margin:0\">" +
-                            escapeHtml(String(bytes, Charsets.UTF_8)) + "</pre></body>",
-                        path,
-                    )
-                }
+                renderBytes(pageTitle, bytes)
             } catch (e: Exception) {
                 // 文件不存在/读不到:给可读的失败页,而不是继续白着
                 renderLocal(errorPage(path, e.message ?: "读取失败"), "打开失败")
@@ -132,12 +155,53 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         }
     }
 
-    /** 地址栏回车:电脑路径走 pc 模式,其余当网址/搜索词。 */
+    /** 打开已下载到手机的文件(content://),与电脑文件同一条渲染管线。 */
+    fun openLocalUri(uri: String) {
+        input = uri
+        loadingPc = true
+        // 【文件名来源】优先用任务中心那条下载记录的原文件名(用户看到的那个名字),
+        // 其次 ContentResolver 的 DISPLAY_NAME,最后才用 uri 末段。
+        // 名称 + MIME 共同决定渲染分支(md/xlsx/docx…),拿不到后缀就会退化成纯文本。
+        var name = TaskCenter.tasks.value.firstOrNull { it.localUri == uri }?.title.orEmpty()
+        if (name.isBlank()) name = uri.substringAfterLast('/')
+        val mime = runCatching { ctx.contentResolver.getType(android.net.Uri.parse(uri)) }
+            .getOrNull().orEmpty()
+        if (!name.contains('.')) {
+            runCatching {
+                ctx.contentResolver.query(android.net.Uri.parse(uri), null, null, null, null)?.use { c ->
+                    val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) name = c.getString(idx)
+                }
+            }
+        }
+        if (!name.contains('.')) name += extForMime(mime)
+        pageTitle = name
+        scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    ctx.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use { it.readBytes() }
+                        ?: throw IllegalStateException("无法读取该文件(可能已被删除)")
+                }
+                renderBytes(name, bytes, mime)
+            } catch (e: Exception) {
+                renderLocal(errorPage(name, e.message ?: "读取失败"), "打开失败")
+            } finally {
+                loadingPc = false
+            }
+        }
+    }
+
+    /** 地址栏回车:电脑路径走 pc 模式,手机文件走 content 模式,其余当网址/搜索词。 */
     fun submit(raw: String) {
         val t = raw.trim()
         if (t.isEmpty()) return
-        val pc = toPcPath(t)
-        if (pc != null) openPcFile(pc) else webRef?.loadUrl(normalizeUrl(t))
+        when {
+            t.startsWith("content://") -> openLocalUri(t)
+            else -> {
+                val pc = toPcPath(t)
+                if (pc != null) openPcFile(pc) else webRef?.loadUrl(normalizeUrl(t))
+            }
+        }
     }
 
     Column(
@@ -182,12 +246,17 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
             Spacer(Modifier.width(10.dp))
             IconActionButton(R.drawable.ic_lucide_refresh_cw, "刷新", {
                 val t = input.trim()
-                val pc = toPcPath(t)
-                if (pc != null) openPcFile(pc) else webRef?.reload()
+                when {
+                    t.startsWith("content://") -> openLocalUri(t)
+                    else -> {
+                        val pc = toPcPath(t)
+                        if (pc != null) openPcFile(pc) else webRef?.reload()
+                    }
+                }
             }, bg = Pa.Card)
         }
 
-        // ---------- 第二行:标题 + 前进/后退 + 外部打开 ----------
+        // ---------- 第二行:标题 + 前进/后退 + 手机/桌面切换 + 外部打开 ----------
         Row(
             Modifier
                 .fillMaxWidth()
@@ -196,7 +265,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         ) {
             Text(
                 when {
-                    loadingPc -> "正在从电脑读取…"
+                    loadingPc -> "正在读取…"
                     pageTitle.isNotEmpty() -> pageTitle
                     else -> "内置浏览器"
                 },
@@ -226,10 +295,29 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     val w = webRef ?: return@IconActionButton
                     w.settings.loadWithOverviewMode = desktopView
                     w.settings.useWideViewPort = true
-                    w.settings.userAgentString = if (desktopView) DESKTOP_UA else null
-                    val cur = input.trim()
-                    val pc = toPcPath(cur)
-                    if (pc != null) openPcFile(pc) else if (cur.isNotEmpty()) w.loadUrl(normalizeUrl(cur)) else w.reload()
+                    // 【修复白屏】显式还原默认 UA(而不是置 null),本地页面用缓存重排
+                    w.settings.userAgentString = if (desktopView) DESKTOP_UA else defaultUa
+                    val local = lastLocal
+                    if (local != null) {
+                        pageTitle = local.second
+                        progress = 1f
+                        w.loadDataWithBaseURL(
+                            null,
+                            if (desktopView) local.first else adaptForMobile(local.first),
+                            "text/html", "utf-8", null,
+                        )
+                    } else {
+                        val cur = input.trim()
+                        when {
+                            cur.startsWith("content://") -> openLocalUri(cur)
+                            else -> {
+                                val pc = toPcPath(cur)
+                                if (pc != null) openPcFile(pc)
+                                else if (cur.isNotEmpty()) w.loadUrl(normalizeUrl(cur))
+                                else w.reload()
+                            }
+                        }
+                    }
                 },
                 bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
             )
@@ -271,6 +359,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 .navigationBarsPadding(),
             factory = { context ->
                 WebView(context).apply {
+                    defaultUa = settings.userAgentString ?: ""
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     // 手机视图:按设备宽度排版(配合注入的 viewport),不再"整页缩放进一屏"
@@ -289,13 +378,17 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         ): Boolean = false // 站内跳转都留在内置浏览器
 
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                            if (url?.startsWith("data:") != true) input = url.orEmpty()
+                            if (isRemote(url)) {
+                                input = url.orEmpty()
+                                // 离开本地渲染页时清掉缓存(切换视图不再错误复用旧内容)
+                                lastLocal = null
+                            }
                             canGoBack = view?.canGoBack() ?: false
                             canGoForward = view?.canGoForward() ?: false
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
-                            if (url?.startsWith("data:") != true) input = url.orEmpty()
+                            if (isRemote(url)) input = url.orEmpty()
                             progress = 1f
                             canGoBack = view?.canGoBack() ?: false
                             canGoForward = view?.canGoForward() ?: false
@@ -326,12 +419,13 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         }
 
                         override fun onReceivedTitle(view: WebView?, title: String?) {
-                            if (!title.isNullOrBlank()) pageTitle = title
+                            if (!title.isNullOrBlank() && title != "about:blank") pageTitle = title
                         }
                     }
                     webRef = this
                     when {
                         initialUrl.startsWith("pc:") -> openPcFile(initialUrl.removePrefix("pc:"))
+                        initialUrl.startsWith("content://") -> openLocalUri(initialUrl)
                         initialUrl.isNotBlank() -> loadUrl(normalizeUrl(initialUrl))
                         else -> renderLocal(startPage(), "内置浏览器")
                     }
@@ -370,11 +464,43 @@ private const val DESKTOP_UA =
         "Chrome/126.0 Safari/537.36"
 
 /**
+ * 地址栏该不该跟着 WebView 的回调走。
+ *
+ * 【为什么需要】本地渲染走 `loadDataWithBaseURL(null, …)`,WebView 回报的 URL 是
+ * `about:blank`,直接回填会把地址栏(以及 lastLocal 缓存)冲掉 —— 视图切换就白屏了。
+ * 只有真正的公网/内网地址才回填。
+ */
+private fun isRemote(url: String?): Boolean =
+    url != null && (url.startsWith("http://") || url.startsWith("https://") ||
+        url.startsWith("file:") || url.startsWith("ftp:"))
+
+/** MIME → 后缀:content:// 查不到 DISPLAY_NAME 时用它兜出可判定的文件名。 */
+private fun extForMime(mime: String): String = when {
+    mime.startsWith("text/markdown") -> ".md"
+    mime.startsWith("text/html") -> ".html"
+    mime.startsWith("text/plain") -> ".txt"
+    mime.startsWith("text/csv") -> ".csv"
+    mime.startsWith("image/png") -> ".png"
+    mime.startsWith("image/jpeg") -> ".jpg"
+    mime.startsWith("image/gif") -> ".gif"
+    mime.startsWith("image/webp") -> ".webp"
+    mime.startsWith("application/json") -> ".json"
+    mime.contains("spreadsheetml") -> ".xlsx"
+    mime.contains("wordprocessingml") -> ".docx"
+    mime.contains("presentationml") -> ".pptx"
+    mime == "application/pdf" -> ".pdf"
+    mime.contains("vnd.android.package-archive") -> ".apk"
+    mime.contains("zip") -> ".zip"
+    mime.startsWith("video/") -> ".mp4"
+    mime.startsWith("audio/") -> ".mp3"
+    else -> ""
+}
+
+/**
  * 判断输入是不是"电脑上的路径"。
  * Windows 盘符(`G:\a\b.html` / `C:/a/b`)与 Unix 绝对路径都算。
  * @return 规范化后的路径,不是路径则 null
- */
-private fun toPcPath(raw: String): String? {
+ */private fun toPcPath(raw: String): String? {
     val t = raw.trim().removePrefix("pc:").removePrefix("file:///")
     val windows = Regex("^[A-Za-z]:[\\\\/]")
     return when {
@@ -421,6 +547,26 @@ private fun errorPage(target: String, reason: String): String = """
       </div>
     </body>
 """.trimIndent()
+
+/** 纯文本页(等宽、可换行)。 */
+private fun textPage(text: String): String =
+    "<body style=\"margin:0;background:#0b0b0d;color:#e6e6e6;" +
+        "font:13px/1.6 ui-monospace,Menlo,Consolas,monospace\"><pre style=\"" +
+        "white-space:pre-wrap;word-break:break-word;padding:14px;margin:0\">" +
+        escapeHtml(text) + "</pre></body>"
+
+/** 二进制文件提示页:不再把乱码倒进 <pre>。 */
+private fun binaryPage(name: String, size: Long): String = """
+    <body style="margin:0;background:#0b0b0d;color:#e6e6e6;font:14px/1.7 system-ui,-apple-system,sans-serif">
+      <div style="padding:22px 18px">
+        <div style="font-size:17px;font-weight:600;color:#ffffff">这个格式不适合在线预览</div>
+        <div style="margin-top:10px;color:#b9b9c0;font-size:13px">
+          ${escapeHtml(name)}($size)是二进制文件(老版 Office/PDF/压缩包等),
+          在浏览器里只能看到乱码。可以下载到手机后用对应应用打开。
+        </div>
+      </div>
+    </body>
+""".trimIndent().replace("($size)", "( ${humanSize(size)} )")
 
 private fun escapeHtml(s: String): String = s
     .replace("&", "&amp;")

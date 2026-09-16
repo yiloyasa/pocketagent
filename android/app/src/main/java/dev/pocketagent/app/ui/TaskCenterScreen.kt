@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
@@ -80,6 +81,8 @@ fun TaskCenterScreen(
     onOpenSettings: () -> Unit,
     onGoTab: (Int) -> Unit,
     onOpenBrowser: (String) -> Unit = {},
+    /** 下载类任务点卡片本体 → 跳「用户数据管理」(文件的具体管理都在那)。 */
+    onOpenUserData: () -> Unit = {},
     /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
     onBackToHome: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -216,23 +219,19 @@ fun TaskCenterScreen(
                                         // 消息处理 → 回到那个会话
                                         task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty() ->
                                             onOpenThread(task.threadId)
-                                        // 下载项 → 点整行走"查看"(网页/文本/图片进内置浏览器,
-                                        // 安装包/文档交给系统),不再只能点右上角那个小图标
-                                        task.kind == TaskCenter.Kind.DOWNLOAD &&
-                                            task.status == TaskCenter.Status.DONE &&
-                                            task.localUri.isNotEmpty() -> PaDownloader.openLocalFile(
-                                            ctx = ctx,
-                                            uri = task.localUri,
-                                            title = task.title,
-                                            detail = task.detail,
-                                            onOpenInBrowser = onOpenBrowser,
-                                        )
+                                        // 下载项 → 点整行进「用户数据管理」(查看/分享/删除都在那),
+                                        // 右上角的地球图标才是"直接打开文件"
+                                        task.kind == TaskCenter.Kind.DOWNLOAD -> onOpenUserData()
                                     }
                                 },
                                 onRemove = { TaskCenter.remove(task.id) },
                                 onRetry = {
-                                    // 中断/失败的消息类任务:回到会话里重发即可 —— 这里只做"引路"
-                                    if (task.threadId.isNotEmpty()) onOpenThread(task.threadId)
+                                    // 中断/失败的消息类任务:不只是"引路"—— 先从电脑端把
+                                    // 已完成的结果同步回来(找到对应消息并输出到手机端),再进会话
+                                    if (task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty()) {
+                                        TurnSession.resyncFromDaemon(task.threadId)
+                                        onOpenThread(task.threadId)
+                                    }
                                 },
                                 onOpenFile = {
                                     // 网页/文本/图片 → 内置浏览器;APK → 系统安装器
@@ -471,6 +470,9 @@ private fun TaskRow(
                 Modifier
                     .fillMaxWidth()
                     .height(4.dp)
+                    // 【修复光线外溢】扫描高亮用 translationX 移动,默认不被父容器裁剪,
+                    // 高亮会画出进度条、压到卡片文字。clip 之后光带只在 4dp 轨道内扫。
+                    .clip(RoundedCornerShape(50))
                     .background(Pa.Bg, RoundedCornerShape(50)),
             ) {
                 if (task.progress > 0f) {

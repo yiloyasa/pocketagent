@@ -23,7 +23,12 @@ import dev.pocketagent.app.ui.theme.Pa
 /**
  * 数字角标(设计规范 §2.5)。
  *
- * 【位置】贴在 [content] 内图标的右上角,偏移 `x +2dp / y -2dp`。
+ * 【位置】挂在 [content] 的右上角外沿,偏移 `x +5dp / y -5dp`,像系统角标一样
+ * "咬"在图标角上而不是盖住图标本体。
+ *
+ * 【样式】红底白字的胶囊:最小 15dp 高、9sp 半粗字、1.5dp 与所在表面同色的描边 ——
+ * 无论垫在浅色还是深色上,角标都有一圈清晰的"切口"轮廓(修复:此前 12dp/8sp
+ * 在 17dp 的小图标上糊成一团,看不出数字)。
  *
  * 【为什么不用弹窗】设计要求「不使用弹窗,直接进入页面即可看到」——
  * 角标是最小侵入的告知方式,不打断用户当前操作。
@@ -47,20 +52,20 @@ fun PaBadge(
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = 3.dp, y = (-3).dp)
-                    .heightIn(min = 12.dp)
-                    .widthIn(min = 12.dp)
+                    .offset(x = 5.dp, y = (-5).dp)
+                    .heightIn(min = 15.dp)
+                    .widthIn(min = 15.dp)
                     .background(Pa.Red, CircleShape)
-                    .border(1.dp, outline, CircleShape)
-                    .padding(horizontal = 3.dp)
+                    .border(1.5.dp, outline, CircleShape)
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
                     .semantics { contentDescription = "任务中心，$count 条未处理" },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label,
-                    fontSize = 8.sp,
+                    fontSize = 9.sp,
                     color = Color.White,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }

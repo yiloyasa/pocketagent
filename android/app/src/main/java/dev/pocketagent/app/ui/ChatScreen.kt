@@ -92,6 +92,7 @@ import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.rememberDrawerController
@@ -1254,6 +1255,18 @@ fun ChatScreen(
             IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
             Spacer(Modifier.width(14.dp))
             Text(threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
+            // 终止正在跑的轮次(用户反馈:任务跑飞了没法自己停)
+            if (st.running) {
+                IconActionButton(
+                    AppR.drawable.ic_lucide_square, "终止任务",
+                    {
+                        TurnSession.cancelTurn(threadId)
+                        Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
+                    },
+                    bg = Pa.Card, size = 34.dp, iconSize = 16.dp, tint = Pa.Red,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             IconActionButton(
                 AppR.drawable.ic_lucide_download, "导出对话",
                 { showExport = true },
@@ -1295,6 +1308,11 @@ fun ChatScreen(
                         Column(
                             Modifier
                                 .widthIn(max = 300.dp)
+                                // 长按复制(用户反馈:消息长按没有任何反应)
+                                .pressableLong(
+                                    onClick = {},
+                                    onLongPress = { copyMessage(ctx, item.text) },
+                                )
                                 .background(Pa.AccentDim, RoundedCornerShape(18.dp, 6.dp, 18.dp, 18.dp))
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1347,14 +1365,21 @@ fun ChatScreen(
                     "codex_event" -> Unit
                     "usage" -> Unit
                     else -> Column(Modifier.fillMaxWidth()) {
-                        InAppMarkdown(
-                            text = item.text,
-                            modifier = Modifier.fillMaxWidth(),
-                            fontSize = 15f * uiScale,
-                            onOpenUrl = onOpenBrowser,
-                        )
-                        // 消息里如果给了电脑上的文件路径,主操作是"打开预览 / 下载这个文件";
-                        // 没有路径才退回"把这段回复存成文件"。
+                        // 长按复制整条回复
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressableLong(onClick = {}, onLongPress = { copyMessage(ctx, item.text) }),
+                        ) {
+                            InAppMarkdown(
+                                text = item.text,
+                                modifier = Modifier.fillMaxWidth(),
+                                fontSize = 15f * uiScale,
+                                onOpenUrl = onOpenBrowser,
+                            )
+                        }
+                        // 消息里如果给了电脑上的文件路径,唯一的动作是"用浏览器打开";
+                        // 「下载到手机」已收进左上角菜单 → 任务中心(用户明确要求移除)。
                         val pcFiles = remember(item.text) { extractPcPaths(item.text) }
                         if (pcFiles.isNotEmpty()) {
                             pcFiles.take(3).forEach { path ->
@@ -1374,29 +1399,11 @@ fun ChatScreen(
                                             tint = Pa.AccentText, modifier = Modifier.size(13.dp),
                                         )
                                         Spacer(Modifier.width(5.dp))
-                                        Text("打开 $fileName", fontSize = 10.5.sp, color = Pa.AccentText)
-                                    }
-                                    Spacer(Modifier.width(16.dp))
-                                    Row(
-                                        Modifier.pressable(haptic = true) {
-                                            PaDownloader.downloadFromPc(path, threadTitle, threadId)
-                                            Toast.makeText(ctx, "已开始下载到手机", Toast.LENGTH_SHORT).show()
-                                        },
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(
-                                            painterResource(AppR.drawable.ic_lucide_download), null,
-                                            tint = Pa.TextTertiary, modifier = Modifier.size(13.dp),
-                                        )
-                                        Spacer(Modifier.width(5.dp))
-                                        Text("下载到手机", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                                        Text("在浏览器打开 $fileName", fontSize = 10.5.sp, color = Pa.AccentText)
                                     }
                                 }
                             }
                         }
-                        // 说明:以前每条回复下都挂一个"保存到手机",它保存的其实是**这段对话文本**,
-                        // 不是任何文件 —— 用户看到的"下载了对话内容"就是它。
-                        // 现在统一收到右上角「导出对话」里(可选多条),消息内只保留真正的文件操作。
                     }
                 }
             }
@@ -2450,21 +2457,32 @@ private fun ExportChatSheet(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // 右上角:选择方式的拆分按钮(主按钮=全选,下拉=全选/反选/清空)
+                // 右上角:选择方式的拆分按钮。主按钮随当前选择**实时变化**
+                // (全选后显示"已全选"、清空后显示"未选"、部分选中显示"已选 n"),
+                // 主按钮点击 = 全选/清空来回切换(修复"反选后右上角没反应"的观感)。
+                val allSelected = selected.size == exportable.size && selected.isNotEmpty()
                 dev.pocketagent.app.ui.component.SplitButton(
                     label = "选择",
-                    mainLabel = "全选",
+                    mainLabel = when {
+                        selected.isEmpty() -> "未选"
+                        allSelected -> "已全选"
+                        else -> "已选 " + selected.size
+                    },
                     compact = true,
-                    onMainClick = { selected = exportable.indices.toSet() },
+                    onMainClick = {
+                        selected = if (allSelected) emptySet() else exportable.indices.toSet()
+                    },
                     options = listOf(
                         dev.pocketagent.app.ui.component.SplitOption(
                             "全选", "选中全部 " + exportable.size + " 条",
+                            selected = allSelected,
                         ) { selected = exportable.indices.toSet() },
                         dev.pocketagent.app.ui.component.SplitOption(
                             "反选", "已选的反过来",
                         ) { selected = exportable.indices.toSet() - selected },
                         dev.pocketagent.app.ui.component.SplitOption(
                             "清空", "一条都不选",
+                            selected = selected.isEmpty(),
                         ) { selected = emptySet() },
                     ),
                 )
@@ -2579,4 +2597,12 @@ private fun ExportChip(label: String, onClick: () -> Unit) {
     ) {
         Text(label, fontSize = 12.sp, color = Pa.TextSecondary)
     }
+}
+
+/** 复制一条消息的文本到系统剪贴板(长按消息触发)。 */
+private fun copyMessage(ctx: Context, text: String) {
+    if (text.isBlank()) return
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    cm.setPrimaryClip(android.content.ClipData.newPlainText("PocketAgent 消息", text))
+    Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
 }

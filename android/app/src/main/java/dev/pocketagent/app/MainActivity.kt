@@ -162,6 +162,8 @@ private fun RootNav() {
                         onOpenBrowser = { url ->
                             nav.navigate("browser?url=" + android.net.Uri.encode(url))
                         },
+                        // 下载任务点卡片本体 → 直达设置里的「用户数据管理」
+                        onOpenUserData = { nav.navigate("settings?sub=userdata") },
                         onBackToHome = backToHome,
                     )
                 }
@@ -198,9 +200,14 @@ private fun RootNav() {
                 onBack = { nav.popBackStack() },
             )
         }
-        composable("settings") {
+        composable(
+            route = "settings?sub={sub}",
+            arguments = listOf(navArgument("sub") { type = NavType.StringType; defaultValue = "" }),
+        ) { entry ->
             SettingsScreen(
                 onBack = { nav.popBackStack() },
+                // 任务中心点下载卡片 → 直达「用户数据管理」二级页
+                openUserData = entry.arguments?.getString("sub") == "userdata",
                 // "用户数据管理"里可以直接用内置浏览器打开已下载的网页/文本
                 onOpenBrowser = { url ->
                     nav.navigate("browser?url=" + android.net.Uri.encode(url))

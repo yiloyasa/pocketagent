@@ -526,20 +526,17 @@ private fun RailIcon(
                 .background(if (selected) Pa.AccentDim else Color.Transparent, RoundedCornerShape(13.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            if (badge > 0) {
-                PaBadge(count = badge) {
+            PaBadge(count = badge) {
+                Box(
+                    Modifier.size(26.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(
                         painterResource(iconRes), label,
                         tint = if (selected) Pa.Accent else Pa.TextSecondary,
                         modifier = Modifier.size(20.dp),
                     )
                 }
-            } else {
-                Icon(
-                    painterResource(iconRes), label,
-                    tint = if (selected) Pa.Accent else Pa.TextSecondary,
-                    modifier = Modifier.size(20.dp),
-                )
             }
         }
         if (showTip) {
@@ -612,18 +609,17 @@ private fun QuickTile(
             .padding(horizontal = 12.dp, vertical = 11.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (badge > 0) {
-                PaBadge(count = badge) {
+            // 角标锚在 26dp 的图标框上(直接锚 17dp 小图标会被角标盖掉大半)
+            PaBadge(count = badge) {
+                Box(
+                    Modifier.size(26.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(
                         painterResource(icon), null,
                         tint = Pa.Accent, modifier = Modifier.size(17.dp),
                     )
                 }
-            } else {
-                Icon(
-                    painterResource(icon), null,
-                    tint = Pa.Accent, modifier = Modifier.size(17.dp),
-                )
             }
         }
         Spacer(Modifier.height(9.dp))

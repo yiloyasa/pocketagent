@@ -124,7 +124,17 @@ func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest
 }
 
 func (s *Server) CancelTurn(ctx context.Context, req *pb.CancelTurnRequest) (*pb.Empty, error) {
-	return &pb.Empty{}, nil // 取消也走流断开/重入打断
+	if _, ok := s.cfg.Store.Get(req.ThreadId); !ok {
+		return nil, errNotFound("会话不存在")
+	}
+	// 手机端"终止任务":取到该线程在跑的轮次取消函数并触发。
+	// provider.Run 会因 ctx 取消而返回,轮次按 FAILED 收尾(带已产出的部分内容),
+	// 手机端收到 Failed 帧后结束转圈;流已断开时也没关系 —— 取消的是电脑端执行本身。
+	if cancel := s.activeTurns.Cancel(req.ThreadId); cancel != nil {
+		cancel()
+		log.Printf("[turn] 手机端主动取消 %s", req.ThreadId)
+	}
+	return &pb.Empty{}, nil
 }
 
 // RenameThread 重命名会话(双端同步:落库后桌面端/手机端读到同一标题)。

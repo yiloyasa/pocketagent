@@ -18,6 +18,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pocketagent.v1.ApprovalDecision
 import pocketagent.v1.ApprovalRequest
+import pocketagent.v1.CancelSignal
+import pocketagent.v1.CancelTurnRequest
 import pocketagent.v1.ContentBlock
 import pocketagent.v1.CodexEvent
 import pocketagent.v1.GetThreadRequest
@@ -422,6 +424,83 @@ object TurnSession {
         st.errorMessage = "正在重新获取电脑端任务结果"
         st.recovering = true
         recoverOrphanTurn(threadId, st)
+    }
+
+    /**
+     * 终止正在跑的轮次(用户在会话页点"停止")。
+     *
+     * 【双保险】优先走轮次流里的取消帧(daemon 在流内直接 cancel);
+     * 流已断开时退回 CancelTurn 一元 RPC —— daemon 会从 activeTurns
+     * 注册表里找到该线程在跑的轮次并取消。本地状态由随后到达的
+     * FAILED/COMPLETED 帧收尾;若流本来就断了,取消后走一次历史同步兜底。
+     */
+    fun cancelTurn(threadId: String) {
+        val st = state(threadId)
+        if (!st.running) return
+        val sent = st.replyCh?.trySend(
+            TurnClientMessage.newBuilder()
+                .setCancel(CancelSignal.newBuilder().setReason("用户在手机端终止"))
+                .build(),
+        )
+        if (sent?.isSuccess != true) {
+            // 流不可用(断线/恢复中):直接打 RPC,daemon 端取消电脑上的执行
+            scope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        AgentConnection.threadService().cancelTurn(
+                            CancelTurnRequest.newBuilder().setThreadId(threadId).build(),
+                        )
+                    }
+                }.onSuccess {
+                    // 电脑端已取消:同步一次历史,把已产出的部分内容拿回来
+                    resyncFromDaemon(threadId, silent = true)
+                }.onFailure {
+                    st.recoveryError = "终止失败:${it.message ?: "无法连接电脑"}"
+                }
+            }
+        }
+    }
+
+    /**
+     * 手动同步:从 daemon 拉取最新历史并整屏回填。
+     *
+     * 任务中心「重试」/会话页手动刷新/取消后的兜底都走这里 ——
+     * 关键在**找到对应消息并正常输出到手机端**:电脑端只要落库了
+     * 新回复,这里就把它带回时间线并结束任务中心里的对应条目。
+     */
+    fun resyncFromDaemon(threadId: String, silent: Boolean = false) {
+        val st = state(threadId)
+        if (st.running) return
+        if (!silent) {
+            st.recovering = true
+            st.recoveryError = null
+            st.errorMessage = "正在从电脑端同步任务结果"
+        }
+        scope.launch {
+            try {
+                val history = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().getThreadHistory(
+                        GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build(),
+                    ).messagesList
+                }
+                val current = st.items.count { it.role == "user" || it.role == "assistant" }
+                st.items.clear()
+                st.items.addAll(historyToChatItems(history))
+                st.recovering = false
+                st.recoveryError = null
+                st.errorMessage = null
+                TaskCenter.finishMessage(
+                    threadId,
+                    ok = true,
+                    detail = if (history.size >= current) "已从电脑端同步结果" else "",
+                )
+            } catch (e: Exception) {
+                st.recovering = false
+                st.recoveryError = "同步失败:${e.message ?: "无法连接电脑"}"
+                TaskCenter.finishMessage(threadId, ok = false, detail = "同步失败")
+            }
+            maybeStopKeepAlive()
+        }
     }
 
     /** 回复审批请求(允许/拒绝),经后台流的 request 通道发给 daemon。 */

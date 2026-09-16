@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,18 +79,6 @@ import pocketagent.v1.McpServerStatus
 import pocketagent.v1.ModelInfo
 import pocketagent.v1.SetCodexSettingsRequest
 
-/**
- * 设置范围(三个板块,遵循回退原则):
- *   GLOBAL  —— 对全局所有 Agent 与 APP 界面生效(连接 / 显示 / 阅读)
- *   RUNNING —— 仅对"当前正在运行的 agent"生效,含它的专属设置
- *   OTHER   —— 其他 agent:选中某个即切换到它,并自动跳到它的专属设置页
- */
-enum class SettingsScope(val id: String, val label: String) {
-    GLOBAL("global", "全局"),
-    RUNNING("running", "当前 Agent"),
-    OTHER("other", "其他 Agent"),
-}
-
 private val OTHER_AGENT_OPTIONS = listOf(
     "opencode" to "OpenCode",
     "claude" to "Claude",
@@ -99,26 +86,19 @@ private val OTHER_AGENT_OPTIONS = listOf(
     "hermes" to "Hermes",
 )
 
-/** agent id → 展示名(第二板块标题、其他 agent 列表共用)。 */
+/** agent id → 展示名(二级页标题、agent 列表共用)。 */
 private val AGENT_DISPLAY = (listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS).toMap()
 
 private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
 
-/** 设置页的分区定义:id 用作 Lazy key,content 为分区内容。 */
-private class SettingsSection(
-    val id: String,
-    val content: @Composable () -> Unit,
-)
-
 /**
- * 设置页(三板块精简版)。
+ * 设置页(重做版:一级导航、二级编辑)。
  *
- * 【这一版的结构】
- *  1. 页头大标题 → 范围分段(全局 / 当前 Agent / 其他 Agent) → 直接是分区卡片。
- *     上一版夹在中间的"快捷导航 chips"已移除(与分段功能重叠、实际没人用)。
- *  2. **所有多选项设置统一为 SplitButton**:主按钮一键切换/执行默认操作,
- *     下拉箭头直接指定某一项;当前值以 Accent 显示在按钮右侧,替代原来的说明文字。
- *  3. 设置项不再写解释性小字(只保留"界面文字大小"的实时预览),页面更工整。
+ * 【信息架构】
+ *  1. 一级页 = 电脑连接卡(现状一目了然)+ 少量导航行(外观 / Agent / 用户数据 / 关于),
+ *     不再放"范围分段"(全局/当前/其他三段切换把同一批设置拆到三处,实际很难找到东西);
+ *  2. 所有编辑动作收进二级页:外观与阅读 / Agent 与模型 / 用户数据管理;
+ *  3. 多选项设置仍统一 SplitButton;设置项不写解释性小字(字号预览除外)。
  *
  * 【逻辑未变】审批/沙箱/模型/思考强度照样走 writeCodex 乐观更新 + 失败回滚;
  * 连接凭证照样走 setCredentials + connectWithFallback。
@@ -126,6 +106,8 @@ private class SettingsSection(
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    /** 任务中心点下载卡片进来时直达「用户数据管理」二级页。 */
+    openUserData: Boolean = false,
     /** 用内置浏览器查看已下载的网页/文本(由 MainActivity 提供导航)。 */
     onOpenBrowser: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -142,19 +124,12 @@ fun SettingsScreen(
     var connectionSaving by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
     var settingsFeedback by remember { mutableStateOf<String?>(null) }
-    var selectedScope by remember { mutableStateOf(SettingsScope.GLOBAL) }
-    var selectedOtherAgent by remember { mutableStateOf(OTHER_AGENT_OPTIONS.first().first) }
     // 默认模型选择器(完整选择弹窗,主按钮触发)
     var showModelPicker by remember { mutableStateOf(false) }
     var modelChoices by remember { mutableStateOf(listOf<ModelInfo>()) }
-    // 第二板块始终跟随"当前运行的 agent"
     val runningAgent = AgentConnection.selectedAgent
     val connectionError = AgentConnection.connError.collectAsState().value
-    // 用户数据管理用的下载清单(实时)
-    val allTasks by TaskCenter.tasks.collectAsState()
-    val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
-    val listState = rememberLazyListState()
 
     // 模型候选(默认模型选择器用)
     LaunchedEffect(connectionEpoch) {
@@ -298,25 +273,12 @@ fun SettingsScreen(
         }
     }
 
-    /** 显示模式应用(循环切换与下拉选择共用)。 */
-    fun applyThemeMode(id: String) {
-        AgentConnection.themeMode = id
-        AgentTheme.mode = id
-        showSettingsFeedback("显示模式已保存")
-    }
+    // ---------------- 二级页路由(不引入导航组件,设置页自洽) ----------------
+    var subPage by remember { mutableStateOf<String?>(if (openUserData) "userdata" else null) }
 
-    // ---------------- 分区定义 ----------------
-
-    // 二级页状态:设置页的"一级导航、二级编辑"结构(不引入导航组件,保持设置页自洽)
-    var subPage by remember { mutableStateOf<String?>(null) }
-
-    // 一级页要显示的连接现状(行右侧那个值)
-    val connStateTop = AgentConnection.connState.collectAsState().value
-    val connTransportTop = AgentConnection.connTransport.collectAsState().value
-    val connSummary = when (connStateTop) {
-        "ok" -> "已连接 · " + connTransportTop.ifEmpty { "直连" }
-        "down" -> "未连接"
-        else -> "检查中"
+    // 返回层级:二级页 → 一级页;一级页 → 退出设置(此前物理返回直接退出,层级断裂)
+    androidx.activity.compose.BackHandler(enabled = true) {
+        if (subPage != null) subPage = null else onBack()
     }
 
     if (subPage == "userdata") {
@@ -336,517 +298,66 @@ fun SettingsScreen(
         )
         return
     }
-
-    val globalSections = listOf(
-        // 用户数据管理:连接地址 + 所有下载内容(原「连接」板块迁到这里统一管理)
-        // 用户数据管理:一级页只留一行(参考主流设置页的信息架构:一级做导航,二级做编辑),
-        // 连接表单与下载清单都收进二级页,首屏不再被输入框淹没。
-        SettingsSection("userdata") {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Pa.Card, RoundedCornerShape(16.dp))
-                    .padding(horizontal = 14.dp),
-            ) {
-                SettingRow(
-                    title = "用户数据管理",
-                    desc = "连接地址 · 下载内容",
-                    icon = R.drawable.ic_lucide_server,
-                    value = connSummary,
-                    chevron = true,
-                    onClick = { subPage = "userdata" },
-                )
-            }
-        },
-        SettingsSection("appearance") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_file_text,
-                title = "外观与阅读",
-            ) {
-                Spacer(Modifier.height(10.dp))
-                // 界面文字大小:主=循环切换,下拉=三选一
-                val uiOptions = listOf(
-                    Triple("0.9", "小", 0.9f),
-                    Triple("1.0", "标准", 1.0f),
-                    Triple("1.15", "大", 1.15f),
-                )
-                val uiIdx = uiOptions.indexOfFirst {
-                    kotlin.math.abs(it.third - AgentConnection.uiTextScale) < 0.02f
-                }.coerceAtLeast(0)
-                SplitButton(
-                    label = "界面文字大小",
-                    mainLabel = uiOptions[uiIdx].second,
-                    onMainClick = {
-                        val next = uiOptions[(uiIdx + 1) % uiOptions.size]
-                        AgentConnection.setTextScale(next.third, AgentConnection.thinkTextScale)
-                        showSettingsFeedback("界面字号已保存")
-                    },
-                    options = uiOptions.map { (id, label, v) ->
-                        SplitOption(
-                            title = label,
-                            selected = kotlin.math.abs(v - AgentConnection.uiTextScale) < 0.02f,
-                        ) {
-                            AgentConnection.setTextScale(v, AgentConnection.thinkTextScale)
-                            showSettingsFeedback("界面字号已保存")
-                        }
-                    },
-                )
-                Spacer(Modifier.height(8.dp))
-                // 实时预览:改动立刻可见(唯一保留的说明性内容)
-                Text(
-                    "预览:这是一段界面文字,当前字号 ×" +
-                        String.format(java.util.Locale.US, "%.2f", AgentConnection.uiTextScale),
-                    Modifier
-                        .fillMaxWidth()
-                        .background(Pa.Bg, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    fontSize = (13 * AgentConnection.uiTextScale).sp,
-                    color = Pa.TextSecondary,
-                )
-                Spacer(Modifier.height(8.dp))
-
-                // 思考显示大小
-                val thinkOptions = listOf(
-                    Triple("0.85", "小", 0.85f),
-                    Triple("1.0", "标准", 1.0f),
-                    Triple("1.25", "大", 1.25f),
-                )
-                val thinkIdx = thinkOptions.indexOfFirst {
-                    kotlin.math.abs(it.third - AgentConnection.thinkTextScale) < 0.02f
-                }.coerceAtLeast(0)
-                SplitButton(
-                    label = "思考显示大小",
-                    mainLabel = thinkOptions[thinkIdx].second,
-                    onMainClick = {
-                        val next = thinkOptions[(thinkIdx + 1) % thinkOptions.size]
-                        AgentConnection.setTextScale(AgentConnection.uiTextScale, next.third)
-                        showSettingsFeedback("思考字号已保存")
-                    },
-                    options = thinkOptions.map { (id, label, v) ->
-                        SplitOption(
-                            title = label,
-                            selected = kotlin.math.abs(v - AgentConnection.thinkTextScale) < 0.02f,
-                        ) {
-                            AgentConnection.setTextScale(AgentConnection.uiTextScale, v)
-                            showSettingsFeedback("思考字号已保存")
-                        }
-                    },
-                )
-                Spacer(Modifier.height(8.dp))
-
-                // 工具详情(折叠/展开)
-                SplitButton(
-                    label = "工具详情",
-                    mainLabel = if (AgentConnection.toolDetailsExpanded) "展开" else "折叠",
-                    onMainClick = {
-                        AgentConnection.toolDetailsExpanded = !AgentConnection.toolDetailsExpanded
-                        showSettingsFeedback("工具详情设置已保存")
-                    },
-                    options = listOf(
-                        SplitOption(
-                            "折叠", selected = !AgentConnection.toolDetailsExpanded,
-                        ) {
-                            AgentConnection.toolDetailsExpanded = false
-                            showSettingsFeedback("工具详情设置已保存")
-                        },
-                        SplitOption(
-                            "展开", selected = AgentConnection.toolDetailsExpanded,
-                        ) {
-                            AgentConnection.toolDetailsExpanded = true
-                            showSettingsFeedback("工具详情设置已保存")
-                        },
-                    ),
-                )
-                Spacer(Modifier.height(8.dp))
-
-                // 显示思考过程(展示/隐藏)
-                SplitButton(
-                    label = "显示思考过程",
-                    mainLabel = if (AgentConnection.showThinking) "展示" else "隐藏",
-                    onMainClick = {
-                        AgentConnection.showThinking = !AgentConnection.showThinking
-                        showSettingsFeedback(
-                            if (AgentConnection.showThinking) "将流式显示思考过程" else "将只显示对话结果",
-                        )
-                    },
-                    options = listOf(
-                        SplitOption("展示", selected = AgentConnection.showThinking) {
-                            AgentConnection.showThinking = true
-                            showSettingsFeedback("将流式显示思考过程")
-                        },
-                        SplitOption("隐藏", selected = !AgentConnection.showThinking) {
-                            AgentConnection.showThinking = false
-                            showSettingsFeedback("将只显示对话结果")
-                        },
-                    ),
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-        },
-        SettingsSection("display") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_monitor,
-                title = "显示模式",
-            ) {
-                Spacer(Modifier.height(10.dp))
-                val modeOptions = listOf(
-                    Triple("system", "跟随系统", "自动跟随系统深浅色"),
-                    Triple("light", "浅色", "始终使用浅色界面"),
-                    Triple("dark", "深色", "始终使用深色界面"),
-                )
-                val currentModeIdx = modeOptions
-                    .indexOfFirst { it.first == AgentConnection.themeMode }
-                    .coerceAtLeast(0)
-                SplitButton(
-                    label = "显示模式",
-                    mainLabel = modeOptions[currentModeIdx].second,
-                    onMainClick = {
-                        val next = modeOptions[(currentModeIdx + 1) % modeOptions.size]
-                        applyThemeMode(next.first)
-                    },
-                    options = modeOptions.map { (id, name, desc) ->
-                        SplitOption(
-                            title = name,
-                            desc = desc,
-                            selected = AgentConnection.themeMode == id,
-                        ) { applyThemeMode(id) }
-                    },
-                )
-                Spacer(Modifier.height(6.dp))
-            }
-        },
-        SettingsSection("about") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_info,
-                title = "关于",
-            ) {
-                SettingRow(
-                    title = host?.displayName ?: "…",
-                    desc = "电脑 · ${host?.os ?: ""}/${host?.arch ?: ""}",
-                    divider = true,
-                )
-                SettingRow(title = "PocketAgent", desc = "v0.1.0 · 复刻并超越 Mobile Codex")
-            }
-        },
-    )
-
-    val codexSections = listOf(
-        SettingsSection("permissions") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_shield,
-                title = "权限与安全",
-            ) {
-                Spacer(Modifier.height(10.dp))
-                // 审批策略
-                val approvalOptions = listOf(
-                    Triple("untrusted", "仅信任", "只自动执行白名单命令"),
-                    Triple("on-request", "按需询问", "运行命令前先征求批准"),
-                    Triple("never", "完全访问", "不询问,直接执行"),
-                )
-                val approvalIdx = approvalOptions
-                    .indexOfFirst { it.first == settings?.approvalPolicy }
-                    .coerceAtLeast(0)
-                SplitButton(
-                    label = "审批策略",
-                    mainLabel = approvalOptions[approvalIdx].second,
-                    onMainClick = {
-                        val next = approvalOptions[(approvalIdx + 1) % approvalOptions.size]
-                        writeCodex(approval = next.first)
-                    },
-                    options = approvalOptions.map { (id, label, desc) ->
-                        SplitOption(
-                            title = label,
-                            desc = desc,
-                            selected = settings?.approvalPolicy == id,
-                        ) { writeCodex(approval = id) }
-                    },
-                )
-                Spacer(Modifier.height(8.dp))
-
-                // 沙箱模式
-                val sandboxOptions = listOf(
-                    Triple("read-only", "只读", "只能读取文件"),
-                    Triple("workspace-write", "工作区可写", "仅工作区内可写"),
-                    Triple("danger-full-access", "完全访问", "不限制文件与网络"),
-                )
-                val sandboxIdx = sandboxOptions
-                    .indexOfFirst { it.first == settings?.sandbox }
-                    .coerceAtLeast(0)
-                SplitButton(
-                    label = "沙箱模式",
-                    mainLabel = sandboxOptions[sandboxIdx].second,
-                    onMainClick = {
-                        val next = sandboxOptions[(sandboxIdx + 1) % sandboxOptions.size]
-                        writeCodex(sandbox = next.first)
-                    },
-                    options = sandboxOptions.map { (id, label, desc) ->
-                        SplitOption(
-                            title = label,
-                            desc = desc,
-                            selected = settings?.sandbox == id,
-                        ) { writeCodex(sandbox = id) }
-                    },
-                )
-                Spacer(Modifier.height(10.dp))
-
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable(haptic = true) { showApprovalPreview = true }
-                        .background(Pa.Bg, RoundedCornerShape(13.dp))
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("预览审批弹窗", fontSize = 13.5.sp, color = Pa.TextPrimary)
-                }
-                Spacer(Modifier.height(6.dp))
-            }
-        },
-        SettingsSection("model") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_cpu,
-                title = "模型与思考",
-            ) {
-                Spacer(Modifier.height(10.dp))
-                val currentModelName = settings?.model?.takeIf { it.isNotEmpty() }
-                    ?.let { id -> modelChoices.find { it.id == id }?.displayName ?: id }
-                    ?: "跟随桌面配置"
-                // 默认模型:主=完整选择器,下拉=快速切换
-                SplitButton(
-                    label = "默认模型",
-                    caption = currentModelName,
-                    onMainClick = {
-                        if (modelChoices.isEmpty()) {
-                            showSettingsFeedback("未获取到模型列表,请检查连接")
-                        } else {
-                            showModelPicker = true
-                        }
-                    },
-                    options = buildList {
-                        add(
-                            SplitOption(
-                                "跟随桌面配置",
-                                "使用电脑上当前 agent 的默认模型",
-                                selected = settings?.model.isNullOrEmpty(),
-                            ) { writeCodex(model = "") },
-                        )
-                        if (modelChoices.isEmpty()) {
-                            add(SplitOption("未获取到模型列表", "请检查连接后重试") { })
-                        } else {
-                            modelChoices.forEach { m ->
-                                add(
-                                    SplitOption(
-                                        title = m.displayName.ifBlank { m.id },
-                                        desc = buildString {
-                                            if (m.contextWindow > 0) append("上下文 ${m.contextWindow / 1000}k")
-                                            if (m.supportsThinking) {
-                                                if (isNotEmpty()) append(" · ")
-                                                append("支持思考")
-                                            }
-                                        },
-                                        selected = settings?.model == m.id,
-                                    ) { writeCodex(model = m.id) },
-                                )
-                            }
-                        }
-                    },
-                )
-                Spacer(Modifier.height(8.dp))
-
-                // 思考强度
-                val effortOptions = listOf(
-                    Triple("low", "低", "最快,浅推理"),
-                    Triple("medium", "中", "速度与深度平衡"),
-                    Triple("high", "高", "更慢,更细"),
-                    Triple("xhigh", "极高", "最慢,最细"),
-                )
-                val effortIdx = effortOptions
-                    .indexOfFirst { it.first == settings?.effort }
-                    .coerceAtLeast(0)
-                SplitButton(
-                    label = "思考强度",
-                    mainLabel = effortOptions[effortIdx].second,
-                    onMainClick = {
-                        val next = effortOptions[(effortIdx + 1) % effortOptions.size]
-                        writeCodex(effort = next.first)
-                    },
-                    options = effortOptions.map { (id, label, desc) ->
-                        SplitOption(
-                            title = label,
-                            desc = desc,
-                            selected = settings?.effort == id,
-                        ) { writeCodex(effort = id) }
-                    },
-                )
-                Spacer(Modifier.height(6.dp))
-            }
-        },
-        SettingsSection("account") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_user,
-                title = "Codex 账户",
-            ) {
-                SettingRow(
-                    title = host?.displayName ?: "…",
-                    desc = "已登录 · 模型与用量走桌面端账号",
-                )
-            }
-        },
-        SettingsSection("mcp") {
-            SectionBlock(
-                icon = R.drawable.ic_lucide_server,
-                title = "集成 · MCP 服务器",
-            ) {
-                if (mcpList.isEmpty()) {
-                    Text(
-                        if (settingsLoading) "加载中…" else "未获取到 MCP 列表",
-                        fontSize = 12.sp, color = Pa.TextTertiary,
-                        modifier = Modifier.padding(vertical = 12.dp),
-                    )
-                } else {
-                    mcpList.forEachIndexed { index, m ->
-                        SettingRow(
-                            title = m.name,
-                            desc = "${m.tools} 个工具",
-                            divider = index != mcpList.lastIndex,
-                        )
-                    }
-                }
-            }
-        },
-    )
-
-    val sections: List<SettingsSection> = when (selectedScope) {
-        SettingsScope.GLOBAL -> globalSections
-        SettingsScope.RUNNING ->
-            if (runningAgent == "codex") {
-                codexSections
-            } else {
-                // 其他 agent 的专属设置:接入完成后在此填充。
-                listOf(
-                    SettingsSection("placeholder") {
-                        SectionBlock(
-                            icon = R.drawable.ic_lucide_cpu,
-                            title = "${agentDisplay(runningAgent)} 的专属设置",
-                        ) {
-                            Text(
-                                "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
-                                    "在此之前可先到【其他 Agent】里切回 Codex。",
-                                fontSize = 12.sp, color = Pa.TextTertiary,
-                                modifier = Modifier.padding(vertical = 12.dp),
-                            )
-                        }
-                    },
-                )
-            }
-        SettingsScope.OTHER -> {
-            // 切换 Agent:一个 SplitButton 搞定(主=切到当前选中项,下拉=换一个)
-            val agentChoices = listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS
-            val pendingIdx = agentChoices
-                .indexOfFirst { it.first == selectedOtherAgent }
-                .coerceAtLeast(0)
-            listOf(
-                SettingsSection("switch") {
-                    SectionBlock(
-                        icon = R.drawable.ic_lucide_cpu,
-                        title = "切换 Agent",
-                    ) {
-                        Spacer(Modifier.height(10.dp))
-                        SplitButton(
-                            label = "切换 Agent",
-                            mainLabel = agentChoices[pendingIdx].second,
-                            onMainClick = {
-                                val id = agentChoices[pendingIdx].first
-                                AgentConnection.switchAgent(id)
-                                showSettingsFeedback("已切换到 ${agentDisplay(id)}")
-                                selectedScope = SettingsScope.RUNNING
-                            },
-                            options = agentChoices.map { (id, name) ->
-                                SplitOption(
-                                    title = name,
-                                    selected = runningAgent == id,
-                                ) {
-                                    selectedOtherAgent = id
-                                    AgentConnection.switchAgent(id)
-                                    showSettingsFeedback("已切换到 ${agentDisplay(id)}")
-                                    selectedScope = SettingsScope.RUNNING
-                                }
-                            },
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "当前运行:${agentDisplay(runningAgent)}",
-                            Modifier.padding(start = 3.dp),
-                            fontSize = 10.5.sp,
-                            color = Pa.TextTertiary,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                    }
-                },
-            )
-        }
+    if (subPage == "appearance") {
+        AppearancePage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) })
+        return
+    }
+    if (subPage == "agent") {
+        AgentPage(
+            onBack = { subPage = null },
+            runningAgent = runningAgent,
+            settings = settings,
+            settingsLoading = settingsLoading,
+            modelChoices = modelChoices,
+            mcpList = mcpList,
+            host = host,
+            writeCodex = { a, s, m, e -> writeCodex(a, s, m, e) },
+            onFeedback = { showSettingsFeedback(it) },
+            onShowModelPicker = { showModelPicker = true },
+            onShowApprovalPreview = { showApprovalPreview = true },
+        )
+        return
     }
 
-    // 切换板块时回到顶部
-    LaunchedEffect(selectedScope) {
-        listState.scrollToItem(0)
+    val connStateTop = AgentConnection.connState.collectAsState().value
+    val connTransportTop = AgentConnection.connTransport.collectAsState().value
+    val connSummary = when (connStateTop) {
+        "ok" -> "已连接 · " + connTransportTop.ifEmpty { "直连" }
+        "down" -> "未连接"
+        else -> "检查中"
+    }
+    val themeLabel = listOf(
+        "system" to "跟随系统", "light" to "浅色", "dark" to "深色",
+    ).firstOrNull { it.first == AgentConnection.themeMode }?.second ?: "跟随系统"
+    val uiScaleLabel = when {
+        AgentConnection.uiTextScale < 0.95f -> "小"
+        AgentConnection.uiTextScale > 1.05f -> "大"
+        else -> "标准"
     }
 
+    // ---------------- 一级页 ----------------
     Column(
         modifier
             .fillMaxSize()
             .background(Pa.Bg)
             .statusBarsPadding(),
     ) {
-        // ---------- 页头:返回 + 大标题 ----------
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-        }
-        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 10.dp)) {
-            Text("设置", fontSize = 30.sp, color = Pa.TextPrimary)
-            Text(
-                "连接 · 外观 · 各 Agent 的专属配置",
-                Modifier.padding(top = 2.dp),
-                fontSize = 12.sp,
-                color = Pa.TextTertiary,
-            )
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        // ---------- 范围分段(全局 / 当前 Agent / 其他) ----------
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .background(Pa.Card, RoundedCornerShape(50))
-                .padding(4.dp),
-        ) {
-            val scopeTabs = listOf(
-                SettingsScope.GLOBAL to "全局",
-                SettingsScope.RUNNING to agentDisplay(runningAgent),
-                SettingsScope.OTHER to "其他 Agent",
-            )
-            scopeTabs.forEach { (scopeOption, label) ->
-                ScopeTab(
-                    label = label,
-                    selected = selectedScope == scopeOption,
-                    modifier = Modifier.weight(1f),
-                ) { selectedScope = scopeOption }
+            Column(Modifier.fillMaxWidth().padding(start = 10.dp)) {
+                Text("设置", fontSize = 26.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
             }
         }
 
-        // ---------- 滚动内容(公告区 + 分区卡片) ----------
         LazyColumn(
-            state = listState,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .navigationBarsPadding(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 14.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item(key = "banner") {
@@ -887,8 +398,134 @@ fun SettingsScreen(
                     }
                 }
             }
-            sections.forEach { section ->
-                item(key = "sec-${section.id}") { section.content() }
+
+            // ---------- 电脑连接卡(点进去 = 用户数据管理) ----------
+            item(key = "hero") {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable(haptic = true) { subPage = "userdata" }
+                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(46.dp)
+                            .background(
+                                if (connStateTop == "ok") Pa.AccentDim else Pa.Hover,
+                                RoundedCornerShape(14.dp),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_lucide_monitor), null,
+                            tint = if (connStateTop == "ok") Pa.Accent else Pa.TextSecondary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            host?.displayName?.ifBlank { "我的电脑" } ?: "我的电脑",
+                            fontSize = 15.5.sp,
+                            color = Pa.TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            connSummary +
+                                (host?.os?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                            Modifier.padding(top = 2.dp),
+                            fontSize = 11.5.sp,
+                            color = Pa.TextTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_chevron_right), null,
+                        tint = Pa.TextTertiary, modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+
+            // ---------- 通用 ----------
+            item(key = "general") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_sliders, "通用")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 14.dp),
+                    ) {
+                        SettingRow(
+                            title = "外观与阅读",
+                            icon = R.drawable.ic_lucide_monitor,
+                            value = themeLabel + " · " + uiScaleLabel,
+                            chevron = true,
+                            divider = true,
+                            onClick = { subPage = "appearance" },
+                        )
+                        SettingRow(
+                            title = "用户数据管理",
+                            desc = "连接 · 下载内容",
+                            icon = R.drawable.ic_lucide_server,
+                            value = connSummary,
+                            chevron = true,
+                            onClick = { subPage = "userdata" },
+                        )
+                    }
+                }
+            }
+
+            // ---------- Agent ----------
+            item(key = "agent") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_cpu, "Agent")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 14.dp),
+                    ) {
+                        SettingRow(
+                            title = "Agent 与模型",
+                            desc = "切换 Agent · 权限 · 模型 · MCP",
+                            icon = R.drawable.ic_lucide_cpu,
+                            value = agentDisplay(runningAgent),
+                            chevron = true,
+                            onClick = { subPage = "agent" },
+                        )
+                    }
+                }
+            }
+
+            // ---------- 关于 ----------
+            item(key = "about") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_info, "关于")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 14.dp),
+                    ) {
+                        SettingRow(
+                            title = "版本",
+                            icon = R.drawable.ic_lucide_info,
+                            value = "v0.1.0",
+                            divider = true,
+                        )
+                        SettingRow(
+                            title = "电脑",
+                            icon = R.drawable.ic_lucide_monitor,
+                            value = listOfNotNull(host?.os, host?.arch).joinToString("/").ifBlank { "—" },
+                        )
+                    }
+                }
             }
         }
     }
@@ -908,6 +545,448 @@ fun SettingsScreen(
             },
             onDismiss = { showModelPicker = false },
         )
+    }
+}
+
+/** 卡片外的灰字分组标题(小图标 + 12sp 灰字)。 */
+@Composable
+private fun GroupLabel(icon: Int, title: String) {
+    Row(
+        Modifier.padding(start = 18.dp, top = 12.dp, bottom = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(icon), null,
+            tint = Pa.TextTertiary,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            title,
+            fontSize = 12.sp,
+            color = Pa.TextTertiary,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+/** 二级页骨架:返回 + 标题 + 可滚动内容。 */
+@Composable
+private fun SubPageScaffold(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(Pa.Bg)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
+            Spacer(Modifier.width(10.dp))
+            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Pa.TextPrimary)
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            content = content,
+        )
+    }
+}
+
+/**
+ * 二级页:外观与阅读 —— 字号 / 思考 / 工具详情 / 显示模式。
+ */
+@Composable
+private fun AppearancePage(
+    onBack: () -> Unit,
+    onFeedback: (String) -> Unit,
+) {
+    SubPageScaffold(title = "外观与阅读", onBack = onBack) {
+        SectionBlock(icon = R.drawable.ic_lucide_monitor, title = "字号") {
+            Spacer(Modifier.height(10.dp))
+            // 界面文字大小:主=循环切换,下拉=三选一
+            val uiOptions = listOf(
+                Triple("0.9", "小", 0.9f),
+                Triple("1.0", "标准", 1.0f),
+                Triple("1.15", "大", 1.15f),
+            )
+            val uiIdx = uiOptions.indexOfFirst {
+                kotlin.math.abs(it.third - AgentConnection.uiTextScale) < 0.02f
+            }.coerceAtLeast(0)
+            SplitButton(
+                label = "界面文字大小",
+                mainLabel = uiOptions[uiIdx].second,
+                onMainClick = {
+                    val next = uiOptions[(uiIdx + 1) % uiOptions.size]
+                    AgentConnection.setTextScale(next.third, AgentConnection.thinkTextScale)
+                    onFeedback("界面字号已保存")
+                },
+                options = uiOptions.map { (_, label, v) ->
+                    SplitOption(
+                        title = label,
+                        selected = kotlin.math.abs(v - AgentConnection.uiTextScale) < 0.02f,
+                    ) {
+                        AgentConnection.setTextScale(v, AgentConnection.thinkTextScale)
+                        onFeedback("界面字号已保存")
+                    }
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+            // 实时预览:改动立刻可见(唯一保留的说明性内容)
+            Text(
+                "预览:这是一段界面文字,当前字号 ×" +
+                    String.format(java.util.Locale.US, "%.2f", AgentConnection.uiTextScale),
+                Modifier
+                    .fillMaxWidth()
+                    .background(Pa.Bg, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                fontSize = (13 * AgentConnection.uiTextScale).sp,
+                color = Pa.TextSecondary,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // 思考显示大小
+            val thinkOptions = listOf(
+                Triple("0.85", "小", 0.85f),
+                Triple("1.0", "标准", 1.0f),
+                Triple("1.25", "大", 1.25f),
+            )
+            val thinkIdx = thinkOptions.indexOfFirst {
+                kotlin.math.abs(it.third - AgentConnection.thinkTextScale) < 0.02f
+            }.coerceAtLeast(0)
+            SplitButton(
+                label = "思考显示大小",
+                mainLabel = thinkOptions[thinkIdx].second,
+                onMainClick = {
+                    val next = thinkOptions[(thinkIdx + 1) % thinkOptions.size]
+                    AgentConnection.setTextScale(AgentConnection.uiTextScale, next.third)
+                    onFeedback("思考字号已保存")
+                },
+                options = thinkOptions.map { (_, label, v) ->
+                    SplitOption(
+                        title = label,
+                        selected = kotlin.math.abs(v - AgentConnection.thinkTextScale) < 0.02f,
+                    ) {
+                        AgentConnection.setTextScale(AgentConnection.uiTextScale, v)
+                        onFeedback("思考字号已保存")
+                    }
+                },
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+
+        SectionBlock(icon = R.drawable.ic_lucide_brain, title = "对话内容") {
+            Spacer(Modifier.height(10.dp))
+            // 显示思考过程(展示/隐藏)
+            SplitButton(
+                label = "显示思考过程",
+                mainLabel = if (AgentConnection.showThinking) "展示" else "隐藏",
+                onMainClick = {
+                    AgentConnection.showThinking = !AgentConnection.showThinking
+                    onFeedback(
+                        if (AgentConnection.showThinking) "将流式显示思考过程" else "将只显示对话结果",
+                    )
+                },
+                options = listOf(
+                    SplitOption("展示", selected = AgentConnection.showThinking) {
+                        AgentConnection.showThinking = true
+                        onFeedback("将流式显示思考过程")
+                    },
+                    SplitOption("隐藏", selected = !AgentConnection.showThinking) {
+                        AgentConnection.showThinking = false
+                        onFeedback("将只显示对话结果")
+                    },
+                ),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // 工具详情(折叠/展开)
+            SplitButton(
+                label = "工具详情",
+                mainLabel = if (AgentConnection.toolDetailsExpanded) "展开" else "折叠",
+                onMainClick = {
+                    AgentConnection.toolDetailsExpanded = !AgentConnection.toolDetailsExpanded
+                    onFeedback("工具详情设置已保存")
+                },
+                options = listOf(
+                    SplitOption(
+                        "折叠", selected = !AgentConnection.toolDetailsExpanded,
+                    ) {
+                        AgentConnection.toolDetailsExpanded = false
+                        onFeedback("工具详情设置已保存")
+                    },
+                    SplitOption(
+                        "展开", selected = AgentConnection.toolDetailsExpanded,
+                    ) {
+                        AgentConnection.toolDetailsExpanded = true
+                        onFeedback("工具详情设置已保存")
+                    },
+                ),
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+
+        SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "显示模式") {
+            Spacer(Modifier.height(10.dp))
+            val modeOptions = listOf(
+                Triple("system", "跟随系统", "自动跟随系统深浅色"),
+                Triple("light", "浅色", "始终使用浅色界面"),
+                Triple("dark", "深色", "始终使用深色界面"),
+            )
+            val currentModeIdx = modeOptions
+                .indexOfFirst { it.first == AgentConnection.themeMode }
+                .coerceAtLeast(0)
+            SplitButton(
+                label = "显示模式",
+                mainLabel = modeOptions[currentModeIdx].second,
+                onMainClick = {
+                    val next = modeOptions[(currentModeIdx + 1) % modeOptions.size]
+                    AgentConnection.themeMode = next.first
+                    AgentTheme.mode = next.first
+                    onFeedback("显示模式已保存")
+                },
+                options = modeOptions.map { (id, name, desc) ->
+                    SplitOption(
+                        title = name,
+                        desc = desc,
+                        selected = AgentConnection.themeMode == id,
+                    ) {
+                        AgentConnection.themeMode = id
+                        AgentTheme.mode = id
+                        onFeedback("显示模式已保存")
+                    }
+                },
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+/**
+ * 二级页:Agent 与模型 —— 切换 Agent + 当前 agent(codex)的专属设置。
+ */
+@Composable
+private fun AgentPage(
+    onBack: () -> Unit,
+    runningAgent: String,
+    settings: CodexSettings?,
+    settingsLoading: Boolean,
+    modelChoices: List<ModelInfo>,
+    mcpList: List<McpServerStatus>,
+    host: HostInfo?,
+    writeCodex: (approval: String?, sandbox: String?, model: String?, effort: String?) -> Unit,
+    onFeedback: (String) -> Unit,
+    onShowModelPicker: () -> Unit,
+    onShowApprovalPreview: () -> Unit,
+) {
+    SubPageScaffold(title = "Agent 与模型", onBack = onBack) {
+        SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "切换 Agent") {
+            Spacer(Modifier.height(10.dp))
+            val agentChoices = listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS
+            agentChoices.forEachIndexed { i, (id, name) ->
+                SettingRow(
+                    title = name,
+                    desc = if (runningAgent == id) "当前运行中" else "点击切换到此 Agent",
+                    icon = R.drawable.ic_lucide_cpu,
+                    chevron = true,
+                    divider = i != agentChoices.lastIndex,
+                    onClick = {
+                        if (runningAgent != id) {
+                            AgentConnection.switchAgent(id)
+                            onFeedback("已切换到 ${agentDisplay(id)}")
+                        }
+                    },
+                )
+            }
+        }
+
+        if (runningAgent == "codex") {
+            SectionBlock(icon = R.drawable.ic_lucide_shield, title = "权限与安全") {
+                Spacer(Modifier.height(10.dp))
+                // 审批策略
+                val approvalOptions = listOf(
+                    Triple("untrusted", "仅信任", "只自动执行白名单命令"),
+                    Triple("on-request", "按需询问", "运行命令前先征求批准"),
+                    Triple("never", "完全访问", "不询问,直接执行"),
+                )
+                val approvalIdx = approvalOptions
+                    .indexOfFirst { it.first == settings?.approvalPolicy }
+                    .coerceAtLeast(0)
+                SplitButton(
+                    label = "审批策略",
+                    mainLabel = approvalOptions[approvalIdx].second,
+                    onMainClick = {
+                        val next = approvalOptions[(approvalIdx + 1) % approvalOptions.size]
+                        writeCodex(next.first, null, null, null)
+                    },
+                    options = approvalOptions.map { (id, label, desc) ->
+                        SplitOption(
+                            title = label,
+                            desc = desc,
+                            selected = settings?.approvalPolicy == id,
+                        ) { writeCodex(id, null, null, null) }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+
+                // 沙箱模式
+                val sandboxOptions = listOf(
+                    Triple("read-only", "只读", "只能读取文件"),
+                    Triple("workspace-write", "工作区可写", "仅工作区内可写"),
+                    Triple("danger-full-access", "完全访问", "不限制文件与网络"),
+                )
+                val sandboxIdx = sandboxOptions
+                    .indexOfFirst { it.first == settings?.sandbox }
+                    .coerceAtLeast(0)
+                SplitButton(
+                    label = "沙箱模式",
+                    mainLabel = sandboxOptions[sandboxIdx].second,
+                    onMainClick = {
+                        val next = sandboxOptions[(sandboxIdx + 1) % sandboxOptions.size]
+                        writeCodex(null, next.first, null, null)
+                    },
+                    options = sandboxOptions.map { (id, label, desc) ->
+                        SplitOption(
+                            title = label,
+                            desc = desc,
+                            selected = settings?.sandbox == id,
+                        ) { writeCodex(null, id, null, null) }
+                    },
+                )
+                Spacer(Modifier.height(10.dp))
+
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable(haptic = true) { onShowApprovalPreview() }
+                        .background(Pa.Bg, RoundedCornerShape(13.dp))
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("预览审批弹窗", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+
+            SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "模型与思考") {
+                Spacer(Modifier.height(10.dp))
+                val currentModelName = settings?.model?.takeIf { it.isNotEmpty() }
+                    ?.let { id -> modelChoices.find { it.id == id }?.displayName ?: id }
+                    ?: "跟随桌面配置"
+                // 默认模型:主=完整选择器,下拉=快速切换
+                SplitButton(
+                    label = "默认模型",
+                    caption = currentModelName,
+                    onMainClick = {
+                        if (modelChoices.isEmpty()) {
+                            onFeedback("未获取到模型列表,请检查连接")
+                        } else {
+                            onShowModelPicker()
+                        }
+                    },
+                    options = buildList {
+                        add(
+                            SplitOption(
+                                "跟随桌面配置",
+                                "使用电脑上当前 agent 的默认模型",
+                                selected = settings?.model.isNullOrEmpty(),
+                            ) { writeCodex(null, null, "", null) },
+                        )
+                        if (modelChoices.isEmpty()) {
+                            add(SplitOption("未获取到模型列表", "请检查连接后重试") { })
+                        } else {
+                            modelChoices.forEach { m ->
+                                add(
+                                    SplitOption(
+                                        title = m.displayName.ifBlank { m.id },
+                                        desc = buildString {
+                                            if (m.contextWindow > 0) append("上下文 ${m.contextWindow / 1000}k")
+                                            if (m.supportsThinking) {
+                                                if (isNotEmpty()) append(" · ")
+                                                append("支持思考")
+                                            }
+                                        },
+                                        selected = settings?.model == m.id,
+                                    ) { writeCodex(null, null, m.id, null) },
+                                )
+                            }
+                        }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+
+                // 思考强度
+                val effortOptions = listOf(
+                    Triple("low", "低", "最快,浅推理"),
+                    Triple("medium", "中", "速度与深度平衡"),
+                    Triple("high", "高", "更慢,更细"),
+                    Triple("xhigh", "极高", "最慢,最细"),
+                )
+                val effortIdx = effortOptions
+                    .indexOfFirst { it.first == settings?.effort }
+                    .coerceAtLeast(0)
+                SplitButton(
+                    label = "思考强度",
+                    mainLabel = effortOptions[effortIdx].second,
+                    onMainClick = {
+                        val next = effortOptions[(effortIdx + 1) % effortOptions.size]
+                        writeCodex(null, null, null, next.first)
+                    },
+                    options = effortOptions.map { (id, label, desc) ->
+                        SplitOption(
+                            title = label,
+                            desc = desc,
+                            selected = settings?.effort == id,
+                        ) { writeCodex(null, null, null, id) }
+                    },
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+
+            SectionBlock(icon = R.drawable.ic_lucide_server, title = "集成 · MCP 服务器") {
+                if (mcpList.isEmpty()) {
+                    Text(
+                        if (settingsLoading) "加载中…" else "未获取到 MCP 列表",
+                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                } else {
+                    mcpList.forEachIndexed { index, m ->
+                        SettingRow(
+                            title = m.name,
+                            desc = "${m.tools} 个工具",
+                            divider = index != mcpList.lastIndex,
+                        )
+                    }
+                }
+            }
+        } else {
+            SectionBlock(icon = R.drawable.ic_lucide_info, title = agentDisplay(runningAgent)) {
+                Text(
+                    "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
+                        "可先在上方「切换 Agent」里回到 Codex。",
+                    fontSize = 12.sp, color = Pa.TextTertiary,
+                    modifier = Modifier.padding(vertical = 12.dp),
+                )
+            }
+        }
+
+        SectionBlock(icon = R.drawable.ic_lucide_user, title = "Codex 账户") {
+            SettingRow(
+                title = host?.displayName ?: "…",
+                desc = "已登录 · 模型与用量走桌面端账号",
+            )
+        }
+        Spacer(Modifier.height(20.dp))
     }
 }
 
@@ -937,27 +1016,6 @@ private fun shareLocalFile(ctx: android.content.Context, uri: String) {
 private fun deleteLocalFile(ctx: android.content.Context, uri: String) {
     if (uri.isEmpty()) return
     runCatching { ctx.contentResolver.delete(android.net.Uri.parse(uri), null, null) }
-}
-
-/** 范围分段按钮(选中 = 蓝底白字)。 */
-@Composable
-private fun ScopeTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier
-            .pressable(haptic = true) { onClick() }
-            .background(if (selected) Pa.Accent else Color.Transparent, RoundedCornerShape(50))
-            .padding(vertical = 9.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            fontSize = 12.5.sp,
-            color = if (selected) Color.White else Pa.TextSecondary,
-            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
 }
 
 /**
@@ -1199,10 +1257,7 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
 
 /**
  * 设置分组:标题在**卡片外**(灰色小字 + 小图标),卡片内是一行行设置条目。
- *
- * 【为什么改成这样】参考主流 App 的设置页(账户/应用/关于 分组):一级页面只做"识别 + 导航",
- * 组标题轻、行内容重,视线自然落在每行的当前值上;原先"卡内大页眉 + 分隔线"的写法
- * 让每张卡都像一段新章节,页面被切得很碎,也显得笨重。
+ * (二级页内部继续沿用这一语言。)
  */
 @Composable
 fun SectionBlock(
@@ -1211,23 +1266,7 @@ fun SectionBlock(
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(start = 18.dp, top = 12.dp, bottom = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                painterResource(icon), null,
-                tint = Pa.TextTertiary,
-                modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                title,
-                fontSize = 12.sp,
-                color = Pa.TextTertiary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
+        GroupLabel(icon, title)
         Column(
             Modifier
                 .fillMaxWidth()
@@ -1311,9 +1350,8 @@ fun SettingRow(
 /**
  * 二级页:用户数据管理 —— 连接地址 + 全部下载内容。
  *
- * 【设计取向】一级页只显示"已连接 · 局域网直连"这一个结论,编辑动作全部收进来;
- * 下载内容在这里统一管理(查看 / 分享 / 删除),并标出文件类型(安装包/文本/Markdown…),
- * 与任务中心用同一套 [fileKindOf] 判定,两处显示不会打架。
+ * 【设计取向】连接编辑与下载内容(查看 / 分享 / 删除)统一收在这里;
+ * 文件类型与任务中心用同一套 [fileKindOf] 判定,两处显示不会打架。
  */
 @Composable
 private fun UserDataPage(
@@ -1337,222 +1375,194 @@ private fun UserDataPage(
     val transport = AgentConnection.connTransport.collectAsState().value
     val connAddr = AgentConnection.connAddress.collectAsState().value
 
-    Column(Modifier.fillMaxSize()) {
-        // ---------- 顶栏:返回 + 标题 ----------
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "用户数据管理",
-                Modifier.weight(1f),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = Pa.TextPrimary,
-            )
-        }
-
-        androidx.compose.foundation.lazy.LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 16.dp, end = 16.dp, bottom = 28.dp,
-            ),
-        ) {
-            // ---------- 连接 ----------
-            item {
-                SectionBlock(icon = R.drawable.ic_lucide_globe, title = "连接") {
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .background(
-                                    when (connState) {
-                                        "ok" -> Pa.Green
-                                        "down" -> Pa.Red
-                                        else -> Pa.TextTertiary
-                                    },
-                                    CircleShape,
-                                ),
-                        )
-                        Spacer(Modifier.width(9.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                when (connState) {
-                                    "ok" -> "已连接 · " + transport
-                                    "down" -> "未连接 · 自动重连中"
-                                    else -> "检查中…"
-                                },
-                                fontSize = 13.5.sp,
-                                color = Pa.TextPrimary,
-                            )
-                            Text(
-                                if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
-                                fontSize = 10.5.sp,
-                                color = Pa.TextTertiary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    if (errorMessage != null) {
-                        Text(
-                            errorMessage + (if (errorAddress.isNotEmpty()) "\n地址:" + errorAddress else ""),
-                            Modifier
-                                .fillMaxWidth()
-                                .background(Pa.Bg, RoundedCornerShape(12.dp))
-                                .padding(11.dp),
-                            fontSize = 11.sp,
-                            color = Pa.Red,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                    }
-                    SettingsTextField(
-                        value = addr,
-                        onValueChange = onAddr,
-                        label = "地址 (host:port)",
-                        keyboardType = KeyboardType.Uri,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    SettingsTextField(
-                        value = token,
-                        onValueChange = onToken,
-                        label = "配对 token(未配对留空)",
-                        password = true,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    SplitButton(
-                        label = if (connectionSaving) "连接中…" else "保存并测试连接",
-                        onMainClick = onSaveAndTest,
-                        options = listOf(
-                            SplitOption("仅保存凭证", "不立即测试,交给自动重连接管") { onSaveOnly() },
-                            SplitOption("重新扫描候选地址", "USB → 局域网 → Tailscale 依次尝试") { onRescan() },
-                            SplitOption("清空输入", "重置地址与 token") {
-                                onAddr(""); onToken("")
+    SubPageScaffold(title = "用户数据管理", onBack = onBack) {
+        SectionBlock(icon = R.drawable.ic_lucide_globe, title = "连接") {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .background(
+                            when (connState) {
+                                "ok" -> Pa.Green
+                                "down" -> Pa.Red
+                                else -> Pa.TextTertiary
                             },
+                            CircleShape,
                         ),
+                )
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (connState) {
+                            "ok" -> "已连接 · " + transport
+                            "down" -> "未连接 · 自动重连中"
+                            else -> "检查中…"
+                        },
+                        fontSize = 13.5.sp,
+                        color = Pa.TextPrimary,
                     )
-                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
+                        fontSize = 10.5.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
+            if (errorMessage != null) {
+                Text(
+                    errorMessage + (if (errorAddress.isNotEmpty()) "\n地址:" + errorAddress else ""),
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Bg, RoundedCornerShape(12.dp))
+                        .padding(11.dp),
+                    fontSize = 11.sp,
+                    color = Pa.Red,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            SettingsTextField(
+                value = addr,
+                onValueChange = onAddr,
+                label = "地址 (host:port)",
+                keyboardType = KeyboardType.Uri,
+            )
+            Spacer(Modifier.height(10.dp))
+            SettingsTextField(
+                value = token,
+                onValueChange = onToken,
+                label = "配对 token(未配对留空)",
+                password = true,
+            )
+            Spacer(Modifier.height(12.dp))
+            SplitButton(
+                label = if (connectionSaving) "连接中…" else "保存并测试连接",
+                onMainClick = onSaveAndTest,
+                options = listOf(
+                    SplitOption("仅保存凭证", "不立即测试,交给自动重连接管") { onSaveOnly() },
+                    SplitOption("重新扫描候选地址", "USB → 局域网 → Tailscale 依次尝试") { onRescan() },
+                    SplitOption("清空输入", "重置地址与 token") {
+                        onAddr(""); onToken("")
+                    },
+                ),
+            )
+            Spacer(Modifier.height(6.dp))
+        }
 
-            // ---------- 下载内容 ----------
-            item {
-                SectionBlock(
-                    icon = R.drawable.ic_lucide_download,
-                    title = "下载内容 · " + downloads.count { it.status == TaskCenter.Status.DONE } + " 个文件",
-                ) {
-                    if (downloads.isEmpty()) {
-                        Text(
-                            "还没有下载内容。会话里点文件旁的「下载到手机」后会出现在这里。",
-                            Modifier.padding(vertical = 14.dp),
-                            fontSize = 11.5.sp,
-                            color = Pa.TextTertiary,
-                        )
-                    } else {
-                        downloads.forEach { d ->
-                            val kind = fileKindOf(d.title)
-                            Column {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 11.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box(
+        Spacer(Modifier.height(14.dp))
+
+        SectionBlock(
+            icon = R.drawable.ic_lucide_download,
+            title = "下载内容 · " + downloads.count { it.status == TaskCenter.Status.DONE } + " 个文件",
+        ) {
+            if (downloads.isEmpty()) {
+                Text(
+                    "还没有下载内容。在会话右上角「导出对话」或左上角菜单的任务中心里下载后,会出现在这里。",
+                    Modifier.padding(vertical = 14.dp),
+                    fontSize = 11.5.sp,
+                    color = Pa.TextTertiary,
+                )
+            } else {
+                downloads.forEach { d ->
+                    val kind = fileKindOf(d.title)
+                    Column {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(34.dp)
+                                    .background(kind.color.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_lucide_file_text), null,
+                                    tint = kind.color,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                            Spacer(Modifier.width(11.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        d.title.ifEmpty { "(未命名文件)" },
+                                        Modifier.weight(1f, fill = false),
+                                        fontSize = 13.sp,
+                                        color = Pa.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        kind.label,
                                         Modifier
-                                            .size(34.dp)
-                                            .background(kind.color.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(
-                                            painterResource(R.drawable.ic_lucide_file_text), null,
-                                            tint = kind.color,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                    }
-                                    Spacer(Modifier.width(11.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                d.title.ifEmpty { "(未命名文件)" },
-                                                Modifier.weight(1f, fill = false),
-                                                fontSize = 13.sp,
-                                                color = Pa.TextPrimary,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(
-                                                kind.label,
-                                                Modifier
-                                                    .background(kind.color.copy(alpha = 0.18f), RoundedCornerShape(50))
-                                                    .padding(horizontal = 6.dp, vertical = 1.dp),
-                                                fontSize = 9.5.sp,
-                                                color = kind.color,
-                                            )
-                                        }
-                                        Text(
-                                            listOf(
-                                                d.sizeText,
-                                                if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
-                                                statusLabel(d.status),
-                                            ).filter { it.isNotEmpty() }.joinToString("  ·  "),
-                                            Modifier.padding(top = 2.dp),
-                                            fontSize = 10.5.sp,
-                                            color = Pa.TextTertiary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        if (d.detail.isNotEmpty()) {
-                                            Text(
-                                                d.detail,
-                                                fontSize = 9.5.sp,
-                                                color = Pa.TextTertiary,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                    }
-                                    if (d.localUri.isNotEmpty()) {
-                                        IconActionButton(
-                                            R.drawable.ic_lucide_globe, "查看",
-                                            {
-                                                PaDownloader.openLocalFile(
-                                                    ctx = ctx, uri = d.localUri, title = d.title,
-                                                    detail = d.detail, onOpenInBrowser = onOpenBrowser,
-                                                )
-                                            },
-                                            bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                        )
-                                        IconActionButton(
-                                            R.drawable.ic_lucide_share_2, "分享",
-                                            { shareLocalFile(ctx, d.localUri) },
-                                            bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                        )
-                                    }
-                                    IconActionButton(
-                                        R.drawable.ic_lucide_trash_2, "删除",
-                                        {
-                                            deleteLocalFile(ctx, d.localUri)
-                                            TaskCenter.remove(d.id)
-                                            Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
-                                        },
-                                        bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                        tint = Pa.TextTertiary,
+                                            .background(kind.color.copy(alpha = 0.18f), RoundedCornerShape(50))
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                                        fontSize = 9.5.sp,
+                                        color = kind.color,
                                     )
                                 }
-                                Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                                Text(
+                                    listOf(
+                                        d.sizeText,
+                                        if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
+                                        statusLabel(d.status),
+                                    ).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                                    Modifier.padding(top = 2.dp),
+                                    fontSize = 10.5.sp,
+                                    color = Pa.TextTertiary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (d.detail.isNotEmpty()) {
+                                    Text(
+                                        d.detail,
+                                        fontSize = 9.5.sp,
+                                        color = Pa.TextTertiary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
+                            if (d.status == TaskCenter.Status.DONE && d.localUri.isNotEmpty()) {
+                                // 查看:网页/文本/Markdown/图片 → 内置浏览器;安装包/文档 → 系统打开
+                                IconActionButton(
+                                    R.drawable.ic_lucide_globe, "查看",
+                                    {
+                                        PaDownloader.openLocalFile(
+                                            ctx = ctx, uri = d.localUri, title = d.title,
+                                            detail = d.detail, onOpenInBrowser = onOpenBrowser,
+                                        )
+                                    },
+                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                )
+                                IconActionButton(
+                                    R.drawable.ic_lucide_share_2, "分享",
+                                    { shareLocalFile(ctx, d.localUri) },
+                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                )
+                            }
+                            IconActionButton(
+                                R.drawable.ic_lucide_trash_2, "删除",
+                                {
+                                    deleteLocalFile(ctx, d.localUri)
+                                    TaskCenter.remove(d.id)
+                                    Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
+                                },
+                                bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                tint = Pa.TextTertiary,
+                            )
                         }
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
                     }
                 }
             }
         }
+        Spacer(Modifier.height(20.dp))
     }
 }
