@@ -80,6 +80,14 @@ object ThreadUsageStore {
         p.edit().putString(threadId, obj.toString()).apply()
     }
 
+    /** 回收:会话在电脑端被删后清掉残留的用量键。 */
+    fun remove(threadId: String) {
+        prefs?.edit()?.remove(threadId)?.apply()
+    }
+
+    /** 已缓存过用量的会话 id(供失效回收比对)。 */
+    fun allIds(): Set<String> = prefs?.all?.keys ?: emptySet()
+
     fun load(threadId: String): Snapshot? {
         val p = prefs ?: return null
         val raw = p.getString(threadId, null) ?: return null

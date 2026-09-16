@@ -1008,6 +1008,8 @@ fun ChatScreen(
     var codexSettings by remember { mutableStateOf<CodexSettings?>(null) }
     var models by remember { mutableStateOf(listOf<ModelInfo>()) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    // 聊天区当前是否是"离线快照"(决定错误条用提示色而非报错色,并提示输入框不可用)
+    var offlineSnapshot by remember { mutableStateOf(false) }
     var reloadToken by remember { mutableStateOf(0) }
     // 侧边栏品牌行的电脑名(与其他页面一致)
     var hostName by remember { mutableStateOf("") }
@@ -1203,10 +1205,35 @@ fun ChatScreen(
                     st.items.addAll(historyToChatItems(resp.messagesList))
                     listState.scrollToItem(st.items.size - 1)
                 }
+                // 【离线快照】成功后落一份本地只读副本(只留 role+text:
+                // 图片/工具结果离线圈不了,宁可少显示也不能错显示)。
+                dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(
+                    threadId,
+                    st.items
+                        .filter { it.role != "tool" && it.attachments.isEmpty() && it.text.isNotBlank() }
+                        .map { dev.pocketagent.app.ui.component.ThreadSnapshot.Msg(it.role, it.text) },
+                )
             }
             st.historyLoaded = true
+            offlineSnapshot = false
         } catch (e: Exception) {
-            loadError = "无法加载会话历史：${e.message ?: "连接失败"}"
+            // 连不上:有快照就渲染快照并标明,没有才报错(保持原行为)。
+            val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.loadMessages(threadId)
+            if (!snap.isNullOrEmpty()) {
+                st.items.clear()
+                st.items.addAll(snap.map { ChatItem(role = it.role, text = it.text) })
+                listState.scrollToItem(st.items.size - 1)
+                val at = dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
+                loadError = if (at > 0) {
+                    "离线:显示的是 ${dev.pocketagent.app.ui.component.agoText(at)}的本地记录"
+                } else {
+                    "离线:显示的是本地记录"
+                }
+                offlineSnapshot = true
+            } else {
+                loadError = "无法加载会话历史：${e.message ?: "连接失败"}"
+                offlineSnapshot = false
+            }
         }
     }
 
@@ -1293,6 +1320,34 @@ fun ChatScreen(
                     .background(if (hasFailure) Pa.Red else Pa.Accent, CircleShape),
             )
             Spacer(Modifier.width(14.dp))
+        }
+
+        // ---- 连接/加载提示条 ----
+        // 原先 loadError 只有顶栏一个小红点,用户看不到"为什么打不开"。
+        // 离线快照渲染时尤其要说明:看到的是本地记录,不是实时内容。
+        loadError?.let { msg ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 2.dp)
+                    .background(Pa.Card, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    msg, Modifier.weight(1f),
+                    fontSize = 11.5.sp,
+                    color = if (offlineSnapshot) Pa.Yellow else Pa.Red,
+                    maxLines = 2,
+                )
+                TextButton(onClick = {
+                    loadError = null
+                    offlineSnapshot = false
+                    reloadToken++
+                }) {
+                    Text("重试", fontSize = 11.5.sp, color = Pa.Accent)
+                }
+            }
         }
 
         // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----

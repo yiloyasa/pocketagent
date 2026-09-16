@@ -49,9 +49,13 @@ object PaDownloader {
         if (running.incrementAndGet() == 1) AgentConnection.startTurnService()
         scope.launch {
             var sink: OutputStream? = null
+            // 【失败清理】记录已建好的写入位置:半路失败时把半截文件删掉,
+            // 否则系统「下载/PocketAgent」里会堆积 0KB/半截的残留(用户在 app 里看不到,只能去文件管理里翻)。
+            var targetUri: String? = null
             try {
                 val target = createSink(ctx, name, mimeOf(name))
                 sink = target.first
+                targetUri = target.third
                 val display = target.second
                 var written = 0L
                 var total = 0L
@@ -75,12 +79,19 @@ object PaDownloader {
                         "${fmt(written)}${if (total > 0) " / ${fmt(total)}" else ""}",
                     )
                 }
+                // 【完整性校验】流正常结束但没下满(daemon 中途退出/被代理截断)——
+                // 之前这种情况会报"成功"但文件是坏的,现在按失败处理并清理。
+                if (total > 0 && written < total) {
+                    throw IllegalStateException("传输不完整:${fmt(written)} / ${fmt(total)}")
+                }
                 sink.flush()
                 TaskCenter.finishDownload(
                     taskId, true, "已保存到「$display」",
                     localUri = target.third, sizeText = fmt(written),
                 )
+                targetUri = null // 成功:文件归用户,不再清理
             } catch (e: Exception) {
+                deletePartialFile(ctx, targetUri, sink)
                 TaskCenter.finishDownload(taskId, false, "下载失败:${e.message ?: "未知错误"}")
             } finally {
                 runCatching { sink?.close() }
@@ -98,12 +109,14 @@ object PaDownloader {
         if (running.incrementAndGet() == 1) AgentConnection.startTurnService()
         scope.launch {
             var sink: OutputStream? = null
+            var targetUri: String? = null
             try {
                 // 【MIME 必须按名字给】之前这里硬编码 text/plain,MediaStore 会据此
                 // 把 DISPLAY_NAME 补成 ".md.txt" —— 文件名和内容对不上,
                 // 分享出去对方也认不出是 Markdown。统一走 FileKind。
                 val target = createSink(ctx, safeName, mimeOf(safeName))
                 sink = target.first
+                targetUri = target.third
                 val bytes = text.toByteArray()
                 sink.write(bytes)
                 sink.flush()
@@ -111,7 +124,9 @@ object PaDownloader {
                     taskId, true, "已保存到「${target.second}」",
                     localUri = target.third, sizeText = fmt(bytes.size.toLong()),
                 )
+                targetUri = null
             } catch (e: Exception) {
+                deletePartialFile(ctx, targetUri, sink)
                 TaskCenter.finishDownload(taskId, false, "保存失败:${e.message ?: "未知错误"}")
             } finally {
                 runCatching { sink?.close() }
@@ -149,6 +164,23 @@ object PaDownloader {
     }
 
     /**
+     * 失败路径清理半截文件:MediaStore 条目整条删掉(不留 0KB 残尸),
+     * 低版本 file:// 直接删文件。删不动就算了 —— 不让清理失败掩盖真正的下载错误。
+     */
+    private fun deletePartialFile(ctx: Context, uri: String?, sink: OutputStream?) {
+        if (uri == null) return
+        runCatching { sink?.close() }
+        runCatching {
+            val parsed = android.net.Uri.parse(uri)
+            if (parsed.scheme == "content") {
+                ctx.contentResolver.delete(parsed, null, null)
+            } else {
+                parsed.path?.let { java.io.File(it).delete() }
+            }
+        }
+    }
+
+    /**
      * 打开已下载到手机的文件 —— 按 [FileKind.preview] 三态分派。
      *
      *  · IN_APP   → 交给内置浏览器(网页/文本/Markdown/图片/Office/PDF 都能渲染);
@@ -164,6 +196,13 @@ object PaDownloader {
     ) {
         if (uri.isEmpty()) {
             toast(ctx, if (detail.isNotEmpty()) detail else "文件位置未知")
+            return
+        }
+        // 【悬空条目】用户可能在系统文件管理器/清理软件里把文件删了,
+        // 而任务条目还留着 localUri —— 直接打开会静默失败或白屏。
+        // 先校验存在性,失效就明说并给出去处。
+        if (!localFileExists(ctx, uri)) {
+            toast(ctx, "文件已被移动或删除\n可在「设置 → 用户数据管理」里移除该条目")
             return
         }
         val kind = fileKindOf(title)
@@ -185,6 +224,37 @@ object PaDownloader {
         } catch (_: Exception) {
             toast(ctx, "手机上还没有能打开 ${kind.label} 的应用\n已保存到:${detail.ifEmpty { uri }}")
         }
+    }
+
+    /**
+     * 清理悬空下载条目:文件已被用户/清理软件删掉,但任务条目还留着,
+     * 点「查看」会静默失败(审查 D2)。返回清理掉的条数。
+     * 只动 localUri 非空且确认失效的条目;localUri 为空的(老版本历史条目)不动。
+     */
+    fun pruneDanglingTasks(ctx: Context): Int {
+        val targets = TaskCenter.tasks.value.filter {
+            it.kind == TaskCenter.Kind.DOWNLOAD && it.localUri.isNotEmpty()
+        }
+        var n = 0
+        targets.forEach { t ->
+            if (!localFileExists(ctx, t.localUri)) {
+                TaskCenter.remove(t.id)
+                n++
+            }
+        }
+        return n
+    }
+
+    /** 本地文件是否还实际存在(系统侧可能已被用户或清理软件删除)。 */
+    fun localFileExists(ctx: Context, uri: String): Boolean {
+        return runCatching {
+            val parsed = android.net.Uri.parse(uri)
+            when (parsed.scheme) {
+                "content" -> ctx.contentResolver.openFileDescriptor(parsed, "r")?.use { true } ?: false
+                "file" -> parsed.path?.let { java.io.File(it).exists() } ?: false
+                else -> false
+            }
+        }.getOrDefault(false)
     }
 
     /**

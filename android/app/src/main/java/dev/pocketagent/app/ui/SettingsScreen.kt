@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1020,11 +1021,21 @@ private fun statusLabel(s: TaskCenter.Status): String = when (s) {
     TaskCenter.Status.INTERRUPTED -> "已中断"
 }
 
-/** 分享已下载的文件(交给系统分享面板)。 */
-/** 删除手机上的文件(删不掉就忽略:任务项本身仍会移除)。 */
-private fun deleteLocalFile(ctx: android.content.Context, uri: String) {
-    if (uri.isEmpty()) return
-    runCatching { ctx.contentResolver.delete(android.net.Uri.parse(uri), null, null) }
+/**
+ * 删除手机上的文件。
+ * @return 是否真的删掉了(uri 为空视为无可删,返回 true 以免误报;删除异常/未命中返回 false)。
+ * 调用方据此决定提示 —— 删不掉还 toast「已删除」是欺骗用户。
+ */
+private fun deleteLocalFile(ctx: android.content.Context, uri: String): Boolean {
+    if (uri.isEmpty()) return true
+    return runCatching {
+        val parsed = android.net.Uri.parse(uri)
+        if (parsed.scheme == "content") {
+            ctx.contentResolver.delete(parsed, null, null) > 0
+        } else {
+            parsed.path?.let { java.io.File(it).delete() } ?: false
+        }
+    }.getOrDefault(false)
 }
 
 /**
@@ -1563,9 +1574,15 @@ private fun UserDataPage(
                             IconActionButton(
                                 R.drawable.ic_lucide_trash_2, "删除",
                                 {
-                                    deleteLocalFile(ctx, d.localUri)
+                                    // 条目无论如何都移除(留着只会变成打不开的死条目),
+                                    // 但提示按实际删除结果说 —— 删不掉不再谎报「已删除」。
+                                    val deleted = deleteLocalFile(ctx, d.localUri)
                                     TaskCenter.remove(d.id)
-                                    Toast.makeText(ctx, "已删除", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        ctx,
+                                        if (deleted) "已删除" else "文件可能已被系统清理,条目已移除",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
                                 },
                                 bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
                                 tint = Pa.TextTertiary,
@@ -1576,6 +1593,202 @@ private fun UserDataPage(
                 }
             }
         }
+        CacheSection(taskCount = allTasks.size, downloadCount = downloads.size)
         Spacer(Modifier.height(20.dp))
     }
+}
+
+/**
+ * 缓存管理:让用户看得见"app 到底占了多少本地空间",并给出清理入口。
+ *
+ * 【为什么需要】之前除了"清理已完成的任务"没有任何缓存回收手段 ——
+ * 用户遇到"手机空间不足"对 app 无抓手,只能卸载重装(连 token 一起丢)。
+ *
+ * 【清理策略】(对应审查 2.3 矩阵)
+ * - 临时文件/悬空条目/浏览器数据:可再生,随时可清;
+ * - 已下载的文件本体:**不在这里动** —— 那属于用户内容,只在上面的列表里逐条删。
+ */
+@Composable
+private fun CacheSection(taskCount: Int, downloadCount: Int) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var previewBytes by remember { mutableLongStateOf(0L) }
+    var snapshotBytes by remember { mutableLongStateOf(0L) }
+    var tempBytes by remember { mutableLongStateOf(0L) }
+    var browserBytes by remember { mutableLongStateOf(0L) }
+    var toastMsg by remember { mutableStateOf<String?>(null) }
+    var confirmClearTasks by remember { mutableStateOf(false) }
+
+    /** 统计走 IO 线程:遍历目录不能在 UI 线程做。 */
+    fun reload() = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        val pv = dev.pocketagent.app.ui.component.PreviewCache.usage()
+        val sn = dev.pocketagent.app.ui.component.ThreadSnapshot.usage()
+        val tp = dev.pocketagent.app.ui.component.PaCache.tempUsage(ctx)
+        val br = webDataUsage(ctx)
+        withContext(kotlinx.coroutines.Dispatchers.Main) {
+            previewBytes = pv
+            snapshotBytes = sn
+            tempBytes = tp
+            browserBytes = br
+        }
+    }
+    LaunchedEffect(Unit) { reload() }
+
+    toastMsg?.let { msg ->
+        LaunchedEffect(msg) {
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+            toastMsg = null
+        }
+    }
+
+    SectionBlock(icon = R.drawable.ic_lucide_trash_2, title = "缓存") {
+        // ---- 占用一览 ----
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+            StatCell2("预览缓存", sizeText(previewBytes), Modifier.weight(1f))
+            StatCell2("会话快照", sizeText(snapshotBytes), Modifier.weight(1f))
+            StatCell2("临时文件", sizeText(tempBytes), Modifier.weight(1f))
+        }
+        Text(
+            "浏览器数据 ${sizeText(browserBytes)} · 任务条目 $taskCount 条(其中下载 $downloadCount 条)",
+            Modifier.padding(bottom = 8.dp),
+            fontSize = 10.5.sp,
+            color = Pa.TextTertiary,
+        )
+
+        // ---- 清理临时与失效缓存 ----
+        CacheActionRow(
+            title = "清理临时与失效缓存",
+            desc = "崩溃残留的临时文件、文件已被删除的下载条目",
+        ) {
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val temps = dev.pocketagent.app.ui.component.PaCache.sweepTemp(ctx)
+                val dangling = dev.pocketagent.app.ui.component.PaDownloader.pruneDanglingTasks(ctx)
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    reload()
+                    toastMsg = when {
+                        temps == 0 && dangling == 0 -> "没有需要清理的内容"
+                        else -> "已清理:${listOfNotNull(
+                            if (temps > 0) "$temps 个临时文件" else null,
+                            if (dangling > 0) "$dangling 个失效条目" else null,
+                        ).joinToString("、")}"
+                    }
+                }
+            }
+        }
+
+        // ---- 清理预览与快照缓存(离线能力会一起清空,所以说明清楚) ----
+        if (previewBytes + snapshotBytes > 0) {
+            CacheActionRow(
+                title = "清空预览与会话快照",
+                desc = "释放 ${sizeText(previewBytes + snapshotBytes)};离线可看的内容也会一并消失,联网后自动重建",
+            ) {
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val a = dev.pocketagent.app.ui.component.PreviewCache.clear()
+                    val b = dev.pocketagent.app.ui.component.ThreadSnapshot.clear()
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        reload()
+                        toastMsg = "已释放 ${sizeText(a + b)}"
+                    }
+                }
+            }
+        }
+
+        // ---- 清理浏览器数据 ----
+        CacheActionRow(
+            title = "清理浏览器数据",
+            desc = "内置浏览器的缓存、Cookie 与网页存储",
+        ) {
+            dev.pocketagent.app.ui.component.PaCache.clearBrowserData(ctx)
+            reload()
+            toastMsg = "浏览器数据已清理"
+        }
+
+        // ---- 清空任务条目(保留文件本体,需二次确认) ----
+        CacheActionRow(
+            title = "清空已完成的任务条目",
+            desc = "只清列表,不删已下载的文件",
+            danger = true,
+        ) {
+            confirmClearTasks = true
+        }
+    }
+
+    if (confirmClearTasks) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClearTasks = false },
+            title = { Text("清空任务条目?", color = Pa.TextPrimary) },
+            text = {
+                Text(
+                    "只移除任务中心的记录,已下载到手机的文件不受影响。此操作不可撤销。",
+                    color = Pa.TextSecondary, fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    TaskCenter.clearFinished()
+                    confirmClearTasks = false
+                    reload()
+                    toastMsg = "已清空已完成的条目"
+                }) { Text("清空", color = Pa.Red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearTasks = false }) {
+                    Text("取消", color = Pa.TextSecondary)
+                }
+            },
+            containerColor = Pa.CardHigh,
+        )
+    }
+}
+
+/** 缓存分区的一格数字。 */
+@Composable
+private fun StatCell2(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        Text(value, fontSize = 13.sp, color = Pa.TextPrimary)
+        Text(label, Modifier.padding(top = 2.dp), fontSize = 10.sp, color = Pa.TextTertiary)
+    }
+}
+
+/** 缓存管理里的一个可执行动作行。 */
+@Composable
+private fun CacheActionRow(
+    title: String,
+    desc: String,
+    danger: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(haptic = true, onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, color = if (danger) Pa.Red else Pa.TextPrimary)
+            Text(desc, Modifier.padding(top = 2.dp), fontSize = 10.5.sp, color = Pa.TextTertiary)
+        }
+        Icon(
+            painterResource(R.drawable.ic_lucide_chevron_right), null,
+            tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
+        )
+    }
+}
+
+/** 人类可读的体积。 */
+private fun sizeText(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1fMB", bytes / 1048576f)
+    bytes >= 1024 -> String.format(java.util.Locale.US, "%.0fKB", bytes / 1024f)
+    else -> "${bytes}B"
+}
+
+/** WebView 数据占用(app_webview 目录),粗算即可 —— 只用于给用户看个量级。 */
+private fun webDataUsage(ctx: android.content.Context): Long {
+    val dir = java.io.File(ctx.applicationInfo.dataDir, "app_webview")
+    return runCatching {
+        fun size(f: java.io.File): Long =
+            if (f.isDirectory) (f.listFiles()?.sumOf { size(it) } ?: 0L) else f.length()
+        size(dir)
+    }.getOrDefault(0L)
 }

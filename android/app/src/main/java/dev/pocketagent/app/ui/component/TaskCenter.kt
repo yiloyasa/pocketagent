@@ -139,7 +139,10 @@ object TaskCenter {
         // 这里保证只增不减。
         t.progress = maxOf(t.progress, progress.coerceIn(0f, 1f))
         if (detail.isNotEmpty()) t.detail = detail
-        persist()
+        // 【节流】下载分块(64KB/块)到达频繁:512MB 文件 = 8192 次。
+        // UI 每块都刷新,但磁盘写合并(每 300ms 最多一次),
+        // 完成时的 finishDownload(immediate) 兜底,不会丢最终状态。
+        persist(immediate = false)
     }
 
     /** 下载完成:记录文件位置与大小,供列表点击打开。 */
@@ -187,7 +190,26 @@ object TaskCenter {
 
     // ---------------------------------------------------------------- 内部
 
-    private fun persist() {
+    /** 下载分块高频进度更新的落盘节流间隔。 */
+    private const val PERSIST_THROTTLE_MS = 300L
+
+    /** 滚动上限:每类(消息/下载)最多保留这么多条「已结束且已读」的任务,最旧先淘汰。 */
+    private const val MAX_FINISHED_PER_KIND = 50
+
+    /** 落盘走单线程串行队列:字符串构建与写盘都不占调用方线程。 */
+    private val persistExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "pa-task-persist").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var lastDiskWrite = 0L
+
+    /**
+     * @param immediate true(默认)= 状态性变化(登记/完成/删除/已读),立即落盘;
+     *                 false = 高频进度更新,300ms 合并写盘(UI 不受影响,永远实时)。
+     */
+    private fun persist(immediate: Boolean = true) {
+        applyCap()
         // 【必须】StateFlow 只按引用比对,原地修改 List 里的 Task 不会通知订阅者。
         // 这里统一重新发射一次,保证任务中心列表与角标能收到变更。
         _tasks.value = _tasks.value.toList()
@@ -198,6 +220,34 @@ object TaskCenter {
         _unreadCount.value = _tasks.value.count { !it.read }
 
         val p = prefs ?: return
+        if (immediate) {
+            lastDiskWrite = System.currentTimeMillis()
+            persistExecutor.execute { writeDisk(p) }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastDiskWrite < PERSIST_THROTTLE_MS) return // 节流窗口内:稍后的块会再触发
+        lastDiskWrite = now
+        persistExecutor.execute { writeDisk(p) }
+    }
+
+    /** 滚动上限:已结束且已读的任务每类只留最近 [MAX_FINISHED_PER_KIND] 条(索引无限增长会拖慢每次全量重写)。RUNNING 与未读不裁。 */
+    private fun applyCap() {
+        val all = _tasks.value
+        val finishedReadCount = all.count { it.status != Status.RUNNING && it.read }
+        if (finishedReadCount <= MAX_FINISHED_PER_KIND * 2) return
+        val kept = mutableListOf<Task>()
+        for (kind in listOf(Kind.MESSAGE, Kind.DOWNLOAD)) {
+            val list = all.filter { it.kind == kind }
+            kept += list.filter { it.status == Status.RUNNING || !it.read }
+            kept += list.filter { it.status != Status.RUNNING && it.read }
+                .sortedByDescending { it.startedAt }
+                .take(MAX_FINISHED_PER_KIND)
+        }
+        if (kept.size < all.size) _tasks.value = kept.toList()
+    }
+
+    private fun writeDisk(p: SharedPreferences) {
         val text = _tasks.value.joinToString("\n") { t ->
             listOf(
                 t.id, t.threadId, t.kind.name, t.title, t.status.name,

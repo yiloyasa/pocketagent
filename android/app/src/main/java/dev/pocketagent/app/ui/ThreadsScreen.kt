@@ -141,6 +141,8 @@ fun ThreadsScreen(
     val undo = rememberUndoState()
     var showNewThread by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    // 列表是否是"离线快照"渲染的(决定错误条的颜色:离线用提示色而非报错色)
+    var offline by remember { mutableStateOf(false) }
     // 电脑会话单独记录错误:拉不到时要能看见,而不是显示成「电脑里什么都没有」
     var pcError by remember { mutableStateOf<String?>(null) }
     // 首次加载中:列表区显示骨架屏(设计规范 §2.3)。只在"列表还空着"时才出,
@@ -216,9 +218,56 @@ fun ThreadsScreen(
                     }
                 }
                 loadError = null
+                offline = false
+
+                // 【失效键回收】会话在电脑端被删后,手机端的 threadModel/usage 键会永久残留。
+                // 这里在 IO 线程内用"全量列表"(all 含归档)比对,延迟 7 天清理。
+                runCatching {
+                    val live: Set<String> = all.map { it.id }.filter { it.isNotEmpty() }.toSet()
+                    dev.pocketagent.app.ui.component.ThreadSnapshot.pruneStalePrefs(live)
+                }
             }
+            // 【离线快照】拉取成功就落一份本地副本:断网时列表还能照常显示
+            // (遥控器形态下,"上次连上时有哪些会话"本身就是有用信息)。
+            dev.pocketagent.app.ui.component.ThreadSnapshot.saveThreads(
+                threads.map {
+                    dev.pocketagent.app.ui.component.ThreadSnapshot.Row(
+                        id = it.id,
+                        title = it.title,
+                        updatedAtUnixMs = it.updatedAtUnixMs,
+                        workspace = it.workspace,
+                        codexThreadId = it.codexThreadId,
+                        archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
+                    )
+                },
+            )
         } catch (e: Exception) {
-            loadError = "会话列表加载失败：${e.message ?: "连接失败"}"
+            // 连不上就退回快照:有快照 → 显示并标明是离线副本;没有 → 保持原报错。
+            val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.loadThreads()
+                .filter { it.archived == showArchived }
+            if (snap.isNotEmpty()) {
+                threads = snap.map {
+                    PThread.newBuilder()
+                        .setId(it.id)
+                        .setTitle(it.title)
+                        .setUpdatedAtUnixMs(it.updatedAtUnixMs)
+                        .setWorkspace(it.workspace)
+                        .setCodexThreadId(it.codexThreadId)
+                        .build()
+                }
+                pcThreads = emptyList()
+                pcError = null
+                val at = dev.pocketagent.app.ui.component.ThreadSnapshot.threadsSnapshotAt()
+                loadError = if (at > 0) {
+                    "离线:显示的是 ${dev.pocketagent.app.ui.component.agoText(at)}同步的快照,点击重试"
+                } else {
+                    "离线:显示的是本地快照,点击重试"
+                }
+                offline = true
+            } else {
+                loadError = "会话列表加载失败：${e.message ?: "连接失败"}"
+                offline = false
+            }
         }
         pinned = ThreadPins.all()
         loading = false
@@ -370,7 +419,10 @@ fun ThreadsScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(message, Modifier.weight(1f), fontSize = 12.sp, color = Pa.Red, maxLines = 2)
+                    Text(
+                        message, Modifier.weight(1f), fontSize = 12.sp,
+                        color = if (offline) Pa.Yellow else Pa.Red, maxLines = 2,
+                    )
                     TextButton(onClick = { refresh() }) {
                         Text("重试", color = Pa.Accent)
                     }

@@ -282,7 +282,11 @@ fun FilesScreen(
                                     // 【能力矩阵分派】能内置渲染的一律交给内置浏览器 ——
                                     // Office / PDF / Markdown / 图片 / 网页 都能排版展示,
                                     // 比在这个弹层里塞纯文本好得多。
-                                    kind?.preview == PreviewMode.IN_APP -> onOpenBrowser("pc:" + e.path)
+                                    kind?.preview == PreviewMode.IN_APP -> onOpenBrowser(
+                                        // 【带上目录条目的 size/mtime】内置浏览器据此生成预览缓存键 ——
+                                        // 文件在电脑上被改过 → mtime 变 → 键变 → 自动重拉,不会看到旧内容。
+                                        "pc:" + e.path + "?_pas=" + e.sizeBytes + "&_pam=" + e.modifiedUnixMs,
+                                    )
                                     // 内置不了(旧版 Office / 压缩包 / 音视频)才引导下载
                                     else -> askDownload = e
                                 }

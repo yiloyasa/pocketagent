@@ -319,6 +319,13 @@ object AgentConnection {
         prefs?.edit()?.putString("threadModel:$threadId", modelId)?.apply()
     }
 
+    /** 回收:会话在电脑端被删后清掉本地残留的模型键(否则键随会话数无上界增长)。 */
+    fun removeThreadModel(threadId: String) {
+        if (threadId.isBlank()) return
+        threadModels.remove(threadId)
+        prefs?.edit()?.remove("threadModel:$threadId")?.apply()
+    }
+
     /** 切换当前运行的 agent(设置页第二板块跟随它变化)。 */
     fun switchAgent(agentId: String) {
         val id = agentId.trim()

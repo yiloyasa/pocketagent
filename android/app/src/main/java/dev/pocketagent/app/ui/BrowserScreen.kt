@@ -74,7 +74,7 @@ import pocketagent.v1.ReadFileRequest
 fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var input by remember { mutableStateOf(initialUrl.removePrefix("pc:")) }
+    var input by remember { mutableStateOf(stripPcMeta(initialUrl)) }
     var progress by remember { mutableFloatStateOf(0f) }
     var pageTitle by remember { mutableStateOf("") }
     var canGoBack by remember { mutableStateOf(false) }
@@ -142,8 +142,14 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         }
     }
 
-    /** 读电脑上的文件并渲染。 */
-    fun openPcFile(path: String) {
+    /**
+     * 读电脑上的文件并渲染。
+     *
+     * @param cacheSize/cacheMtime 来源目录条目的 size/mtime(FilesScreen 进入时携带)。
+     * 有元数据 → 先查[预览内容缓存][dev.pocketagent.app.ui.component.PreviewCache],
+     * 命中免传输(离线时同样可用);未命中则拉取后回填。无元数据(消息里的裸路径)不走缓存 —— 宁可慢,不能脏。
+     */
+    fun openPcFile(path: String, cacheSize: Long = -1L, cacheMtime: Long = -1L) {
         input = path
         loadingPc = true
         pcPath = path
@@ -151,6 +157,15 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         pageTitle = path.substringAfterLast('/').substringAfterLast('\\')
         scope.launch {
             try {
+                if (cacheSize >= 0 && cacheMtime >= 0) {
+                    val cached = withContext(Dispatchers.IO) {
+                        dev.pocketagent.app.ui.component.PreviewCache.get(path, cacheSize, cacheMtime)
+                    }
+                    if (cached != null) {
+                        renderBytes(pageTitle, cached)
+                        return@launch
+                    }
+                }
                 val bytes = withContext(Dispatchers.IO) {
                     val stream = AgentConnection.fileService().readFile(
                         // 【必须显式给上限】max_bytes=0 表示"用服务端默认值",而默认只有 2MB ——
@@ -165,6 +180,12 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     while (stream.hasNext()) buf.write(stream.next().data.toByteArray())
                     buf.toByteArray()
                 }
+                // 回填预览缓存:字节数与元数据一致才写(不一致说明元数据过期,宁可不缓存)
+                if (cacheSize >= 0 && cacheMtime >= 0 && bytes.size.toLong() == cacheSize) {
+                    withContext(Dispatchers.IO) {
+                        dev.pocketagent.app.ui.component.PreviewCache.put(path, cacheSize, cacheMtime, bytes)
+                    }
+                }
                 renderBytes(pageTitle, bytes)
             } catch (e: Exception) {
                 // 文件不存在/读不到:给可读的失败页,而不是继续白着
@@ -173,6 +194,25 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 loadingPc = false
             }
         }
+    }
+
+    /**
+     * pc: 地址统一入口:`pc:<path>[?_pas=<size>&_pam=<mtime>]`。
+     * 元数据由 FilesScreen 从目录条目带上(Windows 文件名禁止 ?,无歧义),
+     * 供预览缓存做精确失效;没有就按裸路径打开。
+     */
+    fun openPcUrl(url: String) {
+        val raw = url.removePrefix("pc:")
+        val idx = raw.indexOf("?_pas=")
+        if (idx < 0) {
+            openPcFile(raw)
+            return
+        }
+        val path = raw.substring(0, idx)
+        val meta = raw.substring(idx + "?_pas=".length)
+        val size = meta.substringBefore('&').toLongOrNull() ?: -1L
+        val mtime = meta.substringAfter("_pam=", "").toLongOrNull() ?: -1L
+        openPcFile(path, size, mtime)
     }
 
     /** 打开已下载到手机的文件(content://),与电脑文件同一条渲染管线。 */
@@ -497,7 +537,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     }
                     webRef = this
                     when {
-                        initialUrl.startsWith("pc:") -> openPcFile(initialUrl.removePrefix("pc:"))
+                        initialUrl.startsWith("pc:") -> openPcUrl(initialUrl)
                         initialUrl.startsWith("content://") -> openLocalUri(initialUrl)
                         initialUrl.isNotBlank() -> loadUrl(normalizeUrl(initialUrl))
                         else -> renderLocal(startPage(), "内置浏览器")
@@ -577,11 +617,21 @@ private fun extForMime(mime: String): String = when {
 }
 
 /**
+ * 剥掉 pc: 地址携带的预览缓存元数据(`?_pas=<size>&_pam=<mtime>`),得到干净路径。
+ * 地址栏要展示/回车重开的是路径本身,元数据只是缓存键的原料,混进去会让 readFile 拿到错误路径。
+ */
+private fun stripPcMeta(raw: String): String {
+    val t = raw.removePrefix("pc:")
+    val idx = t.indexOf("?_pas=")
+    return if (idx < 0) t else t.substring(0, idx)
+}
+
+/**
  * 判断输入是不是"电脑上的路径"。
  * Windows 盘符(`G:\a\b.html` / `C:/a/b`)与 Unix 绝对路径都算。
  * @return 规范化后的路径,不是路径则 null
  */private fun toPcPath(raw: String): String? {
-    val t = raw.trim().removePrefix("pc:").removePrefix("file:///")
+    val t = stripPcMeta(raw.trim()).removePrefix("file:///")
     val windows = Regex("^[A-Za-z]:[\\\\/]")
     return when {
         windows.containsMatchIn(t) -> t.replace('/', '\\')

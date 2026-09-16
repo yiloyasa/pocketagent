@@ -40,9 +40,11 @@ import dev.pocketagent.app.ui.Splash
 import dev.pocketagent.app.ui.TaskCenterScreen
 import dev.pocketagent.app.ui.TerminalScreen
 import dev.pocketagent.app.ui.ThreadsScreen
+import dev.pocketagent.app.ui.component.PaCache
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.ThreadPins
+import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.component.ThreadUsageStore
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaTheme
@@ -55,7 +57,9 @@ class MainActivity : ComponentActivity() {
         TaskCenter.init(this) // 任务中心:恢复未读数与任务清单(杀进程不丢)
         ThreadUsageStore.init(this) // 会话上下文用量缓存:重开会话时回显
         ThreadPins.init(this) // 会话置顶偏好
+        ThreadSnapshot.init(this) // 会话离线快照:断线时列表/最近消息仍可读
         PaDownloader.init(this) // 下载到手机(会话输出/电脑文件)
+        PaCache.init(this) // 缓存管家:启动时清扫崩溃残留的临时文件(pa_pdf_* / pa_ziplist*)
         AgentConnection.startAutoReconnect() // 断线自动重连(USB→Tailscale 回退),恢复后全局刷新
         enableEdgeToEdge()
         setContent {
