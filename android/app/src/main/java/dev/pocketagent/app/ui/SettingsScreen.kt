@@ -63,6 +63,8 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.humanSize
+import dev.pocketagent.app.ui.component.parseHumanSize
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
@@ -1601,6 +1603,12 @@ private fun UserDataPage(
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val allTasks by TaskCenter.tasks.collectAsState()
     val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
+    // 下载合计:把各条已显示的体积字符串解析回字节再相加。
+    // 用"反解析已显示的值"而不是另取一套磁盘统计,是为了保证
+    // **合计恒等于明细之和**,不会出现上下一对不上的新口径矛盾。
+    val downloadBytes = downloads
+        .filter { it.status == TaskCenter.Status.DONE }
+        .sumOf { parseHumanSize(it.sizeText) }
     // 旧版本下载条目是 10 字段格式,没有 localUri → 查看/分享图标被门控隐藏。
     // 进页面按文件名反向找回本地路径,找回后 attachLocalUriIfEmpty→persist()
     // 会重新发射列表,图标随之出现。legacyTried 记录已尝试的 id,防止重组时反复查 MediaStore。
@@ -1699,7 +1707,9 @@ private fun UserDataPage(
 
         SectionBlock(
             icon = R.drawable.ic_lucide_download,
-            title = "下载内容 · " + downloads.count { it.status == TaskCenter.Status.DONE } + " 个文件",
+            title = "下载内容 · " + downloads.count { it.status == TaskCenter.Status.DONE } + " 个文件" +
+                // 总计:用户问"到底占了我多少空间",只给单条体积等于让他自己加
+                if (downloadBytes > 0) " · 共 ${humanSize(downloadBytes)}" else "",
         ) {
             if (downloads.isEmpty()) {
                 Text(
@@ -1811,25 +1821,40 @@ private fun UserDataPage(
                 }
             }
         }
-        CacheSection(taskCount = allTasks.size, downloadCount = downloads.size)
+        CacheSection(
+            taskCount = allTasks.size,
+            downloadCount = downloads.size,
+            downloadBytes = downloadBytes,
+        )
         Spacer(Modifier.height(20.dp))
     }
 }
 
 /**
- * 缓存管理:让用户看得见"app 到底占了多少本地空间",并给出清理入口。
+ * 存储占用 / 缓存管理:让用户看得见"app 到底占了多少本地空间",并给出清理入口。
  *
- * 【为什么需要】之前除了"清理已完成的任务"没有任何缓存回收手段 ——
- * 用户遇到"手机空间不足"对 app 无抓手,只能卸载重装(连 token 一起丢)。
+ * 【口径必须与系统严格一致】系统「设置 → 应用 → 存储占用」是这样分的:
+ *   缓存     = `cacheDir` 的**真实递归大小**
+ *   用户数据 = `filesDir`(以及 SP / 数据库 / WebView 数据目录)
+ * 本页以前只把自建的三项(预览 / 快照 / 临时)相加,于是出现
+ * "系统说 25.72MB、App 说 62KB" —— 差的正是 **WebView 写在 cacheDir 里的
+ * HTTP 缓存与 DOM Storage**,以及被错算进"缓存"、其实属于用户数据的会话快照。
+ * 现在直接量真实目录,两边必然对得上。
  *
  * 【清理策略】(对应审查 2.3 矩阵)
- * - 临时文件/悬空条目/浏览器数据:可再生,随时可清;
- * - 已下载的文件本体:**不在这里动** —— 那属于用户内容,只在上面的列表里逐条删。
+ * - 临时文件 / 悬空条目 / 浏览器数据 / 预览缓存:可再生,随时可清;
+ * - 会话快照:清了会失去离线可看的内容(联网后重建),所以单独说明;
+ * - 已下载的文件本体:**不在这里动** —— 那属于用户内容,只在上面的列表里逐条删;
+ * - 登录凭证与设置:任何清理项都不碰,避免"清缓存把自己清掉线"。
  */
 @Composable
-private fun CacheSection(taskCount: Int, downloadCount: Int) {
+private fun CacheSection(taskCount: Int, downloadCount: Int, downloadBytes: Long) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
+    // 与系统一致的两项
+    var cacheBytes by remember { mutableLongStateOf(0L) }
+    var userBytes by remember { mutableLongStateOf(0L) }
+    // 明细(用于解释"缓存里到底装了什么")
     var previewBytes by remember { mutableLongStateOf(0L) }
     var snapshotBytes by remember { mutableLongStateOf(0L) }
     var tempBytes by remember { mutableLongStateOf(0L) }
@@ -1843,11 +1868,16 @@ private fun CacheSection(taskCount: Int, downloadCount: Int) {
         val sn = dev.pocketagent.app.ui.component.ThreadSnapshot.usage()
         val tp = dev.pocketagent.app.ui.component.PaCache.tempUsage(ctx)
         val br = webDataUsage(ctx)
+        // 真实目录大小 —— 这两个数字就是系统存储页看到的口径
+        val cd = dev.pocketagent.app.ui.component.PaCache.cacheUsage(ctx)
+        val fd = dev.pocketagent.app.ui.component.PaCache.filesUsage(ctx)
         withContext(kotlinx.coroutines.Dispatchers.Main) {
             previewBytes = pv
             snapshotBytes = sn
             tempBytes = tp
             browserBytes = br
+            cacheBytes = cd
+            userBytes = fd
         }
     }
     LaunchedEffect(Unit) { reload() }
@@ -1859,15 +1889,32 @@ private fun CacheSection(taskCount: Int, downloadCount: Int) {
         }
     }
 
-    SectionBlock(icon = R.drawable.ic_lucide_trash_2, title = "缓存") {
-        // ---- 占用一览 ----
+    SectionBlock(icon = R.drawable.ic_lucide_trash_2, title = "存储占用") {
+        // ---- 三格总览:口径与系统存储页一致 ----
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-            StatCell2("预览缓存", sizeText(previewBytes), Modifier.weight(1f))
-            StatCell2("会话快照", sizeText(snapshotBytes), Modifier.weight(1f))
-            StatCell2("临时文件", sizeText(tempBytes), Modifier.weight(1f))
+            StatCell2("缓存", sizeText(cacheBytes), Modifier.weight(1f))
+            StatCell2("用户数据", sizeText(userBytes), Modifier.weight(1f))
+            StatCell2("下载", sizeText(downloadBytes), Modifier.weight(1f))
         }
+        // ---- 逐项说明"这些数字里都是什么",避免含义不明的空白数字 ----
         Text(
-            "浏览器数据 ${sizeText(browserBytes)} · 任务条目 $taskCount 条(其中下载 $downloadCount 条)",
+            "缓存 ${sizeText(cacheBytes)} = 浏览器缓存 ${sizeText(browserBytes)}" +
+                " + 预览缓存 ${sizeText(previewBytes)} + 临时文件 ${sizeText(tempBytes)};" +
+                "与系统「存储占用 → 缓存」是同一个数字,可以对照查看。",
+            Modifier.padding(bottom = 4.dp),
+            fontSize = 10.5.sp,
+            color = Pa.TextTertiary,
+        )
+        Text(
+            "用户数据 ${sizeText(userBytes)} = 会话快照 ${sizeText(snapshotBytes)}" +
+                " + 设置与登录凭证;下方的清理项**都不会动到它**。",
+            Modifier.padding(bottom = 4.dp),
+            fontSize = 10.5.sp,
+            color = Pa.TextTertiary,
+        )
+        Text(
+            "下载 ${sizeText(downloadBytes)} · $downloadCount 个文件 · 任务条目 $taskCount 条;" +
+                "文件本体在系统下载目录,只能在上方列表里逐条删除。",
             Modifier.padding(bottom = 8.dp),
             fontSize = 10.5.sp,
             color = Pa.TextTertiary,
@@ -1876,7 +1923,8 @@ private fun CacheSection(taskCount: Int, downloadCount: Int) {
         // ---- 清理临时与失效缓存 ----
         CacheActionRow(
             title = "清理临时与失效缓存",
-            desc = "崩溃残留的临时文件、文件已被删除的下载条目",
+            desc = "删掉崩溃残留的临时文件与「文件已被删除」的下载条目。" +
+                "不碰预览缓存、不碰登录状态,可随时清。",
         ) {
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val temps = dev.pocketagent.app.ui.component.PaCache.sweepTemp(ctx)
@@ -1898,7 +1946,9 @@ private fun CacheSection(taskCount: Int, downloadCount: Int) {
         if (previewBytes + snapshotBytes > 0) {
             CacheActionRow(
                 title = "清空预览与会话快照",
-                desc = "释放 ${sizeText(previewBytes + snapshotBytes)};离线可看的内容也会一并消失,联网后自动重建",
+                desc = "释放 ${sizeText(previewBytes + snapshotBytes)};" +
+                    "后果:断网时「刚看过的文件」和最近的对话会打不开,联网后自动重建。" +
+                    "不影响登录状态与电脑端内容。",
             ) {
                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     val a = dev.pocketagent.app.ui.component.PreviewCache.clear()
@@ -1914,7 +1964,9 @@ private fun CacheSection(taskCount: Int, downloadCount: Int) {
         // ---- 清理浏览器数据 ----
         CacheActionRow(
             title = "清理浏览器数据",
-            desc = "内置浏览器的缓存、Cookie 与网页存储",
+            desc = "清掉内置浏览器的 HTTP 缓存 / Cookie / 网页存储。" +
+                "后果:在内置浏览器里登录过的网站需要重新登录;" +
+                "不影响电脑端、不影响 App 设置与连接凭证。",
         ) {
             dev.pocketagent.app.ui.component.PaCache.clearBrowserData(ctx)
             reload()
@@ -1924,7 +1976,7 @@ private fun CacheSection(taskCount: Int, downloadCount: Int) {
         // ---- 清空任务条目(保留文件本体,需二次确认) ----
         CacheActionRow(
             title = "清空已完成的任务条目",
-            desc = "只清列表,不删已下载的文件",
+            desc = "只清任务中心的记录列表,不删已下载的文件,也不减上面的「下载」占用。",
             danger = true,
         ) {
             confirmClearTasks = true

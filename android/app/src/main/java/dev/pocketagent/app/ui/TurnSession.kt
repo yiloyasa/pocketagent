@@ -503,21 +503,28 @@ object TurnSession {
         }
     }
 
-    /** 回复审批请求(允许/拒绝),经后台流的 request 通道发给 daemon。 */
-    fun answerApproval(threadId: String, requestId: String, approved: Boolean) {
+    /**
+     * 回复审批请求(允许/拒绝),经后台流的 request 通道发给 daemon。
+     *
+     * note 是自由文本通道,只有"反问类"请求(request_user_input / MCP elicitation)才用:
+     * 里面装的是 `{"<问题id>":{"answers":["..."]}}`,daemon 原样转成 codex 期望的答案映射。
+     * 审批类固定传空串 —— 别把两类语义混在一个字段里,否则 agent 会收到一段
+     * 和它的问题无关的"理由"。
+     */
+    fun answerApproval(threadId: String, requestId: String, approved: Boolean, note: String = "") {
         val st = state(threadId)
         val ap = st.pendingApproval ?: return
         if (ap.requestId != requestId) {
             st.approvalError = "审批请求已更新，请重新确认"
             return
         }
+        val decision = ApprovalDecision.newBuilder()
+            .setRequestId(requestId)
+            .setApproved(approved)
+        if (note.isNotEmpty()) decision.setNote(note)
         val result = st.replyCh?.trySend(
             TurnClientMessage.newBuilder()
-                .setApproval(
-                    ApprovalDecision.newBuilder()
-                        .setRequestId(requestId)
-                        .setApproved(approved),
-                )
+                .setApproval(decision.build())
                 .build(),
         )
         if (result?.isSuccess == true) {

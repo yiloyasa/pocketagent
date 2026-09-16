@@ -48,6 +48,9 @@ type CodexProvider struct {
 	disablePasteBurst     bool
 	// 标题同步:codex 自动命名线程时回调(server 层落库,双端可见)
 	TitleHandler func(codexThreadID, title string)
+	// 目标同步:codex 侧 goal 状态机变化时回调(server 层落库)。
+	// goal 为空表示被清除;status 是 active/paused/blocked/usageLimited/budgetLimited/complete。
+	GoalHandler func(codexThreadID, goal, status string, tokensUsed, timeUsedSeconds int64)
 	// 我们的 threadID → codex threadId + 加载它的子进程代号。真正的事实来源是
 	// store.Thread.CodexThreadID;内存缓存只在同一子进程生命周期内有效。
 	// 子进程重启(gen 变化)后必须先 thread/resume,否则 turn/start 打到
@@ -55,6 +58,11 @@ type CodexProvider struct {
 	// 永不结束——手机端表现为一直转圈)。
 	threadMap map[string]threadRef
 	gen       atomic.Int32 // codex 子进程代号,每次(重)启 +1
+	// 常驻目标(codex 的 thread/goal/set)。codex 只认"已被 app-server 加载"的线程,
+	// 所以线程还没跑过第一轮(或子进程刚重启还没 resume)时先暂存,等 Run() 拿到
+	// codex threadId 后补发。见 codex_goal.go。
+	goalMu       sync.Mutex
+	pendingGoals map[string]string
 }
 
 type threadRef struct {
@@ -63,7 +71,10 @@ type threadRef struct {
 }
 
 func NewCodexProvider() *CodexProvider {
-	return &CodexProvider{threadMap: map[string]threadRef{}}
+	return &CodexProvider{
+		threadMap:    map[string]threadRef{},
+		pendingGoals: map[string]string{},
+	}
 }
 
 func (p *CodexProvider) ID() string          { return "codex" }
@@ -185,13 +196,6 @@ type itemNotif struct {
 		Status           string `json:"status"`
 	} `json:"item"`
 }
-type approvalReq struct {
-	CallId  string          `json:"callId"`
-	ItemId  string          `json:"itemId"`  // v2 协议(item/commandExecution/requestApproval)用 itemId
-	Command json.RawMessage `json:"command"` // 新版是字符串,旧版是数组,都兼容
-	Cwd     string          `json:"cwd"`
-	Reason  string          `json:"reason"`
-}
 
 // approvalCommand 把 command 字段归一成一行命令字符串。
 func approvalCommand(raw json.RawMessage) string {
@@ -264,6 +268,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}
 
 	// 2) 事件路由
+	// 线程此时已确实加载在 codex 侧:把之前暂存的常驻目标补发下去
+	// (用户可能是"先设目标、再开始第一轮",那时还没有 codex threadId)。
+	p.applyPendingGoal(req.Thread.ID, codexTID)
+
 	var finalText strings.Builder  // item/completed 兜底来源
 	var streamText strings.Builder // delta 实时拼接(主来源,和手机看到的逐字一致)
 	var mu sync.Mutex
@@ -273,6 +281,11 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	var doneOnce sync.Once
 	finish := func() { doneOnce.Do(func() { close(done) }) }
 	var lastErr *pb.Error
+	// 本回合 codex 报过变更的文件。审批卡上"这次会改哪些文件"的唯一来源 ——
+	// v2 的 item/fileChange/requestApproval 参数里**没有**文件列表,只有同一回合
+	// item/fileChange/patchUpdated 通知带过来的 changes。写(readLoop 分发 goroutine)
+	// 与读(反向请求 handler)不在同一 goroutine,统一用 mu 保护。
+	var changeFiles []string
 
 	c := p.client
 	// 通知分发走单独 goroutine:readLoop 若被慢 sink(手机网络背压)阻塞,
@@ -288,6 +301,39 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		case method == "turn/started":
 			// 任务真正进入 codex 的凭据:turn/started 已到达
 			log.Printf("[codex] codex 已接收任务 thread=%s %.140s", codexTID, string(params))
+		case method == "item/fileChange/patchUpdated":
+			// 累积"本回合被改动的文件",供文件变更审批卡展示(见 changeFiles 注释)。
+			var n struct {
+				ThreadId string `json:"threadId"`
+				Changes  []struct {
+					Path string `json:"path"`
+				} `json:"changes"`
+			}
+			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID {
+				paths := make([]string, 0, len(n.Changes))
+				for _, ch := range n.Changes {
+					if ch.Path != "" {
+						paths = append(paths, ch.Path)
+					}
+				}
+				if len(paths) > 0 {
+					mu.Lock()
+					changeFiles = mergePaths(changeFiles, paths)
+					mu.Unlock()
+				}
+			}
+		case method == "thread/goal/updated" || method == "thread/goal/cleared":
+			// codex 是 goal 的事实来源:它会规范化文本、也会自己改状态
+			// (active→complete / blocked / usageLimited)。把变化同步回我们库里,
+			// 手机端就能看到"目标已完成"这类信息,而不是永远停在设下去的那一刻。
+			goalText, status, tokensUsed, timeUsed := goalStatusFromNotification(params)
+			if method == "thread/goal/cleared" {
+				goalText = ""
+			}
+			log.Printf("[codex] goal 变化 %s status=%s tokens=%d time=%ds", method, status, tokensUsed, timeUsed)
+			if p.GoalHandler != nil {
+				go p.GoalHandler(codexTID, goalText, status, tokensUsed, timeUsed)
+			}
 		case method == "turn/completed":
 			var n struct {
 				ThreadId string `json:"threadId"`
@@ -455,41 +501,75 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}()
 	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
 		log.Printf("[codex] 反向请求 %s 原始参数: %.400s", method, string(params))
-		if !strings.Contains(strings.ToLower(method), "approval") {
-			// 未知反向请求:统一拒绝,避免卡死
-			_ = c.Respond(id, map[string]string{"decision": "decline"})
+		kind := classifyCodexRequest(method)
+
+		// 【第一条规则】不认识的、以及明确不属于我们职责的,回 JSON-RPC error。
+		// 以前这里统一回 {"decision":"decline"} —— 那不是"拒绝执行",而是拿一种请求的
+		// 报文形状去回答另一种请求,对方只能按协议错误处理(token 刷新就是这么被打死的)。
+		switch kind {
+		case reqUnsupported, reqUnknown:
+			msg := unsupportedRequestMessage(method)
+			if kind == reqUnknown {
+				msg = "PocketAgent 未实现该反向请求: " + method
+			}
+			log.Printf("[codex] %s → 回 error(%s)", method, msg)
+			_ = c.RespondError(id, -32601, msg)
 			return
 		}
-		var a approvalReq
-		json.Unmarshal(params, &a)
-		idForCall := a.CallId
-		if idForCall == "" {
-			idForCall = a.ItemId
-		}
-		call := pb.ToolCallBlock{
-			Id:   idForCall,
-			Name: "shell",
-			JsonArgs: mustJSON(map[string]interface{}{
-				"command": approvalCommand(a.Command),
-				"cwd":     a.Cwd,
-				"reason":  a.Reason,
-			}),
-		}
-		decision := "decline"
-		note := ""
+
+		mu.Lock()
+		files := append([]string(nil), changeFiles...)
+		mu.Unlock()
+
+		// 【第二条规则】按类别构造真实的审批卡,再问手机。
+		call := buildApprovalCall(kind, method, params, files)
 		approvalWaiting.Store(true)
+		allow, note := false, ""
+		askErr := error(nil)
 		if approve != nil {
-			if ok, n, err := approve(ctx, call); err == nil && ok {
-				// app-server expects the enum variant `accept`, not the old
-				// boolean-style `approved` value.
-				decision = "accept"
-			} else if err == nil {
-				note = n
-				_ = note
-			}
+			allow, note, askErr = approve(ctx, call)
 		}
 		approvalWaiting.Store(false)
-		_ = c.Respond(id, map[string]string{"decision": decision})
+		if askErr != nil {
+			// 手机端断流/超时:这不是"用户拒绝"。回 error,让 codex 按通道故障处理,
+			// 别把基础设施问题伪装成用户意志。
+			log.Printf("[codex] 审批通道失败 %s: %v", method, askErr)
+			_ = c.RespondError(id, -32000, "审批通道失败: "+askErr.Error())
+			return
+		}
+
+		// 【第三条规则】应答形状按方法名走,尤其旧版审批用 approved/denied 而不是 accept/decline。
+		switch kind {
+		case reqApprovalCommand, reqApprovalFileChange, reqApprovalPatch:
+			_ = c.Respond(id, map[string]string{"decision": approvalDecision(method, allow)})
+
+		case reqApprovalPermissions:
+			if allow {
+				var a permissionsApprovalParams
+				_ = json.Unmarshal(params, &a)
+				var perms interface{}
+				_ = json.Unmarshal(a.Permissions, &perms)
+				// 原样授予申请的那份 profile:不做裁剪,否则"少给一个路径"会让命令
+				// 换一种方式失败,故障更难定位。
+				_ = c.Respond(id, map[string]interface{}{"permissions": perms, "scope": "turn"})
+			} else {
+				// 这个应答没有 decision 字段:不同意的表达方式就是"什么都不授予"。
+				_ = c.Respond(id, map[string]interface{}{"permissions": map[string]interface{}{}})
+			}
+
+		case reqAskUser:
+			var a askUserParams
+			_ = json.Unmarshal(params, &a)
+			// 手机端的答案放在 ApprovalDecision.note 里(JSON),这里原样转成 answers。
+			_ = c.Respond(id, map[string]interface{}{"answers": splitAnswerNote(note, a.Questions)})
+
+		case reqAskMcp:
+			action := "decline"
+			if allow {
+				action = "accept"
+			}
+			_ = c.Respond(id, map[string]interface{}{"action": action})
+		}
 	}
 	defer func() {
 		c.NotifHandler = nil

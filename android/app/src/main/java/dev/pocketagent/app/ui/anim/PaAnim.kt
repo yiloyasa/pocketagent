@@ -115,7 +115,8 @@ fun IconActionButton(
     size: Dp = 42.dp,
     iconSize: Dp = 20.dp,
     bg: Color = MaterialTheme.colorScheme.surfaceVariant,
-    tint: Color = MaterialTheme.colorScheme.onBackground,
+    // 传 null 表示沿用主题默认图标色;需要"激活态反色"的按钮(如搜索开关)才显式传色。
+    tint: Color? = null,
     shape: Shape = RoundedCornerShape(14.dp),
 ) {
     Box(
@@ -125,7 +126,11 @@ fun IconActionButton(
             .background(bg, shape),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(iconRes), contentDescription, tint = tint, modifier = Modifier.size(iconSize))
+        Icon(
+            painterResource(iconRes), contentDescription,
+            tint = tint ?: MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.size(iconSize),
+        )
     }
 }
 

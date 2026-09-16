@@ -1,13 +1,19 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -171,19 +177,94 @@ private fun MarkdownLine.annotated(): AnnotatedString = buildAnnotatedString {
 
 @Composable
 fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float = 15f) {
+    // 【为什么按"块"而不是按"行"渲染】原来这里是 parseMarkdownForDisplay(...).forEach { Text(...) },
+    // 每一行代码各自画一个带圆角的背景。后果有三个,真机上都看得到:
+    //   1) 相邻行的圆角互相咬合,左右边缘漏出页底纯黑 → 视觉上是"横竖缝隙";
+    //   2) 每行上下各 10dp padding,代码块行距被翻倍,ASCII 图(那些 │ ─ ┌ 组成的
+    //      架构图)纵向对不齐,看起来像"设计坏了";
+    //   3) 没有横向滚动 + 默认软换行 → 长行被硬折,图直接散架。
+    // 现在把连续代码行聚合成**一个**整块,统一背景/圆角/内边距,并允许横向滚动。
+    val blocks = remember(source) { groupMarkdownBlocks(parseMarkdownForDisplay(source)) }
     Column(modifier) {
-        parseMarkdownForDisplay(source).forEach { line ->
-            val code = line.kind == MarkdownLineKind.CODE
-            Text(
-                text = line.annotated(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (code) Modifier.background(Pa.Card, RoundedCornerShape(10.dp)).padding(10.dp) else Modifier),
-                color = if (code) Pa.TextSecondary else Pa.TextPrimary,
-                fontSize = (if (line.kind == MarkdownLineKind.HEADING) fontSize + 2 else fontSize).sp,
-                fontWeight = if (line.kind == MarkdownLineKind.HEADING) FontWeight.Bold else FontWeight.Normal,
-                lineHeight = (fontSize * 1.55f).sp,
-            )
+        blocks.forEach { block ->
+            when (block) {
+                is MdBlock.Code -> MarkdownCodeBlock(block.text, fontSize)
+                is MdBlock.Line -> MarkdownTextLine(block.line, fontSize)
+            }
         }
     }
+}
+
+@Composable
+private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
+    Text(
+        text = line.annotated(),
+        modifier = Modifier.fillMaxWidth(),
+        color = Pa.TextPrimary,
+        fontSize = (if (line.kind == MarkdownLineKind.HEADING) fontSize + 2 else fontSize).sp,
+        fontWeight = if (line.kind == MarkdownLineKind.HEADING) FontWeight.Bold else FontWeight.Normal,
+        lineHeight = (fontSize * 1.55f).sp,
+    )
+}
+
+@Composable
+private fun MarkdownCodeBlock(code: String, fontSize: Float) {
+    // 等宽 + 比页底抬高一档的背景 + 细描边,读起来是"一块代码面板"而不是"凹进去的黑洞"。
+    // 代码块内容不走 inline span 着色 —— 那会把整段代码染成强调蓝(旧实现的问题之一)。
+    val scroll = rememberScrollState()
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Pa.Card)
+            .border(0.5.dp, Pa.Separator, RoundedCornerShape(12.dp))
+            // 先裁形状再横滚,滚动内容不会溢出圆角
+            .horizontalScroll(scroll),
+    ) {
+        Text(
+            text = code,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            fontFamily = FontFamily.Monospace,
+            // 代码比正文小半号更接近"终端感",同时保证不低于 9sp 以免不可读
+            fontSize = (fontSize - 1.5f).coerceAtLeast(9f).sp,
+            color = Pa.TextSecondary,
+            lineHeight = (fontSize * 1.4f).sp,
+            // 关键:不折行,交给横向滚动 —— ASCII 图与长命令行靠这个保住对齐
+            softWrap = false,
+        )
+    }
+}
+
+/** Markdown 渲染块:要么是一个整块代码,要么是普通一行。 */
+sealed interface MdBlock {
+    /** 连续的代码行已合并,text 内部用 '\n' 分隔。 */
+    data class Code(val text: String) : MdBlock
+    data class Line(val line: MarkdownLine) : MdBlock
+}
+
+/**
+ * 把逐行解析结果聚合成渲染块 —— 连续 [MarkdownLineKind.CODE] 合并成单个 [MdBlock.Code]。
+ *
+ * 抽成纯函数是为了能单测:块边界(代码块开头/结尾/多段代码块/空代码块)是这类
+ * 渲染最容易出错的边界,不应该只能靠肉眼在真机上看。
+ */
+fun groupMarkdownBlocks(lines: List<MarkdownLine>): List<MdBlock> {
+    val out = mutableListOf<MdBlock>()
+    var i = 0
+    while (i < lines.size) {
+        if (lines[i].kind != MarkdownLineKind.CODE) {
+            out += MdBlock.Line(lines[i])
+            i++
+            continue
+        }
+        val buf = StringBuilder()
+        while (i < lines.size && lines[i].kind == MarkdownLineKind.CODE) {
+            if (buf.isNotEmpty()) buf.append('\n')
+            buf.append(lines[i].text)
+            i++
+        }
+        out += MdBlock.Code(buf.toString())
+    }
+    return out
 }

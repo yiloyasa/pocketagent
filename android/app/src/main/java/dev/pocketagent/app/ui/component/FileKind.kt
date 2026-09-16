@@ -180,3 +180,26 @@ fun humanSize(bytes: Long): String = when {
     bytes >= 1024 -> String.format(java.util.Locale.US, "%.0fKB", bytes / 1024f)
     else -> "${bytes}B"
 }
+
+/**
+ * [humanSize] 的逆运算:把 "19.1MB" / "33KB" / "512B" / "1.20GB" 还原成字节数。
+ *
+ * 【为什么需要"反解析"】下载条目落盘时只存了给人看的字符串(没有数值字段),
+ * 而"下载内容总计占用"要求做加法。与其改存储格式(得处理历史条目兼容),
+ * 不如在展示层把带单位的字符串换回字节 —— 这样**合计值恒等于各行之和**,
+ * 不会出现"总和与明细对不上"的新口径矛盾。
+ *
+ * 解析失败按 0 计:它只服务展示,任何异常都不应影响清理逻辑。
+ */
+fun parseHumanSize(text: String): Long {
+    val s = text.trim().uppercase(java.util.Locale.US)
+    if (s.isEmpty()) return 0L
+    val m = Regex("^([0-9]+(?:\\.[0-9]+)?)\\s*(GB|MB|KB|B)?$").find(s) ?: return 0L
+    val v = m.groupValues[1].toDoubleOrNull() ?: return 0L
+    return when (m.groupValues[2]) {
+        "GB" -> (v * 1073741824.0).toLong()
+        "MB" -> (v * 1048576.0).toLong()
+        "KB" -> (v * 1024.0).toLong()
+        else -> v.toLong()
+    }
+}

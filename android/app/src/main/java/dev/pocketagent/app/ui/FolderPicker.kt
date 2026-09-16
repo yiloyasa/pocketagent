@@ -41,6 +41,7 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -109,13 +110,9 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
      */
     fun goUpOneLevel(): Boolean {
         if (showRoots) return false
-        val norm = path.replace('/', '\\').trimEnd('\\')
-        val idx = norm.lastIndexOf('\\')
-        when {
-            idx > 2 -> loadDir(norm.substring(0, idx) + "\\")
-            idx == 2 -> loadDir(norm + "\\")
-            else -> loadRoots()
-        }
+        // 与文件页共用同一份坐标规则(component/PathNav.kt)
+        val up = parentDirectoryOf(path)
+        if (up != null) loadDir(up) else loadRoots()
         return true
     }
 

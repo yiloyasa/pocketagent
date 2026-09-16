@@ -115,6 +115,15 @@ func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest
 	if err := s.cfg.Store.Update(t); err != nil {
 		return nil, errInternal(err)
 	}
+	// 【关键】光落库是个假开关:codex 有 thread/goal/set|clear 与完整状态机,
+	// 不下发的话它根本不知道用户设了目标,表现就是"我明明设了目标,它没当回事"。
+	// 下发失败不影响落库结果(线程还没被 app-server 加载时是正常情况,
+	// provider 会暂存并在第一轮 Run 拿到 codex threadId 后补发)。
+	if p, ok := s.cfg.Providers["codex"].(*agent.CodexProvider); ok && t.CodexThreadID != "" {
+		if err := p.SetGoal(t.ID, req.Goal); err != nil {
+			log.Printf("[goal] 下发失败(已落库,稍后补发)thread=%s: %v", t.ID, err)
+		}
+	}
 	return threadToPB(t), nil
 }
 
@@ -251,8 +260,10 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 
 	approve := func(actx context.Context, call pb.ToolCallBlock) (bool, string, error) {
 		reqID := randomID("apr")
+		// 原因文案跟着动作类型走(而不是对所有类型都写"危险操作"):
+		// 反问类请求被贴"危险操作"会让人误判出了事故。
 		sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalRequest{ApprovalRequest: &pb.ApprovalRequest{
-			RequestId: reqID, Action: &call, Reason: "agent 请求执行危险操作",
+			RequestId: reqID, Action: &call, Reason: agent.ApprovalReason(call),
 		}}})
 		select {
 		case d := <-approvalCh:

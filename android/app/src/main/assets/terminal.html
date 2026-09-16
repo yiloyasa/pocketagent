@@ -28,21 +28,20 @@
       padding: 4px 6px;
     }
     #terminal .xterm, #terminal .xterm-viewport { height: 100%; }
-    /* 禁掉页面级滚动/回弹,滚动手势交给 xterm */
-    #terminal, #terminal .xterm, #terminal .xterm-viewport {
+    /* 【滑动手感 · 为什么 CSS 这条路走不通】
+       xterm 的 DOM 是 `.xterm > { .xterm-viewport(滚动容器), .xterm-screen(内容) }`
+       —— 内容与滚动容器是**兄弟节点**。手指按内容时,浏览器沿祖先链向上找不到
+       .xterm-viewport 这个可滚动元素,于是 touch-action: pan-y 给谁都落不到实处
+       (上一轮那处 CSS 修复因此完全无效,已验证)。原生滚动这条路堵死,
+       滚动只能由 JS 驱动 —— 所以这里保持 none:不让浏览器插手,
+       全部交给下面脚本里"每帧一次 + 滑动期间暂停输出写入"的实现。 */
+    #terminal, #terminal .xterm, #terminal .xterm-viewport,
+    #terminal .xterm-screen, #terminal .xterm-rows {
       touch-action: none;
       overscroll-behavior: contain;
     }
     #terminal .xterm-viewport { scrollbar-width: none; }
     #terminal .xterm-viewport::-webkit-scrollbar { display: none; }
-    /* 【滑动手感】xterm 的 .xterm-viewport 自身是可滚动元素(isScrollable),
-       Android WebView 里给它 pan-y 才能被合成器接管成原生滚动 —— 之前整片
-       touch-action:none 把上下滑动全禁掉,只能靠 xterm 自己处理,于是"手指在拖
-       但画面不动/一顿一顿"。这里只对 viewport 放开纵向平移,
-       横向和其余区域仍然禁掉,避免页面级回弹干扰终端选区。 */
-    #terminal .xterm-viewport { touch-action: pan-y; }
-    /* 终端是等宽网格,内容宽度永远由 fit() 适配,不存在横向滚动需求 */
-    #terminal .xterm-screen, #terminal .xterm-rows { touch-action: pan-y; }
   </style>
 </head>
 <body>
@@ -84,26 +83,108 @@
       // 滚动时用户手指正占着主线程,减少 JS 侧工作量能明显改善跟手度。
       var _pending = [];
       var _rafQueued = false;
+      // 【滑动手感的另一半】手指滑动期间**暂停输出写入**。
+      // 卡顿的真身是两件事同时挤主线程:
+      //   (1) xterm 自绑的 touchmove 每个事件都改一次 scrollTop(高刷屏一秒上百次),
+      //       每次都触发一遍可见行重算;
+      //   (2) 输出流的 atob + term.write 正好也在这一帧跑。
+      // 单修哪一个都还是卡。这里让 (2) 在 (1) 期间让路:输出不丢,只是晚 100 多毫秒出来。
+      var _scrollBusy = false;
       function _drain() {
         _rafQueued = false;
         if (!_pending.length) return;
+        // 滑动中先不写;松手时由 __paScrollBusy(false) 重新排队
+        if (_scrollBusy) return;
         var bin = atob(_pending.join(''));
         _pending.length = 0;
         var arr = new Uint8Array(bin.length);
         for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
         term.write(arr);
       }
+      function _scheduleDrain() {
+        if (!_rafQueued) { _rafQueued = true; requestAnimationFrame(_drain); }
+      }
       window.termWrite = function (b64) {
         _pending.push(b64);
-        if (!_rafQueued) {
-          _rafQueued = true;
-          requestAnimationFrame(_drain);
-        }
+        _scheduleDrain();
+      };
+      // 滑动状态开关:由下面的触摸拦截器调用
+      window.__paScrollBusy = function (busy) {
+        var was = _scrollBusy;
+        _scrollBusy = busy;
+        if (was && !busy) _scheduleDrain();
       };
       // flush 竞态期间积压的输出
       while (window._termQueue.length) {
         window.termWrite(window._termQueue.shift());
       }
+
+      // ---- 【滑动手感 · 关键修复】自己驱动滚动,每帧只写一次 scrollTop ----
+      // 为什么必须自己来:CSS 的原生滚动方案在 xterm 的 DOM 结构下不可能生效
+      // (见文件头 CSS 注释)。为什么原来的 xterm 原生处理会卡:它对**每个**
+      // touchmove 都 `scrollTop += delta`,高刷屏一秒上百次,每次都要重算可见行;
+      // 再叠加上并发的输出写入,主线程直接饱和 —— 真机表现就是"上下滑动严重卡顿"。
+      //
+      // 做法:捕获阶段拦下 touchmove(不让 xterm 处理),把位移累积起来,
+      // 用 requestAnimationFrame **每帧只落一次** scrollTop;同时抬手/停下后
+      // 延迟一小段再恢复输出写入,避免刚松手又被刷屏拖住。
+      (function () {
+        var vp = document.querySelector('.xterm-viewport');
+        if (!vp) return;
+        var lastY = 0, acc = 0, rafPending = false, idleTimer = null;
+        // mode: null=尚未判定 / 'scroll'=接管(纵向快拖) / 'pass'=放行(横向、多指、长按)
+        var mode = null, startX = 0, startY = 0, startT = 0;
+        var THRESHOLD = 6;   // px:位移小于它不下结论,免得把"点一下"误判成拖动
+        var LONGPRESS = 350; // ms:长按是 xterm 的选词手势,必须让路
+        function apply() {
+          rafPending = false;
+          if (acc !== 0) { vp.scrollTop += acc; acc = 0; }
+        }
+        function markBusy() {
+          if (window.__paScrollBusy) window.__paScrollBusy(true);
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(function () {
+            // 补上最后一帧没落下的位移,再放行输出
+            if (acc !== 0 && !rafPending) { rafPending = true; requestAnimationFrame(apply); }
+            if (window.__paScrollBusy) window.__paScrollBusy(false);
+          }, 140);
+        }
+        document.addEventListener('touchstart', function (ev) {
+          if (ev.touches.length !== 1) { mode = 'pass'; return; }
+          mode = null;
+          startX = ev.touches[0].clientX;
+          startY = ev.touches[0].clientY;
+          startT = Date.now();
+          lastY = startY;
+          acc = 0;
+        }, true);
+        document.addEventListener('touchmove', function (ev) {
+          if (mode === 'pass') return;
+          if (ev.touches.length !== 1) { mode = 'pass'; return; }
+          if (mode === null) {
+            // 长按之后才开始移动 = 用户在拖选文字,交回 xterm,别抢
+            if (Date.now() - startT > LONGPRESS) { mode = 'pass'; return; }
+            var cx = ev.touches[0].clientX, cy = ev.touches[0].clientY;
+            var dx = Math.abs(cx - startX), dy = Math.abs(cy - startY);
+            if (dx < THRESHOLD && dy < THRESHOLD) return;
+            mode = dy > dx ? 'scroll' : 'pass';
+            if (mode === 'pass') return;
+          }
+          var y = ev.touches[0].clientY;
+          acc += lastY - y;
+          lastY = y;
+          // 只 stopPropagation 挡住 xterm 那份"逐事件改 scrollTop"的实现;
+          // 不 preventDefault —— 这里本来就没有原生滚动可取消。
+          ev.stopPropagation();
+          markBusy();
+          if (!rafPending) { rafPending = true; requestAnimationFrame(apply); }
+        }, true);
+        document.addEventListener('touchend', function () { mode = null; }, true);
+        document.addEventListener('touchcancel', function () {
+          mode = null;
+          if (window.__paScrollBusy) window.__paScrollBusy(false);
+        }, true);
+      })();
 
       // 按键/粘贴输入 → Android 桥 → gRPC
       term.onData(function (data) {

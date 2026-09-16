@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -250,7 +251,15 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
             // 否则标题虽然已经更新，xterm 仍会显示旧 PTY 的提示符和历史输出。
             androidx.compose.runtime.key(sessionKey, cwd) {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    // 【键盘遮挡 · 手机端适配】必须加 imePadding()。
+                    // 页面里 #terminal 是 top:0;bottom:0 的绝对定位,CSS 高 100% 跟的是
+                    // **WebView 的高度**。而 enableEdgeToEdge() 之后 adjustResize 不再让窗口
+                    // 变矮,WebView 高度恒定 → #terminal 高度不变 → page 里那句
+                    // `new ResizeObserver(fitAndReport).observe(el)` 永远不会触发 →
+                    // fit() 不重排、PTY 行数不同步,键盘一盖上来提示符就被挡在外面。
+                    // 给它 imePadding,键盘弹起时 WebView 真的变矮,整条链路(ResizeObserver
+                    // → fit → resize → PTY)才会自己跑起来。
+                    modifier = Modifier.fillMaxSize().imePadding(),
                     factory = { ctx ->
                         WebView(ctx).apply {
                             @SuppressLint("SetJavaScriptEnabled")

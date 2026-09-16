@@ -152,6 +152,18 @@ fun UndoBarHost(
     state: UndoState,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 8.dp,
+    /**
+     * 是否由组件自己加状态栏内边距。
+     *
+     * 【为什么必须可关】组件默认要加(见下面 [statusBarsPadding] 处的注释)——
+     * 前提是宿主页面的根节点直通屏幕边缘。但文件页(FilesScreen)外面套了 Scaffold,
+     * 它的 topBar 已经自己 `statusBarsPadding()` 过,内容区又通过 `padding(pad)`
+     * 下移了一整个顶栏高度。此时组件**再**加一次状态栏内边距,提示条就会再往下
+     * 掉一个状态栏的高度,正好压在路径标题行和第一条文件上 —— 真机上就是
+     * "删除提示条糊在内容上"的那个 bug。
+     * 所以:宿主已经消费过顶部 insets 的,传 false。
+     */
+    applyStatusBarsPadding: Boolean = true,
 ) {
     val item = state.current
     val density = LocalDensity.current
@@ -191,9 +203,10 @@ fun UndoBarHost(
 
         Box(
             Modifier
-                // 状态栏内边距由组件自己保证:页面根节点是 edge-to-edge 的,
+                // 状态栏内边距:页面根节点直通屏幕边缘时由组件自己保证,
                 // 不给就会浮到状态栏里和系统图标重叠(真机实测踩到过)。
-                .statusBarsPadding()
+                // 宿主已消费过顶部 insets 时由调用方传 false 关掉(见参数注释)。
+                .then(if (applyStatusBarsPadding) Modifier.statusBarsPadding() else Modifier)
                 .padding(top = topPadding, start = 16.dp, end = 16.dp)
                 .fillMaxWidth()
                 .widthIn(max = 520.dp)

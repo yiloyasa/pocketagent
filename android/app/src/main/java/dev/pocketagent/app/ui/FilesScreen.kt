@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,8 +44,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,8 +63,8 @@ import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.component.rememberUndoState
-import androidx.compose.ui.graphics.Color
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
@@ -100,6 +105,12 @@ fun FilesScreen(
     var path by remember { mutableStateOf(initialPath ?: "") }
     var showRoots by remember { mutableStateOf(initialPath.isNullOrEmpty()) }
     var entries by remember { mutableStateOf(listOf<DirectoryEntry>()) }
+    // 【文件搜索】只对"当前目录已加载的条目"按名字做不区分大小写的过滤。
+    // 跨目录递归搜索需要 daemon 侧的接口(现在的 SearchContent 是**内容**搜索,
+    // 不是文件名搜索),所以界面上会明确写出搜索范围 —— 不做"看起来能搜全部、
+    // 其实只搜一层"的假承诺。
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var showCreate by remember { mutableStateOf(false) } // 新建文件/文件夹
@@ -226,13 +237,10 @@ fun FilesScreen(
      */
     fun goUpOneLevel(): Boolean {
         if (showRoots) return false
-        val norm = path.replace('/', '\\').trimEnd('\\')
-        val idx = norm.lastIndexOf('\\')
-        when {
-            idx > 2 -> loadDir(norm.substring(0, idx) + "\\")
-            idx == 2 -> loadDir(norm + "\\")
-            else -> loadRoots()
-        }
+        // 坐标规则收敛到 component/PathNav.kt,与文件夹选择器共用同一份,
+        // 避免两处实现再次漂移(历史上两处都踩过"原地重载"的坑)。
+        val up = parentDirectoryOf(path)
+        if (up != null) loadDir(up) else loadRoots()
         return true
     }
 
@@ -277,6 +285,13 @@ fun FilesScreen(
         } else {
             loadDir(initialPath)
         }
+    }
+
+    // 【搜索结果】空查询时原样返回,不做任何额外拷贝。
+    val visibleEntries = remember(entries, searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) entries
+        else entries.filter { it.name.contains(q, ignoreCase = true) }
     }
 
     Scaffold(
@@ -324,6 +339,20 @@ fun FilesScreen(
                 )
                 Spacer(Modifier.width(8.dp))
                 if (!showRoots) {
+                    // 【文件搜索】按名字过滤当前目录内容。放在这里而不是塞进抽屉,
+                    // 是因为"在眼前这堆文件里找某个"才是高频场景。
+                    IconActionButton(
+                        if (searchOpen) AppR.drawable.ic_lucide_x else AppR.drawable.ic_lucide_search,
+                        if (searchOpen) "关闭搜索" else "搜索",
+                        {
+                            searchOpen = !searchOpen
+                            if (!searchOpen) searchQuery = ""
+                        },
+                        bg = if (searchOpen) Pa.Accent else Pa.Card,
+                        // 开着时用反色图标(蓝底白图),关着时沿用主题默认色。
+                        tint = if (searchOpen) Color.White else null,
+                    )
+                    Spacer(Modifier.width(8.dp))
                     IconActionButton(
                         AppR.drawable.ic_lucide_plus, "新建",
                         { showCreate = true },
@@ -339,7 +368,10 @@ fun FilesScreen(
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
+        // 【为什么要 clipToBounds】撤销条入场动画是从内容区上方(-自身高度)滑下来的。
+        // 宿主 Box 若不加裁剪,动画头几帧会画到顶栏之上 —— 真机上就是"标题栏上闪过
+        // 一层残影"。裁掉越界部分,动画只在内容区内可见。
+        Box(Modifier.padding(pad).fillMaxSize().clipToBounds()) {
         Column(Modifier.fillMaxSize()) {
             if (path.isNotEmpty()) {
                 Text(
@@ -356,6 +388,57 @@ fun FilesScreen(
                     Text(it, Modifier.padding(10.dp), color = Pa.Red, fontSize = 13.sp)
                 }
             }
+            // ---- 搜索框(仅非"此电脑"层显示:盘符列表没有搜索的意义) ----
+            if (searchOpen && !showRoots) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp)
+                        .background(Pa.Card, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(AppR.drawable.ic_lucide_search), null,
+                        tint = Pa.TextTertiary, modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                        singleLine = true,
+                        textStyle = TextStyle(
+                            fontSize = 13.5.sp, color = Pa.TextPrimary,
+                        ),
+                        cursorBrush = SolidColor(Pa.Accent),
+                        decorationBox = { inner ->
+                            Box {
+                                if (searchQuery.isEmpty()) {
+                                    Text(
+                                        "在当前目录中搜索文件名…",
+                                        fontSize = 13.5.sp, color = Pa.TextTertiary,
+                                    )
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                    if (searchQuery.isNotEmpty()) {
+                        Text(
+                            "${visibleEntries.size} 项",
+                            fontSize = 10.5.sp, color = Pa.TextTertiary,
+                        )
+                    }
+                }
+                // 说明搜索范围:避免用户以为"搜不到 = 文件不存在"
+                Text(
+                    "范围：当前目录（不含子目录），按文件名匹配，不区分大小写",
+                    Modifier.padding(start = 18.dp, top = 4.dp),
+                    fontSize = 10.sp,
+                    color = Pa.TextTertiary,
+                )
+            }
             // 【修复】weight(1f) 让 LazyColumn 占满剩余高度并启用懒加载滚动;
             // 之前没加 weight 导致列表不滚动、看不到全部
             LazyColumn(
@@ -363,7 +446,17 @@ fun FilesScreen(
                 state = listState,
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
-                items(entries, key = { it.path }) { e ->
+                if (visibleEntries.isEmpty() && searchQuery.isNotBlank()) {
+                    item(key = "__no_match__") {
+                        Text(
+                            "当前目录没有匹配「$searchQuery」的文件",
+                            Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            fontSize = 12.5.sp,
+                            color = Pa.TextTertiary,
+                        )
+                    }
+                }
+                items(visibleEntries, key = { it.path }) { e ->
                     val kind = if (e.isDir) null else fileKindOf(e.name)
                     // 【文件管理】左滑出「重命名 / 删除」,与会话列表同一套交互。
                     // 行内容里不能挂 clickable(容器独占手势),所以点击走 onClick 参数。
@@ -457,7 +550,13 @@ fun FilesScreen(
             }
         }
             // 撤销条浮在内容之上(删除后给一次反悔机会)
-            UndoBarHost(undo, Modifier.align(Alignment.TopCenter))
+            // applyStatusBarsPadding = false:外层 Scaffold 的 topBar 已经消费过状态栏,
+            // 内容区又整体下移了一个顶栏高度。组件若再加一次,提示条会掉到内容首行上。
+            UndoBarHost(
+                undo,
+                Modifier.align(Alignment.TopCenter),
+                applyStatusBarsPadding = false,
+            )
         }
     }
 

@@ -461,6 +461,23 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
                     settings.textZoom = 100
+                    // ---- 以下四项是"普通网站打不开/白屏"的直接原因 ----
+                    // 1) 第三方 Cookie:默认**关闭**(targetSdk Lollipop+ 起)。
+                    //    登录类站点(截图里的星辰 API 就是)普遍靠跨域 Cookie 维持会话,
+                    //    关着就是"第一次能看到登录页,登完/再进变纯白"。
+                    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                    // 2) 混合内容:默认 MIXED_CONTENT_NEVER_ALLOW —— https 页面里的
+                    //    http 图片/脚本/接口全被拦掉,页面就会"顶栏在、内容空"。
+                    //    usesCleartextTraffic 只管主文档,管不到子资源,必须显式放开。
+                    settings.mixedContentMode =
+                        android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    // 3) DOM Storage / Database:现代前端(React/Vue)靠它存 token,
+                    //    不给就是"接口通了但页面渲染不出来"。
+                    settings.databaseEnabled = true
+                    // 4) 明确的缓存策略:跟系统一致走默认(有网用网络、无网回缓存),
+                    //    避免因隐式 LOAD_NO_CACHE 导致每次都是全新会话、登录态丢失。
+                    settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
                     setBackgroundColor(if (Pa.IsDark) 0xFF0B0B0D.toInt() else 0xFFFFFFFF.toInt())
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
@@ -530,6 +547,53 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                                     "text/html", "utf-8", null,
                                 )
                             }
+                        }
+
+                        // 【白屏的最后一块拼图】原实现只处理"传输层错误"(onReceivedError),
+                        // 服务器**真的返回了 4xx/5xx** 时它不触发 —— 而这类响应体
+                        // 往往就是一片空白。用户看到的是"顶栏在、内容是白的、没有任何提示",
+                        // 完全无从判断是自己网络问题还是站点拒绝。
+                        // 这里把主文档的 HTTP 错误也转成可见的失败页。
+                        override fun onReceivedHttpError(
+                            view: WebView?,
+                            request: android.webkit.WebResourceRequest?,
+                            errorResponse: android.webkit.WebResourceResponse?,
+                        ) {
+                            if (request?.isForMainFrame != true) return
+                            val code = errorResponse?.statusCode ?: 0
+                            // 只对明确的错误码出页;3xx 是正常重定向,不能拦
+                            if (code < 400) return
+                            progress = 1f
+                            view?.loadDataWithBaseURL(
+                                null,
+                                errorPage(
+                                    request.url?.toString().orEmpty(),
+                                    "服务器返回 HTTP $code" +
+                                        (errorResponse?.reasonPhrase?.let { " · $it" } ?: ""),
+                                ),
+                                "text/html", "utf-8", null,
+                            )
+                        }
+
+                        // HTTPS 证书有问题时,WebView 默认静默取消 → 又是一片白。
+                        // 这里仍然拒绝加载(安全红线不动),但把原因显示出来,
+                        // 否则用户只会觉得"这个浏览器坏了"。
+                        @Suppress("DEPRECATION")
+                        override fun onReceivedSslError(
+                            view: WebView?,
+                            handler: android.webkit.SslErrorHandler?,
+                            error: android.net.http.SslError?,
+                        ) {
+                            handler?.cancel()
+                            progress = 1f
+                            view?.loadDataWithBaseURL(
+                                null,
+                                errorPage(
+                                    error?.url.orEmpty(),
+                                    "HTTPS 证书校验未通过,已阻止加载(不会忽略证书错误)",
+                                ),
+                                "text/html", "utf-8", null,
+                            )
                         }
                     }
                     webChromeClient = object : WebChromeClient() {

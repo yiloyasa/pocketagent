@@ -30,7 +30,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -43,6 +48,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -95,11 +101,14 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
+import dev.pocketagent.app.ui.component.keyboardAwareBottomPadding
 import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import pocketagent.v1.ApprovalDecision
 import pocketagent.v1.ApprovalRequest
 import pocketagent.v1.ContentBlock
@@ -1083,6 +1092,15 @@ val EFFORTS = listOf(
     EffortOption("xhigh", "极高"),
 )
 
+/**
+ * 会话页。
+ *
+ * 需要 ExperimentalLayoutApi 的 opt-in,只为一处:
+ * `WindowInsets.ime.union(WindowInsets.navigationBars)` —— 输入区要取"键盘与
+ * 导航栏中较高的那个"而不是两者相加。自己手写等价逻辑反而更脆(要处理 insets
+ * 消费语义),所以直接用官方 union。
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     threadId: String,
@@ -1108,6 +1126,9 @@ fun ChatScreen(
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    // 【长文本大窗编辑】输入框最多 4 行,写长需求/贴代码时不够用。
+    // 打开一个整屏可用高度的编辑面板,内容与输入框双向同一份 state。
+    var expandedInputOpen by remember { mutableStateOf(false) }
     // 【执行计划面板】任务完成后计划卡不再散落在时间线里,而是收进会话上方
     // 一个可展开/收起的面板:默认收起(顶部只留一行进度摘要),点开看完整步骤。
     var planPanelOpen by remember { mutableStateOf(false) }
@@ -1115,6 +1136,12 @@ fun ChatScreen(
     val latestPlan = remember(st.items, st.planSteps) {
         st.items.lastOrNull { it.role == "plan" && it.planSteps.isNotEmpty() }?.planSteps
             ?: st.planSteps
+    }
+    // 【默认展开】计划一出现就展开 —— 对应"未完成时要保持在会话中显示"。
+    // 键用 Boolean 而不是步骤列表:只在"从无到有"时触发一次,
+    // 之后用户手动收起不会被反复弹开。
+    LaunchedEffect(latestPlan.isNotEmpty()) {
+        if (latestPlan.isNotEmpty()) planPanelOpen = true
     }
     // 侧边栏用的最近会话:和模型/设置一起预取,打开抽屉时直接就是数据,不必等网络
     var recentThreads by remember { mutableStateOf(listOf<PThread>()) }
@@ -1384,8 +1411,8 @@ fun ChatScreen(
         ApprovalSheet(
             action = ap,
             error = st.approvalError,
-            onDecision = { approved ->
-                TurnSession.answerApproval(threadId, ap.requestId, approved)
+            onDecision = { approved, note ->
+                TurnSession.answerApproval(threadId, ap.requestId, approved, note)
             },
         )
     }
@@ -1463,39 +1490,79 @@ fun ChatScreen(
             Spacer(Modifier.width(14.dp))
         }
 
-        // ---- 连接/加载提示条 ----
-        // 原先 loadError 只有顶栏一个小红点,用户看不到"为什么打不开"。
-        // 离线快照渲染时尤其要说明:看到的是本地记录,不是实时内容。
-        loadError?.let { msg ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 2.dp)
-                    .background(Pa.Card, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    msg, Modifier.weight(1f),
-                    fontSize = 11.5.sp,
-                    color = if (offlineSnapshot) Pa.Yellow else Pa.Red,
-                    maxLines = 2,
-                )
-                TextButton(onClick = {
-                    loadError = null
-                    offlineSnapshot = false
-                    reloadToken++
-                }) {
-                    Text("重试", fontSize = 11.5.sp, color = Pa.Accent)
+        // ---- 连接 / 加载 / 恢复提示条 ----
+        // 【统一出口】原先这里只渲染 loadError,于是 TurnSession 里那一整套
+        // "断线后自动把电脑端任务结果捞回来"的状态(recovering / recoveryError /
+        // errorMessage)**在界面上完全不可见**。真机表现就是用户说的:
+        // "连接中断后仍显示红色、没有任何等待 UI" —— 他没法区分
+        // "正在自动恢复"和"彻底失败了",只能干等。
+        //
+        // 现在按优先级合并成一条提示,并且等待态带进度指示:
+        //   恢复失败 > 恢复中(等待) > 轮次错误 > 页面加载错误
+        run {
+            val waiting = st.recovering
+            val noticeMsg = when {
+                st.recoveryError != null -> st.recoveryError
+                waiting -> st.errorMessage ?: "连接已断开，正在恢复电脑端任务结果"
+                st.errorMessage != null -> st.errorMessage
+                loadError != null -> loadError
+                else -> null
+            }
+            if (noticeMsg != null) {
+                // 等待态用黄色(警示但非失败),彻底失败/加载失败用红色
+                val tone = if (waiting) Pa.Yellow else Pa.Red
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 2.dp)
+                        .background(Pa.Card, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 等待态:转圈告诉用户"它在动",不是卡死了
+                    if (waiting) {
+                        CircularProgressIndicator(
+                            Modifier.size(12.dp),
+                            strokeWidth = 1.5.dp,
+                            color = Pa.Yellow,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(
+                        noticeMsg, Modifier.weight(1f),
+                        fontSize = 11.5.sp,
+                        color = if (!waiting && offlineSnapshot) Pa.Yellow else tone,
+                        maxLines = 2,
+                    )
+                    // 自动恢复进行中不给"重试"—— 重复点只会打断它自己的重试节奏。
+                    // 只有"彻底失败"和"页面加载失败"才需要用户推一把。
+                    if (!waiting) {
+                        TextButton(onClick = {
+                            if (st.recoveryError != null) {
+                                TurnSession.retryRecovery(threadId)
+                            } else {
+                                loadError = null
+                                offlineSnapshot = false
+                                reloadToken++
+                            }
+                        }) {
+                            Text("重试", fontSize = 11.5.sp, color = Pa.Accent)
+                        }
+                    }
                 }
             }
         }
 
         // ---- 执行计划面板 ----
-        // 【用户诉求】计划不再随时间线滚走:未完成时在时间线原位置仍能看到步骤,
+        // 【用户诉求】计划不再随时间线滚走:未完成时在会话原位置仍能看到步骤,
         // 跑完之后那张卡不移除,而是把它**提到会话上方**收成一个可展开的面板,
         // 需要回顾时点开,不需要时收起只留一行进度摘要。
-        if (latestPlan.isNotEmpty() && AgentConnection.showThinking) {
+        //
+        // 【本轮修正 · 真因】这里原先还挂着 `&& AgentConnection.showThinking`。
+        // 那是「显示思考过程」的开关,跟交互计划毫无关系 —— 用户一旦把它关掉,
+        // 计划面板就跟着一起消失,现象正是"桌面 agent 明明有这个能力,却不显示"。
+        // 计划该不该出现只取决于**有没有计划数据**,不该受其它显示开关连坐。
+        if (latestPlan.isNotEmpty()) {
             PlanPanel(
                 steps = latestPlan,
                 draft = if (st.running) st.planStream else "",
@@ -1661,7 +1728,12 @@ fun ChatScreen(
             Modifier
                 .fillMaxWidth()
                 .background(Pa.Bg)
-                .imePadding()
+                // 【键盘遮挡 · 取较大值而不是相加】
+                // 键盘弹起时底部该留的是键盘高度;收起时该留的是导航栏高度。
+                // 直接 `imePadding().navigationBarsPadding()` 会把两者加起来,
+                // 键盘弹起时多出一条导航栏高度的空白("输入框离键盘有一道缝")。
+                // 统一走 component/KeyboardInsets.kt 里的共享实现,不再各页各写。
+                .keyboardAwareBottomPadding()
                 .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 16.dp),
         ) {
             // 已上传附件 chips
@@ -1871,6 +1943,20 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.width(6.dp))
+                    // [展开编辑] 长文本在小胶囊里最多 4 行,写需求/贴代码时憋屈。
+                    // 点它把同一段文字提到大窗里编辑,确认后原样落回输入框。
+                    Box(
+                        Modifier
+                            .size(32.dp)
+                            .pressable { expandedInputOpen = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
+                            tint = Pa.TextSecondary, modifier = Modifier.size(17.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
                     // [发送]
                     val canSend = !st.running && input.isNotBlank()
                     Box(
@@ -1977,6 +2063,22 @@ fun ChatScreen(
                 )
                 Toast.makeText(ctx, "已导出 $count 条消息,可在任务中心查看", Toast.LENGTH_SHORT).show()
             },
+        )
+    }
+
+    // 长文本大窗编辑(需求:输入过长时可增大输入框窗口)
+    if (expandedInputOpen) {
+        ExpandedInputSheet(
+            value = input,
+            onValueChange = { input = it },
+            onDismiss = { expandedInputOpen = false },
+            onSend = {
+                val text = input
+                expandedInputOpen = false
+                send(text)
+                input = ""
+            },
+            canSend = !st.running && input.isNotBlank(),
         )
     }
 
@@ -2193,19 +2295,138 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
     }
 }
 
-/** 审批抽屉:命令卡片 + 拒绝(红)/允许(蓝)双按钮。 */
+/** 一条待用户回答的问题(来自 codex 的 item/tool/requestUserInput / MCP elicitation)。 */
+private data class AskQuestion(val id: String, val text: String, val options: List<String>)
+
+/** 需要"回答"而不是"批准"的动作类型。 */
+private val ApprovalAskNames = setOf("request_user_input", "mcp_elicitation")
+
+/**
+ * 审批抽屉:按动作类型渲染 + 拒绝/允许(反问类则是"取消/提交")。
+ *
+ * 【为什么按类型分派】daemon 现在会送出多种动作类型(shell / file_change / apply_patch /
+ * permissions / request_user_input / mcp_elicitation)。以前全部被画成"一条 shell 命令",
+ * 于是"允许写入文件""允许放开网络访问"在手机上长得和"允许跑 rm -rf"一模一样 ——
+ * 用户点"允许"时并不知道自己在允许什么,审批卡就失去了意义。
+ * 这里按 name 给出各自的标题、正文与按钮文案,让每一次授权都能被看懂。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ApprovalSheet(
     action: ApprovalRequest,
     error: String?,
-    onDecision: (Boolean) -> Unit,
+    onDecision: (Boolean, String) -> Unit,
 ) {
     val state = rememberModalBottomSheetState(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != androidx.compose.material3.SheetValue.Hidden },
     )
     var expanded by remember(action.requestId) { mutableStateOf(false) }
+    val name = action.action.name
+    val isAsk = name in ApprovalAskNames
+    // 参数是 JSON 字符串,解析失败时退回原样展示(不能让卡片变成空白)。
+    val args = remember(action.action.jsonArgs) {
+        runCatching { JSONObject(action.action.jsonArgs) }.getOrNull()
+    }
+
+    // 标题 / 副标题:让用户一眼知道"这次要发生的是什么事"。
+    val title: String
+    val subtitle: String
+    when (name) {
+        "shell" -> {
+            title = "允许执行?"; subtitle = "agent 请求执行以下命令"
+        }
+        "file_change" -> {
+            title = "允许修改文件?"; subtitle = "agent 请求改动以下文件"
+        }
+        "apply_patch" -> {
+            title = "允许应用补丁?"; subtitle = "agent 请求改动以下文件"
+        }
+        "permissions" -> {
+            title = "允许提权?"; subtitle = "agent 请求额外的文件 / 网络权限"
+        }
+        "request_user_input" -> {
+            title = "agent 在问你"; subtitle = args?.optString("message").orEmpty().ifBlank { "回答后它才会继续" }
+        }
+        "mcp_elicitation" -> {
+            title = "MCP 需要确认"
+            val server = args?.optString("server").orEmpty()
+            subtitle = (args?.optString("message").orEmpty().ifBlank { "请确认这次调用" }) +
+                if (server.isNotBlank()) "（来自 $server）" else ""
+        }
+        "write_file" -> {
+            // 旧行为保留:本地 provider 的写文件审批仍走这条路。
+            title = "允许写入?"; subtitle = "agent 请求写入以下文件"
+        }
+        else -> {
+            title = "需要你确认"; subtitle = "agent 请求执行以下操作"
+        }
+    }
+
+    // 正文:按类型取该动作**特有**的字段,而不是把整坨 JSON 丢给用户。
+    val body = remember(action.action.jsonArgs, name) {
+        buildString {
+            when (name) {
+                "shell" -> {
+                    append(args?.optString("command").orEmpty())
+                    args?.optString("cwd").orEmpty().takeIf { it.isNotBlank() }?.let {
+                        append("\n\n工作目录：").append(it)
+                    }
+                }
+                "file_change", "apply_patch" -> {
+                    val files = args?.optJSONArray("files")
+                    if (files != null && files.length() > 0) {
+                        for (i in 0 until files.length()) appendLine(files.optString(i))
+                    }
+                    args?.optInt("count", 0)?.takeIf { it > 0 }?.let { append("共 ").append(it).append(" 个文件") }
+                }
+                "permissions" -> {
+                    val perms = args?.optJSONObject("permissions")
+                    if (perms != null) append(perms.toString(2)) else append(action.action.jsonArgs)
+                }
+                else -> append(action.action.jsonArgs)
+            }
+            args?.optString("reason").orEmpty().takeIf { it.isNotBlank() }?.let {
+                append("\n\n理由：").append(it)
+            }
+            args?.optString("grantRoot").orEmpty().takeIf { it.isNotBlank() }?.let {
+                append("\n会话内授权范围：").append(it)
+            }
+        }.trim()
+    }
+
+    // 反问类:每个问题一行(有选项就渲染成可选按钮),答案按 codex 期望的
+    // {"<问题id>":{"answers":["..."]}} 形状回给 daemon。
+    val questions = remember(action.action.jsonArgs) {
+        val arr = args?.optJSONArray("questions")
+        buildList {
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val q = arr.optJSONObject(i) ?: continue
+                    val opts = q.optJSONArray("options")?.let { oa ->
+                        (0 until oa.length()).mapNotNull { oa.optJSONObject(it)?.optString("label") }
+                    } ?: emptyList()
+                    add(AskQuestion(q.optString("id"), q.optString("question"), opts))
+                }
+            }
+        }
+    }
+    // 问题 id 缺失时给个稳定的兜底 key,否则答案会挂不上。
+    fun qid(q: AskQuestion, idx: Int) = q.id.ifBlank { "q$idx" }
+    var answers by remember(action.requestId) { mutableStateOf(emptyMap<String, String>()) }
+    val canSubmit = isAsk && (questions.isEmpty() || answers.values.any { it.isNotBlank() })
+
+    fun submit() {
+        val obj = JSONObject()
+        questions.forEachIndexed { idx, q ->
+            val a = answers[qid(q, idx)].orEmpty().trim()
+            if (a.isNotBlank()) {
+                obj.put(qid(q, idx), JSONObject().put("answers", JSONArray().put(a)))
+            }
+        }
+        onDecision(true, obj.toString())
+    }
+
     ModalBottomSheet(
         onDismissRequest = { },
         sheetState = state,
@@ -2214,6 +2435,15 @@ private fun ApprovalSheet(
         ),
         containerColor = Pa.CardHigh,
         shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        // 【状态栏重叠的真因】material3 的 ModalBottomSheet 默认
+        // `contentWindowInsets = WindowInsets.safeDrawing.only(Bottom)` ——
+        // **只消费底部 insets,不管顶部**。命令一长,抽屉被撑到接近全屏时,
+        // 拖柄/"允许执行?"/命令卡就直接画到系统状态栏底下,和时钟电量叠在一起。
+        // 改成消费整块 safeDrawing(上下都管),抽屉顶部自动让开状态栏。
+        // 注意:本版本 material3 的 contentWindowInsets 是 `@Composable () -> WindowInsets`
+        // 而不是直接取值 —— 少一层 `{ }` 会连锁报"@Composable invocations can only
+        // happen from the context of a @Composable function"。
+        contentWindowInsets = { WindowInsets.safeDrawing },
         dragHandle = {
             Box(
                 Modifier.padding(top = 10.dp).width(40.dp).height(4.dp)
@@ -2225,23 +2455,26 @@ private fun ApprovalSheet(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("允许执行?", Modifier.weight(1f), fontSize = 19.sp, color = Pa.TextPrimary)
-            Text(
-                if (expanded) "收起" else "展开",
-                fontSize = 11.sp,
-                color = Pa.Accent,
-            )
-            IconActionButton(
-                if (expanded) AppR.drawable.ic_lucide_chevron_left else AppR.drawable.ic_lucide_chevron_right,
-                if (expanded) "隐藏命令" else "展开命令",
-                { expanded = !expanded },
-                bg = Color.Transparent,
-                size = 36.dp,
-                iconSize = 18.dp,
-            )
+            Text(title, Modifier.weight(1f), fontSize = 19.sp, color = Pa.TextPrimary)
+            // 反问类没有"可展开的原文",收起/展开这一对控件对它没有意义。
+            if (!isAsk) {
+                Text(
+                    if (expanded) "收起" else "展开",
+                    fontSize = 11.sp,
+                    color = Pa.Accent,
+                )
+                IconActionButton(
+                    if (expanded) AppR.drawable.ic_lucide_chevron_left else AppR.drawable.ic_lucide_chevron_right,
+                    if (expanded) "隐藏详情" else "展开详情",
+                    { expanded = !expanded },
+                    bg = Color.Transparent,
+                    size = 36.dp,
+                    iconSize = 18.dp,
+                )
+            }
         }
         Text(
-            "agent 请求执行以下" + if (action.action.name == "write_file") "写入" else "命令",
+            subtitle,
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 4.dp),
@@ -2258,18 +2491,118 @@ private fun ApprovalSheet(
                 color = Pa.Red,
             )
         }
-        if (expanded) {
-            Text(
-                action.action.jsonArgs,
+        if (isAsk) {
+            // 【反问类】把问题原样摆出来:有选项就做成按钮(手机上点一下比打字快),
+            // 也保留输入框用于开放式回答。答案经 note 通道回给 daemon。
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                if (questions.isEmpty()) {
+                    Text(
+                        args?.optString("message").orEmpty().ifBlank { action.action.jsonArgs },
+                        fontSize = 13.sp, color = Pa.TextPrimary, lineHeight = 19.sp,
+                    )
+                }
+                questions.forEachIndexed { idx, q ->
+                    val key = qid(q, idx)
+                    val cur = answers[key].orEmpty()
+                    Text(
+                        q.text.ifBlank { "请回答" },
+                        Modifier.padding(top = if (idx == 0) 0.dp else 14.dp, bottom = 8.dp),
+                        fontSize = 13.5.sp, color = Pa.TextPrimary, lineHeight = 19.sp,
+                    )
+                    if (q.options.isNotEmpty()) {
+                        Column {
+                            q.options.forEach { opt ->
+                                val active = cur == opt
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 6.dp)
+                                        .pressable { answers = answers + (key to opt) }
+                                        .background(
+                                            if (active) Pa.AccentDim else Pa.Card,
+                                            RoundedCornerShape(12.dp),
+                                        )
+                                        .border(
+                                            0.5.dp,
+                                            if (active) Pa.Accent else Pa.Separator,
+                                            RoundedCornerShape(12.dp),
+                                        )
+                                        .padding(horizontal = 14.dp, vertical = 11.dp),
+                                ) {
+                                    Text(
+                                        opt,
+                                        fontSize = 13.sp,
+                                        color = if (active) Pa.Accent else Pa.TextSecondary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Pa.Card)
+                            .border(0.5.dp, Pa.Separator, RoundedCornerShape(12.dp)),
+                    ) {
+                        BasicTextField(
+                            value = cur,
+                            onValueChange = { answers = answers + (key to it) },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),
+                            textStyle = TextStyle(fontSize = 13.sp, color = Pa.TextPrimary),
+                            cursorBrush = SolidColor(Pa.Accent),
+                            decorationBox = { inner ->
+                                Box {
+                                    if (cur.isEmpty()) {
+                                        Text(
+                                            if (q.options.isEmpty()) "输入你的回答…" else "或直接输入你的回答…",
+                                            fontSize = 13.sp, color = Pa.TextTertiary,
+                                        )
+                                    }
+                                    inner()
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        } else if (expanded || name == "permissions") {
+            // 权限提升没有"展开才看"的道理:它要用户看清放开了什么,默认就展示。
+            // 【详情区改造】三个问题一起解决:
+            //  1) 原来是裸 Text,命令一长就把抽屉顶到全屏,既不滚动也没法收;
+            //     → 加高度上限 + 纵向滚动,抽屉高度从此可控;
+            //  2) 长命令的手机上核对/复制是刚需 → 套 SelectionContainer;
+            //  3) 底色 Pa.Bg 铺在 Pa.CardHigh 上是一块"纯黑凹陷" →
+            //     换成 Pa.Card + 细描边,与 Markdown 代码块用同一套观感(全局一致)。
+            val cmdScroll = rememberScrollState()
+            Box(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp, vertical = 12.dp)
-                    .background(Pa.Bg, RoundedCornerShape(14.dp))
-                    .padding(14.dp),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                color = Pa.TextPrimary,
-            )
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Pa.Card)
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(14.dp))
+                    .heightIn(max = 240.dp)
+                    .verticalScroll(cmdScroll),
+            ) {
+                SelectionContainer {
+                    Text(
+                        body,
+                        Modifier.padding(14.dp),
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Pa.TextPrimary,
+                        // 命令按原样换行展示(不强制单行),配合纵向滚动即可读全
+                        lineHeight = 17.sp,
+                    )
+                }
+            }
         }
         Row(
             Modifier
@@ -2280,23 +2613,30 @@ private fun ApprovalSheet(
             Box(
                 Modifier
                     .weight(1f)
-                    .pressable { onDecision(false) }
+                    .pressable { onDecision(false, "") }
                     .background(Pa.Card, RoundedCornerShape(16.dp))
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("拒绝", fontSize = 16.sp, color = Pa.Red)
+                Text(if (isAsk) "取消" else "拒绝", fontSize = 16.sp, color = Pa.Red)
             }
             Spacer(Modifier.width(12.dp))
             Box(
                 Modifier
                     .weight(1f)
-                    .pressable { onDecision(true) }
-                    .background(Pa.Accent, RoundedCornerShape(16.dp))
+                    .pressable(enabled = !isAsk || canSubmit) { if (isAsk) submit() else onDecision(true, "") }
+                    .background(
+                        if (isAsk && !canSubmit) Pa.Hover else Pa.Accent,
+                        RoundedCornerShape(16.dp),
+                    )
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("允许", fontSize = 16.sp, color = Color.White)
+                Text(
+                    if (isAsk) "提交" else "允许",
+                    fontSize = 16.sp,
+                    color = if (isAsk && !canSubmit) Pa.TextTertiary else Color.White,
+                )
             }
         }
     }
@@ -2616,6 +2956,108 @@ private fun InAppMarkdown(
  * 【为什么放这里】之前"保存到手机"散落在每条回复下面,用户根本分不清保存的是什么;
  * 汇总成一个入口 + 明确的条数回执,才符合"下载的东西要看得见、找得到"。
  */
+/**
+ * 长文本大窗编辑。
+ *
+ * 【为什么需要】底部小胶囊最多 4 行,写稍长的需求或贴一段代码时看不到全貌,
+ * 改中间一句得来回滚。这里给一个占大半个屏幕的编辑区。
+ *
+ * 【为什么不会有内容不同步的问题】它和主输入框共用**同一份 state**
+ * (`value` / `onValueChange` 直连 `input`),不存在两份副本需要回写,
+ * 点"完成"只是收起面板,文字本来就已经在输入框里了。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ExpandedInputSheet(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSend: () -> Unit,
+    canSend: Boolean,
+) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        containerColor = Pa.CardHigh,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        // 与审批抽屉同一套 insets 处理,避免顶部压到状态栏
+        contentWindowInsets = { WindowInsets.safeDrawing },
+        dragHandle = {
+            Box(
+                Modifier.padding(top = 10.dp).width(40.dp).height(4.dp)
+                    .background(Pa.Hover, CircleShape),
+            )
+        },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.82f)
+                .padding(horizontal = 16.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("编辑消息", Modifier.weight(1f), fontSize = 17.sp, color = Pa.TextPrimary)
+                Text("${value.length} 字", fontSize = 11.sp, color = Pa.TextTertiary)
+                Spacer(Modifier.width(10.dp))
+                // 完成 = 收起面板,内容原样留在底部输入框
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .pressable { onDismiss() }
+                        .background(Pa.Card)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                ) {
+                    Text("完成", fontSize = 13.sp, color = Pa.TextPrimary)
+                }
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .pressable(scaleDown = 0.92f, enabled = canSend) { onSend() }
+                        .background(if (canSend) Pa.Accent else Pa.Hover)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                ) {
+                    Text(
+                        "发送", fontSize = 13.sp,
+                        color = if (canSend) Color.White else Pa.TextTertiary,
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            val scroll = rememberScrollState()
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Pa.Card)
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp)),
+            ) {
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxSize().verticalScroll(scroll).padding(14.dp),
+                    textStyle = TextStyle(fontSize = 15.sp, color = Pa.TextPrimary, lineHeight = 22.sp),
+                    cursorBrush = SolidColor(Pa.Accent),
+                    decorationBox = { inner ->
+                        Box {
+                            if (value.isEmpty()) {
+                                Text(
+                                    "随心输入,发给电脑上的 agent…",
+                                    fontSize = 15.sp, color = Pa.TextTertiary,
+                                )
+                            }
+                            inner()
+                        }
+                    },
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ExportChatSheet(

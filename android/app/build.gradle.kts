@@ -47,7 +47,10 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    // 【故意的取舍】这里**没有** androidx.compose.material:material-icons-extended。
+    // 它曾把 DEX 撑到 27MB 里的一半(material.icons 家族 ≈14.2MB,其中 filled 就有 2.4MB),
+    // 而全项目对 Icons.* 的引用数是 0 —— 图标统一用 lucide 矢量图(res/drawable/ic_lucide_*.xml)。
+    // material3 自身带的 material-icons-core 仍然在,基础图标不受影响。
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.navigation:navigation-compose:2.8.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")

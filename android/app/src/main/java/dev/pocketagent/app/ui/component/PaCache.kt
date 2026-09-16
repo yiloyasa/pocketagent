@@ -40,6 +40,20 @@ object PaCache {
     /** cacheDir 的当前占用(临时文件 + 预览缓存),供缓存管理页展示。 */
     fun cacheUsage(ctx: Context): Long = dirSize(ctx.cacheDir)
 
+    /** 用户数据目录(filesDir)的递归占用。 */
+    fun filesUsage(ctx: Context): Long = dirSize(ctx.filesDir)
+
+    /**
+     * 任意目录的递归占用。
+     *
+     * 【为什么要有它】缓存管理页的数字必须和「系统设置 → 应用 → 存储占用」对得上,
+     * 否则用户拿两个页面一比就是"这 App 在骗我"。系统那边统计的是
+     * `cacheDir`(缓存)与 `filesDir`+其它(用户数据)的**真实递归大小**,
+     * 所以这里也按真实目录来算,而不是把几个自建缓存相加 —— 后者漏掉了
+     * WebView 写在 cacheDir 里的那几十 MB(正是真机上 25.72MB 对不上 62KB 的原因)。
+     */
+    fun dirUsage(dir: File): Long = dirSize(dir)
+
     /** 已知前缀的临时文件当前占用(崩溃残留会体现在这里)。 */
     fun tempUsage(ctx: Context): Long {
         val files = ctx.cacheDir.listFiles() ?: return 0

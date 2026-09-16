@@ -135,6 +135,30 @@ func (c *Client) Respond(id int64, result interface{}) error {
 	return err
 }
 
+// RespondError 用 JSON-RPC error 应答反向请求。
+//
+// 【为什么必须区分 Respond 和 RespondError】反向请求的"拒绝"有两种完全不同的含义:
+//   - 审批类(审批卡上点"拒绝"):这是一个**成功的应答**,内容是"用户不同意"。
+//     必须走 Respond,形状是该请求规定的 decision 字段。
+//   - 我们能力不足(不管理 ChatGPT 凭证、没有实现动态工具、不生成 attestation):
+//     这时**不能**伪造一个 decision —— 对方按自己 schema 解析会失败或误判。
+//     正确做法是回 JSON-RPC error,让它按"客户端不支持"处理。
+//
+// 早期实现把这两者混成一个 {"decision":"decline"},于是 token 刷新被当成
+// "用户拒绝了刷新",请求语义被彻底改写。
+func (c *Client) RespondError(id int64, code int, message string) error {
+	raw, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]interface{}{"code": code, "message": message},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = c.stdin.Write(append(raw, '\n'))
+	return err
+}
+
 func (c *Client) readLoop() {
 	debug := os.Getenv("PA_CODEX_DEBUG") != ""
 	for {

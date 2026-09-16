@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"runtime"
 	"strings"
 
@@ -93,6 +94,23 @@ func New(cfg Config) *Server {
 					t.Title = title
 					_ = cfg.Store.Update(t)
 				}
+			}
+		}
+		// codex 是 goal 的事实来源:它会规范化文本、也会自己推进状态机
+		// (active → complete / blocked / usageLimited / budgetLimited)。
+		// 把这些变化写回存储,手机端才能看到"目标已完成"而不是停在设下去的那一刻。
+		p.GoalHandler = func(codexTID, goal, status string, tokensUsed, timeUsedSeconds int64) {
+			for _, t := range cfg.Store.List(true) {
+				if t.CodexThreadID != codexTID {
+					continue
+				}
+				if t.Goal == goal {
+					continue
+				}
+				t.Goal = goal
+				_ = cfg.Store.Update(t)
+				log.Printf("[goal] 同步会话 %s: goal=%.60q status=%s tokens=%d time=%ds",
+					t.ID, goal, status, tokensUsed, timeUsedSeconds)
 			}
 		}
 	}
