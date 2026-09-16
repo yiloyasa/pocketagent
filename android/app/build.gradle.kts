@@ -61,6 +61,9 @@ dependencies {
     implementation("io.grpc:grpc-stub:1.66.0")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
     testImplementation("junit:junit:4.13.2")
+    // android.jar 里的 org.json 是 stub(JVM 单测调用会抛 "not mocked"),
+    // 这里补一份真实实现,让离线快照的读写逻辑可被单测覆盖。
+    testImplementation("org.json:json:20231013")
 }
 
 protobuf {

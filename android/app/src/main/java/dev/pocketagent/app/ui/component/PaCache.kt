@@ -81,16 +81,22 @@ object PaCache {
  */
 object PreviewCache {
 
-    /** 预览缓存总量上限(字节)。 */
-    private const val MAX_TOTAL_BYTES = 200L * 1024 * 1024
+    /** 预览缓存总量上限(字节);单测会下调以验证 LRU。 */
+    internal var maxTotalBytes = 200L * 1024 * 1024
 
     /** 单文件上限:与预览拉取上限一致,超大的本来就不会进预览管线。 */
-    private const val MAX_ENTRY_BYTES = 64L * 1024 * 1024
+    internal var maxEntryBytes = 64L * 1024 * 1024
 
     private var dir: File? = null
 
     fun init(ctx: Context) {
         val d = File(ctx.cacheDir, PaCache.PREVIEW_DIR)
+        runCatching { d.mkdirs() }
+        dir = d
+    }
+
+    /** 仅供单测:直接指定缓存目录,绕开 Context。 */
+    internal fun initForTest(d: File) {
         runCatching { d.mkdirs() }
         dir = d
     }
@@ -116,7 +122,7 @@ object PreviewCache {
     /** 写入缓存并执行 LRU 淘汰。调用方需保证 bytes 与 size/mtime 一致(防脏缓存)。 */
     fun put(path: String, size: Long, mtime: Long, bytes: ByteArray) {
         val d = dir ?: return
-        if (bytes.size > MAX_ENTRY_BYTES) return
+        if (bytes.size > maxEntryBytes) return
         runCatching {
             val f = File(d, key(path, size, mtime))
             f.writeBytes(bytes)
@@ -128,11 +134,14 @@ object PreviewCache {
     private fun evictIfNeeded(d: File) {
         val files = d.listFiles() ?: return
         var total = files.sumOf { it.length() }
-        if (total <= MAX_TOTAL_BYTES) return
+        if (total <= maxTotalBytes) return
         val ordered = files.sortedBy { it.lastModified() }
         for (f in ordered) {
-            if (total <= MAX_TOTAL_BYTES) break
-            if (f.delete()) total -= f.length()
+            if (total <= maxTotalBytes) break
+            // 长度必须在删除前取:delete 之后 length() 恒为 0,total 就永远不会下降,
+            // 结果会把整个缓存目录清空(而不是只淘汰最旧的)。
+            val len = f.length()
+            if (f.delete()) total -= len
         }
     }
 

@@ -59,6 +59,12 @@ object ThreadSnapshot {
         dir = d
     }
 
+    /** 仅供单测:直接指定快照目录,绕开 Context(android.jar 在 JVM 单测里不可用)。 */
+    internal fun initForTest(d: File) {
+        runCatching { d.mkdirs() }
+        dir = d
+    }
+
     // ------------------------------------------------------------ 会话列表
 
     fun saveThreads(rows: List<Row>) {
