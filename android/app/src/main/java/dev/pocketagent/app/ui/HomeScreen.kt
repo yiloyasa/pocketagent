@@ -104,6 +104,8 @@ fun HomeScreen(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit = {},
+    /** 重看新手教程(透传给侧边栏「更多」入口)。 */
+    onOpenOnboarding: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -424,6 +426,7 @@ fun HomeScreen(
             onOpenTerminal = { onOpenTerminal() },
             onOpenSettings = { onOpenSettings() },
             onOpenTaskCenter = onOpenTaskCenter,
+            onOpenOnboarding = onOpenOnboarding,
             onOpenBrowser = { onOpenBrowser() },
         )
     }

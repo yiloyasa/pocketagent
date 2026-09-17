@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1491,6 +1492,13 @@ private fun AgentPage(
             }
 
             SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "能力 · 技能与插件") {
+                // 数量过多时默认只展示前 DEFAULT_VISIBLE_PER_KIND 条,避免 29 个技能
+                // 把整页铺满;被折叠的条目点"展开更多"用底部弹窗看全部。
+                val DEFAULT_VISIBLE_PER_KIND = 3
+                val EXPAND_SHEET_MAX_HEIGHT = 420.dp
+                // 放在分支前:确保「读取中 / 为空」的提前 return 不会把它跳过。
+                var showAllCapabilities by remember { mutableStateOf(false) }
+
                 Spacer(Modifier.height(10.dp))
                 if (capabilities.isEmpty()) {
                     // 四态必须分清:还在读 / 读失败 / 读完确实没有 / 有数据。
@@ -1511,40 +1519,107 @@ private fun AgentPage(
                     val byKind = capabilities.groupBy { it.kind }
                     // 顺序固定:技能 → hooks → 插件。用 codex 返回的顺序会随
                     // 目录扫描结果抖动,同一台机器每次打开位置都不一样。
-                    listOf("skill" to "技能", "hook" to "Hooks", "plugin" to "插件")
-                        .forEach { (kind, label) ->
-                            val items = byKind[kind].orEmpty()
-                            if (items.isEmpty()) return@forEach
-                            Text(
-                                "$label · ${items.size}",
-                                fontSize = 11.sp,
-                                color = Pa.TextTertiary,
-                                modifier = Modifier.padding(bottom = 4.dp),
-                            )
-                            items.forEachIndexed { i, c ->
-                                // 描述优先给"为什么用不了":enabled=false 却不说明原因,
-                                // 用户只会觉得"我装的技能没生效"。三项都空就整行留白,
-                                // 不硬凑一句废话。
-                                val desc = listOfNotNull(
-                                    c.disabledReason.takeIf { it.isNotBlank() },
-                                    c.description.takeIf { it.isNotBlank() },
-                                    c.source.takeIf { it.isNotBlank() }?.let { "来源 $it" },
-                                ).firstOrNull().orEmpty()
-                                // control 是必填的 RowScope 槽位(默认空实现),所以
-                                // 这里不做"传 null 表示没有控件",而是在槽位内部判断。
-                                SettingRow(
-                                    title = c.name.ifBlank { "(未命名)" },
-                                    desc = desc,
-                                    divider = i != items.lastIndex,
-                                    control = {
-                                        if (!c.enabled) {
-                                            Text("已停用", fontSize = 11.sp, color = Pa.TextTertiary)
-                                        }
-                                    },
-                                )
-                            }
-                            Spacer(Modifier.height(8.dp))
+                    val kindsOrder = listOf("skill" to "技能", "hook" to "Hooks", "plugin" to "插件")
+                    // 弹窗要列出所有分类的全部条目,提前算好总数供标题复用。
+                    val totalCapabilityCount = byKind.values.sumOf { it.size }
+
+                    // 折叠列表与弹窗共用同一套条目渲染(含"为什么用不了 / 已停用")。
+                    @Composable
+                    fun CapabilityItemRow(c: CodexCapability, divider: Boolean) {
+                        // 描述优先给"为什么用不了":enabled=false 却不说明原因,
+                        // 用户只会觉得"我装的技能没生效"。三项都空就整行留白,
+                        // 不硬凑一句废话。
+                        val desc = listOfNotNull(
+                            c.disabledReason.takeIf { it.isNotBlank() },
+                            c.description.takeIf { it.isNotBlank() },
+                            c.source.takeIf { it.isNotBlank() }?.let { "来源 $it" },
+                        ).firstOrNull().orEmpty()
+                        // control 是必填的 RowScope 槽位(默认空实现),所以
+                        // 这里不做"传 null 表示没有控件",而是在槽位内部判断。
+                        SettingRow(
+                            title = c.name.ifBlank { "(未命名)" },
+                            desc = desc,
+                            divider = divider,
+                            control = {
+                                if (!c.enabled) {
+                                    Text("已停用", fontSize = 11.sp, color = Pa.TextTertiary)
+                                }
+                            },
+                        )
+                    }
+
+                    kindsOrder.forEach { (kind, label) ->
+                        val items = byKind[kind].orEmpty()
+                        if (items.isEmpty()) return@forEach
+                        Text(
+                            "$label · ${items.size}",
+                            fontSize = 11.sp,
+                            color = Pa.TextTertiary,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                        val visible = items.take(DEFAULT_VISIBLE_PER_KIND)
+                        val hasMore = items.size > DEFAULT_VISIBLE_PER_KIND
+                        visible.forEachIndexed { i, c ->
+                            // 折叠视图里最后一条可见项:若还有被折叠的条目,保留
+                            // 分隔线与"展开更多"行衔接;否则按原逻辑(非末项才分隔)。
+                            val isLastVisible = i == visible.lastIndex
+                            CapabilityItemRow(c, divider = !(isLastVisible && !hasMore))
                         }
+                        if (hasMore) {
+                            SettingRow(
+                                title = "展开更多(${items.size - DEFAULT_VISIBLE_PER_KIND})",
+                                desc = "",
+                                divider = false,
+                                chevron = true,
+                                onClick = { showAllCapabilities = true },
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    // 弹窗:列出所有分类的全部条目,内容可上下滑动(用 LazyColumn,勿用 Column 硬塞)。
+                    if (showAllCapabilities) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showAllCapabilities = false },
+                            containerColor = Pa.CardHigh,
+                            title = {
+                                Text(
+                                    "技能与插件($totalCapabilityCount 个)",
+                                    color = Pa.TextPrimary, fontSize = 17.sp,
+                                )
+                            },
+                            text = {
+                                LazyColumn(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = EXPAND_SHEET_MAX_HEIGHT),
+                                ) {
+                                    kindsOrder.forEach { (kind, label) ->
+                                        val items = byKind[kind].orEmpty()
+                                        if (items.isEmpty()) return@forEach
+                                        item {
+                                            Text(
+                                                "$label · ${items.size}",
+                                                fontSize = 11.sp,
+                                                color = Pa.TextTertiary,
+                                                modifier = Modifier.padding(vertical = 4.dp),
+                                            )
+                                        }
+                                        items.forEachIndexed { i, c ->
+                                            item {
+                                                CapabilityItemRow(c, divider = i != items.lastIndex)
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showAllCapabilities = false }) {
+                                    Text("收起", color = Pa.AccentText, fontSize = 15.sp)
+                                }
+                            },
+                        )
+                    }
                 }
             }
 
@@ -1966,10 +2041,19 @@ fun SettingRow(
 }
 
 /**
+ * 一条已下载文件在本机的真实状态:是否还在、真实体积(查不到为 null)。
+ * 用于在离线情况下诚实区分"能打开 / 已被删除 / 位置未知",绝不装作能打开。
+ */
+private data class DlFileState(val exists: Boolean, val realSize: Long?)
+
+/**
  * 二级页:用户数据管理 —— 连接地址 + 全部下载内容。
  *
  * 【设计取向】连接编辑与下载内容(查看 / 分享 / 删除)统一收在这里;
  * 文件类型与任务中心用同一套 [fileKindOf] 判定,两处显示不会打架。
+ *
+ * 【离线可靠】下载列表只来自本地持久化的任务清单(SharedPreferences),不依赖任何 daemon
+ * 状态;查看/分享直接用 [PaDownloader] 的本地 content URI,零 daemon 往返。
  */
 @Composable
 private fun UserDataPage(
@@ -1988,13 +2072,35 @@ private fun UserDataPage(
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val allTasks by TaskCenter.tasks.collectAsState()
+    // 【离线可靠】列表只来自本地持久化的任务清单(SharedPreferences),不依赖任何 daemon 状态 ——
+    // 断网/连不上时照样渲染,不会变成"0 个文件"。
     val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
-    // 下载合计:把各条已显示的体积字符串解析回字节再相加。
-    // 用"反解析已显示的值"而不是另取一套磁盘统计,是为了保证
-    // **合计恒等于明细之和**,不会出现上下一对不上的新口径矛盾。
-    val downloadBytes = downloads
-        .filter { it.status == TaskCenter.Status.DONE }
-        .sumOf { parseHumanSize(it.sizeText) }
+    val doneDownloads = downloads.filter { it.status == TaskCenter.Status.DONE }
+
+    // 每条已下载文件的"是否还在 / 真实体积":本地查 MediaStore / 文件系统,零 daemon 往返。
+    // 结果进 state,列表据此决定显示「查看/分享」还是「文件已被删除」。
+    val dlStates by produceState(emptyMap<String, DlFileState>(), downloads) {
+        value = withContext(Dispatchers.IO) {
+            doneDownloads.associate { d ->
+                val exists = if (d.localUri.isNotEmpty()) PaDownloader.localFileExists(ctx, d.localUri) else false
+                val size = if (exists) PaDownloader.queryLocalFileSize(ctx, d.localUri) else null
+                d.id to DlFileState(exists, size)
+            }
+        }
+    }
+
+    // 下载占用:优先用"文件真实字节数"(MediaStore 查回),查不到才回退到条目上记录的体积字符串;
+    // 两者都没有就记为未知 —— 绝不用 0 冒充"没占用"。
+    val downloadBytes = doneDownloads.sumOf { d ->
+        val real = dlStates[d.id]?.realSize
+        real ?: if (d.sizeText.isNotEmpty()) parseHumanSize(d.sizeText) else null ?: 0L
+    }
+    val downloadUnknown = doneDownloads.any { d ->
+        val real = dlStates[d.id]?.realSize
+        (real ?: if (d.sizeText.isNotEmpty()) parseHumanSize(d.sizeText) else null) == null
+    }
+    val doneCount = doneDownloads.size
+
     // 旧版本下载条目是 10 字段格式,没有 localUri → 查看/分享图标被门控隐藏。
     // 进页面按文件名反向找回本地路径,找回后 attachLocalUriIfEmpty→persist()
     // 会重新发射列表,图标随之出现。legacyTried 记录已尝试的 id,防止重组时反复查 MediaStore。
@@ -2093,9 +2199,13 @@ private fun UserDataPage(
 
         SectionBlock(
             icon = R.drawable.ic_lucide_download,
-            title = "下载内容 · " + downloads.count { it.status == TaskCenter.Status.DONE } + " 个文件" +
-                // 总计:用户问"到底占了我多少空间",只给单条体积等于让他自己加
-                if (downloadBytes > 0) " · 共 ${humanSize(downloadBytes)}" else "",
+            title = "下载内容 · " + doneCount + " 个文件" +
+                // 总计:用户问"到底占了我多少空间"。查不到真实体积就如实标「未知」,不用 0 冒充。
+                when {
+                    downloadUnknown -> " · 占用未知"
+                    downloadBytes > 0 -> " · 共 " + humanSize(downloadBytes)
+                    else -> ""
+                },
         ) {
             if (downloads.isEmpty()) {
                 Text(
@@ -2167,23 +2277,37 @@ private fun UserDataPage(
                                     )
                                 }
                             }
-                            if (d.status == TaskCenter.Status.DONE && d.localUri.isNotEmpty()) {
-                                // 查看:网页/文本/Markdown/图片 → 内置浏览器;安装包/文档 → 系统打开
-                                IconActionButton(
-                                    R.drawable.ic_lucide_globe, "查看",
-                                    {
-                                        PaDownloader.openLocalFile(
-                                            ctx = ctx, uri = d.localUri, title = d.title,
-                                            detail = d.detail, onOpenInBrowser = onOpenBrowser,
-                                        )
-                                    },
-                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                )
-                                IconActionButton(
-                                    R.drawable.ic_lucide_share_2, "分享",
-                                    { PaDownloader.shareLocalFile(ctx, d.localUri, d.title) },
-                                    bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                )
+                            val canOpen = d.status == TaskCenter.Status.DONE &&
+                                d.localUri.isNotEmpty() && (dlStates[d.id]?.exists ?: false)
+                            when {
+                                canOpen -> {
+                                    // 查看:网页/文本/Markdown/图片 → 内置浏览器;安装包/文档 → 系统打开。
+                                    // 直接用本地 content URI,零 daemon 往返,断网也能开。
+                                    IconActionButton(
+                                        R.drawable.ic_lucide_globe, "查看",
+                                        {
+                                            PaDownloader.openLocalFile(
+                                                ctx = ctx, uri = d.localUri, title = d.title,
+                                                detail = d.detail, onOpenInBrowser = onOpenBrowser,
+                                            )
+                                        },
+                                        bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                    )
+                                    IconActionButton(
+                                        R.drawable.ic_lucide_share_2, "分享",
+                                        { PaDownloader.shareLocalFile(ctx, d.localUri, d.title) },
+                                        bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
+                                    )
+                                }
+                                d.status == TaskCenter.Status.DONE -> {
+                                    // 文件本体真丢了(被系统/清理软件删掉)或位置未知:如实告知,
+                                    // 绝不装作能打开;只给删除(移除死条目)。
+                                    Text(
+                                        if (d.localUri.isEmpty()) "位置未知" else "文件已被删除",
+                                        Modifier.padding(end = 6.dp),
+                                        fontSize = 10.5.sp, color = Pa.Red,
+                                    )
+                                }
                             }
                             IconActionButton(
                                 R.drawable.ic_lucide_trash_2, "删除",
@@ -2209,8 +2333,9 @@ private fun UserDataPage(
         }
         CacheSection(
             taskCount = allTasks.size,
-            downloadCount = downloads.size,
+            downloadCount = doneCount,
             downloadBytes = downloadBytes,
+            downloadUnknown = downloadUnknown,
         )
         Spacer(Modifier.height(20.dp))
     }
@@ -2234,13 +2359,18 @@ private fun UserDataPage(
  * - 登录凭证与设置:任何清理项都不碰,避免"清缓存把自己清掉线"。
  */
 @Composable
-private fun CacheSection(taskCount: Int, downloadCount: Int, downloadBytes: Long) {
+private fun CacheSection(
+    taskCount: Int,
+    downloadCount: Int,
+    downloadBytes: Long,
+    downloadUnknown: Boolean,
+) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     // 与系统一致的两项
     var cacheBytes by remember { mutableLongStateOf(0L) }
     var userBytes by remember { mutableLongStateOf(0L) }
-    // 明细(用于解释"缓存里到底装了什么")
+    // 明细(用于「详情」里解释"这些数字里都是什么")
     var previewBytes by remember { mutableLongStateOf(0L) }
     var snapshotBytes by remember { mutableLongStateOf(0L) }
     var tempBytes by remember { mutableLongStateOf(0L) }
@@ -2280,37 +2410,14 @@ private fun CacheSection(taskCount: Int, downloadCount: Int, downloadBytes: Long
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
             StatCell2("缓存", sizeText(cacheBytes), Modifier.weight(1f))
             StatCell2("用户数据", sizeText(userBytes), Modifier.weight(1f))
-            StatCell2("下载", sizeText(downloadBytes), Modifier.weight(1f))
+            // 下载占用:查不到真实体积就如实标「未知」,绝不用 0 冒充
+            StatCell2("下载", if (downloadUnknown) "未知" else sizeText(downloadBytes), Modifier.weight(1f))
         }
-        // ---- 逐项说明"这些数字里都是什么",避免含义不明的空白数字 ----
-        Text(
-            "缓存 ${sizeText(cacheBytes)} = 浏览器缓存 ${sizeText(browserBytes)}" +
-                " + 预览缓存 ${sizeText(previewBytes)} + 临时文件 ${sizeText(tempBytes)};" +
-                "与系统「存储占用 → 缓存」是同一个数字,可以对照查看。",
-            Modifier.padding(bottom = 4.dp),
-            fontSize = 10.5.sp,
-            color = Pa.TextTertiary,
-        )
-        Text(
-            "用户数据 ${sizeText(userBytes)} = 会话快照 ${sizeText(snapshotBytes)}" +
-                " + 设置与登录凭证;下方的清理项**都不会动到它**。",
-            Modifier.padding(bottom = 4.dp),
-            fontSize = 10.5.sp,
-            color = Pa.TextTertiary,
-        )
-        Text(
-            "下载 ${sizeText(downloadBytes)} · $downloadCount 个文件 · 任务条目 $taskCount 条;" +
-                "文件本体在系统下载目录,只能在上方列表里逐条删除。",
-            Modifier.padding(bottom = 8.dp),
-            fontSize = 10.5.sp,
-            color = Pa.TextTertiary,
-        )
 
-        // ---- 清理临时与失效缓存 ----
+        // ---- 清理动作:一行标题 + 一行短后果(≤16 字),完整说明收进下方「详情」 ----
         CacheActionRow(
             title = "清理临时与失效缓存",
-            desc = "删掉崩溃残留的临时文件与「文件已被删除」的下载条目。" +
-                "不碰预览缓存、不碰登录状态,可随时清。",
+            desc = "清残留,可随时",
         ) {
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val temps = dev.pocketagent.app.ui.component.PaCache.sweepTemp(ctx)
@@ -2332,9 +2439,7 @@ private fun CacheSection(taskCount: Int, downloadCount: Int, downloadBytes: Long
         if (previewBytes + snapshotBytes > 0) {
             CacheActionRow(
                 title = "清空预览与会话快照",
-                desc = "释放 ${sizeText(previewBytes + snapshotBytes)};" +
-                    "后果:断网时「刚看过的文件」和最近的对话会打不开,联网后自动重建。" +
-                    "不影响登录状态与电脑端内容。",
+                desc = "断网预览将失效",
             ) {
                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     val a = dev.pocketagent.app.ui.component.PreviewCache.clear()
@@ -2350,9 +2455,7 @@ private fun CacheSection(taskCount: Int, downloadCount: Int, downloadBytes: Long
         // ---- 清理浏览器数据 ----
         CacheActionRow(
             title = "清理浏览器数据",
-            desc = "清掉内置浏览器的 HTTP 缓存 / Cookie / 网页存储。" +
-                "后果:在内置浏览器里登录过的网站需要重新登录;" +
-                "不影响电脑端、不影响 App 设置与连接凭证。",
+            desc = "网站需重新登录",
         ) {
             dev.pocketagent.app.ui.component.PaCache.clearBrowserData(ctx)
             reload()
@@ -2362,10 +2465,55 @@ private fun CacheSection(taskCount: Int, downloadCount: Int, downloadBytes: Long
         // ---- 清空任务条目(保留文件本体,需二次确认) ----
         CacheActionRow(
             title = "清空已完成的任务条目",
-            desc = "只清任务中心的记录列表,不删已下载的文件,也不减上面的「下载」占用。",
+            desc = "仅删记录,留文件",
             danger = true,
         ) {
             confirmClearTasks = true
+        }
+
+        // ---- 详情:口径与清理后果的完整说明(默认折叠,信息不丢、不刷屏) ----
+        CollapsibleDetail {
+            Text(
+                "缓存 ${sizeText(cacheBytes)} = 浏览器缓存(粗算) ${sizeText(browserBytes)}" +
+                    " + 预览缓存 ${sizeText(previewBytes)} + 临时文件 ${sizeText(tempBytes)}" +
+                    " + 其余 cacheDir 内容;与系统「存储占用 → 缓存」同口径,可对照。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "用户数据 ${sizeText(userBytes)} = 会话快照 ${sizeText(snapshotBytes)}" +
+                    " + 设置与登录凭证;下方清理项都不会动到它。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "下载 ${if (downloadUnknown) "占用未知" else sizeText(downloadBytes)} · $downloadCount 个文件" +
+                    " · 任务条目 $taskCount 条;文件本体在系统下载目录,只能在上方列表逐条删除。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "清理临时与失效缓存:删崩溃残留的临时文件与「文件已被删除」的下载条目;" +
+                    "不碰预览缓存、不碰登录状态,可随时清。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "清空预览与会话快照:释放 ${sizeText(previewBytes + snapshotBytes)};" +
+                    "后果:断网时「刚看过的文件」和最近对话打不开,联网后自动重建;不影响登录与电脑端。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "清理浏览器数据:清掉内置浏览器的 HTTP 缓存 / Cookie / 网页存储;" +
+                    "后果:浏览器里登录过的网站需重新登录;不影响电脑端与 App 设置。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "清空已完成的任务条目:只清任务中心记录列表,不删已下载文件,也不减上方「下载」占用。",
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
         }
     }
 
@@ -2429,6 +2577,31 @@ private fun CacheActionRow(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
             tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
         )
+    }
+}
+
+/**
+ * 默认折叠的「详情」展开区:把长解释收进来,默认不刷屏,点一下才展开。
+ * 用简单 state 切换,不引第三方依赖。
+ */
+@Composable
+private fun CollapsibleDetail(content: @Composable () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .pressable(haptic = false, onClick = { expanded = !expanded })
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("详情", fontSize = 11.sp, color = Pa.TextTertiary)
+            Spacer(Modifier.weight(1f))
+            Text(if (expanded) "▾" else "▸", fontSize = 12.sp, color = Pa.TextTertiary)
+        }
+        if (expanded) {
+            content()
+        }
     }
 }
 

@@ -346,6 +346,31 @@ object TurnSession {
                             }
                         }
                         TurnServerMessage.MsgCase.APPROVAL_REQUEST -> st.pendingApproval = ev.approvalRequest
+                        TurnServerMessage.MsgCase.APPROVAL_RESOLVED -> {
+                            // 【幽灵审批卡治理】该审批已在电脑端被处理(daemon 竞速
+                            // serverRequest/resolved 后转发):立即撤卡,不再让用户对着
+                            // 一张点不动也没意义的卡。附一条时间线说明卡为何消失。
+                            val resolved = ev.approvalResolved
+                            val cur = st.pendingApproval
+                            if (cur == null || resolved.requestId.isBlank() ||
+                                resolved.requestId == cur.requestId
+                            ) {
+                                st.pendingApproval = null
+                                st.approvalError = null
+                                val note = resolved.note.ifBlank { "这条审批已在电脑端被处理" }
+                                upsertCodexEventItem(
+                                    st,
+                                    CodexEvent.newBuilder()
+                                        // WARNING 才会进时间线(STATUS 被过滤,见
+                                        // shouldShowCodexEventInTimeline);这里是"用户须知
+                                        // 情"的解释面,黄色提示语义合适。
+                                        .setKind(CodexEvent.Kind.WARNING)
+                                        .setTitle("审批已在电脑端处理")
+                                        .setMessage(note)
+                                        .build(),
+                                )
+                            }
+                        }
                         TurnServerMessage.MsgCase.COMPLETED -> {
                             sawEnd = true
                             commitThinking(st)

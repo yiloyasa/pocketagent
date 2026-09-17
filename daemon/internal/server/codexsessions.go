@@ -5,6 +5,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -13,19 +15,61 @@ import (
 	"github.com/pocketagent/daemon/internal/store"
 )
 
+// codexAppServerBudget 是 ListCodexThreads 调 codex app-server 的时间预算。
+// codex 不可用时(子进程重启 / 令牌失效)必须在预算内失败并返回错误,
+// 让手机端展示 pcError,而不是挂起等 callTimeout(120s)。
+const codexAppServerBudget = 5 * time.Second
+
+// runBounded 在 budget 内执行 fn;fn 超时/失败一律返回零值与 error,
+// 调用方据此降级(放弃同步 / 把错误透传给手机),绝不无限挂起。
+// fn 仍在后台跑完(最坏等下游自身超时),但调用方早已带着降级结果返回。
+func runBounded[T any](budget time.Duration, fn func() (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	type result struct {
+		v   T
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		v, err := fn()
+		ch <- result{v, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-ctx.Done():
+		var zero T
+		return zero, fmt.Errorf("调用超时(%s)", budget)
+	}
+}
+
+// listCodexViaAppServerBounded 在预算内调用 app-server 的 thread/list;
+// 超时/失败一律返回 error,由调用方决定是否把错误透传给手机(pcError 展示)。
+func listCodexViaAppServerBounded(p *agent.CodexProvider, budget time.Duration) ([]agent.CodexSessionInfo, error) {
+	return runBounded[[]agent.CodexSessionInfo](budget, p.ListCodexThreadsViaAppServer)
+}
+
 func (s *Server) ListCodexThreads(ctx context.Context, req *pb.ListCodexThreadsRequest) (*pb.ListCodexThreadsResponse, error) {
-	// 首选 app-server 的 thread/list(codex 自动命名的真实标题);失败回退扫 rollout
+	// 首选 app-server 的 thread/list(codex 自动命名的真实标题)。
+	// 【短预算 + 降级】codex 不可用时必须在预算内返回,但**不要**直接报错 ——
+	// 下面的 rollout 扫描不依赖 codex 进程存活,降级到它仍能给出可用列表
+	// (报错会让手机端"电脑上的会话"整个空掉,比旧数据更糟)。
 	var sessions []agent.CodexSessionInfo
 	if p, ok := s.cfg.Providers["codex"].(*agent.CodexProvider); ok {
-		if via, err := p.ListCodexThreadsViaAppServer(); err == nil && len(via) > 0 {
+		via, err := listCodexViaAppServerBounded(p, codexAppServerBudget)
+		if err != nil {
+			log.Printf("[sessions] app-server thread/list 超时/失败(%.1fs 预算),降级 rollout 扫描: %v",
+				codexAppServerBudget.Seconds(), err)
+		} else {
 			sessions = via
 		}
 	}
-	// 标题/目录兜底:app-server 有时只回 id(标题为空),这里用 rollout 扫描
-	// (首条用户消息 + 文件头 cwd)补齐 —— 保证"加载 codex 已有项目/任务时
-	// 能直接看到标题",而不是一片"(未命名会话)"。
+	// 标题/目录兜底:app-server 有时只回 id(标题为空),或干脆一条都没回(此时
+	// 用本地 rollout 扫描兜底,保证"加载 codex 已有项目/任务时能直接看到标题",
+	// 而不是一片"(未命名会话)")。
 	scanned, scanErr := agent.ListCodexSessions()
-	if sessions == nil {
+	if len(sessions) == 0 {
 		if scanErr != nil {
 			return nil, errInternal(scanErr)
 		}

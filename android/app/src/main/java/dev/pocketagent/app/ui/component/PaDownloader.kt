@@ -258,6 +258,24 @@ object PaDownloader {
     }
 
     /**
+     * 查本地文件真实字节数(content:// 走 MediaStore 的 file descriptor,file:// 走 File.length)。
+     * 文件不存在或读取失败返回 null —— 调用方据此如实显示「未知」,而**绝不用 0 冒充**
+     * "没占用"(之前下载合计在 sizeText 缺失时会算出 0,等于骗用户"什么都没下")。
+     * 纯本地查询,零 daemon 往返,断网也能用。
+     */
+    fun queryLocalFileSize(ctx: Context, uri: String): Long? {
+        if (uri.isEmpty()) return null
+        return runCatching {
+            val parsed = android.net.Uri.parse(uri)
+            when (parsed.scheme) {
+                "content" -> ctx.contentResolver.openFileDescriptor(parsed, "r")?.use { it.statSize } ?: null
+                "file" -> parsed.path?.let { java.io.File(it).length().takeIf { s -> s > 0L } }
+                else -> null
+            }
+        }.getOrNull()
+    }
+
+    /**
      * 按文件名在「下载/PocketAgent」里找回文件 —— 旧版本的历史条目没存 localUri
      * (早期 finishDownload 不落盘这个字段),但文件多半还躺在原处。
      * 找到就返回可打开的 URI(条目由调用方补回,查看/分享图标随之恢复);

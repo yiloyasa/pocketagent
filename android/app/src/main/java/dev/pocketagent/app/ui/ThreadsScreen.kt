@@ -181,6 +181,9 @@ fun ThreadsScreen(
     var loadError by remember { mutableStateOf<String?>(null) }
     // 列表是否是"离线快照"渲染的(决定错误条的颜色:离线用提示色而非报错色)
     var offline by remember { mutableStateOf(false) }
+    // 重试进行中:点「重试」先自愈半死通道再拉列表,期间按钮显示"进行中"防抖,
+    // 避免连续点击重复触发(也避免重试仍打在已坏的通道上)。
+    var retrying by remember { mutableStateOf(false) }
     // 电脑会话单独记录错误:拉不到时要能看见,而不是显示成「电脑里什么都没有」
     var pcError by remember { mutableStateOf<String?>(null) }
     // 首次加载中:列表区显示骨架屏(设计规范 §2.3)。只在"列表还空着"时才出,
@@ -200,15 +203,25 @@ fun ThreadsScreen(
      * 剔除这些 id,两处不再各显示一条;同时**每次都刷新两个列表**,
      * 避免删掉一条后电脑列表还是旧缓存(点开报"无法打开")。
      */
-    fun refresh() = scope.launch {
+    // doRefresh:真正的拉取逻辑(可挂起、可等待)。refresh() 只是把它丢进协程跑,
+    // 这样重试可以在"回收半死通道"之后再等待本次拉取结束(按钮显示进行中防抖)。
+    suspend fun doRefresh() {
         // 快照要落"未过滤的全量",而 all 是 withContext 块里的局部量 ——
         // 用外层变量把它带出来(同一协程顺序执行,不存在竞态)。
         var allForSnapshot: List<PThread> = emptyList()
+        // gRPC 是否可达:getHostInfo 成功 = daemon 活着(顶部连接卡据此显示"已连接")。
+        // 区分"连不上 daemon"(真离线)与"连得上但列表拉取失败"(codex 上游无响应),
+        // 两者横幅文案与配色不同,不能都写成"离线"。
+        var hostReached = false
         try {
             withContext(Dispatchers.IO) {
-                host = AgentConnection.connectWithFallback()
-                    ?: AgentConnection.hostService()
-                        .getHostInfo(GetHostInfoRequest.getDefaultInstance())
+                // 先探测 gRPC:成功才认为连接健康;失败则 hostReached=false,
+                // 进入 catch 后按"离线"分支展示快照。
+                host = runCatching {
+                    AgentConnection.connectWithFallback()
+                        ?: AgentConnection.hostService()
+                            .getHostInfo(GetHostInfoRequest.getDefaultInstance())
+                }.onSuccess { hostReached = true }.getOrThrow()
                 // daemon 的 include_archived=true 是"活跃+已归档"的全量,这里自己分流
                 val all = AgentConnection.threadService()
                     .listThreads(
@@ -322,12 +335,17 @@ fun ThreadsScreen(
                 pcThreads = emptyList()
                 pcError = null
                 val at = dev.pocketagent.app.ui.component.ThreadSnapshot.threadsSnapshotAt()
-                loadError = if (at > 0) {
-                    "离线:显示的是 ${dev.pocketagent.app.ui.component.agoText(at)}同步的快照,点击重试"
-                } else {
-                    "离线:显示的是本地快照,点击重试"
-                }
-                offline = true
+                // 纯函数构造横幅:区分"连不上 daemon"(真离线)与"连得上但 codex 无响应"
+                // (中性,不写"离线"),避免和上方的"已连接"连接卡自相矛盾。
+                val banner = buildListBanner(
+                    connectionOk = hostReached,
+                    snapshotAtMs = at,
+                    agoText = { ms -> dev.pocketagent.app.ui.component.agoText(ms) },
+                )
+                loadError = banner.message
+                // 配色跟随横幅语义:真离线(黄·快照)与 codex 无响应(中性)都不按硬错误红;
+                // 只有"连快照都没有"的真·加载失败才用红(见下面的 else 分支)。
+                offline = banner.offline
             } else {
                 loadError = "会话列表加载失败：${e.message ?: "连接失败"}"
                 offline = false
@@ -335,6 +353,27 @@ fun ThreadsScreen(
         }
         pinned = ThreadPins.all()
         loading = false
+    }
+
+    /** 暴露给 UI 的非挂起入口:把 doRefresh 丢进协程执行。 */
+    fun refresh() = scope.launch { doRefresh() }
+
+    /**
+     * 重试:先自愈半死通道(OkHttp 传输 UNAVAILABLE 半死态),再拉列表。
+     * 否则重试仍打在同一条已坏通道上 —— 表现就是"点重试毫无效果"。
+     * 期间按钮显示"进行中"防抖,本次拉取真正结束才解除。
+     */
+    fun retry() {
+        if (retrying) return
+        retrying = true
+        scope.launch {
+            try {
+                AgentConnection.recycleChannel("会话列表重试:自愈半死通道")
+                doRefresh()
+            } finally {
+                retrying = false
+            }
+        }
     }
 
     /**
@@ -600,7 +639,7 @@ fun ThreadsScreen(
             // ---- 连接状态卡 ----
             ConnectionCard(
                 host = host,
-                onRetry = { refresh() },
+                onRetry = { retry() },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             )
             loadError?.let { message ->
@@ -616,8 +655,8 @@ fun ThreadsScreen(
                         message, Modifier.weight(1f), fontSize = 12.sp,
                         color = if (offline) Pa.Yellow else Pa.Red, maxLines = 2,
                     )
-                    TextButton(onClick = { refresh() }) {
-                        Text("重试", color = Pa.Accent)
+                    TextButton(onClick = { retry() }, enabled = !retrying) {
+                        Text(if (retrying) "进行中…" else "重试", color = Pa.Accent)
                     }
                 }
             }

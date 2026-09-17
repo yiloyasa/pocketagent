@@ -35,6 +35,8 @@ import dev.pocketagent.app.ui.ChatScreen
 import dev.pocketagent.app.ui.FilesScreen
 import dev.pocketagent.app.ui.GitScreen
 import dev.pocketagent.app.ui.HomeScreen
+import dev.pocketagent.app.ui.Onboarding
+import dev.pocketagent.app.ui.OnboardingPrefs
 import dev.pocketagent.app.ui.SettingsScreen
 import dev.pocketagent.app.ui.Splash
 import dev.pocketagent.app.ui.TaskCenterScreen
@@ -83,6 +85,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun RootNav() {
     val nav = rememberNavController()
+    val context = LocalContext.current
+    // 首启检测:未看过新手教程则从 onboarding 起步,看完切回 home
+    val startDestination = remember {
+        if (OnboardingPrefs.isDone(context)) "home" else "onboarding"
+    }
     var tab by remember { mutableIntStateOf(0) }
     // 二级页面按返回时:回到主页并自动展开侧边栏(用户定义的返回层级)
     var openHomeDrawer by remember { mutableIntStateOf(0) }
@@ -90,7 +97,6 @@ private fun RootNav() {
         tab = 0
         openHomeDrawer += 1
     }
-    val context = LocalContext.current
     val view = LocalView.current
 
     SideEffect {
@@ -105,13 +111,20 @@ private fun RootNav() {
 
     NavHost(
         navController = nav,
-        startDestination = "home",
+        startDestination = startDestination,
         // 【动效】进场慢一点、退场快一点 —— 苹果式转场节奏
         enterTransition = { fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 20 } },
         exitTransition = { fadeOut(tween(140)) },
         popEnterTransition = { fadeIn(tween(220)) },
         popExitTransition = { fadeOut(tween(140)) + slideOutHorizontally(tween(140)) { it / 20 } },
     ) {
+        composable("onboarding") {
+            // 新手教程:看完写标志并切回主页(无返回栈残留)
+            Onboarding(onDone = {
+                OnboardingPrefs.markDone(context)
+                nav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
+            })
+        }
         composable("home") {
             // 【无底栏】主导航全部收进左上角图标弹出的侧边栏
             val openTaskCenter = { tab = 4 }
@@ -127,6 +140,7 @@ private fun RootNav() {
                         onOpenBrowser = { nav.navigate("browser") },
                         onGoTab = { tab = it },
                         onBackToHome = backToHome,
+                        onOpenOnboarding = { nav.navigate("onboarding") },
                     )
                     1 -> ThreadsScreen(
                         currentTab = 1,

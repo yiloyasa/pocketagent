@@ -212,7 +212,19 @@ message TurnServerMessage {
     TurnCompleted completed = 7;
     TurnFailed failed = 8;
     CodexEvent codex_event = 9;       // Codex 原生错误/重试/状态事件
+    // 审批请求已被桌面端/codex 侧处理(serverRequest/resolved):
+    // 手机端必须立即关闭正在展示的审批卡,否则会残留"幽灵审批卡"
+    // (桌面端已放行/拒绝,手机上却还挂着一张点不动也没意义的卡)。
+    ApprovalResolved approval_resolved = 10;
   }
+}
+
+message ApprovalResolved {
+  // 对应 ApprovalRequest.request_id;为空 = "当前挂着的审批卡"(codex 的
+  // 审批请求在同一会话内是串行的,单槽位足够)。
+  string request_id = 1;
+  // 人话说明,展示在时间线里,让用户明白卡为什么消失。
+  string note = 2;
 }
 
 // Codex app-server 的原生状态和错误事件。

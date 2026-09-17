@@ -177,7 +177,7 @@ func (x CodexEvent_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CodexEvent_Kind.Descriptor instead.
 func (CodexEvent_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{34, 0}
+	return file_v1_thread_proto_rawDescGZIP(), []int{35, 0}
 }
 
 type ToolCallUpdate_Phase int32
@@ -226,7 +226,7 @@ func (x ToolCallUpdate_Phase) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolCallUpdate_Phase.Descriptor instead.
 func (ToolCallUpdate_Phase) EnumDescriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{38, 0}
+	return file_v1_thread_proto_rawDescGZIP(), []int{39, 0}
 }
 
 type ApproveGuardianDeniedActionRequest struct {
@@ -2123,6 +2123,7 @@ type TurnServerMessage struct {
 	//	*TurnServerMessage_Completed
 	//	*TurnServerMessage_Failed
 	//	*TurnServerMessage_CodexEvent
+	//	*TurnServerMessage_ApprovalResolved
 	Msg           isTurnServerMessage_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2246,6 +2247,15 @@ func (x *TurnServerMessage) GetCodexEvent() *CodexEvent {
 	return nil
 }
 
+func (x *TurnServerMessage) GetApprovalResolved() *ApprovalResolved {
+	if x != nil {
+		if x, ok := x.Msg.(*TurnServerMessage_ApprovalResolved); ok {
+			return x.ApprovalResolved
+		}
+	}
+	return nil
+}
+
 type isTurnServerMessage_Msg interface {
 	isTurnServerMessage_Msg()
 }
@@ -2286,6 +2296,13 @@ type TurnServerMessage_CodexEvent struct {
 	CodexEvent *CodexEvent `protobuf:"bytes,9,opt,name=codex_event,json=codexEvent,proto3,oneof"` // Codex 原生错误/重试/状态事件
 }
 
+type TurnServerMessage_ApprovalResolved struct {
+	// 审批请求已被桌面端/codex 侧处理(serverRequest/resolved):
+	// 手机端必须立即关闭正在展示的审批卡,否则会残留"幽灵审批卡"
+	// (桌面端已放行/拒绝,手机上却还挂着一张点不动也没意义的卡)。
+	ApprovalResolved *ApprovalResolved `protobuf:"bytes,10,opt,name=approval_resolved,json=approvalResolved,proto3,oneof"`
+}
+
 func (*TurnServerMessage_Started) isTurnServerMessage_Msg() {}
 
 func (*TurnServerMessage_TextDelta) isTurnServerMessage_Msg() {}
@@ -2303,6 +2320,63 @@ func (*TurnServerMessage_Completed) isTurnServerMessage_Msg() {}
 func (*TurnServerMessage_Failed) isTurnServerMessage_Msg() {}
 
 func (*TurnServerMessage_CodexEvent) isTurnServerMessage_Msg() {}
+
+func (*TurnServerMessage_ApprovalResolved) isTurnServerMessage_Msg() {}
+
+type ApprovalResolved struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 对应 ApprovalRequest.request_id;为空 = "当前挂着的审批卡"(codex 的
+	// 审批请求在同一会话内是串行的,单槽位足够)。
+	RequestId string `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// 人话说明,展示在时间线里,让用户明白卡为什么消失。
+	Note          string `protobuf:"bytes,2,opt,name=note,proto3" json:"note,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApprovalResolved) Reset() {
+	*x = ApprovalResolved{}
+	mi := &file_v1_thread_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApprovalResolved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApprovalResolved) ProtoMessage() {}
+
+func (x *ApprovalResolved) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApprovalResolved.ProtoReflect.Descriptor instead.
+func (*ApprovalResolved) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ApprovalResolved) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ApprovalResolved) GetNote() string {
+	if x != nil {
+		return x.Note
+	}
+	return ""
+}
 
 // Codex app-server 的原生状态和错误事件。
 // 事件先实时发送给手机，再由最终 TurnFailed/TurnCompleted 收尾。
@@ -2336,7 +2410,7 @@ type CodexEvent struct {
 
 func (x *CodexEvent) Reset() {
 	*x = CodexEvent{}
-	mi := &file_v1_thread_proto_msgTypes[34]
+	mi := &file_v1_thread_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2348,7 +2422,7 @@ func (x *CodexEvent) String() string {
 func (*CodexEvent) ProtoMessage() {}
 
 func (x *CodexEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[34]
+	mi := &file_v1_thread_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2361,7 +2435,7 @@ func (x *CodexEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodexEvent.ProtoReflect.Descriptor instead.
 func (*CodexEvent) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{34}
+	return file_v1_thread_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CodexEvent) GetKind() CodexEvent_Kind {
@@ -2507,7 +2581,7 @@ type TurnStarted struct {
 
 func (x *TurnStarted) Reset() {
 	*x = TurnStarted{}
-	mi := &file_v1_thread_proto_msgTypes[35]
+	mi := &file_v1_thread_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2519,7 +2593,7 @@ func (x *TurnStarted) String() string {
 func (*TurnStarted) ProtoMessage() {}
 
 func (x *TurnStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[35]
+	mi := &file_v1_thread_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2532,7 +2606,7 @@ func (x *TurnStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnStarted.ProtoReflect.Descriptor instead.
 func (*TurnStarted) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{35}
+	return file_v1_thread_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *TurnStarted) GetTurnId() string {
@@ -2558,7 +2632,7 @@ type TextDelta struct {
 
 func (x *TextDelta) Reset() {
 	*x = TextDelta{}
-	mi := &file_v1_thread_proto_msgTypes[36]
+	mi := &file_v1_thread_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2570,7 +2644,7 @@ func (x *TextDelta) String() string {
 func (*TextDelta) ProtoMessage() {}
 
 func (x *TextDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[36]
+	mi := &file_v1_thread_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2583,7 +2657,7 @@ func (x *TextDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TextDelta.ProtoReflect.Descriptor instead.
 func (*TextDelta) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{36}
+	return file_v1_thread_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *TextDelta) GetDelta() string {
@@ -2602,7 +2676,7 @@ type ThinkingDelta struct {
 
 func (x *ThinkingDelta) Reset() {
 	*x = ThinkingDelta{}
-	mi := &file_v1_thread_proto_msgTypes[37]
+	mi := &file_v1_thread_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2614,7 +2688,7 @@ func (x *ThinkingDelta) String() string {
 func (*ThinkingDelta) ProtoMessage() {}
 
 func (x *ThinkingDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[37]
+	mi := &file_v1_thread_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2627,7 +2701,7 @@ func (x *ThinkingDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThinkingDelta.ProtoReflect.Descriptor instead.
 func (*ThinkingDelta) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{37}
+	return file_v1_thread_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ThinkingDelta) GetDelta() string {
@@ -2648,7 +2722,7 @@ type ToolCallUpdate struct {
 
 func (x *ToolCallUpdate) Reset() {
 	*x = ToolCallUpdate{}
-	mi := &file_v1_thread_proto_msgTypes[38]
+	mi := &file_v1_thread_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2660,7 +2734,7 @@ func (x *ToolCallUpdate) String() string {
 func (*ToolCallUpdate) ProtoMessage() {}
 
 func (x *ToolCallUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[38]
+	mi := &file_v1_thread_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2673,7 +2747,7 @@ func (x *ToolCallUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallUpdate.ProtoReflect.Descriptor instead.
 func (*ToolCallUpdate) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{38}
+	return file_v1_thread_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ToolCallUpdate) GetPhase() ToolCallUpdate_Phase {
@@ -2709,7 +2783,7 @@ type ApprovalRequest struct {
 
 func (x *ApprovalRequest) Reset() {
 	*x = ApprovalRequest{}
-	mi := &file_v1_thread_proto_msgTypes[39]
+	mi := &file_v1_thread_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2721,7 +2795,7 @@ func (x *ApprovalRequest) String() string {
 func (*ApprovalRequest) ProtoMessage() {}
 
 func (x *ApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[39]
+	mi := &file_v1_thread_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2734,7 +2808,7 @@ func (x *ApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalRequest.ProtoReflect.Descriptor instead.
 func (*ApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{39}
+	return file_v1_thread_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ApprovalRequest) GetRequestId() string {
@@ -2771,7 +2845,7 @@ type UsageUpdate struct {
 
 func (x *UsageUpdate) Reset() {
 	*x = UsageUpdate{}
-	mi := &file_v1_thread_proto_msgTypes[40]
+	mi := &file_v1_thread_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2783,7 +2857,7 @@ func (x *UsageUpdate) String() string {
 func (*UsageUpdate) ProtoMessage() {}
 
 func (x *UsageUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[40]
+	mi := &file_v1_thread_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2796,7 +2870,7 @@ func (x *UsageUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageUpdate.ProtoReflect.Descriptor instead.
 func (*UsageUpdate) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{40}
+	return file_v1_thread_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *UsageUpdate) GetUsage() *Usage {
@@ -2832,7 +2906,7 @@ type TurnCompleted struct {
 
 func (x *TurnCompleted) Reset() {
 	*x = TurnCompleted{}
-	mi := &file_v1_thread_proto_msgTypes[41]
+	mi := &file_v1_thread_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2844,7 +2918,7 @@ func (x *TurnCompleted) String() string {
 func (*TurnCompleted) ProtoMessage() {}
 
 func (x *TurnCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[41]
+	mi := &file_v1_thread_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2857,7 +2931,7 @@ func (x *TurnCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnCompleted.ProtoReflect.Descriptor instead.
 func (*TurnCompleted) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{41}
+	return file_v1_thread_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *TurnCompleted) GetTurnId() string {
@@ -2899,7 +2973,7 @@ type TurnFailed struct {
 
 func (x *TurnFailed) Reset() {
 	*x = TurnFailed{}
-	mi := &file_v1_thread_proto_msgTypes[42]
+	mi := &file_v1_thread_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2911,7 +2985,7 @@ func (x *TurnFailed) String() string {
 func (*TurnFailed) ProtoMessage() {}
 
 func (x *TurnFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[42]
+	mi := &file_v1_thread_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2924,7 +2998,7 @@ func (x *TurnFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnFailed.ProtoReflect.Descriptor instead.
 func (*TurnFailed) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{42}
+	return file_v1_thread_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TurnFailed) GetTurnId() string {
@@ -2957,7 +3031,7 @@ type CancelTurnRequest struct {
 
 func (x *CancelTurnRequest) Reset() {
 	*x = CancelTurnRequest{}
-	mi := &file_v1_thread_proto_msgTypes[43]
+	mi := &file_v1_thread_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2969,7 +3043,7 @@ func (x *CancelTurnRequest) String() string {
 func (*CancelTurnRequest) ProtoMessage() {}
 
 func (x *CancelTurnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[43]
+	mi := &file_v1_thread_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2982,7 +3056,7 @@ func (x *CancelTurnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelTurnRequest.ProtoReflect.Descriptor instead.
 func (*CancelTurnRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{43}
+	return file_v1_thread_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *CancelTurnRequest) GetThreadId() string {
@@ -3123,7 +3197,7 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\bapproved\x18\x02 \x01(\bR\bapproved\x12\x12\n" +
 	"\x04note\x18\x03 \x01(\tR\x04note\"&\n" +
 	"\fCancelSignal\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xcd\x04\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x9e\x05\n" +
 	"\x11TurnServerMessage\x127\n" +
 	"\astarted\x18\x01 \x01(\v2\x1b.pocketagent.v1.TurnStartedH\x00R\astarted\x12:\n" +
 	"\n" +
@@ -3135,8 +3209,14 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\tcompleted\x18\a \x01(\v2\x1d.pocketagent.v1.TurnCompletedH\x00R\tcompleted\x124\n" +
 	"\x06failed\x18\b \x01(\v2\x1a.pocketagent.v1.TurnFailedH\x00R\x06failed\x12=\n" +
 	"\vcodex_event\x18\t \x01(\v2\x1a.pocketagent.v1.CodexEventH\x00R\n" +
-	"codexEventB\x05\n" +
-	"\x03msg\"\x84\a\n" +
+	"codexEvent\x12O\n" +
+	"\x11approval_resolved\x18\n" +
+	" \x01(\v2 .pocketagent.v1.ApprovalResolvedH\x00R\x10approvalResolvedB\x05\n" +
+	"\x03msg\"E\n" +
+	"\x10ApprovalResolved\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
+	"\x04note\x18\x02 \x01(\tR\x04note\"\x84\a\n" +
 	"\n" +
 	"CodexEvent\x123\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1f.pocketagent.v1.CodexEvent.KindR\x04kind\x12\x12\n" +
@@ -3267,7 +3347,7 @@ func file_v1_thread_proto_rawDescGZIP() []byte {
 }
 
 var file_v1_thread_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_v1_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_v1_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
 var file_v1_thread_proto_goTypes = []any{
 	(ThreadStatus)(0),                          // 0: pocketagent.v1.ThreadStatus
 	(CodexEvent_Kind)(0),                       // 1: pocketagent.v1.CodexEvent.Kind
@@ -3306,102 +3386,104 @@ var file_v1_thread_proto_goTypes = []any{
 	(*ApprovalDecision)(nil),                   // 34: pocketagent.v1.ApprovalDecision
 	(*CancelSignal)(nil),                       // 35: pocketagent.v1.CancelSignal
 	(*TurnServerMessage)(nil),                  // 36: pocketagent.v1.TurnServerMessage
-	(*CodexEvent)(nil),                         // 37: pocketagent.v1.CodexEvent
-	(*TurnStarted)(nil),                        // 38: pocketagent.v1.TurnStarted
-	(*TextDelta)(nil),                          // 39: pocketagent.v1.TextDelta
-	(*ThinkingDelta)(nil),                      // 40: pocketagent.v1.ThinkingDelta
-	(*ToolCallUpdate)(nil),                     // 41: pocketagent.v1.ToolCallUpdate
-	(*ApprovalRequest)(nil),                    // 42: pocketagent.v1.ApprovalRequest
-	(*UsageUpdate)(nil),                        // 43: pocketagent.v1.UsageUpdate
-	(*TurnCompleted)(nil),                      // 44: pocketagent.v1.TurnCompleted
-	(*TurnFailed)(nil),                         // 45: pocketagent.v1.TurnFailed
-	(*CancelTurnRequest)(nil),                  // 46: pocketagent.v1.CancelTurnRequest
-	(*ContentBlock)(nil),                       // 47: pocketagent.v1.ContentBlock
-	(*ToolCallBlock)(nil),                      // 48: pocketagent.v1.ToolCallBlock
-	(*ToolResultBlock)(nil),                    // 49: pocketagent.v1.ToolResultBlock
-	(*Usage)(nil),                              // 50: pocketagent.v1.Usage
-	(*Error)(nil),                              // 51: pocketagent.v1.Error
-	(*Empty)(nil),                              // 52: pocketagent.v1.Empty
+	(*ApprovalResolved)(nil),                   // 37: pocketagent.v1.ApprovalResolved
+	(*CodexEvent)(nil),                         // 38: pocketagent.v1.CodexEvent
+	(*TurnStarted)(nil),                        // 39: pocketagent.v1.TurnStarted
+	(*TextDelta)(nil),                          // 40: pocketagent.v1.TextDelta
+	(*ThinkingDelta)(nil),                      // 41: pocketagent.v1.ThinkingDelta
+	(*ToolCallUpdate)(nil),                     // 42: pocketagent.v1.ToolCallUpdate
+	(*ApprovalRequest)(nil),                    // 43: pocketagent.v1.ApprovalRequest
+	(*UsageUpdate)(nil),                        // 44: pocketagent.v1.UsageUpdate
+	(*TurnCompleted)(nil),                      // 45: pocketagent.v1.TurnCompleted
+	(*TurnFailed)(nil),                         // 46: pocketagent.v1.TurnFailed
+	(*CancelTurnRequest)(nil),                  // 47: pocketagent.v1.CancelTurnRequest
+	(*ContentBlock)(nil),                       // 48: pocketagent.v1.ContentBlock
+	(*ToolCallBlock)(nil),                      // 49: pocketagent.v1.ToolCallBlock
+	(*ToolResultBlock)(nil),                    // 50: pocketagent.v1.ToolResultBlock
+	(*Usage)(nil),                              // 51: pocketagent.v1.Usage
+	(*Error)(nil),                              // 52: pocketagent.v1.Error
+	(*Empty)(nil),                              // 53: pocketagent.v1.Empty
 }
 var file_v1_thread_proto_depIdxs = []int32{
 	6,  // 0: pocketagent.v1.ListThreadSectionsResponse.sections:type_name -> pocketagent.v1.ThreadSection
 	14, // 1: pocketagent.v1.ListCodexThreadsResponse.threads:type_name -> pocketagent.v1.CodexThreadInfo
 	20, // 2: pocketagent.v1.GetThreadHistoryResponse.messages:type_name -> pocketagent.v1.ThreadMessage
-	47, // 3: pocketagent.v1.ThreadMessage.blocks:type_name -> pocketagent.v1.ContentBlock
+	48, // 3: pocketagent.v1.ThreadMessage.blocks:type_name -> pocketagent.v1.ContentBlock
 	0,  // 4: pocketagent.v1.Thread.status:type_name -> pocketagent.v1.ThreadStatus
 	21, // 5: pocketagent.v1.ListThreadsResponse.threads:type_name -> pocketagent.v1.Thread
 	32, // 6: pocketagent.v1.TurnClientMessage.input:type_name -> pocketagent.v1.TurnInput
 	33, // 7: pocketagent.v1.TurnClientMessage.supplement:type_name -> pocketagent.v1.TurnSupplement
 	34, // 8: pocketagent.v1.TurnClientMessage.approval:type_name -> pocketagent.v1.ApprovalDecision
 	35, // 9: pocketagent.v1.TurnClientMessage.cancel:type_name -> pocketagent.v1.CancelSignal
-	47, // 10: pocketagent.v1.TurnInput.blocks:type_name -> pocketagent.v1.ContentBlock
-	47, // 11: pocketagent.v1.TurnSupplement.blocks:type_name -> pocketagent.v1.ContentBlock
-	38, // 12: pocketagent.v1.TurnServerMessage.started:type_name -> pocketagent.v1.TurnStarted
-	39, // 13: pocketagent.v1.TurnServerMessage.text_delta:type_name -> pocketagent.v1.TextDelta
-	40, // 14: pocketagent.v1.TurnServerMessage.thinking_delta:type_name -> pocketagent.v1.ThinkingDelta
-	41, // 15: pocketagent.v1.TurnServerMessage.tool_call:type_name -> pocketagent.v1.ToolCallUpdate
-	42, // 16: pocketagent.v1.TurnServerMessage.approval_request:type_name -> pocketagent.v1.ApprovalRequest
-	43, // 17: pocketagent.v1.TurnServerMessage.usage:type_name -> pocketagent.v1.UsageUpdate
-	44, // 18: pocketagent.v1.TurnServerMessage.completed:type_name -> pocketagent.v1.TurnCompleted
-	45, // 19: pocketagent.v1.TurnServerMessage.failed:type_name -> pocketagent.v1.TurnFailed
-	37, // 20: pocketagent.v1.TurnServerMessage.codex_event:type_name -> pocketagent.v1.CodexEvent
-	1,  // 21: pocketagent.v1.CodexEvent.kind:type_name -> pocketagent.v1.CodexEvent.Kind
-	2,  // 22: pocketagent.v1.ToolCallUpdate.phase:type_name -> pocketagent.v1.ToolCallUpdate.Phase
-	48, // 23: pocketagent.v1.ToolCallUpdate.call:type_name -> pocketagent.v1.ToolCallBlock
-	49, // 24: pocketagent.v1.ToolCallUpdate.result:type_name -> pocketagent.v1.ToolResultBlock
-	48, // 25: pocketagent.v1.ApprovalRequest.action:type_name -> pocketagent.v1.ToolCallBlock
-	50, // 26: pocketagent.v1.UsageUpdate.usage:type_name -> pocketagent.v1.Usage
-	50, // 27: pocketagent.v1.UsageUpdate.total_usage:type_name -> pocketagent.v1.Usage
-	47, // 28: pocketagent.v1.TurnCompleted.final_blocks:type_name -> pocketagent.v1.ContentBlock
-	50, // 29: pocketagent.v1.TurnCompleted.usage:type_name -> pocketagent.v1.Usage
-	51, // 30: pocketagent.v1.TurnFailed.error:type_name -> pocketagent.v1.Error
-	22, // 31: pocketagent.v1.ThreadService.CreateThread:input_type -> pocketagent.v1.CreateThreadRequest
-	23, // 32: pocketagent.v1.ThreadService.ListThreads:input_type -> pocketagent.v1.ListThreadsRequest
-	25, // 33: pocketagent.v1.ThreadService.GetThread:input_type -> pocketagent.v1.GetThreadRequest
-	26, // 34: pocketagent.v1.ThreadService.DeleteThread:input_type -> pocketagent.v1.DeleteThreadRequest
-	27, // 35: pocketagent.v1.ThreadService.ArchiveThread:input_type -> pocketagent.v1.ArchiveThreadRequest
-	28, // 36: pocketagent.v1.ThreadService.RenameThread:input_type -> pocketagent.v1.RenameThreadRequest
-	29, // 37: pocketagent.v1.ThreadService.SetThreadGoal:input_type -> pocketagent.v1.SetThreadGoalRequest
-	30, // 38: pocketagent.v1.ThreadService.CompactThread:input_type -> pocketagent.v1.CompactThreadRequest
-	31, // 39: pocketagent.v1.ThreadService.StartTurn:input_type -> pocketagent.v1.TurnClientMessage
-	46, // 40: pocketagent.v1.ThreadService.CancelTurn:input_type -> pocketagent.v1.CancelTurnRequest
-	18, // 41: pocketagent.v1.ThreadService.GetThreadHistory:input_type -> pocketagent.v1.GetThreadHistoryRequest
-	13, // 42: pocketagent.v1.ThreadService.ListCodexThreads:input_type -> pocketagent.v1.ListCodexThreadsRequest
-	16, // 43: pocketagent.v1.ThreadService.ImportCodexThread:input_type -> pocketagent.v1.ImportCodexThreadRequest
-	4,  // 44: pocketagent.v1.ThreadService.ForkThread:input_type -> pocketagent.v1.ForkThreadRequest
-	5,  // 45: pocketagent.v1.ThreadService.RollbackThread:input_type -> pocketagent.v1.RollbackThreadRequest
-	7,  // 46: pocketagent.v1.ThreadService.ListThreadSections:input_type -> pocketagent.v1.ListThreadSectionsRequest
-	9,  // 47: pocketagent.v1.ThreadService.CreateThreadSection:input_type -> pocketagent.v1.CreateThreadSectionRequest
-	10, // 48: pocketagent.v1.ThreadService.RenameThreadSection:input_type -> pocketagent.v1.RenameThreadSectionRequest
-	11, // 49: pocketagent.v1.ThreadService.DeleteThreadSection:input_type -> pocketagent.v1.DeleteThreadSectionRequest
-	12, // 50: pocketagent.v1.ThreadService.MoveThreadToSection:input_type -> pocketagent.v1.MoveThreadToSectionRequest
-	3,  // 51: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:input_type -> pocketagent.v1.ApproveGuardianDeniedActionRequest
-	21, // 52: pocketagent.v1.ThreadService.CreateThread:output_type -> pocketagent.v1.Thread
-	24, // 53: pocketagent.v1.ThreadService.ListThreads:output_type -> pocketagent.v1.ListThreadsResponse
-	21, // 54: pocketagent.v1.ThreadService.GetThread:output_type -> pocketagent.v1.Thread
-	52, // 55: pocketagent.v1.ThreadService.DeleteThread:output_type -> pocketagent.v1.Empty
-	21, // 56: pocketagent.v1.ThreadService.ArchiveThread:output_type -> pocketagent.v1.Thread
-	21, // 57: pocketagent.v1.ThreadService.RenameThread:output_type -> pocketagent.v1.Thread
-	21, // 58: pocketagent.v1.ThreadService.SetThreadGoal:output_type -> pocketagent.v1.Thread
-	52, // 59: pocketagent.v1.ThreadService.CompactThread:output_type -> pocketagent.v1.Empty
-	36, // 60: pocketagent.v1.ThreadService.StartTurn:output_type -> pocketagent.v1.TurnServerMessage
-	52, // 61: pocketagent.v1.ThreadService.CancelTurn:output_type -> pocketagent.v1.Empty
-	19, // 62: pocketagent.v1.ThreadService.GetThreadHistory:output_type -> pocketagent.v1.GetThreadHistoryResponse
-	15, // 63: pocketagent.v1.ThreadService.ListCodexThreads:output_type -> pocketagent.v1.ListCodexThreadsResponse
-	17, // 64: pocketagent.v1.ThreadService.ImportCodexThread:output_type -> pocketagent.v1.ImportCodexThreadResponse
-	21, // 65: pocketagent.v1.ThreadService.ForkThread:output_type -> pocketagent.v1.Thread
-	21, // 66: pocketagent.v1.ThreadService.RollbackThread:output_type -> pocketagent.v1.Thread
-	8,  // 67: pocketagent.v1.ThreadService.ListThreadSections:output_type -> pocketagent.v1.ListThreadSectionsResponse
-	6,  // 68: pocketagent.v1.ThreadService.CreateThreadSection:output_type -> pocketagent.v1.ThreadSection
-	6,  // 69: pocketagent.v1.ThreadService.RenameThreadSection:output_type -> pocketagent.v1.ThreadSection
-	52, // 70: pocketagent.v1.ThreadService.DeleteThreadSection:output_type -> pocketagent.v1.Empty
-	21, // 71: pocketagent.v1.ThreadService.MoveThreadToSection:output_type -> pocketagent.v1.Thread
-	52, // 72: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:output_type -> pocketagent.v1.Empty
-	52, // [52:73] is the sub-list for method output_type
-	31, // [31:52] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	48, // 10: pocketagent.v1.TurnInput.blocks:type_name -> pocketagent.v1.ContentBlock
+	48, // 11: pocketagent.v1.TurnSupplement.blocks:type_name -> pocketagent.v1.ContentBlock
+	39, // 12: pocketagent.v1.TurnServerMessage.started:type_name -> pocketagent.v1.TurnStarted
+	40, // 13: pocketagent.v1.TurnServerMessage.text_delta:type_name -> pocketagent.v1.TextDelta
+	41, // 14: pocketagent.v1.TurnServerMessage.thinking_delta:type_name -> pocketagent.v1.ThinkingDelta
+	42, // 15: pocketagent.v1.TurnServerMessage.tool_call:type_name -> pocketagent.v1.ToolCallUpdate
+	43, // 16: pocketagent.v1.TurnServerMessage.approval_request:type_name -> pocketagent.v1.ApprovalRequest
+	44, // 17: pocketagent.v1.TurnServerMessage.usage:type_name -> pocketagent.v1.UsageUpdate
+	45, // 18: pocketagent.v1.TurnServerMessage.completed:type_name -> pocketagent.v1.TurnCompleted
+	46, // 19: pocketagent.v1.TurnServerMessage.failed:type_name -> pocketagent.v1.TurnFailed
+	38, // 20: pocketagent.v1.TurnServerMessage.codex_event:type_name -> pocketagent.v1.CodexEvent
+	37, // 21: pocketagent.v1.TurnServerMessage.approval_resolved:type_name -> pocketagent.v1.ApprovalResolved
+	1,  // 22: pocketagent.v1.CodexEvent.kind:type_name -> pocketagent.v1.CodexEvent.Kind
+	2,  // 23: pocketagent.v1.ToolCallUpdate.phase:type_name -> pocketagent.v1.ToolCallUpdate.Phase
+	49, // 24: pocketagent.v1.ToolCallUpdate.call:type_name -> pocketagent.v1.ToolCallBlock
+	50, // 25: pocketagent.v1.ToolCallUpdate.result:type_name -> pocketagent.v1.ToolResultBlock
+	49, // 26: pocketagent.v1.ApprovalRequest.action:type_name -> pocketagent.v1.ToolCallBlock
+	51, // 27: pocketagent.v1.UsageUpdate.usage:type_name -> pocketagent.v1.Usage
+	51, // 28: pocketagent.v1.UsageUpdate.total_usage:type_name -> pocketagent.v1.Usage
+	48, // 29: pocketagent.v1.TurnCompleted.final_blocks:type_name -> pocketagent.v1.ContentBlock
+	51, // 30: pocketagent.v1.TurnCompleted.usage:type_name -> pocketagent.v1.Usage
+	52, // 31: pocketagent.v1.TurnFailed.error:type_name -> pocketagent.v1.Error
+	22, // 32: pocketagent.v1.ThreadService.CreateThread:input_type -> pocketagent.v1.CreateThreadRequest
+	23, // 33: pocketagent.v1.ThreadService.ListThreads:input_type -> pocketagent.v1.ListThreadsRequest
+	25, // 34: pocketagent.v1.ThreadService.GetThread:input_type -> pocketagent.v1.GetThreadRequest
+	26, // 35: pocketagent.v1.ThreadService.DeleteThread:input_type -> pocketagent.v1.DeleteThreadRequest
+	27, // 36: pocketagent.v1.ThreadService.ArchiveThread:input_type -> pocketagent.v1.ArchiveThreadRequest
+	28, // 37: pocketagent.v1.ThreadService.RenameThread:input_type -> pocketagent.v1.RenameThreadRequest
+	29, // 38: pocketagent.v1.ThreadService.SetThreadGoal:input_type -> pocketagent.v1.SetThreadGoalRequest
+	30, // 39: pocketagent.v1.ThreadService.CompactThread:input_type -> pocketagent.v1.CompactThreadRequest
+	31, // 40: pocketagent.v1.ThreadService.StartTurn:input_type -> pocketagent.v1.TurnClientMessage
+	47, // 41: pocketagent.v1.ThreadService.CancelTurn:input_type -> pocketagent.v1.CancelTurnRequest
+	18, // 42: pocketagent.v1.ThreadService.GetThreadHistory:input_type -> pocketagent.v1.GetThreadHistoryRequest
+	13, // 43: pocketagent.v1.ThreadService.ListCodexThreads:input_type -> pocketagent.v1.ListCodexThreadsRequest
+	16, // 44: pocketagent.v1.ThreadService.ImportCodexThread:input_type -> pocketagent.v1.ImportCodexThreadRequest
+	4,  // 45: pocketagent.v1.ThreadService.ForkThread:input_type -> pocketagent.v1.ForkThreadRequest
+	5,  // 46: pocketagent.v1.ThreadService.RollbackThread:input_type -> pocketagent.v1.RollbackThreadRequest
+	7,  // 47: pocketagent.v1.ThreadService.ListThreadSections:input_type -> pocketagent.v1.ListThreadSectionsRequest
+	9,  // 48: pocketagent.v1.ThreadService.CreateThreadSection:input_type -> pocketagent.v1.CreateThreadSectionRequest
+	10, // 49: pocketagent.v1.ThreadService.RenameThreadSection:input_type -> pocketagent.v1.RenameThreadSectionRequest
+	11, // 50: pocketagent.v1.ThreadService.DeleteThreadSection:input_type -> pocketagent.v1.DeleteThreadSectionRequest
+	12, // 51: pocketagent.v1.ThreadService.MoveThreadToSection:input_type -> pocketagent.v1.MoveThreadToSectionRequest
+	3,  // 52: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:input_type -> pocketagent.v1.ApproveGuardianDeniedActionRequest
+	21, // 53: pocketagent.v1.ThreadService.CreateThread:output_type -> pocketagent.v1.Thread
+	24, // 54: pocketagent.v1.ThreadService.ListThreads:output_type -> pocketagent.v1.ListThreadsResponse
+	21, // 55: pocketagent.v1.ThreadService.GetThread:output_type -> pocketagent.v1.Thread
+	53, // 56: pocketagent.v1.ThreadService.DeleteThread:output_type -> pocketagent.v1.Empty
+	21, // 57: pocketagent.v1.ThreadService.ArchiveThread:output_type -> pocketagent.v1.Thread
+	21, // 58: pocketagent.v1.ThreadService.RenameThread:output_type -> pocketagent.v1.Thread
+	21, // 59: pocketagent.v1.ThreadService.SetThreadGoal:output_type -> pocketagent.v1.Thread
+	53, // 60: pocketagent.v1.ThreadService.CompactThread:output_type -> pocketagent.v1.Empty
+	36, // 61: pocketagent.v1.ThreadService.StartTurn:output_type -> pocketagent.v1.TurnServerMessage
+	53, // 62: pocketagent.v1.ThreadService.CancelTurn:output_type -> pocketagent.v1.Empty
+	19, // 63: pocketagent.v1.ThreadService.GetThreadHistory:output_type -> pocketagent.v1.GetThreadHistoryResponse
+	15, // 64: pocketagent.v1.ThreadService.ListCodexThreads:output_type -> pocketagent.v1.ListCodexThreadsResponse
+	17, // 65: pocketagent.v1.ThreadService.ImportCodexThread:output_type -> pocketagent.v1.ImportCodexThreadResponse
+	21, // 66: pocketagent.v1.ThreadService.ForkThread:output_type -> pocketagent.v1.Thread
+	21, // 67: pocketagent.v1.ThreadService.RollbackThread:output_type -> pocketagent.v1.Thread
+	8,  // 68: pocketagent.v1.ThreadService.ListThreadSections:output_type -> pocketagent.v1.ListThreadSectionsResponse
+	6,  // 69: pocketagent.v1.ThreadService.CreateThreadSection:output_type -> pocketagent.v1.ThreadSection
+	6,  // 70: pocketagent.v1.ThreadService.RenameThreadSection:output_type -> pocketagent.v1.ThreadSection
+	53, // 71: pocketagent.v1.ThreadService.DeleteThreadSection:output_type -> pocketagent.v1.Empty
+	21, // 72: pocketagent.v1.ThreadService.MoveThreadToSection:output_type -> pocketagent.v1.Thread
+	53, // 73: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:output_type -> pocketagent.v1.Empty
+	53, // [53:74] is the sub-list for method output_type
+	32, // [32:53] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_v1_thread_proto_init() }
@@ -3426,6 +3508,7 @@ func file_v1_thread_proto_init() {
 		(*TurnServerMessage_Completed)(nil),
 		(*TurnServerMessage_Failed)(nil),
 		(*TurnServerMessage_CodexEvent)(nil),
+		(*TurnServerMessage_ApprovalResolved)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -3433,7 +3516,7 @@ func file_v1_thread_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_thread_proto_rawDesc), len(file_v1_thread_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   44,
+			NumMessages:   45,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

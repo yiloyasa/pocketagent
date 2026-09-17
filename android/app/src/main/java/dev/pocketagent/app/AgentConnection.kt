@@ -199,6 +199,13 @@ object AgentConnection {
     private const val REMOTE_TIMEOUT_MS = 6000L
 
     /**
+     * 列表类 RPC 的超时:codex 冷启动约 1~2s、子进程重启窗口更久,放宽到 20s 避免
+     * 被短暂的 codex 无响应误判成"离线"。配合 daemon 侧 2.5s 同步预算,实际很少用满,
+     * 主要是给 codex 上游抖动留出自愈余地(见 daemon 的 syncThreadsFromCodex)。
+     */
+    private const val LIST_RETRY_TIMEOUT_MS = 20_000L
+
+    /**
      * 候选地址顺序(回退原则的落点):
      *   USB(adb reverse 反向隧道) → 局域网直连 → Tailscale → 用户手填地址(兜底)
      *
@@ -468,7 +475,7 @@ object AgentConnection {
         HostServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(8, TimeUnit.SECONDS)
 
     fun threadService(): ThreadServiceGrpc.ThreadServiceBlockingStub =
-        ThreadServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(8, TimeUnit.SECONDS)
+        ThreadServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(LIST_RETRY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
 
     fun threadServiceAsync(): ThreadServiceGrpc.ThreadServiceStub =
         ThreadServiceGrpc.newStub(channel())

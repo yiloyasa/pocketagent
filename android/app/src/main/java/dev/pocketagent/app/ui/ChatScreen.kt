@@ -638,516 +638,8 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
     }
 }
 
-/**
- * 上下文窗口明细 —— 点输入栏的"上下文"胶囊弹出(问题 11:替换旧样式)。
- *
- * 【为什么改】旧版是居中小弹窗 + 五条各自独立的细进度条:
- * 内容本身就多(本轮用量 / 累计用量 / 构成估算),弹窗里要一直往下滚,
- * 而且五条独立条形看不出"上下文整体被占了多满"。
- *
- * 【新结构】
- *   1. 底部大卡片(ModalBottomSheet)—— 内容多时就该用竖向空间,而不是挤一个框。
- *   2. 顶部「主视觉」把总量画成一条**容量条**:已用段(输入/输出)+ 剩余空间同框,
- *      "还能装多少"一眼可见,比五个百分比数字直观得多。
- *   3. 本轮 / 累计改成**分段切换**,不再上下堆两遍,少滚一半。
- *
- * 【口径】"合计"只算 输入 + 输出。缓存读/缓存写是输入的**子集**、思考是输出的子集,
- * 若一并相加会把同一批 token 数两遍 —— 明细里照列(便于排查),但绝不参与合计。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ContextWindowCard(
-    model: ModelInfo?,
-    contextWindow: Long,
-    windowIsFallback: Boolean,
-    turnUsage: Usage?,
-    totalUsage: Usage?,
-    items: List<ChatItem>,
-    onDismiss: () -> Unit,
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var scopeTab by remember { mutableStateOf(0) } // 0 = 本轮, 1 = 本会话累计
-    val usage = if (scopeTab == 0) turnUsage else totalUsage
-    // daemon 还没上报过用量时的兜底:按会话内容字符量估一个占用,
-    // 面板不会再显示"0%"或"暂无数据"这种看起来像坏了的状态。
-    val estimated = remember(items) { estimateTokens(items) }
-    val showEstimate = usage == null && estimated > 0
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .navigationBarsPadding()
-                .padding(bottom = 18.dp),
-        ) {
-            // ---------- 标题行 ----------
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("上下文窗口", fontSize = 20.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        model?.displayName ?: "跟随桌面配置",
-                        fontSize = 11.5.sp,
-                        color = Pa.TextTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                IconActionButton(
-                    AppR.drawable.ic_lucide_x, "关闭", onDismiss,
-                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
-                )
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // ---------- 主视觉:容量条 ----------
-            ContextHero(
-                usage = usage,
-                contextWindow = contextWindow,
-                estimatedTokens = if (showEstimate) estimated else 0L,
-                windowIsFallback = windowIsFallback,
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            // ---------- 本轮 / 累计 分段切换 ----------
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Pa.Bg, RoundedCornerShape(50))
-                    .padding(4.dp),
-            ) {
-                ScopeTab("本轮", scopeTab == 0, Modifier.weight(1f)) { scopeTab = 0 }
-                ScopeTab("本会话累计", scopeTab == 1, Modifier.weight(1f)) { scopeTab = 1 }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // ---------- token 明细(输入 / 输出 / 缓存 / 合计 / 缓存命中) ----------
-            if (usage == null && showEstimate) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(16.dp))
-                        .padding(horizontal = 13.dp, vertical = 10.dp),
-                ) {
-                    TokenRow("输入", estimated, contextWindow, Pa.Accent)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "合计 ~${String.format(java.util.Locale.US, "%,d", estimated)} tokens",
-                        fontSize = 11.5.sp,
-                        color = Pa.TextPrimary,
-                    )
-                    Text(
-                        "由会话内容字符量估算(≈4 字符/token);电脑端下次上报后自动切换为真实值。",
-                        Modifier.padding(top = 3.dp),
-                        fontSize = 10.sp,
-                        color = Pa.TextTertiary,
-                    )
-                }
-            } else if (usage == null) {
-                Text(
-                    "暂无数据(尚未收到用量上报)",
-                    Modifier
-                        .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
-                        .padding(14.dp),
-                    fontSize = 12.sp,
-                    color = Pa.TextTertiary,
-                )
-            } else {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(16.dp))
-                        .padding(horizontal = 13.dp, vertical = 10.dp),
-                ) {
-                    // 只列真实存在的维度:思考含在输出内、缓存读/写含在输入内,不重复计入合计
-                    TokenRow("输入", usage.inputTokens, contextWindow, Pa.Accent)
-                    TokenRow("输出", usage.outputTokens, contextWindow, Pa.Green)
-                    TokenRow("缓存读", usage.cacheReadTokens, contextWindow, Pa.Accent.copy(alpha = 0.55f))
-                    TokenRow("缓存写", usage.cacheWriteTokens, contextWindow, Pa.TextTertiary)
-
-                    Spacer(Modifier.height(6.dp))
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
-                    Spacer(Modifier.height(8.dp))
-
-                    val total = usage.inputTokens + usage.outputTokens
-                    val hitRate = if (usage.inputTokens > 0) {
-                        usage.cacheReadTokens.toFloat() / usage.inputTokens * 100f
-                    } else -1f
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "合计 ${String.format(java.util.Locale.US, "%,d", total)} tokens",
-                            Modifier.weight(1f),
-                            fontSize = 12.sp,
-                            color = Pa.TextPrimary,
-                        )
-                        if (hitRate >= 0) {
-                            Text(
-                                "缓存命中 ${String.format(java.util.Locale.US, "%.1f%%", hitRate)}",
-                                fontSize = 11.sp,
-                                color = Pa.AccentText,
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            EstimateSection(items)
-        }
-    }
-}
-
-/**
- * 主视觉:一条"容量条"。
- *
- * 底槽 = 整个上下文窗口;填充 = 输入(蓝) + 输出(绿);剩下的深色部分就是**还能装多少**。
- * 右侧百分比 = 占用 / 窗口。窗口未知时退化成"只用不占比",并明确提示去发一轮消息。
- */
-/**
- * 会话内容的 token 估算(≈4 字符/token)。
- * 仅用于 daemon 尚未上报用量时的兜底展示,不作计费依据。
- */
 /** 电脑端没上报窗口时的兜底值(codex 常见 272K)。 */
 private const val DEFAULT_CONTEXT_WINDOW = 272_000L
-
-private fun estimateTokens(items: List<ChatItem>): Long {
-    var chars = 0L
-    items.forEach { chars += it.text.length + it.toolArgs.length }
-    return chars / 4
-}
-
-@Composable
-private fun ContextHero(
-    usage: Usage?,
-    contextWindow: Long,
-    estimatedTokens: Long = 0,
-    windowIsFallback: Boolean = false,
-) {
-    val isEstimate = usage == null && estimatedTokens > 0
-    val input = if (isEstimate) estimatedTokens else (usage?.inputTokens ?: 0)
-    val output = if (isEstimate) 0L else (usage?.outputTokens ?: 0)
-    val used = input + output
-    val known = contextWindow > 0
-    val ratio = if (known) (used.toFloat() / contextWindow).coerceIn(0f, 1f) else 0f
-    // 占用色:正常蓝,接近/超过窗口时转红,提示"该清上下文了"
-    val barColor = when {
-        !known -> Pa.Accent
-        ratio >= 0.9f -> Pa.Red
-        ratio >= 0.7f -> Pa.Yellow
-        else -> Pa.Accent
-    }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                if (usage == null && !isEstimate) "—" else String.format(java.util.Locale.US, "%,d", used),
-                fontSize = 21.sp,
-                color = Pa.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (isEstimate) {
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "估算",
-                    Modifier
-                        .padding(bottom = 4.dp)
-                        .background(Pa.Hover, RoundedCornerShape(50))
-                        .padding(horizontal = 7.dp, vertical = 2.dp),
-                    fontSize = 9.5.sp,
-                    color = Pa.TextSecondary,
-                )
-            }
-            Spacer(Modifier.width(6.dp))
-            Text(
-                when {
-                    !known -> " tokens 已用"
-                    windowIsFallback -> " / ${contextWindow / 1000}K tokens(默认窗口)"
-                    else -> " / ${contextWindow / 1000}K tokens"
-                },
-                Modifier.padding(bottom = 4.dp),
-                fontSize = 12.sp,
-                color = Pa.TextTertiary,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (known) String.format(java.util.Locale.US, "%.1f%%", ratio * 100f) else "窗口未知",
-                Modifier
-                    .background(
-                        if (known) barColor.copy(alpha = 0.16f) else Pa.Hover,
-                        RoundedCornerShape(50),
-                    )
-                    .padding(horizontal = 9.dp, vertical = 3.dp),
-                fontSize = 11.sp,
-                color = if (known) barColor else Pa.TextTertiary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // 容量条:已用段 + 剩余段同框
-        // 【上一版为什么是黑条】内层用 weight(fill = false) 嵌套,没有确定宽度时会被测量成 0,
-        // 于是"占了 10%"在条上完全看不见。改用 Box + fillMaxWidth(比例) 分段,宽度是确定的。
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(10.dp)
-                .background(Pa.Bg, RoundedCornerShape(50))
-                .clip(RoundedCornerShape(50)),
-        ) {
-            if (known && used > 0) {
-                Row(
-                    Modifier
-                        .fillMaxWidth(ratio.coerceIn(0.012f, 1f))
-                        .fillMaxHeight(),
-                ) {
-                    if (input > 0) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(input.toFloat() / used)
-                                .fillMaxHeight()
-                                .background(Pa.Accent),
-                        )
-                    }
-                    if (output > 0) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(output.toFloat() / used)
-                                .fillMaxHeight()
-                                .background(Pa.Green),
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        // 图例:把"已用 / 剩余"翻译成人话
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LegendDot(Pa.Accent)
-            Text(
-                "输入 ${String.format(java.util.Locale.US, "%,d", input)}",
-                fontSize = 10.5.sp, color = Pa.TextSecondary,
-            )
-            Spacer(Modifier.width(12.dp))
-            LegendDot(Pa.Green)
-            Text(
-                "输出 ${String.format(java.util.Locale.US, "%,d", output)}",
-                fontSize = 10.5.sp, color = Pa.TextSecondary,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (known) "剩余 ${(contextWindow - used).coerceAtLeast(0) / 1000}K" else "",
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
-            )
-        }
-
-        if (!known || windowIsFallback) {
-            Text(
-                "窗口大小由电脑端随用量上报;当前按常见默认值估算,发一轮消息后会自动校准。",
-                Modifier.padding(top = 8.dp),
-                fontSize = 10.5.sp,
-                color = Pa.TextTertiary,
-            )
-        }
-    }
-}
-
-@Composable
-private fun LegendDot(color: Color) {
-    Box(Modifier.size(7.dp).background(color, CircleShape))
-    Spacer(Modifier.width(5.dp))
-}
-
-/** 分段切换按钮(选中=蓝底白字)。 */
-@Composable
-private fun ScopeTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(
-        modifier
-            .pressable(haptic = true) { onClick() }
-            .background(if (selected) Pa.Accent else Color.Transparent, RoundedCornerShape(50))
-            .padding(vertical = 9.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            fontSize = 12.5.sp,
-            color = if (selected) Color.White else Pa.TextSecondary,
-            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-        )
-    }
-}
-
-/** 一行 token 维度:名称 · 数值 · 占比条 · 百分比。 */
-@Composable
-private fun TokenRow(label: String, value: Long, contextWindow: Long, color: Color) {
-    val pct = if (contextWindow > 0) value.toFloat() / contextWindow * 100f else 0f
-    val over = pct > 100f
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 3.5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, Modifier.width(46.dp), fontSize = 11.5.sp, color = Pa.TextSecondary)
-        Text(
-            String.format(java.util.Locale.US, "%,d", value),
-            Modifier.width(68.dp),
-            fontSize = 11.5.sp,
-            color = Pa.TextPrimary,
-            textAlign = TextAlign.End,
-        )
-        Spacer(Modifier.width(10.dp))
-        Box(
-            Modifier
-                .weight(1f)
-                .height(6.dp)
-                .background(Pa.Bg, RoundedCornerShape(50)),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth((pct / 100f).coerceIn(0f, 1f))
-                    .fillMaxHeight()
-                    .background(if (over) Pa.Red else color, RoundedCornerShape(50)),
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (over) "超窗" else String.format(java.util.Locale.US, "%.1f%%", pct),
-            Modifier.width(44.dp),
-            fontSize = 10.5.sp,
-            color = if (over) Pa.Red else Pa.TextTertiary,
-            textAlign = TextAlign.End,
-        )
-    }
-}
-
-/**
- * 构成估算:按当前时间线各部分的文字量粗估 token(≈4 字符/token),
- * 回答"上下文都被谁占了"。协议未提供逐项精确值,这里只是参考。
- */
-@Composable
-private fun EstimateSection(items: List<ChatItem>) {
-    // 【为什么按"角色/工具名"分类】协议只给了整体 token 用量,没给逐项拆分;
-    // 这里按内容字符量(≈4 字符/token)粗估,回答"上下文都被谁占了"。
-    var dialog = 0L      // 对话消息(user/assistant)
-    var thinking = 0L    // 思考过程 / 执行计划
-    var tools = 0L       // 普通工具调用
-    var mcp = 0L         // MCP 工具(mcp 前缀或 __ 分隔)
-    var skills = 0L      // 技能(skill 前缀)
-    var subagents = 0L   // 子 agent / 委派任务
-    var other = 0L       // 其他事件
-
-    items.forEach { it ->
-        val chars = (it.text.length + it.toolArgs.length).toLong()
-        val name = it.toolName.lowercase()
-        when {
-            it.role == "user" || it.role == "assistant" -> dialog += it.text.length.toLong()
-            it.role == "thinking" || it.role == "plan" -> thinking += it.text.length.toLong()
-            it.role == "tool" -> when {
-                name.startsWith("mcp") || name.contains("__") -> mcp += chars
-                name.startsWith("skill") || name.contains("skill") -> skills += chars
-                name.contains("agent") || name.contains("delegate") || name.contains("spawn") -> subagents += chars
-                else -> tools += chars
-            }
-            else -> other += chars
-        }
-    }
-
-    val totalChars = (dialog + thinking + tools + mcp + skills + subagents + other).coerceAtLeast(1L)
-    data class Part(val label: String, val chars: Long, val color: Color)
-    val parts = listOf(
-        Part("对话消息", dialog, Pa.Accent),
-        Part("思考", thinking, Pa.AccentText),
-        Part("工具调用", tools, Pa.Green),
-        Part("MCP", mcp, Pa.Mcp),
-        Part("技能 skills", skills, Pa.Yellow),
-        Part("子 agent", subagents, Pa.Red),
-        Part("其他", other, Pa.TextTertiary),
-    ).filter { it.chars > 0 }
-
-    Text(
-        "内容构成占比",
-        fontSize = 13.sp,
-        color = Pa.TextPrimary,
-        fontWeight = FontWeight.SemiBold,
-    )
-    Spacer(Modifier.height(8.dp))
-    if (items.isEmpty() || parts.isEmpty()) {
-        Text("暂无会话内容", fontSize = 11.sp, color = Pa.TextTertiary)
-        return
-    }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(horizontal = 13.dp, vertical = 10.dp),
-    ) {
-        parts.forEach { p ->
-            val pct = p.chars.toFloat() / totalChars
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 3.5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(6.dp).background(p.color, RoundedCornerShape(2.dp)))
-                Spacer(Modifier.width(8.dp))
-                Text(p.label, Modifier.width(74.dp), fontSize = 11.sp, color = Pa.TextSecondary, maxLines = 1)
-                Text(
-                    "~${String.format(java.util.Locale.US, "%,d", p.chars / 4)}",
-                    Modifier.width(56.dp),
-                    fontSize = 11.sp,
-                    color = Pa.TextPrimary,
-                    textAlign = TextAlign.End,
-                )
-                Spacer(Modifier.width(8.dp))
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(5.dp)
-                        .background(Pa.Bg, RoundedCornerShape(50))
-                        .clip(RoundedCornerShape(50)),
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(pct.coerceIn(0.01f, 1f))
-                            .fillMaxHeight()
-                            .background(p.color),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    String.format(java.util.Locale.US, "%.0f%%", pct * 100f),
-                    Modifier.width(34.dp),
-                    fontSize = 10.5.sp,
-                    color = Pa.TextTertiary,
-                    textAlign = TextAlign.End,
-                )
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "按内容字符量估算(≈4 字符/token),仅用于看比例;token 精确值见上方明细。",
-            fontSize = 9.5.sp,
-            color = Pa.TextTertiary,
-        )
-    }
-}
 
 /** 审批策略选项(与 codex approvalPolicy 对齐)。 */
 val APPROVALS = listOf(
@@ -1166,6 +658,18 @@ val EFFORTS = listOf(
     EffortOption("high", "高"),
     EffortOption("xhigh", "极高"),
 )
+
+/**
+ * 工具行里模型名最多吃"剩余空间",过长会被省略号挤成 0 宽(只剩 ">" )。
+ * 超过该字符数时,把模型名提到输入框上方一行全宽完整显示(不省略、可换行)。
+ */
+private const val MODEL_NAME_INLINE_MAX = 14
+
+/**
+ * 输入框内容超过该字符数时,给"展开编辑"图标轻微高亮(Pa.Accent),
+ * 提示用户可点开大窗编辑长文本(见输入栏展开图标)。
+ */
+private const val EXPAND_HINT_THRESHOLD = 80
 
 /**
  * 会话页。
@@ -1963,6 +1467,17 @@ fun ChatScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
+            // 【生效模型名】在输入栏前统一计算,供"输入框上方全宽行"与"工具行模型 chip"复用。
+            // 修复 2b:displayName 可能为空串(daemon 返回的模型未带展示名),空串不能触发
+            // `?:` 兜底,必须用 takeIf { isNotBlank() } 先判空,再回退到 model id 的斜杠后段
+            // 或"跟随桌面"。这样无论模型列表是否加载完,当前模型名都非空、完整可读。
+            // 一律用 model/list 返回的 displayName,不硬编码任何模型名。
+            val modelDisplayName = effectiveModel?.displayName?.takeIf { it.isNotBlank() }
+            val modelName = modelDisplayName
+                ?: if (AgentConnection.selectedModel.isEmpty()) "跟随桌面"
+                else AgentConnection.selectedModel.substringAfter('/')
+            val effortLabel = EFFORTS.find { it.id == AgentConnection.selectedEffort }?.label
+
             var approvalMenu by remember { mutableStateOf(false) }
             Column(
                 Modifier
@@ -1990,6 +1505,21 @@ fun ChatScreen(
                         }
                     },
                 )
+                // [模型名全宽行] 工具行里模型名只吃剩余空间,过长会被省略号挤成 0 宽
+                // (只剩 ">")。超过 MODEL_NAME_INLINE_MAX 时在此补一行完整显示:不省略、可换行,
+                // 保证"当前使用的模型名始终完整可见";工具行里的模型 chip 仍作点击入口。
+                if (modelName.length > MODEL_NAME_INLINE_MAX) {
+                    Text(
+                        text = modelName +
+                            if (!effortLabel.isNullOrBlank() && effortLabel != "默认") " · $effortLabel" else "",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 18.dp, end = 12.dp, bottom = 2.dp),
+                        fontSize = 11.5.sp,
+                        color = Pa.TextSecondary,
+                        maxLines = 2,
+                    )
+                }
                 // 第二行:工具行
                 Row(
                     Modifier
@@ -2095,17 +1625,14 @@ fun ChatScreen(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            if (contextWindow > 0) "上下文 ${contextWindow / 1000}k" else "上下文",
+                            if (!windowIsFallback) "上下文 ${contextWindow / 1000}k" else "上下文",
                             fontSize = 10.5.sp, color = Pa.TextSecondary, maxLines = 1,
                         )
                     }
                     Spacer(Modifier.width(6.dp))
                     // [模型 · 强度] 直显当前模型(点击弹卡面切换)。
                     // weight(1f) + 省略号:模型名再长也只吃剩余空间,绝不挤压发送键。
-                    val modelName = effectiveModel?.displayName
-                        ?: if (AgentConnection.selectedModel.isEmpty()) "跟随桌面"
-                        else AgentConnection.selectedModel.substringAfter('/')
-                    val effortLabel = EFFORTS.find { it.id == AgentConnection.selectedEffort }?.label
+                    // modelName / effortLabel 已在输入栏前统一计算(含 displayName 空串兜底)。
                     Row(
                         Modifier
                             .weight(1f)
@@ -2139,7 +1666,9 @@ fun ChatScreen(
                     ) {
                         Icon(
                             painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
-                            tint = Pa.TextSecondary, modifier = Modifier.size(17.dp),
+                            // 长文本提示:内容超过 EXPAND_HINT_THRESHOLD 时轻微高亮,提示可展开大窗编辑。
+                            tint = if (input.length > EXPAND_HINT_THRESHOLD) Pa.Accent else Pa.TextSecondary,
+                            modifier = Modifier.size(17.dp),
                         )
                     }
                     Spacer(Modifier.width(6.dp))
@@ -2420,10 +1949,9 @@ fun ChatScreen(
         ModelEffortCard(threadId = threadId, onDismiss = { showModelCard = false })
     }
 
-    // 上下文窗口明细:点输入栏"上下文"胶囊打开
+    // 上下文窗口明细:点输入栏"上下文"胶囊打开(真实用量卡,替代旧估算版)
     if (showContextCard) {
-        ContextWindowCard(
-            model = effectiveModel,
+        ContextUsageCard(
             contextWindow = contextWindow,
             windowIsFallback = windowIsFallback,
             turnUsage = st.turnUsage,

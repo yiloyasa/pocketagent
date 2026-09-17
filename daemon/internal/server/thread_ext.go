@@ -386,21 +386,70 @@ func (s *Server) ApproveGuardianDeniedAction(ctx context.Context, req *pb.Approv
 
 // ---------- 会话列表:搜索 / 分组过滤 / 排序 / 归档 ----------
 
+// codexSyncBudget 是同步 codex 会话列表时给 codex 子进程的时间预算。
+//
+// 为什么是 2.5s:codex 冷启动约 1~2s、子进程重启窗口更久,但 ListThreads 是
+// 最高频的会话列表接口,绝不能因为上游(codex 令牌失效 / 子进程反复重启)卡住
+// 而让手机端误判"离线"。超时或失败时一律放弃同步、直接用本地库返回 —— 本地库
+// 才是会话列表的事实来源,codex 只用来补全分组/归档/标题这些"慢一致性"字段。
+const codexSyncBudget = 2500 * time.Millisecond
+
 // syncThreadsFromCodex 把 codex 的会话列表同步进本地库(分组、归档、标题、时间)。
 //
 // 【只在"用户真的用了过滤/排序"时才打这次同步】原因很实际:daemon 的 codex
 // 子进程可能没在跑,一次同步要等它冷启动(1~2 秒)。会话列表是最高频的页面,
 // 不该为了一致性每次都付这个代价。而一旦用户点了搜索/分组/归档页,
 // 他对"多等一下、但结果是全的"是有预期的。
+//
+// 【有界时间预算】codex 不可用时(令牌 403 / 子进程反复重启)本次同步必须在
+// codexSyncBudget 内结束:成功就用结果补全本地库;超时/失败就放弃,ListThreads
+// 直接读本地库返回。绝不让 ListThreads 因此失败或长时间阻塞(否则手机端 8s
+// 超时 → 被误标成"离线")。syncCodexInFlight 保证同一时刻只有一个同步在跑,
+// 避免 codex 不可用时一堆 goroutine 在 withClient 生命周期锁上排队。
 func (s *Server) syncThreadsFromCodex(searchTerm string, includeArchived bool) {
+	if !s.syncCodexInFlight.CompareAndSwap(false, true) {
+		return
+	}
 	p := s.codexProvider()
 	if p == nil {
+		s.syncCodexInFlight.Store(false)
 		return
 	}
-	entries, err := p.ListThreadEntries(searchTerm, "", "", false, includeArchived, 0)
-	if err != nil || len(entries) == 0 {
+	ctx, cancel := context.WithTimeout(context.Background(), codexSyncBudget)
+	defer cancel()
+	type syncResult struct {
+		entries []agent.CodexThreadEntry
+		err     error
+	}
+	ch := make(chan syncResult, 1)
+	go func() {
+		// 标志位由本 goroutine 在真正结束时清除(含 callTimeout 尾),
+		// 这样超时路径下不会把新请求又放进来去抢生命周期锁。
+		defer s.syncCodexInFlight.Store(false)
+		entries, err := p.ListThreadEntries(searchTerm, "", "", false, includeArchived, 0)
+		ch <- syncResult{entries, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil || len(r.entries) == 0 {
+			if r.err != nil {
+				log.Printf("[sync] codex 同步失败,改用本地库返回: %v", r.err)
+			}
+			return
+		}
+		// 同步成功:在 ListThreads 读本地库之前把变化写回(见 ListThreads 第 103 行)。
+		s.mergeCodexEntries(r.entries)
+	case <-ctx.Done():
+		// 预算用完:放弃同步,ListThreads 早已用本地库返回,这里直接走人,
+		// 绝不阻塞。后台 goroutine 仍会跑完并在结束时清标志位。
+		log.Printf("[sync] codex 同步超时(%s),改用本地库返回", codexSyncBudget)
 		return
 	}
+}
+
+// mergeCodexEntries 把 codex 拉回的会话条目写回本地库(分组/归档/标题有变化才更新)。
+// 抽出来是因为 syncThreadsFromCodex 现在要在"同步成功"分支里调用。
+func (s *Server) mergeCodexEntries(entries []agent.CodexThreadEntry) {
 	byCodex := map[string]*store.Thread{}
 	for _, t := range s.cfg.Store.List(true) {
 		if t.CodexThreadID != "" {

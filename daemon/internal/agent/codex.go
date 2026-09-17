@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,6 +74,17 @@ type CodexProvider struct {
 	// 才有人接,任务外到达的会被直接丢掉 —— 于是"电脑上归档了、手机上还是活跃"。
 	// 这里回调给 server 层,由它同步本地库。
 	ThreadEventHandler func(codexThreadID, method string, params json.RawMessage)
+
+	// 自动压缩状态机(按 codex 线程 id 索引):compactArmed/compactFired 防抖。
+	// 仅由 maybeAutoCompact / resetCompactState 在 compactMu 保护下访问。
+	compactMu    sync.Mutex
+	compactState map[string]compactState
+
+	// 正在等手机应答的反向请求(codex 侧 JSON-RPC id → 解决信号 channel)。
+	// codex 通过 serverRequest/resolved 通知"该请求已在桌面端被解决"时,
+	// 我们据此提前结束等待、不再 Respond,并让手机端撤掉审批卡(幽灵卡治理)。
+	pendingReqMu    sync.Mutex
+	pendingResolved map[int64]chan struct{}
 }
 
 // guardianKeep 最多记住多少条审查结论。审查是高频事件(每个被执行的动作一次),
@@ -90,7 +102,56 @@ func NewCodexProvider() *CodexProvider {
 		pendingGoals:    map[string]string{},
 		guardianReviews: map[string]*GuardianReview{},
 		guardianLatest:  map[string]string{},
+		compactState:    map[string]compactState{},
+		pendingResolved: map[int64]chan struct{}{},
 	}
+}
+
+// registerPendingServerRequest 登记"正在等手机应答"的反向请求,
+// 返回一个在该请求被 codex 侧解决时关闭的 channel(见 serverRequest/resolved)。
+func (p *CodexProvider) registerPendingServerRequest(id int64) <-chan struct{} {
+	ch := make(chan struct{})
+	p.pendingReqMu.Lock()
+	p.pendingResolved[id] = ch
+	p.pendingReqMu.Unlock()
+	return ch
+}
+
+// unregisterPendingServerRequest 正常结束(拿到手机应答)时清理登记,防 map 泄漏。
+func (p *CodexProvider) unregisterPendingServerRequest(id int64) {
+	p.pendingReqMu.Lock()
+	delete(p.pendingResolved, id)
+	p.pendingReqMu.Unlock()
+}
+
+// resolvePendingServerRequest codex 通知某反向请求已被解决:关闭对应信号。
+func (p *CodexProvider) resolvePendingServerRequest(rawID json.RawMessage) {
+	id := parseServerRequestID(rawID)
+	if id == 0 {
+		return
+	}
+	p.pendingReqMu.Lock()
+	if ch, ok := p.pendingResolved[id]; ok {
+		delete(p.pendingResolved, id)
+		close(ch)
+	}
+	p.pendingReqMu.Unlock()
+}
+
+// parseServerRequestID codex 的 RequestId 在 JSON 里可能是数字或字符串,
+// 统一成 int64(0 = 解析失败;codex 的 JSON-RPC id 从 1 起,0 不会撞真实 id)。
+func parseServerRequestID(raw json.RawMessage) int64 {
+	var n int64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+			return v
+		}
+	}
+	return 0
 }
 
 func (p *CodexProvider) ID() string          { return "codex" }
@@ -547,6 +608,27 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					sink(pb.TurnServerMessage{
 						Msg: &pb.TurnServerMessage_Usage{Usage: usage},
 					})
+					// 真实自动压缩:占用率越阈自动调 thread/compact/start,状态机防抖。
+					// 【口径与桌面端一致】占用率 = 本 turn 用量(last) / 窗口:每轮输入都
+					// 重发全部上下文,last.totalTokens 就是"当前窗口被占了多少"。
+					// 绝不能用 total_usage(thread 累计)—— 压缩后累计不回落,状态机永远无法重新武装。
+					// 窗口未知(0)时 compactDecide 不触发,不会误压。
+					p.maybeAutoCompact(codexTID, usage.GetUsage(), usage.GetModelContextWindow())
+				}
+			}
+			if method == "context/compacted" || method == "thread/compacted" {
+				// 压缩已发生:重新武装状态机,后续再次吃满会再次触发。
+				p.resetCompactState(codexTID)
+			}
+			if method == "serverRequest/resolved" {
+				// 该反向请求已在桌面端被解决:若我们正等手机审批,提前结束等待
+				// 并让手机撤卡(幽灵审批卡治理,见 ReqHandler 的竞速分支)。
+				var n struct {
+					RequestId json.RawMessage `json:"requestId"`
+					ThreadId  string          `json:"threadId"`
+				}
+				if json.Unmarshal(params, &n) == nil {
+					p.resolvePendingServerRequest(n.RequestId)
 				}
 			}
 			if event := codexNotificationEvent(method, params, codexTID, ""); event != nil {
@@ -597,7 +679,35 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		allow, note := false, ""
 		askErr := error(nil)
 		if approve != nil {
-			allow, note, askErr = approve(ctx, call)
+			// 【serverRequest/resolved 竞速】我们等手机应答期间,codex 可能通知
+			// "该请求已被解决"(用户在桌面端点了,或被 codex 自动处理)。
+			// 此时不能再等手机、也绝不能再 Respond(重复应答);同时要让手机端
+			// 把挂着的审批卡撤下去 —— 否则就是一张点不动也没意义的"幽灵审批卡"。
+			resolved := p.registerPendingServerRequest(id)
+			type approveOut struct {
+				allow bool
+				note  string
+				err   error
+			}
+			outCh := make(chan approveOut, 1)
+			go func() {
+				a, n, e := approve(ctx, call)
+				outCh <- approveOut{a, n, e}
+			}()
+			select {
+			case out := <-outCh:
+				allow, note, askErr = out.allow, out.note, out.err
+			case <-resolved:
+				// 迟到的手机应答会落进 outCh(带缓冲),由 GC 回收,无泄漏。
+				log.Printf("[codex] 反向请求 %s(id=%d)已在桌面端被解决,不再等待手机审批", method, id)
+				sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
+					Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
+				}}})
+				approvalWaiting.Store(false)
+				p.unregisterPendingServerRequest(id)
+				return
+			}
+			p.unregisterPendingServerRequest(id)
 		}
 		approvalWaiting.Store(false)
 		if askErr != nil {

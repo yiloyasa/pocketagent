@@ -157,6 +157,43 @@ fun stripInlineMarkdown(source: String): String = source
     .replace(inlineCodePattern) { it.groupValues[1] }
     .replace(Regex("\\[([^]]+)]\\([^)]*\\)"), "$1")
 
+/**
+ * 渲染前清洗:把少量在目标设备字体里取不到字形(显示为豆腐块 / 错误字形)的字符,
+ * 替换成等义、一定能渲染的安全形式。
+ *
+ * 【为什么需要】MarkdownText 正文走 Material 默认字体(Roboto / 设备默认),绝大多数字符
+ * 都能正常渲染,且缺失字形会自动回退到系统字体;但 §(U+00A7 SECTION SIGN)等极少数符号在
+ * 个别机型 / 字重下仍可能掉成豆腐块。这里**不粗暴 strip 全盘特殊字符**(那会把
+ * `|§9 连接可靠性|` 这类表格行的语义拆坏),只做"异常字符 → 友好替代"的定点替换,
+ * 作为字体回退之外的兜底。
+ *
+ * 【如何扩展】往 [DISPLAY_TEXT_REPLACEMENTS] 加一行即可(键支持多字符序列,值是替代文本),
+ * 无需改任何调用点。§N 这类带序号的走下方正则规则,要换别的友好形式只改一处。
+ */
+private val DISPLAY_TEXT_REPLACEMENTS: Map<String, String> = mapOf(
+    // 默认不替换任何字符:§ 等一般能靠平台字体回退正常渲染。
+    // 若某机型实测把 § 渲染成豆腐块,在此加一行覆盖即可,例如:
+    //   "§" to "§",            // 仍保留原字符(确认回退生效)
+    //   "§9" to "第 9 节",      // 或按语义替换。新增条目无需改调用点。
+)
+
+/** `§数字`(可带小数点,如 §9 / §7.2 / §10)→ `第 数字 节`:保留语义且任何字体都能渲染。 */
+private val SECTION_SIGN_RE = Regex("§\\s*(\\d[\\d.]*)")
+
+/**
+ * 见 [DISPLAY_TEXT_REPLACEMENTS]。返回清洗后的文本;原文本无异常字符时原样返回。
+ * 字体回退优先(不改动内容),清洗表仅作兜底,绝不整段 strip 特殊字符。
+ */
+fun sanitizeDisplayText(text: String): String {
+    var out = text
+    for ((bad, good) in DISPLAY_TEXT_REPLACEMENTS) {
+        if (bad in out) out = out.replace(bad, good)
+    }
+    // §数字 → 第 数字 节:§ 在个别机型掉字形时的兜底(原字符能渲染时等同友好改写)。
+    out = SECTION_SIGN_RE.replace(out) { "第 ${it.groupValues[1]} 节" }
+    return out
+}
+
 private fun MarkdownLine.annotated(): AnnotatedString = buildAnnotatedString {
     if (kind == MarkdownLineKind.BULLET) append("• ")
     spans.forEach { span ->
@@ -184,7 +221,9 @@ fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float 
     //      架构图)纵向对不齐,看起来像"设计坏了";
     //   3) 没有横向滚动 + 默认软换行 → 长行被硬折,图直接散架。
     // 现在把连续代码行聚合成**一个**整块,统一背景/圆角/内边距,并允许横向滚动。
-    val blocks = remember(source) { groupMarkdownBlocks(parseMarkdownForDisplay(source)) }
+    // 渲染前清洗:把可能在部分机型掉字形的少数符号(如 §)替换为友好形式,
+    // 作为字体回退之外的兜底(见 sanitizeDisplayText)。
+    val blocks = remember(source) { groupMarkdownBlocks(parseMarkdownForDisplay(sanitizeDisplayText(source))) }
     Column(modifier) {
         blocks.forEach { block ->
             when (block) {

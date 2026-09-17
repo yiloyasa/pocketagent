@@ -347,7 +347,7 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 	case "context/compacted", "thread/compacted":
 		event.Kind = pb.CodexEvent_CONTEXT_COMPACTED
 		event.Title = "上下文已压缩"
-		event.Message = "Codex 已压缩当前线程上下文，继续任务时会使用较新的上下文窗口。"
+		event.Message = "上下文已自动压缩,继续任务时会使用较新的上下文窗口。"
 	case "mcpServer/startupStatus/updated", "mcpServer/status/updated":
 		var n struct {
 			Name          string  `json:"name"`
@@ -387,6 +387,24 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 		if n.RateLimits.PlanType != "" {
 			event.Message += " · 方案 " + n.RateLimits.PlanType
 		}
+	case "item/commandExecution/terminalInteraction":
+		// 命令运行中输出了交互提示(sudo 密码、y/n 确认等)。
+		// 【诚实边界】当前 codex 协议(v2 schema 全量核对)只有这条通知,
+		// **没有**配套的"向运行中命令写 stdin"的方法 —— command/exec/write 只
+		// 适用于独立的 command/exec 会话,对 thread 内的 commandExecution 无效。
+		// 所以这里只做"可见状态 + 明确指引",绝不伪造一个写不进去的输入框。
+		var n struct {
+			ItemId string `json:"itemId"`
+			Stdin  string `json:"stdin"`
+		}
+		_ = json.Unmarshal(raw, &n)
+		event.Kind = pb.CodexEvent_WARNING
+		event.Code = n.ItemId
+		event.Title = "命令在等终端输入"
+		event.Message = fmt.Sprintf(
+			"命令输出了交互提示:%s。当前 codex 协议不支持向运行中的命令写入输入,请在电脑上完成该交互(输密码 / 确认),或在手机上终止任务后改用免交互方式重试。",
+			n.Stdin,
+		)
 	default:
 		// 第二梯队事件(审查者/回合 diff/弃用/配置/沙箱/hook/技能/队列/安全缓冲)。
 		// 识别不出来就直接丢弃 —— 伪造一条"收到某事件"只会把真正的事件淹掉。

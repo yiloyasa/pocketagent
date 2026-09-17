@@ -16,6 +16,7 @@ import (
 	"log"
 	"runtime"
 	"strings"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -50,6 +51,10 @@ type Server struct {
 	hostID string
 	// 每线程正在执行的 turn(重入打断用)
 	activeTurns *activeTurns
+	// syncCodexInFlight 防止 codex 不可用时重复堆积同步:同一时刻只跑一个
+	// syncThreadsFromCodex。否则每次 refresh 都新起一个,会在 withClient 的
+	// 生命周期锁上排队等待(最坏等 codex 的 callTimeout=120s)。
+	syncCodexInFlight atomic.Bool
 }
 
 func New(cfg Config) *Server {

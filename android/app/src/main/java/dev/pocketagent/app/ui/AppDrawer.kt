@@ -94,6 +94,8 @@ fun AppDrawer(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit = {},
+    /** 重看新手教程(抽屉「更多」分组入口;默认空实现以最小化侵入其它调用点)。 */
+    onOpenOnboarding: () -> Unit = {},
     /** 传了就显示"新建对话"主操作(聊天页用;其余页面各有自己的新建入口)。 */
     onNewThread: (() -> Unit)? = null,
     /** 传了就显示"网页"快捷磁贴(内置浏览器)。 */
@@ -198,6 +200,7 @@ fun AppDrawer(
                 onOpenTerminal = { requestClose { onOpenTerminal() } },
                 onOpenSettings = { requestClose { onOpenSettings() } },
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
+                onOpenOnboarding = { requestClose { onOpenOnboarding() } },
                 onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
                 onNewThread = onNewThread,
                 onOpenBrowser = onOpenBrowser,
@@ -226,6 +229,7 @@ private fun DrawerPanel(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
+    onOpenOnboarding: () -> Unit = {},
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
     onOpenBrowser: (() -> Unit)? = null,
@@ -390,6 +394,13 @@ private fun DrawerPanel(
                 desc = "连接 / 外观 / 权限",
                 selected = false,
                 onClick = onOpenSettings,
+            )
+            DrawerItem(
+                icon = R.drawable.ic_lucide_sparkles,
+                title = "新手教程",
+                desc = "快速回顾使用流程",
+                selected = false,
+                onClick = onOpenOnboarding,
             )
 
             Spacer(Modifier.height(14.dp))

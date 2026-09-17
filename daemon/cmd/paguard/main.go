@@ -27,6 +27,7 @@ func main() {
 	var (
 		probeAddr  = flag.String("probe", "127.0.0.1:7246", "探测端口是否有人在听")
 		daemonAddr = flag.String("daemon-addr", "0.0.0.0:7246", "daemon 监听地址")
+		pairCode   = flag.String("pair-code", "", "配对码;转发给 daemon 作鉴权口令(与手机端 token 一致)")
 		checkOnly  = flag.Bool("check-only", false, "只探测并记日志,不启动 daemon(自测用)")
 		killPid    = flag.Int("kill", 0, "TerminateProcess 指定 PID(测试守护链路用,GUI 子系统无窗口)")
 	)
@@ -55,7 +56,7 @@ func main() {
 		return
 	}
 
-	if err := startDaemon(dir, *daemonAddr); err != nil {
+	if err := startDaemon(dir, *daemonAddr, *pairCode); err != nil {
 		exitLog("paguard: start daemon: %v", err)
 	}
 	// 等daemon 完成绑定;成功即退出,daemon 独立存活(paguard 由 WMI
@@ -95,7 +96,7 @@ func killProcess(pid int) error {
 	return nil
 }
 
-func startDaemon(dir, addr string) error {
+func startDaemon(dir, addr, pairCode string) error {
 	out, err := os.OpenFile(filepath.Join(dir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -103,7 +104,11 @@ func startDaemon(dir, addr string) error {
 	defer out.Close()
 
 	// 与旧 watchdog.bat 完全一致的启动参数:cwd=daemon 目录,workspace=仓库根。
-	cmd := exec.Command(filepath.Join(dir, "pocketagentd.exe"), "-addr", addr, "-workspace", filepath.Clean(filepath.Join(dir, "..")))
+	args := []string{"-addr", addr, "-workspace", filepath.Clean(filepath.Join(dir, ".."))}
+	if pairCode != "" {
+		args = append(args, "-pair-code", pairCode)
+	}
+	cmd := exec.Command(filepath.Join(dir, "pocketagentd.exe"), args...)
 	cmd.Dir = dir
 	if os.Getenv("CODEX_BIN") == "" {
 		cmd.Env = append(os.Environ(), "CODEX_BIN="+defaultCodexBin)

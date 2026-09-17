@@ -231,7 +231,22 @@ func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest
 }
 
 func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest) (*pb.Empty, error) {
-	// P1 实现:把历史摘要成一段"前情提要",替换原消息
+	// 真实压缩:落到 codex 的 thread/compact/start,由桌面端 agent 真正执行。
+	// 手动压缩入口(手机端可后续接),与自动压缩共用同一条 codex 通道。
+	p := s.codexProvider()
+	if p == nil {
+		return nil, errUnavailable("电脑上没有可用的 codex")
+	}
+	t, ok := s.cfg.Store.Get(req.ThreadId)
+	if !ok {
+		return nil, errNotFound("会话不存在")
+	}
+	if t.CodexThreadID == "" {
+		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法压缩")
+	}
+	if err := p.CompactThread(t.CodexThreadID); err != nil {
+		return nil, errInternal(err)
+	}
 	return &pb.Empty{}, nil
 }
 
