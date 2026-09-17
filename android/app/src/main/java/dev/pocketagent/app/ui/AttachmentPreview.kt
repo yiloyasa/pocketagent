@@ -2,7 +2,6 @@ package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,13 +17,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.theme.Pa
 import java.util.Locale
 import kotlin.math.max
+
+/** 附件卡片里文件名的中间省略上限(超过则保留扩展名的中间省略,见 [middleEllipsize])。 */
+private const val ATTACH_CARD_NAME_MAX = 60
 
 enum class AttachmentKind { IMAGE, FILE }
 
@@ -71,9 +76,21 @@ fun AttachmentCard(
     onClick: () -> Unit = {},
 ) {
     val image = attachmentKind(attachment.name, attachment.mediaType) == AttachmentKind.IMAGE
+    val ctx = LocalContext.current
     Row(
         modifier
-            .clickable(onClick = onClick)
+            // 单击预览 / 长按复制完整文件名(与消息长按复制同一写法)
+            .pressableLong(
+                onClick = onClick,
+                onLongPress = {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cm.setPrimaryClip(
+                        android.content.ClipData.newPlainText("PocketAgent 文件名", attachment.name),
+                    )
+                    android.widget.Toast.makeText(ctx, "已复制文件名", android.widget.Toast.LENGTH_SHORT).show()
+                },
+            )
             .background(Pa.AccentDim, RoundedCornerShape(14.dp))
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -94,8 +111,14 @@ fun AttachmentCard(
                 )
             }
         }
-        Column {
-            Text(attachment.name, color = Pa.TextPrimary, fontSize = 12.sp, maxLines = 1)
+        // 文件名最多 3 行、可换行;宽度吃满剩余空间以强制换行(否则长名被裁)。
+        // 真需省略时保留扩展名(见 middleEllipsize),不让用户丢掉"这是什么文件"。
+        Column(Modifier.weight(1f)) {
+            Text(
+                middleEllipsize(attachment.name, ATTACH_CARD_NAME_MAX),
+                color = Pa.TextPrimary, fontSize = 12.sp,
+                maxLines = 3, softWrap = true, overflow = TextOverflow.Ellipsis,
+            )
             Text(formatAttachmentSize(attachment.size.toLong()), color = Pa.TextSecondary, fontSize = 10.sp)
         }
     }

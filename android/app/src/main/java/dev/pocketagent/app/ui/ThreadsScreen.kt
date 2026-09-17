@@ -489,6 +489,14 @@ fun ThreadsScreen(
                 }
                 if (sectionId.isEmpty()) {
                     Toast.makeText(ctx, "已移出分组", Toast.LENGTH_SHORT).show()
+                } else {
+                    // 移入分组也要有可见反馈(之前只在移出时提示,移入静默,像没生效)
+                    val secName = sections.firstOrNull { it.id == sectionId }?.name
+                    Toast.makeText(
+                        ctx,
+                        "已移入「${secName?.ifBlank { "未命名分组" } ?: "分组"}」",
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
                 refresh()
             } catch (e: Exception) {
@@ -727,10 +735,12 @@ fun ThreadsScreen(
                     when {
                         activeSectionName != null ->
                             "只看分组「${activeSectionName.ifBlank { "未命名分组" }}」"
-                        filter == THREAD_FILTER_UNGROUPED -> "只看未分组的会话"
+                        // "未分组"不解释清楚,用户会当成"已删除/已归档"。这里在**点击之前**
+                        // 就把含义说清(与长按面板、聊天页复用同一措辞 ungroupedHint)。
+                        filter == THREAD_FILTER_UNGROUPED -> "只看未分组的会话 · " + ungroupedHint()
                         else -> "只看某个分组(分组列表暂时读不到,点「全部」可退出)"
                     },
-                    Modifier.padding(start = 18.dp, top = 6.dp),
+                    Modifier.padding(start = 18.dp, end = 18.dp, top = 6.dp),
                     fontSize = 11.5.sp, color = Pa.TextTertiary,
                 )
             }
@@ -832,6 +842,13 @@ fun ThreadsScreen(
                                         rowKey = t.id,
                                         openKey = openKey,
                                         actions = listOf(
+                                            // 【可见可达的"移入分组"入口】之前分组只藏在长按菜单里
+                                            // (没有任何可见提示,用户反馈"功能缺失")。放到左滑动作栏
+                                            // 的第一项 —— 左滑是这个列表既有的标准手势,不需要额外学习。
+                                            SwipeAction(
+                                                "section", "分组",
+                                                R.drawable.ic_lucide_folder, Pa.AccentText,
+                                            ),
                                             SwipeAction(
                                                 "pin",
                                                 if (isPinned) "取消置顶" else "置顶",
@@ -865,6 +882,8 @@ fun ThreadsScreen(
                                                         Toast.LENGTH_SHORT,
                                                     ).show()
                                                 }
+                                                // 打开"移动到分组"面板(与长按同一面板)
+                                                "section" -> organizeTarget = t
                                                 "archive" -> archiveOptimistic(t)
                                                 "rename" -> {
                                                     renameField = TextFieldValue(
@@ -877,11 +896,11 @@ fun ThreadsScreen(
                                             }
                                         },
                                         rowBackground = Pa.Card,
-                                        // 长按 = 会话组织(移动到分组 / 分叉)。
-                                        // 【为什么是长按而不是第 5 个左滑动作】动作区是 64dp × 动作数,
-                                        // 5 个就 320dp,超过 SwipeRevealRow 的 72% 上限(窄屏会被裁掉),
-                                        // 而且左滑本身已经承载了最高频的四个动作。长按这个位置
-                                        // 本来就是为"上下文菜单"留的(见文件下方注释)。
+                                        // 长按 = 会话组织(移动到分组 / 分叉),与左滑"分组"动作同一面板。
+                                        // 【关于 5 个左滑动作的宽度】动作区上限是屏宽 72%(窄屏 360dp → 259dp),
+                                        // SwipeRevealRow 会把 revealPx 夹到该上限后按 weight 均分,所以 5 个动作
+                                        // 各约 52dp —— 不溢出、不裁切,只是比 64dp 略窄(最长标签"取消置顶"≈40dp,
+                                        // 仍在宽度内)。"分组"补的是可见入口,不是把动作区撑爆。
                                         onLongPress = { organizeTarget = t },
                                         // 已展开时点内容 = 收起,未展开才进会话
                                         onClick = {
@@ -1041,7 +1060,13 @@ fun ThreadsScreen(
                 )
                 Text(
                     "移动到分组",
-                    Modifier.padding(start = 24.dp, top = 16.dp, bottom = 2.dp),
+                    Modifier.padding(start = 24.dp, top = 16.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                // "未分组"的含义:在**点击之前**就可见(不能点了才弹说明)
+                Text(
+                    ungroupedHint(),
+                    Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
                     fontSize = 11.5.sp, color = Pa.TextTertiary,
                 )
                 // 当前所在分组打上「当前」并在文案里标明 —— 用户点开就能确认"这条现在在哪"

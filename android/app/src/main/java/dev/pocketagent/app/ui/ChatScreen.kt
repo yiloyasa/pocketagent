@@ -81,6 +81,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -103,10 +105,13 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
+import dev.pocketagent.app.ui.component.UsageCache
+import dev.pocketagent.app.ui.component.UsageSnapshot
 import dev.pocketagent.app.ui.component.keyboardAwareBottomPadding
 import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -641,6 +646,37 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
 /** 电脑端没上报窗口时的兜底值(codex 常见 272K)。 */
 private const val DEFAULT_CONTEXT_WINDOW = 272_000L
 
+/**
+ * 当前 agent 的"默认模型" id。
+ *
+ * daemon 的 ListModels 实测 id 带 agent 前缀(`codex/default`、`echo/echo-1` …),
+ * 用 `$agent/default` 表示"随桌面配置生效的模型"。抽成函数供两处共用,避免
+ * "一处泛化、一处硬编码 codex" 再分叉。agent 为空时退回 codex。
+ */
+private fun agentDefaultModelId(agent: String): String =
+    if (agent.isBlank()) "codex/default" else "$agent/default"
+
+/**
+ * 上下文窗口解析优先级(从高到低):
+ *  1) live:daemon 随用量上报的真实窗口(唯一权威值)
+ *  2) modelDeclared:当前生效模型自己声明的窗口
+ *  3) agentDefaultDeclared:当前 agent 的默认模型声明的窗口
+ *     (codex 恒定 272000;同一 app-server 下所有模型共用它,真机上模型卡也是这么显示的)
+ * 只要拿到 >0 就算"窗口已知";全为 0 才返回 0(未知 → 环内画"—",绝不假装 0%)。
+ *
+ * 【为什么用 agent 默认窗口兜底是有意的取舍】codex 的窗口由 app-server 统一管理,
+ * 但 ListModels 里除默认模型外的 28 个 codex 端点模型 cw 全为 0,而 codex 的
+ * `thread/tokenUsage/updated` 又不带 modelContextWindow ⇒ 只看"当前模型声明值"
+ * 会让占用环恒显示"—"。取其默认模型**自报**的窗口(而不是 App 编造一个数字),
+ * 卡片里仍写清窗口总量,便于用户核对。
+ */
+internal fun pickContextWindow(live: Long, modelDeclared: Int, agentDefaultDeclared: Int): Long {
+    if (live > 0) return live
+    if (modelDeclared > 0) return modelDeclared.toLong()
+    if (agentDefaultDeclared > 0) return agentDefaultDeclared.toLong()
+    return 0L
+}
+
 /** 审批策略选项(与 codex approvalPolicy 对齐)。 */
 val APPROVALS = listOf(
     Triple("untrusted", "仅信任", "白名单外的命令先批准"),
@@ -660,16 +696,24 @@ val EFFORTS = listOf(
 )
 
 /**
- * 工具行里模型名最多吃"剩余空间",过长会被省略号挤成 0 宽(只剩 ">" )。
- * 超过该字符数时,把模型名提到输入框上方一行全宽完整显示(不省略、可换行)。
+ * 【已删除 MODEL_NAME_INLINE_MAX】
+ * 旧逻辑:只在模型名超过 14 字符时才在输入框上方补一行全宽显示 ——
+ * "刚好没超过、但已被工具行挤断"的名字依旧读不全(用户反馈"模型名仍未完整显示")。
+ * 现在这一行**恒显且不限行数**,不再需要阈值常量。
  */
-private const val MODEL_NAME_INLINE_MAX = 14
 
 /**
  * 输入框内容超过该字符数时,给"展开编辑"图标轻微高亮(Pa.Accent),
  * 提示用户可点开大窗编辑长文本(见输入栏展开图标)。
  */
 private const val EXPAND_HINT_THRESHOLD = 80
+
+/**
+ * 附件 chip 里文件名的中间省略上限(见 [middleEllipsize])。
+ * 取值远大于常见文件名,保证正常名字完整可读(配合最多 3 行换行);
+ * 只有病态长名才退化为"保留扩展名的中间省略"。
+ */
+private const val ATTACH_CHIP_NAME_MAX = 80
 
 /**
  * 会话页。
@@ -821,20 +865,67 @@ fun ChatScreen(
 
     // 生效模型:会话选择 → codex 桌面默认 → 本轮实际运行 → 列表首个。
     // 统一后,无论"跟随桌面配置"还是指定模型,上下文窗口都可查看、可点开明细。
+    val mainAgent = AgentConnection.selectedAgent
     val effectiveModelId = AgentConnection.selectedModel
         .ifEmpty { codexSettings?.model.orEmpty() }
         .ifEmpty { st.runningModel }
     val effectiveModel = models.find { it.id == effectiveModelId }
         ?: models.find { it.id == st.runningModel }
-        ?: models.find { it.id == "codex/default" }
+        // 用 agent 默认模型 id(`$agent/default`),不再硬编码 "codex/default"
+        ?: models.find { it.id == agentDefaultModelId(mainAgent) }
         ?: models.firstOrNull()
-    // 窗口大小:模型列表值 与 daemon 随用量上报的真实值 取大;
-    // 列表里大多数 codex 模型没有窗口数据,靠上报值兜底(切模型后仍可显示)。
-    // 窗口大小:模型声明值 / daemon 上报值 / 兜底默认
-    // (之前三者都拿不到时整块面板恒显示"窗口未知 · 0%",看起来像坏了)
-    val reportedWindow = maxOf((effectiveModel?.contextWindow ?: 0).toLong(), st.liveContextWindow)
+    // agent 默认模型自报的窗口(codex 恒定 272000;同一 app-server 下所有模型共用它)。
+    val agentDefaultWindow = models.find { it.id == agentDefaultModelId(mainAgent) }?.contextWindow ?: 0
+    // 窗口解析优先级链:daemon 上报真实窗口 > 当前模型声明窗口 > agent 默认模型声明窗口。
+    // 只看"当前模型声明值"时,真机上(选中模型 cw=0 且 codex 不带上报窗口)会恒返回 0 →
+    // windowIsFallback=true → 占用环恒显示"—";用 agent 默认窗口兜底后可显示真实占比。
+    val reportedWindow = pickContextWindow(
+        live = st.liveContextWindow,
+        modelDeclared = effectiveModel?.contextWindow ?: 0,
+        agentDefaultDeclared = agentDefaultWindow,
+    )
     val contextWindow = if (reportedWindow > 0) reportedWindow else DEFAULT_CONTEXT_WINDOW
     val windowIsFallback = reportedWindow <= 0
+
+    // ---- 上下文窗口卡:断网缓存 + 自动刷新 ----
+    // ① 每次收到用量更新(含从缓存回填的首帧)都写一份"最后一次已知用量"到本地:
+    //    断网/自动断网后,卡片仍能照常显示这些数字,并标出是什么时候的。
+    LaunchedEffect(threadId, st.turnUsage, st.totalUsage, st.liveContextWindow) {
+        UsageCache.init(ctx)
+        if (st.turnUsage != null || st.totalUsage != null) {
+            UsageCache.save(
+                threadId,
+                UsageSnapshot(
+                    contextWindow = contextWindow,
+                    windowIsFallback = windowIsFallback,
+                    turnUsage = st.turnUsage,
+                    totalUsage = st.totalUsage,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+    }
+    // ② 卡片打开期间每 3s 刷新一次;卡片关闭即随 LaunchedEffect 作用域取消,不会漏取消。
+    var usageRefreshTick by remember { mutableStateOf(0) }
+    LaunchedEffect(showContextCard) {
+        if (!showContextCard) return@LaunchedEffect
+        while (true) {
+            delay(3000)
+            usageRefreshTick++
+        }
+    }
+    // ③ 连接由"非 ok"回到"ok"时立即刷新一次(断网恢复后不必干等下一个 3s);
+    //    断网时不做任何重试,失败静默 —— 卡片靠缓存继续显示,不做无谓刷屏。
+    // connState 取值:checking / ok / down。**checking 是巡检中间态,不是"已知断网"**:
+    // 若按 `!= "ok"` 判离线,连接巡检的瞬间会闪一条假的"离线"提示 —— 与本轮在修的
+    // "UI 假装有状态"是同一类病。故:提示条只在 `down` 时出现;`checking` 不显示提示条,
+    // 但 4 项数字照样从缓存兜底显示(不出现空态)。
+    val connState = AgentConnection.connState.collectAsState().value
+    val connDown = connState == "down"
+    val connOk = connState == "ok"
+    LaunchedEffect(connOk) {
+        if (connOk) usageRefreshTick++
+    }
 
     /** 会话内无缝切换审批策略(codex 桌面端同步生效)。 */
     fun setApproval(id: String) {
@@ -1435,7 +1526,11 @@ fun ChatScreen(
                     attachments.forEach { at ->
                         Row(
                             Modifier
-                                .pressable { openAttachment(at) }
+                                // 单击预览 / 长按复制完整文件名(复用消息长按复制的写法)
+                                .pressableLong(
+                                    onClick = { openAttachment(at) },
+                                    onLongPress = { copyMessage(ctx, at.name) },
+                                )
                                 .background(Pa.CardHigh, RoundedCornerShape(10.dp))
                                 .padding(horizontal = 10.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1452,7 +1547,14 @@ fun ChatScreen(
                                 tint = Pa.Accent, modifier = Modifier.size(13.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(at.name, fontSize = 11.sp, color = Pa.TextPrimary, maxLines = 1)
+                            // 文件名最多 3 行、可换行;宽度封顶以强制换行(横向滚动行里若不封顶,
+                            // 文本会一直延伸并被视口裁掉)。真需省略时保留扩展名(见 middleEllipsize)。
+                            Text(
+                                middleEllipsize(at.name, ATTACH_CHIP_NAME_MAX),
+                                Modifier.widthIn(max = 220.dp),
+                                fontSize = 11.sp, color = Pa.TextPrimary,
+                                maxLines = 3, softWrap = true, overflow = TextOverflow.Ellipsis,
+                            )
                             Spacer(Modifier.width(6.dp))
                             Icon(
                                 painterResource(AppR.drawable.ic_lucide_x), null,
@@ -1484,42 +1586,62 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .background(Pa.Card, RoundedCornerShape(26.dp)),
             ) {
-                // 第一行:输入框
-                BasicTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 12.dp)
-                        .heightIn(min = 24.dp),
-                    textStyle = TextStyle(fontSize = 15.sp, color = Pa.TextPrimary),
-                    cursorBrush = SolidColor(Pa.Accent),
-                    maxLines = 4,
-                    enabled = !st.running,
-                    decorationBox = { inner ->
-                        Box {
-                            if (input.isEmpty()) {
-                                Text("随心输入,发给电脑上的 agent…", fontSize = 15.sp, color = Pa.TextTertiary)
-                            }
-                            inner()
-                        }
-                    },
-                )
-                // [模型名全宽行] 工具行里模型名只吃剩余空间,过长会被省略号挤成 0 宽
-                // (只剩 ">")。超过 MODEL_NAME_INLINE_MAX 时在此补一行完整显示:不省略、可换行,
-                // 保证"当前使用的模型名始终完整可见";工具行里的模型 chip 仍作点击入口。
-                if (modelName.length > MODEL_NAME_INLINE_MAX) {
-                    Text(
-                        text = modelName +
-                            if (!effortLabel.isNullOrBlank() && effortLabel != "默认") " · $effortLabel" else "",
+                // 第一行:输入框 + 整个输入栏右上角的"展开编辑"小标识
+                // 【为什么放右上角】它是低频辅助动作。放进工具行会和发送键 / 模型 chip
+                // 抢注意力,用户明确要求"不要在右侧,也不要在发送键左边"。挪到整个胶囊的
+                // 右上角后:不起眼(小号 + TextTertiary)、又始终可达,不占工具行的横向预算。
+                Box(Modifier.fillMaxWidth()) {
+                    BasicTextField(
+                        value = input,
+                        onValueChange = { input = it },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 18.dp, end = 12.dp, bottom = 2.dp),
-                        fontSize = 11.5.sp,
-                        color = Pa.TextSecondary,
-                        maxLines = 2,
+                            // 右侧预留 30dp:保证右上角图标不会压住光标 / 末尾文字
+                            .padding(start = 18.dp, end = 30.dp, top = 12.dp, bottom = 12.dp)
+                            .heightIn(min = 24.dp),
+                        textStyle = TextStyle(fontSize = 15.sp, color = Pa.TextPrimary),
+                        cursorBrush = SolidColor(Pa.Accent),
+                        maxLines = 4,
+                        enabled = !st.running,
+                        decorationBox = { inner ->
+                            Box {
+                                if (input.isEmpty()) {
+                                    Text("随心输入,发给电脑上的 agent…", fontSize = 15.sp, color = Pa.TextTertiary)
+                                }
+                                inner()
+                            }
+                        },
                     )
+                    // 展开编辑:内容超过 EXPAND_HINT_THRESHOLD 时轻微提亮到 Pa.Accent,
+                    // 保留原有"长文本可展开大窗"的提示语义;平时保持低调(TextTertiary)。
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(end = 10.dp, top = 6.dp)
+                            .size(22.dp)
+                            .pressable { expandedInputOpen = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
+                            tint = if (input.length > EXPAND_HINT_THRESHOLD) Pa.Accent else Pa.TextTertiary,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
                 }
+                // [模型名全宽行] 当前生效的模型名**恒显且完整**:不截断、不限行数。
+                // 【为什么改恒显】上一版只在名字超过 14 字符时才补这一行,于是"长度没超、
+                // 但已被工具行省略号挤断"的名字依然读不全(用户反馈"模型名仍未完整显示")。
+                // 现在无条件显示全文;工具行里的模型 chip 仍作点击入口。
+                Text(
+                    text = modelName +
+                        if (!effortLabel.isNullOrBlank() && effortLabel != "默认") " · $effortLabel" else "",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 18.dp, end = 12.dp, bottom = 2.dp),
+                    fontSize = 11.5.sp,
+                    color = Pa.TextSecondary,
+                )
                 // 第二行:工具行
                 Row(
                     Modifier
@@ -1553,13 +1675,14 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.width(2.dp))
-                    // [审批策略] 会话内无缝切换
+                    // [审批策略] 会话内无缝切换 —— 扁平可点区域(图标 + 文字 + chevron),
+                    // 去掉 Pa.CardHigh 胶囊底色回落到参考图的视觉层级(只借排版,颜色仍走 Pa)。
+                    // DropdownMenu 的全部逻辑与 APPROVALS 取值映射保持不变。
                     Box {
                         Row(
                             Modifier
                                 .pressable { approvalMenu = true }
-                                .background(Pa.CardHigh, RoundedCornerShape(50))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             val cur = codexSettings?.approvalPolicy ?: "on-request"
@@ -1574,6 +1697,11 @@ fun ChatScreen(
                                 APPROVALS.find { it.first == cur }?.second ?: "按需询问",
                                 fontSize = 11.5.sp,
                                 color = if (danger) Pa.Red else Pa.TextPrimary,
+                            )
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                painterResource(AppR.drawable.ic_lucide_chevron_down), null,
+                                tint = Pa.TextTertiary, modifier = Modifier.size(12.dp),
                             )
                         }
                         DropdownMenu(
@@ -1610,26 +1738,32 @@ fun ChatScreen(
                             }
                         }
                     }
-                    // [上下文窗口] 常显(窗口未知也显示,点开可看用量);
-                    // 窗口大小 = 模型列表值与 daemon 上报的真实值取大。
-                    Row(
+                    // [上下文窗口] 常显:圆形占用环 —— 外圈一个圆环,环内直接显示实际使用占比。
+                    // 【本轮改版】旧版是「圆形图标 + 上下文 128k」的胶囊:横向占位大,而且
+                    // 看不出窗口被占了多少。现在环内给占比(≥80% 黄、≥95% 红),窗口总量与
+                    // 用量明细点开卡面看;窗口未知或还没上报用量时环内是"—",绝不假装 0%。
+                    val ctxWindowKnown = !windowIsFallback && contextWindow > 0
+                    val ctxUsage = st.turnUsage
+                    val ctxRingKnown = ctxWindowKnown && ctxUsage != null
+                    val ctxRatio =
+                        if (ctxRingKnown) usageTotalTokens(ctxUsage).toFloat() / contextWindow.toFloat() else 0f
+                    Box(
                         Modifier
-                            .pressable(haptic = true) { showContextCard = true }
-                            .background(Pa.CardHigh, RoundedCornerShape(50))
-                            .padding(horizontal = 9.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .size(34.dp)
+                            .semantics {
+                                contentDescription = "上下文窗口 " + ringPercentLabel(ctxRatio, ctxRingKnown) +
+                                    if (ctxWindowKnown) " (窗口 ${contextWindow / 1000}k)" else ""
+                            }
+                            .pressable(haptic = true) { showContextCard = true },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_cpu), null,
-                            tint = Pa.Accent, modifier = Modifier.size(12.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            if (!windowIsFallback) "上下文 ${contextWindow / 1000}k" else "上下文",
-                            fontSize = 10.5.sp, color = Pa.TextSecondary, maxLines = 1,
+                        ContextRing(
+                            ratio = ctxRatio,
+                            windowKnown = ctxRingKnown,
+                            modifier = Modifier.size(28.dp),
                         )
                     }
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(2.dp))
                     // [模型 · 强度] 直显当前模型(点击弹卡面切换)。
                     // weight(1f) + 省略号:模型名再长也只吃剩余空间,绝不挤压发送键。
                     // modelName / effortLabel 已在输入栏前统一计算(含 displayName 空串兜底)。
@@ -1650,28 +1784,30 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Spacer(Modifier.width(3.dp))
+                        // [模型 chip ▾] 入口图标放大到 14dp 并提到 TextSecondary:
+                        // 12dp + TextTertiary 在深色底上几乎看不见(用户反馈"图标过小")。
                         Icon(
-                            painterResource(AppR.drawable.ic_lucide_chevron_right), null,
-                            tint = Pa.TextTertiary, modifier = Modifier.size(12.dp),
+                            painterResource(AppR.drawable.ic_lucide_chevron_down), null,
+                            tint = Pa.TextSecondary, modifier = Modifier.size(14.dp),
                         )
                     }
-                    Spacer(Modifier.width(6.dp))
-                    // [展开编辑] 长文本在小胶囊里最多 4 行,写需求/贴代码时憋屈。
-                    // 点它把同一段文字提到大窗里编辑,确认后原样落回输入框。
+                    Spacer(Modifier.width(4.dp))
+                    // [麦克风占位] 本轮只做入口:点击提示"即将支持",不引入 SpeechRecognizer、
+                    // 不申请任何权限(用户已确认语音输入本轮仅占位)。
                     Box(
                         Modifier
                             .size(32.dp)
-                            .pressable { expandedInputOpen = true },
+                            .pressable {
+                                Toast.makeText(ctx, "语音输入即将支持", Toast.LENGTH_SHORT).show()
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
-                            // 长文本提示:内容超过 EXPAND_HINT_THRESHOLD 时轻微高亮,提示可展开大窗编辑。
-                            tint = if (input.length > EXPAND_HINT_THRESHOLD) Pa.Accent else Pa.TextSecondary,
-                            modifier = Modifier.size(17.dp),
+                            painterResource(AppR.drawable.ic_lucide_mic), "语音输入",
+                            tint = Pa.TextSecondary, modifier = Modifier.size(18.dp),
                         )
                     }
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(4.dp))
                     // [发送]
                     val canSend = !st.running && input.isNotBlank()
                     Box(
@@ -1701,24 +1837,45 @@ fun ChatScreen(
             onDismissRequest = { selectedAttachment = null },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            Box(
+            Column(
                 Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.92f))
                     .clickable { selectedAttachment = null },
-                contentAlignment = Alignment.Center,
             ) {
-                if (preview != null) {
-                    androidx.compose.foundation.Image(
-                        preview,
-                        contentDescription = attachment.name,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(18.dp),
-                    )
-                } else {
-                    Text("无法预览：${attachment.name}", color = Color.White)
+                // 标题行:预览态显示**完整文件名**(不省略、可换行),长按复制完整名。
+                // 这样"名字被裁"的老问题在点开预览后彻底消失(需求:预览标题行要完整可见)。
+                Text(
+                    attachment.name,
+                    Modifier
+                        .fillMaxWidth()
+                        .pressableLong(
+                            onClick = {},
+                            onLongPress = { copyMessage(ctx, attachment.name) },
+                        )
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    maxLines = 3,
+                    softWrap = true,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(
+                    Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (preview != null) {
+                        androidx.compose.foundation.Image(
+                            preview,
+                            contentDescription = attachment.name,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(18.dp),
+                        )
+                    } else {
+                        Text("无法预览：${attachment.name}", color = Color.White)
+                    }
                 }
             }
         }
@@ -1786,7 +1943,7 @@ fun ChatScreen(
                     rollbackOpen = true
                 }
                 Text(
-                    "把会话退回几个回合之前(只改对话记录)。",
+                    rollbackSummary(),
                     Modifier.padding(start = 24.dp, end = 24.dp),
                     fontSize = 11.5.sp, color = Pa.TextTertiary,
                 )
@@ -1949,14 +2106,35 @@ fun ChatScreen(
         ModelEffortCard(threadId = threadId, onDismiss = { showModelCard = false })
     }
 
-    // 上下文窗口明细:点输入栏"上下文"胶囊打开(真实用量卡,替代旧估算版)
+    // 上下文窗口明细:点输入栏"上下文"胶囊打开(真实用量卡,替代旧估算版)。
+    // 【断网可读】打开时先读本地缓存,再用实时数据覆盖;usageRefreshTick / 连接恢复
+    // 都会让 cached 重新求值,从而"自动刷新"(读取 tick 作为 remember 键即登记了订阅)。
     if (showContextCard) {
+        UsageCache.init(ctx)
+        val cached = remember(usageRefreshTick, connOk, threadId) { UsageCache.load(threadId) }
+        // 实时窗口已知就用实时值;否则退回缓存里的窗口;两者都没有再退回兜底默认。
+        val liveWindowKnown = !windowIsFallback && contextWindow > 0
+        val cw: Long
+        val fb: Boolean
+        if (liveWindowKnown) {
+            cw = contextWindow
+            fb = false
+        } else if (cached != null && cached.contextWindow > 0) {
+            cw = cached.contextWindow
+            fb = cached.windowIsFallback
+        } else {
+            cw = contextWindow
+            fb = windowIsFallback
+        }
         ContextUsageCard(
-            contextWindow = contextWindow,
-            windowIsFallback = windowIsFallback,
-            turnUsage = st.turnUsage,
-            totalUsage = st.totalUsage,
-            items = st.items.toList(),
+            contextWindow = cw,
+            windowIsFallback = fb,
+            turnUsage = st.turnUsage ?: cached?.turnUsage,
+            totalUsage = st.totalUsage ?: cached?.totalUsage,
+            // 只有"已知断网"(down)才显示离线提示条;checking 不显示(见上方 ③ 的注释)。
+            online = !connDown,
+            cachedAt = cached?.updatedAt,
+            nowMillis = System.currentTimeMillis(),
             onDismiss = { showContextCard = false },
         )
     }
@@ -2028,19 +2206,28 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 品牌图标 28dp:与下面每一行对齐,「这模型是哪个 agent 给的」一眼可辨。
+                    // tint = Color.Unspecified:品牌图标必须原色,不能被主题色染掉。
+                    agentBrandIcon(AgentConnection.selectedAgent)?.let { res ->
+                        Icon(
+                            painterResource(res), null,
+                            tint = Color.Unspecified, modifier = Modifier.size(28.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    }
                     Column(Modifier.weight(1f)) {
                         Text(
                             "跟随桌面配置",
                             fontSize = 15.sp,
                             color = if (followSelected) Pa.Accent else Pa.TextPrimary,
-                            maxLines = 1,
                         )
                         Text("使用电脑上 codex 当前的默认模型", fontSize = 10.5.sp, color = Pa.TextTertiary)
                     }
                     if (followSelected) {
+                        Spacer(Modifier.width(8.dp))
                         Icon(
                             painterResource(AppR.drawable.ic_lucide_check), null,
-                            tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                            tint = Pa.Accent, modifier = Modifier.size(20.dp),
                         )
                     }
                 }
@@ -2057,13 +2244,21 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        agentBrandIcon(AgentConnection.selectedAgent)?.let { res ->
+                            Icon(
+                                painterResource(res), null,
+                                tint = Color.Unspecified, modifier = Modifier.size(28.dp),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                        }
                         Column(Modifier.weight(1f)) {
+                            // 【完整显示,不截断】以前 maxLines=1 + 省略号,带后缀的长模型名
+                            // 只能读半截(用户反馈"模型名称仍未完整显示")。去掉行数上限,
+                            // 让它按需换行;displayName 为空时退回模型 id,绝不显示空白行。
                             Text(
-                                m.displayName,
+                                m.displayName.ifBlank { m.id },
                                 fontSize = 15.sp,
                                 color = if (selected) Pa.Accent else Pa.TextPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                             )
                             if (m.contextWindow > 0) {
                                 Text(
@@ -2075,9 +2270,10 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                             }
                         }
                         if (selected) {
+                            Spacer(Modifier.width(8.dp))
                             Icon(
                                 painterResource(AppR.drawable.ic_lucide_check), null,
-                                tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                                tint = Pa.Accent, modifier = Modifier.size(20.dp),
                             )
                         }
                     }
