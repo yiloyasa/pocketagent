@@ -19,25 +19,29 @@ import (
 )
 
 type Thread struct {
-	ID        string            `json:"id"`
-	Title     string            `json:"title"`
-	Workspace string            `json:"workspace"`
-	Goal      string            `json:"goal"`
-	ModelID   string            `json:"model_id"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Workspace string `json:"workspace"`
+	Goal      string `json:"goal"`
+	ModelID   string `json:"model_id"`
 	// Codex 桥接:对应 codex app-server 的 threadId(daemon 重启后仍能续上会话)
-	CodexThreadID string         `json:"codex_thread_id,omitempty"`
+	CodexThreadID string `json:"codex_thread_id,omitempty"`
 	// 思考强度(low/medium/high/xhigh);空 = 跟随桌面默认
 	Effort string `json:"effort,omitempty"`
-	Status    pb.ThreadStatus   `json:"status"`
-	CreatedAt int64             `json:"created_at"`
-	UpdatedAt int64             `json:"updated_at"`
-	Messages  []StoredMessage   `json:"messages"`
-	Usage     pb.Usage          `json:"usage"`
+	// 所属分组(codex 侧 threadSection 的 id);空 = 未分组。
+	// 分组本身存在于 codex,这里只缓存"这条会话在哪个组",
+	// 免得列一次会话就要为每条去问一次 codex。
+	SectionID string          `json:"section_id,omitempty"`
+	Status    pb.ThreadStatus `json:"status"`
+	CreatedAt int64           `json:"created_at"`
+	UpdatedAt int64           `json:"updated_at"`
+	Messages  []StoredMessage `json:"messages"`
+	Usage     pb.Usage        `json:"usage"`
 }
 
 // StoredMessage 是一轮对话的一条记录(用户输入或助手回复)。
 type StoredMessage struct {
-	Role      string            // "user" | "assistant"
+	Role      string // "user" | "assistant"
 	Blocks    []pb.ContentBlock
 	CreatedAt int64
 }
@@ -82,10 +86,10 @@ type FileStore struct {
 	mu   sync.Mutex
 	path string
 	data struct {
-		Threads    map[string]*Thread `json:"threads"`
-		DefaultWorkspace string       `json:"default_workspace"`
-		DefaultModelID   string       `json:"default_model_id"`
-		DefaultEffort    string       `json:"default_effort"`
+		Threads          map[string]*Thread `json:"threads"`
+		DefaultWorkspace string             `json:"default_workspace"`
+		DefaultModelID   string             `json:"default_model_id"`
+		DefaultEffort    string             `json:"default_effort"`
 	}
 }
 

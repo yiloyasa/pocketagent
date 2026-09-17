@@ -21,6 +21,435 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type GetCodexUsageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCodexUsageRequest) Reset() {
+	*x = GetCodexUsageRequest{}
+	mi := &file_v1_model_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCodexUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCodexUsageRequest) ProtoMessage() {}
+
+func (x *GetCodexUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCodexUsageRequest.ProtoReflect.Descriptor instead.
+func (*GetCodexUsageRequest) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{0}
+}
+
+// 一个限流窗口(primary / secondary 用的是同一个结构)。
+type RateLimitWindow struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	UsedPercent        int32                  `protobuf:"varint,1,opt,name=used_percent,json=usedPercent,proto3" json:"used_percent,omitempty"`                        // 已用百分比(0-100)
+	ResetsAtUnixS      int64                  `protobuf:"varint,2,opt,name=resets_at_unix_s,json=resetsAtUnixS,proto3" json:"resets_at_unix_s,omitempty"`              // 何时重置;0 = 未知
+	WindowDurationMins int64                  `protobuf:"varint,3,opt,name=window_duration_mins,json=windowDurationMins,proto3" json:"window_duration_mins,omitempty"` // 窗口长度(分钟);0 = 未知
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *RateLimitWindow) Reset() {
+	*x = RateLimitWindow{}
+	mi := &file_v1_model_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RateLimitWindow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RateLimitWindow) ProtoMessage() {}
+
+func (x *RateLimitWindow) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RateLimitWindow.ProtoReflect.Descriptor instead.
+func (*RateLimitWindow) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RateLimitWindow) GetUsedPercent() int32 {
+	if x != nil {
+		return x.UsedPercent
+	}
+	return 0
+}
+
+func (x *RateLimitWindow) GetResetsAtUnixS() int64 {
+	if x != nil {
+		return x.ResetsAtUnixS
+	}
+	return 0
+}
+
+func (x *RateLimitWindow) GetWindowDurationMins() int64 {
+	if x != nil {
+		return x.WindowDurationMins
+	}
+	return 0
+}
+
+type CodexUsage struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	PlanType             string                 `protobuf:"bytes,1,opt,name=plan_type,json=planType,proto3" json:"plan_type,omitempty"` // 套餐类型(free/plus/pro/…)
+	Primary              *RateLimitWindow       `protobuf:"bytes,2,opt,name=primary,proto3" json:"primary,omitempty"`
+	Secondary            *RateLimitWindow       `protobuf:"bytes,3,opt,name=secondary,proto3" json:"secondary,omitempty"`
+	HasCredits           bool                   `protobuf:"varint,4,opt,name=has_credits,json=hasCredits,proto3" json:"has_credits,omitempty"`
+	UnlimitedCredits     bool                   `protobuf:"varint,5,opt,name=unlimited_credits,json=unlimitedCredits,proto3" json:"unlimited_credits,omitempty"`
+	CreditBalance        string                 `protobuf:"bytes,6,opt,name=credit_balance,json=creditBalance,proto3" json:"credit_balance,omitempty"`                          // 余额(字符串,codex 侧就是字符串)
+	SpendControlReached  bool                   `protobuf:"varint,7,opt,name=spend_control_reached,json=spendControlReached,proto3" json:"spend_control_reached,omitempty"`     // 是否触顶(触顶后会被拒)
+	RateLimitReachedType string                 `protobuf:"bytes,8,opt,name=rate_limit_reached_type,json=rateLimitReachedType,proto3" json:"rate_limit_reached_type,omitempty"` // 触顶类型
+	LifetimeTokens       int64                  `protobuf:"varint,9,opt,name=lifetime_tokens,json=lifetimeTokens,proto3" json:"lifetime_tokens,omitempty"`                      // 累计 token
+	PeakDailyTokens      int64                  `protobuf:"varint,10,opt,name=peak_daily_tokens,json=peakDailyTokens,proto3" json:"peak_daily_tokens,omitempty"`                // 单日峰值
+	CurrentStreakDays    int32                  `protobuf:"varint,11,opt,name=current_streak_days,json=currentStreakDays,proto3" json:"current_streak_days,omitempty"`          // 连续使用天数
+	FetchedAtUnixMs      int64                  `protobuf:"varint,12,opt,name=fetched_at_unix_ms,json=fetchedAtUnixMs,proto3" json:"fetched_at_unix_ms,omitempty"`              // 这份数据的拉取时间
+	// 拉取失败的原因(未登录 / 地区不支持 / 网络)。非空时手机端显示"暂时读不到 + 原因",
+	// 而不是展示一堆 0 —— 0 会被误读成"额度用完了"。
+	Error         string `protobuf:"bytes,13,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CodexUsage) Reset() {
+	*x = CodexUsage{}
+	mi := &file_v1_model_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodexUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodexUsage) ProtoMessage() {}
+
+func (x *CodexUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodexUsage.ProtoReflect.Descriptor instead.
+func (*CodexUsage) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CodexUsage) GetPlanType() string {
+	if x != nil {
+		return x.PlanType
+	}
+	return ""
+}
+
+func (x *CodexUsage) GetPrimary() *RateLimitWindow {
+	if x != nil {
+		return x.Primary
+	}
+	return nil
+}
+
+func (x *CodexUsage) GetSecondary() *RateLimitWindow {
+	if x != nil {
+		return x.Secondary
+	}
+	return nil
+}
+
+func (x *CodexUsage) GetHasCredits() bool {
+	if x != nil {
+		return x.HasCredits
+	}
+	return false
+}
+
+func (x *CodexUsage) GetUnlimitedCredits() bool {
+	if x != nil {
+		return x.UnlimitedCredits
+	}
+	return false
+}
+
+func (x *CodexUsage) GetCreditBalance() string {
+	if x != nil {
+		return x.CreditBalance
+	}
+	return ""
+}
+
+func (x *CodexUsage) GetSpendControlReached() bool {
+	if x != nil {
+		return x.SpendControlReached
+	}
+	return false
+}
+
+func (x *CodexUsage) GetRateLimitReachedType() string {
+	if x != nil {
+		return x.RateLimitReachedType
+	}
+	return ""
+}
+
+func (x *CodexUsage) GetLifetimeTokens() int64 {
+	if x != nil {
+		return x.LifetimeTokens
+	}
+	return 0
+}
+
+func (x *CodexUsage) GetPeakDailyTokens() int64 {
+	if x != nil {
+		return x.PeakDailyTokens
+	}
+	return 0
+}
+
+func (x *CodexUsage) GetCurrentStreakDays() int32 {
+	if x != nil {
+		return x.CurrentStreakDays
+	}
+	return 0
+}
+
+func (x *CodexUsage) GetFetchedAtUnixMs() int64 {
+	if x != nil {
+		return x.FetchedAtUnixMs
+	}
+	return 0
+}
+
+func (x *CodexUsage) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ListCodexCapabilitiesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCodexCapabilitiesRequest) Reset() {
+	*x = ListCodexCapabilitiesRequest{}
+	mi := &file_v1_model_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCodexCapabilitiesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCodexCapabilitiesRequest) ProtoMessage() {}
+
+func (x *ListCodexCapabilitiesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCodexCapabilitiesRequest.ProtoReflect.Descriptor instead.
+func (*ListCodexCapabilitiesRequest) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{3}
+}
+
+// 一条能力(skill / hook / plugin 共用)。
+type CodexCapability struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Kind        string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"` // skill / hook / plugin
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Description string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Enabled     bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Path        string                 `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`
+	// disabled_reason 直接回答"为什么用不了",比 enabled=false 有用得多。
+	DisabledReason string `protobuf:"bytes,6,opt,name=disabled_reason,json=disabledReason,proto3" json:"disabled_reason,omitempty"`
+	Version        string `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
+	Source         string `protobuf:"bytes,8,opt,name=source,proto3" json:"source,omitempty"` // 来源:工作目录 / 插件市场名
+	Status         string `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"` // hook 的最近运行状态;plugin 的 availability
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CodexCapability) Reset() {
+	*x = CodexCapability{}
+	mi := &file_v1_model_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodexCapability) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodexCapability) ProtoMessage() {}
+
+func (x *CodexCapability) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodexCapability.ProtoReflect.Descriptor instead.
+func (*CodexCapability) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CodexCapability) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *CodexCapability) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetDisabledReason() string {
+	if x != nil {
+		return x.DisabledReason
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *CodexCapability) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+type ListCodexCapabilitiesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*CodexCapability     `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCodexCapabilitiesResponse) Reset() {
+	*x = ListCodexCapabilitiesResponse{}
+	mi := &file_v1_model_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCodexCapabilitiesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCodexCapabilitiesResponse) ProtoMessage() {}
+
+func (x *ListCodexCapabilitiesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCodexCapabilitiesResponse.ProtoReflect.Descriptor instead.
+func (*ListCodexCapabilitiesResponse) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ListCodexCapabilitiesResponse) GetItems() []*CodexCapability {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 type GetCodexSettingsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -29,7 +458,7 @@ type GetCodexSettingsRequest struct {
 
 func (x *GetCodexSettingsRequest) Reset() {
 	*x = GetCodexSettingsRequest{}
-	mi := &file_v1_model_proto_msgTypes[0]
+	mi := &file_v1_model_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +470,7 @@ func (x *GetCodexSettingsRequest) String() string {
 func (*GetCodexSettingsRequest) ProtoMessage() {}
 
 func (x *GetCodexSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[0]
+	mi := &file_v1_model_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,7 +483,7 @@ func (x *GetCodexSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCodexSettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetCodexSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{0}
+	return file_v1_model_proto_rawDescGZIP(), []int{6}
 }
 
 type CodexSettings struct {
@@ -71,13 +500,23 @@ type CodexSettings struct {
 	ModelVerbosity        string `protobuf:"bytes,7,opt,name=model_verbosity,json=modelVerbosity,proto3" json:"model_verbosity,omitempty"`                        // low / medium / high
 	ModelReasoningSummary string `protobuf:"bytes,8,opt,name=model_reasoning_summary,json=modelReasoningSummary,proto3" json:"model_reasoning_summary,omitempty"` // concise / detailed
 	DisablePasteBurst     bool   `protobuf:"varint,9,opt,name=disable_paste_burst,json=disablePasteBurst,proto3" json:"disable_paste_burst,omitempty"`            // 粘贴长文本时不触发爆破检测
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// ---- 托管策略(configRequirements/read)。字段号从 10 起,旧字段语义一字未动 ----
+	// 【为什么必须带回来】用户桌面上的 codex 可能被管理员/MDM 策略约束
+	// (requirements.toml),某些取值是被禁的。手机上照旧渲染出来,用户就会
+	// "点了 → codex 拒绝 → App 无反馈"。这三个列表是空的表示该项无限制;
+	// 非空时手机端**只渲染列表里的取值**。
+	AllowedApprovalPolicies []string `protobuf:"bytes,10,rep,name=allowed_approval_policies,json=allowedApprovalPolicies,proto3" json:"allowed_approval_policies,omitempty"` // 空 = 无限制
+	AllowedSandboxModes     []string `protobuf:"bytes,11,rep,name=allowed_sandbox_modes,json=allowedSandboxModes,proto3" json:"allowed_sandbox_modes,omitempty"`             // 空 = 无限制
+	AllowedWebSearchModes   []string `protobuf:"bytes,12,rep,name=allowed_web_search_modes,json=allowedWebSearchModes,proto3" json:"allowed_web_search_modes,omitempty"`     // 空 = 无限制
+	Managed                 bool     `protobuf:"varint,13,opt,name=managed,proto3" json:"managed,omitempty"`                                                                 // 是否处在托管(受策略约束)状态
+	ManagedNote             string   `protobuf:"bytes,14,opt,name=managed_note,json=managedNote,proto3" json:"managed_note,omitempty"`                                       // 策略来源与影响的人话说明
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *CodexSettings) Reset() {
 	*x = CodexSettings{}
-	mi := &file_v1_model_proto_msgTypes[1]
+	mi := &file_v1_model_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -89,7 +528,7 @@ func (x *CodexSettings) String() string {
 func (*CodexSettings) ProtoMessage() {}
 
 func (x *CodexSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[1]
+	mi := &file_v1_model_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -102,7 +541,7 @@ func (x *CodexSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodexSettings.ProtoReflect.Descriptor instead.
 func (*CodexSettings) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{1}
+	return file_v1_model_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CodexSettings) GetApprovalPolicy() string {
@@ -168,6 +607,41 @@ func (x *CodexSettings) GetDisablePasteBurst() bool {
 	return false
 }
 
+func (x *CodexSettings) GetAllowedApprovalPolicies() []string {
+	if x != nil {
+		return x.AllowedApprovalPolicies
+	}
+	return nil
+}
+
+func (x *CodexSettings) GetAllowedSandboxModes() []string {
+	if x != nil {
+		return x.AllowedSandboxModes
+	}
+	return nil
+}
+
+func (x *CodexSettings) GetAllowedWebSearchModes() []string {
+	if x != nil {
+		return x.AllowedWebSearchModes
+	}
+	return nil
+}
+
+func (x *CodexSettings) GetManaged() bool {
+	if x != nil {
+		return x.Managed
+	}
+	return false
+}
+
+func (x *CodexSettings) GetManagedNote() string {
+	if x != nil {
+		return x.ManagedNote
+	}
+	return ""
+}
+
 type SetCodexSettingsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ApprovalPolicy string                 `protobuf:"bytes,1,opt,name=approval_policy,json=approvalPolicy,proto3" json:"approval_policy,omitempty"`
@@ -185,7 +659,7 @@ type SetCodexSettingsRequest struct {
 
 func (x *SetCodexSettingsRequest) Reset() {
 	*x = SetCodexSettingsRequest{}
-	mi := &file_v1_model_proto_msgTypes[2]
+	mi := &file_v1_model_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -197,7 +671,7 @@ func (x *SetCodexSettingsRequest) String() string {
 func (*SetCodexSettingsRequest) ProtoMessage() {}
 
 func (x *SetCodexSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[2]
+	mi := &file_v1_model_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -210,7 +684,7 @@ func (x *SetCodexSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetCodexSettingsRequest.ProtoReflect.Descriptor instead.
 func (*SetCodexSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{2}
+	return file_v1_model_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SetCodexSettingsRequest) GetApprovalPolicy() string {
@@ -277,7 +751,7 @@ type ListMcpServersRequest struct {
 
 func (x *ListMcpServersRequest) Reset() {
 	*x = ListMcpServersRequest{}
-	mi := &file_v1_model_proto_msgTypes[3]
+	mi := &file_v1_model_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -289,7 +763,7 @@ func (x *ListMcpServersRequest) String() string {
 func (*ListMcpServersRequest) ProtoMessage() {}
 
 func (x *ListMcpServersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[3]
+	mi := &file_v1_model_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -302,21 +776,31 @@ func (x *ListMcpServersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMcpServersRequest.ProtoReflect.Descriptor instead.
 func (*ListMcpServersRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{3}
+	return file_v1_model_proto_rawDescGZIP(), []int{9}
 }
 
 type McpServerStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Tools         int32                  `protobuf:"varint,2,opt,name=tools,proto3" json:"tools,omitempty"`  // 已注册工具数
-	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // ready / starting / failed(尽力而为)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Name   string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Tools  int32                  `protobuf:"varint,2,opt,name=tools,proto3" json:"tools,omitempty"`  // 已注册工具数
+	Status string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // ready / starting / failed(尽力而为)
+	// ---- 增强(字段号从 4 起)----
+	// 【以前把这两项丢了】codex 的 McpServerStatus 本来就带 authStatus 和 serverInfo,
+	// 只转发 name/tools/status 的话,"某个 MCP 用不了"这件事在手机上完全看不出来 ——
+	// 用户只会觉得"这个工具怎么不работа"。authStatus 直接回答是不是授权问题。
+	AuthStatus            string `protobuf:"bytes,4,opt,name=auth_status,json=authStatus,proto3" json:"auth_status,omitempty"`          // 鉴权状态(如未授权/已授权/需登录)
+	ServerVersion         string `protobuf:"bytes,5,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"` // serverInfo.version
+	ServerTitle           string `protobuf:"bytes,6,opt,name=server_title,json=serverTitle,proto3" json:"server_title,omitempty"`       // serverInfo.title / name
+	ResourceCount         int32  `protobuf:"varint,7,opt,name=resource_count,json=resourceCount,proto3" json:"resource_count,omitempty"`
+	ResourceTemplateCount int32  `protobuf:"varint,8,opt,name=resource_template_count,json=resourceTemplateCount,proto3" json:"resource_template_count,omitempty"`
+	Error                 string `protobuf:"bytes,9,opt,name=error,proto3" json:"error,omitempty"` // 启动失败原因
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *McpServerStatus) Reset() {
 	*x = McpServerStatus{}
-	mi := &file_v1_model_proto_msgTypes[4]
+	mi := &file_v1_model_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -328,7 +812,7 @@ func (x *McpServerStatus) String() string {
 func (*McpServerStatus) ProtoMessage() {}
 
 func (x *McpServerStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[4]
+	mi := &file_v1_model_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -341,7 +825,7 @@ func (x *McpServerStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use McpServerStatus.ProtoReflect.Descriptor instead.
 func (*McpServerStatus) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{4}
+	return file_v1_model_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *McpServerStatus) GetName() string {
@@ -365,6 +849,48 @@ func (x *McpServerStatus) GetStatus() string {
 	return ""
 }
 
+func (x *McpServerStatus) GetAuthStatus() string {
+	if x != nil {
+		return x.AuthStatus
+	}
+	return ""
+}
+
+func (x *McpServerStatus) GetServerVersion() string {
+	if x != nil {
+		return x.ServerVersion
+	}
+	return ""
+}
+
+func (x *McpServerStatus) GetServerTitle() string {
+	if x != nil {
+		return x.ServerTitle
+	}
+	return ""
+}
+
+func (x *McpServerStatus) GetResourceCount() int32 {
+	if x != nil {
+		return x.ResourceCount
+	}
+	return 0
+}
+
+func (x *McpServerStatus) GetResourceTemplateCount() int32 {
+	if x != nil {
+		return x.ResourceTemplateCount
+	}
+	return 0
+}
+
+func (x *McpServerStatus) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type ListMcpServersResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Servers       []*McpServerStatus     `protobuf:"bytes,1,rep,name=servers,proto3" json:"servers,omitempty"`
@@ -374,7 +900,7 @@ type ListMcpServersResponse struct {
 
 func (x *ListMcpServersResponse) Reset() {
 	*x = ListMcpServersResponse{}
-	mi := &file_v1_model_proto_msgTypes[5]
+	mi := &file_v1_model_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -386,7 +912,7 @@ func (x *ListMcpServersResponse) String() string {
 func (*ListMcpServersResponse) ProtoMessage() {}
 
 func (x *ListMcpServersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[5]
+	mi := &file_v1_model_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -399,7 +925,7 @@ func (x *ListMcpServersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMcpServersResponse.ProtoReflect.Descriptor instead.
 func (*ListMcpServersResponse) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{5}
+	return file_v1_model_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListMcpServersResponse) GetServers() []*McpServerStatus {
@@ -417,7 +943,7 @@ type ListModelsRequest struct {
 
 func (x *ListModelsRequest) Reset() {
 	*x = ListModelsRequest{}
-	mi := &file_v1_model_proto_msgTypes[6]
+	mi := &file_v1_model_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -429,7 +955,7 @@ func (x *ListModelsRequest) String() string {
 func (*ListModelsRequest) ProtoMessage() {}
 
 func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[6]
+	mi := &file_v1_model_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -442,7 +968,7 @@ func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsRequest.ProtoReflect.Descriptor instead.
 func (*ListModelsRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{6}
+	return file_v1_model_proto_rawDescGZIP(), []int{12}
 }
 
 type ListModelsResponse struct {
@@ -454,7 +980,7 @@ type ListModelsResponse struct {
 
 func (x *ListModelsResponse) Reset() {
 	*x = ListModelsResponse{}
-	mi := &file_v1_model_proto_msgTypes[7]
+	mi := &file_v1_model_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -466,7 +992,7 @@ func (x *ListModelsResponse) String() string {
 func (*ListModelsResponse) ProtoMessage() {}
 
 func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[7]
+	mi := &file_v1_model_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -479,7 +1005,7 @@ func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsResponse.ProtoReflect.Descriptor instead.
 func (*ListModelsResponse) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{7}
+	return file_v1_model_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListModelsResponse) GetModels() []*ModelInfo {
@@ -504,7 +1030,7 @@ type ModelInfo struct {
 
 func (x *ModelInfo) Reset() {
 	*x = ModelInfo{}
-	mi := &file_v1_model_proto_msgTypes[8]
+	mi := &file_v1_model_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -516,7 +1042,7 @@ func (x *ModelInfo) String() string {
 func (*ModelInfo) ProtoMessage() {}
 
 func (x *ModelInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[8]
+	mi := &file_v1_model_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -529,7 +1055,7 @@ func (x *ModelInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelInfo.ProtoReflect.Descriptor instead.
 func (*ModelInfo) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{8}
+	return file_v1_model_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ModelInfo) GetId() string {
@@ -590,7 +1116,7 @@ type SetDefaultModelRequest struct {
 
 func (x *SetDefaultModelRequest) Reset() {
 	*x = SetDefaultModelRequest{}
-	mi := &file_v1_model_proto_msgTypes[9]
+	mi := &file_v1_model_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -602,7 +1128,7 @@ func (x *SetDefaultModelRequest) String() string {
 func (*SetDefaultModelRequest) ProtoMessage() {}
 
 func (x *SetDefaultModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[9]
+	mi := &file_v1_model_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -615,7 +1141,7 @@ func (x *SetDefaultModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDefaultModelRequest.ProtoReflect.Descriptor instead.
 func (*SetDefaultModelRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{9}
+	return file_v1_model_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *SetDefaultModelRequest) GetModelId() string {
@@ -635,7 +1161,7 @@ type TestModelRequest struct {
 
 func (x *TestModelRequest) Reset() {
 	*x = TestModelRequest{}
-	mi := &file_v1_model_proto_msgTypes[10]
+	mi := &file_v1_model_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -647,7 +1173,7 @@ func (x *TestModelRequest) String() string {
 func (*TestModelRequest) ProtoMessage() {}
 
 func (x *TestModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[10]
+	mi := &file_v1_model_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -660,7 +1186,7 @@ func (x *TestModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestModelRequest.ProtoReflect.Descriptor instead.
 func (*TestModelRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{10}
+	return file_v1_model_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TestModelRequest) GetModelId() string {
@@ -689,7 +1215,7 @@ type TestModelResponse struct {
 
 func (x *TestModelResponse) Reset() {
 	*x = TestModelResponse{}
-	mi := &file_v1_model_proto_msgTypes[11]
+	mi := &file_v1_model_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -701,7 +1227,7 @@ func (x *TestModelResponse) String() string {
 func (*TestModelResponse) ProtoMessage() {}
 
 func (x *TestModelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[11]
+	mi := &file_v1_model_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -714,7 +1240,7 @@ func (x *TestModelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestModelResponse.ProtoReflect.Descriptor instead.
 func (*TestModelResponse) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{11}
+	return file_v1_model_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TestModelResponse) GetOk() bool {
@@ -749,8 +1275,43 @@ var File_v1_model_proto protoreflect.FileDescriptor
 
 const file_v1_model_proto_rawDesc = "" +
 	"\n" +
-	"\x0ev1/model.proto\x12\x0epocketagent.v1\x1a\x0fv1/common.proto\"\x19\n" +
-	"\x17GetCodexSettingsRequest\"\xdd\x02\n" +
+	"\x0ev1/model.proto\x12\x0epocketagent.v1\x1a\x0fv1/common.proto\"\x16\n" +
+	"\x14GetCodexUsageRequest\"\x8f\x01\n" +
+	"\x0fRateLimitWindow\x12!\n" +
+	"\fused_percent\x18\x01 \x01(\x05R\vusedPercent\x12'\n" +
+	"\x10resets_at_unix_s\x18\x02 \x01(\x03R\rresetsAtUnixS\x120\n" +
+	"\x14window_duration_mins\x18\x03 \x01(\x03R\x12windowDurationMins\"\xcb\x04\n" +
+	"\n" +
+	"CodexUsage\x12\x1b\n" +
+	"\tplan_type\x18\x01 \x01(\tR\bplanType\x129\n" +
+	"\aprimary\x18\x02 \x01(\v2\x1f.pocketagent.v1.RateLimitWindowR\aprimary\x12=\n" +
+	"\tsecondary\x18\x03 \x01(\v2\x1f.pocketagent.v1.RateLimitWindowR\tsecondary\x12\x1f\n" +
+	"\vhas_credits\x18\x04 \x01(\bR\n" +
+	"hasCredits\x12+\n" +
+	"\x11unlimited_credits\x18\x05 \x01(\bR\x10unlimitedCredits\x12%\n" +
+	"\x0ecredit_balance\x18\x06 \x01(\tR\rcreditBalance\x122\n" +
+	"\x15spend_control_reached\x18\a \x01(\bR\x13spendControlReached\x125\n" +
+	"\x17rate_limit_reached_type\x18\b \x01(\tR\x14rateLimitReachedType\x12'\n" +
+	"\x0flifetime_tokens\x18\t \x01(\x03R\x0elifetimeTokens\x12*\n" +
+	"\x11peak_daily_tokens\x18\n" +
+	" \x01(\x03R\x0fpeakDailyTokens\x12.\n" +
+	"\x13current_streak_days\x18\v \x01(\x05R\x11currentStreakDays\x12+\n" +
+	"\x12fetched_at_unix_ms\x18\f \x01(\x03R\x0ffetchedAtUnixMs\x12\x14\n" +
+	"\x05error\x18\r \x01(\tR\x05error\"\x1e\n" +
+	"\x1cListCodexCapabilitiesRequest\"\xfc\x01\n" +
+	"\x0fCodexCapability\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x18\n" +
+	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x12\n" +
+	"\x04path\x18\x05 \x01(\tR\x04path\x12'\n" +
+	"\x0fdisabled_reason\x18\x06 \x01(\tR\x0edisabledReason\x12\x18\n" +
+	"\aversion\x18\a \x01(\tR\aversion\x12\x16\n" +
+	"\x06source\x18\b \x01(\tR\x06source\x12\x16\n" +
+	"\x06status\x18\t \x01(\tR\x06status\"V\n" +
+	"\x1dListCodexCapabilitiesResponse\x125\n" +
+	"\x05items\x18\x01 \x03(\v2\x1f.pocketagent.v1.CodexCapabilityR\x05items\"\x19\n" +
+	"\x17GetCodexSettingsRequest\"\xc3\x04\n" +
 	"\rCodexSettings\x12'\n" +
 	"\x0fapproval_policy\x18\x01 \x01(\tR\x0eapprovalPolicy\x12\x18\n" +
 	"\asandbox\x18\x02 \x01(\tR\asandbox\x12\x18\n" +
@@ -760,7 +1321,13 @@ const file_v1_model_proto_rawDesc = "" +
 	"\x14hide_agent_reasoning\x18\x06 \x01(\bR\x12hideAgentReasoning\x12'\n" +
 	"\x0fmodel_verbosity\x18\a \x01(\tR\x0emodelVerbosity\x126\n" +
 	"\x17model_reasoning_summary\x18\b \x01(\tR\x15modelReasoningSummary\x12.\n" +
-	"\x13disable_paste_burst\x18\t \x01(\bR\x11disablePasteBurst\"\xcd\x02\n" +
+	"\x13disable_paste_burst\x18\t \x01(\bR\x11disablePasteBurst\x12:\n" +
+	"\x19allowed_approval_policies\x18\n" +
+	" \x03(\tR\x17allowedApprovalPolicies\x122\n" +
+	"\x15allowed_sandbox_modes\x18\v \x03(\tR\x13allowedSandboxModes\x127\n" +
+	"\x18allowed_web_search_modes\x18\f \x03(\tR\x15allowedWebSearchModes\x12\x18\n" +
+	"\amanaged\x18\r \x01(\bR\amanaged\x12!\n" +
+	"\fmanaged_note\x18\x0e \x01(\tR\vmanagedNote\"\xcd\x02\n" +
 	"\x17SetCodexSettingsRequest\x12'\n" +
 	"\x0fapproval_policy\x18\x01 \x01(\tR\x0eapprovalPolicy\x12\x18\n" +
 	"\asandbox\x18\x02 \x01(\tR\asandbox\x12\x14\n" +
@@ -770,11 +1337,18 @@ const file_v1_model_proto_rawDesc = "" +
 	"\x0fmodel_verbosity\x18\x06 \x01(\tR\x0emodelVerbosity\x126\n" +
 	"\x17model_reasoning_summary\x18\a \x01(\tR\x15modelReasoningSummary\x12.\n" +
 	"\x13disable_paste_burst\x18\b \x01(\bR\x11disablePasteBurst\"\x17\n" +
-	"\x15ListMcpServersRequest\"S\n" +
+	"\x15ListMcpServersRequest\"\xb3\x02\n" +
 	"\x0fMcpServerStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05tools\x18\x02 \x01(\x05R\x05tools\x12\x16\n" +
-	"\x06status\x18\x03 \x01(\tR\x06status\"S\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12\x1f\n" +
+	"\vauth_status\x18\x04 \x01(\tR\n" +
+	"authStatus\x12%\n" +
+	"\x0eserver_version\x18\x05 \x01(\tR\rserverVersion\x12!\n" +
+	"\fserver_title\x18\x06 \x01(\tR\vserverTitle\x12%\n" +
+	"\x0eresource_count\x18\a \x01(\x05R\rresourceCount\x126\n" +
+	"\x17resource_template_count\x18\b \x01(\x05R\x15resourceTemplateCount\x12\x14\n" +
+	"\x05error\x18\t \x01(\tR\x05error\"S\n" +
 	"\x16ListMcpServersResponse\x129\n" +
 	"\aservers\x18\x01 \x03(\v2\x1f.pocketagent.v1.McpServerStatusR\aservers\"\x13\n" +
 	"\x11ListModelsRequest\"G\n" +
@@ -798,7 +1372,7 @@ const file_v1_model_proto_rawDesc = "" +
 	"\x05reply\x18\x02 \x01(\tR\x05reply\x12\x1d\n" +
 	"\n" +
 	"latency_ms\x18\x03 \x01(\x03R\tlatencyMs\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error2\xa0\x04\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error2\xe9\x05\n" +
 	"\fModelService\x12S\n" +
 	"\n" +
 	"ListModels\x12!.pocketagent.v1.ListModelsRequest\x1a\".pocketagent.v1.ListModelsResponse\x12P\n" +
@@ -806,7 +1380,9 @@ const file_v1_model_proto_rawDesc = "" +
 	"\tTestModel\x12 .pocketagent.v1.TestModelRequest\x1a!.pocketagent.v1.TestModelResponse\x12Z\n" +
 	"\x10GetCodexSettings\x12'.pocketagent.v1.GetCodexSettingsRequest\x1a\x1d.pocketagent.v1.CodexSettings\x12Z\n" +
 	"\x10SetCodexSettings\x12'.pocketagent.v1.SetCodexSettingsRequest\x1a\x1d.pocketagent.v1.CodexSettings\x12_\n" +
-	"\x0eListMcpServers\x12%.pocketagent.v1.ListMcpServersRequest\x1a&.pocketagent.v1.ListMcpServersResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x0eListMcpServers\x12%.pocketagent.v1.ListMcpServersRequest\x1a&.pocketagent.v1.ListMcpServersResponse\x12Q\n" +
+	"\rGetCodexUsage\x12$.pocketagent.v1.GetCodexUsageRequest\x1a\x1a.pocketagent.v1.CodexUsage\x12t\n" +
+	"\x15ListCodexCapabilities\x12,.pocketagent.v1.ListCodexCapabilitiesRequest\x1a-.pocketagent.v1.ListCodexCapabilitiesResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_model_proto_rawDescOnce sync.Once
@@ -820,42 +1396,55 @@ func file_v1_model_proto_rawDescGZIP() []byte {
 	return file_v1_model_proto_rawDescData
 }
 
-var file_v1_model_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_v1_model_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_v1_model_proto_goTypes = []any{
-	(*GetCodexSettingsRequest)(nil), // 0: pocketagent.v1.GetCodexSettingsRequest
-	(*CodexSettings)(nil),           // 1: pocketagent.v1.CodexSettings
-	(*SetCodexSettingsRequest)(nil), // 2: pocketagent.v1.SetCodexSettingsRequest
-	(*ListMcpServersRequest)(nil),   // 3: pocketagent.v1.ListMcpServersRequest
-	(*McpServerStatus)(nil),         // 4: pocketagent.v1.McpServerStatus
-	(*ListMcpServersResponse)(nil),  // 5: pocketagent.v1.ListMcpServersResponse
-	(*ListModelsRequest)(nil),       // 6: pocketagent.v1.ListModelsRequest
-	(*ListModelsResponse)(nil),      // 7: pocketagent.v1.ListModelsResponse
-	(*ModelInfo)(nil),               // 8: pocketagent.v1.ModelInfo
-	(*SetDefaultModelRequest)(nil),  // 9: pocketagent.v1.SetDefaultModelRequest
-	(*TestModelRequest)(nil),        // 10: pocketagent.v1.TestModelRequest
-	(*TestModelResponse)(nil),       // 11: pocketagent.v1.TestModelResponse
-	(*Empty)(nil),                   // 12: pocketagent.v1.Empty
+	(*GetCodexUsageRequest)(nil),          // 0: pocketagent.v1.GetCodexUsageRequest
+	(*RateLimitWindow)(nil),               // 1: pocketagent.v1.RateLimitWindow
+	(*CodexUsage)(nil),                    // 2: pocketagent.v1.CodexUsage
+	(*ListCodexCapabilitiesRequest)(nil),  // 3: pocketagent.v1.ListCodexCapabilitiesRequest
+	(*CodexCapability)(nil),               // 4: pocketagent.v1.CodexCapability
+	(*ListCodexCapabilitiesResponse)(nil), // 5: pocketagent.v1.ListCodexCapabilitiesResponse
+	(*GetCodexSettingsRequest)(nil),       // 6: pocketagent.v1.GetCodexSettingsRequest
+	(*CodexSettings)(nil),                 // 7: pocketagent.v1.CodexSettings
+	(*SetCodexSettingsRequest)(nil),       // 8: pocketagent.v1.SetCodexSettingsRequest
+	(*ListMcpServersRequest)(nil),         // 9: pocketagent.v1.ListMcpServersRequest
+	(*McpServerStatus)(nil),               // 10: pocketagent.v1.McpServerStatus
+	(*ListMcpServersResponse)(nil),        // 11: pocketagent.v1.ListMcpServersResponse
+	(*ListModelsRequest)(nil),             // 12: pocketagent.v1.ListModelsRequest
+	(*ListModelsResponse)(nil),            // 13: pocketagent.v1.ListModelsResponse
+	(*ModelInfo)(nil),                     // 14: pocketagent.v1.ModelInfo
+	(*SetDefaultModelRequest)(nil),        // 15: pocketagent.v1.SetDefaultModelRequest
+	(*TestModelRequest)(nil),              // 16: pocketagent.v1.TestModelRequest
+	(*TestModelResponse)(nil),             // 17: pocketagent.v1.TestModelResponse
+	(*Empty)(nil),                         // 18: pocketagent.v1.Empty
 }
 var file_v1_model_proto_depIdxs = []int32{
-	4,  // 0: pocketagent.v1.ListMcpServersResponse.servers:type_name -> pocketagent.v1.McpServerStatus
-	8,  // 1: pocketagent.v1.ListModelsResponse.models:type_name -> pocketagent.v1.ModelInfo
-	6,  // 2: pocketagent.v1.ModelService.ListModels:input_type -> pocketagent.v1.ListModelsRequest
-	9,  // 3: pocketagent.v1.ModelService.SetDefaultModel:input_type -> pocketagent.v1.SetDefaultModelRequest
-	10, // 4: pocketagent.v1.ModelService.TestModel:input_type -> pocketagent.v1.TestModelRequest
-	0,  // 5: pocketagent.v1.ModelService.GetCodexSettings:input_type -> pocketagent.v1.GetCodexSettingsRequest
-	2,  // 6: pocketagent.v1.ModelService.SetCodexSettings:input_type -> pocketagent.v1.SetCodexSettingsRequest
-	3,  // 7: pocketagent.v1.ModelService.ListMcpServers:input_type -> pocketagent.v1.ListMcpServersRequest
-	7,  // 8: pocketagent.v1.ModelService.ListModels:output_type -> pocketagent.v1.ListModelsResponse
-	12, // 9: pocketagent.v1.ModelService.SetDefaultModel:output_type -> pocketagent.v1.Empty
-	11, // 10: pocketagent.v1.ModelService.TestModel:output_type -> pocketagent.v1.TestModelResponse
-	1,  // 11: pocketagent.v1.ModelService.GetCodexSettings:output_type -> pocketagent.v1.CodexSettings
-	1,  // 12: pocketagent.v1.ModelService.SetCodexSettings:output_type -> pocketagent.v1.CodexSettings
-	5,  // 13: pocketagent.v1.ModelService.ListMcpServers:output_type -> pocketagent.v1.ListMcpServersResponse
-	8,  // [8:14] is the sub-list for method output_type
-	2,  // [2:8] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	1,  // 0: pocketagent.v1.CodexUsage.primary:type_name -> pocketagent.v1.RateLimitWindow
+	1,  // 1: pocketagent.v1.CodexUsage.secondary:type_name -> pocketagent.v1.RateLimitWindow
+	4,  // 2: pocketagent.v1.ListCodexCapabilitiesResponse.items:type_name -> pocketagent.v1.CodexCapability
+	10, // 3: pocketagent.v1.ListMcpServersResponse.servers:type_name -> pocketagent.v1.McpServerStatus
+	14, // 4: pocketagent.v1.ListModelsResponse.models:type_name -> pocketagent.v1.ModelInfo
+	12, // 5: pocketagent.v1.ModelService.ListModels:input_type -> pocketagent.v1.ListModelsRequest
+	15, // 6: pocketagent.v1.ModelService.SetDefaultModel:input_type -> pocketagent.v1.SetDefaultModelRequest
+	16, // 7: pocketagent.v1.ModelService.TestModel:input_type -> pocketagent.v1.TestModelRequest
+	6,  // 8: pocketagent.v1.ModelService.GetCodexSettings:input_type -> pocketagent.v1.GetCodexSettingsRequest
+	8,  // 9: pocketagent.v1.ModelService.SetCodexSettings:input_type -> pocketagent.v1.SetCodexSettingsRequest
+	9,  // 10: pocketagent.v1.ModelService.ListMcpServers:input_type -> pocketagent.v1.ListMcpServersRequest
+	0,  // 11: pocketagent.v1.ModelService.GetCodexUsage:input_type -> pocketagent.v1.GetCodexUsageRequest
+	3,  // 12: pocketagent.v1.ModelService.ListCodexCapabilities:input_type -> pocketagent.v1.ListCodexCapabilitiesRequest
+	13, // 13: pocketagent.v1.ModelService.ListModels:output_type -> pocketagent.v1.ListModelsResponse
+	18, // 14: pocketagent.v1.ModelService.SetDefaultModel:output_type -> pocketagent.v1.Empty
+	17, // 15: pocketagent.v1.ModelService.TestModel:output_type -> pocketagent.v1.TestModelResponse
+	7,  // 16: pocketagent.v1.ModelService.GetCodexSettings:output_type -> pocketagent.v1.CodexSettings
+	7,  // 17: pocketagent.v1.ModelService.SetCodexSettings:output_type -> pocketagent.v1.CodexSettings
+	11, // 18: pocketagent.v1.ModelService.ListMcpServers:output_type -> pocketagent.v1.ListMcpServersResponse
+	2,  // 19: pocketagent.v1.ModelService.GetCodexUsage:output_type -> pocketagent.v1.CodexUsage
+	5,  // 20: pocketagent.v1.ModelService.ListCodexCapabilities:output_type -> pocketagent.v1.ListCodexCapabilitiesResponse
+	13, // [13:21] is the sub-list for method output_type
+	5,  // [5:13] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_v1_model_proto_init() }
@@ -870,7 +1459,7 @@ func file_v1_model_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_model_proto_rawDesc), len(file_v1_model_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

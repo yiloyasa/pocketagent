@@ -32,6 +32,59 @@ service ThreadService {
   // 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
   rpc ListCodexThreads(ListCodexThreadsRequest) returns (ListCodexThreadsResponse);
   rpc ImportCodexThread(ImportCodexThreadRequest) returns (ImportCodexThreadResponse);
+
+  // ---- 会话组织:分组 / 分支 / 回滚 ----
+  // 【为什么 fork 和 rollback 必须二次确认】两者都会改变"这个会话之后是什么" ——
+  // fork 会分出一条新会话,rollback 会直接丢掉最近 N 个回合。手机上误触的代价比
+  // 电脑上高得多(屏幕小、手指滑一下就点到),所以 App 侧必须弹确认再调。
+  rpc ForkThread(ForkThreadRequest) returns (Thread);
+  rpc RollbackThread(RollbackThreadRequest) returns (Thread);
+
+  rpc ListThreadSections(ListThreadSectionsRequest) returns (ListThreadSectionsResponse);
+  rpc CreateThreadSection(CreateThreadSectionRequest) returns (ThreadSection);
+  rpc RenameThreadSection(RenameThreadSectionRequest) returns (ThreadSection);
+  rpc DeleteThreadSection(DeleteThreadSectionRequest) returns (Empty);
+  rpc MoveThreadToSection(MoveThreadToSectionRequest) returns (Thread);
+
+  // 审查者(guardian/自动审查)拒绝之后,用户推翻它的结论并要求继续执行。
+  // 手机端不提供这个按钮的话,用户看到的就是"任务莫名其妙失败了"。
+  rpc ApproveGuardianDeniedAction(ApproveGuardianDeniedActionRequest) returns (Empty);
+}
+
+message ApproveGuardianDeniedActionRequest {
+  string thread_id = 1;
+  string review_id = 2;       // 来自 item/autoApprovalReview/* 的 reviewId
+  string target_item_id = 3;  // 被审查的那个动作对应 item
+}
+
+message ForkThreadRequest {
+  string thread_id = 1;
+  string last_turn_id = 2;    // 从哪个回合之后分叉;空 = 最新
+}
+
+message RollbackThreadRequest {
+  string thread_id = 1;
+  int32 num_turns = 2;        // 回滚最近 N 个回合(必须 > 0)
+}
+
+message ThreadSection {
+  string id = 1;
+  string name = 2;
+  string color = 3;           // 外观(appearance.color),空 = 默认
+  string icon = 4;            // 外观(appearance.icon)
+  int32 thread_count = 5;     // 该分组下的会话数(daemon 统计)
+}
+
+message ListThreadSectionsRequest {}
+message ListThreadSectionsResponse { repeated ThreadSection sections = 1; }
+
+message CreateThreadSectionRequest { string name = 1; }
+message RenameThreadSectionRequest { string section_id = 1; string name = 2; }
+message DeleteThreadSectionRequest { string section_id = 1; }
+
+message MoveThreadToSectionRequest {
+  string thread_id = 1;
+  string section_id = 2;      // 空 = 移出分组
 }
 
 message ListCodexThreadsRequest {}
@@ -74,6 +127,14 @@ message Thread {
   // 桥接的 codex 线程 id:非空表示本会话来自电脑上的 codex 会话。
   // 手机端用它把"活跃"与"电脑"两处同一个会话合并成一条(不去重会出现两份)。
   string codex_thread_id = 10;
+  // ---- 会话组织(字段号从 11 起,旧字段语义一字未动) ----
+  string section_id = 11;      // 所属分组;空 = 未分组
+  bool archived = 12;          // 归档状态(codex 侧 thread/archived|unarchived 的真实值)
+  // 审查者(guardian)最近一次驳回:非空表示"自动审查已经拒了这个动作,
+  // 用户可以推翻"。手机端据此显示"仍然执行"入口。
+  string guardian_denied_review_id = 13;
+  string guardian_denied_item_id = 14;
+  string guardian_denied_reason = 15;
 }
 
 enum ThreadStatus {
@@ -93,6 +154,11 @@ message CreateThreadRequest {
 message ListThreadsRequest {
   bool include_archived = 1;
   int32 limit = 2;       // 0 = 全部
+  // ---- 服务端过滤(交给 codex 的 thread/list,比在手机上过滤整表更省) ----
+  string search_term = 3;   // 按标题/内容搜索;空 = 不过滤
+  string section_id = 4;    // 只看某个分组;空 = 全部分组
+  string sort_key = 5;      // created / updated;空 = 默认(updated)
+  bool sort_ascending = 6;  // 默认 false(新的在前)
 }
 message ListThreadsResponse { repeated Thread threads = 1; }
 
@@ -162,6 +228,25 @@ message CodexEvent {
     MODEL_REROUTED = 6;
     RATE_LIMIT = 7;
     CONTEXT_COMPACTED = 8;
+    // ---- 以下为"彻底接入"补齐的事件类型 ----
+    // 审查者(guardian/auto_review)对某个动作的判定过程与结论。
+    // 【为什么单独一类】它不是错误也不是警告:动作可能被**自动拒绝**,
+    // 而用户的 approvals_reviewer 一旦不是 user,审批卡根本不会弹。
+    // 不展示的话,用户看到的就是"任务莫名其妙失败"。
+    GUARDIAN_REVIEW = 9;
+    // 本回合的文件改动 diff(turn/diff/updated)。手机端渲染成可折叠的代码块。
+    TURN_DIFF = 10;
+    // codex 自己的弃用/配置/沙箱警告:以前这些通知我们直接丢掉了。
+    DEPRECATION = 11;
+    CONFIG_WARNING = 12;
+    SANDBOX_WARNING = 13;
+    // hooks 执行与技能变化:回答"它到底跑了什么、有哪些能力"。
+    HOOK = 14;
+    SKILLS_CHANGED = 15;
+    // 会话排队状态变化(用户连续发消息时,后面的在排队)。
+    QUEUE = 16;
+    // 模型安全缓冲/校验:属于"为什么这次输出很慢/被拦了"的解释面。
+    MODEL_SAFETY = 17;
   }
   Kind kind = 1;
   string code = 2;          // CodexErrorInfo 或事件代码
@@ -174,10 +259,17 @@ message CodexEvent {
   int64 retry_after_ms = 9; // 若 Codex 提供冷却时间
   string thread_id = 10;
   string turn_id = 11;
-  string raw_json = 12;    // 诊断用原始参数, UI 默认不直接展示
+  // ---- 结构化附带信息(字段号从 12 起)----
+  string risk_level = 12;      // GUARDIAN_REVIEW:low / medium / high / critical
+  string review_status = 13;   // inProgress / approved / denied / timedOut / aborted
+  string review_id = 14;       // 用于"仍然执行"时回指这一次审查
+  string target_item_id = 15;  // 被审查的动作
+  string rationale = 16;       // 审查者的理由(人脸话,直接展示)
+  string diff = 17;            // TURN_DIFF:统一 diff 文本
+  string raw_json = 18;    // 诊断用原始参数, UI 默认不直接展示
   // turn/plan/updated 的执行计划步骤,每项格式 "status|text"
   // (status: pending/in_progress/completed)。UI 渲染为步骤卡。
-  repeated string plan_steps = 13;
+  repeated string plan_steps = 19;
 }
 
 message TurnStarted {

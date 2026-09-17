@@ -388,7 +388,11 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 			event.Message += " · 方案 " + n.RateLimits.PlanType
 		}
 	default:
-		return nil
+		// 第二梯队事件(审查者/回合 diff/弃用/配置/沙箱/hook/技能/队列/安全缓冲)。
+		// 识别不出来就直接丢弃 —— 伪造一条"收到某事件"只会把真正的事件淹掉。
+		if !codexExtendedNotificationEvent(method, raw, event) {
+			return nil
+		}
 	}
 
 	if strings.TrimSpace(event.Message) == "" {

@@ -61,6 +61,15 @@ object TurnSession {
         var recoveryError by mutableStateOf<String?>(null)
         var errorMessage by mutableStateOf<String?>(null)
         var codexEvents by mutableStateOf(listOf<pocketagent.v1.CodexEvent>())
+        /**
+         * 已经被用户推翻过的审查 id。
+         *
+         * 【为什么要记在这里而不是改事件对象】CodexEvent 是不可变 proto,
+         * 用户点"仍然执行"之后我们不能改那张卡上的事件;而"按钮要消失"
+         * 又必须立刻反映到 UI 上。所以单独存一份集合,由卡片渲染时查询。
+         * 放在 State 里 = 离开页面再回来仍然是"已推翻",不会重新给一个点了会报错的按钮。
+         */
+        var guardianOverridden by mutableStateOf(setOf<String>())
         var historyLoaded by mutableStateOf(false)
         var pendingApproval by mutableStateOf<ApprovalRequest?>(null)
         var approvalError by mutableStateOf<String?>(null)
@@ -118,6 +127,44 @@ object TurnSession {
         if (idx >= 0) st.items[idx] = card else st.items.add(card)
         st.planSteps = emptyList()
         st.planStream = ""
+    }
+
+    /**
+     * 把一条 codex 事件放进时间线;同一次审查/同一轮的 diff 原地更新,不重复插卡。
+     *
+     * 与工具卡同一套思路(见 TOOL_CALL 分支):codex 对同一件事会发多条通知
+     * (审查 started → completed;diff 反复更新),逐条追加会让时间线里
+     * 同一件事出现好几张卡 —— 用户会以为发生了好几次。
+     */
+    private fun upsertCodexEventItem(st: State, event: pocketagent.v1.CodexEvent) {
+        val card = codexEventToChatItem(event)
+        val key = codexEventTimelineKey(event)
+        if (key.isNotEmpty()) {
+            val idx = st.items.indexOfLast {
+                it.role == "codex_event" && it.codexEvent?.let { e -> codexEventTimelineKey(e) } == key
+            }
+            if (idx >= 0) {
+                st.items[idx] = card
+                return
+            }
+        }
+        // 连续重复的同类提示(例如同一句 hooks 警告重复到达)只留一条,
+        // 否则时间线会被同一句话挤满。
+        val last = st.items.lastOrNull()
+        if (last?.role == "codex_event" &&
+            last.codexEvent?.kind == event.kind &&
+            last.codexEvent?.message == event.message
+        ) {
+            return
+        }
+        st.items.add(card)
+    }
+
+    /** 用户推翻了某次审查的驳回结论:收起入口并记住状态。 */
+    fun markGuardianOverridden(threadId: String, reviewId: String) {
+        if (reviewId.isBlank()) return
+        val st = state(threadId)
+        st.guardianOverridden = st.guardianOverridden + reviewId
     }
 
     /** 发送一条消息并启动/接续后台轮次。 */
@@ -246,6 +293,15 @@ object TurnSession {
                             }
                             if (cev.kind == CodexEvent.Kind.ERROR) {
                                 st.errorMessage = cev.message
+                            }
+                            // 【本轮修正】以前这些事件只进 st.codexEvents,而那个列表
+                            // **从未被渲染**(ChatScreen 里 "codex_event" -> Unit) ——
+                            // 于是审查驳回、配置警告、回合 diff、技能变化全部静默消失,
+                            // 用户看到的只有"任务莫名失败"。现在按"是否需要用户知情"
+                            // 分类入时间线,诊断类仍旧只做状态与错误提示(见
+                            // shouldShowCodexEventInTimeline 的长注释)。
+                            if (shouldShowCodexEventInTimeline(cev)) {
+                                upsertCodexEventItem(st, cev)
                             }
                         }
                         TurnServerMessage.MsgCase.TOOL_CALL -> {

@@ -41,6 +41,12 @@ object ThreadSnapshot {
         val workspace: String,
         val codexThreadId: String,
         val archived: Boolean,
+        /**
+         * 所属分组。**字段是后加的**,旧快照里没有这个键 —— 所以读写都走 opt*
+         * (缺键读成空串),不带上它的话离线时"某个分组"那一格只能显示全量列表,
+         * 用户会以为分组串了。
+         */
+        val sectionId: String = "",
     )
 
     /** 一条消息快照。 */
@@ -80,6 +86,7 @@ object ThreadSnapshot {
                         put("w", r.workspace)
                         put("c", r.codexThreadId)
                         put("a", r.archived)
+                        put("s", r.sectionId)
                     },
                 )
             }
@@ -103,6 +110,7 @@ object ThreadSnapshot {
                     workspace = o.optString("w"),
                     codexThreadId = o.optString("c"),
                     archived = o.optBoolean("a"),
+                    sectionId = o.optString("s"),
                 )
             }
             out

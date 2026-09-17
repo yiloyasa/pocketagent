@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"runtime"
@@ -112,6 +113,13 @@ func New(cfg Config) *Server {
 				log.Printf("[goal] 同步会话 %s: goal=%.60q status=%s tokens=%d time=%ds",
 					t.ID, goal, status, tokensUsed, timeUsedSeconds)
 			}
+		}
+		// 会话级事实(归档/取消归档/删除/改名/状态)由 codex 发起时同步回本地库。
+		// 这一条以前不存在 —— 于是"电脑上归档/删掉的会话,手机上还是活的"。
+		// 注意 SyncThreadEvent 会在**独立 goroutine** 里被调用(常驻钩子跑在
+		// codexapp 的读循环里,绝不能阻塞它),所以它只碰 store,不碰网络。
+		p.ThreadEventHandler = func(codexTID, method string, params json.RawMessage) {
+			srv.SyncThreadEvent(codexTID, method, params)
 		}
 	}
 	return srv

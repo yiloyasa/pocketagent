@@ -19,19 +19,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ThreadService_CreateThread_FullMethodName      = "/pocketagent.v1.ThreadService/CreateThread"
-	ThreadService_ListThreads_FullMethodName       = "/pocketagent.v1.ThreadService/ListThreads"
-	ThreadService_GetThread_FullMethodName         = "/pocketagent.v1.ThreadService/GetThread"
-	ThreadService_DeleteThread_FullMethodName      = "/pocketagent.v1.ThreadService/DeleteThread"
-	ThreadService_ArchiveThread_FullMethodName     = "/pocketagent.v1.ThreadService/ArchiveThread"
-	ThreadService_RenameThread_FullMethodName      = "/pocketagent.v1.ThreadService/RenameThread"
-	ThreadService_SetThreadGoal_FullMethodName     = "/pocketagent.v1.ThreadService/SetThreadGoal"
-	ThreadService_CompactThread_FullMethodName     = "/pocketagent.v1.ThreadService/CompactThread"
-	ThreadService_StartTurn_FullMethodName         = "/pocketagent.v1.ThreadService/StartTurn"
-	ThreadService_CancelTurn_FullMethodName        = "/pocketagent.v1.ThreadService/CancelTurn"
-	ThreadService_GetThreadHistory_FullMethodName  = "/pocketagent.v1.ThreadService/GetThreadHistory"
-	ThreadService_ListCodexThreads_FullMethodName  = "/pocketagent.v1.ThreadService/ListCodexThreads"
-	ThreadService_ImportCodexThread_FullMethodName = "/pocketagent.v1.ThreadService/ImportCodexThread"
+	ThreadService_CreateThread_FullMethodName                = "/pocketagent.v1.ThreadService/CreateThread"
+	ThreadService_ListThreads_FullMethodName                 = "/pocketagent.v1.ThreadService/ListThreads"
+	ThreadService_GetThread_FullMethodName                   = "/pocketagent.v1.ThreadService/GetThread"
+	ThreadService_DeleteThread_FullMethodName                = "/pocketagent.v1.ThreadService/DeleteThread"
+	ThreadService_ArchiveThread_FullMethodName               = "/pocketagent.v1.ThreadService/ArchiveThread"
+	ThreadService_RenameThread_FullMethodName                = "/pocketagent.v1.ThreadService/RenameThread"
+	ThreadService_SetThreadGoal_FullMethodName               = "/pocketagent.v1.ThreadService/SetThreadGoal"
+	ThreadService_CompactThread_FullMethodName               = "/pocketagent.v1.ThreadService/CompactThread"
+	ThreadService_StartTurn_FullMethodName                   = "/pocketagent.v1.ThreadService/StartTurn"
+	ThreadService_CancelTurn_FullMethodName                  = "/pocketagent.v1.ThreadService/CancelTurn"
+	ThreadService_GetThreadHistory_FullMethodName            = "/pocketagent.v1.ThreadService/GetThreadHistory"
+	ThreadService_ListCodexThreads_FullMethodName            = "/pocketagent.v1.ThreadService/ListCodexThreads"
+	ThreadService_ImportCodexThread_FullMethodName           = "/pocketagent.v1.ThreadService/ImportCodexThread"
+	ThreadService_ForkThread_FullMethodName                  = "/pocketagent.v1.ThreadService/ForkThread"
+	ThreadService_RollbackThread_FullMethodName              = "/pocketagent.v1.ThreadService/RollbackThread"
+	ThreadService_ListThreadSections_FullMethodName          = "/pocketagent.v1.ThreadService/ListThreadSections"
+	ThreadService_CreateThreadSection_FullMethodName         = "/pocketagent.v1.ThreadService/CreateThreadSection"
+	ThreadService_RenameThreadSection_FullMethodName         = "/pocketagent.v1.ThreadService/RenameThreadSection"
+	ThreadService_DeleteThreadSection_FullMethodName         = "/pocketagent.v1.ThreadService/DeleteThreadSection"
+	ThreadService_MoveThreadToSection_FullMethodName         = "/pocketagent.v1.ThreadService/MoveThreadToSection"
+	ThreadService_ApproveGuardianDeniedAction_FullMethodName = "/pocketagent.v1.ThreadService/ApproveGuardianDeniedAction"
 )
 
 // ThreadServiceClient is the client API for ThreadService service.
@@ -55,6 +63,20 @@ type ThreadServiceClient interface {
 	// 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
 	ListCodexThreads(ctx context.Context, in *ListCodexThreadsRequest, opts ...grpc.CallOption) (*ListCodexThreadsResponse, error)
 	ImportCodexThread(ctx context.Context, in *ImportCodexThreadRequest, opts ...grpc.CallOption) (*ImportCodexThreadResponse, error)
+	// ---- 会话组织:分组 / 分支 / 回滚 ----
+	// 【为什么 fork 和 rollback 必须二次确认】两者都会改变"这个会话之后是什么" ——
+	// fork 会分出一条新会话,rollback 会直接丢掉最近 N 个回合。手机上误触的代价比
+	// 电脑上高得多(屏幕小、手指滑一下就点到),所以 App 侧必须弹确认再调。
+	ForkThread(ctx context.Context, in *ForkThreadRequest, opts ...grpc.CallOption) (*Thread, error)
+	RollbackThread(ctx context.Context, in *RollbackThreadRequest, opts ...grpc.CallOption) (*Thread, error)
+	ListThreadSections(ctx context.Context, in *ListThreadSectionsRequest, opts ...grpc.CallOption) (*ListThreadSectionsResponse, error)
+	CreateThreadSection(ctx context.Context, in *CreateThreadSectionRequest, opts ...grpc.CallOption) (*ThreadSection, error)
+	RenameThreadSection(ctx context.Context, in *RenameThreadSectionRequest, opts ...grpc.CallOption) (*ThreadSection, error)
+	DeleteThreadSection(ctx context.Context, in *DeleteThreadSectionRequest, opts ...grpc.CallOption) (*Empty, error)
+	MoveThreadToSection(ctx context.Context, in *MoveThreadToSectionRequest, opts ...grpc.CallOption) (*Thread, error)
+	// 审查者(guardian/自动审查)拒绝之后,用户推翻它的结论并要求继续执行。
+	// 手机端不提供这个按钮的话,用户看到的就是"任务莫名其妙失败了"。
+	ApproveGuardianDeniedAction(ctx context.Context, in *ApproveGuardianDeniedActionRequest, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type threadServiceClient struct {
@@ -198,6 +220,86 @@ func (c *threadServiceClient) ImportCodexThread(ctx context.Context, in *ImportC
 	return out, nil
 }
 
+func (c *threadServiceClient) ForkThread(ctx context.Context, in *ForkThreadRequest, opts ...grpc.CallOption) (*Thread, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Thread)
+	err := c.cc.Invoke(ctx, ThreadService_ForkThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) RollbackThread(ctx context.Context, in *RollbackThreadRequest, opts ...grpc.CallOption) (*Thread, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Thread)
+	err := c.cc.Invoke(ctx, ThreadService_RollbackThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ListThreadSections(ctx context.Context, in *ListThreadSectionsRequest, opts ...grpc.CallOption) (*ListThreadSectionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListThreadSectionsResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ListThreadSections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) CreateThreadSection(ctx context.Context, in *CreateThreadSectionRequest, opts ...grpc.CallOption) (*ThreadSection, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ThreadSection)
+	err := c.cc.Invoke(ctx, ThreadService_CreateThreadSection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) RenameThreadSection(ctx context.Context, in *RenameThreadSectionRequest, opts ...grpc.CallOption) (*ThreadSection, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ThreadSection)
+	err := c.cc.Invoke(ctx, ThreadService_RenameThreadSection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) DeleteThreadSection(ctx context.Context, in *DeleteThreadSectionRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, ThreadService_DeleteThreadSection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) MoveThreadToSection(ctx context.Context, in *MoveThreadToSectionRequest, opts ...grpc.CallOption) (*Thread, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Thread)
+	err := c.cc.Invoke(ctx, ThreadService_MoveThreadToSection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ApproveGuardianDeniedAction(ctx context.Context, in *ApproveGuardianDeniedActionRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, ThreadService_ApproveGuardianDeniedAction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ThreadServiceServer is the server API for ThreadService service.
 // All implementations must embed UnimplementedThreadServiceServer
 // for forward compatibility.
@@ -219,6 +321,20 @@ type ThreadServiceServer interface {
 	// 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
 	ListCodexThreads(context.Context, *ListCodexThreadsRequest) (*ListCodexThreadsResponse, error)
 	ImportCodexThread(context.Context, *ImportCodexThreadRequest) (*ImportCodexThreadResponse, error)
+	// ---- 会话组织:分组 / 分支 / 回滚 ----
+	// 【为什么 fork 和 rollback 必须二次确认】两者都会改变"这个会话之后是什么" ——
+	// fork 会分出一条新会话,rollback 会直接丢掉最近 N 个回合。手机上误触的代价比
+	// 电脑上高得多(屏幕小、手指滑一下就点到),所以 App 侧必须弹确认再调。
+	ForkThread(context.Context, *ForkThreadRequest) (*Thread, error)
+	RollbackThread(context.Context, *RollbackThreadRequest) (*Thread, error)
+	ListThreadSections(context.Context, *ListThreadSectionsRequest) (*ListThreadSectionsResponse, error)
+	CreateThreadSection(context.Context, *CreateThreadSectionRequest) (*ThreadSection, error)
+	RenameThreadSection(context.Context, *RenameThreadSectionRequest) (*ThreadSection, error)
+	DeleteThreadSection(context.Context, *DeleteThreadSectionRequest) (*Empty, error)
+	MoveThreadToSection(context.Context, *MoveThreadToSectionRequest) (*Thread, error)
+	// 审查者(guardian/自动审查)拒绝之后,用户推翻它的结论并要求继续执行。
+	// 手机端不提供这个按钮的话,用户看到的就是"任务莫名其妙失败了"。
+	ApproveGuardianDeniedAction(context.Context, *ApproveGuardianDeniedActionRequest) (*Empty, error)
 	mustEmbedUnimplementedThreadServiceServer()
 }
 
@@ -267,6 +383,30 @@ func (UnimplementedThreadServiceServer) ListCodexThreads(context.Context, *ListC
 }
 func (UnimplementedThreadServiceServer) ImportCodexThread(context.Context, *ImportCodexThreadRequest) (*ImportCodexThreadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ImportCodexThread not implemented")
+}
+func (UnimplementedThreadServiceServer) ForkThread(context.Context, *ForkThreadRequest) (*Thread, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForkThread not implemented")
+}
+func (UnimplementedThreadServiceServer) RollbackThread(context.Context, *RollbackThreadRequest) (*Thread, error) {
+	return nil, status.Error(codes.Unimplemented, "method RollbackThread not implemented")
+}
+func (UnimplementedThreadServiceServer) ListThreadSections(context.Context, *ListThreadSectionsRequest) (*ListThreadSectionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListThreadSections not implemented")
+}
+func (UnimplementedThreadServiceServer) CreateThreadSection(context.Context, *CreateThreadSectionRequest) (*ThreadSection, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateThreadSection not implemented")
+}
+func (UnimplementedThreadServiceServer) RenameThreadSection(context.Context, *RenameThreadSectionRequest) (*ThreadSection, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameThreadSection not implemented")
+}
+func (UnimplementedThreadServiceServer) DeleteThreadSection(context.Context, *DeleteThreadSectionRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteThreadSection not implemented")
+}
+func (UnimplementedThreadServiceServer) MoveThreadToSection(context.Context, *MoveThreadToSectionRequest) (*Thread, error) {
+	return nil, status.Error(codes.Unimplemented, "method MoveThreadToSection not implemented")
+}
+func (UnimplementedThreadServiceServer) ApproveGuardianDeniedAction(context.Context, *ApproveGuardianDeniedActionRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApproveGuardianDeniedAction not implemented")
 }
 func (UnimplementedThreadServiceServer) mustEmbedUnimplementedThreadServiceServer() {}
 func (UnimplementedThreadServiceServer) testEmbeddedByValue()                       {}
@@ -512,6 +652,150 @@ func _ThreadService_ImportCodexThread_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ThreadService_ForkThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForkThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ForkThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ForkThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ForkThread(ctx, req.(*ForkThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_RollbackThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).RollbackThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_RollbackThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).RollbackThread(ctx, req.(*RollbackThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ListThreadSections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListThreadSectionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ListThreadSections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ListThreadSections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ListThreadSections(ctx, req.(*ListThreadSectionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_CreateThreadSection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateThreadSectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).CreateThreadSection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_CreateThreadSection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).CreateThreadSection(ctx, req.(*CreateThreadSectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_RenameThreadSection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameThreadSectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).RenameThreadSection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_RenameThreadSection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).RenameThreadSection(ctx, req.(*RenameThreadSectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_DeleteThreadSection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteThreadSectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).DeleteThreadSection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_DeleteThreadSection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).DeleteThreadSection(ctx, req.(*DeleteThreadSectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_MoveThreadToSection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MoveThreadToSectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).MoveThreadToSection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_MoveThreadToSection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).MoveThreadToSection(ctx, req.(*MoveThreadToSectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ApproveGuardianDeniedAction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApproveGuardianDeniedActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ApproveGuardianDeniedAction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ApproveGuardianDeniedAction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ApproveGuardianDeniedAction(ctx, req.(*ApproveGuardianDeniedActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ThreadService_ServiceDesc is the grpc.ServiceDesc for ThreadService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -566,6 +850,38 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ImportCodexThread",
 			Handler:    _ThreadService_ImportCodexThread_Handler,
+		},
+		{
+			MethodName: "ForkThread",
+			Handler:    _ThreadService_ForkThread_Handler,
+		},
+		{
+			MethodName: "RollbackThread",
+			Handler:    _ThreadService_RollbackThread_Handler,
+		},
+		{
+			MethodName: "ListThreadSections",
+			Handler:    _ThreadService_ListThreadSections_Handler,
+		},
+		{
+			MethodName: "CreateThreadSection",
+			Handler:    _ThreadService_CreateThreadSection_Handler,
+		},
+		{
+			MethodName: "RenameThreadSection",
+			Handler:    _ThreadService_RenameThreadSection_Handler,
+		},
+		{
+			MethodName: "DeleteThreadSection",
+			Handler:    _ThreadService_DeleteThreadSection_Handler,
+		},
+		{
+			MethodName: "MoveThreadToSection",
+			Handler:    _ThreadService_MoveThreadToSection_Handler,
+		},
+		{
+			MethodName: "ApproveGuardianDeniedAction",
+			Handler:    _ThreadService_ApproveGuardianDeniedAction_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

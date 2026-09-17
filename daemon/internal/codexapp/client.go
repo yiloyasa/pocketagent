@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 type Client struct {
@@ -24,10 +25,20 @@ type Client struct {
 
 	mu      sync.Mutex
 	nextID  int64
-	pending map[int64]chan json.RawMessage
+	pending map[int64]chan rpcResp
 
 	// 通知(服务器 → 客户端,无需应答):item 更新、delta、turn 生命周期
+	//
+	// 【两个钩子的分工 —— 别合并】PocketAgent 是"手机遥控",一轮任务的事件需要
+	// 实时转给手机,所以 NotifHandler 由 Run() 按轮次装上/卸下。但有一类通知
+	// 跟"有没有在跑任务"无关:审查结论、会话归档/删除、队列变化、技能增删。
+	// 它们以前全部落空 —— 因为不在轮次里就没人接(表现为手机上永远看不到
+	// "审查者驳回了",以及电脑上删掉的会话在手机上还活着)。
+	// 因此再加一个**常驻**的 GlobalHandler:子进程活着就一直挂着,
+	// 负责把这类"后台事实"记下来。
 	NotifHandler func(method string, params json.RawMessage)
+	// GlobalHandler 常驻通知钩子(先于 NotifHandler 调用,只做记录,不做流式渲染)
+	GlobalHandler func(method string, params json.RawMessage)
 	// 反向请求(服务器 → 客户端,必须应答):审批等
 	ReqHandler func(id int64, method string, params json.RawMessage)
 }
@@ -79,7 +90,7 @@ func Start() (*Client, error) {
 		cmd:     cmd,
 		stdin:   stdin,
 		stdout:  bufio.NewReaderSize(stdout, 4*1024*1024),
-		pending: map[int64]chan json.RawMessage{},
+		pending: map[int64]chan rpcResp{},
 	}
 	go c.readLoop()
 	return c, nil
@@ -99,11 +110,26 @@ type wireMsg struct {
 }
 
 // Call 发请求并等待应答。
+//
+// 【两条不容商量的纪律 —— 都是被线上问题逼出来的】
+//
+//  1. **JSON-RPC 错误必须变成 Go error**。以前这里把 codex 的错误原样塞进返回的
+//     JSON(`{"error":"..."}`)、err 却返回 nil,于是每个调用点的 `if err != nil`
+//     全是死分支:codex 说"这个会话没找到",我们当成"成功了,拿到空结果"。
+//     后果很具体 —— turn/start 失败被当成成功后,手机端只会一直转圈直到
+//     150 秒看门狗才报错;thread/resume 失败被当成成功,后续 turn/start 打到
+//     一个子进程不认识的线程上,codex 静默吞掉、什么都不发生。
+//     现在错误在传输层就转成 error,调用点写不写判断都不会再被误导。
+//
+//  2. **必须有超时**。应答靠 readLoop 投递,子进程一旦不回(协议不支持、
+//     内部死锁、被沙箱拦住),这里会**永远**阻塞。而调用方大多是在 withClient
+//     持锁的情况下调它 —— 一个请求挂住,后面所有 codex 操作全部排队等待。
+//     宁可口齿清楚地报超时,也不要一个不响的死锁。
 func (c *Client) Call(method string, params interface{}) (json.RawMessage, error) {
 	c.mu.Lock()
 	c.nextID++
 	id := c.nextID
-	ch := make(chan json.RawMessage, 1)
+	ch := make(chan rpcResp, 1)
 	c.pending[id] = ch
 	c.mu.Unlock()
 
@@ -113,15 +139,35 @@ func (c *Client) Call(method string, params interface{}) (json.RawMessage, error
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
+		c.forget(id)
 		return nil, err
 	}
 	if _, err := c.stdin.Write(append(raw, '\n')); err != nil {
+		c.forget(id)
 		return nil, fmt.Errorf("写入 %s 失败: %w", method, err)
 	}
 
-	v := <-ch // 应答由 readLoop 投递;P0 不设超时(由上层 ctx 控制整体)
-	return v, nil
+	select {
+	case resp := <-ch:
+		if resp.err != nil {
+			return nil, fmt.Errorf("%s: %w", method, resp.err)
+		}
+		return resp.raw, nil
+	case <-time.After(callTimeout):
+		c.forget(id)
+		return nil, fmt.Errorf("%s: 等待 codex 应答超时(%s)", method, callTimeout)
+	}
 }
+
+func (c *Client) forget(id int64) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	c.mu.Unlock()
+}
+
+// callTimeout 单条请求的等待上限。取值宽松(有些请求确实慢:插件安装、历史压缩),
+// 但只要它有界,就不会出现"一个请求挂住、所有 codex 操作排队等它"。
+const callTimeout = 120 * time.Second
 
 // Respond 应答服务器的反向请求(审批)。
 func (c *Client) Respond(id int64, result interface{}) error {
@@ -197,6 +243,12 @@ func (c *Client) dispatch(m *wireMsg) {
 		return
 	}
 	if m.Method != "" {
+		// 先给常驻钩子(记录后台事实),再给当轮钩子(转流给手机)。
+		// 顺序不能反:当轮钩子在 turn/completed 后会 finish(),之后的事件照样要落到
+		// 常驻钩子里,否则"任务结束瞬间到达的归档/队列通知"又会丢。
+		if c.GlobalHandler != nil {
+			c.GlobalHandler(m.Method, m.Params)
+		}
 		if c.NotifHandler != nil {
 			c.NotifHandler(m.Method, m.Params)
 		}
@@ -209,13 +261,21 @@ func (c *Client) dispatch(m *wireMsg) {
 		c.mu.Unlock()
 		if ok {
 			if m.Error != nil {
-				errRaw, _ := json.Marshal(map[string]string{"error": m.Error.Message})
-				ch <- errRaw
+				// 错误在传输层就转成 Go error(见 Call 的长注释:以前这里塞进
+				// 返回的 JSON,调用点的 err 判断全是死分支)。
+				ch <- rpcResp{err: fmt.Errorf("codex 返回错误 %d: %s", m.Error.Code, m.Error.Message)}
 			} else {
-				ch <- m.Result
+				ch <- rpcResp{raw: m.Result}
 			}
 		}
 	}
+}
+
+// rpcResp 一次应答:要么是结果,要么是错误。用结构体而不是裸 RawMessage,
+// 就是为了让"错误"无法被当成"空结果"混过去。
+type rpcResp struct {
+	raw json.RawMessage
+	err error
 }
 
 // Close 结束子进程。

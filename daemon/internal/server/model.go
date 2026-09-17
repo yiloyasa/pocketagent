@@ -67,26 +67,7 @@ func (s *Server) codexProvider() *agent.CodexProvider {
 	return nil
 }
 
-func (s *Server) GetCodexSettings(ctx context.Context, _ *pb.GetCodexSettingsRequest) (*pb.CodexSettings, error) {
-	out := &pb.CodexSettings{}
-	p := s.codexProvider()
-	if p == nil {
-		return out, nil
-	}
-	approval, sandbox := p.DesktopSettings()
-	out.ApprovalPolicy = approval
-	out.Sandbox = sandbox
-	out.Account = p.Account()
-	out.Model = s.cfg.Store.DefaultModelID()
-	out.Effort = s.cfg.Store.DefaultEffort()
-	// 行为与降噪:直接回显 provider 内存态(不读磁盘,不影响桌面端)
-	bar, verbosity, summary, burst := p.BehaviorSettings()
-	out.HideAgentReasoning = bar
-	out.ModelVerbosity = verbosity
-	out.ModelReasoningSummary = summary
-	out.DisablePasteBurst = burst
-	return out, nil
-}
+// GetCodexSettings / ListMcpServers 见 model_ext.go(带托管策略与 MCP 详情)。
 
 func (s *Server) SetCodexSettings(ctx context.Context, req *pb.SetCodexSettingsRequest) (*pb.CodexSettings, error) {
 	p := s.codexProvider()
@@ -110,22 +91,4 @@ func (s *Server) SetCodexSettings(ctx context.Context, req *pb.SetCodexSettingsR
 		_ = s.cfg.Store.SetDefaultEffort(req.Effort)
 	}
 	return s.GetCodexSettings(ctx, &pb.GetCodexSettingsRequest{})
-}
-
-func (s *Server) ListMcpServers(ctx context.Context, _ *pb.ListMcpServersRequest) (*pb.ListMcpServersResponse, error) {
-	out := &pb.ListMcpServersResponse{}
-	p := s.codexProvider()
-	if p == nil {
-		return out, nil
-	}
-	list, err := p.McpStatus()
-	if err != nil {
-		return out, nil // 拉不到就返回空列表(不阻塞设置页)
-	}
-	for _, m := range list {
-		name, _ := m["name"].(string)
-		tools, _ := m["tools"].(int)
-		out.Servers = append(out.Servers, &pb.McpServerStatus{Name: name, Tools: int32(tools)})
-	}
-	return out, nil
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -63,7 +62,22 @@ type CodexProvider struct {
 	// codex threadId 后补发。见 codex_goal.go。
 	goalMu       sync.Mutex
 	pendingGoals map[string]string
+	// ---- 会话级事实(由常驻通知钩子维护,见 codexapp.Client.GlobalHandler)----
+	// 审查(guardian / 自动审查)结论。用户点"仍然执行"时,我们必须把 codex 发来的
+	// 原始结论**原样**还原成它要的 GuardianAssessmentEvent —— 见 codex_guardian.go。
+	gMu             sync.Mutex
+	guardianReviews map[string]*GuardianReview // reviewId → 结论
+	guardianLatest  map[string]string          // threadID → 最近一条"未放行"的 reviewId
+	guardianOrder   []string                   // 淘汰顺序(只保留最近若干条)
+	// 会话生命周期变化(归档/删除/回滚/改名/队列)。以前这些通知只在任务运行期间
+	// 才有人接,任务外到达的会被直接丢掉 —— 于是"电脑上归档了、手机上还是活跃"。
+	// 这里回调给 server 层,由它同步本地库。
+	ThreadEventHandler func(codexThreadID, method string, params json.RawMessage)
 }
+
+// guardianKeep 最多记住多少条审查结论。审查是高频事件(每个被执行的动作一次),
+// 只保留最近的足够用:能点"仍然执行"的必然是刚刚发生、还在屏幕上的那一条。
+const guardianKeep = 200
 
 type threadRef struct {
 	id  string
@@ -72,8 +86,10 @@ type threadRef struct {
 
 func NewCodexProvider() *CodexProvider {
 	return &CodexProvider{
-		threadMap:    map[string]threadRef{},
-		pendingGoals: map[string]string{},
+		threadMap:       map[string]threadRef{},
+		pendingGoals:    map[string]string{},
+		guardianReviews: map[string]*GuardianReview{},
+		guardianLatest:  map[string]string{},
 	}
 }
 
@@ -150,6 +166,7 @@ func (p *CodexProvider) withClient(fn func(*codexapp.Client) error) error {
 				return serr
 			}
 			p.client, p.inited = c, false
+			p.attachGlobalHandler(c)
 			p.gen.Add(1)
 			err = try()
 		}
@@ -165,9 +182,62 @@ func (p *CodexProvider) withClient(fn func(*codexapp.Client) error) error {
 		return serr
 	}
 	p.client, p.inited = c, false
+	p.attachGlobalHandler(c)
 	p.gen.Add(1)
 	log.Printf("[codex] app-server 子进程已重启(gen=%d),所有线程缓存作废", p.gen.Load())
 	return try()
+}
+
+// attachGlobalHandler 给新拉起的子进程装上**常驻**通知钩子。
+//
+// 【为什么单独一层】codexapp.Client.NotifHandler 是给"当轮任务"用的、随 Run 装拆;
+// 而审查结论、会话归档/删除/回滚、技能变化这些事实在任务之外也会到达。
+// 不挂常驻钩子的话,这些通知就是发给了空气 —— 表现是手机上永远看不到"审查者驳回了",
+// 以及电脑上删掉的会话在手机上还活着。
+//
+// 这里只做**廉价记录**(加锁写 map / 回调),绝不碰 sink 与手机网络:
+// 它在 readLoop 里被同步调用,一旦阻塞,整条事件管道都会卡住。
+func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
+	c.GlobalHandler = func(method string, params json.RawMessage) {
+		switch {
+		case strings.HasPrefix(method, "item/autoApprovalReview/"),
+			method == "autoApprovalReview/strictReviewRequired", method == "guardianWarning":
+			// 审查结论:记下来,供"仍然执行"还原 + 供手机端展示。
+			p.recordGuardianNotification(method, params)
+		case method == "thread/archived", method == "thread/unarchived",
+			method == "thread/deleted", method == "thread/reverted", method == "thread/closed",
+			method == "thread/name/updated", method == "thread/queue/changed",
+			method == "thread/status/changed", method == "thread/started",
+			method == "skills/changed", method == "thread/plan/updated":
+			// 会话级事实的变化:交给 server 层同步本地库(异步,别拖住 readLoop)。
+			if h := p.ThreadEventHandler; h != nil {
+				p.ThreadEventHandlerAsync(h, method, params)
+			}
+		}
+	}
+}
+
+// ThreadEventHandlerAsync 在独立 goroutine 里回调 server 层。
+//
+// 【为什么必须异步】这段代码跑在 codexapp 的 readLoop 里 —— 那是**唯一**一条
+// 读子进程输出的 goroutine。回调里只要做任何可能阻塞的事(写文件、打日志、
+// 访问手机),整条事件管道就停了:表现是"手机上半天不出字,然后一次性全出来"。
+// params 在这里立即排空成独立副本 —— readLoop 之后不会再动它,但复制一份
+// 成本极低(几百字节),换来"回调方想留多久留多久"的自由。
+func (p *CodexProvider) ThreadEventHandlerAsync(h func(codexThreadID, method string, params json.RawMessage), method string, params json.RawMessage) {
+	cp := make([]byte, len(params))
+	copy(cp, params)
+	tid := codexThreadIDOf(params)
+	go h(tid, method, cp)
+}
+
+// codexThreadIDOf 从通知参数里取 threadId(取不到就返回空,由 server 层忽略)。
+func codexThreadIDOf(params json.RawMessage) string {
+	var n struct {
+		ThreadId string `json:"threadId"`
+	}
+	_ = json.Unmarshal(params, &n)
+	return n.ThreadId
 }
 
 var errNoClient = fmt.Errorf("codex 子进程未启动")
@@ -714,22 +784,24 @@ func (p *CodexProvider) ListCodexThreadsViaAppServer() ([]CodexSessionInfo, erro
 		if err != nil {
 			return out, err
 		}
+		// 【实测纠正】result.data 是数组(不是 {items:[...]} —— "items" 是
+		// JSON Schema 里数组元素的声明,不是字段名)。这个写法曾经解析失败,
+		// 而失败被下面的 rollout 扫描兜底吃掉,所以"加载电脑上已有会话"一直
+		// 用的是文件扫描的标题,而不是 codex 自动命名的真实标题。
 		var res struct {
-			Data struct {
-				Items []struct {
-					ID        string  `json:"id"`
-					Name      *string `json:"name"`
-					Preview   string  `json:"preview"`
-					Cwd       string  `json:"cwd"`
-					UpdatedAt int64   `json:"updatedAt"`
-				} `json:"items"`
+			Data []struct {
+				ID        string  `json:"id"`
+				Name      *string `json:"name"`
+				Preview   string  `json:"preview"`
+				Cwd       string  `json:"cwd"`
+				UpdatedAt int64   `json:"updatedAt"`
 			} `json:"data"`
-			NextCursor string `json:"nextCursor"`
+			NextCursor *string `json:"nextCursor"`
 		}
 		if json.Unmarshal(raw, &res) != nil {
 			return out, fmt.Errorf("thread/list 应答无法解析: %s", clip(string(raw), 200))
 		}
-		for _, it := range res.Data.Items {
+		for _, it := range res.Data {
 			title := ""
 			if it.Name != nil && *it.Name != "" {
 				title = *it.Name
@@ -745,10 +817,10 @@ func (p *CodexProvider) ListCodexThreadsViaAppServer() ([]CodexSessionInfo, erro
 				UpdatedAt: time.Unix(it.UpdatedAt, 0),
 			})
 		}
-		if res.NextCursor == "" || len(res.Data.Items) == 0 {
+		if res.NextCursor == nil || *res.NextCursor == "" || len(res.Data) == 0 {
 			break
 		}
-		cursor = res.NextCursor
+		cursor = *res.NextCursor
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
@@ -880,39 +952,10 @@ func (p *CodexProvider) DesktopSettings() (approvalPolicy, sandbox string) {
 	return p.approvalPolicy, p.sandbox
 }
 
-// McpStatus 桥接 codex 的 listMcpServerStatus:返回 MCP 服务器名与工具数。
-func (p *CodexProvider) McpStatus() ([]map[string]interface{}, error) {
-	if err := p.withClient(func(c *codexapp.Client) error { return nil }); err != nil {
-		return nil, err
-	}
-	raw, err := p.client.Call("mcpServerStatus/list", map[string]interface{}{})
-	if err != nil {
-		return nil, err
-	}
-	if os.Getenv("PA_DEBUG") != "" {
-		fmt.Println("[mcp-raw]", string(raw[:min(len(raw), 600)]))
-	}
-	var res struct {
-		Data []struct {
-			Name       string `json:"name"`
-			ServerInfo *struct {
-				Title string `json:"title"`
-			} `json:"serverInfo"`
-			Tools map[string]interface{} `json:"tools"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(raw, &res) != nil {
-		return nil, nil
-	}
-	out := make([]map[string]interface{}, 0, len(res.Data))
-	for _, m := range res.Data {
-		out = append(out, map[string]interface{}{
-			"name":  m.Name,
-			"tools": len(m.Tools),
-		})
-	}
-	return out, nil
-}
+// 【原 McpStatus() 已删除】它返回 []map[string]interface{},只带 name/tools,
+// 而 authStatus / serverInfo / 错误原因全被丢掉了 —— 于是"某个 MCP 用不了"在手机上
+// 完全看不出来。它还被 McpStatusDetailed 完全覆盖(后者按 MCP 状态详情建模)。
+// 留着一份行为不同的同名旧实现,只会让下一个人改错那一个。
 
 // Account 从模型列表里取登录账号(形如 "Codex · xxx@qq.com" 的账号组条目)。
 func (p *CodexProvider) Account() string {

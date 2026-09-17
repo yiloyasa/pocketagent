@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardActions
@@ -89,12 +91,19 @@ import pocketagent.v1.ImportCodexThreadRequest
 import pocketagent.v1.ListCodexThreadsRequest
 import pocketagent.v1.ListModelsRequest
 import pocketagent.v1.ListThreadsRequest
+import pocketagent.v1.ListThreadSectionsRequest
 import pocketagent.v1.ArchiveThreadRequest
+import pocketagent.v1.CreateThreadSectionRequest
 import pocketagent.v1.DeleteThreadRequest
+import pocketagent.v1.DeleteThreadSectionRequest
+import pocketagent.v1.ForkThreadRequest
 import pocketagent.v1.ModelInfo
+import pocketagent.v1.MoveThreadToSectionRequest
 import pocketagent.v1.RenameThreadRequest
+import pocketagent.v1.RenameThreadSectionRequest
 import pocketagent.v1.ThreadStatus
 import pocketagent.v1.Thread as PThread
+import pocketagent.v1.ThreadSection as PSection
 
 /**
  * 会话列表页 —— 对标参考图 2(主页):
@@ -117,7 +126,20 @@ fun ThreadsScreen(
     val ctx = LocalContext.current
     var threads by remember { mutableStateOf(listOf<PThread>()) }
     var host by remember { mutableStateOf<HostInfo?>(null) }
-    var showArchived by remember { mutableStateOf(false) }
+    // 【筛选维度】全部 / 已归档 / 未分组 / 某个分组 —— 单值互斥(见 ThreadOrganize.kt)。
+    // 以前这里是 showArchived 一个布尔量,加上分组后布尔量表达不了第三、第四态。
+    var filter by remember { mutableStateOf(THREAD_FILTER_ALL) }
+    // codex 侧的分组(事实来源在电脑上:在电脑上分的组,手机上立刻能看到)。
+    var sections by remember { mutableStateOf(listOf<PSection>()) }
+    // 分组管理面板:新建 / 重命名 / 删除
+    var sectionSheet by remember { mutableStateOf<SectionSheet?>(null) }
+    var sectionField by remember { mutableStateOf("") }
+    var sectionBusy by remember { mutableStateOf(false) }
+    // 长按会话卡后的"组织"面板(移动到分组 / 分叉)
+    var organizeTarget by remember { mutableStateOf<PThread?>(null) }
+    // 筛选 chip 行的滚动位置。分组数量不确定,行内横向滚动;新建完要把它滚出来。
+    val chipScroll = rememberScrollState()
+    var scrollChipsToEnd by remember { mutableStateOf(false) }
     // 电脑上**尚未导入**的 codex 会话:导入过的会以本地会话身份出现,不会在这里重复一条。
     var pcThreads by remember { mutableStateOf(listOf<CodexThreadInfo>()) }
     var importingId by remember { mutableStateOf("") }
@@ -134,7 +156,11 @@ fun ThreadsScreen(
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     // 新建会话面板(返回键要用,声明必须早于 BackHandler)
     var showNewThread by remember { mutableStateOf(false) }
-    // 【返回层级 · 分级回退】抽屉 → 正在重命名 → 新建面板 → 归档筛选 → 主板块。
+    // 归档筛选的旧口径,由 filter 派生 —— 保留它是因为列表分流、电脑会话过滤、
+    // 空态文案都按"当前是不是在看归档"分支,三处语义完全一致,再各自判断 filter
+    // 只会让它们有机会不一致。
+    val showArchived = filter == THREAD_FILTER_ARCHIVED
+    // 【返回层级 · 分级回退】抽屉 → 正在重命名 → 新建面板 → 组织/分组面板 → 筛选 → 主板块。
     // 之前只有"抽屉/回主页"两级:在"已归档"里按返回会直接跳回主页,
     // 重命名框开着也会被判为"该回主板块"。
     BackHandler(enabled = true) {
@@ -142,7 +168,9 @@ fun ThreadsScreen(
             drawerCtrl.visible -> drawerCtrl.close()
             renamingId != null -> renamingId = null
             showNewThread -> showNewThread = false
-            showArchived -> showArchived = false
+            organizeTarget != null -> organizeTarget = null
+            sectionSheet != null -> sectionSheet = null
+            filter != THREAD_FILTER_ALL -> filter = THREAD_FILTER_ALL
             else -> onBackToHome()
         }
     }
@@ -173,6 +201,9 @@ fun ThreadsScreen(
      * 避免删掉一条后电脑列表还是旧缓存(点开报"无法打开")。
      */
     fun refresh() = scope.launch {
+        // 快照要落"未过滤的全量",而 all 是 withContext 块里的局部量 ——
+        // 用外层变量把它带出来(同一协程顺序执行,不存在竞态)。
+        var allForSnapshot: List<PThread> = emptyList()
         try {
             withContext(Dispatchers.IO) {
                 host = AgentConnection.connectWithFallback()
@@ -185,15 +216,27 @@ fun ThreadsScreen(
                             .setIncludeArchived(true)
                             .build())
                     .threadsList
-                threads = all.filter { t ->
-                    if (showArchived) t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
-                    else t.status != ThreadStatus.THREAD_STATUS_ARCHIVED
-                }
+                // 【存全量,渲染时再筛】threads 一律保存 daemon 给的原始列表(含归档、
+                // 带 section_id),筛选只在渲染那一步做。理由有两条:
+                //   1) 切分组/切归档是纯本地动作,不再重新拉一次(拉一次要等 daemon 把
+                //      codex 侧的分组状态同步进本地库,冷启动时 1~2 秒);
+                //   2) 列表不再被"当前视图"裁剪,离线快照因此天然是全量的。
+                threads = all
                 // 最近工作区跟随会话记录自动补全
                 threads.map { it.workspace }.filter { it.isNotEmpty() }
                     .distinct().take(5).forEach { AgentConnection.addRecentWorkspace(it) }
 
                 val importedCodexIds = all.map { it.codexThreadId }.filter { it.isNotEmpty() }.toSet()
+
+                // ---- 分组:事实来源在 codex 侧,每次刷新跟着列表一起拉 ----
+                // 【失败不清空】分组拉不到(电脑上 codex 没起来/网络抖动)时保留上一次的,
+                // 让用户继续按老分组看;清空会让他以为"分组全没了"。
+                runCatching {
+                    sections = AgentConnection.threadService()
+                        .listThreadSections(ListThreadSectionsRequest.getDefaultInstance())
+                        .sectionsList
+                }
+
                 // 老版本 daemon 不带 codex_thread_id:退回「标题 + 工作目录」匹配,尽量不去重失败
                 val localByTitle = all
                     .filter { it.workspace.isNotEmpty() }
@@ -205,7 +248,10 @@ fun ThreadsScreen(
                 val localByPlaceAndTime = all
                     .filter { it.workspace.isNotEmpty() && it.updatedAtUnixMs > 0 }
                     .map { Triple(it.workspace.trim().lowercase(), it.updatedAtUnixMs, it.title) }
-                pcThreads = if (showArchived) {
+                // 电脑上未导入的 codex 会话只在"全部"里露面:它们没有分组信息
+                // (CodexThreadInfo 不带 section),放进分组视图会让用户以为
+                // "这个分组里有几条没归组的"。
+                pcThreads = if (filter != THREAD_FILTER_ALL) {
                     emptyList()
                 } else {
                     try {
@@ -239,6 +285,7 @@ fun ThreadsScreen(
             }
             // 【离线快照】拉取成功就落一份本地副本:断网时列表还能照常显示
             // (遥控器形态下,"上次连上时有哪些会话"本身就是有用信息)。
+            // threads 现在是未裁剪的全量(见上面的注释),所以快照天然是全量的。
             dev.pocketagent.app.ui.component.ThreadSnapshot.saveThreads(
                 threads.map {
                     dev.pocketagent.app.ui.component.ThreadSnapshot.Row(
@@ -248,13 +295,20 @@ fun ThreadsScreen(
                         workspace = it.workspace,
                         codexThreadId = it.codexThreadId,
                         archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
+                        sectionId = it.sectionId,
                     )
                 },
             )
         } catch (e: Exception) {
             // 连不上就退回快照:有快照 → 显示并标明是离线副本;没有 → 保持原报错。
             val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.loadThreads()
-                .filter { it.archived == showArchived }
+                .filter {
+                    matchesThreadFilter(
+                        sectionId = it.sectionId,
+                        archived = it.archived,
+                        filter = filter,
+                    )
+                }
             if (snap.isNotEmpty()) {
                 threads = snap.map {
                     PThread.newBuilder()
@@ -377,8 +431,137 @@ fun ThreadsScreen(
         }
     }
 
+    // ---- 会话组织:分组增删改移 + 分叉 ----
+    // 【为什么全部走 refresh() 收尾】分组是 codex 侧的事实(在电脑上分的组手机上要
+    // 立刻能看到),本地自己拼一份状态迟早两端不一致。这几个动作都低频,多拉一次
+    // 列表换"看到的就是真的",值。
+
+    /** 把会话移进分组;sectionId 为空 = 移出分组。 */
+    fun moveThreadToSection(t: PThread, sectionId: String) {
+        organizeTarget = null
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().moveThreadToSection(
+                        MoveThreadToSectionRequest.newBuilder()
+                            .setThreadId(t.id)
+                            .setSectionId(sectionId)
+                            .build())
+                }
+                if (sectionId.isEmpty()) {
+                    Toast.makeText(ctx, "已移出分组", Toast.LENGTH_SHORT).show()
+                }
+                refresh()
+            } catch (e: Exception) {
+                // daemon 对"还没在电脑上落地"的会话回 FAILED_PRECONDITION,那句话
+                // 本来就是写给用户看的("先发一条消息"),直接透出比翻译成"系统错误"有用。
+                Toast.makeText(ctx, e.message ?: "移动分组失败", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** 分叉会话:复制出一条新会话并直接打开,原会话保持不动。 */
+    fun forkThread(t: PThread) {
+        organizeTarget = null
+        scope.launch {
+            try {
+                val nt = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().forkThread(
+                        ForkThreadRequest.newBuilder()
+                            .setThreadId(t.id)
+                            // last_turn_id 留空 = 从最新状态分叉。手机端时间线里没有
+                            // codex 的回合 id(历史接口不返回 turnId),给不出"从某个回合分叉",
+                            // 所以不做一个选了也没用的回合选择器。
+                            .build())
+                }
+                refresh()
+                onOpenThread(nt.id)
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "分叉失败", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** 新建分组;into 非空时把这条会话一并移进去(用户点的是"新建并移入")。 */
+    fun createSection(name: String, into: PThread?) {
+        if (sectionBusy) return
+        sectionBusy = true
+        scope.launch {
+            try {
+                val sec = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().createThreadSection(
+                        CreateThreadSectionRequest.newBuilder().setName(name.trim()).build())
+                }
+                sections = sections + sec
+                sectionSheet = null
+                sectionField = ""
+                // 新分组的 chip 排在最后一个,不滚过去就是"创建成功但看不见"
+                scrollChipsToEnd = true
+                if (into != null) moveThreadToSection(into, sec.id)
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "新建分组失败", Toast.LENGTH_LONG).show()
+            } finally {
+                sectionBusy = false
+            }
+        }
+    }
+
+    fun renameSection(id: String, name: String) {
+        if (sectionBusy) return
+        sectionBusy = true
+        scope.launch {
+            try {
+                val sec = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().renameThreadSection(
+                        RenameThreadSectionRequest.newBuilder()
+                            .setSectionId(id).setName(name.trim()).build())
+                }
+                // 【只换名字,别把计数一起换掉】RenameThreadSection 的应答里没有
+                // thread_count(分组计数是 daemon 用本地库现算的),直接替换会让
+                // chip 上的数字变成 0,改个名字看着像"这个组空了"。
+                sections = sections.map {
+                    if (it.id == id) sec.toBuilder().setThreadCount(it.threadCount).build()
+                    else it
+                }
+                sectionSheet = null
+                sectionField = ""
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "重命名分组失败", Toast.LENGTH_LONG).show()
+            } finally {
+                sectionBusy = false
+            }
+        }
+    }
+
+    /** 删除分组。**只删分组本身**:组里的会话会变成未分组,不会被删掉。 */
+    fun deleteSection(id: String) {
+        if (sectionBusy) return
+        sectionBusy = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().deleteThreadSection(
+                        DeleteThreadSectionRequest.newBuilder().setSectionId(id).build())
+                }
+                sections = sections.filterNot { it.id == id }
+                // 正在看的那个分组被删了就退回"全部",否则停在一个不存在的筛选上是空列表
+                if (filter == id) filter = THREAD_FILTER_ALL
+                sectionSheet = null
+                sectionField = ""
+                Toast.makeText(ctx, "已删除分组,组里的会话变成未分组", Toast.LENGTH_SHORT).show()
+                refresh()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "删除分组失败", Toast.LENGTH_LONG).show()
+            } finally {
+                sectionBusy = false
+            }
+        }
+    }
+
     val reconnectTick = AgentConnection.connectionEpoch.collectAsState().value
-    LaunchedEffect(Unit, showArchived, reconnectTick) { refresh() }
+    // 【不把 filter 放进 key】threads 拿的是全量,筛选在渲染时做,所以切筛选是纯本地
+    // 动作:不重新拉列表,也不会因为一次网络抖动让"刚点进去的分组"变空。
+    LaunchedEffect(Unit, reconnectTick) { refresh() }
 
     // 【不再"一滚动就收起"】旧实现会在拖拽结束的那一帧把刚滑开的行收回去,
     // 看起来像"滑开了又自动弹回"。改为:纵向真正滚动超过一屏距离才收起(见 listState 监听无需)。
@@ -439,11 +622,78 @@ fun ThreadsScreen(
                 }
             }
 
-            // ---- 过滤 chips:全部 / 已归档(电脑上未导入的 codex 会话合并在"全部"里) ----
-            Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp)) {
-                FilterChip2("全部", !showArchived) { showArchived = false }
+            // ---- 筛选 chips:全部 / 已归档 / 未分组 / 各个分组 ----
+            // 【为什么并成一排】分组和归档一样,回答的都是"我要看哪一批会话" ——
+            // 分两排会让人以为要先选档位再选分组。分组数量未知,所以这一排横向滚动。
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.weight(1f).horizontalScroll(chipScroll),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip2("全部", filter == THREAD_FILTER_ALL) { filter = THREAD_FILTER_ALL }
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip2("已归档", showArchived) { filter = THREAD_FILTER_ARCHIVED }
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip2("未分组", filter == THREAD_FILTER_UNGROUPED) {
+                        filter = THREAD_FILTER_UNGROUPED
+                    }
+                    sections.forEach { sec ->
+                        Spacer(Modifier.width(8.dp))
+                        SectionChip(
+                            label = sec.name.ifBlank { "未命名分组" },
+                            selected = filter == sec.id,
+                            count = sec.threadCount,
+                            // 点 = 看这个分组;长按 = 管这个分组(改名 / 删除)
+                            onClick = { filter = sec.id },
+                            onLongPress = {
+                                // 预填当前名字:改名是"改"不是"重打",空输入框会逼用户
+                                // 把整个名字重新敲一遍(还会因为记不全而改坏)。
+                                sectionField = sec.name
+                                sectionSheet = SectionSheet.Manage(sec.id, sec.name)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
                 Spacer(Modifier.width(8.dp))
-                FilterChip2("已归档", showArchived) { showArchived = true }
+                // 【固定在右端,不参与横向滚动】分组一多,"新建分组"就会被滚出屏幕 ——
+                // 而它恰恰是"分组多到需要管理"时更要用的那个入口。筛选 chips 自己滚,
+                // 这个入口留在原地。
+                NewSectionChip { sectionField = ""; sectionSheet = SectionSheet.Create() }
+            }
+
+            // 新建分组后滚到末尾:chip 加进来时 maxValue 还是旧的,所以 key 里带上
+            // sections.size 让它在下一次测量之后再滚。
+            LaunchedEffect(scrollChipsToEnd, sections.size) {
+                if (scrollChipsToEnd) {
+                    chipScroll.animateScrollTo(chipScroll.maxValue)
+                    scrollChipsToEnd = false
+                }
+            }
+
+            // 当前筛选的说明(分组名可能被横向滚出屏幕,这里给一句"你在看什么")
+            val activeSectionName = sections.firstOrNull { it.id == filter }?.name
+            // 【筛选指向了一个我们列不出来的分组】分两种情形,都不该让用户对着一个
+            // 被筛过的列表发呆:①离线,分组列表整个读不到;②这个分组刚在电脑上被删。
+            // 这时给出说明,并提示"点全部可退出"(点全部永远可用,不依赖网络)。
+            val activeSectionMissing = filter.isNotEmpty() && activeSectionName == null &&
+                filter != THREAD_FILTER_ARCHIVED && filter != THREAD_FILTER_UNGROUPED
+            if (activeSectionName != null || filter == THREAD_FILTER_UNGROUPED ||
+                activeSectionMissing
+            ) {
+                Text(
+                    when {
+                        activeSectionName != null ->
+                            "只看分组「${activeSectionName.ifBlank { "未命名分组" }}」"
+                        filter == THREAD_FILTER_UNGROUPED -> "只看未分组的会话"
+                        else -> "只看某个分组(分组列表暂时读不到,点「全部」可退出)"
+                    },
+                    Modifier.padding(start = 18.dp, top = 6.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
             }
 
             // ---- 会话列表:本地会话 + 电脑上未导入的 codex 会话,合成一条流 ----
@@ -451,8 +701,19 @@ fun ThreadsScreen(
             // 置顶项恒排最前,其余按更新时间倒序。
             val pinnedKeys = pinned
             val rows: List<SessionRow> = buildList {
-                threads.forEach { add(SessionRow.Local(it, pinKey(it, null))) }
-                if (!showArchived) pcThreads.forEach { add(SessionRow.Pc(it)) }
+                // 【筛选只在渲染这一步做】threads 是全量(见 refresh 的注释),
+                // 归档/分组的判定全走同一套规则(matchesThreadFilter),
+                // 不在别处再写一遍 if —— 两处判断迟早会不一致。
+                threads
+                    .filter {
+                        matchesThreadFilter(
+                            sectionId = it.sectionId,
+                            archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
+                            filter = filter,
+                        )
+                    }
+                    .forEach { add(SessionRow.Local(it, pinKey(it, null))) }
+                if (filter == THREAD_FILTER_ALL) pcThreads.forEach { add(SessionRow.Pc(it)) }
             }.sortedWith(
                 compareByDescending<SessionRow> { it.pinKey in pinnedKeys }
                     .thenByDescending { it.sortKey },
@@ -481,9 +742,24 @@ fun ThreadsScreen(
                         )
                     }
                     EmptyState(
-                        iconRes = if (showArchived) R.drawable.ic_lucide_archive else R.drawable.ic_lucide_message_square,
-                        title = if (showArchived) "没有归档的会话" else "还没有会话",
-                        hint = if (showArchived) "左滑会话可恢复或删除" else "点右下角 + 开始你的第一个任务",
+                        iconRes = when {
+                            showArchived -> R.drawable.ic_lucide_archive
+                            activeSectionName != null -> R.drawable.ic_lucide_folder
+                            else -> R.drawable.ic_lucide_message_square
+                        },
+                        title = when {
+                            showArchived -> "没有归档的会话"
+                            activeSectionName != null ->
+                                "「${activeSectionName.ifBlank { "未命名分组" }}」还没有会话"
+                            filter == THREAD_FILTER_UNGROUPED -> "没有未分组的会话"
+                            else -> "还没有会话"
+                        },
+                        hint = when {
+                            showArchived -> "左滑会话可恢复或删除"
+                            activeSectionName != null || filter == THREAD_FILTER_UNGROUPED ->
+                                "长按会话可把它移进分组"
+                            else -> "点右下角 + 开始你的第一个任务"
+                        },
                     )
                     }
                 }
@@ -562,6 +838,12 @@ fun ThreadsScreen(
                                             }
                                         },
                                         rowBackground = Pa.Card,
+                                        // 长按 = 会话组织(移动到分组 / 分叉)。
+                                        // 【为什么是长按而不是第 5 个左滑动作】动作区是 64dp × 动作数,
+                                        // 5 个就 320dp,超过 SwipeRevealRow 的 72% 上限(窄屏会被裁掉),
+                                        // 而且左滑本身已经承载了最高频的四个动作。长按这个位置
+                                        // 本来就是为"上下文菜单"留的(见文件下方注释)。
+                                        onLongPress = { organizeTarget = t },
                                         // 已展开时点内容 = 收起,未展开才进会话
                                         onClick = {
                                             // 任何一行处于展开态时,点击(包括点别的行)先收起 —— iOS 式行为,
@@ -702,8 +984,78 @@ fun ThreadsScreen(
         )
     }
 
-    // 长按菜单已移除:重命名 / 归档 / 删除 全部收敛到左滑动作里,
-    // 一条交互路径比"长按弹一层、再点一次"更连贯(也为后续接入长按上下文菜单留位)。
+    // 长按菜单:重命名 / 归档 / 删除 仍然全部收敛在左滑动作里(一条交互路径比
+    // "长按弹一层、再点一次"更连贯)。长按只承载**左滑放不下**的动作 —— 分组有
+    // 任意多个、"移动到哪个分组"天然需要一个列表,塞进左滑动作区会超过 72% 宽度上限。
+    organizeTarget?.let { t ->
+        ModalBottomSheet(
+            onDismissRequest = { organizeTarget = null },
+            containerColor = Pa.CardHigh,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
+                Text(
+                    t.title.ifBlank { "未命名会话" },
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    fontSize = 17.sp, color = Pa.TextPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "移动到分组",
+                    Modifier.padding(start = 24.dp, top = 16.dp, bottom = 2.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                // 当前所在分组打上「当前」并在文案里标明 —— 用户点开就能确认"这条现在在哪"
+                SheetAction(
+                    R.drawable.ic_lucide_folder,
+                    if (t.sectionId.isEmpty()) "未分组（当前）" else "未分组",
+                    tint = if (t.sectionId.isEmpty()) Pa.Accent else Pa.TextPrimary,
+                ) { moveThreadToSection(t, "") }
+                sections.forEach { sec ->
+                    val here = sec.id == t.sectionId
+                    SheetAction(
+                        R.drawable.ic_lucide_folder,
+                        sec.name.ifBlank { "未命名分组" } + if (here) "（当前）" else "",
+                        tint = if (here) Pa.Accent else Pa.TextPrimary,
+                    ) { moveThreadToSection(t, sec.id) }
+                }
+                SheetAction(R.drawable.ic_lucide_folder_plus, "新建分组并移入…", Pa.Accent) {
+                    sectionField = ""
+                    sectionSheet = SectionSheet.Create(moveInto = t)
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Pa.Separator)
+                Text(
+                    "分叉",
+                    Modifier.padding(start = 24.dp, bottom = 2.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                SheetAction(R.drawable.ic_lucide_git_branch, "分叉会话") { forkThread(t) }
+                Text(
+                    forkConsequence(),
+                    Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+            }
+        }
+    }
+
+    // ---- 分组管理面板(顶部「新建分组」chip / 长按分组 chip) ----
+    sectionSheet?.let { sheet ->
+        SectionManagerSheet(
+            sheet = sheet,
+            field = sectionField,
+            onFieldChange = { sectionField = it },
+            busy = sectionBusy,
+            onDismiss = { sectionSheet = null; sectionField = "" },
+            onSubmit = { name ->
+                when (sheet) {
+                    is SectionSheet.Create -> createSection(name, sheet.moveInto)
+                    is SectionSheet.Manage -> renameSection(sheet.id, name)
+                }
+            },
+            onDelete = { (sheet as? SectionSheet.Manage)?.let { deleteSection(it.id) } },
+        )
+    }
 
     // 重命名已改为「行内编辑」(见 ThreadCard 的 renaming 分支),不再使用对话框 —— 设计规范 §3.1
 
@@ -1080,5 +1432,181 @@ fun SheetAction(iconRes: Int, label: String, tint: Color = Pa.TextPrimary, onCli
         Icon(painterResource(iconRes), null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(label, fontSize = 15.sp, color = tint)
+    }
+}
+
+/**
+ * 分组管理面板的形态。
+ *
+ * @property Create.moveInto 非空表示"从某个会话上发起的建组" —— 建完要把这条会话
+ *   一并移进去。用对象本身携带这个意图,而不是再加一个"当前操作对象"的旁路状态:
+ *   面板关了意图就没了,不会在下一次建组时冒出来。
+ */
+private sealed interface SectionSheet {
+    data class Create(val moveInto: PThread? = null) : SectionSheet
+    data class Manage(val id: String, val name: String) : SectionSheet
+}
+
+/** 分组 chip:点筛选、长按管理。带一个会话数,让"这个组是不是空的"一眼可见。 */
+@Composable
+private fun SectionChip(
+    label: String,
+    selected: Boolean,
+    count: Int,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    Row(
+        Modifier
+            // 长按与点击共存用 pressableLong(内部是 combinedClickable)——
+            // 手写两个 pointerInput 叠在一起时,内层会把 down 消费掉,外层就再也收不到点击。
+            .pressableLong(onClick = onClick, onLongPress = onLongPress)
+            .background(if (selected) Pa.AccentDim else Pa.Card, RoundedCornerShape(50))
+            .padding(horizontal = 13.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_lucide_folder), null,
+            tint = if (selected) Pa.Accent else Pa.TextSecondary,
+            modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            label, fontSize = 13.sp,
+            color = if (selected) Pa.Accent else Pa.TextSecondary,
+            maxLines = 1,
+        )
+        if (count > 0) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "$count", fontSize = 11.sp,
+                color = if (selected) Pa.AccentText else Pa.TextTertiary,
+            )
+        }
+    }
+}
+
+/** 「新建分组」chip:与筛选 chip 同一排、同一形状,避免多一个常驻工具按钮。 */
+@Composable
+private fun NewSectionChip(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .pressable { onClick() }
+            .background(Pa.Card, RoundedCornerShape(50))
+            .padding(horizontal = 13.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_lucide_folder_plus), null,
+            tint = Pa.TextSecondary, modifier = Modifier.size(13.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("新建分组", fontSize = 13.sp, color = Pa.TextSecondary)
+    }
+}
+
+/**
+ * 新建 / 改名 / 删除分组。
+ *
+ * 【删除为什么要二次确认且必须解释】codex 删分组**只删分组**,组里的会话会变成
+ * 未分组。用户凭直觉会以为"删组 = 删里面的会话",不解释清楚就没人敢点;
+ * 只说"确认删除?"又等于什么都没说。所以确认页直接把这句后果写在按钮上方。
+ */
+@Composable
+private fun SectionManagerSheet(
+    sheet: SectionSheet,
+    field: String,
+    onFieldChange: (String) -> Unit,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    // 换一个面板(改名→新建)时确认态要复位,否则会带着上一份的"确认删除"进来
+    var confirmDelete by remember(sheet) { mutableStateOf(false) }
+    val manage = sheet as? SectionSheet.Manage
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Pa.CardHigh,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 26.dp)) {
+            Text(
+                if (manage == null) "新建分组" else "分组设置",
+                fontSize = 17.sp, color = Pa.TextPrimary,
+            )
+            if (manage != null) {
+                Text(
+                    manage.name.ifBlank { "未命名分组" },
+                    Modifier.padding(top = 2.dp),
+                    fontSize = 12.sp, color = Pa.TextSecondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            if (confirmDelete) {
+                Text(
+                    "删除分组「${manage?.name?.ifBlank { "未命名分组" }.orEmpty()}」？\n" +
+                        "组里的会话不会被删除,只会变成未分组。",
+                    Modifier.padding(top = 14.dp),
+                    fontSize = 14.sp, color = Pa.TextPrimary,
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = { confirmDelete = false; onDelete() },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = Pa.Red,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text("确认删除", color = Color.White) }
+                }
+            } else {
+                OutlinedTextField(
+                    value = field,
+                    onValueChange = onFieldChange,
+                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                    singleLine = true,
+                    placeholder = { Text("分组名", color = Pa.TextTertiary) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = { if (field.isNotBlank() && !busy) onSubmit(field) },
+                    ),
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 14.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        enabled = field.isNotBlank() && !busy,
+                        onClick = { onSubmit(field) },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = Pa.Accent,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text(
+                            if (manage == null) "创建" else "保存",
+                            color = if (field.isNotBlank() && !busy) Color(0xFF0B0B0D)
+                            else Pa.TextTertiary,
+                        )
+                    }
+                }
+                if (manage != null) {
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider(color = Pa.Separator)
+                    SheetAction(
+                        R.drawable.ic_lucide_trash_2, "删除分组", Pa.Red,
+                    ) { confirmDelete = true }
+                }
+            }
+        }
     }
 }

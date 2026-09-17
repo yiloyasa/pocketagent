@@ -16,8 +16,14 @@ import (
 
 // ---------- Thread CRUD ----------
 
-func threadToPB(t *store.Thread) *pb.Thread {
-	return &pb.Thread{
+// threadToPB 把存储里的会话转成协议结构。
+//
+// 【关于"审查者驳回"三个字段为什么每次现查】它们不是会话的固有属性,而是
+// "最近一次自动审查有没有拦下某个动作"。这个状态只活在 codex 子进程和 daemon
+// 内存里(见 agent/codex_guardian.go),落库没有意义 —— 落库反而会在 daemon
+// 重启后留下一个点了就报错的僵尸按钮。所以这里每次从 provider 现取。
+func (s *Server) threadToPB(t *store.Thread) *pb.Thread {
+	out := &pb.Thread{
 		Id: t.ID, Title: t.Title, Workspace: t.Workspace, Goal: t.Goal,
 		ModelId: t.ModelID, Status: t.Status,
 		CreatedAtUnixMs: t.CreatedAt, UpdatedAtUnixMs: t.UpdatedAt,
@@ -25,7 +31,37 @@ func threadToPB(t *store.Thread) *pb.Thread {
 		// 把桥接的 codex 线程 id 透出:手机端据此把"活跃"与"电脑"里的
 		// 同一个会话合并为一条(否则会显示两份)。
 		CodexThreadId: t.CodexThreadID,
+		SectionId:     t.SectionID,
+		// 归档只有一个事实来源(Status),这里只是把它翻译成布尔量,
+		// 免得手机端要同时判断 status==ARCHIVED 和 archived 两个字段。
+		Archived: t.Status == pb.ThreadStatus_THREAD_STATUS_ARCHIVED,
 	}
+	if p := s.codexProvider(); p != nil && t.CodexThreadID != "" {
+		if g := p.GuardianLatest(t.CodexThreadID); g != nil {
+			out.GuardianDeniedReviewId = g.ReviewID
+			out.GuardianDeniedItemId = g.TargetItemID
+			out.GuardianDeniedReason = guardianReasonLine(g)
+		}
+	}
+	return out
+}
+
+// guardianReasonLine 把一条审查结论压成手机端能直接显示的一句话。
+func guardianReasonLine(g *agent.GuardianReview) string {
+	if g == nil {
+		return ""
+	}
+	parts := []string{}
+	if g.ActionLabel != "" {
+		parts = append(parts, g.ActionLabel)
+	}
+	if g.RiskLevel != "" {
+		parts = append(parts, "风险:"+agent.RiskLevelLabel(g.RiskLevel))
+	}
+	if g.Rationale != "" {
+		parts = append(parts, g.Rationale)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (s *Server) CreateThread(ctx context.Context, req *pb.CreateThreadRequest) (*pb.Thread, error) {
@@ -48,19 +84,74 @@ func (s *Server) CreateThread(ctx context.Context, req *pb.CreateThreadRequest) 
 	if err := s.cfg.Store.Create(t); err != nil {
 		return nil, errInternal(err)
 	}
-	return threadToPB(t), nil
+	return s.threadToPB(t), nil
 }
 
+// ListThreads 会话列表。
+//
+// 【过滤/排序的实现取舍】codex 的 thread/list 支持 searchTerm / archived / limit,
+// 但**不支持**分组过滤与排序键;而分组是 codex 侧的事实。所以:
+//   - 用户一旦用了搜索/分组/归档中的任意一项,先把 codex 的列表同步进本地
+//     (一次往返换来分组与归档状态的正确),再在本地过滤排序;
+//   - 什么都没用时,只读本地库 —— 会话列表是最高频页面,不该每次都等 codex 冷启动。
 func (s *Server) ListThreads(ctx context.Context, req *pb.ListThreadsRequest) (*pb.ListThreadsResponse, error) {
+	// 搜索/分组/看归档:先与电脑对一次账
+	if req.SearchTerm != "" || req.SectionId != "" || req.IncludeArchived || req.SortKey != "" {
+		s.syncThreadsFromCodex(req.SearchTerm, req.IncludeArchived)
+	}
+
 	threads := s.cfg.Store.List(req.IncludeArchived)
+	// 分组过滤
+	if req.SectionId != "" {
+		kept := threads[:0]
+		for _, t := range threads {
+			if t.SectionID == req.SectionId {
+				kept = append(kept, t)
+			}
+		}
+		threads = kept
+	}
+	// 搜索兜底:codex 的 searchTerm 覆盖不到还没同步进来的本地会话(比如刚从
+	// rollout 导入、codex 侧还没索引到的),这里再在本地过一遍,宁可多留不可漏。
+	if req.SearchTerm != "" {
+		kept := threads[:0]
+		for _, t := range threads {
+			if searchTermMatches(t, req.SearchTerm) {
+				kept = append(kept, t)
+			}
+		}
+		threads = kept
+	}
+	// 排序。store.List 已经按 updated 倒序返回,所以只需在处理 asc / created 时重排。
+	if req.SortKey == "created" {
+		sortByCreated(threads, req.SortAscending)
+	} else if req.SortAscending {
+		// 默认键(updated)升序 = 把倒序结果翻过来
+		for i, j := 0, len(threads)-1; i < j; i, j = i+1, j-1 {
+			threads[i], threads[j] = threads[j], threads[i]
+		}
+	}
 	if req.Limit > 0 && int(req.Limit) < len(threads) {
 		threads = threads[:req.Limit]
 	}
 	out := &pb.ListThreadsResponse{}
 	for _, t := range threads {
-		out.Threads = append(out.Threads, threadToPB(t))
+		out.Threads = append(out.Threads, s.threadToPB(t))
 	}
 	return out, nil
+}
+
+// sortByCreated 按创建时间排(稳定插入排序:会话量在几百条量级,够用且无额外内存)。
+func sortByCreated(threads []*store.Thread, asc bool) {
+	less := func(a, b *store.Thread) bool { return a.CreatedAt > b.CreatedAt }
+	if asc {
+		less = func(a, b *store.Thread) bool { return a.CreatedAt < b.CreatedAt }
+	}
+	for i := 1; i < len(threads); i++ {
+		for j := i; j > 0 && less(threads[j], threads[j-1]); j-- {
+			threads[j], threads[j-1] = threads[j-1], threads[j]
+		}
+	}
 }
 
 func (s *Server) GetThread(ctx context.Context, req *pb.GetThreadRequest) (*pb.Thread, error) {
@@ -68,7 +159,7 @@ func (s *Server) GetThread(ctx context.Context, req *pb.GetThreadRequest) (*pb.T
 	if !ok {
 		return nil, errNotFound("会话不存在")
 	}
-	return threadToPB(t), nil
+	return s.threadToPB(t), nil
 }
 
 func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) (*pb.Empty, error) {
@@ -90,6 +181,12 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 	return &pb.Empty{}, nil
 }
 
+// ArchiveThread 归档 / 取消归档。
+//
+// 【为什么要真的告诉 codex】归档以前只是"我们库里改个状态",于是电脑上的
+// codex 会话列表里它还在,手机上却不见了 —— 用户换个设备看就是两套事实。
+// codex 侧失败不影响本地结果(它可能是个还没在电脑上落地的新会话),
+// 但会记日志,不让"以为归档了其实没有"悄悄发生。
 func (s *Server) ArchiveThread(ctx context.Context, req *pb.ArchiveThreadRequest) (*pb.Thread, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
 	if !ok {
@@ -103,7 +200,13 @@ func (s *Server) ArchiveThread(ctx context.Context, req *pb.ArchiveThreadRequest
 	if err := s.cfg.Store.Update(t); err != nil {
 		return nil, errInternal(err)
 	}
-	return threadToPB(t), nil
+	if p := s.codexProvider(); p != nil && t.CodexThreadID != "" {
+		if err := p.SetCodexArchived(t.CodexThreadID, req.Archived); err != nil {
+			log.Printf("[archive] 同步到 codex 失败(本地已归档)thread=%s codex=%s: %v",
+				t.ID, t.CodexThreadID, err)
+		}
+	}
+	return s.threadToPB(t), nil
 }
 
 func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest) (*pb.Thread, error) {
@@ -124,7 +227,7 @@ func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest
 			log.Printf("[goal] 下发失败(已落库,稍后补发)thread=%s: %v", t.ID, err)
 		}
 	}
-	return threadToPB(t), nil
+	return s.threadToPB(t), nil
 }
 
 func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest) (*pb.Empty, error) {
@@ -147,6 +250,9 @@ func (s *Server) CancelTurn(ctx context.Context, req *pb.CancelTurnRequest) (*pb
 }
 
 // RenameThread 重命名会话(双端同步:落库后桌面端/手机端读到同一标题)。
+//
+// 这里额外把标题写回 codex:否则电脑上还是旧标题,用户在电脑上找会话时会以为
+// 自己在手机上改的名字没生效。
 func (s *Server) RenameThread(ctx context.Context, req *pb.RenameThreadRequest) (*pb.Thread, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
 	if !ok {
@@ -156,7 +262,12 @@ func (s *Server) RenameThread(ctx context.Context, req *pb.RenameThreadRequest) 
 	if err := s.cfg.Store.Update(t); err != nil {
 		return nil, errInternal(err)
 	}
-	return threadToPB(t), nil
+	if p := s.codexProvider(); p != nil && t.CodexThreadID != "" {
+		if err := p.SetCodexThreadName(t.CodexThreadID, req.Title); err != nil {
+			log.Printf("[rename] 同步标题到 codex 失败(本地已改名)thread=%s: %v", t.ID, err)
+		}
+	}
+	return s.threadToPB(t), nil
 }
 
 // GetThreadHistory 返回历史消息。数据来自我们自己的存储(两类 provider 统一):

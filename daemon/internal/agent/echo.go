@@ -66,8 +66,8 @@ func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appr
 		resultText = strings.Join(lines, "\n")
 	}
 	sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
-		Phase: pb.ToolCallUpdate_FINISHED,
-		Call:  &pb.ToolCallBlock{Id: callID, Name: "list_dir", JsonArgs: `{"path":"."}`},
+		Phase:  pb.ToolCallUpdate_FINISHED,
+		Call:   &pb.ToolCallBlock{Id: callID, Name: "list_dir", JsonArgs: `{"path":"."}`},
 		Result: &pb.ToolResultBlock{CallId: callID, Ok: err == nil, Output: resultText},
 	}}})
 

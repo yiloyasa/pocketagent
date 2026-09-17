@@ -13,7 +13,7 @@ import (
 
 const (
 	// 单文件读取:未指定 max_bytes 时的默认上限(要能装下 APK/安装包,手机端下载依赖它)
-	defaultReadLimit  = 512 * 1024 * 1024 // 512MB
+	defaultReadLimit  = 512 * 1024 * 1024  // 512MB
 	hardReadLimit     = 1024 * 1024 * 1024 // 1GB 硬上限,防止误触超大文件
 	defaultSearchHits = 200
 )

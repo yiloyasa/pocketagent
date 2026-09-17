@@ -55,6 +55,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Text
@@ -122,11 +124,14 @@ import pocketagent.v1.GitDiffRequest
 import pocketagent.v1.GitCommitRequest
 import pocketagent.v1.GetThreadHistoryRequest
 import pocketagent.v1.GetThreadRequest
+import pocketagent.v1.ForkThreadRequest
+import pocketagent.v1.RollbackThreadRequest
 import pocketagent.v1.ListModelsRequest
 import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ModelInfo
 import pocketagent.v1.SetCodexSettingsRequest
 import pocketagent.v1.TextBlock
+import pocketagent.v1.ApproveGuardianDeniedActionRequest
 import pocketagent.v1.Thread as PThread
 import pocketagent.v1.ToolCallUpdate
 import pocketagent.v1.TurnClientMessage
@@ -177,46 +182,116 @@ private fun loadAttachmentPreview(context: Context, attachment: Attachment): Ima
 }
 
 @Composable
-private fun CodexEventCard(event: CodexEvent) {
-    var expanded by remember(event.rawJson) { mutableStateOf(AgentConnection.toolDetailsExpanded) }
-    val color = if (event.kind == CodexEvent.Kind.ERROR) Pa.Red else Pa.Accent
+private fun CodexEventCard(
+    event: CodexEvent,
+    uiScale: Float = 1f,
+    guardianOverridden: Boolean = false,
+    onApproveGuardian: ((CodexEvent) -> Unit)? = null,
+) {
+    // 【为什么按 kind 上色而不是"非 ERROR 一律 Accent"】这些卡片的用途完全不同:
+    // 红色 = 出事了(审查驳回/任务错误);黄色 = 需要留意但没坏(配置/沙箱/弃用);
+    // 中性 = 只是告知(技能变化、排队)。全都一个颜色等于没有优先级,
+    // 用户会习惯性略过 —— 那么把这些卡片搬进时间线就白搬了。
+    val (accent, bg) = when {
+        event.kind == CodexEvent.Kind.ERROR -> Pa.Red to Pa.Card
+        event.kind == CodexEvent.Kind.GUARDIAN_REVIEW && event.reviewStatus == "denied" -> Pa.Red to Pa.Card
+        event.kind == CodexEvent.Kind.GUARDIAN_REVIEW &&
+            (event.reviewStatus == "timedOut" || event.reviewStatus == "aborted") -> Pa.Yellow to Pa.Card
+        event.kind == CodexEvent.Kind.GUARDIAN_REVIEW && event.reviewStatus == "approved" -> Pa.Green to Pa.Card
+        event.kind == CodexEvent.Kind.DEPRECATION ||
+            event.kind == CodexEvent.Kind.CONFIG_WARNING ||
+            event.kind == CodexEvent.Kind.SANDBOX_WARNING -> Pa.Yellow to Pa.Card
+        else -> Pa.Accent to Pa.Card
+    }
+    val statusLabel = guardianStatusLabel(event.reviewStatus)
+    val riskLabel = riskLevelLabel(event.riskLevel)
+    val overridable = guardianOverridable(event) && !guardianOverridden && onApproveGuardian != null
+    var expanded by remember(event.title, event.rawJson) { mutableStateOf(false) }
+
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(14.dp))
+            .background(bg, RoundedCornerShape(14.dp))
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                buildString {
-                    append(event.title.ifBlank { "Codex 状态" })
-                    if (event.httpStatus > 0) append(" · HTTP ${event.httpStatus}")
-                    if (event.willRetry) append(" · 正在重试")
-                },
+                event.title.ifBlank { "Codex 状态" },
                 Modifier.weight(1f),
-                color = color,
-                fontSize = 13.sp,
+                color = accent,
+                fontSize = (13 * uiScale).sp,
                 fontWeight = FontWeight.SemiBold,
             )
+            if (statusLabel.isNotBlank()) {
+                Text(
+                    statusLabel,
+                    Modifier
+                        .background(accent.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                    color = accent,
+                    fontSize = (10 * uiScale).sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.width(6.dp))
+            }
             if (event.rawJson.isNotBlank()) {
                 TextButton(
                     onClick = { expanded = !expanded },
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                 ) {
-                    Text(if (expanded) "收起" else "详情", color = Pa.Accent, fontSize = 11.sp)
+                    Text(if (expanded) "收起" else "详情", color = Pa.AccentText, fontSize = (11 * uiScale).sp)
                 }
             }
         }
+        if (riskLabel.isNotBlank()) {
+            Text(riskLabel, color = accent, fontSize = (11 * uiScale).sp, fontWeight = FontWeight.Medium)
+        }
         if (event.message.isNotBlank()) {
-            Text(event.message, color = Pa.TextPrimary, fontSize = 12.sp)
+            Text(event.message, color = Pa.TextPrimary, fontSize = (12 * uiScale).sp)
+        }
+        // 回合 diff:等宽展示,横向可滚(桌面上的改动行往往很长,
+        // 手机上换行会把 diff 的语义彻底破坏)。
+        if (event.diff.isNotBlank()) {
+            Text(
+                event.diff,
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 260.dp)
+                    .verticalScroll(rememberScrollState())
+                    .horizontalScroll(rememberScrollState())
+                    .background(Pa.Bg, RoundedCornerShape(8.dp))
+                    .padding(8.dp),
+                color = Pa.TextSecondary,
+                fontSize = (10 * uiScale).sp,
+                fontFamily = FontFamily.Monospace,
+            )
         }
         if (event.url.isNotBlank()) {
             Text(
                 event.url,
                 color = Pa.TextTertiary,
-                fontSize = 10.sp,
+                fontSize = (10 * uiScale).sp,
                 fontFamily = FontFamily.Monospace,
+            )
+        }
+        /*
+         * 「仍然执行」:审查者(guardian / 自动审查)驳回之后的唯一出路。
+         * 不给这个入口,用户看到的就是"任务莫名失败了",而且他并不知道
+         * 自己其实有权推翻 —— 这才是这个按钮存在的全部理由。
+         */
+        when {
+            overridable -> TextButton(
+                onClick = { onApproveGuardian(event) },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text("仍然执行", color = Pa.Red, fontSize = (12 * uiScale).sp, fontWeight = FontWeight.SemiBold)
+            }
+            guardianOverridable(event) && guardianOverridden -> Text(
+                "已推翻这次驳回,继续执行",
+                color = Pa.Green,
+                fontSize = (11 * uiScale).sp,
             )
         }
         if (expanded) {
@@ -227,7 +302,7 @@ private fun CodexEventCard(event: CodexEvent) {
                     .background(Pa.Bg, RoundedCornerShape(8.dp))
                     .padding(8.dp),
                 color = Pa.TextSecondary,
-                fontSize = 10.sp,
+                fontSize = (10 * uiScale).sp,
                 fontFamily = FontFamily.Monospace,
             )
         }
@@ -1100,7 +1175,10 @@ val EFFORTS = listOf(
  * 导航栏中较高的那个"而不是两者相加。自己手写等价逻辑反而更脆(要处理 insets
  * 消费语义),所以直接用官方 union。
  */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    ExperimentalMaterial3Api::class,
+)
 @Composable
 fun ChatScreen(
     threadId: String,
@@ -1126,6 +1204,12 @@ fun ChatScreen(
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    // 「更多」面板:分叉 / 回滚。这两件事都是**偶尔做一次**的会话级动作,
+    // 单独给顶栏加两个常驻按钮会让它变挤,收进一个入口更稳。
+    var showMore by remember { mutableStateOf(false) }
+    // 回滚选择(二级面板):先选丢几个回合,再确认
+    var rollbackOpen by remember { mutableStateOf(false) }
+    var rollbackBusy by remember { mutableStateOf(false) }
     // 【长文本大窗编辑】输入框最多 4 行,写长需求/贴代码时不够用。
     // 打开一个整屏可用高度的编辑面板,内容与输入框双向同一份 state。
     var expandedInputOpen by remember { mutableStateOf(false) }
@@ -1152,6 +1236,8 @@ fun ChatScreen(
     BackHandler(enabled = true) {
         when {
             drawerCtrl.visible -> drawerCtrl.close()
+            rollbackOpen -> rollbackOpen = false
+            showMore -> showMore = false
             showExport -> showExport = false
             showGitPanel -> showGitPanel = false
             showContextCard -> showContextCard = false
@@ -1262,6 +1348,35 @@ fun ChatScreen(
                 Toast.makeText(ctx, "审批策略 → ${APPROVALS.find { it.first == id }?.second}", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(ctx, "切换失败:${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * 推翻审查者(guardian / 自动审查)的驳回结论,要求继续执行。
+     *
+     * 【为什么失败也要弹提示 —— 而不是静默重试】codex 侧对这条请求的校验很严:
+     * 结论一旦过期(daemon 重启、动作已经重发过),它就不认这个 reviewId 了。
+     * 这类失败重试没有意义,必须让用户看到"这条审查已经过期,请重新发起动作",
+     * 否则他会以为按钮坏了,反复点。
+     */
+    fun approveGuardian(ev: CodexEvent) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().approveGuardianDeniedAction(
+                        ApproveGuardianDeniedActionRequest.newBuilder()
+                            .setThreadId(threadId)
+                            .setReviewId(ev.reviewId)
+                            .setTargetItemId(ev.targetItemId)
+                            .build(),
+                    )
+                }
+                // 成功:收起入口并留住"已推翻"的状态(离开页面再回来也不会又冒出按钮)
+                TurnSession.markGuardianOverridden(threadId, ev.reviewId)
+                Toast.makeText(ctx, "已推翻这次驳回,电脑会继续执行", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "推翻失败:${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -1407,6 +1522,60 @@ fun ChatScreen(
         TurnSession.send(threadId, text, sent)
     }
 
+    /**
+     * 分叉:从当前会话的最新状态复制出一条新会话,原会话不动。
+     *
+     * 【为什么不做"从某条消息分叉"】手机端时间线里没有 codex 的回合 id ——
+     * 历史接口(ThreadMessage)不带 turnId,所以给不出"从这一回合之后分叉"。
+     * 与其做一个选了也传不对参数的回合选择器,不如只提供"从最新状态分叉"这个
+     * 真实成立的语义,并把这句话写在按钮下面。
+     */
+    fun doFork() {
+        showMore = false
+        if (st.running) {
+            Toast.makeText(ctx, "任务正在执行,等它跑完再分叉", Toast.LENGTH_SHORT).show()
+            return
+        }
+        scope.launch {
+            try {
+                val nt = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().forkThread(
+                        ForkThreadRequest.newBuilder().setThreadId(threadId).build())
+                }
+                Toast.makeText(ctx, "已分叉出「${nt.title}」", Toast.LENGTH_SHORT).show()
+                onOpenThread(nt.id)
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "分叉失败", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** 回滚最近 turns 个回合:只改对话历史,不会撤销电脑上已经改过的文件。 */
+    fun doRollback(turns: Int) {
+        if (rollbackBusy) return
+        rollbackBusy = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().rollbackThread(
+                        RollbackThreadRequest.newBuilder()
+                            .setThreadId(threadId)
+                            .setNumTurns(turns)
+                            .build())
+                }
+                rollbackOpen = false
+                // 重新拉一次历史:daemon 会把本地历史裁掉,但手机端手上那份还是旧的,
+                // 不重拉就会出现"回滚了但屏幕上那几条还在"。
+                reloadToken++
+                Toast.makeText(ctx, "已回滚最近 $turns 个回合", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "回滚失败", Toast.LENGTH_LONG).show()
+            } finally {
+                rollbackBusy = false
+            }
+        }
+    }
+
     st.pendingApproval?.let { ap ->
         ApprovalSheet(
             action = ap,
@@ -1465,6 +1634,12 @@ fun ChatScreen(
             IconActionButton(
                 AppR.drawable.ic_lucide_download, "导出对话",
                 { showExport = true },
+                bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+            )
+            Spacer(Modifier.width(8.dp))
+            IconActionButton(
+                AppR.drawable.ic_lucide_ellipsis, "更多",
+                { showMore = true },
                 bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
             )
             Spacer(Modifier.width(8.dp))
@@ -1638,7 +1813,18 @@ fun ChatScreen(
                     "tool" -> ToolCallCard(item, uiScale)
                     // 后台 Codex/MCP 事件只影响右上角状态点，不再把诊断卡片
                     // 连续插入会话正文。
-                    "codex_event" -> Unit
+                    // 【本轮修正】以前这里是一句 `-> Unit`,把所有 codex 事件
+                    // 一律丢弃 —— 连"审查者驳回了动作"这种用户必须知情(而且可以
+                    // 推翻)的事件也一起丢了。现在按 shouldShowCodexEventInTimeline
+                    // 的分类渲染:诊断类在源头就不进 items,进 items 的都要看得见。
+                    "codex_event" -> item.codexEvent?.let { ev ->
+                        CodexEventCard(
+                            event = ev,
+                            uiScale = uiScale,
+                            guardianOverridden = st.guardianOverridden.contains(ev.reviewId),
+                            onApproveGuardian = { approveGuardian(it) },
+                        )
+                    }
                     "usage" -> Unit
                     else -> Column(Modifier.fillMaxWidth()) {
                         // 长按复制整条回复
@@ -2041,6 +2227,119 @@ fun ChatScreen(
                 onOpenSettings()
             },
         )
+    }
+
+    // ---- 更多:分叉 / 回滚 ----
+    if (showMore) {
+        ModalBottomSheet(
+            onDismissRequest = { showMore = false },
+            containerColor = Pa.CardHigh,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
+                Text(
+                    "会话操作",
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    fontSize = 17.sp, color = Pa.TextPrimary,
+                )
+                Spacer(Modifier.height(10.dp))
+                SheetAction(AppR.drawable.ic_lucide_git_branch, "分叉会话") { doFork() }
+                Text(
+                    forkConsequence(),
+                    Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Pa.Separator)
+                SheetAction(
+                    AppR.drawable.ic_lucide_undo_2, "回滚…", Pa.Red,
+                ) {
+                    showMore = false
+                    rollbackOpen = true
+                }
+                Text(
+                    "把会话退回几个回合之前(只改对话记录)。",
+                    Modifier.padding(start = 24.dp, end = 24.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+            }
+        }
+    }
+
+    // ---- 回滚:选丢几个回合,再确认 ----
+    // 回合数从时间线里现数(每条用户消息 = 一个回合)。数不出回合(历史还没加载出来)
+    // 就不给选项 —— 免得用户选完必然失败。
+    if (rollbackOpen) {
+        val turnTotal = st.items.count { it.role == "user" }
+        val options = rollbackOptions(turnTotal)
+        var picked by remember(turnTotal) { mutableStateOf(1) }
+        ModalBottomSheet(
+            onDismissRequest = { rollbackOpen = false },
+            containerColor = Pa.CardHigh,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
+                Text(
+                    "回滚会话",
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    fontSize = 17.sp, color = Pa.TextPrimary,
+                )
+                if (options.isEmpty()) {
+                    Text(
+                        "这个会话还没有可回滚的回合。",
+                        Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+                        fontSize = 13.sp, color = Pa.TextTertiary,
+                    )
+                } else {
+                    Text(
+                        rollbackConsequence(picked),
+                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
+                        fontSize = 12.sp, color = Pa.TextSecondary,
+                    )
+                    options.forEach { n ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable { picked = n }
+                                .padding(horizontal = 24.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                painterResource(
+                                    if (picked == n) AppR.drawable.ic_lucide_circle_check
+                                    else AppR.drawable.ic_lucide_undo_2,
+                                ),
+                                null,
+                                tint = if (picked == n) Pa.Red else Pa.TextTertiary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                rollbackOptionLabel(n, turnTotal),
+                                fontSize = 15.sp,
+                                color = if (picked == n) Pa.TextPrimary else Pa.TextSecondary,
+                            )
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(onClick = { rollbackOpen = false }, enabled = !rollbackBusy) {
+                            Text("取消")
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            enabled = !rollbackBusy,
+                            onClick = { doRollback(picked) },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = Pa.Red,
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                        ) { Text("确认回滚", color = Color.White) }
+                    }
+                }
+            }
+        }
     }
 
     // 导出对话(可多选)

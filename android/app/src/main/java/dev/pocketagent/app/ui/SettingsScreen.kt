@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -74,14 +75,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import pocketagent.v1.CodexCapability
 import pocketagent.v1.CodexSettings
+import pocketagent.v1.CodexUsage
 import pocketagent.v1.GetCodexSettingsRequest
+import pocketagent.v1.GetCodexUsageRequest
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostInfo
+import pocketagent.v1.ListCodexCapabilitiesRequest
 import pocketagent.v1.ListMcpServersRequest
 import pocketagent.v1.ListModelsRequest
 import pocketagent.v1.McpServerStatus
 import pocketagent.v1.ModelInfo
+import pocketagent.v1.RateLimitWindow
 import pocketagent.v1.SetCodexSettingsRequest
 
 private val OTHER_AGENT_OPTIONS = listOf(
@@ -93,6 +99,189 @@ private val OTHER_AGENT_OPTIONS = listOf(
 
 /** agent id → 展示名(二级页标题、agent 列表共用)。 */
 private val AGENT_DISPLAY = (listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS).toMap()
+
+/**
+ * 按托管策略(configRequirements)过滤可选项。
+ *
+ * 【为什么必须过滤 —— 一个"点了没反应"的经典坑】桌面上的 codex 可能被
+ * 管理员/MDM 通过 requirements.toml 约束,白名单之外的取值会被 codex **直接拒绝**。
+ * 而设置页走的是乐观更新:先改本地状态、再发请求。于是用户看到的是
+ * "已改成完全访问",实际压根没生效,而且没有任何报错 —— 他会以为这个 App 坏了。
+ * 与其给一个点了没用的选项,不如一开始就不给。
+ *
+ * [allowed] 为空表示该项无限制(未被托管),原样返回全部可选项。
+ */
+private fun <T> filterByManagedPolicy(
+    all: List<T>,
+    allowed: List<String>,
+    id: (T) -> String,
+): List<T> = if (allowed.isEmpty()) all else all.filter { id(it) in allowed }
+
+/** 状态胶囊:一行小字 + 语义色底。用于 MCP 服务器"就绪/失败"这类一眼判断。 */
+@Composable
+private fun StatusChip(text: String, color: Color) {
+    Text(
+        text,
+        Modifier
+            .background(color.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        color = color,
+        fontSize = 10.5.sp,
+        fontWeight = FontWeight.Medium,
+    )
+}
+
+/**
+ * 用量与限流面板。
+ *
+ * 【为什么值得占一屏】用户在手机外面发任务之前,第一个要确认的就是"还有没有额度"。
+ * 以前只有 account/rateLimits/updated 被当告警转发,没有一个可以主动查看的地方 ——
+ * 想知道额度只能回电脑。而手机上最贵的成本就是"为了看一眼数字而走回电脑前"。
+ *
+ * 【读不到时不能显示 0】这是最容易做错的一步:额度读不到(未登录 / 地区受限 /
+ * 断网)时如果照常渲染 0%,用户会理解成"额度用完了",然后不敢发任务 ——
+ * 一次数据缺失被读成一次业务结论。所以读不到就直说读不到,并带上原因。
+ */
+@Composable
+private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
+    if (usage == null) {
+        Text(
+            if (loading) "正在读取…" else "未获取到用量信息",
+            fontSize = 12.sp, color = Pa.TextTertiary,
+            modifier = Modifier.padding(vertical = 12.dp),
+        )
+        return
+    }
+    if (usage.error.isNotBlank()) {
+        Text("暂时读不到额度", fontSize = 12.5.sp, color = Pa.TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text(usage.error, fontSize = 11.sp, color = Pa.TextTertiary)
+        return
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            usage.planType.ifBlank { "未报告套餐" },
+            Modifier.weight(1f),
+            fontSize = 13.sp,
+            color = Pa.TextPrimary,
+            fontWeight = FontWeight.Medium,
+        )
+        if (usage.spendControlReached) {
+            StatusChip("已达上限", Pa.Red)
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+
+    RateLimitRow("5 小时", usage.primary)
+    Spacer(Modifier.height(8.dp))
+    RateLimitRow("每周", usage.secondary)
+
+    // 累计用量属于"看一眼就够"的补充信息,放在最后,不跟限流条抢注意力。
+    val extras = buildList {
+        if (usage.lifetimeTokens > 0) {
+            add("累计 ${formatTokenCount(usage.lifetimeTokens)} tokens")
+        }
+        if (usage.peakDailyTokens > 0) {
+            add("单日峰值 ${formatTokenCount(usage.peakDailyTokens)}")
+        }
+        if (usage.currentStreakDays > 0) add("连续 ${usage.currentStreakDays} 天")
+    }
+    if (extras.isNotEmpty()) {
+        Spacer(Modifier.height(9.dp))
+        Text(extras.joinToString(" · "), fontSize = 11.sp, color = Pa.TextTertiary)
+    }
+    if (usage.hasCredits || usage.creditBalance.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (usage.unlimitedCredits) "额度不限量" else "剩余额度 ${usage.creditBalance}",
+            fontSize = 11.sp,
+            color = Pa.TextTertiary,
+        )
+    }
+}
+
+/**
+ * 一条限流窗口:名称 + 百分比 + 进度条 + 重置倒计时。
+ * 数据缺失(usedPercent 与 resets 都是 0 且窗口长度未知)时整条不显示 ——
+ * 画一条永远 0% 的进度条比不画更容易误导。
+ */
+@Composable
+private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
+    if (window == null) return
+    val hasData = window.usedPercent > 0 || window.resetsAtUnixS > 0 || window.windowDurationMins > 0
+    if (!hasData) return
+
+    val pct = usedPercentClamped(window)
+    val barColor = when (usageLevelColorPercent(pct)) {
+        2 -> Pa.Red
+        1 -> Pa.Yellow
+        else -> Pa.Green
+    }
+    val reset = resetCountdownLabel(window.resetsAtUnixS, System.currentTimeMillis())
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                rateLimitWindowLabel(window.windowDurationMins, fallbackLabel),
+                Modifier.weight(1f),
+                fontSize = 12.sp,
+                color = Pa.TextSecondary,
+            )
+            Text("$pct%", fontSize = 12.sp, color = barColor, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.height(5.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .background(Pa.Bg, RoundedCornerShape(50)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(pct / 100f)
+                    .fillMaxHeight()
+                    .background(barColor, RoundedCornerShape(50)),
+            )
+        }
+        if (reset.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(reset, fontSize = 10.5.sp, color = Pa.TextTertiary)
+        }
+    }
+}
+
+/** 大数字缩写成 k / M,避免"1234567 tokens"这种读不出量级的写法。 */
+private fun formatTokenCount(value: Long): String = when {
+    value >= 1_000_000L -> String.format(java.util.Locale.US, "%.1fM", value / 1_000_000.0)
+    value >= 1_000L -> String.format(java.util.Locale.US, "%.0fk", value / 1_000.0)
+    else -> value.toString()
+}
+/** 托管策略生效时的说明条:告诉用户"为什么选项变少了",而不是让他自己发现少了。 */
+@Composable
+private fun ManagedPolicyNote(text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Yellow.copy(alpha = 0.10f), RoundedCornerShape(11.dp))
+            .padding(horizontal = 11.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_lucide_shield),
+            null,
+            tint = Pa.Yellow,
+            modifier = Modifier.size(13.dp).padding(top = 1.dp),
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(
+            text,
+            fontSize = 11.sp,
+            color = Pa.TextSecondary,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
 
 /**
  * agent id → 品牌图标:与主页网格用的是**同一组 drawable**,
@@ -140,8 +329,22 @@ fun SettingsScreen(
     var addr by remember { mutableStateOf(AgentConnection.configuredAddress()) }
     var token by remember { mutableStateOf(AgentConnection.token) }
     var settings by remember { mutableStateOf<CodexSettings?>(null) }
-    var settingsLoading by remember { mutableStateOf(true) }
     var mcpList by remember { mutableStateOf(listOf<McpServerStatus>()) }
+    var mcpLoading by remember { mutableStateOf(true) }
+    // 用量/限流:以前只把 account/rateLimits/updated 当告警转发,没有可查看的面板,
+    // 用户想知道"还有没有额度"只能回到电脑上。
+    var codexUsage by remember { mutableStateOf<CodexUsage?>(null) }
+    var usageLoading by remember { mutableStateOf(true) }
+    // 能力可见性:这台电脑上这个 agent 到底有哪些技能/hooks/插件。
+    var capabilities by remember { mutableStateOf(listOf<CodexCapability>()) }
+    // 【必须与"确实是空的"分开】能力是本地读取(快),用量要打上游(慢)。
+    // 如果共用一个 loading 标志,慢调用还没回来时能力面板就会显示
+    // "未报告任何技能" —— 把"还没加载"说成"确实没有",用户会以为功能坏了。
+    var capabilitiesLoading by remember { mutableStateOf(true) }
+    // 读失败的原因。必须与"确实是空的"分开:失败时渲染成"未报告任何技能"
+    // 等于告诉用户"你没装技能",而真相是这次没读到 —— 用户会去重装技能,
+    // 白折腾一圈。这是这块 UI 里最容易漏掉的第四个状态。
+    var capabilitiesError by remember { mutableStateOf<String?>(null) }
     var host by remember { mutableStateOf<HostInfo?>(null) }
     var showApprovalPreview by remember { mutableStateOf(false) }
     var connectionSaving by remember { mutableStateOf(false) }
@@ -183,21 +386,63 @@ fun SettingsScreen(
             withContext(Dispatchers.IO) {
                 settings = AgentConnection.modelService()
                     .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
-                settingsLoading = false
                 host = AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
             }
         } catch (e: Exception) {
-            settingsLoading = false
             settingsError = "无法加载 Codex 设置：${e.message ?: "连接失败"}"
         }
+        // 三个面板依次拉取,但**每个面板有自己的 loading 标志**。
+        //
+        // 【为什么不是并发】试过并发,结果三个调用一起失败:
+        // UNAVAILABLE: Channel shutdownNow invoked。原因是自动重连探活会在
+        // 判定连接异常时回收整条 gRPC 通道(shutdownNow),并发的长调用会被一起打断。
+        // 串行时只有当前这一个调用受影响,其余面板照常出数据。
+        //
+        // 【顺序:先本地后上游】MCP 与能力是 codex 本地读取(毫秒级),用量要打
+        // chatgpt.com(可能几十秒,还会超时)。把用量放最后,慢调用就不会挡住
+        // 前面两个面板先显示出来。
+        //
+        // 【为什么每个面板必须有自己的标志】以前三个面板共用 settingsLoading,
+        // 而那个标志只代表"设置本体"读完了 —— 于是"还在读取"会被显示成
+        // "未获取到 MCP 列表" / "未报告任何技能",用户据此以为 MCP 没配、
+        // 技能没装,而真相只是还没回来。
         try {
-            withContext(Dispatchers.IO) {
-                mcpList = AgentConnection.modelServiceSlow()
+            mcpList = withContext(Dispatchers.IO) {
+                AgentConnection.modelServiceSlow()
                     .listMcpServers(ListMcpServersRequest.newBuilder().build())
                     .serversList
             }
         } catch (e: Exception) {
             if (settingsError == null) settingsError = "无法加载 MCP 列表：${e.message ?: "连接失败"}"
+        } finally {
+            mcpLoading = false
+        }
+        try {
+            capabilities = withContext(Dispatchers.IO) {
+                AgentConnection.modelServiceSlow()
+                    .listCodexCapabilities(ListCodexCapabilitiesRequest.newBuilder().build())
+                    .itemsList
+            }
+        } catch (e: Exception) {
+            // 不抢占 settingsError(它属于设置本体),但要留下自己的原因,
+            // 供面板区分"读不到"和"确实没有"。
+            capabilitiesError = e.message ?: "连接失败"
+        } finally {
+            capabilitiesLoading = false
+        }
+        // 用量:读不到时 daemon 会把原因放在 usage.error 里带回来,这里不把它当异常 ——
+        // "读不到"本身就是要展示给用户的信息(未登录 / 地区不支持 / 网络)。
+        try {
+            codexUsage = withContext(Dispatchers.IO) {
+                AgentConnection.modelServiceSlow()
+                    .getCodexUsage(GetCodexUsageRequest.newBuilder().build())
+            }
+        } catch (e: Exception) {
+            codexUsage = CodexUsage.newBuilder()
+                .setError(e.message ?: "连接失败")
+                .build()
+        } finally {
+            usageLoading = false
         }
     }
 
@@ -363,9 +608,14 @@ fun SettingsScreen(
             onBack = { subPage = null },
             runningAgent = runningAgent,
             settings = settings,
-            settingsLoading = settingsLoading,
             modelChoices = modelChoices,
             mcpList = mcpList,
+            mcpLoading = mcpLoading,
+            codexUsage = codexUsage,
+            usageLoading = usageLoading,
+            capabilities = capabilities,
+            capabilitiesLoading = capabilitiesLoading,
+            capabilitiesError = capabilitiesError,
             host = host,
             writeCodex = codexWriter,
             onFeedback = { showSettingsFeedback(it) },
@@ -902,9 +1152,14 @@ private fun AgentPage(
     onBack: () -> Unit,
     runningAgent: String,
     settings: CodexSettings?,
-    settingsLoading: Boolean,
     modelChoices: List<ModelInfo>,
     mcpList: List<McpServerStatus>,
+    mcpLoading: Boolean,
+    codexUsage: CodexUsage?,
+    usageLoading: Boolean,
+    capabilities: List<CodexCapability>,
+    capabilitiesLoading: Boolean,
+    capabilitiesError: String?,
     host: HostInfo?,
     writeCodex: CodexWriter,
     onFeedback: (String) -> Unit,
@@ -938,56 +1193,106 @@ private fun AgentPage(
         if (runningAgent == "codex") {
             SectionBlock(icon = R.drawable.ic_lucide_shield, title = "权限与安全") {
                 Spacer(Modifier.height(10.dp))
+                // 托管策略:被 requirements.toml 约束时,只渲染白名单里的取值。
+                // 读取/写入都还是原字段,只是可选项被收窄。
+                val allowedApproval = settings?.allowedApprovalPoliciesList.orEmpty()
+                val allowedSandbox = settings?.allowedSandboxModesList.orEmpty()
+                if (settings?.managed == true) {
+                    ManagedPolicyNote(
+                        settings.managedNote.ifBlank {
+                            "这台电脑上的 Codex 受管理员策略约束,部分选项已被限制。"
+                        },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+
                 // 审批策略
-                val approvalOptions = listOf(
-                    Triple("untrusted", "仅信任", "只自动执行白名单命令"),
-                    Triple("on-request", "按需询问", "运行命令前先征求批准"),
-                    Triple("never", "完全访问", "不询问,直接执行"),
-                )
-                val approvalIdx = approvalOptions
-                    .indexOfFirst { it.first == settings?.approvalPolicy }
-                    .coerceAtLeast(0)
-                SplitButton(
-                    label = "审批策略",
-                    mainLabel = approvalOptions[approvalIdx].second,
-                    onMainClick = {
-                        val next = approvalOptions[(approvalIdx + 1) % approvalOptions.size]
-                        writeCodex.copy(approval = next.first).commit()
-                    },
-                    options = approvalOptions.map { (id, label, desc) ->
-                        SplitOption(
-                            title = label,
-                            desc = desc,
-                            selected = settings?.approvalPolicy == id,
-                        ) { writeCodex.copy(approval = id).commit() }
-                    },
-                )
+                val approvalOptions = filterByManagedPolicy(
+                    listOf(
+                        Triple("untrusted", "仅信任", "只自动执行白名单命令"),
+                        Triple("on-request", "按需询问", "运行命令前先征求批准"),
+                        Triple("never", "完全访问", "不询问,直接执行"),
+                    ),
+                    allowedApproval,
+                ) { it.first }
+                if (approvalOptions.isEmpty()) {
+                    // 白名单里的取值我们一个都不认识(codex 加了新的策略档位)。
+                    // 这种情况给一个不可点的只读行,而不是让下面的下标访问崩掉。
+                    SettingRow(
+                        title = "审批策略",
+                        desc = "当前取值 ${settings?.approvalPolicy.orEmpty()} 不在 App 支持的选项内",
+                        divider = true,
+                    )
+                } else {
+                    // 【不能 coerceAtLeast(0)】codex 没报告这个值时(桌面未显式配置,
+                    // 用 codex 自己的默认),退回列表第一项会让界面显示"仅信任" ——
+                    // 用户会以为自己已经处在那个模式里,而实际生效的是别的值。
+                    // 取不到就如实写"跟随桌面",并且一个选项都不标选中。
+                    val approvalIdx = approvalOptions
+                        .indexOfFirst { it.first == settings?.approvalPolicy }
+                    val approvalLabel = if (approvalIdx >= 0) {
+                        approvalOptions[approvalIdx].second
+                    } else {
+                        "跟随桌面"
+                    }
+                    SplitButton(
+                        label = "审批策略",
+                        mainLabel = approvalLabel,
+                        onMainClick = {
+                            val next = approvalOptions[if (approvalIdx >= 0) (approvalIdx + 1) % approvalOptions.size else 0]
+                            writeCodex.copy(approval = next.first).commit()
+                        },
+                        options = approvalOptions.map { (id, label, desc) ->
+                            SplitOption(
+                                title = label,
+                                desc = desc,
+                                selected = settings?.approvalPolicy == id,
+                            ) { writeCodex.copy(approval = id).commit() }
+                        },
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
 
                 // 沙箱模式
-                val sandboxOptions = listOf(
-                    Triple("read-only", "只读", "只能读取文件"),
-                    Triple("workspace-write", "工作区可写", "仅工作区内可写"),
-                    Triple("danger-full-access", "完全访问", "不限制文件与网络"),
-                )
-                val sandboxIdx = sandboxOptions
-                    .indexOfFirst { it.first == settings?.sandbox }
-                    .coerceAtLeast(0)
-                SplitButton(
-                    label = "沙箱模式",
-                    mainLabel = sandboxOptions[sandboxIdx].second,
-                    onMainClick = {
-                        val next = sandboxOptions[(sandboxIdx + 1) % sandboxOptions.size]
-                        writeCodex.copy(sandbox = next.first).commit()
-                    },
-                    options = sandboxOptions.map { (id, label, desc) ->
-                        SplitOption(
-                            title = label,
-                            desc = desc,
-                            selected = settings?.sandbox == id,
-                        ) { writeCodex.copy(sandbox = id).commit() }
-                    },
-                )
+                val sandboxOptions = filterByManagedPolicy(
+                    listOf(
+                        Triple("read-only", "只读", "只能读取文件"),
+                        Triple("workspace-write", "工作区可写", "仅工作区内可写"),
+                        Triple("danger-full-access", "完全访问", "不限制文件与网络"),
+                    ),
+                    allowedSandbox,
+                ) { it.first }
+                if (sandboxOptions.isEmpty()) {
+                    SettingRow(
+                        title = "沙箱模式",
+                        desc = "当前取值 ${settings?.sandbox.orEmpty()} 不在 App 支持的选项内",
+                        divider = true,
+                    )
+                } else {
+                    // 同上:取值未知时如实显示"跟随桌面",不假装选中第一项。
+                    val sandboxIdx = sandboxOptions
+                        .indexOfFirst { it.first == settings?.sandbox }
+                    val sandboxLabel = if (sandboxIdx >= 0) {
+                        sandboxOptions[sandboxIdx].second
+                    } else {
+                        "跟随桌面"
+                    }
+                    SplitButton(
+                        label = "沙箱模式",
+                        mainLabel = sandboxLabel,
+                        onMainClick = {
+                            val next = sandboxOptions[if (sandboxIdx >= 0) (sandboxIdx + 1) % sandboxOptions.size else 0]
+                            writeCodex.copy(sandbox = next.first).commit()
+                        },
+                        options = sandboxOptions.map { (id, label, desc) ->
+                            SplitOption(
+                                title = label,
+                                desc = desc,
+                                selected = settings?.sandbox == id,
+                            ) { writeCodex.copy(sandbox = id).commit() }
+                        },
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
 
                 Box(
@@ -1179,19 +1484,100 @@ private fun AgentPage(
                 Spacer(Modifier.height(6.dp))
             }
 
+            SectionBlock(icon = R.drawable.ic_lucide_server, title = "用量与限流") {
+                Spacer(Modifier.height(10.dp))
+                CodexUsageBody(usage = codexUsage, loading = usageLoading)
+                Spacer(Modifier.height(6.dp))
+            }
+
+            SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "能力 · 技能与插件") {
+                Spacer(Modifier.height(10.dp))
+                if (capabilities.isEmpty()) {
+                    // 四态必须分清:还在读 / 读失败 / 读完确实没有 / 有数据。
+                    // 前两个都不能渲染成最后一个 —— "还在读"说成"未报告任何",
+                    // 用户以为技能没装;"读失败"说成"未报告任何",用户会去重装技能,
+                    // 白折腾一圈。这块 UI 最容易漏的就是第四个状态。
+                    val emptyText = when {
+                        capabilitiesLoading -> "正在读取…"
+                        capabilitiesError != null -> "暂时读不到能力列表：" + capabilitiesError
+                        else -> "这台电脑上的 Codex 未报告任何技能、hooks 或插件"
+                    }
+                    Text(
+                        emptyText,
+                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                } else {
+                    val byKind = capabilities.groupBy { it.kind }
+                    // 顺序固定:技能 → hooks → 插件。用 codex 返回的顺序会随
+                    // 目录扫描结果抖动,同一台机器每次打开位置都不一样。
+                    listOf("skill" to "技能", "hook" to "Hooks", "plugin" to "插件")
+                        .forEach { (kind, label) ->
+                            val items = byKind[kind].orEmpty()
+                            if (items.isEmpty()) return@forEach
+                            Text(
+                                "$label · ${items.size}",
+                                fontSize = 11.sp,
+                                color = Pa.TextTertiary,
+                                modifier = Modifier.padding(bottom = 4.dp),
+                            )
+                            items.forEachIndexed { i, c ->
+                                // 描述优先给"为什么用不了":enabled=false 却不说明原因,
+                                // 用户只会觉得"我装的技能没生效"。三项都空就整行留白,
+                                // 不硬凑一句废话。
+                                val desc = listOfNotNull(
+                                    c.disabledReason.takeIf { it.isNotBlank() },
+                                    c.description.takeIf { it.isNotBlank() },
+                                    c.source.takeIf { it.isNotBlank() }?.let { "来源 $it" },
+                                ).firstOrNull().orEmpty()
+                                // control 是必填的 RowScope 槽位(默认空实现),所以
+                                // 这里不做"传 null 表示没有控件",而是在槽位内部判断。
+                                SettingRow(
+                                    title = c.name.ifBlank { "(未命名)" },
+                                    desc = desc,
+                                    divider = i != items.lastIndex,
+                                    control = {
+                                        if (!c.enabled) {
+                                            Text("已停用", fontSize = 11.sp, color = Pa.TextTertiary)
+                                        }
+                                    },
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                }
+            }
+
             SectionBlock(icon = R.drawable.ic_lucide_server, title = "集成 · MCP 服务器") {
                 if (mcpList.isEmpty()) {
                     Text(
-                        if (settingsLoading) "加载中…" else "未获取到 MCP 列表",
+                        if (mcpLoading) "正在读取…" else "未获取到 MCP 列表",
                         fontSize = 12.sp, color = Pa.TextTertiary,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
                     mcpList.forEachIndexed { index, m ->
                         SettingRow(
-                            title = m.name,
-                            desc = "${m.tools} 个工具",
+                            title = m.serverTitle.ifBlank { m.name },
+                            // 只显示工具数的话,"某个 MCP 用不了"在手机上完全看不出来。
+                            // 鉴权状态直接回答是不是授权问题,错误原因直接给出失败理由。
+                            desc = buildString {
+                                append("${m.tools} 个工具")
+                                if (m.authStatus.isNotBlank() && m.authStatus != "unsupported") {
+                                    append(" · 鉴权 ${m.authStatus}")
+                                }
+                                if (m.resourceCount > 0) append(" · ${m.resourceCount} 个资源")
+                                if (m.serverVersion.isNotBlank()) append(" · v${m.serverVersion}")
+                                if (m.error.isNotBlank()) append(" · ${m.error}")
+                            },
                             divider = index != mcpList.lastIndex,
+                            control = {
+                                val ok = m.status == "ready" && m.error.isBlank()
+                                StatusChip(
+                                    text = if (ok) "就绪" else if (m.error.isNotBlank()) "失败" else m.status,
+                                    color = if (ok) Pa.Green else Pa.Red,
+                                )
+                            },
                         )
                     }
                 }

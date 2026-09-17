@@ -63,6 +63,36 @@ func (s *Server) ListCodexThreads(ctx context.Context, req *pb.ListCodexThreadsR
 	return out, nil
 }
 
+// codexRolloutMessages 把某个 codex 线程的 rollout 读成本地会话消息。
+//
+// 【为什么抽出来】"把一个 codex 线程变成可续聊的本地线程"有两个入口:
+// 导入电脑上已有的会话(ImportCodexThread)、以及分叉(ForkThread)。
+// 两边的差别只在标题/工作区怎么定,消息映射必须完全一致 —— 否则会出现
+// "导入的会话有历史、分叉的没历史"这种同源不同果的差异。
+func codexRolloutMessages(codexThreadID string) ([]store.StoredMessage, error) {
+	path, err := agent.FindCodexSession(codexThreadID)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := agent.LoadCodexSessionMessages(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.StoredMessage, 0, len(msgs))
+	for _, m := range msgs {
+		at := m.At.UnixMilli()
+		if at <= 0 {
+			at = time.Now().UnixMilli()
+		}
+		out = append(out, store.StoredMessage{
+			Role:      m.Role,
+			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: m.Text}}}},
+			CreatedAt: at,
+		})
+	}
+	return out, nil
+}
+
 func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThreadRequest) (*pb.ImportCodexThreadResponse, error) {
 	// 已导入过:直接复用现有线程(不重复建)
 	for _, t := range s.cfg.Store.List(true) {
@@ -70,13 +100,11 @@ func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThrea
 			return &pb.ImportCodexThreadResponse{ThreadId: t.ID}, nil
 		}
 	}
-	path, err := agent.FindCodexSession(req.CodexThreadId)
+	msgs, err := codexRolloutMessages(req.CodexThreadId)
 	if err != nil {
+		// FindCodexSession 给的是自定义错误("找不到 codex 会话 …的 rollout"),
+		// 语义就是"没这个会话" —— 与改动前一致地回 NotFound。
 		return nil, errNotFound(err.Error())
-	}
-	msgs, err := agent.LoadCodexSessionMessages(path)
-	if err != nil {
-		return nil, errInternal(err)
 	}
 	sessions, _ := agent.ListCodexSessions()
 	title, cwd := "codex 会话", ""
@@ -101,17 +129,7 @@ func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThrea
 		CreatedAt:     time.Now().UnixMilli(),
 		UpdatedAt:     time.Now().UnixMilli(),
 	}
-	for _, m := range msgs {
-		at := m.At.UnixMilli()
-		if at <= 0 {
-			at = time.Now().UnixMilli()
-		}
-		t.Messages = append(t.Messages, store.StoredMessage{
-			Role:      m.Role,
-			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: m.Text}}}},
-			CreatedAt: at,
-		})
-	}
+	t.Messages = append(t.Messages, msgs...)
 	if err := s.cfg.Store.Create(t); err != nil {
 		return nil, errInternal(err)
 	}

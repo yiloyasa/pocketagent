@@ -19,12 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ModelService_ListModels_FullMethodName       = "/pocketagent.v1.ModelService/ListModels"
-	ModelService_SetDefaultModel_FullMethodName  = "/pocketagent.v1.ModelService/SetDefaultModel"
-	ModelService_TestModel_FullMethodName        = "/pocketagent.v1.ModelService/TestModel"
-	ModelService_GetCodexSettings_FullMethodName = "/pocketagent.v1.ModelService/GetCodexSettings"
-	ModelService_SetCodexSettings_FullMethodName = "/pocketagent.v1.ModelService/SetCodexSettings"
-	ModelService_ListMcpServers_FullMethodName   = "/pocketagent.v1.ModelService/ListMcpServers"
+	ModelService_ListModels_FullMethodName            = "/pocketagent.v1.ModelService/ListModels"
+	ModelService_SetDefaultModel_FullMethodName       = "/pocketagent.v1.ModelService/SetDefaultModel"
+	ModelService_TestModel_FullMethodName             = "/pocketagent.v1.ModelService/TestModel"
+	ModelService_GetCodexSettings_FullMethodName      = "/pocketagent.v1.ModelService/GetCodexSettings"
+	ModelService_SetCodexSettings_FullMethodName      = "/pocketagent.v1.ModelService/SetCodexSettings"
+	ModelService_ListMcpServers_FullMethodName        = "/pocketagent.v1.ModelService/ListMcpServers"
+	ModelService_GetCodexUsage_FullMethodName         = "/pocketagent.v1.ModelService/GetCodexUsage"
+	ModelService_ListCodexCapabilities_FullMethodName = "/pocketagent.v1.ModelService/ListCodexCapabilities"
 )
 
 // ModelServiceClient is the client API for ModelService service.
@@ -41,6 +43,12 @@ type ModelServiceClient interface {
 	SetCodexSettings(ctx context.Context, in *SetCodexSettingsRequest, opts ...grpc.CallOption) (*CodexSettings, error)
 	// MCP 服务器状态(对应 codex 的 MCP 配置)
 	ListMcpServers(ctx context.Context, in *ListMcpServersRequest, opts ...grpc.CallOption) (*ListMcpServersResponse, error)
+	// ---- 用量 / 限流(account/rateLimits/read + account/usage/read)----
+	// 用户在手机外面发任务之前,得先知道"还有没有额度"。以前只把
+	// account/rateLimits/updated 当告警转发,没落成可查看的面板。
+	GetCodexUsage(ctx context.Context, in *GetCodexUsageRequest, opts ...grpc.CallOption) (*CodexUsage, error)
+	// ---- 能力可见性(只读):这台电脑上这个 agent 到底有哪些技能/hooks/插件 ----
+	ListCodexCapabilities(ctx context.Context, in *ListCodexCapabilitiesRequest, opts ...grpc.CallOption) (*ListCodexCapabilitiesResponse, error)
 }
 
 type modelServiceClient struct {
@@ -111,6 +119,26 @@ func (c *modelServiceClient) ListMcpServers(ctx context.Context, in *ListMcpServ
 	return out, nil
 }
 
+func (c *modelServiceClient) GetCodexUsage(ctx context.Context, in *GetCodexUsageRequest, opts ...grpc.CallOption) (*CodexUsage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CodexUsage)
+	err := c.cc.Invoke(ctx, ModelService_GetCodexUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *modelServiceClient) ListCodexCapabilities(ctx context.Context, in *ListCodexCapabilitiesRequest, opts ...grpc.CallOption) (*ListCodexCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCodexCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, ModelService_ListCodexCapabilities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ModelServiceServer is the server API for ModelService service.
 // All implementations must embed UnimplementedModelServiceServer
 // for forward compatibility.
@@ -125,6 +153,12 @@ type ModelServiceServer interface {
 	SetCodexSettings(context.Context, *SetCodexSettingsRequest) (*CodexSettings, error)
 	// MCP 服务器状态(对应 codex 的 MCP 配置)
 	ListMcpServers(context.Context, *ListMcpServersRequest) (*ListMcpServersResponse, error)
+	// ---- 用量 / 限流(account/rateLimits/read + account/usage/read)----
+	// 用户在手机外面发任务之前,得先知道"还有没有额度"。以前只把
+	// account/rateLimits/updated 当告警转发,没落成可查看的面板。
+	GetCodexUsage(context.Context, *GetCodexUsageRequest) (*CodexUsage, error)
+	// ---- 能力可见性(只读):这台电脑上这个 agent 到底有哪些技能/hooks/插件 ----
+	ListCodexCapabilities(context.Context, *ListCodexCapabilitiesRequest) (*ListCodexCapabilitiesResponse, error)
 	mustEmbedUnimplementedModelServiceServer()
 }
 
@@ -152,6 +186,12 @@ func (UnimplementedModelServiceServer) SetCodexSettings(context.Context, *SetCod
 }
 func (UnimplementedModelServiceServer) ListMcpServers(context.Context, *ListMcpServersRequest) (*ListMcpServersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMcpServers not implemented")
+}
+func (UnimplementedModelServiceServer) GetCodexUsage(context.Context, *GetCodexUsageRequest) (*CodexUsage, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCodexUsage not implemented")
+}
+func (UnimplementedModelServiceServer) ListCodexCapabilities(context.Context, *ListCodexCapabilitiesRequest) (*ListCodexCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCodexCapabilities not implemented")
 }
 func (UnimplementedModelServiceServer) mustEmbedUnimplementedModelServiceServer() {}
 func (UnimplementedModelServiceServer) testEmbeddedByValue()                      {}
@@ -282,6 +322,42 @@ func _ModelService_ListMcpServers_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ModelService_GetCodexUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCodexUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelServiceServer).GetCodexUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ModelService_GetCodexUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelServiceServer).GetCodexUsage(ctx, req.(*GetCodexUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ModelService_ListCodexCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCodexCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelServiceServer).ListCodexCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ModelService_ListCodexCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelServiceServer).ListCodexCapabilities(ctx, req.(*ListCodexCapabilitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ModelService_ServiceDesc is the grpc.ServiceDesc for ModelService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -312,6 +388,14 @@ var ModelService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMcpServers",
 			Handler:    _ModelService_ListMcpServers_Handler,
+		},
+		{
+			MethodName: "GetCodexUsage",
+			Handler:    _ModelService_GetCodexUsage_Handler,
+		},
+		{
+			MethodName: "ListCodexCapabilities",
+			Handler:    _ModelService_ListCodexCapabilities_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

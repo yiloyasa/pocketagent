@@ -22,7 +22,60 @@ service ModelService {
   rpc SetCodexSettings(SetCodexSettingsRequest) returns (CodexSettings);
   // MCP 服务器状态(对应 codex 的 MCP 配置)
   rpc ListMcpServers(ListMcpServersRequest) returns (ListMcpServersResponse);
+
+  // ---- 用量 / 限流(account/rateLimits/read + account/usage/read)----
+  // 用户在手机外面发任务之前,得先知道"还有没有额度"。以前只把
+  // account/rateLimits/updated 当告警转发,没落成可查看的面板。
+  rpc GetCodexUsage(GetCodexUsageRequest) returns (CodexUsage);
+
+  // ---- 能力可见性(只读):这台电脑上这个 agent 到底有哪些技能/hooks/插件 ----
+  rpc ListCodexCapabilities(ListCodexCapabilitiesRequest) returns (ListCodexCapabilitiesResponse);
 }
+
+message GetCodexUsageRequest {}
+
+// 一个限流窗口(primary / secondary 用的是同一个结构)。
+message RateLimitWindow {
+  int32 used_percent = 1;          // 已用百分比(0-100)
+  int64 resets_at_unix_s = 2;      // 何时重置;0 = 未知
+  int64 window_duration_mins = 3;  // 窗口长度(分钟);0 = 未知
+}
+
+message CodexUsage {
+  string plan_type = 1;               // 套餐类型(free/plus/pro/…)
+  RateLimitWindow primary = 2;
+  RateLimitWindow secondary = 3;
+  bool has_credits = 4;
+  bool unlimited_credits = 5;
+  string credit_balance = 6;          // 余额(字符串,codex 侧就是字符串)
+  bool spend_control_reached = 7;     // 是否触顶(触顶后会被拒)
+  string rate_limit_reached_type = 8; // 触顶类型
+  int64 lifetime_tokens = 9;          // 累计 token
+  int64 peak_daily_tokens = 10;       // 单日峰值
+  int32 current_streak_days = 11;     // 连续使用天数
+  int64 fetched_at_unix_ms = 12;      // 这份数据的拉取时间
+  // 拉取失败的原因(未登录 / 地区不支持 / 网络)。非空时手机端显示"暂时读不到 + 原因",
+  // 而不是展示一堆 0 —— 0 会被误读成"额度用完了"。
+  string error = 13;
+}
+
+message ListCodexCapabilitiesRequest {}
+
+// 一条能力(skill / hook / plugin 共用)。
+message CodexCapability {
+  string kind = 1;             // skill / hook / plugin
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+  string path = 5;
+  // disabled_reason 直接回答"为什么用不了",比 enabled=false 有用得多。
+  string disabled_reason = 6;
+  string version = 7;
+  string source = 8;           // 来源:工作目录 / 插件市场名
+  string status = 9;           // hook 的最近运行状态;plugin 的 availability
+}
+
+message ListCodexCapabilitiesResponse { repeated CodexCapability items = 1; }
 
 message GetCodexSettingsRequest {}
 
@@ -39,6 +92,17 @@ message CodexSettings {
   string model_verbosity = 7;         // low / medium / high
   string model_reasoning_summary = 8; // concise / detailed
   bool disable_paste_burst = 9;       // 粘贴长文本时不触发爆破检测
+
+  // ---- 托管策略(configRequirements/read)。字段号从 10 起,旧字段语义一字未动 ----
+  // 【为什么必须带回来】用户桌面上的 codex 可能被管理员/MDM 策略约束
+  // (requirements.toml),某些取值是被禁的。手机上照旧渲染出来,用户就会
+  // "点了 → codex 拒绝 → App 无反馈"。这三个列表是空的表示该项无限制;
+  // 非空时手机端**只渲染列表里的取值**。
+  repeated string allowed_approval_policies = 10; // 空 = 无限制
+  repeated string allowed_sandbox_modes = 11;     // 空 = 无限制
+  repeated string allowed_web_search_modes = 12;  // 空 = 无限制
+  bool managed = 13;                              // 是否处在托管(受策略约束)状态
+  string managed_note = 14;                       // 策略来源与影响的人话说明
 }
 
 message SetCodexSettingsRequest {
@@ -59,6 +123,16 @@ message McpServerStatus {
   string name = 1;
   int32 tools = 2;      // 已注册工具数
   string status = 3;    // ready / starting / failed(尽力而为)
+  // ---- 增强(字段号从 4 起)----
+  // 【以前把这两项丢了】codex 的 McpServerStatus 本来就带 authStatus 和 serverInfo,
+  // 只转发 name/tools/status 的话,"某个 MCP 用不了"这件事在手机上完全看不出来 ——
+  // 用户只会觉得"这个工具怎么不好使"。authStatus 直接回答是不是授权问题。
+  string auth_status = 4;      // 鉴权状态(如未授权/已授权/需登录)
+  string server_version = 5;   // serverInfo.version
+  string server_title = 6;     // serverInfo.title / name
+  int32 resource_count = 7;
+  int32 resource_template_count = 8;
+  string error = 9;            // 启动失败原因
 }
 
 message ListMcpServersResponse {
