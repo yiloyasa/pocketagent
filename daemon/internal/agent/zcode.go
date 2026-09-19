@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -516,7 +517,10 @@ func (p *ZcodeProvider) subscribe(ctx context.Context, threadID, sid string) err
 }
 
 // applyModel 把 Thread.ModelID("zcode/<modelId>")映射成 session/setModel。
-// 失败只记日志:模型不可用是"降级继续",不是"整轮失败"。
+// 【失败语义】结构上不可解析(模型不在快照/不属于 zcode/resume 失败)与
+// setModel RPC 失败(登录/配额/上游拒收)都返回错误,由 Run 交整轮失败,
+// 错误文案直接指导用户动作;档位与模型自声明 levels 的不一致走容错,不报错
+// (见下方 T-02 注释)。
 // 【实测】setModel 的 model={providerId,modelId,options?{reasoningLevel}};
 // GLM 系不带 reasoningLevel 会报 -32603,所以引用缓存里存了 defaultLevel。
 // 【effort 取值(P2-8 快照语义)】threadEffort = Thread.Effort(会话胶囊显式
@@ -577,16 +581,20 @@ func (p *ZcodeProvider) applyModel(ctx context.Context, sid, modelID, threadEffo
 		}
 	}
 	level := zcodeReasoningLevel(threadEffort, desktopEffort, ref.DefaultReasoningLv)
-	if len(ref.Levels) > 0 && level != "" {
-		found := false
-		for _, v := range ref.Levels {
-			if v == level {
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("ZCode 模型 %s 不支持思考档位 %s，可用: %s", spec, level, strings.Join(ref.Levels, ", "))
-		}
+	// 【T-02 容错,替代原"档位不在 levels 即整轮失败"的硬校验】快照可能自相矛盾:
+	// deepseek-v4-flash 实测 default_level="max" 但 levels=[low,medium,high,xhigh,none],
+	// 上游也确实拒收 max("ReasoningEffort invalid … low, medium, high, xhigh, none",
+	// 证据 docs/verify/evidence/2026-09-19-device-build/02-routing-models/
+	// probe-zcmodelprobe.txt)。按档位来源分两级,不新增任何写死枚举:
+	//   - 档位来自模型自带 defaultLevel(用户线程/桌面都没选)且不在其自声明
+	//     levels 里 → 省略 options(协议语义"不覆盖"),沿用桌面端对当前模型的
+	//     默认档位 —— 不伪造档位、不每轮白打一次注定被拒的 setModel;GLM 系
+	//     (defaultLevel 均在 levels 内)照旧显式下发,不受影响。
+	//   - 用户显式选择(线程 effort / 桌面默认)不在 levels 里 → 原样透传,
+	//     provider 是唯一裁决者,拒绝时由 setModel 失败分支把可用档位报给用户。
+	if threadEffort == "" && desktopEffort == "" && level != "" && len(ref.Levels) > 0 && !slices.Contains(ref.Levels, level) {
+		log.Printf("[zcode] 模型 %s 自带 defaultLevel %q 不在其声明档位 %v 内,省略 reasoningLevel(沿用桌面端当前档位)", spec, level, ref.Levels)
+		level = ""
 	}
 	_, err := p.client.CallCtx(ctx, "session/setModel", map[string]interface{}{"sessionId": sid, "model": zcodeModelSelection(ref.ProviderID, firstNonEmpty(ref.NativeID, spec), level)})
 	if err != nil {
@@ -839,7 +847,9 @@ func (p *ZcodeProvider) emitThinkingFor(t *store.Thread, delta string, sink Sink
 // 线程显式 effort > 桌面默认 effort > 模型引用自带 defaultLevel。
 // 【为什么必须带值】GLM 系 setModel 不带 reasoningLevel 会报 -32603(实证),
 // 所以三者都空时保留 defaultLevel,defaultLevel 也为空才省略 options。
-// 用户 effort 值原样透传;provider 不认该值会报错,由 applyModel 记日志降级继续。
+// 用户 effort 值原样透传,provider 不认由 applyModel 的 setModel 失败分支
+// 上抛报错;模型自带 defaultLevel 与其自声明 levels 自相矛盾时的容错见
+// applyModel(T-02:省略 options,不整轮失败)。
 func zcodeReasoningLevel(threadEffort, desktopEffort, defaultLevel string) string {
 	if threadEffort != "" {
 		return threadEffort

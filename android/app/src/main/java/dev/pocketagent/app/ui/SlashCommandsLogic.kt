@@ -157,6 +157,27 @@ internal fun slashPanelVisible(
     return filterSlashCandidates(slashCandidatesFor(agentId, commands), input).isNotEmpty()
 }
 
+/** 未知助手的空态文案(AUDIT §3.3:遇未知值给人话,禁止静默、禁止"未知/错误"字样)。 */
+internal const val SLASH_UNKNOWN_AGENT_HINT = "该助手暂无可用命令"
+
+/**
+ * 未知助手的空态提示是否显示(纯函数,JVM 单测钉死):
+ * 会话归属 agent 已知非空但不在三源面板名单里(zcode/codex/pi 之外,如旧库残值
+ * 或将来的第 4 个 agent),用户又敲出了 "/" 词元 → 输入栏上方给人话空态,而不是
+ * 面板静默不弹(用户敲了 "/" 却毫无反馈,会以为坏了)。
+ *   - agentId 为空/空白 = 会话信息还没拉到(getThread 在路上):不提示,免得
+ *     加载瞬间闪一条错误印象的文案;
+ *   - 离线快照态:不提示(与面板同口径,离线横幅已另行说明);
+ *   - 三源会话永远走正常面板(内置伪命令兜底,见 slashPanelVisible),不进本分支。
+ */
+internal fun slashUnknownAgentHintVisible(agentId: String?, input: String, offline: Boolean): Boolean {
+    if (offline) return false
+    if (slashTokenOf(input) == null) return false
+    val id = agentId?.trim() ?: return false
+    if (id.isEmpty()) return false
+    return !isSlashPanelAgent(id)
+}
+
 /**
  * 点选回填:把输入开头的 "/词元" 替换成 "/命令 "(注意补一个空格,方便接着
  * 敲参数),词元之后的文字原样保留("/go 修复登录" 选 goal → "/goal 修复登录")。

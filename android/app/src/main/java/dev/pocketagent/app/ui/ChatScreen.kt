@@ -127,6 +127,8 @@ import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.UsageCache
 import dev.pocketagent.app.ui.component.UsageSnapshot
+import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY
+import dev.pocketagent.app.ui.component.VOICE_ERROR_MIC_BLOCKED
 import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_ENGINE
 import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_MODEL
 import dev.pocketagent.app.ui.component.UndoBarHost
@@ -954,6 +956,10 @@ fun ChatScreen(
     // 真死区",提示文案据此分流。识别器重建(voskReady 翻转)或重进页面即重置 ——
     // 新实例的模型要重新往内存里加载,又是一次"首次加载"。
     val voiceModelWarm = remember(voskReady) { AtomicBoolean(false) }
+    // 【静默失败修复·回退】系统引擎是否已判死(死区超时/致命错误码):置位后识别器随
+    // remember 键翻转自动重建为端侧 SenseVoice。声明必须在 startVoiceWatchdog 之前 ——
+    // Kotlin 局部函数引用不了其后声明的局部变量(看门狗超时分支要写它)。
+    var systemVoiceFailed by remember { mutableStateOf(false) }
 
     // 所有事件源(点击/权限回答/识别器回调)统一走这里:归约 → 指令入队 → 更新展示态
     fun dispatchVoice(event: VoiceEvent) {
@@ -984,13 +990,21 @@ fun ChatScreen(
                 delay(VOICE_DEAD_ZONE_TIMEOUT_MS)
                 val elapsedMs = System.currentTimeMillis() - startAt
                 if (voiceDeadZoneTimedOut(elapsedMs, voiceGotCallback.get()) && voiceUi.listening) {
-                    // 【P2-d】零回调撞满阈值有两种真相:服务真死区 / Vosk 首次点击还在把
-                    // 模型载入内存(秒级,极端更久)。本识别器未暖(尚无一次成功识别)且
-                    // 当前选中的是端侧 Vosk 引擎 → 按"加载中"提示。就绪与否现场读
-                    // VoskModelManager 单例:看门狗协程持有的是启动组合时的旧闭包值,
-                    // 单例读取永远新鲜,不受重组时序影响。
-                    val firstVoskLoad = !voiceModelWarm.get() &&
-                        pickVoiceEngine(sysVoiceAvailable, VoskModelManager.isReady()) == VoiceEngineKind.VOSK
+                    // 【静默失败修复·回退】零回调死区若发生在系统引擎上 = "预检可用但
+                    // 服务死区"的 ROM:不弃用的话用户永远循环"点击→空转 8 秒→语音服务
+                    // 无响应",端侧 SenseVoice 永远轮不上。这里记 systemVoiceFailed,
+                    // 识别器随 remember 键翻转自动重建为端侧引擎,下次点击直接走端侧。
+                    // 判定在纯函数 voiceDeadZoneShouldRetireSystem(JVM 单测锁定)。
+                    if (voiceDeadZoneShouldRetireSystem(sysVoiceAvailable && !systemVoiceFailed)) {
+                        systemVoiceFailed = true
+                    }
+                    // 【P2-d 收敛】Vosk 已不再是用户可选引擎(createVoiceRecognizer 恒传
+                    // voskReady=false),"首次冷加载"文案只剩历史语义;端侧 SenseVoice 的
+                    // onAlive 在进录音态后立刻到(真冷加载发生在停止后的转写段,有周期性
+                    // 回活喂狗),零回调撞满看门狗一律按"服务无响应"提示,不再误报
+                    // "正在加载语音模型"(旧判定 pickVoiceEngine(…, VoskModelManager
+                    // .isReady()) 会在残留 legacy Vosk 模型的机器上误报)。
+                    val firstVoskLoad = false
                     Log.d("PaVoice", "死区超时兜底触发 elapsed=${elapsedMs}ms firstVoskLoad=$firstVoskLoad")
                     dispatchVoice(VoiceEvent.DeadZoneTimeout(firstVoskLoad))
                 }
@@ -1003,7 +1017,7 @@ fun ChatScreen(
     // 交给 dispatchVoice 驱动状态机;onAlive 喂死区看门狗。
     // 【注意 key】voskReady 从 false→true(模型下载完成/磁盘扫描发现已就绪)时重建识别器,
     // 旧识别器经 DisposableEffect(voiceRecognizer) 自动销毁 —— "下完自动可用"。
-    var systemVoiceFailed by remember { mutableStateOf(false) }
+    // systemVoiceFailed 声明已上移至 startVoiceWatchdog 之前(局部函数引用顺序要求)
     val voiceRecognizer = remember(sysVoiceAvailable, systemVoiceFailed, senseReady) {
         Log.d("PaVoice", "创建识别器开始 sys=$sysVoiceAvailable voskReady=$voskReady")
         createVoiceRecognizer(
@@ -1024,7 +1038,11 @@ fun ChatScreen(
             },
             onResult = { text -> dispatchVoice(VoiceEvent.RecognitionResults(text)) },
             onErrorEvent = { code ->
-                if (sysVoiceAvailable && !systemVoiceFailed && code in setOf(1,2,4,5,8,11,12,13)) {
+                // 【静默失败修复·回退】系统引擎报这些错(含 3=AUDIO_ERROR:MIUI「录音」
+                // 开关关闭时的典型表现)= 系统识别服务在本机修不好:记失败标记,remember
+                // 键翻转 → 识别器自动重建为端侧 SenseVoice,不再原地反复失败。
+                // 判定在纯函数 systemVoiceRetireNeeded(JVM 单测锁定)。
+                if (sysVoiceAvailable && !systemVoiceFailed && systemVoiceRetireNeeded(code)) {
                     scope.launch(Dispatchers.Main.immediate) { systemVoiceFailed=true }
                 }
                 // 【模型加载失败回连】VOICE_ERROR_VOSK_MODEL = 端侧模型加载失败:
@@ -1044,18 +1062,32 @@ fun ChatScreen(
         onDispose { voiceRecognizer?.destroy() }
     }
     fun reportVoiceUnavailable() {
+        // 【自愈】初始化失败态(如首次解压被磁盘满/进程被杀打断)给一次重试机会:
+        // prepareBundledModel 幂等(有 busy 挡板),本次点击弹原因,下次点击可能已就绪。
+        if (!senseModelState.preparing && senseModelState.error != null) {
+            SenseVoiceModelManager.prepareBundledModel()
+        }
         val message = when {
             senseModelState.preparing -> "App 内置语音正在初始化，请稍候"
-            senseModelState.error != null -> "App 内置语音初始化失败，请重新安装 App"
-            else -> "设备暂无可用的语音识别服务"
+            senseModelState.error != null -> "端侧语音初始化失败：${senseModelState.error}（已自动重试，稍候再点一次）"
+            // ready=false 又无 preparing/error:理论上的瞬态(初始化还没跑完),不再谎报
+            // "设备不支持",改成引导重试
+            else -> "语音引擎尚未就绪，请稍候再点一次；若持续出现请重启 App"
         }
         Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
     }
     // 一次性权限申请:拒绝后状态机记为 NO_PERMISSION,下次点击可再次申请
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         Log.d("PaVoice", "权限回答 granted=$granted 识别器可用=${voiceRecognizer != null}")
-        if (granted && voiceRecognizer == null) reportVoiceUnavailable()
-        dispatchVoice(VoiceEvent.PermissionAnswered(granted, voiceRecognizer != null))
+        if (granted && voiceRecognizer == null) {
+            // 【重复提示修复】授权了但引擎没建起来(端侧初始化中/失败):上面
+            // reportVoiceUnavailable 已给出真实原因(初始化中/失败可重试),不再叠加
+            // 一条"这台设备不支持语音识别"的误导提示 —— 旧实现两个 Toast 连发,
+            // 第二句是谎话(引擎只是还没就绪,不是设备不支持)。
+            reportVoiceUnavailable()
+        } else {
+            dispatchVoice(VoiceEvent.PermissionAnswered(granted, voiceRecognizer != null))
+        }
     }
     // 消费语音指令:从通道逐条取出执行(开始/停止识别、识别文本并入输入框不自动发送、人话提示)。
     // LaunchedEffect 只启动一次,与 voiceUi 的重组完全解耦 —— 指令必达(V-1 修复核心)。
@@ -1068,9 +1100,13 @@ fun ChatScreen(
                 currentVoiceRecognizer?.start()
             }
             if (fx.stop) {
-                // 主动停止:看门狗一并撤掉(之后的结果回调到达时再撤一次,双保险)
-                voiceWatchdog.getAndSet(null)?.cancel()
+                // 主动停止:立即换上"收尾看门狗" —— 停止后端侧引擎还有秒级"模型加载
+                // +转写"空窗,识别器在转写期间会周期性回 onAlive 喂狗;若停止后 8 秒
+                // 零回调(引擎真死了),DeadZoneTimeout 兜底把 UI 收回 IDLE 并给人话
+                // 提示,绝不让波形无限空转(旧行为是直接撤狗 + UI 立刻回 IDLE,
+                // 转写空窗内用户看到"点了没反应")。
                 currentVoiceRecognizer?.stopListening()
+                startVoiceWatchdog()
             }
             fx.append?.let { spoken ->
                 input = joinVoiceText(input, spoken)
@@ -2305,6 +2341,19 @@ fun ChatScreen(
                         }
                     }
                 }
+                // 【未知助手空态】会话归属 agent 已知但不在三源面板名单(zcode/codex/pi
+                // 之外,如旧库残值/将来的第 4 个 agent)且敲出了 "/" → 人话空态,不静默
+                // (AUDIT §3.3:遇未知值给人话,禁止"未知/错误"字样)。agentId 还没拉到
+                // (加载中)与离线态都不提示,避免闪错/与离线横幅重复;纯逻辑见
+                // slashUnknownAgentHintVisible(SlashCommandsLogic.kt)。
+                if (slashUnknownAgentHintVisible(threadAgentId, input, offlineSnapshot)) {
+                    Text(
+                        SLASH_UNKNOWN_AGENT_HINT,
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
+                    )
+                }
                 // 第一行:输入框 + 整个输入栏右上角的"展开编辑"小标识
                 // 【为什么放右上角】它是低频辅助动作。放进工具行会和发送键 / 模型 chip
                 // 抢注意力,用户明确要求"不要在右侧,也不要在发送键左边"。挪到整个胶囊的
@@ -2343,8 +2392,9 @@ fun ChatScreen(
                                     Text(
                                         when {
                                             offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
-                                            // 【P1-9】听写中:placeholder 提示"正在听…"
-                                            voiceUi.listening -> "正在听…"
+                                            // 【P1-9】听写/转写中:placeholder 提示(停止后端侧转写
+                                            // 有秒级空窗,UI 保持"语音输入中",不再显得没反应)
+                                            voiceUi.listening -> "语音输入中…"
                                             else -> "随心输入,发给电脑上的 agent…"
                                         },
                                         fontSize = 15.sp, color = Pa.TextTertiary,
@@ -4531,8 +4581,12 @@ internal enum class VoiceInputState { IDLE, LISTENING, NO_PERMISSION, UNAVAILABL
 /**
  * 识别失败的分类(与 SpeechRecognizer 错误码的映射在 glue 层 [voiceErrorKind])。
  * 【ENGINE】端侧 Vosk 引擎专用(模型加载失败/识别器或录音器异常),系统识别不会产生。
+ * 【MIC_BLOCKED】端侧引擎报"运行时权限已给但仍采不了音"(错误码 102):MIUI 等国产
+ *  ROM 在运行时权限之外还有独立的「录音」开关,或麦克风被其他应用占用 —— 人话提示
+ *  直接给"去哪里开"的可行动指引(此前的静默失败点:102 漏映射落 OTHER,用户只看到
+ *  千篇一律的"识别失败,请重试",永远不知道去安全中心开开关)。
  */
-internal enum class VoiceErrorKind { NO_MATCH, BUSY, INSUFFICIENT_PERMISSIONS, CLIENT, OTHER, ENGINE }
+internal enum class VoiceErrorKind { NO_MATCH, BUSY, INSUFFICIENT_PERMISSIONS, CLIENT, OTHER, ENGINE, MIC_BLOCKED }
 
 /** 语音输入的事件(组合层与识别器回调产生)。 */
 internal sealed interface VoiceEvent {
@@ -4593,7 +4647,12 @@ internal fun voiceReduce(current: VoiceInputUi, event: VoiceEvent): VoiceInputUi
         else -> current.copy(state = VoiceInputState.LISTENING, startRecognition = true)
     }
     is VoiceEvent.PermissionAnswered -> when {
-        !event.granted -> current.copy(state = VoiceInputState.NO_PERMISSION, toast = "没有麦克风权限,无法语音输入")
+        // 【可行动化】拒绝后(尤其 MIUI 拒过两次后系统不再弹框)必须指路"去哪里开",
+        // 只说"无法语音输入"用户无路可走
+        !event.granted -> current.copy(
+            state = VoiceInputState.NO_PERMISSION,
+            toast = "没有麦克风权限:请在 系统设置→应用→PocketAgent→权限 中允许「麦克风」",
+        )
         !event.available -> current.copy(state = VoiceInputState.UNAVAILABLE, toast = "这台设备不支持语音识别")
         else -> current.copy(state = VoiceInputState.LISTENING, startRecognition = true)
     }
@@ -4714,6 +4773,9 @@ internal fun voiceErrorText(kind: VoiceErrorKind): String = when (kind) {
     VoiceErrorKind.CLIENT -> "语音识别不可用"
     VoiceErrorKind.OTHER -> "识别失败,请重试"
     VoiceErrorKind.ENGINE -> "端侧语音引擎异常,请重试"
+    // 可行动指引:MIUI 的「录音」是运行时权限之外独立的一道开关,必须点名指路
+    VoiceErrorKind.MIC_BLOCKED ->
+        "麦克风被系统拦截:请在 系统设置→应用→PocketAgent→权限 中允许「麦克风」;小米/红米还需在 安全中心→权限管理 中允许「录音」,并确认麦克风未被通话等其他应用占用"
 }
 
 // =====================================================================================
@@ -4743,6 +4805,11 @@ internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
     SpeechRecognizer.ERROR_CLIENT -> VoiceErrorKind.CLIENT
     // 【端侧回落】Vosk 自定义错误码(100+):统一归"端侧引擎异常"
     VOICE_ERROR_VOSK_ENGINE, VOICE_ERROR_VOSK_MODEL -> VoiceErrorKind.ENGINE
+    // 【静默失败修复】端侧引擎的"麦克风被拦"(MIUI「录音」开关/被其他应用占用)与
+    // "引擎忙"此前漏映射,落到 OTHER 只会说"识别失败,请重试"——MIUI 用户在安全
+    // 中心关了「录音」开关时,永远得不到"去哪里开"的可行动指引(真机主诉根因之一)。
+    VOICE_ERROR_MIC_BLOCKED -> VoiceErrorKind.MIC_BLOCKED
+    VOICE_ERROR_ENGINE_BUSY -> VoiceErrorKind.BUSY
     else -> VoiceErrorKind.OTHER
 }
 
@@ -4756,6 +4823,33 @@ internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
  * 模型目录完整性无关,不触发;系统识别错误码更不会产生 100/101。
  */
 internal fun voiceModelRefreshNeeded(code: Int): Boolean = code == VOICE_ERROR_VOSK_MODEL
+
+/**
+ * 系统识别错误码 → 是否应弃用系统引擎改选端侧(纯函数,JVM 单测锁定)。
+ *
+ * 【为什么存在】引擎选择"系统优先且粘滞":只要 isRecognitionAvailable=true 就恒选
+ * SYSTEM,而小米等 ROM 上系统识别服务"名义可用实际不可用"的失败形态很多 —— 若这些
+ * 失败只弹提示不弃用,用户会永远循环"点击→失败→再点→再失败",端侧 SenseVoice 明明
+ * 内置就绪却永远轮不上(真机主诉"语音根本用不了"的主根因)。
+ *
+ * 覆盖的错误码:
+ *  1 网络超时 / 2 网络 / 3 录音错误(MIUI「录音」开关关闭时系统识别的典型表现) /
+ *  4 服务端 / 5 客户端 / 8 忙(常驻=服务半死) / 11 服务断连 / 12-13 语言不支持 ——
+ *  在无 GMS 的国产 ROM 上这些几乎都修不好,弃用后识别器重建为端侧引擎。
+ * 不覆盖:6/7(没听到)是正常业务结果;9(权限)有专门的"去设置开启"提示且可自愈;
+ * 100+(端侧自定义码)到达时系统引擎本就未被选中,不能误伤。
+ */
+internal fun systemVoiceRetireNeeded(code: Int): Boolean =
+    code in setOf(1, 2, 3, 4, 5, 8, 11, 12, 13)
+
+/**
+ * 死区超时(8 秒零回调撞满看门狗)是否应弃用系统引擎(纯函数,JVM 单测锁定):
+ * 只有当前选中的就是系统引擎时才弃用 —— "预检可用但服务死区"的 ROM 上不弃用会
+ * 永远循环"点击→空转 8 秒→语音服务无响应";端侧 SenseVoice 的 onAlive 在进录音态
+ * 后立刻到达,零回调只可能是引擎卡死(提示已覆盖),且端侧重建要重新冷加载,
+ * 不因死区自动弃用。
+ */
+internal fun voiceDeadZoneShouldRetireSystem(systemEngineSelected: Boolean): Boolean = systemEngineSelected
 
 /**
  * 创建语音识别器 —— 引擎选择统一入口(决策表 [pickVoiceEngine],JVM 单测锁定):

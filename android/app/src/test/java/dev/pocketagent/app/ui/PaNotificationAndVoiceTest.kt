@@ -249,7 +249,10 @@ class PaNotificationAndVoiceTest {
     fun `语音_权限被拒绝_记无权限并给提示`() {
         val ui = voiceReduce(VoiceInputUi(), VoiceEvent.PermissionAnswered(granted = false, available = true))
         assertEquals(VoiceInputState.NO_PERMISSION, ui.state)
-        assertEquals("没有麦克风权限,无法语音输入", pendingVoiceEffects(ui).toast)
+        // 【可行动化】拒绝后必须指路"去哪里开"(MIUI 拒过两次后系统不再弹框)
+        val toast = pendingVoiceEffects(ui).toast!!
+        assertTrue(toast.contains("系统设置"))
+        assertTrue(toast.contains("麦克风"))
     }
 
     @Test

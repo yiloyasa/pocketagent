@@ -78,6 +78,32 @@ class SlashCommandsLogicTest {
         assertTrue(isPiAgent("pi") && !isZcodeAgent("pi") && !isCodexAgent("pi"))
     }
 
+    // ---- 未知助手空态(AUDIT §3.3:不许静默) ----
+
+    @Test
+    fun `未知助手敲斜杠给空态三源与加载中不给`() {
+        val hint = SLASH_UNKNOWN_AGENT_HINT
+        // 人话文案本身:不含"未知/错误"字样(AUDIT §3.3 红线)
+        assertTrue(hint.isNotBlank())
+        assertFalse(hint.contains("未知"))
+        assertFalse(hint.contains("错误"))
+        // 未知 agent(非空、非三源)+ 斜杠词元 → 空态可见
+        assertTrue(slashUnknownAgentHintVisible("echo", "/", offline = false))
+        assertTrue(slashUnknownAgentHintVisible("echo", "/he", offline = false))
+        assertTrue(slashUnknownAgentHintVisible("legacy-agent", "/看", offline = false))
+        // 大小写变体的三源不算未知(正常面板接管,空态不出现)
+        assertFalse(slashUnknownAgentHintVisible("ZCode", "/", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("Codex", "/", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("PI", "/", offline = false))
+        // agentId 还没拉到(加载中,null/空/空白)→ 不提示,免得闪错
+        assertFalse(slashUnknownAgentHintVisible(null, "/", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("", "/", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("  ", "/", offline = false))
+        // 非斜杠输入不提示;离线快照态不提示(离线横幅另行说明)
+        assertFalse(slashUnknownAgentHintVisible("echo", "普通输入", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("echo", "/", offline = true))
+    }
+
     // ---- 过滤(纵向卡面:不截断条数)----
 
     @Test

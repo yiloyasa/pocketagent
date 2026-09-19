@@ -20,11 +20,18 @@ internal class SenseVoiceSessionRunner(
     private var generation = 0L
     private var session: Session? = null
 
-    fun start() {
+    /**
+     * 启动一轮会话。
+     * @return true = 已启动;false = 忙(上一会话未结束)或已销毁。
+     *   旧实现这种情况静默 return —— 端侧 SenseVoice 停止后还有秒级"模型加载+转写"
+     *   空窗,空窗内点击麦克风会零反馈(用户感知"完全没反应"的静默失败点),
+     *   调用方(SenseVoiceRecognizer.start)据此回报 [dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY]。
+     */
+    fun start(): Boolean {
         val ticket: Long
         val next: Session
         synchronized(lock) {
-            if (destroyed || active) return
+            if (destroyed || active) return false
             active = true
             ticket = ++generation
             next = Session { deliver(ticket, onAlive) }
@@ -36,6 +43,9 @@ internal class SenseVoiceSessionRunner(
                 if (next.stopped) "" else work(next)
             } catch (_: SecurityException) {
                 error = 9; ""
+            } catch (_: MicUnavailableException) {
+                // 麦克风不可用(MIUI「录音」开关/被其他应用占用):专用码给人话指引
+                error = VOICE_ERROR_MIC_BLOCKED; ""
             } catch (_: Throwable) {
                 error = VOICE_ERROR_VOSK_ENGINE; ""
             }
@@ -47,6 +57,7 @@ internal class SenseVoiceSessionRunner(
                 else onResult(text)
             }
         }
+        return true
     }
 
     private fun deliver(ticket: Long, callback: () -> Unit) {

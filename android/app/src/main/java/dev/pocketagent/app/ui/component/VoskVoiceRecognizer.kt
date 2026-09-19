@@ -24,6 +24,29 @@ internal const val VOICE_ERROR_VOSK_ENGINE = 100
 internal const val VOICE_ERROR_VOSK_MODEL = 101
 
 /**
+ * 麦克风不可用错误码:AudioRecord 初始化失败/进不了录音态 —— 典型成因是
+ * MIUI 等国产 ROM 在"运行时权限"之外还有独立的「录音」开关(安全中心/权限管理),
+ * 或麦克风正被其他应用占用。经 voiceErrorKind 映射到 VoiceErrorKind.MIC_BLOCKED,
+ * 人话提示直接给"去哪里开"的可行动指引,不再伪装成引擎异常。
+ */
+internal const val VOICE_ERROR_MIC_BLOCKED = 102
+
+/**
+ * 引擎忙错误码:上一轮会话尚未结束(端侧 SenseVoice 停止后还有秒级
+ * "模型加载+转写"空窗)时又请求开始。映射到 VoiceErrorKind.BUSY 给人话提示,
+ * 替换旧实现的静默 return(用户点麦克风零反馈的静默失败点之一)。
+ * 不复用系统码 8(ERROR_RECOGNIZER_BUSY):组合层把 8 列入"系统服务失败"
+ * 名单,引擎侧码混进去会误伤引擎选择逻辑。
+ */
+internal const val VOICE_ERROR_ENGINE_BUSY = 103
+
+/**
+ * 麦克风不可用(初始化失败/进不了录音态)的标记异常:录音器创建处抛出,
+ * 由会话执行体 catch 后映射为 [VOICE_ERROR_MIC_BLOCKED]。
+ */
+internal class MicUnavailableException(message: String) : IllegalStateException(message)
+
+/**
  * Vosk JSON 结果 `{"text": "..."}` → 纯文本(非法 JSON/缺字段返回空串,JVM 单测锁定)。
  */
 internal fun voskJsonText(json: String): String =
@@ -167,7 +190,9 @@ internal class VoskVoiceRecognizer(
                 return
             }
             if (sessionThread?.isAlive == true) {
-                Log.d("PaVoice", "Vosk start 忽略:上一会话仍在进行")
+                Log.d("PaVoice", "Vosk start 忽略:上一会话仍在进行(上报 BUSY 给用户反馈)")
+                // 【静默失败修复】旧实现只记日志静默 return,用户点击零反馈
+                onErrorEvent(VOICE_ERROR_ENGINE_BUSY)
                 return
             }
             stopped = false
@@ -231,7 +256,8 @@ internal class VoskVoiceRecognizer(
         try {
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                throw IllegalStateException("录音器未能进入录音态")
+                // 进不了录音态:多见于 MIUI「录音」开关关闭或麦克风被其他应用占用
+                throw MicUnavailableException("录音器未能进入录音态")
             }
             Log.d("PaVoice", "Vosk 会话开始(model=$modelPath)")
             engine.reset()
@@ -255,6 +281,9 @@ internal class VoskVoiceRecognizer(
                 onAlive()
                 onResult(text)
             }
+        } catch (t: MicUnavailableException) {
+            Log.d("PaVoice", "Vosk 麦克风不可用:${t.message}")
+            onErrorEvent(VOICE_ERROR_MIC_BLOCKED)
         } catch (t: Throwable) {
             Log.d("PaVoice", "Vosk 会话异常:${t.javaClass.simpleName}: ${t.message}")
             onErrorEvent(VOICE_ERROR_VOSK_ENGINE)
@@ -300,7 +329,10 @@ internal class VoskVoiceRecognizer(
             )
             if (record.state != AudioRecord.STATE_INITIALIZED) {
                 record.release()
-                throw IllegalStateException("录音器初始化失败")
+                // AudioRecord 初始化失败但运行时权限已给 ⇒ 几乎必是 MIUI 等的
+                // 独立「录音」开关关闭,或麦克风被其他应用占用 —— 用专用错误码,
+                // 人话提示给可行动指引(见 VOICE_ERROR_MIC_BLOCKED)
+                throw MicUnavailableException("录音器初始化失败(state=${record.state})")
             }
             record
         } catch (t: SecurityException) {
