@@ -168,7 +168,7 @@ adb install build/app-debug.apk
 
 | 项 | 值 |
 |---|---|
-| Git | `fc3b806`（分支 `main`，**28 提交**）｜工作树**干净（0 未提交）** |
+| Git | 分支 `main`；清理收口提交 `fc3b806`（2026-09-20）｜工作树**干净（0 未提交）** |
 | 版本 | **0.2.2 / versionCode 5** |
 | 契约 | **6 服务 / 64 RPC**（Thread 29、Git 10、Fs 9、Model 8、Host 5、Terminal 3），7 个 proto / 1347 行 |
 | 代码 | daemon 手写 Go **234 文件 / 48559 行**（测试 112/17455、`cmd` 42/7991、生产 80/23113）；生成 13/15499；android main 74 `.kt` / 31323 行、test 62 / 7053 |
