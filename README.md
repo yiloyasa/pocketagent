@@ -168,7 +168,45 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 ---
 
-## 7. 快速开始
+## 7. 设计原则：未来未知事件接口（能透传就透传）
+
+**核心立场**：原生 agent（codex/pi/zcode）会升级、会改模型、会发新事件。daemon/App 不能假设「我认识全部」，更不能把「我不认识」当成「出错」一脚踩死。
+
+### 三层含义
+
+1. **识别不了 ≠ 出错** —— 原生发来 daemon 没见过的通知/字段，默认定性是「数据」不是「异常」；能原样透传就透传，不丢弃、不报警、不伪造。
+2. **接不了 ≠ 接死** —— 暂时没能力处理的反向请求，回 error（如实告知「不支持」），**绝不回伪造的 decision**（伪造一个"同意"会让原生以为用户点了同意，后果不可逆）。
+3. **静态名单是债** —— 凡在代码里写死「模型白名单 / agent 名单 / 事件名单 / 版本号二分判断」，都是给未来埋的雷。原生会新增模型、新增 agent、新增事件、升级到假设外的版本——写死的代码要么漏（新东西显示"未知"），要么错（旧判断踩到新场景）。
+
+### 当前已合规的行为（保持）
+
+| 位置 | 行为 |
+|---|---|
+| `internal/server/model.go` ListModels | **无模型白名单**，原生返回什么透传什么；新增模型/effort 自动出现在 App |
+| `internal/agent/codex_events.go` 默认分支（L408） | 未识别事件**静默丢弃**（不伪造、不上报）——「伪造只会淹掉真正的事件」 |
+| `internal/agent/codex_requests.go` | 不支持的反向请求回 `reqUnsupported`（JSON-RPC error），**不伪造 decision** |
+| `internal/agent/zcode*.go` | 模型名/窗口/reasoning **全部运行时返回**，无静态 GLM 名单 |
+| `internal/agent/native_notifications.go` | "Unknown siblings remain untouched" —— 不认识的兄弟节点原样保留 |
+| `turn_queue` | 中途插入降级为排队，不报错 |
+
+### 已踩死 / 待整改的点（技术债）
+
+| 位置 | 问题 | 影响 |
+|---|---|---|
+| `internal/server/thread.go` CreateThread（L99） | 未知 agent → `errFailedPrecondition` **硬错误** | 新增第 4 个 agent 时 App 直接报错，不能「尽力接入」 |
+| `internal/server/model.go` `order := []string{"codex","pi","zcode"}`（L73） | **agent 顺序写死** | 新 agent 排不进列表 |
+| `internal/server/model.go` `defaultModelIDFor` | 假设 `agent+"/default"` 一定存在 | 原生删掉默认模型后返回一个不存在的 ID |
+| `internal/agent/codex_requests.go` `isLegacyApproval` | 按版本号**二分判断** | codex 升级到假设外的版本会踩错分支 |
+
+### 决策（2026-09-20 拍板）
+
+- **主线 = A「能透传就透传」**：未知通知/字段，daemon 不丢弃，**原样包装**（原文 + 原方法名）透传到 App 诊断视图；App 不显示「错误/未知」，显示「原生发来了一个新事件」。
+- **辅线 = B「把决定权还给用户」**：未知反向请求（如新型审批），daemon 不伪造 decision，**透传请求体**让 App 弹通用确认框（同意/拒绝/忽略）。**做成全局设置开关，默认关**（避免普通用户被技术细节打扰；开发者/进阶用户可开）。
+- **不选 C「协议版本探测」**：维护成本高，仍是「假设我知道所有版本」的思路，与「能透传就透传」相悖。
+
+---
+
+## 8. 快速开始
 
 ```bash
 # ── daemon（电脑上）──
@@ -190,7 +228,7 @@ cd daemon && PATH="/c/go/bin:$PATH" go build ./... && go test ./internal/...
 
 ---
 
-## 8. 当前状态（真值锚点）
+## 9. 当前状态（真值锚点）
 
 | 项 | 值 |
 |---|---|
@@ -210,7 +248,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 9. 已知边界与技术债
+## 10. 已知边界与技术债
 
 - daemon `go vet` 有 protobuf 值拷贝警告（存量噪音，非新问题）
 - 同 provider 多会话不并行（原生 turn 锁排队）
@@ -221,7 +259,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 10. 关键坑（开发必读）
+## 11. 关键坑（开发必读）
 
 1. **"源码改对 ≠ 跑着的是新的"**（头号假故障）：报"没生效"前先 `apkanalyzer dex packages` 查新类 + dex 里 grep 新中文字面量。
 2. **Kotlin 增量缓存失配**：大批 `Unresolved reference` 指向没改的文件 ⇒ 物理删 `app/build`+`.kotlin` 重跑；但错误集中在刚改的文件且首条是操作符 ⇒ 只是缺一行 import。
@@ -236,7 +274,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 11. 运维：日志与清理
+## 12. 运维：日志与清理
 
 - **日志 5 类**：A 运行(daemon.log/watchdog.log，轮转只留错误行)｜B 验收证据(`docs/verify/evidence/**`，磁盘不可清理、**截图不入库**)｜C 构建一次性｜D 归档冷数据(`_archives/`，90 天)｜E 错误汇总(长期)
 - **铁律**：成功日志不长期留盘；`*.log` 禁止入库；归档只搬不删；运行中的日志禁止直接删
@@ -247,7 +285,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 12. 文件/下载支持速查
+## 13. 文件/下载支持速查
 
 判定唯一源 `ui/component/FileKind.kt` 的 `preview` 字段。内置预览：md/文本/json/html/csv/图片/**xlsx+xls(自研 OLE2/BIFF8)**/ods/docx/rtf/odt/pptx/odp/pdf(PdfRenderer)；
 只交系统：doc/ppt/apk/音视频；只保存：压缩包/exe。边界：Office 只还原内容不还原版式；单读 64MB 上限；表格 800×40×3、PDF 12 页、PPTX 40 页。
