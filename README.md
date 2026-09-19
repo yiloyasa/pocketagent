@@ -206,7 +206,20 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 ---
 
-## 8. 快速开始
+## 8. 审核（强制执行）
+
+**任何更改合入前，必须严格按 `AUDIT.md` 执行，无例外。** `AUDIT.md` 是项目唯一审核标准，审核事项以它为准。要点速记：
+
+- **变更分级**（`git diff` 路径自动定级，取最高、不许降级）：**甲**=契约/架构（proto、新 agent）→ L0+L1+L2 全量；**乙**=功能（daemon agent/server、android ui）→ L1 全量+L2 受影响；**丙**=修复 → L1+单条复验+附回归用例；**丁**=仅文档 → 只查锚点漂移
+- **三层**：L0 闸门（产物自证 apkanalyzer）→ L1 自动化（`--rerun`+XML 时间戳防假绿）→ L2 真机（BLOCKED 必带归因+解封条件）
+- **红线一票否决**：伪造 decision / 假绿 / 契约不同步 / 产物不对；**提示项不阻塞**：锚点漂移、证据缺项限期补录
+- **设计原则合规**：新增硬编码名单即报警（存量 4 处挂牌，只减不增）；UI 禁显「未知/错误」，必须显示原生原文
+- **缺陷即测试**：修复不附回归用例 = 没修完；审核资产只增不减
+- 完整标准、checklist、linter 规则、准出 DoD、度量回流 → **`AUDIT.md`**
+
+---
+
+## 9. 快速开始
 
 ```bash
 # ── daemon（电脑上）──
@@ -228,7 +241,7 @@ cd daemon && PATH="/c/go/bin:$PATH" go build ./... && go test ./internal/...
 
 ---
 
-## 9. 当前状态（真值锚点）
+## 10. 当前状态（真值锚点）
 
 | 项 | 值 |
 |---|---|
@@ -248,7 +261,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 10. 已知边界与技术债
+## 11. 已知边界与技术债
 
 - daemon `go vet` 有 protobuf 值拷贝警告（存量噪音，非新问题）
 - 同 provider 多会话不并行（原生 turn 锁排队）
@@ -259,7 +272,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 11. 关键坑（开发必读）
+## 12. 关键坑（开发必读）
 
 1. **"源码改对 ≠ 跑着的是新的"**（头号假故障）：报"没生效"前先 `apkanalyzer dex packages` 查新类 + dex 里 grep 新中文字面量。
 2. **Kotlin 增量缓存失配**：大批 `Unresolved reference` 指向没改的文件 ⇒ 物理删 `app/build`+`.kotlin` 重跑；但错误集中在刚改的文件且首条是操作符 ⇒ 只是缺一行 import。
@@ -274,7 +287,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 12. 运维：日志与清理
+## 13. 运维：日志与清理
 
 - **日志 5 类**：A 运行(daemon.log/watchdog.log，轮转只留错误行)｜B 验收证据(`docs/verify/evidence/**`，磁盘不可清理、**截图不入库**)｜C 构建一次性｜D 归档冷数据(`_archives/`，90 天)｜E 错误汇总(长期)
 - **铁律**：成功日志不长期留盘；`*.log` 禁止入库；归档只搬不删；运行中的日志禁止直接删
@@ -285,7 +298,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 
 ---
 
-## 13. 文件/下载支持速查
+## 14. 文件/下载支持速查
 
 判定唯一源 `ui/component/FileKind.kt` 的 `preview` 字段。内置预览：md/文本/json/html/csv/图片/**xlsx+xls(自研 OLE2/BIFF8)**/ods/docx/rtf/odt/pptx/odp/pdf(PdfRenderer)；
 只交系统：doc/ppt/apk/音视频；只保存：压缩包/exe。边界：Office 只还原内容不还原版式；单读 64MB 上限；表格 800×40×3、PDF 12 页、PPTX 40 页。
