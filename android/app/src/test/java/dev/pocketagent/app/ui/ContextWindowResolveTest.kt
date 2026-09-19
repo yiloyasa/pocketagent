@@ -8,9 +8,8 @@ import org.junit.Test
 /**
  * 上下文窗口解析优先级(pickContextWindow)+ 它如何决定占用环是否显示真实占比。
  *
- * 【为什么必须钉】真机上"选中模型声明窗口=0、codex 又不在用量帧里带上报窗口",
- * 于是窗口被解析成 0 → `windowIsFallback=true` → 环内恒显示破折号(用户要的是实际占比)。
- * 本组用例锁死"用 agent 默认模型的窗口兜底",保证环内出现数字。
+ * 【为什么必须钉】真机上"选中模型声明窗口=0、codex 又不在用量帧里带上报窗口"时，
+ * 窗口必须保持未知，不能用 App 内置经验值伪造百分比。
  */
 class ContextWindowResolveTest {
 
@@ -31,12 +30,12 @@ class ContextWindowResolveTest {
         assertFalse(fallback(w))
     }
 
-    /** 本轮回归守门:真机场景 —— 选中模型与上报窗口都没给值,靠 agent 默认窗口兜底。 */
+    /** 真机场景:选中模型与上报窗口都没给值时必须保持未知。 */
     @Test
-    fun real_device_scenario_falls_back_to_agent_default() {
-        val w = pickContextWindow(live = 0L, modelDeclared = 0, agentDefaultDeclared = 272_000)
-        assertEquals(272_000L, w)
-        assertFalse("窗口必须算作已知,否则环内不会显示数字", fallback(w))
+    fun real_device_scenario_stays_unknown_without_reported_window() {
+        val w = pickContextWindow(live = 0L, modelDeclared = 0, agentDefaultDeclared = 0)
+        assertEquals(0L, w)
+        assertTrue("不能把默认经验值当成 Codex 实测窗口", fallback(w))
     }
 
     @Test
@@ -55,12 +54,11 @@ class ContextWindowResolveTest {
     }
 
     /**
-     * 集成式:真机那条链(0, 0, 272000)解析出的窗口喂给 ringPercentLabel,
-     * 环内应得到 "3%"(7520 / 272000),证明环内会出现真实数字而不是破折号。
+     * 集成式:Codex 实际上报窗口后，环内才显示真实百分比。
      */
     @Test
-    fun resolved_window_makes_the_ring_show_a_real_percent() {
-        val window = pickContextWindow(live = 0L, modelDeclared = 0, agentDefaultDeclared = 272_000)
+    fun reported_window_makes_the_ring_show_a_real_percent() {
+        val window = pickContextWindow(live = 258_400L, modelDeclared = 0, agentDefaultDeclared = 0)
         assertFalse(fallback(window))
         val ratio = 7_520f / window.toFloat()
         assertEquals("3%", ringPercentLabel(ratio, windowKnown = true))

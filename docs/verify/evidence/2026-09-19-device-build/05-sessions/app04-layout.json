@@ -1,0 +1,25 @@
+{
+  "layout": {
+    "send": null,
+    "mic": null,
+    "model": null,
+    "effort": null,
+    "send_found": false,
+    "mic_found": false,
+    "model_found": false,
+    "effort_found": false,
+    "after_long": {
+      "send": null,
+      "mic": null,
+      "send_found": false,
+      "mic_found": false
+    }
+  },
+  "nodes_after_long": [
+    "暂无其他“本机”结果",
+    "切换搜索引擎",
+    "RELEASE_AUDIT_LONG_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "清除输入",
+    "搜索"
+  ]
+}

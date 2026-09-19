@@ -67,6 +67,16 @@ fun ContextUsageCard(
     cachedAt: Long?,
     /** 当前时间(展示"最后更新"的新鲜度用)。 */
     nowMillis: Long,
+    /** Codex 正在执行 contextCompaction item。 */
+    compactionInProgress: Boolean = false,
+    /** 最近一次上下文压缩时间(0 = 未压缩过);驱动"已压缩"状态显示。 */
+    lastCompactedAt: Long = 0L,
+    /**
+     * 会话归属 agent 的展示名("Pi"/"Codex"/…),压缩等待文案用它点名。
+     * 真机实锤(图9 同源问题):过去"等待 Codex 完成压缩"硬编码 codex,Pi 会话
+     * 里张冠李戴;空串退中性"agent",绝不冒名。
+     */
+    agentLabel: String = "",
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -78,8 +88,11 @@ fun ContextUsageCard(
 
     // 窗口已知 = 有真实窗口大小且非兜底默认
     val windowKnown = contextWindow > 0 && !windowIsFallback
+    // 【压缩同步】压缩后、新一轮用量上报前:旧占用已失真(可能超出实际窗口),
+    // 绝不继续显示 —— 环与占比进入"已压缩"态,等真实数据回来再恢复。
+    val compactedPending = !compactionInProgress && compactionPending(turnUsage, lastCompactedAt)
     val occupied = usageTotalTokens(turnUsage)
-    val ratio = if (windowKnown) occupied.toFloat() / contextWindow.toFloat() else 0f
+    val ratio = if (windowKnown && !compactedPending) occupied.toFloat() / contextWindow.toFloat() else 0f
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -127,6 +140,40 @@ fun ContextUsageCard(
                 Spacer(Modifier.height(12.dp))
             }
 
+            // 压缩提示条:压缩后、新一轮用量上报前出现,如实说明当前占比为何留白。
+            if (compactedPending) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        compactionNoticeLabel(lastCompactedAt, nowMillis),
+                        fontSize = 11.sp, color = Pa.Accent, maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+            if (compactionInProgress) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "上下文压缩中 · 旧占用暂不显示",
+                        fontSize = 11.sp,
+                        color = Pa.Accent,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
             // 圆环主视觉(保留)
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 val ringSize = 150.dp
@@ -140,7 +187,7 @@ fun ContextUsageCard(
                         useCenter = false,
                         style = Stroke(stroke),
                     )
-                    if (windowKnown) {
+                    if (windowKnown && !compactedPending && !compactionInProgress) {
                         drawArc(
                             color = ringColor(ratio),
                             startAngle = -90f,
@@ -151,7 +198,20 @@ fun ContextUsageCard(
                     }
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (windowKnown) {
+                    if (compactionInProgress) {
+                        Text("压缩中", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.Accent)
+                        // 按 agent 点名(agentLabel 空串退中性"agent"),不再硬编码 Codex。
+                        Text(
+                            "等待 ${agentLabel.ifBlank { "agent" }} 完成压缩",
+                            fontSize = 11.sp,
+                            color = Pa.TextTertiary,
+                        )
+                    } else if (compactedPending) {
+                        // 压缩态:不显示任何百分比 —— 压缩前的旧占比已失真,
+                        // 新占比要等下一轮用量上报,此处绝不造数。
+                        Text("已压缩", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.Accent)
+                        Text("等待新一轮用量上报", fontSize = 11.sp, color = Pa.TextTertiary)
+                    } else if (windowKnown) {
                         Text(
                             String.format(java.util.Locale.US, "%.0f%%", ratio * 100f),
                             fontSize = 30.sp,
@@ -281,9 +341,15 @@ fun ContextRing(
     ratio: Float,
     windowKnown: Boolean,
     modifier: Modifier = Modifier.size(28.dp),
+    /** 压缩后等新用量:环内显示"已压",不显示任何百分比(旧占比已失真)。 */
+    compacted: Boolean = false,
 ) {
-    val label = ringPercentLabel(ratio, windowKnown)
-    val color = if (windowKnown) ringColor(ratio) else Pa.TextTertiary
+    val label = if (compacted) "已压" else ringPercentLabel(ratio, windowKnown)
+    val color = when {
+        compacted -> Pa.Accent
+        windowKnown -> ringColor(ratio)
+        else -> Pa.TextTertiary
+    }
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = RING_STROKE.toPx()
@@ -295,7 +361,7 @@ fun ContextRing(
                 useCenter = false,
                 style = Stroke(stroke),
             )
-            if (windowKnown) {
+            if (windowKnown && !compacted) {
                 drawArc(
                     color = color,
                     startAngle = -90f,
@@ -344,3 +410,27 @@ fun cacheHitRate(u: Usage?): String {
 
 /** 千分位整数(如 "1,234,567")。 */
 fun formatTokens(v: Long): String = String.format(java.util.Locale.US, "%,d", v)
+
+// ---- 上下文压缩同步(纯函数,可 JVM 单测) ----
+
+/**
+ * 是否处于"已压缩、等新用量"态:压缩发生过、且压缩前的旧占用已作废(turnUsage=null)。
+ * 新一轮用量上报后 turnUsage 恢复非空,自动退出该态 —— 不需要额外的清除时机。
+ */
+internal fun compactionPending(turnUsage: Usage?, lastCompactedAt: Long): Boolean =
+    lastCompactedAt > 0L && turnUsage == null
+
+/**
+ * 压缩提示条文案。纯函数。
+ * 同一天只给时刻("已于 14:03 压缩");跨天补日期,与离线提示条同一套时间语义。
+ */
+internal fun compactionNoticeLabel(compactedAt: Long, now: Long): String {
+    if (compactedAt <= 0L) return "上下文已压缩 · 等待新一轮用量上报"
+    val pattern = if (dev.pocketagent.app.ui.component.sameCalendarDay(compactedAt, now)) {
+        "'已于' HH:mm '压缩 · 等待新一轮用量上报'"
+    } else {
+        "'已于' M月d日 HH:mm '压缩 · 等待新一轮用量上报'"
+    }
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
+        .format(java.util.Date(compactedAt))
+}

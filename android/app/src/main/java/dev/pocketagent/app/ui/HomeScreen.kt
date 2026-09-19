@@ -75,6 +75,101 @@ data class AgentInfo(
     val available: Boolean,
 )
 
+/**
+ * agent 网格可用性判定(纯函数,单测覆盖 AgentAvailabilityTest)。
+ *
+ * 【点亮规则】
+ *  - codex:恒可用(基线 agent,不走 capabilities 判定);
+ *  - pi / zcode:仅当 HostInfo.capabilities 含 "agent:<id>" 前缀时可用 ——
+ *    旧格式 "agent:pi" 与新格式 "agent:pi:v0.85.1"(带探测版本号)都点亮,
+ *    "agent:pika" 这类别的 id 不会误匹配。daemon 侧未部署对应 provider 时
+ *    字段缺失,网格维持灰显"电脑端未安装"(点磁贴看安装引导),
+ *    daemon 升级后无需发版自动点亮;
+ *  - 其余 agent:保持基线(尚未接入,当前全部不可用)。
+ */
+internal fun resolveAgentAvailability(agentId: String, baseAvailable: Boolean, capabilities: List<String>): Boolean =
+    when (agentId) {
+        "pi", "zcode" -> capabilities.any {
+            it.equals("agent:$agentId", ignoreCase = true) ||
+                it.startsWith("agent:$agentId:", ignoreCase = true)
+        }
+        else -> baseAvailable
+    }
+
+/** 走 capabilities 动态点亮、灰显=「电脑端未安装」(给安装引导)的 agent;其余为尚未接入的基线项。 */
+internal val capabilityDrivenAgents = setOf("codex", "pi", "zcode")
+
+/**
+ * 从 capabilities 提取 agent 已装版本(纯函数):daemon 报 "agent:pi:v0.85.1"
+ * → "v0.85.1";旧 daemon 只报 "agent:pi"(无版本)或未装 → null。
+ * 引导弹窗据此显示"已装 vX"与"未安装"两种态。
+ */
+internal fun resolveAgentInstalledVersion(agentId: String, capabilities: List<String>): String? =
+    capabilities.firstOrNull { it.startsWith("agent:$agentId:", ignoreCase = true) }
+        ?.split(":")?.getOrNull(2)?.takeIf { it.isNotBlank() }
+
+/**
+ * 灰显磁贴副文字(纯函数):能力驱动型=电脑端未安装(真实原因,替代过时的"开发中");
+ * 尚未接入的基线 agent(opencode/claude-code/hermes/dsh)=接入中。
+ */
+internal fun unavailableLabel(agentId: String): String =
+    if (agentId in capabilityDrivenAgents) AgentGuideCopy.SUBTITLE_NOT_INSTALLED
+    else AgentGuideCopy.SUBTITLE_INTEGRATING
+
+/**
+ * 引导弹窗文案(集中常量,便于后续调整)。detect=判断依据(与 daemon 侧探测
+ * 逻辑一一对应:piapp.LocatePi/Version、zcodeapp.LocateZCode、codexapp.LocateCodex),
+ * install=安装指引。
+ */
+internal data class AgentGuide(val detect: String, val install: String)
+
+internal object AgentGuideCopy {
+    /** 灰显磁贴副文字:能力驱动型 agent 的真实原因。 */
+    const val SUBTITLE_NOT_INSTALLED = "电脑端未安装"
+    /** 灰显磁贴副文字:尚未接入的基线 agent。 */
+    const val SUBTITLE_INTEGRATING = "接入中"
+
+    // ---- 判断依据(daemon 侧探测逻辑)----
+    const val DETECT_PI = "怎么判断的：电脑端需能定位 node 与 pi 的 cli.js，且 --version 能出版本号（PI_NODE / PI_CLI 可指定路径）"
+    const val DETECT_ZCODE = "怎么判断的：电脑端需同时存在 node 与 ZCode 桌面端的 zcode.cjs（ZCODE_NODE / ZCODE_CJS 可指定路径）"
+    const val DETECT_CODEX = "怎么判断的：电脑端需能在 PATH 或 CODEX_BIN 里定位 codex 可执行文件"
+    const val DETECT_INTEGRATING = "该 agent 尚未接入 PocketAgent，暂不走电脑端探测"
+
+    // ---- 安装指引 ----
+    // 【事实性口径】provider 是 daemon 启动时 DetectProviders 注册的:装好后必须重启
+    // 电脑端 daemon 才会点亮,手机端"重连"不够(磁贴智能体原文有偏差,已修正)。
+    const val INSTALL_PI = "电脑端未检测到 Pi coding agent。安装：npm install @earendil-works/pi-coding-agent，装好后重启电脑端 daemon 自动点亮"
+    const val INSTALL_ZCODE = "未检测到 ZCode 桌面端（node + resources/glm/zcode.cjs）。安装 ZCode 桌面版后重启电脑端 daemon 自动点亮"
+    const val INSTALL_CODEX = "未检测到 codex CLI（CODEX_BIN 或 PATH）。安装 OpenAI Codex CLI 后重启电脑端 daemon 自动点亮"
+    const val INSTALL_INTEGRATING = "敬请期待后续版本"
+}
+
+/** 弹窗文案选择(纯函数,单测覆盖):按 agent id 取判断依据 + 安装指引。 */
+internal fun agentGuideCopy(agentId: String): AgentGuide = when (agentId) {
+    "pi" -> AgentGuide(AgentGuideCopy.DETECT_PI, AgentGuideCopy.INSTALL_PI)
+    "zcode" -> AgentGuide(AgentGuideCopy.DETECT_ZCODE, AgentGuideCopy.INSTALL_ZCODE)
+    "codex" -> AgentGuide(AgentGuideCopy.DETECT_CODEX, AgentGuideCopy.INSTALL_CODEX)
+    else -> AgentGuide(AgentGuideCopy.DETECT_INTEGRATING, AgentGuideCopy.INSTALL_INTEGRATING)
+}
+
+/** 网格清单(纯函数,单测覆盖):基线表 + capabilities 动态点亮。 */
+internal fun buildAgents(capabilities: List<String>): List<AgentInfo> = listOf(
+    AgentInfo("codex", "Codex", "app-server", "Codex app-server 后端", R.drawable.agent_codex, true),
+    AgentInfo("opencode", "OpenCode", "stdio", "HTTP + SSE 会话后端", R.drawable.agent_opencode, false),
+    AgentInfo("claude-code", "Claude", "stdio", "stream-json stdio 后端", R.drawable.agent_claudecode, false),
+    AgentInfo("pi", "Pi", "stdio", "RPC stdio 后端", R.drawable.agent_pi, false),
+    AgentInfo("hermes", "Hermes", "ACP", "ACP stdio 后端", R.drawable.agent_hermes, false),
+    AgentInfo("dsh", "DSH", "网页", "网页版 agent(浏览器接入)", R.drawable.agent_dsh, false),
+    AgentInfo("zcode", "ZCode", "app-server", "ZCode app-server 后端", R.drawable.agent_zcode, false),
+).map { it.copy(available = resolveAgentAvailability(it.id, it.available, capabilities)) }.let { known ->
+    val knownIds = known.map { it.id }.toSet()
+    val extra = capabilities.filter { it.startsWith("agent:") }.mapNotNull { it.split(":").getOrNull(1) }
+        .distinct().filter { it !in knownIds && it != "echo" }.map { id ->
+            AgentInfo(id, id, "native", "电脑端适配器", R.drawable.ic_lucide_cpu, true)
+        }
+    known + extra
+}
+
 /** 加载 drawable-nodpi 的 agent PNG 为 ImageBitmap。 */
 @Composable
 fun agentBitmap(res: Int): androidx.compose.ui.graphics.ImageBitmap {
@@ -116,6 +211,8 @@ fun HomeScreen(
     var recent by remember { mutableStateOf(listOf<PThread>()) }
     var showManage by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
+    // 灰显磁贴点击后弹"为什么不可用、怎么装"的引导弹窗(非 null 即展示)
+    var guideAgent by remember { mutableStateOf<AgentInfo?>(null) }
     // 侧边栏跟手(与会话页同一套 controller)
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
 
@@ -123,7 +220,10 @@ fun HomeScreen(
     LaunchedEffect(openDrawerSignal) {
         if (openDrawerSignal > 0) drawerCtrl.open()
     }
-    var multiAgent by remember { mutableStateOf(AgentConnection.multiAgent) }
+    // 【多agent协同 = 开发中】(用户实锤:开关可拨但功能未实现 = 假可用)。
+    // AgentConnection.multiAgent 不再读也不再写:功能没实现,持久化"已开启"
+    // 只会维持一个假开关。展示恒为关,点按只给"开发中"提示(见下方 Switch)。
+    var multiAgent by remember { mutableStateOf(false) }
     var reloadKey by remember { mutableStateOf(0) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showNewThread by remember { mutableStateOf(false) }
@@ -141,22 +241,19 @@ fun HomeScreen(
                     .threadsList
                 loadError = null
             }
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            // effect 因 reloadKey/重连 epoch 变化被重启时协程会收到取消,
+            // 这是正常重启不是加载失败,别把"The coroutine scope left the
+            // composition"写进错误横幅(旧实现重试一次挂一次的根因)
+            throw e
         } catch (e: Exception) {
             loadError = "首页数据加载失败：${e.message ?: "连接失败"}"
         }
     }
 
-    val agents = remember {
-        listOf(
-            AgentInfo("codex", "Codex", "app-server", "Codex app-server 后端", R.drawable.agent_codex, true),
-            AgentInfo("opencode", "OpenCode", "stdio", "HTTP + SSE 会话后端", R.drawable.agent_opencode, false),
-            AgentInfo("claude-code", "Claude", "stdio", "stream-json stdio 后端", R.drawable.agent_claudecode, false),
-            AgentInfo("pi", "Pi", "stdio", "RPC stdio 后端", R.drawable.agent_pi, false),
-            AgentInfo("hermes", "Hermes", "ACP", "ACP stdio 后端", R.drawable.agent_hermes, false),
-            AgentInfo("dsh", "DSH", "网页", "网页版 agent(浏览器接入)", R.drawable.agent_dsh, false),
-            AgentInfo("zcode", "ZCode", "CLI", "ZCode CLI 后端", R.drawable.agent_zcode, false),
-        )
-    }
+    // agent 网格:可用性按 HostInfo.capabilities 动态判定(daemon 侧报 "agent:<id>"
+    // 才点亮;检测不到维持灰显,daemon 部署后自然点亮)。host 变化时重建。
+    val agents = remember(host) { buildAgents(host?.capabilitiesList.orEmpty()) }
 
     // 左边缘右滑也能唤出侧边栏(问题 7),与左上角图标点按是同一个入口的两种手势
     Column(
@@ -222,9 +319,11 @@ fun HomeScreen(
                                             // 终端只在用户主动点【终端】时打开,平时保持
                                             // "无感":切换 agent 不打断当前界面。
                                             AgentConnection.switchAgent(a.id)
+                                            onGoTab(1)
                                             Toast.makeText(ctx, "已切换到「${a.name}」", Toast.LENGTH_SHORT).show()
                                         } else {
-                                            Toast.makeText(ctx, "「${a.name}」持续开发中,敬请期待", Toast.LENGTH_SHORT).show()
+                                            // 灰显=引导:弹窗讲清"为什么不可用、怎么装"
+                                            guideAgent = a
                                         }
                                     }
                                 }
@@ -236,7 +335,7 @@ fun HomeScreen(
                 }
             }
 
-            // ---- 多agent协同:关=只显示在用的 agent;开=显示/添加协同 agents ----
+            // ---- 多agent协同:开发中。开关恒为关,点按只提示;行内仍显示唯一选中 agent ----
             item(span = { GridItemSpan(4) }) {
                 Column(
                     Modifier
@@ -248,15 +347,20 @@ fun HomeScreen(
                         Column(Modifier.weight(1f)) {
                             Text("多agent协同", fontSize = 15.sp, color = Pa.TextPrimary)
                             Text(
-                                if (multiAgent) "已开启:多个 agent 一起接任务" else "关闭中:仅使用选中的 agent",
+                                if (multiAgent) "已开启:多个 agent 一起接任务" else MULTI_AGENT_HINT_DEV,
                                 fontSize = 11.sp, color = Pa.TextTertiary,
                             )
                         }
                         Switch(
                             checked = multiAgent,
-                            onCheckedChange = {
-                                multiAgent = it
-                                AgentConnection.multiAgent = it
+                            onCheckedChange = { request ->
+                                // 【开发中闸门】打开请求一律不生效:状态回弹保持关 + 人话提示,
+                                // 绝不写 AgentConnection.multiAgent 假装可用(纯函数可单测)。
+                                val (next, hint) = multiAgentToggleResult(request)
+                                multiAgent = next
+                                hint?.let {
+                                    Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show()
+                                }
                             },
                             colors = SwitchDefaults.colors(
                                 checkedTrackColor = Pa.Accent,
@@ -276,8 +380,10 @@ fun HomeScreen(
                             AgentTile(a) {
                                 if (a.available) {
                                     AgentConnection.switchAgent(a.id)
+                                            onGoTab(1)
                                 } else {
-                                    Toast.makeText(ctx, "「${a.name}」持续开发中,敬请期待", Toast.LENGTH_SHORT).show()
+                                    // 与主网格一致:灰显点按 → 引导弹窗
+                                    guideAgent = a
                                 }
                             }
                         }
@@ -325,7 +431,33 @@ fun HomeScreen(
                     }
                     Spacer(Modifier.width(12.dp))
                     Text("新建任务", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
-                    Text("Codex", fontSize = 11.sp, color = Pa.TextTertiary)
+                    // 右侧 agent 名标签:跟随唯一选中源 AgentConnection.selectedAgent 实时显示
+                    // (设置页「切换 Agent」/ 主页网格点选都写它),不再硬编码 "Codex"。
+                    Text(selectedAgentLabel(AgentConnection.selectedAgent), fontSize = 11.sp, color = Pa.TextTertiary)
+                }
+            }
+
+            // ---- 电脑预览:浏览器里一键看电脑上正跑着的 dev server(P2)----
+            // 复用既有 onOpenBrowser 入口打开内置浏览器,浏览器顶栏的"电脑预览"
+            // 按钮列出 daemon 探到的端口(3000/5173/8000…),点一项直接加载。
+            item(span = { GridItemSpan(4) }) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { onOpenBrowser() }
+                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(40.dp).background(Pa.AccentDim, RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text("电脑预览", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
+                    Text("dev server", fontSize = 11.sp, color = Pa.TextTertiary)
                 }
             }
 
@@ -351,7 +483,7 @@ fun HomeScreen(
                     }
                 }
             } else {
-                items(recent.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
+                items(recent.filter { it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -361,7 +493,9 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Image(
-                            bitmap = agentBitmap(R.drawable.agent_codex),
+                            // 【agent 徽标】按线程归属 agent 选图(agent_id 缺省 = codex),
+                            // 复用 ThreadsScreen 同款映射:导入的 Pi/ZCode 会话不再错标 Codex。
+                            bitmap = agentBitmap(agentBadgeRes(t.agentId)),
                             contentDescription = null,
                             modifier = Modifier.size(26.dp),
                             contentScale = ContentScale.Crop,
@@ -388,21 +522,36 @@ fun HomeScreen(
         ManageAgentsSheet(agents = agents, onDismiss = { showManage = false })
     }
 
-    // 新建任务(与其他入口同款:文件式选工作区)
-    if (showNewThread) {
-        NewThreadSheet(
-            onDismiss = { showNewThread = false },
-            onCreate = { ws ->
-                showNewThread = false
-                scope.launch {
-                    try {
-                        val builder = CreateThreadRequest.newBuilder()
-                        if (AgentConnection.selectedModel.isNotEmpty()) {
-                            builder.setModelId(AgentConnection.selectedModel)
-                        }
-                        if (ws.isNotBlank()) {
-                            builder.setWorkspace(ws)
-                        }
+    // 灰显磁贴 → 可用性引导弹窗(为什么不可用、怎么装)
+    guideAgent?.let { agent ->
+        AgentGuideSheet(
+            agent = agent,
+            capabilities = host?.capabilitiesList.orEmpty(),
+            onDismiss = { guideAgent = null },
+        )
+    }
+
+            // 新建任务(与其他入口同款:文件式选工作区)
+            if (showNewThread) {
+                NewThreadSheet(
+                    onDismiss = { showNewThread = false },
+                    onCreate = { ws ->
+                        showNewThread = false
+                        scope.launch {
+                            try {
+                                val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
+                                if (AgentConnection.selectedModel.isNotEmpty()) {
+                                    builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                                }
+                                // P1 修复:带上当前选中的 agent(设置页/主页切换后新建才真正生效)。
+                                // codex 或空保持不传 = 旧语义,由 server 端默认路由到 codex。
+                                val agentId = createThreadAgentId(AgentConnection.selectedAgent)
+                                if (agentId.isNotEmpty()) {
+                                    builder.setAgentId(agentId)
+                                }
+                                if (ws.isNotBlank()) {
+                                    builder.setWorkspace(ws)
+                                }
                         val t = withContext(Dispatchers.IO) {
                             AgentConnection.threadService().createThread(builder.build())
                         }
@@ -456,11 +605,94 @@ fun AgentTile(a: AgentInfo, onClick: () -> Unit) {
             maxLines = 1,
         )
         Text(
-            if (a.available) a.method else "开发中",
+            // 灰显态给真实原因:能力驱动型="电脑端未安装";未接入型="接入中"
+            if (a.available) a.method else unavailableLabel(a.id),
             fontSize = 9.sp,
             color = if (a.available) Pa.Accent.copy(alpha = 0.75f) else Pa.TextTertiary.copy(alpha = 0.5f),
             maxLines = 1,
         )
+    }
+}
+
+/**
+ * agent 可用性引导弹窗:灰显磁贴点击后讲清"为什么不可用、怎么装"。
+ * 风格仿 ManageAgentsSheet(同款圆角/拖柄/关闭按钮)。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDismiss: () -> Unit) {
+    // 已装版本(daemon 报 "agent:<id>:<version>" 时非 null)→ 状态行区分两态
+    val installedVersion = resolveAgentInstalledVersion(agent.id, capabilities)
+    val guide = agentGuideCopy(agent.id)
+    val state = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        containerColor = Pa.CardHigh,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 10.dp).width(40.dp).height(4.dp).background(Pa.Hover, androidx.compose.foundation.shape.CircleShape))
+        },
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(
+                bitmap = agentBitmap(agent.iconRes),
+                contentDescription = agent.name,
+                modifier = Modifier.size(44.dp),
+                contentScale = ContentScale.Crop,
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(agent.name, fontSize = 19.sp, color = Pa.TextPrimary)
+                Text(
+                    // 状态行:未接入型固定"接入中";能力驱动型分"已装 vX"/"电脑端未安装"两态
+                    when {
+                        agent.id !in capabilityDrivenAgents -> AgentGuideCopy.SUBTITLE_INTEGRATING
+                        installedVersion != null -> "已装 $installedVersion"
+                        else -> AgentGuideCopy.SUBTITLE_NOT_INSTALLED
+                    },
+                    fontSize = 12.sp,
+                    color = when {
+                        agent.id !in capabilityDrivenAgents -> Pa.TextSecondary
+                        installedVersion != null -> Pa.Green
+                        else -> Pa.Red
+                    },
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            IconActionButton(R.drawable.ic_lucide_x, "关闭", onDismiss, bg = Color.Transparent, size = 38.dp, iconSize = 18.dp)
+        }
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            GuideBlock("怎么判断的", guide.detect)
+            GuideBlock("怎么装", guide.install)
+        }
+        if (agent.id in capabilityDrivenAgents && installedVersion == null) {
+            Text(
+                "装好后重连 daemon,磁贴自动点亮",
+                Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                fontSize = 11.sp, color = Pa.TextTertiary,
+            )
+        }
+        Spacer(Modifier.height(30.dp))
+    }
+}
+
+/** 引导弹窗里的一块信息卡(标题 + 正文)。 */
+@Composable
+private fun GuideBlock(title: String, body: String) {
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Text(title, fontSize = 12.sp, color = Pa.TextSecondary)
+        Text(body, fontSize = 13.sp, color = Pa.TextPrimary, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -557,7 +789,7 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                     Switch(
                         checked = a.available,
                         onCheckedChange = {
-                            if (!a.available) Toast.makeText(ctx, "「${a.name}」持续开发中", Toast.LENGTH_SHORT).show()
+                            if (!a.available) Toast.makeText(ctx, "「${a.name}」${unavailableLabel(a.id)}", Toast.LENGTH_SHORT).show()
                         },
                         enabled = a.available,
                         colors = SwitchDefaults.colors(
@@ -574,3 +806,46 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
         Spacer(Modifier.height(30.dp))
     }
 }
+
+// ---- 新建会话的 agent 接线(纯函数,单测覆盖 NewThreadAgentSelectionTest)----
+
+/**
+ * 新建会话应携带的 agent_id:
+ * - 空串 / "codex" → 返回空串,请求不设 agent_id = 旧语义,由 server 端默认路由到 codex;
+ * - 其他(pi / zcode / …)→ 原样返回,CreateThreadRequest.agent_id 生效,
+ *   server 端 providerForThread 按它路由到对应后端。
+ *
+ * 【为什么必须收敛成纯函数】新建会话入口有两处(主页"新建任务"行 + ChatScreen 内),
+ * 判定逻辑必须完全一致;且 daemon 侧 agent 不可用时仍允许建会话,
+ * 首条消息会得到 server 的人话错误 —— 这里不做能力预检。
+ */
+internal fun createThreadAgentId(selectedAgent: String): String =
+    if (selectedAgent.isBlank() || selectedAgent == "codex") "" else selectedAgent.trim()
+
+/**
+ * agent id → 展示名:与设置页「切换 Agent」的命名保持一致
+ * (SettingsScreen 内映射是 private,这里按同款名单给一份只读展示名;未知 id 原样显示)。
+ * 用于主页"新建任务"行右侧标签、NewThreadSheet 确认态。
+ */
+internal fun selectedAgentLabel(agentId: String): String = when (agentId) {
+    "", "codex" -> "Codex"
+    "opencode" -> "OpenCode"
+    "claude" -> "Claude"
+    "pi" -> "Pi"
+    "hermes" -> "Hermes"
+    "zcode" -> "ZCode"
+    else -> agentId
+}
+
+// ---- 多agent协同开关:开发中闸门(纯函数,单测覆盖 MultiAgentToggleTest)----
+
+/** "开发中"提示文案(主页开关副标题与点按 Toast 共用同一句,避免两处口径漂移)。 */
+internal const val MULTI_AGENT_HINT_DEV = "开发中:多 agent 协同尚未开放"
+
+/**
+ * 多agent协同开关的点按结果(纯函数):功能未实现,任何"打开"请求都不生效。
+ * @return (下一状态, 待弹提示) —— 下一状态恒为关;"打开"请求附带"开发中"提示,
+ *         "关闭"请求静默(本来就关着,无需打扰)。
+ */
+internal fun multiAgentToggleResult(requestOn: Boolean): Pair<Boolean, String?> =
+    if (requestOn) false to MULTI_AGENT_HINT_DEV else false to null

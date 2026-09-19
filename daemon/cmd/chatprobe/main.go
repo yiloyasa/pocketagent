@@ -4,6 +4,8 @@ package main
 // 逐事件打印 + 总超时,用于真验证 codex 是否收到任务并回复。
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -11,17 +13,39 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
 func main() {
-	prompt := "Reply with exactly: PONG"
-	if len(os.Args) > 1 {
-		prompt = os.Args[1]
+	addr := flag.String("addr", "127.0.0.1:7246", "daemon 地址(ip:port)")
+	plaintext := flag.Bool("plaintext", false, "连明文 gRPC(对付 -plaintext 起的测试 daemon);默认 TLS")
+	// -agent 指定会话 agent(2026-09-19 闭环验收 zcode 用):daemon 侧 CreateThread
+	// 规定 agent_id 为空 = codex(老客户端语义),探针原来没法指定 zcode/pi。
+	agent := flag.String("agent", "", "会话 agent(zcode/pi/codex);空 = codex(老客户端语义)")
+	mode := flag.String("mode", "turn", "turn=建线+发轮次(默认);optimize=只打 OptimizePrompt RPC")
+	style := flag.String("style", "", "optimize 模式的改写风格(concise/detailed/空=默认)")
+	flag.Parse()
+	// 提示词:第一个非 flag 位置参数(【注意】必须放在 flag.Parse() 之后用
+	// flag.Arg(0),不能沿用旧的 os.Args[1] —— 引入 flag 包后 os.Args 里仍带着
+	// 已解析的 flag,直接取 os.Args[1] 会把 "-agent" 当成提示词发给模型,
+	// 2026-09-19 实测踩过;放在 Parse 之前 flag.Arg(0) 恒为空,同样踩过)。
+	prompt := flag.Arg(0)
+	if prompt == "" {
+		prompt = "Reply with exactly: PONG"
 	}
-	conn, err := grpc.NewClient("127.0.0.1:7246", grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	// daemon 生产默认 TLS(自签证书)。诊断用 InsecureSkipVerify 跳过自签校验;
+	// 指纹核对走 tlsprobe。-plaintext=true 回明文。
+	var creds credentials.TransportCredentials
+	if *plaintext {
+		creds = insecure.NewCredentials()
+	} else {
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // 探针仅本机诊断用
+	}
+	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -29,14 +53,26 @@ func main() {
 
 	tc := pb.NewThreadServiceClient(conn)
 	ctx := context.Background()
+	start := time.Now()
 
-	th, err := tc.CreateThread(ctx, &pb.CreateThreadRequest{})
+	// -mode optimize:只打一次 OptimizePrompt RPC(2026-09-19 优化按钮真机验收
+	// 用:走 daemon 的生产 gRPC 面,底层 zcodeapp.GenerateText → session/create
+	// + workspace/generateText),打印改写结果后退出,不走建线/轮次流程。
+	if *mode == "optimize" {
+		resp, err := tc.OptimizePrompt(ctx, &pb.OptimizePromptRequest{Text: prompt, Style: *style})
+		if err != nil {
+			log.Fatalf("OptimizePrompt: %v", err)
+		}
+		fmt.Printf("[probe] optimized(%v): %s\n", time.Since(start), resp.GetOptimized())
+		return
+	}
+
+	th, err := tc.CreateThread(ctx, &pb.CreateThreadRequest{AgentId: *agent})
 	if err != nil {
 		log.Fatal("CreateThread: ", err)
 	}
 	fmt.Printf("[probe] thread=%s created\n", th.Id)
 
-	start := time.Now()
 	stream, err := tc.StartTurn(ctx)
 	if err != nil {
 		log.Fatal("StartTurn: ", err)

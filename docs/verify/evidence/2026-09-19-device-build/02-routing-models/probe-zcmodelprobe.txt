@@ -1,0 +1,29 @@
+# zcmodelprobe
+# ZCode 模型列表真值
+# rc=0 耗时=7.64s @ 22:46:43
+
+node=C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe
+cjs=C:\Users\yanzi\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs
+builtin=
+personal=
+session=sess_c63a1c80-c4b1-450a-9a8a-daa4afcb03a6 current=account:bigmodel-individual-coding-plan/GLM-5.3
+settings.mode={"current":"build"}
+settings.permission={"mode":"build"}
+settings.thoughtLevel={"available":[{"label":"low","value":"low"},{"label":"high","value":"high"},{"label":"max","value":"max"}],"current":"max","enabled":true}
+current={"providerId":"account:bigmodel-individual-coding-plan","modelId":"GLM-5.3","options":{"reasoningLevel":"max"}}
+schema runtime/capabilities result={"independentPlanState":true} error=<nil>
+schema session/setMode result=null error=session/setMode: ZCode 返回错误 -32602: Invalid params — sessionId: Invalid input: expected string, received undefined; mode: Invalid option: expected one of "plan"|"build"|"edit"|"yolo"|"auto"
+available=7
+model provider=10c04b9f-64ed-4762-ae26-b81026c06bc7 id=gpt-5.6-sol label=gpt-5.6-sol provider_label=SSR gpt default_level=max
+model provider=10c04b9f-64ed-4762-ae26-b81026c06bc7 id=gpt-5.6-terra label=gpt-5.6-terra provider_label=SSR gpt default_level=max
+model provider=10c04b9f-64ed-4762-ae26-b81026c06bc7 id=gpt-6-astra label=gpt-6-astra provider_label=SSR gpt default_level=max
+model provider=4e847060-f014-4d5e-886c-0e5fb73e9cfa id=DeepSeek-V4-Flash label=DeepSeek-V4-Flash provider_label=deepseek default_level=max
+model provider=4e847060-f014-4d5e-886c-0e5fb73e9cfa id=DeepSeek-V4-Pro label=DeepSeek-V4-Pro provider_label=deepseek default_level=max
+model provider=account:bigmodel-individual-coding-plan id=GLM-5.3 label=GLM-5.3 provider_label=BigModel Individual Coding Plan default_level=max
+model provider=account:bigmodel-individual-coding-plan id=GLM-5.3-Flash label=GLM-5.3-Flash provider_label=BigModel Individual Coding Plan default_level=max
+closed=true
+deferred_close_error=<nil>
+
+--- stderr ---
+2026/09/19 22:46:36 [zcode] 环境修补:builtin provider 配置 = C:\Users\yanzi\AppData\Local\Programs\ZCode\resources\config\provider\zcode-builtin.json
+2026/09/19 22:46:36 [zcode] ZCode 子进程已拉起 PID=40988 cwd="C:\\Users\\yanzi\\AppData\\Local\\Temp\\pa-zcode-probe-2173532254" runtime=C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe

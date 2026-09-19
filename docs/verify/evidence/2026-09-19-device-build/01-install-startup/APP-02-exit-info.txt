@@ -1,0 +1,8 @@
+ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)
+Last Timestamp of Persistence Into Persistent Storage: 2026-09-19 22:35:44.342
+  package: dev.pocketagent.app
+    Historical Process Exit for uid=10322
+        ApplicationExitInfo #0:
+          timestamp=2026-09-19 22:36:29.019 pid=24463 realUid=10322 packageUid=10322 definingUid=10322 user=0
+          process=dev.pocketagent.app reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=100 pss=143MB rss=280MB description=stop dev.pocketagent.app due to installPackageLI state=empty trace=null

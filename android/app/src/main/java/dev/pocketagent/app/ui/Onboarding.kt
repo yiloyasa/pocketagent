@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import android.content.Context
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,10 +37,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import pocketagent.v1.GetHostInfoRequest
 
 /**
  * 首次启动 / 重看新手教程的持久化标志。
@@ -61,6 +70,17 @@ private sealed interface OnboardBlock {
 
     /** 提示卡(Info 样式)。 */
     data class Note(val text: String) : OnboardBlock
+
+    /**
+     * agent 选择卡:头像位图 + 灰显语义(灰阶 = 电脑端未装/未点亮,与主页同一套语言)。
+     * 与 [Bullet] 分开:agent 头像是一位图(painterResource 不适用),且需要右缘状态标签。
+     */
+    data class AgentRow(
+        val name: String,
+        val iconRes: Int,
+        val desc: String,
+        val dimmed: Boolean = false,
+    ) : OnboardBlock
 }
 
 /** 单页教程(数据驱动)。 */
@@ -73,8 +93,11 @@ private data class OnboardPage(
 /**
  * 教程页清单 —— 后续加页只需往这里追加一个 [OnboardPage],UI 与指示点会自动适配。
  * 顺序即翻页顺序;最后一页的按钮变为「开始使用」。
+ *
+ * 【三 agent 化】Pi / ZCode 的"电脑端已装"靠 HostInfo.capabilities("agent:<id>")判定,
+ * 未连接 / 未装一律灰显 —— 与主页 agent 网格的点亮规则同源,连接后自动点亮。
  */
-private val ONBOARD_PAGES = listOf(
+private fun onboardPages(piInstalled: Boolean, zcodeInstalled: Boolean): List<OnboardPage> = listOf(
     OnboardPage(
         icon = R.drawable.ic_lucide_sparkles,
         title = "欢迎使用 PocketAgent",
@@ -88,7 +111,7 @@ private val ONBOARD_PAGES = listOf(
             OnboardBlock.Bullet(
                 icon = R.drawable.ic_lucide_monitor,
                 title = "电脑是算力",
-                desc = "agent 实际在你的电脑上运行(codex CLI)",
+                desc = "Codex / Pi / ZCode 等 agent 实际在你的电脑上运行",
             ),
             OnboardBlock.Note("数据不强制上云:电脑在你手里,手机只是延伸。"),
         ),
@@ -100,8 +123,8 @@ private val ONBOARD_PAGES = listOf(
             OnboardBlock.Lead("在电脑(Windows)上安装 PocketAgent 桌面端:"),
             OnboardBlock.Bullet(
                 icon = R.drawable.ic_lucide_check,
-                title = "先装 codex CLI",
-                desc = "手机遥控的就是它,电脑上需先装好且可运行",
+                title = "装好至少一个 agent CLI",
+                desc = "Codex 必装;Pi、ZCode 想用哪个装哪个,之后可随时补装",
             ),
             OnboardBlock.Bullet(
                 icon = R.drawable.ic_lucide_check,
@@ -113,6 +136,31 @@ private val ONBOARD_PAGES = listOf(
                 title = "双击 install.bat",
                 desc = "自动注册防火墙与守护进程,并生成连接 token",
             ),
+        ),
+    ),
+    OnboardPage(
+        icon = R.drawable.ic_lucide_cpu,
+        title = "选择你的 agent",
+        blocks = listOf(
+            OnboardBlock.Lead("同一部手机可驾驭多个 agent,会话列表按 agent 分流:"),
+            OnboardBlock.AgentRow(
+                name = "Codex",
+                iconRes = R.drawable.agent_codex,
+                desc = "基线 agent:装好桌面端即可用,支持审批卡 / 分组 / 电脑会话",
+            ),
+            OnboardBlock.AgentRow(
+                name = "Pi",
+                iconRes = R.drawable.agent_pi,
+                desc = if (piInstalled) "电脑端已检测到,可直接开聊" else "电脑端未装/未检测到 —— 电脑上装好 pi 并升级桌面端后自动点亮",
+                dimmed = !piInstalled,
+            ),
+            OnboardBlock.AgentRow(
+                name = "ZCode",
+                iconRes = R.drawable.agent_zcode,
+                desc = if (zcodeInstalled) "电脑端已检测到,可直接开聊" else "电脑端未装/未检测到 —— 电脑上装好 ZCode 并升级桌面端后自动点亮",
+                dimmed = !zcodeInstalled,
+            ),
+            OnboardBlock.Note("灰显 = 电脑端还没装。不影响 Codex 的使用;连接后这里会自动点亮。"),
         ),
     ),
     OnboardPage(
@@ -150,13 +198,31 @@ private val ONBOARD_PAGES = listOf(
             OnboardBlock.Bullet(
                 icon = R.drawable.ic_lucide_send_horizontal,
                 title = "输入指令",
-                desc = "告诉电脑上的 agent 你要它做什么",
+                desc = "告诉电脑上的 agent 你要它做什么;口语化的需求可自动改写成清晰指令(提示词优化)",
             ),
             OnboardBlock.Bullet(
                 icon = R.drawable.ic_lucide_circle_check,
                 title = "审批卡确认",
                 desc = "agent 要执行命令时,手机会弹出确认卡,你点头才跑",
             ),
+        ),
+    ),
+    OnboardPage(
+        icon = R.drawable.ic_lucide_mic,
+        title = "语音输入(可选)",
+        blocks = listOf(
+            OnboardBlock.Lead("动口不动手,输入框旁的麦克风就能说话:"),
+            OnboardBlock.Bullet(
+                icon = R.drawable.ic_lucide_mic,
+                title = "点麦克风开始听写",
+                desc = "识别的文字先进输入框,你确认后再发送,绝不自动发出",
+            ),
+            OnboardBlock.Bullet(
+                icon = R.drawable.ic_lucide_download,
+                title = "首次使用需下载语音模型(约42MB)",
+                desc = "端侧离线中文识别,一次下载永久可用;「设置 → 语音识别」可查看进度、失败重试、删除释放空间",
+            ),
+            OnboardBlock.Note("部分安卓 ROM 没有系统识别服务:此时会自动改用端侧模型,无需任何配置。"),
         ),
     ),
     OnboardPage(
@@ -196,6 +262,11 @@ private val ONBOARD_PAGES = listOf(
                 title = "Tailscale 连上了吗",
                 desc = "异地连接时确认已接入同一 tailnet",
             ),
+            OnboardBlock.Bullet(
+                icon = R.drawable.ic_lucide_mic,
+                title = "语音用不了?",
+                desc = "先到「设置 → 语音识别」下载语音模型;Pi / ZCode 灰显则先在电脑上补装",
+            ),
         ),
     ),
 )
@@ -203,10 +274,34 @@ private val ONBOARD_PAGES = listOf(
 /**
  * 新手教程:横向翻页式引导。
  * [onDone] 在「跳过」或末页「开始使用」时回调 —— 调用方负责写标志并切回主页。
+ *
+ * 【agent 点亮】进入时轻量探测一次电脑端能力(3 秒超时,连不上就全部灰显):
+ * Pi / ZCode 卡按 HostInfo.capabilities 点亮,与主页 agent 网格同规则;重看教程
+ * (设置入口)时若已连接即反映最新安装状态。
  */
 @Composable
 fun Onboarding(onDone: () -> Unit) {
-    val pages = ONBOARD_PAGES
+    // 电脑端 agent 安装状态(灰显依据):拿不到(未连接/超时)= 未点亮,不阻塞翻页
+    var agentCaps by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        val info = withTimeoutOrNull(3_000) {
+            runCatching {
+                AgentConnection.hostService()
+                    .getHostInfo(GetHostInfoRequest.getDefaultInstance())
+            }.getOrNull()
+        }
+        agentCaps = info?.capabilitiesList.orEmpty()
+    }
+    // 【与主页同源】点亮判定复用 resolveAgentAvailability:兼容旧格式 "agent:pi" 与
+    // 新格式 "agent:pi:v0.85.1"(带探测版本号),且不误匹配 "agent:pika" 这类 id。
+    // 曾经这里用 equals 精确匹配,daemon 上线带版本的新格式后已装机器被错误灰显。
+    val piInstalled = remember(agentCaps) {
+        resolveAgentAvailability("pi", baseAvailable = false, capabilities = agentCaps)
+    }
+    val zcodeInstalled = remember(agentCaps) {
+        resolveAgentAvailability("zcode", baseAvailable = false, capabilities = agentCaps)
+    }
+    val pages = remember(piInstalled, zcodeInstalled) { onboardPages(piInstalled, zcodeInstalled) }
     val pager = rememberPagerState(pageCount = { pages.size })
     val scope = rememberCoroutineScope()
     val last = pages.lastIndex
@@ -329,6 +424,7 @@ private fun OnboardPageContent(page: OnboardPage) {
                     )
                     is OnboardBlock.Bullet -> OnboardBullet(block)
                     is OnboardBlock.Note -> OnboardNote(block.text)
+                    is OnboardBlock.AgentRow -> OnboardAgentRow(block)
                 }
             }
         }
@@ -362,6 +458,44 @@ private fun OnboardBullet(b: OnboardBlock.Bullet) {
                 Text(b.desc, fontSize = 12.sp, color = Pa.TextTertiary, lineHeight = 17.sp)
             }
         }
+    }
+}
+
+/**
+ * agent 选择卡:位图头像 + 右缘状态标签;灰显 = 电脑端未装/未点亮
+ * (灰阶滤镜与主页 agent 网格同款,视觉语言一致)。
+ */
+@Composable
+private fun OnboardAgentRow(b: OnboardBlock.AgentRow) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(38.dp).background(Pa.AccentDim, RoundedCornerShape(11.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = agentBitmap(b.iconRes),
+                contentDescription = null,
+                modifier = Modifier.size(26.dp),
+                colorFilter = if (b.dimmed) grayscale() else null,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(b.name, fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(3.dp))
+            Text(b.desc, fontSize = 12.sp, color = Pa.TextTertiary, lineHeight = 17.sp)
+        }
+        Text(
+            if (b.dimmed) "未点亮" else "可用",
+            fontSize = 10.sp,
+            color = if (b.dimmed) Pa.TextTertiary else Pa.Accent,
+        )
     }
 }
 

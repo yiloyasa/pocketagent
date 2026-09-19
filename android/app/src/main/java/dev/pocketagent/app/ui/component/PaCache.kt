@@ -23,6 +23,10 @@ object PaCache {
     fun init(ctx: Context) {
         sweepTemp(ctx)
         PreviewCache.init(ctx)
+        // 网页快照缓存(离线浏览用)也归这里管:init 建好 pa_offline 下的各分区目录,
+        // 并按各分区声明的生命周期(ttlMs)做一次陈旧清扫。
+        OfflineStore.init(ctx)
+        OfflineStore.sweepAllStale()
     }
 
     /** 启动清扫:删掉崩溃/被杀进程留下的临时文件(单文件最大 64MB,不清会越积越多)。 */
@@ -144,19 +148,17 @@ object PreviewCache {
         }
     }
 
-    /** 按最旧先删,把总量压回上限内。 */
+    /**
+     * 按最旧先删,把总量压回上限内。
+     * 淘汰顺序由 [OfflineStore.selectForEviction] 这个**纯函数**给出(可 JVM 单测),
+     * 这里只负责落盘删除。长度必须在删除前取好 —— 删掉之后再 `length()` 恒为 0。
+     */
     private fun evictIfNeeded(d: File) {
         val files = d.listFiles() ?: return
-        var total = files.sumOf { it.length() }
-        if (total <= maxTotalBytes) return
-        val ordered = files.sortedBy { it.lastModified() }
-        for (f in ordered) {
-            if (total <= maxTotalBytes) break
-            // 长度必须在删除前取:delete 之后 length() 恒为 0,total 就永远不会下降,
-            // 结果会把整个缓存目录清空(而不是只淘汰最旧的)。
-            val len = f.length()
-            if (f.delete()) total -= len
-        }
+        val entries = files.map { OfflineStore.CacheEntry(it.name, it.length(), it.lastModified()) }
+        val doomed = OfflineStore.selectForEviction(entries, maxTotalBytes).map { it.name }.toSet()
+        if (doomed.isEmpty()) return
+        for (f in files) if (f.name in doomed) runCatching { f.delete() }
     }
 
     /** 缓存总量(字节),供缓存管理页展示。 */

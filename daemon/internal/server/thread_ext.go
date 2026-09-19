@@ -494,7 +494,9 @@ func searchTermMatches(t *store.Thread, term string) bool {
 		return true
 	}
 	for _, m := range t.Messages {
-		for _, b := range m.Blocks {
+		// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+		for i := range m.Blocks {
+			b := &m.Blocks[i]
 			if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
 				if strings.Contains(strings.ToLower(tb.Text.Text), low) {
 					return true

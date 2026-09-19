@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="multiAgent" value="false" />
+    <boolean name="optimizePrompt" value="false" />
+    <string name="manualAddr"></string>
+    <string name="tsAddr">100.92.193.109:7246</string>
+    <string name="serverCertSha256">a12a872b…</string>
+    <boolean name="toolDetailsExpanded" value="false" />
+    <string name="themeMode">system</string>
+    <string name="addr">10.15.50.160:7246</string>
+    <string name="deviceId">e1df08c0-77ad-40c3-83a2-161a2f8656e1</string>
+    <string name="lanAddr">10.15.50.160:7246</string>
+    <string name="lastGoodAddr">10.15.50.160:7246</string>
+</map>

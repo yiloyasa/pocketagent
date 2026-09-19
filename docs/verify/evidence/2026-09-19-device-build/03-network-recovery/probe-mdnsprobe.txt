@@ -1,0 +1,6 @@
+# mdnsprobe
+# mDNS 局域网发现真值
+# rc=0 耗时=5.38s @ 22:44:47
+
+浏览 _pocketagent._tcp.local.(5s)...
+耗时 5.021s, 发现 0 个实例:

@@ -32,6 +32,11 @@ class TurnKeepAliveService : Service() {
         return START_STICKY
     }
 
+    // Android 15 gives dataSync foreground services a finite background budget.
+    // Stop the service rather than crash; daemon execution and journal replay
+    // remain independent of Android's process lifetime.
+    override fun onTimeout(startId: Int, fgsType: Int) { stopSelf() }
+
     companion object {
         private const val CHANNEL_ID = "pa_turn"
     }

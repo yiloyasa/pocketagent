@@ -1,16 +1,29 @@
 package dev.pocketagent.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.provider.OpenableColumns
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -28,6 +41,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.WindowInsets
@@ -63,6 +79,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,6 +95,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -103,19 +121,37 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
+import androidx.core.content.ContextCompat
+import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.UsageCache
 import dev.pocketagent.app.ui.component.UsageSnapshot
+import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_ENGINE
+import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_MODEL
+import dev.pocketagent.app.ui.component.UndoBarHost
+import dev.pocketagent.app.ui.component.VoskModelManager
+import dev.pocketagent.app.ui.component.VoskModelPhase
+import dev.pocketagent.app.ui.component.VoskVoiceRecognizer
+import dev.pocketagent.app.ui.component.SenseVoiceModelManager
+import dev.pocketagent.app.ui.component.SenseVoiceRecognizer
 import dev.pocketagent.app.ui.component.keyboardAwareBottomPadding
 import dev.pocketagent.app.ui.component.rememberDrawerController
+import dev.pocketagent.app.ui.component.rememberUndoState
+// VoiceEngineKind / pickVoiceEngine 定义在本文件尾部纯逻辑区(与状态机同处,JVM 单测共用)
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import io.grpc.Status
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import pocketagent.v1.ApprovalDecision
 import pocketagent.v1.ApprovalRequest
 import pocketagent.v1.ContentBlock
@@ -124,6 +160,7 @@ import pocketagent.v1.CreateThreadRequest
 import pocketagent.v1.CodexSettings
 import pocketagent.v1.GetCodexSettingsRequest
 import pocketagent.v1.GetHostInfoRequest
+import pocketagent.v1.OptimizePromptRequest
 import pocketagent.v1.GitStatusRequest
 import pocketagent.v1.GitDiffRequest
 import pocketagent.v1.GitCommitRequest
@@ -131,7 +168,12 @@ import pocketagent.v1.GetThreadHistoryRequest
 import pocketagent.v1.GetThreadRequest
 import pocketagent.v1.ForkThreadRequest
 import pocketagent.v1.RollbackThreadRequest
+import pocketagent.v1.CompactThreadRequest
+import pocketagent.v1.StartReviewRequest
+import pocketagent.v1.SetThreadGoalRequest
+import pocketagent.v1.ExportThreadHtmlRequest
 import pocketagent.v1.ListModelsRequest
+import pocketagent.v1.ListSlashCommandsRequest
 import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ModelInfo
 import pocketagent.v1.SetCodexSettingsRequest
@@ -140,6 +182,7 @@ import pocketagent.v1.ApproveGuardianDeniedActionRequest
 import pocketagent.v1.Thread as PThread
 import pocketagent.v1.ToolCallUpdate
 import pocketagent.v1.TurnClientMessage
+import pocketagent.v1.ThreadStatus
 import pocketagent.v1.TurnInput
 import pocketagent.v1.TurnServerMessage
 import pocketagent.v1.Usage
@@ -159,6 +202,14 @@ data class ChatItem(
     val codexEvent: CodexEvent? = null,
     /** 执行计划步骤(turn/plan),每项 "status|text"。 */
     val planSteps: List<String> = emptyList(),
+    /**
+     * P1-4 运行中发消息的投递状态(仅 user 消息会带):
+     * pending(发送中)/ steered(已插入)/ queued(排队中)/ overflow(队列满未送达)。
+     * 空串 = 普通用户消息。状态机见 TurnDelivery.kt。
+     */
+    val deliverState: String = "",
+    /** 排队位次(Queued.position,1 起;仅 deliverState=queued 时有值)。 */
+    val queuePos: Int = 0,
 )
 
 /** 已上传到电脑的附件(手机 → daemon 工作区 .pocketagent-uploads)。 */
@@ -192,6 +243,7 @@ private fun CodexEventCard(
     uiScale: Float = 1f,
     guardianOverridden: Boolean = false,
     onApproveGuardian: ((CodexEvent) -> Unit)? = null,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     // 【为什么按 kind 上色而不是"非 ERROR 一律 Accent"】这些卡片的用途完全不同:
     // 红色 = 出事了(审查驳回/任务错误);黄色 = 需要留意但没坏(配置/沙箱/弃用);
@@ -211,6 +263,9 @@ private fun CodexEventCard(
     val statusLabel = guardianStatusLabel(event.reviewStatus)
     val riskLabel = riskLevelLabel(event.riskLevel)
     val overridable = guardianOverridable(event) && !guardianOverridden && onApproveGuardian != null
+    val skillsBudgetWarning =
+        event.message.contains("skill", ignoreCase = true) &&
+            event.message.contains("budget", ignoreCase = true)
     var expanded by remember(event.title, event.rawJson) { mutableStateOf(false) }
 
     Column(
@@ -241,7 +296,9 @@ private fun CodexEventCard(
                 )
                 Spacer(Modifier.width(6.dp))
             }
-            if (event.rawJson.isNotBlank()) {
+            // 「详情」展开的是协议原始 JSON —— 对"内容已经完整渲染"的事件(回合 diff)
+            // 它就是一段用户看不懂的分层结构(2026-09-18 反馈:展开后像坏了),这类事件不给入口。
+            if (event.rawJson.isNotBlank() && event.kind != CodexEvent.Kind.TURN_DIFF) {
                 TextButton(
                     onClick = { expanded = !expanded },
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
@@ -254,7 +311,15 @@ private fun CodexEventCard(
             Text(riskLabel, color = accent, fontSize = (11 * uiScale).sp, fontWeight = FontWeight.Medium)
         }
         if (event.message.isNotBlank()) {
-            Text(event.message, color = Pa.TextPrimary, fontSize = (12 * uiScale).sp)
+            Text(
+                if (skillsBudgetWarning) {
+                    "技能说明超出上下文预算，Codex 仍能使用全部技能，但部分说明被缩短。"
+                } else {
+                    event.message
+                },
+                color = Pa.TextPrimary,
+                fontSize = (12 * uiScale).sp,
+            )
         }
         // 回合 diff:等宽展示,横向可滚(桌面上的改动行往往很长,
         // 手机上换行会把 diff 的语义彻底破坏)。
@@ -298,6 +363,14 @@ private fun CodexEventCard(
                 color = Pa.Green,
                 fontSize = (11 * uiScale).sp,
             )
+        }
+        if (skillsBudgetWarning && onOpenSettings != null) {
+            TextButton(
+                onClick = onOpenSettings,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text("查看技能与插件", color = Pa.AccentText, fontSize = (12 * uiScale).sp)
+            }
         }
         if (expanded) {
             Text(
@@ -558,7 +631,7 @@ private fun PlanDraftText(draft: String) {
 @Composable
 private fun ToolCallCard(item: ChatItem, scale: Float) {
     // 运行中默认展开(看得到正在干什么),结束后默认收起
-    var expanded by remember(item.toolId) { mutableStateOf(item.toolStatus == "running") }
+    var expanded by remember(item.toolId, AgentConnection.toolDetailsExpanded) { mutableStateOf(AgentConnection.toolDetailsExpanded) }
     val statusColor = when (item.toolStatus) {
         "failure" -> Pa.Red
         "success" -> Pa.Green
@@ -643,9 +716,6 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
     }
 }
 
-/** 电脑端没上报窗口时的兜底值(codex 常见 272K)。 */
-private const val DEFAULT_CONTEXT_WINDOW = 272_000L
-
 /**
  * 当前 agent 的"默认模型" id。
  *
@@ -657,18 +727,47 @@ private fun agentDefaultModelId(agent: String): String =
     if (agent.isBlank()) "codex/default" else "$agent/default"
 
 /**
+ * 按会话归属 agent 过滤模型表(纯函数,单测钉死 —— 见 ChatModelRoutingTest)。
+ *
+ * 【为什么必须过滤】daemon 的 ListModels 是全局列表:每个 provider 的模型 id 都带
+ * agent 前缀("codex/GLM-5.3-Flash"、"pi/zai-coding-cn/glm-5.3"、…),首段即归属
+ * agent。真机实锤(图3):Pi 会话的模型弹窗把别家(codex/zcode)的模型表全列了
+ * 出来 —— 根因就是拿全表直接渲染。按前缀过滤后,Pi 会话只见 Pi 自己的模型。
+ *
+ * agentId 为空(会话归属还没回填)时返回全表:与旧行为一致,回填后立即收窄。
+ */
+internal fun modelsForAgent(models: List<ModelInfo>, agentId: String): List<ModelInfo> {
+    if (agentId.isBlank()) return models
+    return models.filter { it.id.substringBefore('/') == agentId }
+}
+
+/**
+ * 模型 id 的"裸名"显示:去掉首段 agent 前缀(纯函数)。
+ * "pi/glm-5.3" → "glm-5.3";三段式("pi/zai-coding-cn/glm-5.3")只去首段,
+ * 余下原样保留 —— 与 daemon 的 Thread.ModelID 形状一致,不猜第二段语义。
+ * 无前缀的裸 id 原样返回(substringAfter 的缺省兜底必须给 id 本身,不能给空串)。
+ */
+internal fun modelBareName(id: String): String = id.substringAfter('/', id)
+
+/**
+ * "压缩上下文"动作的后果文案,按会话归属 agent 动态(纯函数,单测钉死)。
+ * 真机实锤(图9):Pi 会话里显示"让 Codex 压缩历史上下文" —— 文案硬编码 codex。
+ * daemon 的 CompactThread RPC 已按会话 AgentID 路由(pi/zcode/codex 各走各的
+ * 压缩),文案必须跟上;agent 未知(还没回填)时退中性说法,不点名。
+ */
+internal fun compactionConsequenceCopy(agentId: String): String =
+    if (agentId.isBlank()) "压缩历史上下文以释放窗口空间,不会撤销文件改动。"
+    else "让 ${selectedAgentLabel(agentId)} 压缩历史上下文以释放窗口空间,不会撤销文件改动。"
+
+/**
  * 上下文窗口解析优先级(从高到低):
  *  1) live:daemon 随用量上报的真实窗口(唯一权威值)
  *  2) modelDeclared:当前生效模型自己声明的窗口
  *  3) agentDefaultDeclared:当前 agent 的默认模型声明的窗口
- *     (codex 恒定 272000;同一 app-server 下所有模型共用它,真机上模型卡也是这么显示的)
  * 只要拿到 >0 就算"窗口已知";全为 0 才返回 0(未知 → 环内画"—",绝不假装 0%)。
  *
- * 【为什么用 agent 默认窗口兜底是有意的取舍】codex 的窗口由 app-server 统一管理,
- * 但 ListModels 里除默认模型外的 28 个 codex 端点模型 cw 全为 0,而 codex 的
- * `thread/tokenUsage/updated` 又不带 modelContextWindow ⇒ 只看"当前模型声明值"
- * 会让占用环恒显示"—"。取其默认模型**自报**的窗口(而不是 App 编造一个数字),
- * 卡片里仍写清窗口总量,便于用户核对。
+ * 未知窗口必须保持未知。不能把历史默认值或 App 内置常量当成 Codex 的真实窗口,
+ * 否则占用百分比会与 Codex 实际显示不一致。
  */
 internal fun pickContextWindow(live: Long, modelDeclared: Int, agentDefaultDeclared: Int): Long {
     if (live > 0) return live
@@ -684,6 +783,28 @@ val APPROVALS = listOf(
     Triple("never", "完全访问", "无需批准直接执行,注意风险"),
 )
 
+// ---- 离线快照集成(P1-8 阶段 D;纯函数集中在此,可 JVM 单测)----
+
+/**
+ * 断连时是否用本地快照渲染时间线:
+ * 仅在「已知断网 + 时间线还没有任何消息」时,读 [dev.pocketagent.app.ui.component.ThreadSnapshot]
+ * 渲染只读副本 —— 有连接时行为完全不变。
+ *
+ * 【为什么只认 "down" 不认 "checking"】checking 是连接巡检的中间态,不是"已知断网";
+ * 按 != "ok" 判离线会在巡检瞬间闪出假离线(见 ChatScreen 顶部 connState 的长注释)。
+ */
+internal fun shouldRenderOfflineSnapshot(connState: String, itemsEmpty: Boolean): Boolean =
+    connState == "down" && itemsEmpty
+
+/**
+ * 「离线快照 · HH:mm」横幅文案;无快照时间戳(<=0)返回 null(不显示横幅)。
+ */
+internal fun offlineSnapshotBanner(atMs: Long): String? {
+    if (atMs <= 0) return null
+    val hhmm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(atMs))
+    return "离线快照 · $hhmm"
+}
+
 /** 思考强度选项(id 与 codex turn/start 的 effort 取值一致)。 */
 data class EffortOption(val id: String, val label: String)
 
@@ -694,6 +815,44 @@ val EFFORTS = listOf(
     EffortOption("high", "高"),
     EffortOption("xhigh", "极高"),
 )
+
+/**
+ * 动态思考档位的中文标签(daemon 经 ModelInfo.available_efforts 透出的取值,
+ * 主要是 pi 的档位全集 off/minimal/low/medium/high/xhigh/max)。
+ * 未知档位直接显示原 id:daemon 以后新增取值时 UI 不至于显示空白。
+ */
+internal fun effortLabelOf(id: String): String = when (id) {
+    "" -> "默认"
+    "off" -> "关"
+    "minimal" -> "极低"
+    "low" -> "低"
+    "medium" -> "中"
+    "high" -> "高"
+    "xhigh" -> "极高"
+    "max" -> "最大"
+    else -> id
+}
+
+/**
+ * 思考强度档位选择(纯函数,单测钉死 —— 见 ModelEffortOptionsTest):
+ *
+ * 1. 选中的模型带动态档位(available_efforts 非空,daemon 只给 pi 填)→ 按它渲染;
+ * 2. "跟随桌面配置"(模型为空)且会话归属的 agent 有带档位的模型(如 pi)→
+ *    跟随该 agent 的档位(此时用户还没选具体模型,但档位语义已随 agent 确定);
+ * 3. 其余(codex/zcode 等无动态档位)→ 现有内置默认档 [EFFORTS]。
+ *
+ * 【为什么首位恒补"默认"(空 id)】动态集合(pi)没有这个取值,不补的话用户一旦
+ * 选了动态档位,就再也回不到"跟随桌面"这个初始态。
+ */
+internal fun effortsFor(
+    models: List<ModelInfo>,
+    selectedModelId: String,
+    selectedAgent: String,
+): List<EffortOption> {
+    val modelId = selectedModelId.ifEmpty { "$selectedAgent/default" }
+    val dynamic = models.firstOrNull { it.id == modelId && it.provider == selectedAgent }?.availableEffortsList.orEmpty()
+    return listOf(EffortOption("", "默认")) + dynamic.distinct().map { EffortOption(it, effortLabelOf(it)) }
+}
 
 /**
  * 【已删除 MODEL_NAME_INLINE_MAX】
@@ -743,7 +902,184 @@ fun ChatScreen(
     val ctx = LocalContext.current
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
     val st = remember(threadId) { TurnSession.state(threadId) }
-    var input by remember { mutableStateOf("") }
+    var input by st::draft
+
+    // ---- 提示词优化(实验功能,开关在 设置-外观与阅读,默认关)----
+    // 可见性/在飞状态走纯逻辑状态机(PromptOptimizeLogic.kt,JVM 单测钉行为);
+    // 撤销复用 app 级 UndoBar:成功替换输入后留 5 秒"已优化提示词[撤销]"窗口。
+    val promptOptUndo = rememberUndoState()
+    var promptOptState by remember { mutableStateOf(PromptOptimizeState()) }
+    fun syncPromptOptState(text: String, offline: Boolean) {
+        promptOptState = reducePromptOptimize(
+            promptOptState,
+            PromptOptimizeEvent.InputsChanged(text, AgentConnection.optimizePromptEnabled, offline),
+        )
+    }
+
+    // ---- 【P1-9 语音输入】状态机 + 识别器(纯逻辑 voiceReduce 在文件尾部,可 JVM 单测) ----
+    // 【V-1 修复】一次性指令(start/stop/append/toast)不再放进 voiceUi 后靠 LaunchedEffect(voiceUi)
+    // 的 equals 重启来消费 —— 那条路依赖"两次 state 写"的时序:同值写入会被 mutableStateOf 的
+    // 结构相等策略忽略、消费写与回调写竞争时会互相覆盖,指令就被静默吞掉(真机点击零反馈的根因)。
+    // 现在事件归约**当场**取走指令、经无界 Channel 投递(不丢不重,与重组时序无关),
+    // voiceUi 只保留纯展示状态(空闲/听写/无权限/不可用)。
+    var voiceUi by remember { mutableStateOf(VoiceInputUi()) }
+    val voiceFx = remember { Channel<VoiceEffects>(Channel.UNLIMITED) }
+
+    // ---- 【语音交互动画】两个一次性触发器(纯 UI,不进状态机) ----
+    // 【动画 ①】麦克风按下涟漪:每次点按 +1,组合层据此重放一圈"扩散 + 淡出"的圆环。
+    var micRippleTick by remember { mutableStateOf(0) }
+    // 【动画 ③】识别文本落框:append 指令消费时 +1,驱动输入框一次轻微的"落定"脉动,
+    // 配合输入区的 animateContentSize 构成"文本飞入输入框"的过渡感。
+    var voiceLandedTick by remember { mutableStateOf(0) }
+
+    // ---- 【端侧回落】Vosk 模型管理:进页幂等初始化(磁盘扫描在 IO),状态驱动引擎选择 ----
+    // 系统识别可用性只查一次(部分 ROM 预检就是 false,真机无识别服务 + 无 GMS 云识别)。
+    LaunchedEffect(Unit) {
+        SenseVoiceModelManager.init(ctx.applicationContext)
+    }
+    val senseModelState by SenseVoiceModelManager.state.collectAsState()
+    val senseReady = senseModelState.ready
+    val voskReady = false // Legacy Vosk is no longer a user-facing engine.
+    val sysVoiceAvailable = remember {
+        runCatching { SpeechRecognizer.isRecognitionAvailable(ctx) }.getOrDefault(false)
+    }
+
+    // 【死区兜底】看门狗的跨线程共享状态:识别器回调来自识别器自己的线程、看门狗跑在
+    // 组合协程里,两边只做原子读写,不进 Compose 状态(参与重组只会带来噪声)。
+    // gotCallback = start 之后是否收到过识别器任一关键回调;watchdog = 当前这轮超时协程。
+    val voiceGotCallback = remember { AtomicBoolean(false) }
+    val voiceWatchdog = remember { AtomicReference<Job?>(null) }
+    // 【P2-d】模型暖标记:本识别器实例是否收到过识别器回调(Vosk 的 onAlive 在模型
+    // 载入内存并开始收音后才到)。看门狗触发时用它区分"Vosk 首次冷加载中"与"服务
+    // 真死区",提示文案据此分流。识别器重建(voskReady 翻转)或重进页面即重置 ——
+    // 新实例的模型要重新往内存里加载,又是一次"首次加载"。
+    val voiceModelWarm = remember(voskReady) { AtomicBoolean(false) }
+
+    // 所有事件源(点击/权限回答/识别器回调)统一走这里:归约 → 指令入队 → 更新展示态
+    fun dispatchVoice(event: VoiceEvent) {
+        scope.launch(Dispatchers.Main.immediate) {
+        val (display, fx) = applyVoiceEvent(voiceUi, event)
+        if (voiceEffectsPending(fx)) {
+            Log.d("PaVoice", "event=$event 展示态=$display 指令入队=$fx")
+            voiceFx.trySend(fx)
+        } else {
+            Log.d("PaVoice", "event=$event 展示态=$display 指令=无")
+        }
+        voiceUi = display
+        }
+    }
+
+    // 【死区兜底】start 指令消费时启动 8 秒看门狗:期间 onReadyForSpeech/onPartialResults/
+    // onResults/onError 任一回调到达即取消(见 voiceRecognizer 的 onAlive);到点仍是
+    // LISTENING 且零回调 —— 某些 ROM 预检可用但识别服务实际"死区",UI 会永远卡在脉动
+    // 图标上 —— 此时主动抛 DeadZoneTimeout 事件,状态机回 IDLE 并弹人话提示。
+    // 判定逻辑抽成纯函数 voiceDeadZoneTimedOut(JVM 单测锁定)。
+    // 【P2-d】提示文案按"是否 Vosk 首次冷加载"分流(见 voiceDeadZoneToast,JVM 单测锁定)。
+    fun startVoiceWatchdog() {
+        voiceGotCallback.set(false)
+        voiceWatchdog.getAndSet(null)?.cancel()
+        voiceWatchdog.set(
+            scope.launch {
+                val startAt = System.currentTimeMillis()
+                delay(VOICE_DEAD_ZONE_TIMEOUT_MS)
+                val elapsedMs = System.currentTimeMillis() - startAt
+                if (voiceDeadZoneTimedOut(elapsedMs, voiceGotCallback.get()) && voiceUi.listening) {
+                    // 【P2-d】零回调撞满阈值有两种真相:服务真死区 / Vosk 首次点击还在把
+                    // 模型载入内存(秒级,极端更久)。本识别器未暖(尚无一次成功识别)且
+                    // 当前选中的是端侧 Vosk 引擎 → 按"加载中"提示。就绪与否现场读
+                    // VoskModelManager 单例:看门狗协程持有的是启动组合时的旧闭包值,
+                    // 单例读取永远新鲜,不受重组时序影响。
+                    val firstVoskLoad = !voiceModelWarm.get() &&
+                        pickVoiceEngine(sysVoiceAvailable, VoskModelManager.isReady()) == VoiceEngineKind.VOSK
+                    Log.d("PaVoice", "死区超时兜底触发 elapsed=${elapsedMs}ms firstVoskLoad=$firstVoskLoad")
+                    dispatchVoice(VoiceEvent.DeadZoneTimeout(firstVoskLoad))
+                }
+            },
+        )
+    }
+
+    // 本机优先的识别器:系统识别可用用系统(在线质量好);不可用而端侧 Vosk 模型就绪
+    // 用端侧引擎;都不行 = null(按钮降级,点击时引导下载语音模型)。回调都回主线程统一
+    // 交给 dispatchVoice 驱动状态机;onAlive 喂死区看门狗。
+    // 【注意 key】voskReady 从 false→true(模型下载完成/磁盘扫描发现已就绪)时重建识别器,
+    // 旧识别器经 DisposableEffect(voiceRecognizer) 自动销毁 —— "下完自动可用"。
+    var systemVoiceFailed by remember { mutableStateOf(false) }
+    val voiceRecognizer = remember(sysVoiceAvailable, systemVoiceFailed, senseReady) {
+        Log.d("PaVoice", "创建识别器开始 sys=$sysVoiceAvailable voskReady=$voskReady")
+        createVoiceRecognizer(
+            ctx,
+            sysAvailable = sysVoiceAvailable && !systemVoiceFailed,
+            voskReady = false,
+            senseReady = senseReady,
+            onAlive = {
+                // 【死区兜底】任一关键回调到达 = 服务活着:置位并撤掉超时协程
+                voiceGotCallback.set(true)
+                // 【P2-d】回调到过 = 模型已暖(Vosk 首次加载已完成),此后看门狗再触发
+                // 就不是"加载中",按服务死区提示
+                voiceModelWarm.set(true)
+                voiceWatchdog.getAndSet(null)?.let {
+                    Log.d("PaVoice", "看门狗:收到识别器回调,取消死区超时")
+                    it.cancel()
+                }
+            },
+            onResult = { text -> dispatchVoice(VoiceEvent.RecognitionResults(text)) },
+            onErrorEvent = { code ->
+                if (sysVoiceAvailable && !systemVoiceFailed && code in setOf(1,2,4,5,8,11,12,13)) {
+                    scope.launch(Dispatchers.Main.immediate) { systemVoiceFailed=true }
+                }
+                // 【模型加载失败回连】VOICE_ERROR_VOSK_MODEL = 端侧模型加载失败:
+                // "文件在但内容坏"型损坏会让状态滞留 READY 反复失败,这里回连一次
+                // 磁盘复核,把半损坏目录打回 FAILED 引导重下(refreshFromDisk 有
+                // DOWNLOADING 挡板,幂等安全)。判定在纯函数 voiceModelRefreshNeeded。
+                if (voiceModelRefreshNeeded(code)) VoskModelManager.refreshFromDisk()
+                dispatchVoice(VoiceEvent.RecognitionFailed(voiceErrorKind(code)))
+            },
+        ).also { Log.d("PaVoice", "创建识别器结果 可用=${it != null}") }
+    }
+    // 通知监控登记(P1-6):轮次只会从会话页发起,进页就把本会话交给通知监控,
+    // 之后退出页面轮次照跑,完成/审批时才有 threadId 可发通知。
+    LaunchedEffect(threadId) { PaNotifications.observeThread(threadId) }
+    // 离开页面销毁识别器(防泄漏);语音会话生命周期与页面一致
+    DisposableEffect(voiceRecognizer) {
+        onDispose { voiceRecognizer?.destroy() }
+    }
+    fun reportVoiceUnavailable() {
+        val message = when {
+            senseModelState.preparing -> "App 内置语音正在初始化，请稍候"
+            senseModelState.error != null -> "App 内置语音初始化失败，请重新安装 App"
+            else -> "设备暂无可用的语音识别服务"
+        }
+        Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
+    }
+    // 一次性权限申请:拒绝后状态机记为 NO_PERMISSION,下次点击可再次申请
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Log.d("PaVoice", "权限回答 granted=$granted 识别器可用=${voiceRecognizer != null}")
+        if (granted && voiceRecognizer == null) reportVoiceUnavailable()
+        dispatchVoice(VoiceEvent.PermissionAnswered(granted, voiceRecognizer != null))
+    }
+    // 消费语音指令:从通道逐条取出执行(开始/停止识别、识别文本并入输入框不自动发送、人话提示)。
+    // LaunchedEffect 只启动一次,与 voiceUi 的重组完全解耦 —— 指令必达(V-1 修复核心)。
+    val currentVoiceRecognizer by rememberUpdatedState(voiceRecognizer)
+    LaunchedEffect(Unit) {
+        for (fx in voiceFx) {
+            Log.d("PaVoice", "指令消费 $fx")
+            if (fx.start) {
+                startVoiceWatchdog()
+                currentVoiceRecognizer?.start()
+            }
+            if (fx.stop) {
+                // 主动停止:看门狗一并撤掉(之后的结果回调到达时再撤一次,双保险)
+                voiceWatchdog.getAndSet(null)?.cancel()
+                currentVoiceRecognizer?.stopListening()
+            }
+            fx.append?.let { spoken ->
+                input = joinVoiceText(input, spoken)
+                voiceLandedTick++ // 【动画 ③】文本落框触发输入框"落定"脉动(见输入区)
+            }
+            fx.toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
     var showModelCard by remember { mutableStateOf(false) }
     var showContextCard by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
@@ -755,9 +1091,17 @@ fun ChatScreen(
     // 「更多」面板:分叉 / 回滚。这两件事都是**偶尔做一次**的会话级动作,
     // 单独给顶栏加两个常驻按钮会让它变挤,收进一个入口更稳。
     var showMore by remember { mutableStateOf(false) }
+    // 【内置伪命令"/目标"的弹窗开关】斜杠卡面伪命令点选 = 执行动作:/目标
+    // 打开下方的设置目标底栏(slashGoalSheet 块),/压缩 直接走 doCompact(),
+    // /计划(仅 codex)直接走 doStartReview()。
+    var slashGoalSheet by remember { mutableStateOf(false) }
     // 回滚选择(二级面板):先选丢几个回合,再确认
     var rollbackOpen by remember { mutableStateOf(false) }
     var rollbackBusy by remember { mutableStateOf(false) }
+    // 手动压缩是低频的会话级动作,与回滚一样放在“更多”里。
+    var compactBusy by remember { mutableStateOf(false) }
+    // "/计划"发起计划审查(仅 codex 会话):防重入标记,与 compactBusy 同款。
+    var reviewBusy by remember { mutableStateOf(false) }
     // 【长文本大窗编辑】输入框最多 4 行,写长需求/贴代码时不够用。
     // 打开一个整屏可用高度的编辑面板,内容与输入框双向同一份 state。
     var expandedInputOpen by remember { mutableStateOf(false) }
@@ -803,11 +1147,94 @@ fun ChatScreen(
     var loadError by remember { mutableStateOf<String?>(null) }
     // 聊天区当前是否是"离线快照"(决定错误条用提示色而非报错色,并提示输入框不可用)
     var offlineSnapshot by remember { mutableStateOf(false) }
+    // 离线快照的落盘时间(横幅「离线快照 · HH:mm」用;0 = 无)
+    var offlineSnapshotAt by remember { mutableStateOf(0L) }
     var reloadToken by remember { mutableStateOf(0) }
     // 侧边栏品牌行的电脑名(与其他页面一致)
     var hostName by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
+
+    // 提示词优化:输入/开关/离线态任一变化都重算按钮可见性(单一事实来源是输入,
+    // 状态机只记"请求在飞";纯逻辑见 PromptOptimizeLogic.kt,JVM 单测钉行为)。
+    LaunchedEffect(input, offlineSnapshot, AgentConnection.optimizePromptEnabled) {
+        syncPromptOptState(input, offlineSnapshot)
+    }
+
+    // ---- 斜杠命令面板(zcode/codex/pi 三源)----
+    // threadAgentId 在下方 getThread 处赋值;命令列表按会话进程内缓存
+    // (SlashCommandCache,见 SlashCommandsLogic.kt),进会话/重连/下拉刷新才重拉。
+    // daemon 回空列表 / RPC 失败都安静降级,绝不 Toast 报错打断输入;pi 会话即使
+    // daemon 命令暂未到位,面板仍有内置伪命令(见 slashCandidatesFor)可弹。
+    var threadAgentId by remember { mutableStateOf("") }
+    // daemon 落库的 Thread.ModelID(getThread 回填):会话真实生效模型,
+    // "pi/zai-coding-cn/glm-5.3" 这种 agent 前缀形式。模型芯片/弹窗的选中态以它
+    // 为准(图3 实锤:过去 pi 会话没取到它,链路落到 codex 桌面默认
+    // GLM-5.3-Flash 上,芯片显示成了 codex 的模型)。
+    var threadModelId by remember { mutableStateOf("") }
+    var slashCommands by remember(threadId) { mutableStateOf<List<SlashCommandInfo>>(emptyList()) }
+    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, st.running) {
+        if (!isSlashPanelAgent(threadAgentId)) {
+            // 非面板会话(zcode/codex/pi 之外)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
+            slashCommands = emptyList()
+            return@LaunchedEffect
+        }
+        val cached = SlashCommandCache.get(threadId)
+        if (cached != null) slashCommands = cached
+        val loaded = try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.threadService()
+                    .withDeadlineAfter(SLASH_COMMANDS_DEADLINE_S, TimeUnit.SECONDS)
+                    .listSlashCommands(
+                        ListSlashCommandsRequest.newBuilder().setThreadId(threadId).setRefresh(true).build(),
+                    )
+                    .commandsList
+                    .map { SlashCommandInfo(it.name, it.description, it.inputHint) }
+            }
+        } catch (_: Exception) {
+            emptyList() // 拉不到就没有面板,不是错误
+        }
+        SlashCommandCache.put(threadId, loaded)
+        slashCommands = loaded
+    }
+    // 「优化」点击:RPC OptimizePrompt(daemon 侧整段预算 150s,手机端 deadline 再兜余量;
+    // 改写在电脑端真实生成,耗时数秒到数十秒)。成功替换输入 + 撤销条留原文;
+    // 失败人话 Toast(文案分类在 PromptOptimizeLogic,daemon 的人话 description 优先透传)。
+    fun optimizeCurrentInput() {
+        val original = input
+        if (original.isBlank()) return
+        promptOptState = reducePromptOptimize(promptOptState, PromptOptimizeEvent.OptimizeStarted)
+        scope.launch {
+            try {
+                val resp = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService()
+                        .withDeadlineAfter(PROMPT_OPTIMIZE_DEADLINE_S, TimeUnit.SECONDS)
+                        .optimizePrompt(
+                            OptimizePromptRequest.newBuilder().setText(original)
+                                .setAgentId(AgentConnection.optimizeAgent).setModelId(AgentConnection.optimizeModel).build(),
+                        )
+                }
+                val optimized = resp.optimized.trim()
+                if (optimized.isEmpty()) {
+                    // daemon 保证空返回必报错,这里只是双保险:绝不拿空串覆盖用户输入
+                    Toast.makeText(ctx, "优化结果为空,原文未被改动", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                input = optimized
+                promptOptUndo.show("已优化提示词", onUndo = { input = original })
+            } catch (e: Exception) {
+                val status = Status.fromThrowable(e)
+                val connected = AgentConnection.connState.value == "ok"
+                Toast.makeText(
+                    ctx,
+                    optimizePromptErrorText(status.code.toString(), status.description, connected),
+                    Toast.LENGTH_LONG,
+                ).show()
+            } finally {
+                syncPromptOptState(input, offlineSnapshot)
+            }
+        }
+    }
 
     val uiScale = AgentConnection.uiTextScale
     val thinkScale = AgentConnection.thinkTextScale
@@ -826,7 +1253,7 @@ fun ChatScreen(
         }
         try {
             withContext(Dispatchers.IO) {
-                models = AgentConnection.modelService()
+                models = AgentConnection.modelServiceSlow()
                     .listModels(ListModelsRequest.newBuilder().build()).modelsList
             }
         } catch (e: Exception) {
@@ -858,33 +1285,64 @@ fun ChatScreen(
     // 【会话级模型】进入会话时恢复该会话上次选定的模型;该会话没选过则用全局默认。
     // 修复:selectedModel 过去是全局单值,在 A 会话切模型会污染 B 会话,
     // 退出再进又被重置成"跟随桌面配置";现在按 threadId 单独记住。
-    LaunchedEffect(threadId) {
+    // 【会话级思考强度】与模型同一套语义:恢复该会话的强度覆盖值,没选过用全局默认
+    // (旧实现强度是全局单值且不落盘 —— A 会话调了强度 B 会话跟着变,重启后整个丢失)。
+    // 【键里含全局默认】在设置页改了默认模型/强度而本页还停在后台时,
+    // 默认值一变就重新断言:有覆盖值的会话不受波及,跟随默认的会话立即跟到最新值。
+    LaunchedEffect(threadId, threadAgentId, AgentConnection.defaultModel, AgentConnection.defaultEffort) {
         AgentConnection.selectedModel =
-            AgentConnection.threadModel(threadId) ?: AgentConnection.defaultModel
+            AgentConnection.threadModel(threadId)?.takeIf { it.isEmpty() || it.startsWith("$threadAgentId/") } ?: AgentConnection.modelForAgent(threadAgentId)
+        AgentConnection.selectedEffort =
+            AgentConnection.threadEffort(threadId) ?: AgentConnection.effortForAgent(threadAgentId)
     }
 
-    // 生效模型:会话选择 → codex 桌面默认 → 本轮实际运行 → 列表首个。
-    // 统一后,无论"跟随桌面配置"还是指定模型,上下文窗口都可查看、可点开明细。
-    val mainAgent = AgentConnection.selectedAgent
-    val effectiveModelId = AgentConnection.selectedModel
-        .ifEmpty { codexSettings?.model.orEmpty() }
-        .ifEmpty { st.runningModel }
-    val effectiveModel = models.find { it.id == effectiveModelId }
-        ?: models.find { it.id == st.runningModel }
-        // 用 agent 默认模型 id(`$agent/default`),不再硬编码 "codex/default"
-        ?: models.find { it.id == agentDefaultModelId(mainAgent) }
-        ?: models.firstOrNull()
-    // agent 默认模型自报的窗口(codex 恒定 272000;同一 app-server 下所有模型共用它)。
-    val agentDefaultWindow = models.find { it.id == agentDefaultModelId(mainAgent) }?.contextWindow ?: 0
+    // 生效模型(全部按会话归属 agent 取,不再串别家的模型表/默认值):
+    //   1) 手机端对该会话的显式选择(threadModel(threadId):null=从未选过 →
+    //      退全局默认;""=显式选了"跟随桌面" → 继续往 daemon 真值走);
+    //   2) daemon 落库的 Thread.ModelID —— 会话真实生效模型(getThread 回填,
+    //      pi 会话是 "pi/<provider>/<model>" 前缀形式);
+    //   3) codex 桌面默认 —— 【仅 codex 会话】读 codexSettings:它存的是 codex 的
+    //      全局默认模型,pi 会话读它就是把 codex 模型硬编码进 pi 会话
+    //      (图3 实锤:pi 会话芯片显示成 codex 的 GLM-5.3-Flash,根因在此);
+    //   4) 本轮实际运行 → 会话 agent 的 default 条目 → 该 agent 模型表首个。
+    // 模型查找只在 sessionModels(按 agent 过滤,见 modelsForAgent)里进行,
+    // 别家的模型名再也不会漏进本会话的芯片/弹窗。
+    val sessionAgent = threadAgentId.ifBlank { AgentConnection.selectedAgent }
+    val sessionModels = remember(models, sessionAgent) { modelsForAgent(models, sessionAgent) }
+    LaunchedEffect(threadId,sessionAgent,connectionEpoch) {
+        while(true) {
+            if(sessionAgent.isNotEmpty() && AgentConnection.connState.value=="ok") {
+                try {
+                    val native=withContext(Dispatchers.IO) {
+                        AgentConnection.modelServiceSlow().listModels(ListModelsRequest.newBuilder()
+                            .setAgentId(sessionAgent).setThreadId(threadId).build())
+                    }
+                    if(native.modelsCount>0) models=models.filter { it.provider!=sessionAgent }+native.modelsList
+                    TurnSession.acceptRuntimeSelection(threadId,native.currentModelId,
+                        if(native.hasCurrentEffort()) native.currentEffort else null)
+                } catch(e: kotlinx.coroutines.CancellationException) { throw e }
+                catch(_:Exception) { /* Keep last verified runtime state during network recovery. */ }
+            }
+            delay(10_000)
+        }
+    }
+    val requestedModel=(AgentConnection.threadModel(threadId) ?: threadModelId).takeIf {
+        it.isEmpty() || it.startsWith("$sessionAgent/")
+    }.orEmpty()
+    val followsNative=requestedModel.isBlank() || requestedModel==agentDefaultModelId(sessionAgent)
+    val effectiveModelId=if(followsNative) st.runningModel.ifBlank { requestedModel } else requestedModel
+    val effectiveModel=sessionModels.find { it.id==effectiveModelId }
+        ?: if (effectiveModelId.isBlank() || effectiveModelId==agentDefaultModelId(sessionAgent))
+            sessionModels.find { it.id==agentDefaultModelId(sessionAgent) } else null
+    // agent 默认模型自报的窗口;没有上报就保持未知。
+    val agentDefaultWindow = sessionModels.find { it.id == agentDefaultModelId(sessionAgent) }?.contextWindow ?: 0
     // 窗口解析优先级链:daemon 上报真实窗口 > 当前模型声明窗口 > agent 默认模型声明窗口。
-    // 只看"当前模型声明值"时,真机上(选中模型 cw=0 且 codex 不带上报窗口)会恒返回 0 →
-    // windowIsFallback=true → 占用环恒显示"—";用 agent 默认窗口兜底后可显示真实占比。
     val reportedWindow = pickContextWindow(
         live = st.liveContextWindow,
         modelDeclared = effectiveModel?.contextWindow ?: 0,
         agentDefaultDeclared = agentDefaultWindow,
     )
-    val contextWindow = if (reportedWindow > 0) reportedWindow else DEFAULT_CONTEXT_WINDOW
+    val contextWindow = reportedWindow
     val windowIsFallback = reportedWindow <= 0
 
     // ---- 上下文窗口卡:断网缓存 + 自动刷新 ----
@@ -1054,12 +1512,49 @@ fun ChatScreen(
     }
 
     var threadTitle by remember { mutableStateOf("任务") }
+    // 【桌面只读回显】会话目标顶栏文案(GoalDisplayLogic:goal_detail 电脑端现读优先,
+    // goal 本地库兜底):有则显示一行,无则不占位。
+    var threadGoalLine by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(threadId, connectionEpoch, reloadToken) {
+        // 【P1-4 阶段 D · 离线快照】已知断网(down)进页且时间线还没内容:
+        // 直接用本地只读副本渲染 + 顶部横幅 + 输入停用。checking 是巡检中间态,
+        // 不算断网;有连接时行为完全不变。恢复连接会触发 connectionEpoch 变化
+        // 重跑本效果,由在线分支把 offlineSnapshot 归位。
+        if (st.items.isEmpty()) {
+            val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
+            if (snap != null) {
+                st.items.clear()
+                st.items.addAll(snap.map { ChatItem(role = it.role, text = it.text) })
+                if (st.items.isNotEmpty()) listState.scrollToItem(st.items.size - 1)
+                offlineSnapshotAt =
+                    dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
+                offlineSnapshot = true
+                loadError = null
+            }
+            // 无快照(null):不伪造内容,继续走在线加载(失败时按原有报错分支提示)
+        }
         try {
-            val t = AgentConnection.threadService().getThread(
-                GetThreadRequest.newBuilder().setThreadId(threadId).build())
+            val t = withContext(Dispatchers.IO) {
+                AgentConnection.threadService().getThread(GetThreadRequest.newBuilder().setThreadId(threadId).build())
+            }
             if (t.title.isNotEmpty()) threadTitle = t.title
+            // 【P1-6】顺手把会话名交给通知模块:后台轮次完成时,通知标题用真实会话名
+            PaNotifications.rememberTitle(threadId, t.title)
             threadWorkspace = t.workspace.ifBlank { null }
+            // 斜杠命令面板按会话归属 agent 开关(只认 zcode;空/未知不显示)
+            threadAgentId = t.agentId.ifBlank { "codex" }
+            if (AgentConnection.threadModel(threadId) == null) AgentConnection.setThreadModel(threadId, t.modelId)
+            if (AgentConnection.threadEffort(threadId) == null) AgentConnection.setThreadEffort(threadId, t.effort)
+            // 会话真实生效模型(daemon 落库):模型芯片/弹窗选中态的数据源
+            threadModelId = t.modelId
+            if(st.replyCh==null) st.pendingApproval=t.pendingApprovalsList.firstOrNull()
+            if (!st.running && !st.recovering) {
+                if(t.status==ThreadStatus.THREAD_STATUS_RUNNING) TurnSession.retryRecovery(threadId)
+                else if(t.lastTurnError.isNotBlank()) st.errorMessage=t.lastTurnError
+            }
+            // 目标回读(只增):daemon 在 GetThread 里现读 codex 的 thread/goal/get,
+            // 这里只管把"目标:xxx"文案算出来;读不到/没设目标时为 null,不占位。
+            threadGoalLine = GoalDisplayLogic.goalLine(t)
         } catch (e: Exception) {
             loadError = "无法加载会话：${e.message ?: "连接失败"}"
         }
@@ -1068,9 +1563,9 @@ fun ChatScreen(
             if (!st.running && !st.recovering &&
                 (st.items.isEmpty() || connectionEpoch > 0 || reloadToken > 0)
             ) {
-                val resp = AgentConnection.threadService().getThreadHistory(
-                    GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build(),
-                )
+                val resp = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().getThreadHistory(GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build())
+                }
                 if (resp.messagesList.isNotEmpty()) {
                     st.items.clear()
                     st.items.addAll(historyToChatItems(resp.messagesList))
@@ -1087,34 +1582,42 @@ fun ChatScreen(
             }
             st.historyLoaded = true
             offlineSnapshot = false
+            offlineSnapshotAt = 0
             // 恢复在线后撤掉残留的离线提示
             if (loadError?.startsWith("离线") == true) loadError = null
         } catch (e: Exception) {
-            // 连不上:有快照就渲染快照并标明,没有才报错(保持原行为)。
-            val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.loadMessages(threadId)
-            if (!snap.isNullOrEmpty()) {
+            // 连不上:有快照就渲染快照 + 顶部横幅(输入同时停用),没有才报错(保持原行为)。
+            val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
+            if (!snap.isNullOrEmpty() && st.items.isEmpty()) {
                 st.items.clear()
                 st.items.addAll(snap.map { ChatItem(role = it.role, text = it.text) })
                 listState.scrollToItem(st.items.size - 1)
-                val at = dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
-                loadError = if (at > 0) {
-                    "离线:显示的是 ${dev.pocketagent.app.ui.component.agoText(at)}的本地记录"
-                } else {
-                    "离线:显示的是本地记录"
-                }
+                offlineSnapshotAt = dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
                 offlineSnapshot = true
+                loadError = null
             } else {
                 loadError = "无法加载会话历史：${e.message ?: "连接失败"}"
                 offlineSnapshot = false
+                offlineSnapshotAt = 0
             }
         }
     }
 
-    fun send(text: String) {
-        if (text.isBlank() || st.running) return
+    /**
+     * 发送(空闲开新轮次 / 运行中插入或排队,见 TurnSession.send)。
+     * @return false = 未接收(空文本 / 离线 / 流断恢复中):调用方不清空输入框。
+     */
+    fun send(text: String): Boolean {
+        if (text.isBlank() || offlineSnapshot) return false
+        val wasRunning = st.running // 先取:TurnSession.send 里可能刚把轮次置为 running
         val sent = attachments
+        if (!TurnSession.send(threadId, text, sent)) return false
         attachments = emptyList()
-        TurnSession.send(threadId, text, sent)
+        if (wasRunning) {
+            // 运行中提交的反馈:插入/排队由 daemon 决定,时间线小标签会给出最终状态
+            Toast.makeText(ctx, "已提交:将插入当前任务或自动排队", Toast.LENGTH_SHORT).show()
+        }
+        return true
     }
 
     /**
@@ -1171,6 +1674,65 @@ fun ChatScreen(
         }
     }
 
+    /** 请求 Codex 压缩当前会话上下文;完成以后由 contextCompaction 事件刷新状态。 */
+    fun doCompact() {
+        if (compactBusy) return
+        if (st.running) {
+            Toast.makeText(ctx, "任务正在执行,等它完成后再压缩上下文", Toast.LENGTH_SHORT).show()
+            return
+        }
+        compactBusy = true
+        showMore = false
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().compactThread(
+                        CompactThreadRequest.newBuilder().setThreadId(threadId).build(),
+                    )
+                }
+                Toast.makeText(ctx, "已请求压缩上下文,完成后会显示压缩状态", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, e.message ?: "压缩上下文失败", Toast.LENGTH_LONG).show()
+            } finally {
+                compactBusy = false
+            }
+        }
+    }
+
+    /**
+     * "/计划"(仅 codex 会话):发起计划审查。review/start 是"发起即回"
+     * (daemon 侧实测 0.0s 返回,turn.status=inProgress),审查产出以
+     * 事件(item/turn 系列)流回**本会话**,时间线直接可见,这里不需要任何后续轮询。
+     * focus 是词元后已敲的审查重点(通常为空,daemon 有默认审查口径);
+     * 失败走 slashReviewFailureMessage 的人话 Toast(daemon 业务错误透传,
+     * 传输层错误翻成人话)。
+     */
+    fun doStartReview(focus: String) {
+        if (reviewBusy) return
+        if (st.running) {
+            Toast.makeText(ctx, "任务正在执行,等它完成后再发起计划审查", Toast.LENGTH_SHORT).show()
+            return
+        }
+        reviewBusy = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().startReview(
+                        StartReviewRequest.newBuilder()
+                            .setThreadId(threadId)
+                            .setFocus(focus)
+                            .build(),
+                    )
+                }
+                Toast.makeText(ctx, "已发起计划审查,结果将以事件形式出现在会话中", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, slashReviewFailureMessage(e), Toast.LENGTH_LONG).show()
+            } finally {
+                reviewBusy = false
+            }
+        }
+    }
+
     st.pendingApproval?.let { ap ->
         ApprovalSheet(
             action = ap,
@@ -1188,6 +1750,9 @@ fun ChatScreen(
         st.errorMessage != null ||
         connSt == "down"
 
+    // 根布局包一层 Box:给「已优化提示词[撤销]」的 UndoBar 提供顶部悬浮层
+    // (不挤内容;FilesScreen/ThreadsScreen 同款用法)。Column 本体不动。
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
             .fillMaxSize()
@@ -1260,6 +1825,25 @@ fun ChatScreen(
             Spacer(Modifier.width(14.dp))
         }
 
+        // ---- 会话目标(桌面只读回显,只增):有则显示一行,无则不占位 ----
+        // 数据来自 GetThread 的 goal_detail(电脑端 thread/goal/get 现读),
+        // 文案由 GoalDisplayLogic 计算;与标题行同边距,单行省略不顶时间线。
+        threadGoalLine?.let { goal ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp),
+            ) {
+                Text(
+                    goal,
+                    fontSize = 11.5.sp,
+                    color = Pa.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
         // ---- 连接 / 加载 / 恢复提示条 ----
         // 【统一出口】原先这里只渲染 loadError,于是 TurnSession 里那一整套
         // "断线后自动把电脑端任务结果捞回来"的状态(recovering / recoveryError /
@@ -1323,6 +1907,41 @@ fun ChatScreen(
             }
         }
 
+        // ---- 离线快照横幅(P1-4 阶段 D:断连进页用本地只读副本渲染)----
+        // 与错误提示条分开:它不是"失败",是"明确知道自己在看旧数据"。
+        // 输入栏同时停用(见下方输入区),恢复连接后 connectionEpoch 变化自动回到在线。
+        if (offlineSnapshot) {
+            val banner = offlineSnapshotBanner(offlineSnapshotAt)
+            if (banner != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 2.dp)
+                        .background(Pa.Card, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(AppR.drawable.ic_lucide_info), null,
+                        tint = Pa.Yellow, modifier = Modifier.size(13.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "$banner · 显示的是电脑端会话的本地副本,输入已停用",
+                        Modifier.weight(1f),
+                        fontSize = 11.5.sp, color = Pa.Yellow, maxLines = 2,
+                    )
+                    TextButton(onClick = {
+                        offlineSnapshot = false
+                        offlineSnapshotAt = 0
+                        reloadToken++
+                    }) {
+                        Text("重试", fontSize = 11.5.sp, color = Pa.Accent)
+                    }
+                }
+            }
+        }
+
         // ---- 执行计划面板 ----
         // 【用户诉求】计划不再随时间线滚走:未完成时在会话原位置仍能看到步骤,
         // 跑完之后那张卡不移除,而是把它**提到会话上方**收成一个可展开的面板,
@@ -1355,11 +1974,6 @@ fun ChatScreen(
                         Column(
                             Modifier
                                 .widthIn(max = 300.dp)
-                                // 长按复制(用户反馈:消息长按没有任何反应)
-                                .pressableLong(
-                                    onClick = {},
-                                    onLongPress = { copyMessage(ctx, item.text) },
-                                )
                                 .background(Pa.AccentDim, RoundedCornerShape(18.dp, 6.dp, 18.dp, 18.dp))
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1388,11 +2002,36 @@ fun ChatScreen(
                                 }
                             }
                             if (item.text.isNotBlank()) {
-                                Text(
-                                    item.text,
-                                    color = Pa.TextPrimary,
-                                    fontSize = (15 * uiScale).sp,
-                                )
+                                // 用户消息同样支持长按拖选复制(与回复气泡同一交互)
+                                SelectionContainer {
+                                    Text(
+                                        item.text,
+                                        color = Pa.TextPrimary,
+                                        fontSize = (15 * uiScale).sp,
+                                    )
+                                }
+                            }
+                            // P1-4:运行中发消息的投递标签 —— 发送中 → 已插入运行中任务 /
+                            // 排队中(第N位)/ 队列已满未送达。QueueFlushed 后标签被
+                            // TurnSession 收掉,这条消息自动变回普通用户消息样式。
+                            if (item.deliverState.isNotEmpty()) {
+                                val label = deliveryLabel(item.deliverState, item.queuePos)
+                                if (label.isNotEmpty()) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            painterResource(AppR.drawable.ic_lucide_list_checks), null,
+                                            tint = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
+                                            modifier = Modifier.size(11.dp),
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            label,
+                                            fontSize = 10.sp,
+                                            color = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1418,16 +2057,15 @@ fun ChatScreen(
                             uiScale = uiScale,
                             guardianOverridden = st.guardianOverridden.contains(ev.reviewId),
                             onApproveGuardian = { approveGuardian(it) },
+                            onOpenSettings = onOpenSettings,
                         )
                     }
                     "usage" -> Unit
                     else -> Column(Modifier.fillMaxWidth()) {
-                        // 长按复制整条回复
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressableLong(onClick = {}, onLongPress = { copyMessage(ctx, item.text) }),
-                        ) {
+                        // 自定义选取复制:套 SelectionContainer 后,长按拖选任意片段,
+                        // 系统工具栏给"复制/全选"(用户反馈:旧的长按只能整条复制,没法选一段)。
+                        // 原先的"长按复制整条"手势会拦截长按事件、与选区冲突,已移除。
+                        SelectionContainer {
                             InAppMarkdown(
                                 text = item.text,
                                 modifier = Modifier.fillMaxWidth(),
@@ -1571,14 +2209,19 @@ fun ChatScreen(
 
             // 【生效模型名】在输入栏前统一计算,供"输入框上方全宽行"与"工具行模型 chip"复用。
             // 修复 2b:displayName 可能为空串(daemon 返回的模型未带展示名),空串不能触发
-            // `?:` 兜底,必须用 takeIf { isNotBlank() } 先判空,再回退到 model id 的斜杠后段
-            // 或"跟随桌面"。这样无论模型列表是否加载完,当前模型名都非空、完整可读。
+            // `?:` 兜底,必须用 takeIf { isNotBlank() } 先判空,再回退到生效模型 id 去掉
+            // agent 前缀的裸名(modelBareName:"pi/glm-5.3" → "glm-5.3")或"跟随桌面"。
+            // 这样无论模型列表是否加载完,当前模型名都非空、完整可读。
             // 一律用 model/list 返回的 displayName,不硬编码任何模型名。
+            // 【兜底键用 effectiveModelId 而非 selectedModel】生效链会落到 daemon
+            // 落库的 Thread.ModelID(pi 会话真实模型),芯片显示跟真实跑的一致。
             val modelDisplayName = effectiveModel?.displayName?.takeIf { it.isNotBlank() }
             val modelName = modelDisplayName
-                ?: if (AgentConnection.selectedModel.isEmpty()) "跟随桌面"
-                else AgentConnection.selectedModel.substringAfter('/')
-            val effortLabel = EFFORTS.find { it.id == AgentConnection.selectedEffort }?.label
+                ?: if (effectiveModelId.isEmpty()) "跟随桌面"
+                else modelBareName(effectiveModelId)
+            // 内置档没有的取值(pi 动态档位 off/minimal/max 及未来新增)回
+            // effortLabelOf 的中文标签,模型 chip 上不至于露出英文原 id。
+            val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: st.runningEffort.orEmpty())
 
             var approvalMenu by remember { mutableStateOf(false) }
             Column(
@@ -1586,27 +2229,126 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .background(Pa.Card, RoundedCornerShape(26.dp)),
             ) {
+                // [斜杠命令卡面(纵向)] 会话是面板 agent(zcode/codex/pi 三源)且输入以 "/"
+                // 开头时,列出该线程可用的命令 + 内置伪命令(zcode=会话快照 slashCommands[],
+                // codex=skills 映射,pi=get_commands 真名映射,daemon 按 agent_id 路由同一
+                // RPC;内置伪命令由 slashCandidatesFor 置顶合并,/计划 仅 codex 会话)。
+                // 点选按动作分流:
+                //   - FILL 普通命令 → applySlashPick 回填(zcode/pi→"/命令 " 保留后续文字,
+                //     pi 真命令由 pi 原生展开;codex→自然语言触发技能);
+                //   - GOAL/COMPACT/REVIEW 内置伪命令 → 执行动作(弹目标底栏 / doCompact /
+                //     doStartReview),不填输入框,并把敲出的 "/词元" 清掉
+                //     (stripSlashToken,避免把伪命令名当正文发出;REVIEW 的词元后
+                //     残留文字作为审查重点 focus 下发)。
+                // 视觉:纵向可滑卡面(最大 320dp,每行名称+说明完整不截断)—— 取代旧
+                // "横滚 8 条"候选条,解决 codex/pi 长列表"看不全"的问题;
+                // 可见性/过滤/合并/回填纯逻辑在 SlashCommandsLogic.kt。
+                val slashCandidates = if (slashPanelVisible(threadAgentId, input, slashCommands, offlineSnapshot)) {
+                    filterSlashCandidates(slashCandidatesFor(threadAgentId, slashCommands), input)
+                } else {
+                    emptyList()
+                }
+                if (slashCandidates.isNotEmpty()) {
+                    Text("${slashCandidates.size} 个命令 · 上下滑动查看", fontSize=10.sp,color=Pa.TextTertiary,
+                        modifier=Modifier.padding(start=16.dp,top=8.dp))
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = minOf(180, LocalConfiguration.current.screenHeightDp / 4).dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(start = 10.dp, end = 10.dp, top = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        slashCandidates.forEach { c ->
+                            // 每行一张卡:命令名 + 完整说明(不设 maxLines,描述长也看得全)。
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .pressable {
+                                        when (c.action) {
+                                            SlashAction.GOAL -> {
+                                                input = stripSlashToken(input)
+                                                slashGoalSheet = true
+                                            }
+                                            SlashAction.COMPACT -> {
+                                                input = stripSlashToken(input)
+                                                doCompact()
+                                            }
+                                            SlashAction.REVIEW -> {
+                                                // "/计划":词元后已敲的文字作为审查重点
+                                                // (通常为空,daemon 有默认口径),清空输入框后发起。
+                                                val reviewFocus = stripSlashToken(input)
+                                                input = ""
+                                                doStartReview(reviewFocus)
+                                            }
+                                            SlashAction.FILL -> input = applySlashPick(input, c, threadAgentId)
+                                        }
+                                    }
+                                    .background(Pa.CardHigh, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text(
+                                    "/" + c.name,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Pa.Accent,
+                                )
+                                if (c.description.isNotBlank()) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        c.description,
+                                        fontSize = 11.sp,
+                                        color = Pa.TextSecondary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 // 第一行:输入框 + 整个输入栏右上角的"展开编辑"小标识
                 // 【为什么放右上角】它是低频辅助动作。放进工具行会和发送键 / 模型 chip
                 // 抢注意力,用户明确要求"不要在右侧,也不要在发送键左边"。挪到整个胶囊的
                 // 右上角后:不起眼(小号 + TextTertiary)、又始终可达,不占工具行的横向预算。
-                Box(Modifier.fillMaxWidth()) {
+                // 【动画 ③·文本落框】识别文本并入时行数可能 0→1/1→2:外层 Box 挂
+                // animateContentSize,高度变化平滑过渡(轻量,不引入额外布局);叠加
+                // BasicTextField 上一次 alpha "落定"脉动,构成"文本飞入输入框"的过渡感。
+                val voiceLandPulse = remember { Animatable(1f) }
+                LaunchedEffect(voiceLandedTick) {
+                    if (voiceLandedTick > 0) {
+                        voiceLandPulse.snapTo(0.45f)
+                        voiceLandPulse.animateTo(1f, tween(280))
+                    }
+                }
+                Box(Modifier.fillMaxWidth().animateContentSize()) {
                     BasicTextField(
                         value = input,
                         onValueChange = { input = it },
                         modifier = Modifier
                             .fillMaxWidth()
+                            // 【动画 ③】文本落定脉动:识别文本并入的一瞬整框 45%→100% 透明度
+                            // (280ms),只动绘制层(alpha),不触发重新布局,开销可忽略
+                            .graphicsLayer { alpha = voiceLandPulse.value }
                             // 右侧预留 30dp:保证右上角图标不会压住光标 / 末尾文字
                             .padding(start = 18.dp, end = 30.dp, top = 12.dp, bottom = 12.dp)
                             .heightIn(min = 24.dp),
                         textStyle = TextStyle(fontSize = 15.sp, color = Pa.TextPrimary),
                         cursorBrush = SolidColor(Pa.Accent),
                         maxLines = 4,
-                        enabled = !st.running,
+                        // 【P1-4】running 不再锁输入(运行中发消息=插入/排队);
+                        // 只在离线快照态停用 —— 离线发不出去,别让用户白打一段话。
+                        enabled = true,
                         decorationBox = { inner ->
                             Box {
                                 if (input.isEmpty()) {
-                                    Text("随心输入,发给电脑上的 agent…", fontSize = 15.sp, color = Pa.TextTertiary)
+                                    Text(
+                                        when {
+                                            offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
+                                            // 【P1-9】听写中:placeholder 提示"正在听…"
+                                            voiceUi.listening -> "正在听…"
+                                            else -> "随心输入,发给电脑上的 agent…"
+                                        },
+                                        fontSize = 15.sp, color = Pa.TextTertiary,
+                                    )
                                 }
                                 inner()
                             }
@@ -1633,15 +2375,20 @@ fun ChatScreen(
                 // 【为什么改恒显】上一版只在名字超过 14 字符时才补这一行,于是"长度没超、
                 // 但已被工具行省略号挤断"的名字依然读不全(用户反馈"模型名仍未完整显示")。
                 // 现在无条件显示全文;工具行里的模型 chip 仍作点击入口。
-                Text(
-                    text = modelName +
-                        if (!effortLabel.isNullOrBlank() && effortLabel != "默认") " · $effortLabel" else "",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 18.dp, end = 12.dp, bottom = 2.dp),
-                    fontSize = 11.5.sp,
-                    color = Pa.TextSecondary,
-                )
+                Row(Modifier.fillMaxWidth().pressable { showModelCard = true }
+                    .semantics { contentDescription = "切换模型与思考强度" }
+                    .padding(horizontal=16.dp, vertical=8.dp), verticalAlignment=Alignment.CenterVertically) {
+                    Text(modelName + if(effortLabel != "默认") " · $effortLabel" else "",
+                        modifier=Modifier.weight(1f), fontSize=12.sp, color=Pa.TextSecondary,
+                        maxLines=2, overflow=TextOverflow.Ellipsis)
+                    Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "选择模型", tint=Pa.TextSecondary,modifier=Modifier.requiredSize(18.dp))
+                }
+                if (st.runningEffort != null && st.runningModel.isNotBlank()) {
+                    val actualName = sessionModels.find { it.id == st.runningModel }?.displayName ?: modelBareName(st.runningModel)
+                    Text("最近运行确认：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}",
+                        fontSize=10.sp, color=Pa.TextTertiary,
+                        modifier=Modifier.padding(start=18.dp,end=12.dp,bottom=4.dp))
+                }
                 // 第二行:工具行
                 Row(
                     Modifier
@@ -1649,6 +2396,8 @@ fun ChatScreen(
                         .padding(start = 10.dp, end = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                        verticalAlignment=Alignment.CenterVertically) {
                     // [+ 附件]
                     Box(
                         Modifier
@@ -1675,9 +2424,31 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.width(2.dp))
+                    // [优化](实验功能,开关在 设置-外观与阅读,默认关):把口语化输入
+                    // 改写成给 AI 的清晰指令;可见性走 PromptOptimizeState 状态机
+                    // (开关开 + 在线 + 输入非空 + 不在请求中)。请求中转圈,防重复点击。
+                    if (promptOptState.buttonVisible || promptOptState.inFlight) {
+                        Box(
+                            Modifier
+                                .size(32.dp)
+                                .pressable { optimizeCurrentInput() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (promptOptState.inFlight) {
+                                TypingDots(dotSize = 3.dp, gap = 2.dp)
+                            } else {
+                                Icon(
+                                    painterResource(AppR.drawable.ic_lucide_sparkles), "优化提示词",
+                                    tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(2.dp))
+                    }
                     // [审批策略] 会话内无缝切换 —— 扁平可点区域(图标 + 文字 + chevron),
                     // 去掉 Pa.CardHigh 胶囊底色回落到参考图的视觉层级(只借排版,颜色仍走 Pa)。
                     // DropdownMenu 的全部逻辑与 APPROVALS 取值映射保持不变。
+                    if (sessionAgent == "codex") {
                     Box {
                         Row(
                             Modifier
@@ -1696,6 +2467,7 @@ fun ChatScreen(
                             Text(
                                 APPROVALS.find { it.first == cur }?.second ?: "按需询问",
                                 fontSize = 11.5.sp,
+                                maxLines=1, overflow=TextOverflow.Ellipsis, modifier=Modifier.widthIn(max=72.dp),
                                 color = if (danger) Pa.Red else Pa.TextPrimary,
                             )
                             Spacer(Modifier.width(2.dp))
@@ -1738,6 +2510,7 @@ fun ChatScreen(
                             }
                         }
                     }
+                    }
                     // [上下文窗口] 常显:圆形占用环 —— 外圈一个圆环,环内直接显示实际使用占比。
                     // 【本轮改版】旧版是「圆形图标 + 上下文 128k」的胶囊:横向占位大,而且
                     // 看不出窗口被占了多少。现在环内给占比(≥80% 黄、≥95% 红),窗口总量与
@@ -1745,13 +2518,16 @@ fun ChatScreen(
                     val ctxWindowKnown = !windowIsFallback && contextWindow > 0
                     val ctxUsage = st.turnUsage
                     val ctxRingKnown = ctxWindowKnown && ctxUsage != null
+                    // 压缩同步:压缩后旧占用已失真,小环进入"已压"态而非继续显示旧占比。
+                    val ctxCompacted = compactionPending(st.turnUsage, st.lastCompactedAt)
                     val ctxRatio =
                         if (ctxRingKnown) usageTotalTokens(ctxUsage).toFloat() / contextWindow.toFloat() else 0f
                     Box(
                         Modifier
                             .size(34.dp)
                             .semantics {
-                                contentDescription = "上下文窗口 " + ringPercentLabel(ctxRatio, ctxRingKnown) +
+                                contentDescription = "上下文窗口 " +
+                                    (if (ctxCompacted) "已压缩" else ringPercentLabel(ctxRatio, ctxRingKnown)) +
                                     if (ctxWindowKnown) " (窗口 ${contextWindow / 1000}k)" else ""
                             }
                             .pressable(haptic = true) { showContextCard = true },
@@ -1761,74 +2537,149 @@ fun ChatScreen(
                             ratio = ctxRatio,
                             windowKnown = ctxRingKnown,
                             modifier = Modifier.size(28.dp),
+                            compacted = ctxCompacted,
                         )
                     }
                     Spacer(Modifier.width(2.dp))
-                    // [模型 · 强度] 直显当前模型(点击弹卡面切换)。
-                    // weight(1f) + 省略号:模型名再长也只吃剩余空间,绝不挤压发送键。
-                    // modelName / effortLabel 已在输入栏前统一计算(含 displayName 空串兜底)。
-                    Row(
-                        Modifier
-                            .weight(1f)
-                            .pressable { showModelCard = true }
-                            .padding(horizontal = 4.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            modelName + if (!effortLabel.isNullOrBlank() && effortLabel != "默认") " · $effortLabel" else "",
-                            Modifier.weight(1f, fill = false),
-                            fontSize = 11.5.sp,
-                            color = Pa.TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.width(3.dp))
-                        // [模型 chip ▾] 入口图标放大到 14dp 并提到 TextSecondary:
-                        // 12dp + TextTertiary 在深色底上几乎看不见(用户反馈"图标过小")。
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_chevron_down), null,
-                            tint = Pa.TextSecondary, modifier = Modifier.size(14.dp),
-                        )
                     }
                     Spacer(Modifier.width(4.dp))
-                    // [麦克风占位] 本轮只做入口:点击提示"即将支持",不引入 SpeechRecognizer、
-                    // 不申请任何权限(用户已确认语音输入本轮仅占位)。
+                    // 【P1-9 语音输入】麦克风:无权限先申请(RECORD_AUDIO),有权限启动
+                    // 本机优先的语音识别;识别中图标区换成波形跳动柱;再点一次 =
+                    // 停止并出结果。识别文本只并入输入框,绝不自动发送(保留编辑权)。
+                    val voiceListening = voiceUi.listening
+                    // 【动画 ②·识别中波形】4 根跳动柱替代旧的整体缩放脉动:柱间时长
+                    // 错开(430/560/500/650ms)避免"同起同落"的机械感;空闲分支不挂
+                    // InfiniteTransition,不空转。柱高用 scaleY 绘制层缩放,不改布局。
+                    val micWave: List<Float> = if (voiceListening) {
+                        val wave = rememberInfiniteTransition(label = "micWave")
+                        listOf(
+                            wave.animateFloat(
+                                initialValue = 0.35f, targetValue = 1f,
+                                animationSpec = infiniteRepeatable(tween(430), RepeatMode.Reverse),
+                                label = "wave1",
+                            ).value,
+                            wave.animateFloat(
+                                initialValue = 1f, targetValue = 0.3f,
+                                animationSpec = infiniteRepeatable(tween(560), RepeatMode.Reverse),
+                                label = "wave2",
+                            ).value,
+                            wave.animateFloat(
+                                initialValue = 0.3f, targetValue = 1f,
+                                animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
+                                label = "wave3",
+                            ).value,
+                            wave.animateFloat(
+                                initialValue = 1f, targetValue = 0.4f,
+                                animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
+                                label = "wave4",
+                            ).value,
+                        )
+                    } else {
+                        listOf(1f, 1f, 1f, 1f)
+                    }
+                    // 【动画 ①·按下涟漪】点按重放一圈"扩散 + 淡出"的 Accent 圆环:
+                    // micRippleTick 每次点击 +1,Animatable 0→1 驱动半径与透明度。
+                    val micRipple = remember { Animatable(0f) }
+                    LaunchedEffect(micRippleTick) {
+                        if (micRippleTick > 0) {
+                            micRipple.snapTo(0f)
+                            micRipple.animateTo(1f, tween(420))
+                        }
+                    }
                     Box(
                         Modifier
-                            .size(32.dp)
+                            .requiredSize(40.dp)
                             .pressable {
-                                Toast.makeText(ctx, "语音输入即将支持", Toast.LENGTH_SHORT).show()
+                                micRippleTick++ // 【动画 ①】按下即起涟漪(不依赖识别结果)
+                                val granted = ContextCompat.checkSelfPermission(
+                                    ctx, Manifest.permission.RECORD_AUDIO,
+                                ) == PackageManager.PERMISSION_GRANTED
+                                Log.d(
+                                    "PaVoice",
+                                    "MicClicked 授权=$granted 识别器可用=${voiceRecognizer != null} " +
+                                        "sys=$sysVoiceAvailable bundled=$senseReady",
+                                )
+                                if (granted && voiceRecognizer == null) {
+                                    reportVoiceUnavailable()
+                                    return@pressable
+                                }
+                                dispatchVoice(
+                                    VoiceEvent.MicClicked(granted, voiceRecognizer != null),
+                                )
+                                if (!granted) micPermission.launch(Manifest.permission.RECORD_AUDIO)
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_mic), "语音输入",
-                            tint = Pa.TextSecondary, modifier = Modifier.size(18.dp),
-                        )
+                        // 涟漪圆环:仅动画进行中绘制(0..1),结束后自然隐藏
+                        val ripple = micRipple.value
+                        if (ripple > 0f && ripple < 1f) {
+                            Box(
+                                Modifier
+                                    .size(32.dp)
+                                    .graphicsLayer {
+                                        scaleX = 0.5f + ripple
+                                        scaleY = 0.5f + ripple
+                                    }
+                                    .background(Pa.Accent.copy(alpha = 0.22f * (1f - ripple)), CircleShape),
+                            )
+                        }
+                        if (voiceListening) {
+                            // 识别中:波形柱接管图标位(32dp 盒内 4 柱,基线高 16dp)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(2.5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                micWave.forEach { v ->
+                                    Box(
+                                        Modifier
+                                            .width(2.5.dp)
+                                            .height(16.dp)
+                                            .graphicsLayer { scaleY = v }
+                                            .background(Pa.Accent, RoundedCornerShape(2.dp)),
+                                    )
+                                }
+                            }
+                        } else {
+                            Icon(
+                                painterResource(AppR.drawable.ic_lucide_mic), "语音输入",
+                                tint = Pa.TextSecondary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                     Spacer(Modifier.width(4.dp))
-                    // [发送]
-                    val canSend = !st.running && input.isNotBlank()
+                    // [发送 / 插入]
+                    // 【P1-4】running 时输入可用,发送键变为「插入运行中任务」:
+                    // 图标(列表+勾)与箭头区分,内容描述同步,让读屏与视觉都能分清
+                    // "开新任务"与"插进正在跑的任务(或排队)"。离线快照态一律禁用。
+                    val sendEnabled = !offlineSnapshot && input.isNotBlank() && !st.recovering
+                    val inserting = st.running
                     Box(
                         Modifier
-                            .size(36.dp)
-                            .pressable(scaleDown = 0.88f, enabled = canSend) {
-                                send(input)
-                                input = ""
+                            .requiredSize(40.dp)
+                            .pressable(scaleDown = 0.88f, enabled = sendEnabled) {
+                                if (send(input)) input = ""
                             }
-                            .background(if (canSend) Pa.Accent else Pa.Hover, CircleShape),
+                            .background(if (sendEnabled) Pa.Accent else Pa.Hover, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            painterResource(AppR.drawable.ic_lucide_arrow_up), "发送",
-                            tint = if (canSend) Color.White else Pa.TextTertiary,
+                            painterResource(
+                                if (inserting) AppR.drawable.ic_lucide_list_checks
+                                else AppR.drawable.ic_lucide_arrow_up
+                            ),
+                            if (inserting) "插入运行中任务" else "发送",
+                            tint = if (sendEnabled) Color.White else Pa.TextTertiary,
                             modifier = Modifier.size(18.dp),
                         )
                     }
                 }
             }
         }
+    }
+        // 「已优化提示词[撤销]」悬浮条:置顶居中,不挤内容(组件自带 5s 计时,
+        // 撤销恢复原文;离开页面自动提交 —— 本条无提交动作,等价于自动消失)。
+        UndoBarHost(promptOptUndo, Modifier.align(Alignment.TopCenter))
     }
 
     selectedAttachment?.let { attachment ->
@@ -1929,6 +2780,25 @@ fun ChatScreen(
                     fontSize = 17.sp, color = Pa.TextPrimary,
                 )
                 Spacer(Modifier.height(10.dp))
+                if (threadAgentId=="zcode") {
+                    Column(Modifier.fillMaxWidth().padding(horizontal=20.dp)) {
+                        NativePermissionsSection("zcode",threadId)
+                    }
+                }
+                SheetAction(
+                    AppR.drawable.ic_lucide_refresh_cw,
+                    if (compactBusy) "压缩中…" else "压缩上下文",
+                    Pa.Accent,
+                ) { doCompact() }
+                Text(
+                    // 文案按会话归属 agent 动态(daemon 的 CompactThread 已按 AgentID
+                    // 路由):Pi 会话说"让 Pi 压缩",codex 会话说"让 Codex 压缩"。
+                    // 真机实锤(图9):过去硬编码"让 Codex 压缩…",Pi 会话里张冠李戴。
+                    compactionConsequenceCopy(threadAgentId),
+                    Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Pa.Separator)
                 SheetAction(AppR.drawable.ic_lucide_git_branch, "分叉会话") { doFork() }
                 Text(
                     forkConsequence(),
@@ -1947,6 +2817,96 @@ fun ChatScreen(
                     Modifier.padding(start = 24.dp, end = 24.dp),
                     fontSize = 11.5.sp, color = Pa.TextTertiary,
                 )
+            }
+        }
+    }
+
+    // ---- 斜杠面板伪命令"/目标":设置会话目标(SetThreadGoal)----
+    // 由斜杠卡面的 /目标 伪命令打开(GOAL 动作,见上方候选段)。daemon 的
+    // SetThreadGoal 按 agent 落库并下发(codex thread/goal/set、zcode session/goal,
+    // pi 落库跟随),成功后用返回的 Thread 刷新顶栏目标文案,不整页重拉。
+    if (slashGoalSheet) {
+        var goalDraft by remember { mutableStateOf("") }
+        var goalSaving by remember { mutableStateOf(false) }
+        ModalBottomSheet(
+            onDismissRequest = { if (!goalSaving) slashGoalSheet = false },
+            containerColor = Pa.CardHigh,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 26.dp)) {
+                Text(
+                    "设置会话目标",
+                    Modifier.fillMaxWidth(),
+                    fontSize = 17.sp, color = Pa.TextPrimary,
+                )
+                Text(
+                    "目标会作为常驻上下文:agent 在这个会话里的每一轮都会看到它。",
+                    Modifier.padding(top = 4.dp, bottom = 10.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                BasicTextField(
+                    value = goalDraft,
+                    onValueChange = { goalDraft = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 72.dp)
+                        .background(Pa.Card, RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    textStyle = TextStyle(fontSize = 14.sp, color = Pa.TextPrimary),
+                    cursorBrush = SolidColor(Pa.Accent),
+                    decorationBox = { inner ->
+                        Box {
+                            if (goalDraft.isEmpty()) {
+                                Text(
+                                    "例如:全程用 Kotlin,改动只落在 daemon 模块…",
+                                    fontSize = 14.sp, color = Pa.TextTertiary,
+                                )
+                            }
+                            inner()
+                        }
+                    },
+                )
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable(haptic = true) {
+                            if (goalSaving) return@pressable
+                            if (goalDraft.isBlank()) {
+                                Toast.makeText(ctx, "先写点什么作为目标(或清空后关闭)", Toast.LENGTH_SHORT).show()
+                                return@pressable
+                            }
+                            goalSaving = true
+                            scope.launch {
+                                try {
+                                    val t = withContext(Dispatchers.IO) {
+                                        AgentConnection.threadService().setThreadGoal(
+                                            SetThreadGoalRequest.newBuilder()
+                                                .setThreadId(threadId)
+                                                .setGoal(goalDraft.trim())
+                                                .build(),
+                                        )
+                                    }
+                                    // 顶栏目标文案就地刷新(GoalDisplayLogic 与 GetThread 同一套口径)
+                                    threadGoalLine = GoalDisplayLogic.goalLine(t)
+                                    slashGoalSheet = false
+                                    Toast.makeText(ctx, "已设置会话目标", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(ctx, e.message ?: "设置目标失败", Toast.LENGTH_LONG).show()
+                                } finally {
+                                    goalSaving = false
+                                }
+                            }
+                        }
+                        .background(if (goalSaving) Pa.Hover else Pa.Accent, RoundedCornerShape(14.dp))
+                        .padding(vertical = 13.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (goalSaving) "正在保存…" else "保存目标",
+                        fontSize = 14.5.sp, color = Color.White, fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
     }
@@ -2034,6 +2994,8 @@ fun ChatScreen(
             title = threadTitle,
             items = st.items.toList(),
             threadId = threadId,
+            // 会话归属 agent(GetThread 里带回来):HTML 存档按它做 Pi-only 门控
+            agentId = threadAgentId,
             onDismiss = { showExport = false },
             onExport = { text, count ->
                 showExport = false
@@ -2060,10 +3022,9 @@ fun ChatScreen(
             onSend = {
                 val text = input
                 expandedInputOpen = false
-                send(text)
-                input = ""
+                if (send(text)) input = ""
             },
-            canSend = !st.running && input.isNotBlank(),
+            canSend = !offlineSnapshot && input.isNotBlank() && !st.recovering,
         )
     }
 
@@ -2075,9 +3036,17 @@ fun ChatScreen(
                 showNewThread = false
                 scope.launch {
                     try {
-                        val builder = CreateThreadRequest.newBuilder()
+                        val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
                         if (AgentConnection.selectedModel.isNotEmpty()) {
-                            builder.setModelId(AgentConnection.selectedModel)
+                            builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                        }
+                        // P1 修复:带上当前选中的 agent(设置页/主页切换到 Pi 后,新建会话
+                        // 才真正走 pi 而不是仍默认 codex)。codex 或空保持不传 = 旧语义,
+                        // 由 server 端默认路由;daemon 侧 agent 不可用仍允许建会话,
+                        // 首条消息会得到 server 的人话错误。
+                        val agentId = createThreadAgentId(AgentConnection.selectedAgent)
+                        if (agentId.isNotEmpty()) {
+                            builder.setAgentId(agentId)
                         }
                         if (ws.isNotBlank()) {
                             builder.setWorkspace(ws)
@@ -2103,7 +3072,16 @@ fun ChatScreen(
     }
 
     if (showModelCard) {
-        ModelEffortCard(threadId = threadId, onDismiss = { showModelCard = false })
+        ModelEffortCard(
+            threadId = threadId,
+            // 会话归属 agent:模型表/品牌图标/档位语义按它取,不用全局 selectedAgent
+            // (否则在 pi 会话里开弹窗,弹的还是全局选中 agent 的模型表)。
+            agentId = sessionAgent,
+            // 初始选中态 = 生效模型 id(手机显式选择 > daemon 落库 Thread.ModelID),
+            // 点选后由卡面内部状态即时接管。
+            initialSelectedId = effectiveModelId,
+            onDismiss = { showModelCard = false },
+        )
     }
 
     // 上下文窗口明细:点输入栏"上下文"胶囊打开(真实用量卡,替代旧估算版)。
@@ -2112,7 +3090,7 @@ fun ChatScreen(
     if (showContextCard) {
         UsageCache.init(ctx)
         val cached = remember(usageRefreshTick, connOk, threadId) { UsageCache.load(threadId) }
-        // 实时窗口已知就用实时值;否则退回缓存里的窗口;两者都没有再退回兜底默认。
+        // 实时窗口已知就用实时值;否则退回缓存里的最后一次真实窗口。
         val liveWindowKnown = !windowIsFallback && contextWindow > 0
         val cw: Long
         val fb: Boolean
@@ -2131,6 +3109,12 @@ fun ChatScreen(
             windowIsFallback = fb,
             turnUsage = st.turnUsage ?: cached?.turnUsage,
             totalUsage = st.totalUsage ?: cached?.totalUsage,
+            // 压缩同步:daemon 转发的"上下文已压缩"事件到达后,这里给出明确的压缩状态,
+            // 而不是继续显示压缩前的旧占用(可能超出实际窗口)。
+            compactionInProgress = st.compactionInProgress,
+            lastCompactedAt = st.lastCompactedAt,
+            // 压缩等待文案按会话归属 agent("等待 Pi/Codex 完成压缩"),不硬编码 codex。
+            agentLabel = selectedAgentLabel(sessionAgent),
             // 只有"已知断网"(down)才显示离线提示条;checking 不显示(见上方 ③ 的注释)。
             online = !connDown,
             cachedAt = cached?.updatedAt,
@@ -2143,9 +3127,24 @@ fun ChatScreen(
 /**
  * 模型/思考强度卡面弹窗 —— "弹窗的卡面"而非长抽屉:
  * 居中卡片 + 限高可滚模型列表 + 思考强度胶囊 + 性能提示语。
+ *
+ * 【按会话 agent 取数】模型表按 [agentId] 过滤(modelsForAgent)、品牌图标与
+ * "跟随桌面"副文案按它渲染 —— 不再用全局 AgentConnection.selectedAgent:
+ * pi 会话里开弹窗,列的必须是 pi 自己的模型表(图3 实锤:过去列了别家的)。
+ *
+ * 【选中态】初始值 = [initialSelectedId](调用方按"手机显式选择 > daemon 落库
+ * Thread.ModelID"算好的生效模型);点选后由卡面内部状态接管并即时高亮,
+ * 同时落"会话级模型"持久化(AgentConnection.setThreadModel)。
  */
 @Composable
-fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
+fun ModelEffortCard(
+    threadId: String = "",
+    agentId: String = "",
+    initialSelectedId: String = "",
+    onDismiss: () -> Unit,
+) {
+    // 会话归属 agent:调用方没给(旧调用点/预览)时退全局选中 agent,行为不变。
+    val sessionAgent = agentId.ifBlank { AgentConnection.selectedAgent }
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier
@@ -2167,21 +3166,57 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
             Spacer(Modifier.height(10.dp))
 
             val models = remember { mutableStateOf(listOf<ModelInfo>()) }
-            LaunchedEffect(Unit) {
+            var runtimeModel by remember { mutableStateOf(TurnSession.state(threadId).runningModel) }
+            var runtimeEffort by remember { mutableStateOf(TurnSession.state(threadId).runningEffort) }
+            var loadModelError by remember { mutableStateOf<String?>(null) }
+            var modelLoading by remember { mutableStateOf(true) }
+            var refreshModels by remember { mutableStateOf(0) }
+            LaunchedEffect(sessionAgent,refreshModels) {
+                modelLoading=true
                 models.value = try {
-                    AgentConnection.modelService()
-                        .listModels(ListModelsRequest.newBuilder().build())
-                        .modelsList
+                    // 全局列表按会话 agent 过滤后再渲染:pi 会话不再串进
+                    // codex/zcode 的模型表(图3 实锤修复,见 modelsForAgent)。
+                    val response=withContext(Dispatchers.IO) {
+                        AgentConnection.modelServiceSlow().listModels(ListModelsRequest.newBuilder()
+                            .setAgentId(sessionAgent).setThreadId(threadId).setRefresh(true).build())
+                    }
+                    if(response.currentModelId.isNotBlank()) runtimeModel=response.currentModelId
+                    if(response.hasCurrentEffort()) runtimeEffort=response.currentEffort
+                    modelsForAgent(response.modelsList,sessionAgent)
                 } catch (e: Exception) {
-                    emptyList()
+                    loadModelError=e.message ?: "模型列表暂不可用"
+                    models.value
                 }
+                modelLoading=false
+            }
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Text(if(modelLoading) "正在同步 Agent 原生模型…" else loadModelError ?: "${models.value.count { !it.id.endsWith("/default") }} 个模型 · 来自 Agent 实时状态",
+                    Modifier.weight(1f),fontSize=11.sp,color=Pa.TextSecondary)
+                TextButton(onClick={loadModelError=null;refreshModels++}) { Text("刷新") }
+            }
+            if (runtimeModel.isNotBlank()) {
+                Text(
+                    "Agent 当前：${models.value.find { it.id==runtimeModel }?.displayName ?: modelBareName(runtimeModel)}" +
+                        (runtimeEffort?.let { " · ${effortLabelOf(it)}" } ?: ""),
+                    fontSize=11.sp, color=Pa.TextSecondary,
+                    modifier=Modifier.padding(bottom=8.dp),
+                )
             }
 
             /**
              * 选定模型:会话内选择只改"本会话"(空串="跟随桌面配置",也是有效选择),
              * 不污染全局默认,也不影响其他会话。
+             * 【选中态即时生效】currentPick 是卡面内单一选中状态:初始值来自
+             * [initialSelectedId],点选立即改它 —— 高亮不等任何 RPC/重组链。
              */
+            var currentPick by remember(threadId) { mutableStateOf(initialSelectedId) }
             fun pick(id: String) {
+                TurnSession.state(threadId).selectionPending = true
+                currentPick = id
+                val levels = effortsFor(models.value, id, sessionAgent)
+                if (levels.none { it.id == AgentConnection.selectedEffort }) {
+                    AgentConnection.setThreadEffort(threadId, "")
+                }
                 AgentConnection.selectedModel = id
                 if (threadId.isNotBlank()) {
                     AgentConnection.setThreadModel(threadId, id)
@@ -2197,7 +3232,7 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                     .verticalScroll(rememberScrollState()),
             ) {
                 // 显式"跟随桌面配置"选项(空模型 id)
-                val followSelected = AgentConnection.selectedModel.isEmpty()
+                val followSelected = currentPick.isEmpty()
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -2208,7 +3243,7 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                 ) {
                     // 品牌图标 28dp:与下面每一行对齐,「这模型是哪个 agent 给的」一眼可辨。
                     // tint = Color.Unspecified:品牌图标必须原色,不能被主题色染掉。
-                    agentBrandIcon(AgentConnection.selectedAgent)?.let { res ->
+                    agentBrandIcon(sessionAgent)?.let { res ->
                         Icon(
                             painterResource(res), null,
                             tint = Color.Unspecified, modifier = Modifier.size(28.dp),
@@ -2221,7 +3256,14 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                             fontSize = 15.sp,
                             color = if (followSelected) Pa.Accent else Pa.TextPrimary,
                         )
-                        Text("使用电脑上 codex 当前的默认模型", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                        // 副文案按 agent:codex 的"跟随桌面"= 电脑端 codex 当前默认;
+                        // 其他 agent = 桌面设置页下发的全局默认(pi 侧只认 pi/ 前缀,
+                        // 见 daemon applyDesktopDefaults,指向别家时沿用自己当前模型)。
+                        Text(
+                            if (sessionAgent == "codex") "使用电脑上 codex 当前的默认模型"
+                            else "使用桌面设置下发给 ${selectedAgentLabel(sessionAgent)} 的默认模型",
+                            fontSize = 10.5.sp, color = Pa.TextTertiary,
+                        )
                     }
                     if (followSelected) {
                         Spacer(Modifier.width(8.dp))
@@ -2232,10 +3274,10 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                     }
                 }
                 if (models.value.isEmpty()) {
-                    Text("加载中…", fontSize = 13.sp, color = Pa.TextTertiary, modifier = Modifier.padding(8.dp))
+                    Text(if(modelLoading) "加载中…" else "Agent 暂未报告模型，请刷新", fontSize = 13.sp, color = Pa.TextTertiary, modifier = Modifier.padding(8.dp))
                 }
                 models.value.forEach { m ->
-                    val selected = m.id == AgentConnection.selectedModel
+                    val selected = m.id == currentPick
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -2244,7 +3286,7 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        agentBrandIcon(AgentConnection.selectedAgent)?.let { res ->
+                        agentBrandIcon(sessionAgent)?.let { res ->
                             Icon(
                                 painterResource(res), null,
                                 tint = Color.Unspecified, modifier = Modifier.size(28.dp),
@@ -2285,14 +3327,36 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             Text("思考强度", fontSize = 14.sp, color = Pa.TextPrimary)
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                EFFORTS.forEach { e ->
+            // 档位来源(effortsFor,纯函数已单测):daemon 在模型信息里透出了
+            // 动态档位(available_efforts 非空,pi 随模型变化)就按它渲染;
+            // 没透出(codex/zcode)回内置默认档。键含所选模型/agent:切换时档位行即时刷新。
+            // 【按会话 agent】档位语义跟着会话归属走(currentPick 初始值是会话
+            // 生效模型),不再读全局 selectedAgent/selectedModel。
+            val efforts = remember(
+                models.value,
+                currentPick,
+                sessionAgent,
+                runtimeModel,
+            ) {
+                effortsFor(models.value,
+                    if(currentPick.isBlank() || currentPick=="$sessionAgent/default") runtimeModel else currentPick,
+                    sessionAgent)
+            }
+            // 【横向可滚】pi 动态全集 + "默认"最多 8 枚胶囊,窄屏一排放不下,
+            // 溢出的档位以前会被直接裁掉(点不到也看不见)。
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            ) {
+                efforts.forEach { e ->
                     val selected = AgentConnection.selectedEffort == e.id
                     Box(
                         Modifier
                             .pressable {
-                                AgentConnection.selectedEffort = e.id
-                                AgentConnection.persistEffort()
+                                // 按会话记住并立即持久化(与模型同一套语义):
+                                // 退出再进不回退、不污染其它会话、重启 App 不丢失。
+                                AgentConnection.setThreadEffort(threadId, e.id)
+                                TurnSession.state(threadId).selectionPending = true
                             }
                             .background(
                                 if (selected) Pa.Accent else Pa.Card,
@@ -2310,7 +3374,8 @@ fun ModelEffortCard(threadId: String = "", onDismiss: () -> Unit) {
             }
             Spacer(Modifier.height(12.dp))
             Text(
-                "切换模型或思考强度可能影响会话的后续性能",
+                if (currentPick.isEmpty() || currentPick.endsWith("/default")) "跟随 Agent 原生当前模型；选择具体模型后显示它的实时思考档位。"
+                else "修改应用于下一次输入，执行中收到的原生状态会自动同步。",
                 fontSize = 11.sp,
                 color = Pa.TextTertiary,
             )
@@ -2863,10 +3928,36 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                                         }
                                         .padding(horizontal = 12.dp, vertical = 10.dp),
                                 ) {
-                                    Text(c.path, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Pa.TextPrimary, maxLines = 1)
+                                    // 与 GitScreen.ChangeRow 同一套读法:文件名永远完整可读(目录单独一行),
+                                    // 状态字母翻成中文,未跟踪显示"新"而不是把 porcelain "??" 糊给用户。
+                                    val untracked = isUntrackedChange(c.stagedStatus, c.worktreeStatus)
+                                    val fileName = c.path.substringAfterLast('/')
+                                    val dirPart = c.path.substringBeforeLast('/', "")
                                     Text(
-                                        "暂存:${c.stagedStatus.ifEmpty { "-" }} · 工作区:${c.worktreeStatus.ifEmpty { "-" }}",
-                                        fontSize = 9.5.sp, color = Pa.TextTertiary,
+                                        (if (untracked) "新 · " else "") + fileName,
+                                        fontSize = 12.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = Pa.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (dirPart.isNotEmpty()) {
+                                        Text(
+                                            dirPart,
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = Pa.TextTertiary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Text(
+                                        if (untracked) {
+                                            "未跟踪 · 点击查看 diff"
+                                        } else {
+                                            "暂存:${gitStatusLabel(c.stagedStatus)} · 工作区:${gitStatusLabel(c.worktreeStatus)} · 点击查看 diff"
+                                        },
+                                        fontSize = 9.5.sp, color = Pa.TextTertiary, maxLines = 1,
                                     )
                                 }
                             }
@@ -3081,12 +4172,70 @@ private fun ExpandedInputSheet(
     }
 }
 
+// ---- 导出 HTML 存档(daemon 侧 ExportThreadHtml,Pi-only)的门控与文案纯函数 ----
+
+/** HTML 导出按钮的可用性(按会话归属 agent 判定,纯函数便于单测)。 */
+internal enum class HtmlExportGate {
+    /** pi 会话:直接发 RPC。 */
+    SUPPORTED,
+    /** 已确认非 pi(codex/zcode/其他):本地人话拒绝,不发 RPC —— 无声就是 bug。 */
+    UNSUPPORTED_AGENT,
+    /** agentId 未知(空:GetThread 未回/旧数据):不拦截,交给 daemon 裁决。 */
+    UNKNOWN,
+}
+
+/**
+ * 【为什么空串放行】agent_id 缺失的旧数据里可能藏着真 pi 会话;若把"未知"误判成
+ * "不支持",会被本地误杀(拦错比放错更伤)。放行的代价有限:就算真是 codex,
+ * daemon 也会回错误,经失败 Toast 人话展示,永远有反馈。
+ */
+internal fun htmlExportGate(agentId: String): HtmlExportGate = when {
+    agentId.isBlank() -> HtmlExportGate.UNKNOWN
+    agentId.trim().equals("pi", ignoreCase = true) -> HtmlExportGate.SUPPORTED
+    else -> HtmlExportGate.UNSUPPORTED_AGENT
+}
+
+/**
+ * 导出失败的人话文案:daemon 自述的错误(业务错误)原样透传;传输层错误
+ * (gRPC 状态码)翻译成可执行的人话,不把 "UNAVAILABLE: ..." 英文砸用户脸上。
+ */
+internal fun htmlExportFailureMessage(error: Throwable): String {
+    val status = (error as? io.grpc.StatusRuntimeException)?.status
+    if (status == null) {
+        return error.message?.ifBlank { null } ?: "导出 HTML 失败"
+    }
+    return when (status.code) {
+        io.grpc.Status.Code.UNIMPLEMENTED ->
+            "电脑端 daemon 版本过旧,暂不支持 HTML 存档;请先升级电脑端"
+        io.grpc.Status.Code.UNAVAILABLE ->
+            "连不上电脑,请确认电脑端在线后重试"
+        io.grpc.Status.Code.DEADLINE_EXCEEDED ->
+            "电脑端渲染超时,请稍后重试"
+        else -> error.message?.ifBlank { null } ?: "导出 HTML 失败"
+    }
+}
+
+/**
+ * Markdown 导出的正文纯函数(选中条目 → 对话块),供单测钉死"导出内容与选中
+ * 一致"(P1-1:user → "## 我",其余 → "## Agent",正文原样,条目间空行分隔;
+ * 标题/时间头在调用方拼,这里只管正文 —— 时间不进单测断言)。
+ */
+internal fun buildExportBody(chosen: List<ChatItem>): String {
+    val sb = StringBuilder()
+    chosen.forEach { m ->
+        sb.append(if (m.role == "user") "## 我" else "## Agent").append("\n")
+        sb.append(m.text).append("\n\n")
+    }
+    return sb.toString()
+}
+
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ExportChatSheet(
     title: String,
     items: List<ChatItem>,
     threadId: String,
+    agentId: String,
     onDismiss: () -> Unit,
     onExport: (text: String, count: Int) -> Unit,
 ) {
@@ -3116,6 +4265,16 @@ private fun ExportChatSheet(
     // 历史拉回来之前先用内存里的,拉到之后无缝换成全量(两边都以"有正文的对话消息"为准)
     val source = full ?: exportable
     var selected by remember(source) { mutableStateOf(source.indices.toSet()) }
+    // ---- 导出 HTML 存档(daemon 侧 ExportThreadHtml RPC)----
+    // 与上面的 Markdown 导出互补:Markdown 只导出手机上选中的正文;
+    // HTML 是电脑端把整棵会话渲染成的离线存档(含思考/工具过程),文件落在
+    // 电脑的会话工作区下,成功后经"文件页"的下载链路取回手机看。
+    var exportingHtml by remember { mutableStateOf(false) }
+    val htmlScope = rememberCoroutineScope()
+    val htmlCtx = LocalContext.current
+    // 可见性门控:已确认非 pi 的会话,按钮置灰降级(点击仍给人话 Toast,不许无声);
+    // agentId 未知(空)时保持原样,交给 daemon 裁决(见 htmlExportGate 注释)。
+    val htmlGateBlocked = htmlExportGate(agentId) == HtmlExportGate.UNSUPPORTED_AGENT
 
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -3247,17 +4406,20 @@ private fun ExportChatSheet(
                     .fillMaxWidth()
                     .pressable(haptic = true) {
                         if (selected.isEmpty()) return@pressable
+                        // 【P1-1 修复】导出数据源统一为 source:选中列表 UI、计数、
+                        // 落盘必须用同一张表。full 历史加载完成后 selected 以 source
+                        // 为键重建(remember(source)),索引语义已切到 source 上;若仍
+                        // 按索引从内存子集 exportable 取,会把"已选 50/50 条"导成
+                        // 内存里那几条(内容与计数错位)。条数用过滤后的实际值。
+                        val chosen = source.filterIndexed { i, _ -> i in selected }
                         val sb = StringBuilder()
                         sb.append("# ").append(title.ifBlank { "未命名会话" }).append("\n")
                         sb.append("导出时间: ")
                             .append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
                                 .format(java.util.Date()))
                             .append("\n\n")
-                        exportable.filterIndexed { i, _ -> i in selected }.forEach { m ->
-                            sb.append(if (m.role == "user") "## 我" else "## Agent").append("\n")
-                            sb.append(m.text).append("\n\n")
-                        }
-                        onExport(sb.toString(), selected.size)
+                        sb.append(buildExportBody(chosen))
+                        onExport(sb.toString(), chosen.size)
                     }
                     .background(
                         if (selected.isEmpty()) Pa.Hover else Pa.Accent,
@@ -3270,6 +4432,67 @@ private fun ExportChatSheet(
                     if (selected.isEmpty()) "请选择要导出的消息" else "导出 " + selected.size + " 条消息(Markdown)",
                     fontSize = 14.5.sp,
                     color = if (selected.isEmpty()) Pa.TextTertiary else Color.White,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+            // 导出 HTML 存档:调 daemon 的 ExportThreadHtml(目前 Pi 会话支持)。
+            // pi 会话:发 RPC,成功 Toast 电脑上的绝对路径并收起面板,引导去文件页下载;
+            // 失败人话 Toast(daemon 业务错误原样透传,传输层错误翻成人话)。
+            // 非 pi 会话(codex 等):点击直接本地人话拒绝,不发 RPC —— 无声就是 bug。
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .pressable(haptic = true) {
+                        // 防重入:一轮导出进行中再点忽略(按钮文案已是"正在电脑端渲染 HTML…")
+                        if (exportingHtml) return@pressable
+                        if (htmlGateBlocked) {
+                            Toast.makeText(
+                                htmlCtx,
+                                "HTML 存档目前仅 Pi 会话支持",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            return@pressable
+                        }
+                        exportingHtml = true
+                        htmlScope.launch {
+                            try {
+                                val path = withContext(Dispatchers.IO) {
+                                    AgentConnection.threadService()
+                                        .exportThreadHtml(
+                                            ExportThreadHtmlRequest.newBuilder()
+                                                .setThreadId(threadId)
+                                                .build(),
+                                        )
+                                        .path
+                                }
+                                Toast.makeText(
+                                    htmlCtx,
+                                    "已在电脑生成 HTML 存档:$path\n可在文件页下载查看",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                // 成功即收起面板;Toast 属应用层,面板关掉照样展示
+                                onDismiss()
+                            } catch (e: Exception) {
+                                Toast.makeText(
+                                    htmlCtx,
+                                    htmlExportFailureMessage(e),
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            } finally {
+                                exportingHtml = false
+                            }
+                        }
+                    }
+                    .background(if (htmlGateBlocked) Pa.Hover else Pa.Card, RoundedCornerShape(14.dp))
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (exportingHtml) "正在电脑端渲染 HTML…" else "导出 HTML 存档(电脑端)",
+                    fontSize = 14.5.sp,
+                    color = if (htmlGateBlocked) Pa.TextTertiary else Pa.TextSecondary,
                     fontWeight = FontWeight.Medium,
                 )
             }
@@ -3296,4 +4519,379 @@ private fun copyMessage(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     cm.setPrimaryClip(android.content.ClipData.newPlainText("PocketAgent 消息", text))
     Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
+}
+
+// =====================================================================================
+// P1-9 语音输入 —— 状态机(纯逻辑,零 Android 依赖,见 PaNotificationAndVoiceTest)
+// =====================================================================================
+
+/** 语音输入状态:空闲 / 听写中 / 无权限 / 设备不支持。 */
+internal enum class VoiceInputState { IDLE, LISTENING, NO_PERMISSION, UNAVAILABLE }
+
+/**
+ * 识别失败的分类(与 SpeechRecognizer 错误码的映射在 glue 层 [voiceErrorKind])。
+ * 【ENGINE】端侧 Vosk 引擎专用(模型加载失败/识别器或录音器异常),系统识别不会产生。
+ */
+internal enum class VoiceErrorKind { NO_MATCH, BUSY, INSUFFICIENT_PERMISSIONS, CLIENT, OTHER, ENGINE }
+
+/** 语音输入的事件(组合层与识别器回调产生)。 */
+internal sealed interface VoiceEvent {
+    /**
+     * 点击麦克风。
+     * @param hasPermission RECORD_AUDIO 运行时权限是否已授予(组合层自查)
+     * @param available 识别器是否创建成功(false = 设备不支持)
+     */
+    data class MicClicked(val hasPermission: Boolean, val available: Boolean) : VoiceEvent
+
+    /** 权限申请回答;@param available 同上(回答时才知道识别器可用性)。 */
+    data class PermissionAnswered(val granted: Boolean, val available: Boolean) : VoiceEvent
+
+    /** 识别出最终文本(可能为空 = 没听到)。 */
+    data class RecognitionResults(val text: String) : VoiceEvent
+
+    /** 识别出错。 */
+    data class RecognitionFailed(val kind: VoiceErrorKind) : VoiceEvent
+
+    /**
+     * 死区超时兜底(组合层看门狗触发):预检可用、startListening 也未同步抛,
+     * 但 8 秒内 onReadyForSpeech/onPartialResults/onResults/onError 一个回调都没有 ——
+     * 个别 ROM 的识别服务实际处于"死区",不兜底 UI 会永远卡在 LISTENING。
+     *
+     * 【P2-d】@param firstVoskLoad true = 端侧 Vosk 引擎本识别器实例尚无一次成功识别
+     * (模型还在往内存加载):零回调多半是加载慢而非服务死区,提示文案换成
+     * "正在加载语音模型,请稍候再试"(见 [voiceDeadZoneToast])。默认 false 兼容
+     * 系统引擎与已暖场景,老路径文案不变。
+     */
+    data class DeadZoneTimeout(val firstVoskLoad: Boolean = false) : VoiceEvent
+}
+
+/**
+ * 语音输入的 UI 状态。start/stop/append/toast 是**一次性指令**:
+ * 状态机产出后由组合层消费(pendingVoiceEffects 取出执行 → voiceEffectsConsumed 清除),
+ * 状态机本身不碰任何 Android API。
+ */
+internal data class VoiceInputUi(
+    val state: VoiceInputState = VoiceInputState.IDLE,
+    val startRecognition: Boolean = false,
+    val stopRecognition: Boolean = false,
+    /** 待并入输入框的识别文本(非空 = 消费时拼进输入框,不自动发送)。 */
+    val appendText: String? = null,
+    /** 待弹出的人话提示。 */
+    val toast: String? = null,
+) {
+    val listening: Boolean get() = state == VoiceInputState.LISTENING
+}
+
+/** 状态机主转移:点击/权限回答/出结果/出错。 */
+internal fun voiceReduce(current: VoiceInputUi, event: VoiceEvent): VoiceInputUi = when (event) {
+    is VoiceEvent.MicClicked -> when {
+        // 再点一次 = 停止并等结果
+        current.listening -> current.copy(state = VoiceInputState.IDLE, stopRecognition = true)
+        // 无权限:组合层负责发起申请,回答后走 PermissionAnswered;状态机原地不动
+        !event.hasPermission -> current
+        !event.available -> current.copy(state = VoiceInputState.UNAVAILABLE, toast = "这台设备不支持语音识别")
+        else -> current.copy(state = VoiceInputState.LISTENING, startRecognition = true)
+    }
+    is VoiceEvent.PermissionAnswered -> when {
+        !event.granted -> current.copy(state = VoiceInputState.NO_PERMISSION, toast = "没有麦克风权限,无法语音输入")
+        !event.available -> current.copy(state = VoiceInputState.UNAVAILABLE, toast = "这台设备不支持语音识别")
+        else -> current.copy(state = VoiceInputState.LISTENING, startRecognition = true)
+    }
+    is VoiceEvent.RecognitionResults -> {
+        val text = event.text.trim()
+        if (text.isEmpty()) {
+            current.copy(state = VoiceInputState.IDLE, toast = "没听到,再试一次")
+        } else {
+            current.copy(state = VoiceInputState.IDLE, appendText = text)
+        }
+    }
+    is VoiceEvent.RecognitionFailed -> current.copy(state = VoiceInputState.IDLE, toast = voiceErrorText(event.kind))
+    is VoiceEvent.DeadZoneTimeout -> {
+        // 【死区兜底】服务零响应:主动回 IDLE + 人话提示,不让 UI 卡在 LISTENING 干等。
+        // 【P2-d】Vosk 首次冷加载撞看门狗 ≠ 服务死区:文案按真相分流(纯函数,可单测)
+        current.copy(
+            state = VoiceInputState.IDLE,
+            toast = voiceDeadZoneToast(event.firstVoskLoad),
+        )
+    }
+}
+
+/** 待执行的一次性指令(纯数据,组合层照单执行)。 */
+internal data class VoiceEffects(
+    val start: Boolean,
+    val stop: Boolean,
+    val append: String?,
+    val toast: String?,
+)
+
+internal fun pendingVoiceEffects(ui: VoiceInputUi): VoiceEffects =
+    VoiceEffects(ui.startRecognition, ui.stopRecognition, ui.appendText, ui.toast)
+
+/** 指令执行后清掉一次性字段,状态本体保留。 */
+internal fun voiceEffectsConsumed(ui: VoiceInputUi): VoiceInputUi = ui.copy(
+    startRecognition = false,
+    stopRecognition = false,
+    appendText = null,
+    toast = null,
+)
+
+/**
+ * 【V-1 修复】事件归约的统一入口:归约后**当场**取出一次性指令,返回
+ * (清空指令的纯展示态, 待投递效果)。组合层把效果推入 Channel、把展示态写回 state ——
+ * 指令投递从此不依赖"二次 state 写 + LaunchedEffect equals 重启"的时序,
+ * 连续快速事件各 produce 各的指令,不会因同值状态写入被吞。
+ */
+internal fun applyVoiceEvent(current: VoiceInputUi, event: VoiceEvent): Pair<VoiceInputUi, VoiceEffects> {
+    val next = voiceReduce(current, event)
+    val fx = pendingVoiceEffects(next)
+    return voiceEffectsConsumed(next) to fx
+}
+
+/** 效果是否含待执行动作(空效果无需入队)。 */
+internal fun voiceEffectsPending(fx: VoiceEffects): Boolean =
+    fx.start || fx.stop || fx.append != null || fx.toast != null
+
+/** 识别文本并入输入框:空输入直接放;否则补一个空格再接(不覆盖已输入内容)。 */
+internal fun joinVoiceText(existing: String, spoken: String): String = when {
+    existing.isBlank() -> spoken
+    existing.endsWith(" ") || existing.endsWith("\n") -> existing + spoken
+    else -> "$existing $spoken"
+}
+
+// ---- 端侧回落:引擎选择决策(纯函数,JVM 单测锁定) ----
+
+/** 语音识别引擎:系统识别(在线优先,质量好)/ 端侧 Vosk(离线,无 GMS 依赖的回落)。 */
+internal enum class VoiceEngineKind { SYSTEM, VOSK, UNAVAILABLE }
+
+/**
+ * 引擎选择决策表:
+ *  · 系统可用            → SYSTEM(在线质量好,Vosk 只做回落);
+ *  · 系统不可用+模型就绪 → VOSK(小米等无识别服务 ROM 的唯一落地);
+ *  · 都不行              → UNAVAILABLE(UI 引导下载语音模型,下完 voskReady 翻转
+ *    后识别器自动重建为 VOSK,不再是 UNAVAILABLE)。
+ */
+internal fun pickVoiceEngine(sysAvailable: Boolean, voskReady: Boolean): VoiceEngineKind = when {
+    sysAvailable -> VoiceEngineKind.SYSTEM
+    voskReady -> VoiceEngineKind.VOSK
+    else -> VoiceEngineKind.UNAVAILABLE
+}
+
+// ---- 死区超时兜底(V-1 后续:start 后零回调的 ROM 服务死区) ----
+
+/** 死区超时阈值:start 指令消费后等这么久仍零回调,判定语音服务进入死区(毫秒)。 */
+internal const val VOICE_DEAD_ZONE_TIMEOUT_MS = 8_000L
+
+/**
+ * 死区超时判定(纯函数,JVM 单测锁定):
+ * @param elapsedMs start 指令消费至今已过的毫秒数
+ * @param gotCallback 期间是否收到过识别器任一关键回调
+ *   (onReadyForSpeech/onPartialResults/onResults/onError,任一到达即视为服务活着)
+ * @param timeoutMs 超时阈值(默认 [VOICE_DEAD_ZONE_TIMEOUT_MS])
+ * @return true = 判定死区,组合层应触发 [VoiceEvent.DeadZoneTimeout] 兜底回收状态
+ */
+internal fun voiceDeadZoneTimedOut(
+    elapsedMs: Long,
+    gotCallback: Boolean,
+    timeoutMs: Long = VOICE_DEAD_ZONE_TIMEOUT_MS,
+): Boolean = !gotCallback && elapsedMs >= timeoutMs
+
+/**
+ * 死区超时的人话提示(纯函数,JVM 单测锁定):
+ * 【P2-d】端侧 Vosk 首次点击要先花秒级(极端 8 秒以上)把模型载入内存,这期间
+ * 零回调撞满看门狗的真相是"正在加载模型"而非"服务无响应" —— 文案说真话,引导
+ * 稍候再试(此刻点重试仍有效:上一会话模型加载完成后照常收音、照常出结果)。
+ *
+ * @param firstVoskLoad true = 端侧 Vosk 引擎本识别器实例尚无一次成功识别(冷加载中)
+ */
+internal fun voiceDeadZoneToast(firstVoskLoad: Boolean): String =
+    if (firstVoskLoad) "正在加载语音模型,请稍候再试" else "语音服务无响应,请重试或检查语音服务"
+
+/** 错误分类 → 人话提示(Toast 用)。 */
+internal fun voiceErrorText(kind: VoiceErrorKind): String = when (kind) {
+    VoiceErrorKind.NO_MATCH -> "没听到,再试一次"
+    VoiceErrorKind.BUSY -> "语音服务正忙,稍后再试"
+    VoiceErrorKind.INSUFFICIENT_PERMISSIONS -> "麦克风权限被拒绝,请在系统设置里开启"
+    VoiceErrorKind.CLIENT -> "语音识别不可用"
+    VoiceErrorKind.OTHER -> "识别失败,请重试"
+    VoiceErrorKind.ENGINE -> "端侧语音引擎异常,请重试"
+}
+
+// =====================================================================================
+// P1-9 语音输入 —— 组合层胶水(SpeechRecognizer 适配)
+// =====================================================================================
+
+/**
+ * SpeechRecognizer 的最小接口包装:组合层只依赖它,单测用 fake 顶替
+ * (SpeechRecognizer 本体在 JVM 不可实例化)。
+ */
+internal interface PaVoiceRecognizer {
+    /** 开始听写(zh-CN、自由文本模型)。 */
+    fun start()
+
+    /** 停止听写并等最终结果(再点一次麦克风的语义)。 */
+    fun stopListening()
+
+    /** 释放底层资源(离开会话页时)。 */
+    fun destroy()
+}
+
+/** SpeechRecognizer 错误码(含端侧 Vosk 自定义码)→ 状态机分类。 */
+internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
+    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> VoiceErrorKind.NO_MATCH
+    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> VoiceErrorKind.BUSY
+    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> VoiceErrorKind.INSUFFICIENT_PERMISSIONS
+    SpeechRecognizer.ERROR_CLIENT -> VoiceErrorKind.CLIENT
+    // 【端侧回落】Vosk 自定义错误码(100+):统一归"端侧引擎异常"
+    VOICE_ERROR_VOSK_ENGINE, VOICE_ERROR_VOSK_MODEL -> VoiceErrorKind.ENGINE
+    else -> VoiceErrorKind.OTHER
+}
+
+/**
+ * 端侧错误码 → 是否需要回连模型磁盘复核(纯函数,JVM 单测锁定)。
+ *
+ * 仅 [VOICE_ERROR_VOSK_MODEL](模型加载失败)触发:模型目录"文件在但内容坏"时
+ * 状态机会滞留 READY,每轮识别重复失败而设置页仍显示"已下载"——识别器 onError
+ * 报此码时组合层回连 [VoskModelManager.refreshFromDisk],磁盘复核把半损坏目录
+ * 打回 FAILED 引导重下。[VOICE_ERROR_VOSK_ENGINE](录音器/识别器运行异常)与
+ * 模型目录完整性无关,不触发;系统识别错误码更不会产生 100/101。
+ */
+internal fun voiceModelRefreshNeeded(code: Int): Boolean = code == VOICE_ERROR_VOSK_MODEL
+
+/**
+ * 创建语音识别器 —— 引擎选择统一入口(决策表 [pickVoiceEngine],JVM 单测锁定):
+ *  · SYSTEM      → [createSystemVoiceRecognizer](在线质量好,Vosk 只做回落);
+ *  · VOSK        → 端侧 [VoskVoiceRecognizer](小米等无识别服务 ROM 且模型已就绪);
+ *  · UNAVAILABLE → null(点击麦克风时引导下载语音模型,下完自动翻身为 VOSK)。
+ * 必须在主线程调用(组合层 remember 里,满足)。
+ *
+ * 【回调契约】onResult/onErrorEvent/onAlive 语义见 [createSystemVoiceRecognizer]。
+ */
+private fun createVoiceRecognizer(
+    context: Context,
+    sysAvailable: Boolean,
+    voskReady: Boolean,
+    senseReady: Boolean = false,
+    onResult: (String) -> Unit,
+    onErrorEvent: (Int) -> Unit,
+    onAlive: () -> Unit = {},
+): PaVoiceRecognizer? {
+    if (sysAvailable) {
+        createSystemVoiceRecognizer(context,onResult,onErrorEvent,onAlive)?.let { return it }
+    }
+    if (senseReady) {
+        SenseVoiceModelManager.modelPath()?.let { return SenseVoiceRecognizer(it,onResult,onErrorEvent,onAlive) }
+    }
+    return null
+}
+
+/**
+ * 创建系统识别器(SpeechRecognizer 包装):API31+ 且设备支持本机识别用离线引擎(更快更私密),
+ * 否则回退默认识别器;整个过程失败返回 null(按钮降级为"设备不支持")。
+ * 语言固定 zh-CN + 自由文本;必须在主线程调用(组合层 remember 里,满足)。
+ *
+ * 【V-1 修复】
+ *  1. 先用 [SpeechRecognizer.isRecognitionAvailable] 预检 —— 部分无识别服务的 ROM 上
+ *     createSpeechRecognizer 不抛、startListening 也全静默(连 onError 都不回调),
+ *     预检不过直接返回 null,让上层走"回落 Vosk / 引导下载模型"分支;
+ *  2. startListening 包 try/catch,个别 ROM 会同步抛,兜底映射为 ERROR_CLIENT,
+ *     让状态机回 IDLE 并弹人话提示,而不是无声卡死;
+ *  3. EXTRA_PREFER_OFFLINE 改 false(在线优先):无离线包的设备上强求离线必吃错误
+ *     8/5 且拿不到结果;
+ *  4. 四个关键回调(ready/error/results/partial)与全链路关键节点 Log.d("PaVoice") 埋点,
+ *     真机排障靠它。
+ *
+ * 【死区兜底】@param onAlive 在四个关键回调开头各调一次:预检可用但服务实际"死区"
+ * (start 后零回调)的 ROM 上,组合层靠它区分"服务活着"与"8 秒零回调",任一回调
+ * 到达即取消超时看门狗(见 [voiceDeadZoneTimedOut])。
+ */
+private fun createSystemVoiceRecognizer(
+    context: Context,
+    onResult: (String) -> Unit,
+    onErrorEvent: (Int) -> Unit,
+    onAlive: () -> Unit = {},
+): PaVoiceRecognizer? {
+    // 预检本机是否注册了识别服务(runCatching 防个别 ROM 预检本身抛)
+    val sysAvailable = runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false)
+    val onDeviceAvailable = Build.VERSION.SDK_INT >= 31 &&
+        runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+    Log.d(
+        "PaVoice",
+        "预检 isRecognitionAvailable=$sysAvailable onDevice=$onDeviceAvailable sdk=${Build.VERSION.SDK_INT}",
+    )
+    if (!sysAvailable) return null
+
+    return runCatching {
+        val sr = if (onDeviceAvailable) {
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        }
+        sr.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                Log.d("PaVoice", "回调 onReadyForSpeech:开始收音")
+                onAlive() // 【死区兜底】关键回调到达,喂看门狗
+            }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onError(error: Int) {
+                Log.d("PaVoice", "回调 onError code=$error kind=${voiceErrorKind(error)}")
+                onAlive() // 【死区兜底】关键回调到达,喂看门狗
+                onErrorEvent(error)
+            }
+            override fun onResults(results: Bundle?) {
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+                Log.d("PaVoice", "回调 onResults 文本='$text'")
+                onAlive() // 【死区兜底】关键回调到达,喂看门狗
+                onResult(text)
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                val partial = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                Log.d("PaVoice", "回调 onPartialResults 中间文本='$partial'")
+                onAlive() // 【死区兜底】关键回调到达,喂看门狗
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+        object : PaVoiceRecognizer {
+            override fun start() {
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                    // 【V-1】在线优先:离线只在装了离线识别包的设备上才有意义
+                    if (Build.VERSION.SDK_INT >= 23) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+                }
+                try {
+                    Log.d("PaVoice", "startListening 发起(zh-CN,在线优先)")
+                    sr.startListening(intent)
+                } catch (t: Throwable) {
+                    // 个别 ROM 同步抛(服务未就绪/SecurityException 等):兜底为 CLIENT 错误,
+                    // 状态机回 IDLE 并弹人话提示,绝不无声卡死
+                    Log.d("PaVoice", "startListening 同步异常:${t.javaClass.simpleName}: ${t.message}")
+                    onErrorEvent(SpeechRecognizer.ERROR_CLIENT)
+                }
+            }
+
+            override fun stopListening() {
+                // 停止阶段的同步异常不值得打断 UI(状态机已回 IDLE),记日志防崩
+                runCatching { sr.stopListening() }
+                    .onFailure { Log.d("PaVoice", "stopListening 异常:${it.javaClass.simpleName}") }
+            }
+
+            override fun destroy() {
+                runCatching { sr.destroy() }
+                    .onFailure { Log.d("PaVoice", "destroy 异常:${it.javaClass.simpleName}") }
+            }
+        }
+    }.getOrElse { t ->
+        Log.d("PaVoice", "创建识别器异常:${t.javaClass.simpleName}: ${t.message}")
+        null
+    }
 }

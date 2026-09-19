@@ -1,0 +1,87 @@
+{
+  "apk_size": 249693873,
+  "dexe": [
+    "classes.dex",
+    "classes2.dex",
+    "classes3.dex",
+    "classes5.dex",
+    "classes6.dex",
+    "classes8.dex",
+    "classes9.dex",
+    "classes4.dex",
+    "classes7.dex"
+  ],
+  "abis": [
+    "arm64-v8a",
+    "armeabi",
+    "armeabi-v7a",
+    "mips",
+    "mips64",
+    "x86",
+    "x86_64"
+  ],
+  "sensevoice_apk_ok": true,
+  "sensevoice_detail": [
+    "assets/sensevoice/model.int8.onnx        size=239233841   \n  apk   = c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51\n  expect= c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51\n  MATCH",
+    "assets/sensevoice/tokens.txt             size=315894      \n  apk   = f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc\n  expect= f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc\n  MATCH"
+  ],
+  "exported_components": [
+    {
+      "type": "activity",
+      "name": "dev.pocketagent.app.MainActivity",
+      "exported": "true",
+      "has_MAIN": true
+    },
+    {
+      "type": "service",
+      "name": "dev.pocketagent.app.TurnKeepAliveService",
+      "exported": "false",
+      "has_MAIN": false
+    },
+    {
+      "type": "provider",
+      "name": "androidx.core.content.FileProvider",
+      "exported": "false",
+      "has_MAIN": false
+    },
+    {
+      "type": "provider",
+      "name": "androidx.startup.InitializationProvider",
+      "exported": "false",
+      "has_MAIN": false
+    },
+    {
+      "type": "receiver",
+      "name": "androidx.profileinstaller.ProfileInstallReceiver",
+      "exported": "true",
+      "has_MAIN": false
+    }
+  ],
+  "dex_symbols": [
+    "AgentBrand               FOUND",
+    "SenseVoiceRecognizer     FOUND",
+    "PinTrustManager          FOUND",
+    "TokenStore               FOUND",
+    "DeviceKey                FOUND",
+    "OfflineStore             FOUND",
+    "TurnCheckpointStore      FOUND",
+    "MdnsDiscovery            FOUND",
+    "PaNotifications          FOUND",
+    "PromptOptimizeLogic      FOUND",
+    "SlashCommandsLogic       FOUND",
+    "DesktopEchoLogic         FOUND",
+    "DocFormatRegistry        FOUND",
+    "WebNavPolicy             FOUND",
+    "WebDownloadBridge        FOUND"
+  ],
+  "dex_cn_utf8": [
+    "上下文占用          MISSING",
+    "继续安装           MISSING",
+    "思考强度           FOUND",
+    "权限与安全          FOUND",
+    "行为与降噪          MISSING",
+    "语音输入           FOUND",
+    "已内置            FOUND"
+  ],
+  "manifest_bytes": 4633
+}

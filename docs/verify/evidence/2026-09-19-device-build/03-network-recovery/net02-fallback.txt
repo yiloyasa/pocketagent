@@ -1,0 +1,13 @@
+{
+  "reverse_after_remove": "",
+  "lan_connected": true,
+  "peer": [
+    "10.15.50.160:7246",
+    "10.15.8.248:43558",
+    "21440"
+  ],
+  "seconds_to_lan": 0.2,
+  "app_label": "已连接 · 局域网直连",
+  "user_manual_retry_needed": false,
+  "verdict": "PASS"
+}

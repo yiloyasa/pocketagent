@@ -2,17 +2,33 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"log"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
 func main() {
-	conn, err := grpc.NewClient("127.0.0.1:7268", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 历史上 verify 打的是手工起的测试实例(7268 端口),默认值保持不变。
+	addr := flag.String("addr", "127.0.0.1:7268", "daemon 地址(ip:port)")
+	plaintext := flag.Bool("plaintext", false, "连明文 gRPC(对付 -plaintext 起的测试 daemon);默认 TLS")
+	flag.Parse()
+
+	// daemon 生产默认 TLS(自签证书)。诊断用 InsecureSkipVerify 跳过自签校验;
+	// 指纹核对走 tlsprobe。-plaintext=true 回明文。
+	var creds credentials.TransportCredentials
+	if *plaintext {
+		creds = insecure.NewCredentials()
+	} else {
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // 探针仅本机诊断用
+	}
+	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(creds))
 	must(err)
 	defer conn.Close()
 	ctx := context.Background()
@@ -23,10 +39,15 @@ func main() {
 	must(err)
 	fmt.Printf("✓ GetCodexSettings: account=%q approval=%q sandbox=%q\n", st.Account, st.ApprovalPolicy, st.Sandbox)
 
-	// 2) 写入并回读
-	st2, err := ms.SetCodexSettings(ctx, &pb.SetCodexSettingsRequest{ApprovalPolicy: "on-request", Sandbox: "workspace-write"})
+	// 2) 写入并回读(proto3 optional:用指针表示"显式修改这一项")
+	onReq, wsWrite := "on-request", "workspace-write"
+	st2, err := ms.SetCodexSettings(ctx, &pb.SetCodexSettingsRequest{
+		ApprovalPolicy: &onReq,
+		Sandbox:        &wsWrite,
+	})
 	must(err)
-	fmt.Printf("✓ SetCodexSettings: approval=%q sandbox=%q (写入成功)\n", st2.ApprovalPolicy, st2.Sandbox)
+	fmt.Printf("✓ SetCodexSettings: approval=%q sandbox=%q (写入成功,逐项状态 %d 条)\n",
+		st2.ApprovalPolicy, st2.Sandbox, len(st2.SettingStatus))
 
 	// 3) MCP 服务器列表
 	mcp, err := ms.ListMcpServers(ctx, &pb.ListMcpServersRequest{})

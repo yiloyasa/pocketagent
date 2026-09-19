@@ -1,0 +1,96 @@
+{
+  "summary": {
+    "app_id": "APP-03",
+    "runs": 10,
+    "success": 10,
+    "TotalTime_ms": [
+      702,
+      690,
+      690,
+      689,
+      749,
+      711,
+      682,
+      709,
+      695,
+      691
+    ],
+    "min": 682,
+    "max": 749,
+    "avg": 700.8,
+    "crash_buffer": "",
+    "verdict": "PASS"
+  },
+  "rows": [
+    {
+      "n": 1,
+      "TotalTime": 702,
+      "WaitTime": 706,
+      "pid": "16251",
+      "status_ok": true
+    },
+    {
+      "n": 2,
+      "TotalTime": 690,
+      "WaitTime": 693,
+      "pid": "17051",
+      "status_ok": true
+    },
+    {
+      "n": 3,
+      "TotalTime": 690,
+      "WaitTime": 693,
+      "pid": "17849",
+      "status_ok": true
+    },
+    {
+      "n": 4,
+      "TotalTime": 689,
+      "WaitTime": 692,
+      "pid": "18687",
+      "status_ok": true
+    },
+    {
+      "n": 5,
+      "TotalTime": 749,
+      "WaitTime": 753,
+      "pid": "19524",
+      "status_ok": true
+    },
+    {
+      "n": 6,
+      "TotalTime": 711,
+      "WaitTime": 719,
+      "pid": "20546",
+      "status_ok": true
+    },
+    {
+      "n": 7,
+      "TotalTime": 682,
+      "WaitTime": 686,
+      "pid": "21695",
+      "status_ok": true
+    },
+    {
+      "n": 8,
+      "TotalTime": 709,
+      "WaitTime": 712,
+      "pid": "22447",
+      "status_ok": true
+    },
+    {
+      "n": 9,
+      "TotalTime": 695,
+      "WaitTime": 698,
+      "pid": "23448",
+      "status_ok": true
+    },
+    {
+      "n": 10,
+      "TotalTime": 691,
+      "WaitTime": 695,
+      "pid": "24670",
+      "status_ok": true
+    }
+  ]
+}

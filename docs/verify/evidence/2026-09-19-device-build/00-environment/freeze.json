@@ -1,0 +1,19 @@
+{
+  "frozen_at": "2026-09-19T22:29:32.901605",
+  "git_head": "8cc0c5e8f95a0da807b3d68823bc970b8c1e767e",
+  "dirty_count": 334,
+  "apk_sha256": "554c87b1359de44603bf04744a1bfd06a62ef1cb7ea0e3759c75a74bbd16aae5",
+  "daemon_sha256": "f220d385321a2ecf5702d6a6fb63c452abb2800d97f1e7dd9dae5c6624cf9b4c",
+  "sensevoice_ok": true,
+  "device": {
+    "品牌": "Xiaomi",
+    "型号": "2211133C",
+    "设备代号": "fuxi",
+    "Android": "16",
+    "API": "36",
+    "ROM": "OS3.0",
+    "ROM(incre)": "OS3.0.308.0.WMCCNXM",
+    "SDK 指纹": "Xiaomi/fuxi/fuxi:16/BP2A.250605.031.A3/OS3.0.308.0.WMCCNXM:user/release-keys",
+    "CPU ABI": "arm64-v8a"
+  }
+}

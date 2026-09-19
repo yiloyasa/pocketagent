@@ -35,12 +35,61 @@ param(
     [switch]$Clean
 )
 
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
 if (-not $src) { throw 'Run this script from a file, not from a pasted command.' }
 
 if ($Clean -and (Test-Path $Stage)) {
-    Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
+    $resolvedStage = (Resolve-Path -LiteralPath $Stage).Path
+    $stageItem = Get-Item -LiteralPath $resolvedStage
+    if ($stageItem.LinkType -or $resolvedStage -notmatch '^[A-Za-z]:\\pa\\[^\\]+$') {
+        throw "Refusing recursive clean outside a physical <drive>:\pa\<stage> directory: $resolvedStage"
+    }
+    Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+}
+
+# Fixed upstream dependency, not a wildcard or an unverified partially downloaded AAR.
+$aar = Join-Path $src 'app\libs\sherpa-onnx-1.13.8-verified.aar'
+$aarHash = '633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96'
+if (!(Test-Path -LiteralPath $aar) -or (Get-FileHash -LiteralPath $aar -Algorithm SHA256).Hash -ne $aarHash) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aar) | Out-Null
+    $download = "$aar.download"
+    Invoke-WebRequest -Uri 'https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar' `
+        -OutFile $download -TimeoutSec 180
+    if ((Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -ne $aarHash) {
+        Remove-Item -LiteralPath $download -Force
+        throw 'SenseVoice dependency checksum mismatch.'
+    }
+    Move-Item -LiteralPath $download -Destination $aar -Force
+}
+
+# Models are BUILD inputs, not phone downloads. Both sources must produce the
+# exact pinned SHA-256; the mirror is only a transport alternative in China.
+$speechAssets = Join-Path $src 'app\src\main\assets\sensevoice'
+$speechFiles = @(
+    @{ Name = 'model.int8.onnx'; Hash = 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' },
+    @{ Name = 'tokens.txt'; Hash = 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' }
+)
+$speechRepo = 'csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07'
+New-Item -ItemType Directory -Force -Path $speechAssets | Out-Null
+foreach ($spec in $speechFiles) {
+    $target = Join-Path $speechAssets $spec.Name
+    if ((Test-Path -LiteralPath $target) -and (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -eq $spec.Hash) { continue }
+    $success = $false
+    foreach ($origin in @('https://huggingface.co', 'https://hf-mirror.com')) {
+        try {
+            Invoke-WebRequest -Uri "$origin/$speechRepo/$($spec.Name)" -OutFile "$target.download" -TimeoutSec 900
+            if ((Get-FileHash -LiteralPath "$target.download" -Algorithm SHA256).Hash -ne $spec.Hash) {
+                throw "Bundled speech checksum mismatch: $($spec.Name)"
+            }
+            Move-Item -LiteralPath "$target.download" -Destination $target -Force
+            $success = $true
+            break
+        } catch {
+            Write-Warning "Build input unavailable from $origin : $($_.Exception.Message)"
+        }
+    }
+    if (!$success) { throw "Cannot build an offline-ready APK without verified $($spec.Name)" }
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Stage) | Out-Null

@@ -264,6 +264,10 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
                         WebView(ctx).apply {
                             @SuppressLint("SetJavaScriptEnabled")
                             settings.javaScriptEnabled = true
+                            // 【P1-7 键栏】键栏显隐状态存 localStorage;WebView 默认关闭 DOM
+                            // storage,不开这里页面里的 localStorage 访问会直接抛异常
+                            // (页面已 try/catch 兜底为默认显示,但状态无法持久)。
+                            settings.domStorageEnabled = true
                             webViewClient = WebViewClient()
                             addJavascriptInterface(
                                 TerminalJsBridge(

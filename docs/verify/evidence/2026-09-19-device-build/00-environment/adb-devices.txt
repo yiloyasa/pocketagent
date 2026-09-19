@@ -1,0 +1,2 @@
+List of devices attached
+8e0e7bbe               device product:fuxi model:2211133C device:fuxi transport_id:1

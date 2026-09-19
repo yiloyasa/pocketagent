@@ -1,0 +1,574 @@
+{
+  "step": "gate3b android unit test (forced --rerun)",
+  "executed_at": "2026-09-19 22:32:46",
+  "gradle_rc": 0,
+  "elapsed_s": 36.0,
+  "suites": 62,
+  "tests_total": 448,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "suites_rerun_this_session": 62,
+  "suite_detail": [
+    {
+      "suite": "dev.pocketagent.app.AgentConnectionCandidatesTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.AgentConnectionEndpointsWorkflowC",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.AgentConnectionTofuAndMdnsTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ConnectionDiagnosticsTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.DeviceAuthFlowTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.PinTrustManagerTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.TokenStoreMigrationTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.AgentAvailabilityTest",
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.AgentBadgeAndFilterTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.AgentPcSessionsTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.AttachmentPreviewTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:35",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ChatModelRoutingTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ChatTimelineTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.CodexEventTimelineTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.CodexWriterRegressionTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ContextRingTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ContextWindowResolveTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.DesktopEchoLogicTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.DevServerPreviewUrlTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ExportChatBodyTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ExportHtmlGateTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.GoalDisplayLogicTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.HistoryMessageMapperTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.HistoryThinkingRestoreTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:35",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ListBannerO1Test",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.MarkdownTextTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ModelEffortOptionsTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.MultiAgentToggleTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.NewThreadAgentSelectionTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.OfficeLegacyTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.OnboardingAgentCapabilityTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.PaNotificationAndVoiceTest",
+      "tests": 33,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.PathEncodingTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.PromptOptimizeLogicTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.QAReviewUsageAndOrganizeTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.RuntimeStateRegressionTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.SectionCoverageNoteTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:35",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.SessionConfigAndCompactionTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:35",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.SlashCommandsLogicTest",
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.ThreadOrganizeTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.TurnDeliveryAndOfflineTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.TurnEventResumeTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.UsageFormatTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:35",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.VoskVoiceFallbackTest",
+      "tests": 24,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.WorkflowAFilenameTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.WorkflowAUsageMetricsTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.WorkflowBCapabilityTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.DocFormatRegistryWorkflowC",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.MdnsDiscoveryTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.OfflineStoreWorkflowC",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.PathNavTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.PreviewCacheTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.QAReviewOfflineAndFormatTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.SenseVoiceModelFilesTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.SenseVoiceSessionTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.TaskCenterParseTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.ThreadSnapshotO1Test",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:35",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.ThreadSnapshotTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 10
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.TurnCheckpointStoreTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.WebDownloadBridgeWorkflowC",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.WebNavPolicyWorkflowC",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:37",
+      "age_s": 9
+    },
+    {
+      "suite": "dev.pocketagent.app.ui.component.WorkflowAUsageCacheTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtime": "22:32:36",
+      "age_s": 9
+    }
+  ],
+  "failure_detail": [],
+  "verdict": "PASS"
+}

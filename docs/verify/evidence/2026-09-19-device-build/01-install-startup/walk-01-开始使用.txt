@@ -1,0 +1,60 @@
+- | - | 
+- | - | 
+- | - | android:id/content
+- | - | 
+- | - | 
+- | - | 
+- | - | 
+- | 菜单 | 
+- | - | 
+- | 设置 | 
+- | - | 
+- | - | 
+WHOISLOVE | - | 
+已连接 · 局域网直连 | - | 
+- | - | 
+- | Codex | 
+Codex | - | 
+app-server | - | 
+- | - | 
+- | OpenCode | 
+OpenCode | - | 
+接入中 | - | 
+- | - | 
+- | Claude | 
+Claude | - | 
+接入中 | - | 
+- | - | 
+- | Pi | 
+Pi | - | 
+stdio | - | 
+- | - | 
+- | Hermes | 
+Hermes | - | 
+接入中 | - | 
+- | - | 
+- | DSH | 
+DSH | - | 
+接入中 | - | 
+- | - | 
+- | ZCode | 
+ZCode | - | 
+app-server | - | 
+多agent协同 | - | 
+开发中:多 agent 协同尚未开放 | - | 
+- | - | 
+- | - | 
+- | - | 
+- | Codex | 
+Codex | - | 
+app-server | - | 
+- | - | 
+新建任务 | - | 
+Codex | - | 
+- | - | 
+电脑预览 | - | 
+dev server | - | 
+最近任务 | - | 
+全部 → | - | 
+- | - | 
+严格修复以下多 Agent 应用问题： Codex 目标模式：修复其不进行更改且逻辑理解错误，使其真实适配 Codex… | - | 

@@ -1,0 +1,85 @@
+{
+  "markers": {
+    "codex": "PAAGTCODEX230637",
+    "pi": "PAAGTPI230637",
+    "zcode": "PAAGTZCODE230637"
+  },
+  "runs": {
+    "codex": {
+      "agent": "codex",
+      "marker": "PAAGTCODEX230637",
+      "rc": 0,
+      "seconds": 25.1,
+      "thread": "th-a2b43b2f2177918f",
+      "reply_echoes_marker": true,
+      "out_tail": "[probe] thread=th-a2b43b2f2177918f created\n[  28ms] STARTED\n[ 345ms] EVENT #2 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[ 353ms] EVENT #3 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[ 401ms] EVENT #4 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[ 514ms] EVENT #5 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[24.551s] TEXT_DELTA +\"PA\"\n[24.552s] TEXT_DELTA +\"AG\"\n[24.552s] TEXT_DELTA +\"TC\"\n[24.552s] TEXT_DELTA +\"ODE\"\n[24.826s] TEXT_DELTA +\"X\"\n[24.826s] TEXT_DELTA +\"230\"\n[24.826s] TEXT_DELTA +\"637\"\n[24.875s] EVENT #13 (case *pocketagentv1.TurnServerMessage_Usage)\n[24.875s] EVENT #14 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[24.875s] EVENT #15 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[24.916s] EVENT #16 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[24.917s] COMPLETED\n\n[probe] done in 24.917s, events=17\n[probe] final text: \"PAAGTCODEX230637\"\n"
+    },
+    "pi": {
+      "agent": "pi",
+      "marker": "PAAGTPI230637",
+      "rc": 0,
+      "seconds": 9.6,
+      "thread": "th-b585c3f98a4520a1",
+      "reply_echoes_marker": true,
+      "out_tail": "G +\" nothing\"\n[9.387s] THINKING +\" else\"\n[9.387s] THINKING +\".\"\n[9.387s] THINKING +\" This\"\n[9.387s] THINKING +\" is\"\n[9.387s] THINKING +\" a\"\n[9.387s] THINKING +\" simple\"\n[9.387s] THINKING +\" request\"\n[9.387s] THINKING +\" that\"\n[9.387s] THINKING +\" doesn\"\n[9.387s] THINKING +\"'t\"\n[9.387s] THINKING +\" require\"\n[9.387s] THINKING +\" any\"\n[9.387s] THINKING +\" tools\"\n[9.387s] THINKING +\" or\"\n[9.387s] THINKING +\" complex\"\n[9.387s] THINKING +\" processing\"\n[9.387s] THINKING +\".\"\n[9.387s] THINKING +\" I\"\n[9.387s] THINKING +\" should\"\n[9.387s] THINKING +\" just\"\n[9.387s] THINKING +\" respond\"\n[9.387s] THINKING +\" with\"\n[9.387s] THINKING +\" the\"\n[9.387s] THINKING +\" exact\"\n[9.387s] THINKING +\" token\"\n[9.387s] THINKING +\" as\"\n[9.388s] THINKING +\" specified\"\n[9.388s] THINKING +\".\"\n[9.388s] TEXT_DELTA +\"PA\"\n[9.388s] TEXT_DELTA +\"AG\"\n[9.388s] TEXT_DELTA +\"T\"\n[9.388s] TEXT_DELTA +\"PI\"\n[9.388s] TEXT_DELTA +\"230637\"\n[9.394s] EVENT #62 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[9.407s] EVENT #63 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[9.449s] EVENT #64 (case *pocketagentv1.TurnServerMessage_Usage)\n[9.449s] COMPLETED\n\n[probe] done in 9.449s, events=65\n[probe] final text: \"PAAGTPI230637\"\n"
+    },
+    "zcode": {
+      "agent": "zcode",
+      "marker": "PAAGTZCODE230637",
+      "rc": 0,
+      "seconds": 9.9,
+      "thread": "th-98f7f208919e6fc4",
+      "reply_echoes_marker": true,
+      "out_tail": "[probe] thread=th-98f7f208919e6fc4 created\n[  36ms] STARTED\n[1.522s] EVENT #2 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[2.416s] EVENT #3 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[2.419s] EVENT #4 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[ 2.46s] EVENT #5 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[2.586s] EVENT #6 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[ 2.64s] EVENT #7 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[2.664s] EVENT #8 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[2.664s] EVENT #9 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[9.199s] THINKING +\"The\"\n[9.449s] THINKING +\" user is asking me to reply with exactly this token and noth\"\n[9.518s] THINKING +\"AGTZCODE230637\"\n[9.519s] TEXT_DELTA +\"PA\"\n[9.613s] TEXT_DELTA +\"AGTZCODE230637\"\n[9.656s] EVENT #15 (case *pocketagentv1.TurnServerMessage_CodexEvent)\n[9.657s] EVENT #16 (case *pocketagentv1.TurnServerMessage_Usage)\n[9.657s] COMPLETED\n\n[probe] done in 9.657s, events=17\n[probe] final text: \"PAAGTZCODE230637\"\n"
+    }
+  },
+  "hit_matrix": {
+    "codex_vs_codex": {
+      "count": 1,
+      "files": [
+        ".codex\\sessions\\2026\\09\\19\\rollout-2026-09-19T23-06-37-01a0ba34-7efb-7982-a4c8-3f3f8182aa54.jsonl"
+      ]
+    },
+    "codex_vs_pi": {
+      "count": 0,
+      "files": []
+    },
+    "codex_vs_zcode": {
+      "count": 0,
+      "files": []
+    },
+    "pi_vs_codex": {
+      "count": 0,
+      "files": []
+    },
+    "pi_vs_pi": {
+      "count": 2,
+      "files": [
+        ".pi\\agent\\pi-hermes-memory\\sessions.db-wal",
+        ".pi\\agent\\sessions\\--G--项目1-pocketagent--\\2026-09-19T15-07-03-086Z_01a0ba34-e22e-7096-a303-a67aded2b54c.jsonl"
+      ]
+    },
+    "pi_vs_zcode": {
+      "count": 0,
+      "files": []
+    },
+    "zcode_vs_codex": {
+      "count": 0,
+      "files": []
+    },
+    "zcode_vs_pi": {
+      "count": 0,
+      "files": []
+    },
+    "zcode_vs_zcode": {
+      "count": 2,
+      "files": [
+        ".zcode\\cli\\db\\db.sqlite-wal",
+        ".zcode\\cli\\rollout\\model-io-sess_25a3a9ee-9069-4e50-a2e1-11ba2ea9aace.jsonl"
+      ]
+    }
+  },
+  "self_hit_all": true,
+  "no_cross_contamination": true,
+  "verdict": "PASS"
+}

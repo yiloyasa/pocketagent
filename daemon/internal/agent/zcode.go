@@ -1,0 +1,1825 @@
+package agent
+
+// zcode.go —— ZcodeProvider:把 PocketAgent 的 gRPC 协议桥接到 ZCode 桌面端的
+// agent 内核(node zcode.cjs app-server --stdio,"ZCode Protocol")。
+//
+// 【讲解】事件对照表(手机上看到的 ← ZCode 发来的,0.16.5 探针实测,
+// 证据见 docs/verify/evidence/zcode-p0-probe.md):
+//
+//	文字逐字蹦出      model.streaming + payload.kind="text_delta"
+//	思考过程          model.streaming + payload.kind="reasoning_delta"
+//	"⚙ Write"卡片    tool.updated + payload.kind="tool_call"(含完整 input)
+//	卡片出结果        tool.updated + payload.kind="result"(result.success/content)
+//	工具出错          tool.updated + payload.kind="tool_error" → FINISHED(ok=false)
+//	审批弹卡          interaction/requestPermission(服务器反向请求)→ approve hook
+//	用量              turn.completed payload.usage(input/output/cache/reasoning tokens)
+//	一轮真正结束      turn.completed / turn.failed
+//
+// 【进程模型】与 codex app-server 相同:一个子进程承载多个会话(session),
+// Thread ↔ zcode sessionId 经 threadMap(同子进程代内)+ Thread.ExternalSession.
+// SessionID(落库,daemon 重启后重挂载,session/resume 实测通过)两级映射。
+//
+// 【运行中新输入】zcode 协议侧的 steer 队列(turn.steerQueued/steerDrained)只服务
+// 桌面端内部通道:2026-09-19 实测(docs/verify/evidence/zcode-steer-probe.log,
+// cmd/zcprobe -steer),对 running session 发 session/send 被服务器直接拒绝
+// (-32010 "A prompt is already running for this session"),事件流无任何 steer
+// 类事件,原轮次照常跑完 —— stdio 通道没有可用插话入口,故本 provider【不实现
+// Steerer】;server 层按既有排队语义处理,当前轮次终局后输入作为新轮续跑,不丢。
+//
+// 新会话默认 mode:"build"；仅用户显式 NativeMode 才调用原生 setMode。
+// setMode 会持久化该项目的权限偏好，不能宣称为仅会话或 OS sandbox。
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/store"
+	"github.com/pocketagent/daemon/internal/zcodeapp"
+)
+
+// zcode 常量预算(与 codex 同款分级)。
+const (
+	// zcodeInitBudget 拉起子进程 + 存储就绪的默认上界(本机实测 <3s)。
+	zcodeInitBudget = 15 * time.Second
+	// zcodeStatusBudget 只读状态查询(模型列表等)的整段上界。
+	zcodeStatusBudget = 20 * time.Second
+	// zcodeModelsTTL 模型列表缓存:拉列表要建一个一次性会话,不能每次都来。
+	zcodeModelsTTL = 10 * time.Minute
+	// zcodeWatchdogSilence 轮次看门狗:连续这么久没有任何事件且不在等审批,
+	// 判定任务未被接收/上游卡死(与 codex 的 150s 同口径)。
+	zcodeWatchdogSilence = 150 * time.Second
+	// zcodeUIBudget 审批等手机应答的上界(P2-6,对齐 pi 的 piUIBudget=120s):
+	// 手机端停在审批卡但流不断时,无上界的等待会把整轮一直挂着;若桌面端已按
+	// 自身超时判 deny,daemon 仍在等,之后的应答发的是过期 requestId。
+	zcodeUIBudget = 120 * time.Second
+	// zcodeToolClip 工具输出单帧限长(rune)。
+	zcodeToolClip = 4000
+)
+
+// ZcodeProvider 桥接 ZCode 桌面端 agent。
+type ZcodeProvider struct {
+	// turnMu 串行化轮次;lifeMu 保护子进程生命周期(两者独立,查模型不阻塞轮次)。
+	turnMu     sync.Mutex
+	lifeMu     sync.Mutex
+	client     *zcodeapp.Client
+	inited     bool
+	turnActive atomic.Bool
+
+	// 我们的 threadID → zcode sessionId + 子进程代号。真正的事实来源是
+	// Thread.ExternalSession.SessionID(server 层轮次后落库);内存缓存只在
+	// 同一子进程生命周期内有效,子进程重启后必须 session/resume(实证通过)。
+	// 【P1-2】threadMap 配专属锁:写方 ensureSession 在轮次 goroutine(持
+	// turnMu),读方 loadedZcodeSessionID 会被 SetGoal 在 server RPC goroutine
+	// 调用 —— 两边没有共同锁,裸 map 并发读写会触发 Go runtime fatal
+	// ("concurrent map read and map write"),整个 daemon 崩。读写全走 threadMu。
+	threadMap map[string]threadRef
+	threadMu  sync.Mutex
+	gen       atomic.Int32
+
+	// 模型列表缓存:available 快照来自一次性会话的 settings.model.available。
+	// refByModel 记录 modelId → {providerId, defaultReasoningLevel},供 setModel
+	// 使用(zcode 的 setModel 必须带 providerId,GLM 系还必须带 reasoningLevel)。
+	mu         sync.Mutex
+	models     []pb.ModelInfo
+	modelsAt   time.Time
+	refByModel map[string]zcodeModelRef
+
+	// projMu/projByThread/slashByThread 每个线程的快照账本(session/create、
+	// resume、subscribe 三路应答快照,recordProjection 同点记账):
+	//   - projByThread:projection 段两数,窗口随 UsageUpdate.ModelContextWindow
+	//     透出,手机端据此算上下文占用环(审计 S-1"上下文占用接入 UsageUpdate")。
+	//     【探针实证】turn 结束后 projection.totalTokenCount == turn usage.totalTokens
+	//     (zcode-ctrl-probe2.log:两处同为 19850),所以窗口 + 每轮 usage 就是真实占用。
+	//   - slashByThread:快照 slashCommands[](转 pb),供 SlashCommandsFor 走纯
+	//     内存通路回应 server 的斜杠命令面板,免去"每次起一次性子进程 resume"。
+	projMu        sync.Mutex
+	projByThread  map[string]zcodeProjection
+	slashByThread map[string][]*pb.SlashCommand
+
+	// goalMu/pendingGoals 线程还没挂载会话时的待下发常驻目标(与 codex_goal
+	// 同款:SetGoal 时线程未挂载 → 暂存,Run 拿到 sessionId 后补发)。
+	goalMu       sync.Mutex
+	pendingGoals map[string]string
+
+	// prefsMu 保护桌面偏好内存态(ApplyPrefs 与事件/轮次路径并发读写)。
+	// 【红线】只存内存,绝不写用户桌面端配置。
+	prefsMu sync.Mutex
+	prefs   DesktopPrefs
+
+	// TitleHandler 标题同步钩子:zcode 自动命名会话时回调(server 层落库后
+	// 双端可见)。P0 阶段 server 尚未接线该钩子,字段先留好(与 codex 同名同语义)。
+	TitleHandler func(threadID, title string)
+}
+
+// zcodeModelRef 记录一次模型选择所需的完整定位。
+type zcodeModelRef struct {
+	NativeID           string
+	ProviderID         string
+	DefaultReasoningLv string
+	// SupportsImages 快照声明的图片输入能力(inputFormat.supportsImage,审计 S-1
+	// 同源)。threadMap 命中(本轮无新鲜快照)时,图片门控用这一位兜底判定。
+	SupportsImages bool
+	Levels         []string
+}
+
+// NewZcodeProvider 构造。
+func NewZcodeProvider() *ZcodeProvider {
+	return &ZcodeProvider{
+		threadMap:     map[string]threadRef{},
+		refByModel:    map[string]zcodeModelRef{},
+		projByThread:  map[string]zcodeProjection{},
+		slashByThread: map[string][]*pb.SlashCommand{},
+		pendingGoals:  map[string]string{},
+	}
+}
+
+func (p *ZcodeProvider) ID() string          { return "zcode" }
+func (p *ZcodeProvider) DisplayName() string { return "ZCode(桌面 agent)" }
+
+// RegisterZcode 把 ZCode provider 显式注册进 providers 表(装了 node + zcode.cjs 才注册)。
+//
+// 【为什么是独立函数而不是塞进 DetectProviders】provider.go 正在被 Pi 改造(多
+// agent 注册路径),本阶段红线是不碰它 —— 主模型合并时在 DetectProviders 末尾加一行:
+//
+//	RegisterZcode(m)
+//
+// 即可点亮,与 codex 的注册并列、互不影响。
+func RegisterZcode(m map[string]Provider) {
+	if _, _, err := zcodeapp.LocateZCode(); err == nil {
+		m["zcode"] = NewZcodeProvider()
+	}
+}
+
+// ---- 模型列表 ----
+
+// Models 手机端"模型·强度"胶囊的列表。
+//
+// 【必须以 ZCode 实际返回为准,不能写死】模型表来自 session/create 应答快照的
+// settings.model.available(runtime/capabilities 只回 {independentPlanState:true},
+// 实证)。拉取要建一个一次性会话(工作区用系统临时目录,ZCode 只记录不作业),
+// TTL 缓存兜住频率;失败时至少保住 "zcode/default"(跟随桌面当前模型)。
+func (p *ZcodeProvider) Models() []pb.ModelInfo {
+	p.mu.Lock()
+	if len(p.models) > 0 && time.Since(p.modelsAt) < zcodeModelsTTL {
+		out := p.models
+		p.mu.Unlock()
+		return out
+	}
+	p.mu.Unlock()
+
+	out := []pb.ModelInfo{{
+		Id: "default", Provider: "zcode", DisplayName: "ZCode(跟随桌面配置)",
+		Available: true,
+	}}
+	fetched, refs := p.fetchModels()
+	if len(fetched) > 0 {
+		out = append(out, fetched...)
+		p.mu.Lock()
+		p.models = out
+		p.modelsAt = time.Now()
+		p.refByModel = refs
+		p.mu.Unlock()
+	}
+	return out
+}
+
+// fetchModels 用一次性会话拉模型表。返回 (模型列表, modelId→引用映射)。
+func (p *ZcodeProvider) fetchModels() ([]pb.ModelInfo, map[string]zcodeModelRef) {
+	ctx, cancel := context.WithTimeout(context.Background(), zcodeStatusBudget)
+	defer cancel()
+	var out []pb.ModelInfo
+	refs := map[string]zcodeModelRef{}
+	err := p.withClientCtx(ctx, zcodeStatusBudget, func(ctx context.Context, c *zcodeapp.Client) error {
+		raw, err := c.CallCtx(ctx, "session/create", map[string]interface{}{
+			"workspace": zcodeWorkspace(os.TempDir()),
+			"mode":      "build", // 红线:显式 build,绝不 yolo
+		})
+		if err != nil {
+			return err
+		}
+		out, refs = parseZcodeModels(raw)
+		snapshot, err := zcodeapp.ParseSessionSnapshot(raw)
+		if err != nil {
+			return err
+		}
+		if snapshot.SessionID == "" {
+			return errors.New("ZCode 模型快照没有 sessionId")
+		}
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), zcodeInitBudget)
+		defer closeCancel()
+		return c.CloseSession(closeCtx, snapshot.SessionID)
+	})
+	if err != nil {
+		log.Printf("[zcode] 模型列表探测失败: %v", err)
+		return nil, refs
+	}
+	return out, refs
+}
+
+// parseZcodeModels 从 session/create 快照解析模型表(纯函数,单测覆盖)。
+// 解析统一走 zcodeapp.ParseSessionSnapshot(快照形状的单一事实来源,与 zcodeapp
+// 包的 fixture 单测共用),本函数只做"快照 → pb.ModelInfo"映射:
+//   - supportsImage 透出到 SupportsImages(审计 S-1;与 pi.go 的模型能力位同模式);
+//   - ref/defaultLevel 记进引用映射,供 setModel 定位(GLM 系必带 reasoningLevel)。
+func parseZcodeModels(snapshotRaw json.RawMessage) ([]pb.ModelInfo, map[string]zcodeModelRef) {
+	snap, err := zcodeapp.ParseSessionSnapshot(snapshotRaw)
+	if err != nil {
+		return nil, map[string]zcodeModelRef{}
+	}
+	refs := map[string]zcodeModelRef{}
+	var out []pb.ModelInfo
+	seen := map[string]bool{}
+	counts := map[string]int{}
+	for _, m := range snap.Models {
+		counts[m.ModelID]++
+	}
+	for _, m := range snap.Models {
+		key := zcodeapp.ModelKey(m.ProviderID, m.ModelID)
+		if m.ModelID == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		if counts[m.ModelID] == 1 {
+			key = m.ModelID
+		}
+		refs[key] = zcodeModelRef{
+			NativeID:           m.ModelID,
+			ProviderID:         m.ProviderID,
+			DefaultReasoningLv: m.DefaultReasoningLevel,
+			SupportsImages:     m.InputFormat.SupportsImage,
+			Levels:             m.ReasoningLevels,
+		}
+		name := m.Label
+		if name == "" {
+			name = m.ModelID
+		}
+		if counts[m.ModelID] > 1 {
+			name += " · " + m.ProviderLabel
+		}
+		out = append(out, pb.ModelInfo{
+			Id:               "zcode/" + key,
+			Provider:         "zcode",
+			DisplayName:      name,
+			ContextWindow:    int32(m.ContextWindow),
+			SupportsImages:   m.InputFormat.SupportsImage,
+			SupportsThinking: len(m.ReasoningLevels) > 0,
+			AvailableEfforts: m.ReasoningLevels,
+			Available:        true,
+		})
+	}
+	return out, refs
+}
+
+// zcodeWorkspace 构造 workspace 对象。
+// 【实测】schema Wi={workspacePath, workspaceKey}(strict),且 workspaceKey 必须
+// 等于 workspaceIdentity?.trim() || workspacePath —— 不传 identity 时就是路径本身。
+func zcodeWorkspace(path string) map[string]string {
+	return map[string]string{"workspacePath": path, "workspaceKey": path}
+}
+
+// ---- 子进程生命周期 ----
+
+var errNoZcodeClient = fmt.Errorf("ZCode 子进程未启动")
+
+// withClientCtx 在保证子进程活着的前提下执行 fn;失败自动重启一次。
+//
+// 【TryLock/ErrBusy 模式,与 codex.withClientCtx 同款且三点缺一不可】
+//  1. TryLock 替代 Lock:拿不到锁立即 ErrBusy,一个卡死的操作不拖住全线;
+//  2. 调用方没给截止时间时套默认上界(zcodeInitBudget),无论如何有界;
+//  3. 全程同步,绝不"超时后 go 继续等" —— 那会留下还持着 lifeMu 的僵尸 goroutine。
+//
+// zcode 没有 codex 那样的 initialize 握手:进程起来、存储初始化以 startup/storageState
+// 通知自行推进到 ready,请求即可直接发(实证:启动后立刻 runtime/capabilities 正常应答)。
+func (p *ZcodeProvider) withClientCtx(ctx context.Context, budget time.Duration, fn func(context.Context, *zcodeapp.Client) error) error {
+	if !p.lifeMu.TryLock() {
+		return ErrBusy
+	}
+	defer p.lifeMu.Unlock()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		if budget <= 0 {
+			budget = zcodeInitBudget
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+
+	try := func() error {
+		if p.client == nil {
+			return errNoZcodeClient
+		}
+		return fn(ctx, p.client)
+	}
+	err := try()
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	var rpcErr *zcodeapp.RPCError
+	var accountErr *zcodeapp.AccountSyncError
+	if errors.As(err, &rpcErr) || errors.As(err, &accountErr) {
+		return err // Native/configuration errors do not mean the worker crashed.
+	}
+	// 正在执行轮次时,失败不能重启共享子进程:会把跑着的会话强行切断,
+	// 手机只能收到半截流(与 codex 同款守卫)。
+	if err != nil && err != errNoZcodeClient && p.turnActive.Load() {
+		return err
+	}
+	if err == nil || err == errNoZcodeClient {
+		if err == errNoZcodeClient {
+			c, serr := zcodeapp.Start(zcodeapp.StartOptions{})
+			if serr != nil {
+				return serr
+			}
+			p.client, p.inited = c, true
+			p.gen.Add(1)
+			log.Printf("[zcode] app-server 子进程已启动(gen=%d)", p.gen.Load())
+			err = try()
+		}
+		return err
+	}
+	// 子进程可能挂了:杀掉重来一次
+	if p.client != nil {
+		p.client.Close()
+	}
+	p.client, p.inited = nil, false
+	c, serr := zcodeapp.Start(zcodeapp.StartOptions{})
+	if serr != nil {
+		return serr
+	}
+	p.client, p.inited = c, true
+	p.gen.Add(1)
+	log.Printf("[zcode] app-server 子进程已重启(gen=%d),所有会话缓存作废", p.gen.Load())
+	return try()
+}
+
+// withClient 无 ctx 的便捷入口。
+func (p *ZcodeProvider) withClient(fn func(*zcodeapp.Client) error) error {
+	return p.withClientCtx(context.Background(), zcodeInitBudget, func(ctx context.Context, c *zcodeapp.Client) error {
+		return fn(c)
+	})
+}
+
+// ---- 会话准备 ----
+
+// zcodeProjection 快照 projection 段里"手机占用环要用"的两个数。
+type zcodeProjection struct {
+	ContextWindow   int64
+	TotalTokenCount int64
+}
+
+// zcodeSlashCommands 快照 slashCommands[] → pb 命令列表(纯函数,单测覆盖)。
+// 映射与 server/slash_commands.go 的 fetchViaZcode 完全同款:name/description/
+// inputHint 三字段逐一透传。入参为 nil(快照没带该字段)时返回 nil,由调用方
+// 决定"跳过记账"—— 防止形状缺失的快照把已记账的命令抹掉。
+func zcodeSlashCommands(cmds []zcodeapp.SlashCommand) []*pb.SlashCommand {
+	if cmds == nil {
+		return nil
+	}
+	out := make([]*pb.SlashCommand, 0, len(cmds))
+	for _, sc := range cmds {
+		out = append(out, &pb.SlashCommand{
+			Name:        sc.Name,
+			Description: sc.Description,
+			InputHint:   sc.InputHint,
+		})
+	}
+	return out
+}
+
+// recordProjection 解析一份快照应答,把 projection 与斜杠命令一起记到线程名下。
+// create/resume/subscribe 的应答都可能喂进来;解析失败或没有 projection 段
+// (字段缺失是常态)静默跳过,绝不让快照形状异常打断会话准备。
+// 【斜杠命令记账】快照带 slashCommands 字段(非 nil,显式空数组也算)才覆盖
+// 账本 —— subscribe 应答的快照段可能不带命令列表,不能把 create/resume 记下的
+// 好数据冲掉;记了账,server 的面板查询就走纯内存(SlashCommandsFor)。
+func (p *ZcodeProvider) recordProjection(threadID string, raw json.RawMessage) {
+	snap, err := zcodeapp.ParseSessionSnapshot(raw)
+	if err != nil {
+		return
+	}
+	_, refs := parseZcodeModels(raw)
+	p.mu.Lock()
+	if len(refs) > 0 {
+		p.refByModel = refs
+	}
+	p.mu.Unlock()
+	p.projMu.Lock()
+	if snap.Projection.ContextWindow > 0 {
+		p.projByThread[threadID] = zcodeProjection{
+			ContextWindow:   snap.Projection.ContextWindow,
+			TotalTokenCount: snap.Projection.TotalTokenCount,
+		}
+	}
+	if cmds := zcodeSlashCommands(snap.SlashCommands); cmds != nil {
+		p.slashByThread[threadID] = cmds
+	}
+	p.projMu.Unlock()
+}
+
+// SlashCommandsFor 实现 server 侧 zcodeSlashSource 接口(internal/server/
+// slash_commands.go 类型断言探测):返回线程账本里最近一份快照的斜杠命令,
+// 纯内存、零进程开销。未记账(daemon 刚启动/线程还没跑过轮次/快照从没带过
+// 命令字段)返回 nil,server 自然回退到"一次性子进程 session/resume"兜底路径,
+// 行为与切换前等价。
+func (p *ZcodeProvider) SlashCommandsFor(threadID string) []*pb.SlashCommand {
+	p.projMu.Lock()
+	defer p.projMu.Unlock()
+	return p.slashByThread[threadID]
+}
+
+// contextWindowFor 取线程已知的上下文窗口;未知返回 0(UsageUpdate 里 0=未知,
+// 与 codex tokenUsage.modelContextWindow 同口径)。
+func (p *ZcodeProvider) contextWindowFor(threadID string) int64 {
+	p.projMu.Lock()
+	defer p.projMu.Unlock()
+	return p.projByThread[threadID].ContextWindow
+}
+
+// ensureSession 找到/创建 zcode 会话,并订阅事件流。
+//
+// 优先级:同子进程代内的内存缓存 → Thread.ExternalSession.SessionID 重挂载
+// (session/resume,daemon 重启后的常规路径)→ 新建 session/create。
+// 返回 (sessionId, 是否新建, 本次应答快照原文, 错误)。快照原文供图片输入的
+// 能力门控读取 inputFormat.supportsImage(含 current 模型定位);threadMap 命中
+// (无新鲜快照)时返回 nil,门控退回 refByModel 缓存位判定。
+func (p *ZcodeProvider) ensureSession(ctx context.Context, req TurnRequest) (string, bool, json.RawMessage, error) {
+	gen := int(p.gen.Load())
+	if ref, hit := p.zcodeThreadRefFor(req.Thread.ID); hit && ref.gen == gen {
+		return ref.id, false, nil, nil
+	}
+	if sid := req.Thread.ExternalSession.SessionID; sid != "" {
+		raw, err := p.client.CallCtx(ctx, "session/resume", map[string]interface{}{"sessionId": sid})
+		if err != nil {
+			var accountErr *zcodeapp.AccountSyncError
+			if errors.As(err, &accountErr) {
+				return "", false, nil, err
+			}
+			log.Printf("[zcode] session/resume %s 失败(改开新会话): %v", sid, err)
+		} else {
+			log.Printf("[zcode] 已重挂载会话 %s", sid)
+			p.recordProjection(req.Thread.ID, raw)
+			p.setZcodeThreadRef(req.Thread.ID, threadRef{id: sid, gen: gen})
+			return sid, false, raw, p.subscribe(ctx, req.Thread.ID, sid)
+		}
+	}
+	raw, err := p.client.CallCtx(ctx, "session/create", map[string]interface{}{
+		"workspace": zcodeWorkspace(req.Workspace),
+		"mode":      "build", // 红线:显式 build
+	})
+	if err != nil {
+		return "", false, nil, fmt.Errorf("session/create: %w", err)
+	}
+	var cr struct {
+		Session struct {
+			SessionID string `json:"sessionId"`
+		} `json:"session"`
+	}
+	if json.Unmarshal(raw, &cr) != nil || cr.Session.SessionID == "" {
+		return "", false, nil, fmt.Errorf("session/create 应答无法解析: %s", clip(string(raw), 300))
+	}
+	sid := cr.Session.SessionID
+	p.recordProjection(req.Thread.ID, raw)
+	p.setZcodeThreadRef(req.Thread.ID, threadRef{id: sid, gen: gen})
+	// server 层会在轮次后落库(Pi 同款机制);手机端据此展示外部会话引用。
+	req.Thread.ExternalSession = store.ExternalSessionRef{SessionID: sid, Cwd: req.Workspace}
+	log.Printf("[zcode] 新建会话 %s(workspace=%s)", sid, req.Workspace)
+	return sid, true, raw, p.subscribe(ctx, req.Thread.ID, sid)
+}
+
+// subscribe 订阅事件流。【实测】deliveryKind 必填(desktop-continuous),
+// 不订阅就收不到 model.streaming 的流式增量。
+func (p *ZcodeProvider) subscribe(ctx context.Context, threadID, sid string) error {
+	raw, err := p.client.CallCtx(ctx, "session/subscribe", map[string]interface{}{
+		"sessionId": sid, "deliveryKind": "desktop-continuous", "includeSnapshot": true,
+	})
+	if err != nil {
+		return fmt.Errorf("session/subscribe: %w", err)
+	}
+	// includeSnapshot=true 的应答若带 projection,顺路刷新占用基线
+	// (字段缺失时 recordProjection 静默跳过)。
+	p.recordProjection(threadID, raw)
+	return nil
+}
+
+// applyModel 把 Thread.ModelID("zcode/<modelId>")映射成 session/setModel。
+// 失败只记日志:模型不可用是"降级继续",不是"整轮失败"。
+// 【实测】setModel 的 model={providerId,modelId,options?{reasoningLevel}};
+// GLM 系不带 reasoningLevel 会报 -32603,所以引用缓存里存了 defaultLevel。
+// 【effort 取值(P2-8 快照语义)】threadEffort = Thread.Effort(会话胶囊显式
+// 指定)第一级;desktopEffort 由调用方经 desktopEffortFor 传入(线程快照 >
+// 全局桌面默认)第二级;两者都空才用模型自带 defaultLevel,全空才省略
+// options(空=不覆盖),见 zcodeReasoningLevel。
+func (p *ZcodeProvider) applyModel(ctx context.Context, sid, modelID, threadEffort, desktopEffort string) error {
+	spec := strings.TrimPrefix(modelID, "zcode/")
+	if spec == "" || spec == "default" {
+		if threadEffort == "" && desktopEffort == "" {
+			return nil
+		}
+		raw, err := p.client.CallCtx(ctx, "session/resume", map[string]string{"sessionId": sid})
+		if err != nil {
+			return fmt.Errorf("读取 ZCode 当前模型失败: %w", err)
+		}
+		var snapshot struct {
+			Settings struct {
+				Model struct {
+					Current struct {
+						ModelID string `json:"modelId"`
+					} `json:"current"`
+				} `json:"model"`
+			} `json:"settings"`
+		}
+		if json.Unmarshal(raw, &snapshot) != nil || snapshot.Settings.Model.Current.ModelID == "" {
+			return fmt.Errorf("ZCode 未返回当前模型，无法设置思考强度")
+		}
+		spec = snapshot.Settings.Model.Current.ModelID
+		_, refs := parseZcodeModels(raw)
+		p.mu.Lock()
+		for id, ref := range refs {
+			p.refByModel[id] = ref
+		}
+		p.mu.Unlock()
+	} else if spec == modelID {
+		return fmt.Errorf("模型不属于 ZCode: %s", modelID)
+	}
+	p.mu.Lock()
+	ref, ok := p.refByModel[spec]
+	p.mu.Unlock()
+	if !ok {
+		// Metadata can change in the desktop app between turns. Refresh the actual
+		// session before declaring an opaque/custom model unresolvable.
+		raw, err := p.client.CallCtx(ctx, "session/resume", map[string]string{"sessionId": sid})
+		if err != nil {
+			return fmt.Errorf("ZCode 模型资料暂不可用（不是模型不支持）: %w", err)
+		}
+		_, refs := parseZcodeModels(raw)
+		p.mu.Lock()
+		for id, r := range refs {
+			p.refByModel[id] = r
+		}
+		ref, ok = p.refByModel[spec]
+		p.mu.Unlock()
+		if !ok {
+			return fmt.Errorf("ZCode 最新快照未报告模型 %s 的原生引用，请刷新模型列表；不会替换成其他模型", spec)
+		}
+	}
+	level := zcodeReasoningLevel(threadEffort, desktopEffort, ref.DefaultReasoningLv)
+	if len(ref.Levels) > 0 && level != "" {
+		found := false
+		for _, v := range ref.Levels {
+			if v == level {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("ZCode 模型 %s 不支持思考档位 %s，可用: %s", spec, level, strings.Join(ref.Levels, ", "))
+		}
+	}
+	_, err := p.client.CallCtx(ctx, "session/setModel", map[string]interface{}{"sessionId": sid, "model": zcodeModelSelection(ref.ProviderID, firstNonEmpty(ref.NativeID, spec), level)})
+	if err != nil {
+		return fmt.Errorf("ZCode 模型/思考强度切换失败: %w", err)
+	}
+	return nil
+}
+
+// ---- 控制面:压缩 / 常驻目标 / 删除 ----
+//
+// 【地面真值】2026-09-19 控制面探针(cmd/zcprobe -ctrl,证据
+// docs/verify/evidence/zcode-ctrl-probe.log 与 -probe2.log):
+//   - session/compact {sessionId} → {"response":…,"snapshot":{…}}(全快照);
+//     轮次进行中报 -32010 "Cannot compact while a prompt is running";
+//   - session/goal 参数是 {sessionId, action, objective?},action ∈
+//     "show"|"set"|"replace"|"pause"|"resume"|"clear"(zod -32602 枚举实测);
+//     objective 字段名探针实证(set 成功且回显 "Objective: …")。注意 goal 的
+//     set/clear 会在桌面端驱动一轮目标确认(prompt),期间其它 goal 操作与
+//     compact 都被 -32010 拒 —— 所以目标补发必须放在轮次终局之后,不能抢在
+//     session/send 之前;
+//   - session/close {sessionId} → {"closed":true};close 后已不在 session/list,
+//     resume 报 -32004 "Session not found" —— 语义=真删除,对齐手机"删会话=
+//     双端一致"(审计 §7-5"三家远端删除")。
+
+// CompactSession 手动压缩入口(对齐 codex CompactThread → thread/compact/start):
+// sessionID 是 zcode 侧会话 id(server 层从 Thread.ExternalSession.SessionID 取)。
+// 压缩在桌面端异步执行,应答里的 response/snapshot 我们不消费;会话在跑轮次时
+// zcode 会以 -32010 拒绝,错误原样返回由 server 层转 gRPC 错误码。
+func (p *ZcodeProvider) CompactSession(sessionID string) error {
+	return p.withClient(func(c *zcodeapp.Client) error {
+		if _, err := c.Call("session/compact", map[string]interface{}{"sessionId": sessionID}); err != nil {
+			return fmt.Errorf("session/compact: %w", err)
+		}
+		return nil
+	})
+}
+
+// CloseSession 远端删除:手机删会话时同步删掉桌面端会话(见上节探针实证的
+// 真删除语义)。失败返回明确错误,由 server 层记日志但不让本地删除失败
+// (会话可能已被桌面端删过,与 codex rollout 清理同款降级)。
+func (p *ZcodeProvider) CloseSession(sessionID string) error {
+	return p.withControlClient(context.Background(), func(ctx context.Context, c *zcodeapp.Client) error {
+		return c.CloseSession(ctx, sessionID)
+	})
+}
+
+// setZcodeThreadRef / zcodeThreadRefFor threadMap 的唯一读写入口(P1-2:全走
+// threadMu。ensureSession 的命中查询与记账、loadedZcodeSessionID 的读都必须
+// 经过这两个助手,不允许任何路径直接摸 p.threadMap)。
+func (p *ZcodeProvider) setZcodeThreadRef(threadID string, ref threadRef) {
+	p.threadMu.Lock()
+	defer p.threadMu.Unlock()
+	p.threadMap[threadID] = ref
+}
+
+func (p *ZcodeProvider) zcodeThreadRefFor(threadID string) (threadRef, bool) {
+	p.threadMu.Lock()
+	defer p.threadMu.Unlock()
+	ref, hit := p.threadMap[threadID]
+	return ref, hit
+}
+
+// loadedZcodeSessionID 取该线程在当前子进程里已挂载的 zcode sessionId(带 gen
+// 校验,与 codex 的 loadedCodexThreadID 同款:子进程重启后旧 id 无效);没有则空。
+func (p *ZcodeProvider) loadedZcodeSessionID(threadID string) string {
+	gen := int(p.gen.Load())
+	if ref, hit := p.zcodeThreadRefFor(threadID); hit && ref.gen == gen {
+		return ref.id
+	}
+	return ""
+}
+
+// zcodeGoalParams 构造 session/goal 的参数(纯函数,单测覆盖):
+// 空目标 = action:"clear";非空 = action:"set" + objective(字段名探针实证)。
+func zcodeGoalParams(sessionID, goal string) map[string]interface{} {
+	if strings.TrimSpace(goal) == "" {
+		return map[string]interface{}{"sessionId": sessionID, "action": "clear"}
+	}
+	return map[string]interface{}{"sessionId": sessionID, "action": "set", "objective": goal}
+}
+
+// pushGoal 真正调用 session/goal。set 失败时退 replace 再试一次(目标已存在时
+// zcode 的语义分叉;slash 提示 "/goal [pause|resume|clear|replace <objective>|…]"
+// 实证 replace 存在,探针未走通 replace 本体——当时撞上 -32010 busy)。
+// 【P2-3】client 由调用方经 withClient* 传入:不再裸读 p.client(与 RestartGuard
+// 对齐 —— 轮次未激活时 HistoryFor 等路径可能正在"杀旧起新",窗口内 p.client
+// 为 nil,裸读会空指针 panic)。
+func (p *ZcodeProvider) pushGoal(ctx context.Context, c *zcodeapp.Client, sessionID, goal string) error {
+	params := zcodeGoalParams(sessionID, goal)
+	raw, err := c.CallCtx(ctx, "session/goal", params)
+	if err != nil && strings.TrimSpace(goal) != "" {
+		params["action"] = "replace"
+		if raw2, err2 := c.CallCtx(ctx, "session/goal", params); err2 == nil {
+			raw, err = raw2, nil
+		}
+	}
+	if err != nil {
+		log.Printf("[zcode] goal 下发失败 session=%s: %v", sessionID, err)
+		return err
+	}
+	log.Printf("[zcode] goal 已下发 session=%s goal=%.80q resp=%.160s", sessionID, goal, string(raw))
+	return nil
+}
+
+// stashGoal 记录/清除待下发目标(空串=清除,与 codex stashGoal 同语义)。
+func (p *ZcodeProvider) stashGoal(threadID, goal string) {
+	p.goalMu.Lock()
+	defer p.goalMu.Unlock()
+	p.pendingGoals[threadID] = goal
+}
+
+// takePendingGoal 取出并清除某线程的待下发目标。
+func (p *ZcodeProvider) takePendingGoal(threadID string) (string, bool) {
+	p.goalMu.Lock()
+	defer p.goalMu.Unlock()
+	goal, ok := p.pendingGoals[threadID]
+	if ok {
+		delete(p.pendingGoals, threadID)
+	}
+	return goal, ok
+}
+
+// SetGoal 把常驻目标下发到 zcode。threadID 是我们自己的会话 id;goal 为空串
+// 表示清除目标。下发不了(线程未挂载会话/子进程起不来/正在跑轮次被 -32010 拒)
+// 不算失败:暂存起来等 Run 终局补发,调用方照常落库即可(codex_goal 同款纪律;
+// 清除失败时暂存为空 = 不重试,桌面端目标保持原状,用户可再清一次)。
+// 【P2-3】pushGoal 一并收进 withClient:整段持 lifeMu,杜绝与"杀旧起新"窗口的
+// 竞态;goal 下发失败在 fn 内消化(回 nil)—— goal 被 -32010 拒是桌面端忙,
+// 不是进程死了,不能让 withClient 把它当成"子进程挂了"去重启。
+func (p *ZcodeProvider) SetGoal(threadID, goal string) error {
+	var (
+		mounted bool
+		pushErr error
+	)
+	err := p.withClient(func(c *zcodeapp.Client) error {
+		sid := p.loadedZcodeSessionID(threadID)
+		if sid == "" {
+			return nil // 线程还没挂载会话:暂存等 Run 补发(下方统一处理)
+		}
+		mounted = true
+		pushErr = p.pushGoal(context.Background(), c, sid, goal)
+		return nil
+	})
+	if err == nil && mounted && pushErr == nil {
+		return nil
+	}
+	p.stashGoal(threadID, goal)
+	if err != nil {
+		return err
+	}
+	return pushErr
+}
+
+// applyPendingGoal 在 Run 正常终局后补发暂存目标。带短超时,失败放回暂存
+// (下一轮再试)。【为什么不能在 send 之前发】goal 的 set/clear 会在桌面端
+// 驱动一轮目标确认 prompt(探针实证),期间 session/send 会被 -32010
+// "A prompt is already running" 拒掉,把用户的正式输入打死。
+// 【P2-3】走 withClientCtx(与 SetGoal 同款:push 失败在 fn 内消化,不触发
+// withClient 的"杀旧起新"重启逻辑 —— 桌面端忙不是进程死了)。
+func (p *ZcodeProvider) applyPendingGoal(threadID, sessionID string) {
+	goal, ok := p.takePendingGoal(threadID)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var pushErr error
+	err := p.withClientCtx(ctx, 30*time.Second, func(fctx context.Context, c *zcodeapp.Client) error {
+		pushErr = p.pushGoal(fctx, c, sessionID, goal)
+		return nil
+	})
+	if err != nil || pushErr != nil {
+		p.stashGoal(threadID, goal)
+		return
+	}
+	log.Printf("[zcode] 补发暂存目标 thread=%s", threadID)
+}
+
+// ---- 桌面偏好(PrefsAware)----
+
+// ApplyPrefs 实现 agent.PrefsAware:接收桌面设置页七项偏好的完整快照。
+//
+// 【消费哪些】HideReasoning → 事件路径过滤 ThinkingDelta(emitThinking);
+// Effort → setModel 的 options.reasoningLevel 桌面默认值(zcodeReasoningLevel)。
+// NativeMode → 原生 session/setMode（仅显式值；空值跟随原生）。
+// 【不映射哪些、为什么】Codex 审批策略/沙箱不等价于 ZCode permission mode；
+// 这两项仅对 codex 生效;Verbosity/
+// ReasoningSummary/DisablePasteBurst 协议同样无对应面。快照照单全收(完整覆盖),
+// 与 codex 的 ApplyPrefs 同纪律。
+func (p *ZcodeProvider) ApplyPrefs(pref DesktopPrefs) {
+	p.prefsMu.Lock()
+	defer p.prefsMu.Unlock()
+	p.prefs = pref
+}
+
+// hideReasoning 读"隐藏推理过程"开关。
+func (p *ZcodeProvider) hideReasoning() bool {
+	p.prefsMu.Lock()
+	defer p.prefsMu.Unlock()
+	return p.prefs.HideReasoning
+}
+
+// hideReasoningFor 是 hideReasoning 的线程感知版(P2-8,与 codex 的
+// HideReasoningFor 同语义):有设置快照的线程("设置页更改只对新建对话生效"
+// 上线后新建的会话)一律按快照值判定,与当前全局开关无关 —— 老会话的隐藏
+// 推理不随设置页漂移;旧线程(快照 nil)回退全局,保持升级前行为。
+func (p *ZcodeProvider) hideReasoningFor(t *store.Thread) bool {
+	return p.hideReasoning()
+}
+
+// desktopEffort 读桌面默认思考强度(空=未设置,不覆盖模型自带 defaultLevel)。
+func (p *ZcodeProvider) desktopEffort() string {
+	p.prefsMu.Lock()
+	defer p.prefsMu.Unlock()
+	return p.prefs.Effort
+}
+
+// desktopEffortFor 是 desktopEffort 的线程感知版(P2-8,与 codex 的三级优先级
+// 对齐):线程设置快照(SettingsSnapshot,新建对话那一刻的值)> 全局偏好
+// (旧线程兜底)。线程显式 Effort 的第一级由调用方(zcodeReasoningLevel 的
+// threadEffort 参数)处理;快照非 nil 时快照里的空串就是"当时未设置",保持
+// 原值生效、不中途改抓新全局值。
+func (p *ZcodeProvider) desktopEffortFor(t *store.Thread) string {
+	if t != nil && t.SettingsSnapshot != nil {
+		return t.SettingsSnapshot.Effort
+	}
+	return p.desktopEffort()
+}
+
+// emitThinking 在"隐藏推理"关闭时把思考增量推给 sink(与 codex.go/pi.go 同款
+// daemon 侧强制过滤;ZCode 协议没有原生开关)。抽成方法便于单测钉死开关行为。
+func (p *ZcodeProvider) emitThinking(delta string, sink Sink) {
+	if p.hideReasoning() {
+		return
+	}
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+}
+
+// emitThinkingFor 是 emitThinking 的线程感知版(P2-8):按 hideReasoningFor 的
+// 快照语义判定(有快照按快照,旧线程回全局),Run 的事件泵走这里;
+// emitThinking 保留给无线程上下文的调用与既有单测。
+func (p *ZcodeProvider) emitThinkingFor(t *store.Thread, delta string, sink Sink) {
+	if p.hideReasoningFor(t) {
+		return
+	}
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+}
+
+// zcodeReasoningLevel 计算 setModel 应携带的 reasoningLevel(纯函数,单测覆盖):
+// 线程显式 effort > 桌面默认 effort > 模型引用自带 defaultLevel。
+// 【为什么必须带值】GLM 系 setModel 不带 reasoningLevel 会报 -32603(实证),
+// 所以三者都空时保留 defaultLevel,defaultLevel 也为空才省略 options。
+// 用户 effort 值原样透传;provider 不认该值会报错,由 applyModel 记日志降级继续。
+func zcodeReasoningLevel(threadEffort, desktopEffort, defaultLevel string) string {
+	if threadEffort != "" {
+		return threadEffort
+	}
+	if desktopEffort != "" {
+		return desktopEffort
+	}
+	return defaultLevel
+}
+
+// zcodeModelSelection 构造 setModel 的 model 选择对象(纯函数,单测覆盖):
+// level 为空时省略 options(空=不覆盖),否则带 options.reasoningLevel。
+func zcodeModelSelection(providerID, modelID, level string) map[string]interface{} {
+	sel := map[string]interface{}{"providerId": providerID, "modelId": modelID}
+	if level != "" {
+		sel["options"] = map[string]string{"reasoningLevel": level}
+	}
+	return sel
+}
+
+// ---- 事件 → pb 映射(纯函数,单测覆盖)----
+
+// zcodeEventEnvelope session/event 通知参数外壳。
+type zcodeEventEnvelope struct {
+	SessionID    string          `json:"sessionId"`
+	TurnID       string          `json:"turnId"`
+	EventID      string          `json:"eventId"`
+	Seq          int64           `json:"seq"`
+	DeliveryKind string          `json:"deliveryKind"`
+	Type         string          `json:"type"`
+	Payload      json.RawMessage `json:"payload"`
+}
+
+// mapZcodeStreamDelta 把 model.streaming 事件映射成文本/思考增量。
+// 返回 (kind, delta, ok);kind = "text"|"reasoning"。
+func mapZcodeStreamDelta(payload json.RawMessage) (string, string, bool) {
+	var pl struct {
+		Kind  string `json:"kind"`
+		Delta string `json:"delta"`
+		Done  bool   `json:"done"`
+	}
+	if json.Unmarshal(payload, &pl) != nil || pl.Delta == "" {
+		return "", "", false
+	}
+	switch pl.Kind {
+	case "text_delta":
+		return "text", pl.Delta, true
+	case "reasoning_delta":
+		return "reasoning", pl.Delta, true
+	}
+	return "", "", false
+}
+
+// mapZcodeToolCall 从 tool.updated(payload.kind="tool_call")提取工具调用开始。
+func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
+	var pl struct {
+		Kind       string          `json:"kind"`
+		ToolCallID string          `json:"toolCallId"`
+		ToolName   string          `json:"toolName"`
+		Input      json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "tool_call" || pl.ToolCallID == "" {
+		return pb.ToolCallUpdate{}, false
+	}
+	return pb.ToolCallUpdate{
+		Phase: pb.ToolCallUpdate_STARTED,
+		Call: &pb.ToolCallBlock{
+			Id:       pl.ToolCallID,
+			Name:     pl.ToolName,
+			JsonArgs: mustJSON(rawOrNull(pl.Input)),
+		},
+	}, true
+}
+
+// mapZcodeToolResult 从 tool.updated(payload.kind="result")提取工具结果。
+func mapZcodeToolResult(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
+	var pl struct {
+		Kind       string `json:"kind"`
+		ToolCallID string `json:"toolCallId"`
+		ToolName   string `json:"toolName"`
+		Result     struct {
+			Success bool   `json:"success"`
+			Content string `json:"content"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "result" || pl.ToolCallID == "" {
+		return pb.ToolCallUpdate{}, false
+	}
+	return pb.ToolCallUpdate{
+		Phase: pb.ToolCallUpdate_FINISHED,
+		Call: &pb.ToolCallBlock{
+			Id:       pl.ToolCallID,
+			Name:     pl.ToolName,
+			JsonArgs: "{}",
+		},
+		Result: &pb.ToolResultBlock{
+			CallId: pl.ToolCallID,
+			Ok:     pl.Result.Success,
+			Output: clip(pl.Result.Content, zcodeToolClip),
+		},
+	}, true
+}
+
+// mapZcodeToolError 从 tool.updated(payload.kind="tool_error")提取工具失败帧。
+// 该 kind 在 P0 探针里只出现过一次且样本被截断,字段按 best-effort 解析:
+// 有 error.message/message 就带上,其余兜底固定文案。
+func mapZcodeToolError(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
+	var pl struct {
+		Kind       string `json:"kind"`
+		ToolCallID string `json:"toolCallId"`
+		ToolName   string `json:"toolName"`
+		Error      *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "tool_error" || pl.ToolCallID == "" {
+		return pb.ToolCallUpdate{}, false
+	}
+	msg := "工具执行出错"
+	if pl.Error != nil && pl.Error.Message != "" {
+		msg = pl.Error.Message
+	} else if pl.Message != "" {
+		msg = pl.Message
+	}
+	return pb.ToolCallUpdate{
+		Phase: pb.ToolCallUpdate_FINISHED,
+		Call: &pb.ToolCallBlock{
+			Id:       pl.ToolCallID,
+			Name:     pl.ToolName,
+			JsonArgs: "{}",
+		},
+		Result: &pb.ToolResultBlock{
+			CallId: pl.ToolCallID,
+			Ok:     false,
+			Output: clip(msg, zcodeToolClip),
+		},
+	}, true
+}
+
+// mapZcodeTurnCompleted 解析 turn.completed:返回 (最终正文兜底, 用量, ok)。
+// usage 形状为事件的地面真值(turn.completed payload,探针实测)。
+func mapZcodeTurnCompleted(payload json.RawMessage) (string, *pb.Usage, bool) {
+	var pl struct {
+		Response   string `json:"response"`
+		ResultType string `json:"resultType"`
+		Usage      struct {
+			InputTokens      int64 `json:"inputTokens"`
+			OutputTokens     int64 `json:"outputTokens"`
+			TotalTokens      int64 `json:"totalTokens"`
+			CacheReadTokens  int64 `json:"cacheReadTokens"`
+			CacheWriteTokens int64 `json:"cacheWriteTokens"`
+			ReasoningTokens  int64 `json:"reasoningTokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(payload, &pl) != nil {
+		return "", nil, false
+	}
+	usage := &pb.Usage{
+		InputTokens:      pl.Usage.InputTokens,
+		OutputTokens:     pl.Usage.OutputTokens,
+		CacheReadTokens:  pl.Usage.CacheReadTokens,
+		CacheWriteTokens: pl.Usage.CacheWriteTokens,
+		ReasoningTokens:  pl.Usage.ReasoningTokens,
+	}
+	return pl.Response, usage, true
+}
+
+// zcodeTurnCompletedResultType returns the provider's terminal classification.
+// ZCode emits turn.completed for cancelled/aborted turns as well as successful
+// turns; treating every such frame as success made a cancelled task appear
+// completed with "(完成,无文本输出)".
+func zcodeTurnCompletedResultType(payload json.RawMessage) string {
+	var pl struct {
+		ResultType string `json:"resultType"`
+	}
+	if json.Unmarshal(payload, &pl) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(pl.ResultType))
+}
+
+func zcodeTurnCompletedIsSuccess(payload json.RawMessage) bool {
+	switch zcodeTurnCompletedResultType(payload) {
+	case "", "success", "completed", "complete":
+		return true
+	default:
+		return false
+	}
+}
+
+// mapZcodeTurnFailed 解析 turn.failed 的错误信息。
+func mapZcodeTurnFailed(payload json.RawMessage) (string, bool) {
+	var pl struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+		TurnPhase string `json:"turnPhase"`
+	}
+	if json.Unmarshal(payload, &pl) != nil {
+		return "", false
+	}
+	if pl.Error != nil && pl.Error.Message != "" {
+		return pl.Error.Message, true
+	}
+	if pl.TurnPhase != "" {
+		return "轮次失败(turnPhase=" + pl.TurnPhase + ")", true
+	}
+	return "轮次失败", true
+}
+
+// zcodePermissionRequest interaction/requestPermission 的参数(审批的地面真值)。
+type zcodePermissionRequest struct {
+	RequestID  string          `json:"requestId"`
+	ToolCallID string          `json:"toolCallId"`
+	ToolName   string          `json:"toolName"`
+	RiskLevel  string          `json:"riskLevel"`
+	Reason     string          `json:"reason"`
+	Input      json.RawMessage `json:"input"`
+	Options    []struct {
+		OptionID string `json:"optionId"`
+		Kind     string `json:"kind"`
+	} `json:"options"`
+}
+
+// buildZcodeApprovalCall 把权限请求翻译成手机审批卡。
+// 【vet】返回指针:pb 消息含锁,调用方(zcode.go:945)按调用结果直传 approve,
+// ApprovalHook 已改指针参数,这里必须回传指针(内容不变)。
+func buildZcodeApprovalCall(pr zcodePermissionRequest) *pb.ToolCallBlock {
+	name := pr.ToolName
+	if name == "" {
+		name = "tool"
+	}
+	return &pb.ToolCallBlock{
+		Id:       pr.ToolCallID,
+		Name:     name,
+		JsonArgs: mustJSON(rawOrNull(pr.Input)),
+	}
+}
+
+// zcodeApprovalAnswer 构造审批应答(纯函数,单测覆盖)。
+//
+// 【实测】服务器按 zod schema Jb 严格校验应答:{decision, reason?, modifiedInput?,
+// permissionUpdates?} —— 只允许这四个键。带 optionId 的回答是桌面 UI 内部路径的
+// 形状,走 stdio 回会被判非法 → permission.resolved{decision:"deny"}。
+func zcodeApprovalAnswer(allow bool, note string) map[string]interface{} {
+	if allow {
+		return map[string]interface{}{"decision": "allow", "reason": "Approved once"}
+	}
+	if note == "" {
+		note = "用户在手机上拒绝了该操作"
+	}
+	return map[string]interface{}{"decision": "deny", "reason": note}
+}
+
+// zcodeResponder zcodeapp.Client 的应答面(最小接口,单测可注 fake,不依赖真子进程)。
+type zcodeResponder interface {
+	Respond(rawID json.RawMessage, result interface{}) error
+	RespondError(rawID json.RawMessage, code int, message string) error
+}
+
+// zcodeApprovalTimeoutNote 审批等待超时自动拒绝的人话原因(deny reason,桌面端
+// 会把它当成用户侧拒绝原因展示给 agent —— 说清是超时兜底,不是人的意志)。
+const zcodeApprovalTimeoutNote = "手机端审批等待超时(2 分钟),已自动拒绝该操作"
+
+// handleZcodePermission 处理 interaction/requestPermission(从 Run 的 ReqHandler
+// 抽出,便于单测钉死超时语义;budget 常态传 zcodeUIBudget,测试注入短超时)。
+func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx context.Context, rsp zcodeResponder, approve ApprovalHook, waiting *atomic.Bool, budget time.Duration) bool {
+	var pr zcodePermissionRequest
+	if json.Unmarshal(params, &pr) != nil {
+		_ = rsp.RespondError(rawID, -32602, "审批参数无法解析")
+		return true
+	}
+	waiting.Store(true)
+	defer waiting.Store(false)
+	allow, note := false, ""
+	askErr := error(nil)
+	if approve != nil {
+		// 【P2-6】等待必须有上界(对齐 pi 的 piUIBudget):手机端停在审批卡但
+		// 流不断时,无上界会一直等;超时按 deny 回人话,让桌面端流程继续走
+		// (与 pi 的"未取得手机决定回 cancelled"同口径),不把整轮拖死。
+		actx, acancel := context.WithTimeout(ctx, budget)
+		defer acancel()
+		// 【vet】pb 消息按值存变量再传接口会报 copies lock;直接传复合调用
+		// 结果则不报(pi.go 同款注释)。approve 拿到的卡与 call 完全同值。
+		allow, note, askErr = approve(actx, buildZcodeApprovalCall(pr))
+	}
+	if askErr != nil {
+		if errors.Is(askErr, context.DeadlineExceeded) {
+			log.Printf("[zcode] 审批等待超时(%s),已自动拒绝", budget)
+			_ = rsp.Respond(rawID, zcodeApprovalAnswer(false, zcodeApprovalTimeoutNote))
+			return true
+		}
+		// 手机端断流:这不是"用户拒绝"。回 error,让 zcode 按通道故障处理,
+		// 别把基础设施问题伪装成用户意志(与 codex 同款)。
+		log.Printf("[zcode] 审批通道失败: %v", askErr)
+		_ = rsp.RespondError(rawID, -32000, "审批通道失败: "+askErr.Error())
+		return true
+	}
+	if allow {
+		// 【实测】应答必须严格匹配 schema Jb(decision/reason,strict):
+		// 多余键(如 optionId)会让服务器抛异常 → deny"Permission request failed"。
+		_ = rsp.Respond(rawID, zcodeApprovalAnswer(true, ""))
+	} else {
+		_ = rsp.Respond(rawID, zcodeApprovalAnswer(false, note))
+	}
+	return true
+}
+
+// rawOrNull 空参数归一成 "{}"(JsonArgs 不允许空串)。
+func rawOrNull(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
+// ---- 反问类反向请求(requestUserInput / elicitation)----
+//
+// 【地面真值】zcode.cjs 内嵌 zod schema(2026-09-18 提取):
+//   - interaction/requestUserInput 参数 DXn(strict):
+//     {requestId*, sessionId*, turnId?, toolCallId?, toolName?, prompt?,
+//      questions?:[{question*, header*, options*:[{value*,label*,description?,preview?}].min(1),
+//      multiSelect?}].min(1), input?, origin?, schema?};
+//     应答 jge(strict):{action:"accept"|"decline"|"cancel", content?:object, reason?:string}。
+//   - elicitation/create = MCP 标准 ElicitRequest:form 模式
+//     {mode?:"form", message*, requestedSchema:{type:"object", properties, required?}},
+//     url 模式 {mode:"url", message*, elicitationId*, url*};应答 {action, content?}。
+//
+// 【呈现】两类统一复用 Android 反问表单(工具名 request_user_input,与 codex
+// 同款形状,见 buildAskUserCall);-32601 只留给真正无法呈现的(url 模式 /
+// 连一个可呈现的问题都拼不出来)。
+
+// zcodeUserInputQuestion interaction/requestUserInput 的一条问题(schema AJt)。
+type zcodeUserInputQuestion struct {
+	Question    string `json:"question"`
+	Header      string `json:"header"`
+	MultiSelect bool   `json:"multiSelect"`
+	Options     []struct {
+		Value       string `json:"value"`
+		Label       string `json:"label"`
+		Description string `json:"description"`
+		Preview     string `json:"preview"`
+	} `json:"options"`
+}
+
+// zcodeUserInputRequest interaction/requestUserInput 的参数(只声明消费的字段)。
+type zcodeUserInputRequest struct {
+	RequestID  string                   `json:"requestId"`
+	SessionID  string                   `json:"sessionId"`
+	TurnID     string                   `json:"turnId"`
+	ToolCallID string                   `json:"toolCallId"`
+	ToolName   string                   `json:"toolName"`
+	Prompt     string                   `json:"prompt"`
+	Questions  []zcodeUserInputQuestion `json:"questions"`
+}
+
+// buildZcodeUserInputCall 把 requestUserInput 翻译成手机反问卡。
+// 卡上问题 id 固定 q0..qN;应答侧按服务器的收集规则(BCs 以 question 原文为键)
+// 把答案映射回问题原文。ok=false 表示连一个可呈现的问题都拼不出来。
+func buildZcodeUserInputCall(req zcodeUserInputRequest, cardID string) (pb.ToolCallBlock, bool) {
+	qs := make([]uiAskQuestion, 0, len(req.Questions))
+	for i, q := range req.Questions {
+		opts := make([]string, 0, len(q.Options))
+		for _, o := range q.Options {
+			opts = append(opts, o.Label) // label 上屏;服务器侧按 label=value 收集(jCs:value:t.label)
+		}
+		qs = append(qs, uiAskQuestion{
+			ID:       fmt.Sprintf("q%d", i),
+			Question: firstNonEmpty(q.Question, q.Header),
+			Options:  opts,
+		})
+	}
+	message := req.Prompt
+	if len(qs) == 0 {
+		if message == "" {
+			return pb.ToolCallBlock{}, false
+		}
+		// 纯 prompt 无 questions:也给一个输入框,让用户有地方作答。
+		qs = append(qs, uiAskQuestion{ID: "q0", Question: message})
+		message = "agent 需要你的输入"
+	}
+	return buildAskUserCall(cardID, message, qs), true
+}
+
+// zcodeUserInputAnswer 构造 requestUserInput 的应答(schema jge,strict:只允许
+// action/content/reason 三键)。accept 的 content 按"问题原文→答案"收集
+// (服务器 BCs 按 WCs=question 原文取 content.answers);一个答案都没有时回
+// content:{}(与桌面端 optionId 放行路径 MCs 的 {action:"accept",content:{}} 同款)。
+func zcodeUserInputAnswer(allow bool, note string, req zcodeUserInputRequest) map[string]interface{} {
+	if !allow {
+		return map[string]interface{}{"action": "decline", "reason": askDenyReason(note)}
+	}
+	answers := answerNoteMap(note)
+	content := map[string]interface{}{}
+	for i, q := range req.Questions {
+		a := answers[fmt.Sprintf("q%d", i)]
+		if a == "" {
+			continue
+		}
+		if key := firstNonEmpty(q.Question, q.Header); key != "" {
+			content[key] = a
+		}
+	}
+	return map[string]interface{}{"action": "accept", "content": content}
+}
+
+// zcodeElicitationProperty requestedSchema.properties 的条目(MCP 原始类型定义,
+// 只声明渲染要用的字段;enum 有值时渲染成点选项)。
+type zcodeElicitationProperty struct {
+	Type        string   `json:"type"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Enum        []string `json:"enum"`
+}
+
+// zcodeElicitationRequest elicitation/create 的参数(MCP 标准两形态)。
+type zcodeElicitationRequest struct {
+	Mode            string `json:"mode"`
+	Message         string `json:"message"`
+	ElicitationID   string `json:"elicitationId"`
+	URL             string `json:"url"`
+	RequestedSchema struct {
+		Type       string                              `json:"type"`
+		Properties map[string]zcodeElicitationProperty `json:"properties"`
+		Required   []string                            `json:"required"`
+	} `json:"requestedSchema"`
+}
+
+// buildZcodeElicitationCall 把 form 模式 elicitation 翻译成手机反问卡。
+// 返回 (卡, 属性名顺序, ok):属性名顺序供应答侧把 qN 映射回 content 键
+// (MCP 要求 content 键 = requestedSchema.properties 键);属性按名字排序,
+// 保证卡片顺序稳定可复现(map 遍历无序)。ok=false = url 模式,手机呈现不了。
+func buildZcodeElicitationCall(req zcodeElicitationRequest, cardID string) (pb.ToolCallBlock, []string, bool) {
+	if req.Mode == "url" {
+		return pb.ToolCallBlock{}, nil, false
+	}
+	names := make([]string, 0, len(req.RequestedSchema.Properties))
+	for n := range req.RequestedSchema.Properties {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	qs := make([]uiAskQuestion, 0, len(names))
+	for i, n := range names {
+		prop := req.RequestedSchema.Properties[n]
+		qs = append(qs, uiAskQuestion{
+			ID:       fmt.Sprintf("q%d", i),
+			Question: firstNonEmpty(prop.Title, n),
+			Options:  prop.Enum,
+		})
+	}
+	message := firstNonEmpty(req.Message, "MCP 服务需要你填写内容")
+	if len(qs) == 0 {
+		// 空 form(无属性):没有可填项,给一个说明性条目让用户能"确认/取消"。
+		qs = append(qs, uiAskQuestion{ID: "q0", Question: message})
+		message = "MCP 服务请求确认"
+	}
+	return buildAskUserCall(cardID, message, qs), names, true
+}
+
+// zcodeElicitationAnswer 构造 elicitation/create 的应答(MCP ElicitResult:
+// {action:"accept"|"decline"|"cancel", content?},content 键必须是 properties 键)。
+func zcodeElicitationAnswer(allow bool, note string, req zcodeElicitationRequest, names []string) map[string]interface{} {
+	if !allow {
+		return map[string]interface{}{"action": "decline"}
+	}
+	answers := answerNoteMap(note)
+	content := map[string]interface{}{}
+	for i, n := range names {
+		if a := answers[fmt.Sprintf("q%d", i)]; a != "" {
+			content[n] = a
+		}
+	}
+	return map[string]interface{}{"action": "accept", "content": content}
+}
+
+// askDenyReason 拒绝反问时的人话原因(服务器会把它转成 deny reason 给 agent 看)。
+func askDenyReason(note string) string {
+	if r := strings.TrimSpace(note); r != "" {
+		return r
+	}
+	return "用户在手机上拒绝回答"
+}
+
+// ---- 反问类反向请求的接线(Run 的 ReqHandler 分发到这里)----
+//
+// 【与审批分支的分工】呈现复用手机反问表单(approve hook 通道,ApprovalReason 对
+// request_user_input 有专属文案);应答按各自 schema 组装;-32601 只留给"真的
+// 呈现不了"的形态(url 模式 elicitation / 拼不出任何问题)。通道故障回 -32000,
+// 不把基础设施问题伪装成用户意志(与审批分支同款)。
+
+// rawIDString 服务器反向请求 id 是 JSON 字符串("server-6"),解出裸文本做卡片 id。
+func rawIDString(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// askViaPhone 把反问卡交给手机审批通道等应答;等待期间看门狗放行(用户想清楚
+// 再答是合法静默,与审批分支同款)。approve 为 nil 视为通道不可用。
+func (p *ZcodeProvider) askViaPhone(ctx context.Context, call *pb.ToolCallBlock, approve ApprovalHook, waiting *atomic.Bool) (bool, string, error) {
+	waiting.Store(true)
+	defer waiting.Store(false)
+	if approve == nil {
+		return false, "", errors.New("审批通道不可用")
+	}
+	return approve(ctx, call)
+}
+
+// handleZcodeUserInput 处理 interaction/requestUserInput(agent 反问卡):
+// questions 渲染成点选/输入表单,答案按"问题原文→答案"收进 content(schema jge)。
+func (p *ZcodeProvider) handleZcodeUserInput(rawID, params json.RawMessage, ctx context.Context, rsp zcodeResponder, approve ApprovalHook, waiting *atomic.Bool) bool {
+	var req zcodeUserInputRequest
+	if json.Unmarshal(params, &req) != nil {
+		_ = rsp.RespondError(rawID, -32602, "反问参数无法解析")
+		return true
+	}
+	// 卡片 id:requestId 是服务器侧的关联键(schema 必填),缺失退服务器请求 id。
+	cardID := firstNonEmpty(req.RequestID, rawIDString(rawID))
+	call, ok := buildZcodeUserInputCall(req, cardID)
+	if !ok {
+		// 连一个可呈现的问题都拼不出来:回"客户端不支持",让服务器按自己的
+		// 兜底路径走(绝不伪造一个空 accept 让 agent 拿着空气继续跑)。
+		_ = rsp.RespondError(rawID, -32601, "PocketAgent 无法呈现该反问(无问题且无提示语)")
+		return true
+	}
+	allow, note, err := p.askViaPhone(ctx, &call, approve, waiting)
+	if err != nil {
+		log.Printf("[zcode] 反问通道失败(requestId=%s): %v", req.RequestID, err)
+		_ = rsp.RespondError(rawID, -32000, "反问通道失败: "+err.Error())
+		return true
+	}
+	_ = rsp.Respond(rawID, zcodeUserInputAnswer(allow, note, req))
+	return true
+}
+
+// handleZcodeElicitation 处理 elicitation/create(MCP 标准反问):form 模式按
+// requestedSchema 渲染表单(enum 属性渲染成点选项),应答 content 键 = 属性名。
+// -32601 只留给 url 模式 —— 手机没有"打开外部 URL 等回调"的呈现形态。
+func (p *ZcodeProvider) handleZcodeElicitation(rawID, params json.RawMessage, ctx context.Context, rsp zcodeResponder, approve ApprovalHook, waiting *atomic.Bool) bool {
+	var req zcodeElicitationRequest
+	if json.Unmarshal(params, &req) != nil {
+		_ = rsp.RespondError(rawID, -32602, "elicitation 参数无法解析")
+		return true
+	}
+	call, names, ok := buildZcodeElicitationCall(req, rawIDString(rawID))
+	if !ok {
+		_ = rsp.RespondError(rawID, -32601, "PocketAgent 无法呈现 url 模式的 elicitation")
+		return true
+	}
+	allow, note, err := p.askViaPhone(ctx, &call, approve, waiting)
+	if err != nil {
+		log.Printf("[zcode] elicitation 通道失败: %v", err)
+		_ = rsp.RespondError(rawID, -32000, "elicitation 通道失败: "+err.Error())
+		return true
+	}
+	_ = rsp.Respond(rawID, zcodeElicitationAnswer(allow, note, req, names))
+	return true
+}
+
+// ---- 导入会话的历史惰性拉取 ----
+//
+// 【背景】从桌面端导入的 ZCode 会话(agents_sessions.go)只绑元信息
+// (Thread.ExternalSession.SessionID),首条消息之前的历史不在我们的库里,
+// 手机时间线从导入时刻起算、看不到导入前的对话。
+//
+// 【地面真值】session/resume 的应答自带完整 messages[](探针实证,同进程与
+// 新进程一致,见 docs/verify/evidence/zcode-p0-probe.md §4.6):
+//
+//	{"messages":[{"info":{"role":"user"|"assistant","semantics":{"kind":…},
+//	  "time":{"created":<unixMs>}},"parts":[{"type":"text","text":…}]}]}
+//
+// 本节就是把这个应答映射成 {role,text} 序列,server 层(GetThreadHistory)
+// 首次打开导入线程时调一次并落库缓存。与 ensureSession 的重挂载走同一个
+// session/resume RPC,但不碰 threadMap、不 subscribe(纯读,不订阅事件流)。
+
+// HistoryMsg 导入历史的一条消息(供 server 层落库/上屏的最小形状)。
+type HistoryMsg struct {
+	Role            string // "user" | "assistant"(其余角色在解析时被丢弃)
+	Text            string // 该消息全部 text 部件按原顺序拼接(多段用 \n 连接)
+	CreatedAtUnixMs int64  // zcode info.time.created(毫秒);0 = 应答里没带
+}
+
+// HistoryFor 拉取一个 zcode 会话的完整历史。
+//
+// 内部 withClientCtx(子进程没起会自动拉起)+ session/resume 读取当前消息;
+// 失败(配额/进程起不来/会话已被桌面端删除)返回错误,由调用方降级 ——
+// 绝不崩,也不伪造空历史冒充成功。
+//
+// 【与轮次的互不干扰】withClientCtx 带 TryLock/turnActive 守卫:轮次跑着时
+// 若子进程死亡不会中途重启(避免切断在跑的会话),直接报错降级。
+func (p *ZcodeProvider) HistoryFor(ctx context.Context, sessionID string) ([]HistoryMsg, error) {
+	var out []HistoryMsg
+	err := p.withClientCtx(ctx, zcodeStatusBudget, func(ctx context.Context, c *zcodeapp.Client) error {
+		raw, err := c.CallCtx(ctx, "session/resume", map[string]interface{}{"sessionId": sessionID})
+		if err != nil {
+			return fmt.Errorf("session/resume: %w", err)
+		}
+		out = parseZcodeHistory(raw)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// zcodeResumeReply session/resume 应答里我们消费的字段(其余快照字段忽略)。
+type zcodeResumeReply struct {
+	Messages []zcodeHistoryMessage `json:"messages"`
+}
+
+// zcodeHistoryMessage resume messages[] 的一条(info + parts 两级)。
+type zcodeHistoryMessage struct {
+	Info struct {
+		Role      string `json:"role"`
+		Semantics struct {
+			// "timeline_event" = 换模型等系统时间线(探针实测),不是对话内容
+			Kind string `json:"kind"`
+		} `json:"semantics"`
+		Time struct {
+			Created int64 `json:"created"` // unix 毫秒
+		} `json:"time"`
+	} `json:"info"`
+	Parts []struct {
+		Type string `json:"type"` // text / reasoning / step-start / step-finish / timeline / …
+		Text string `json:"text"`
+	} `json:"parts"`
+}
+
+// parseZcodeHistory 把 session/resume 应答映射成 {role,text} 时间线
+// (纯函数,单测覆盖)。规则:
+//   - timeline_event(info.semantics.kind)整条丢弃 —— 换模型分隔条不是对话;
+//   - role 只认 user/assistant,其余(system 等)丢弃;
+//   - parts 只取 type=="text" 的文本;reasoning(思考)/step-start/step-finish/
+//     工具类部件不进手机时间线(与 server 落库的 user/assistant 文本同口径);
+//   - 拼完没有任何文本的空消息丢弃。
+//
+// 应答无法解析时返回 nil(调用方按"空历史"处理,不报错 —— 快照形状异常
+// 不该把导入线程的历史页打挂)。
+func parseZcodeHistory(raw json.RawMessage) []HistoryMsg {
+	var reply zcodeResumeReply
+	if json.Unmarshal(raw, &reply) != nil {
+		return nil
+	}
+	out := make([]HistoryMsg, 0, len(reply.Messages))
+	for i := range reply.Messages {
+		m := &reply.Messages[i]
+		if m.Info.Semantics.Kind == "timeline_event" {
+			continue
+		}
+		if m.Info.Role != "user" && m.Info.Role != "assistant" {
+			continue
+		}
+		var b strings.Builder
+		for _, part := range m.Parts {
+			if part.Type != "text" || part.Text == "" {
+				continue
+			}
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(part.Text)
+		}
+		if b.Len() == 0 {
+			continue
+		}
+		out = append(out, HistoryMsg{
+			Role:            m.Info.Role,
+			Text:            b.String(),
+			CreatedAtUnixMs: m.Info.Time.Created,
+		})
+	}
+	return out
+}
+
+// ---- 一轮 ----
+
+// Run 执行完整一轮:session/send → 消费 session/event → turn.completed/failed 收尾。
+func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
+	p.turnMu.Lock() // 同一时刻只跑一轮(与 codex 同款;手机端本来也是单会话交互)
+	defer p.turnMu.Unlock()
+	p.turnActive.Store(true)
+	defer p.turnActive.Store(false)
+
+	if err := p.withClient(func(*zcodeapp.Client) error { return nil }); err != nil {
+		return nil, nil, err
+	}
+
+	// 【输入收集】文本拼接(零裁剪约定不变,与 codex 同款);图片字节暂存,
+	// 等下面会话快照确定、做完能力门控后再映射成 session/send attachments
+	// (见 zcodeSendParams;实测形状 2026-09-19 cmd/zcprobe -image)。
+	var userText strings.Builder
+	var userImgs []turnImage
+	for i := range req.InputBlocks {
+		switch t := req.InputBlocks[i].Block.(type) {
+		case *pb.ContentBlock_Text:
+			userText.WriteString(t.Text.Text)
+		case *pb.ContentBlock_Image:
+			if t.Image != nil && len(t.Image.Data) > 0 {
+				userImgs = append(userImgs, turnImage{data: t.Image.Data, mediaType: t.Image.MediaType})
+			}
+		}
+	}
+
+	// 1) 准备会话 + 模型(失败语义:建不上 = 整轮失败;选不上模型 = 降级继续)
+	// created 不再分流(P1-3 修复后新建/resume 一律下发模型)。
+	sid, _, snapRaw, err := p.ensureSession(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if mode := p.nativeModeFor(req.Thread); mode != "" {
+		effective, err := applyZcodeNativeMode(ctx, p.client, sid, mode)
+		if err != nil {
+			return nil, nil, err
+		}
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+			Kind: pb.CodexEvent_STATUS, Code: "native_notification", Title: "zcode · mode", Message: "原生权限模式: " + effective,
+		}}})
+	}
+	// 【P1-3】每轮无条件 applyModel(原来只在 created==true 时下发):threadMap
+	// 命中(同进程第 2 轮起)、daemon 重启后的 resume、导入线程的 resume 全部
+	// created=false,修复前手机端"模型·强度"卡选的值静默失效 —— 与 server 层
+	// applyTurnOverrides 的契约("会话内切换必须生效",thread.go:632)直接矛盾。
+	// applyModel 对 default/空直通、setModel 幂等,重复下发无副作用;模型不可用
+	// 记日志降级继续,不整轮失败。
+	// 【P2-8】桌面默认 effort 走线程快照语义(desktopEffortFor):有快照的会话
+	// 强度按快照装配,老会话不再随设置页全局漂移;与 codex 三级优先级一致。
+	if err := p.applyModel(ctx, sid, req.Thread.ModelID, req.Thread.Effort, p.desktopEffortFor(req.Thread)); err != nil {
+		return nil, nil, err
+	}
+
+	// 2) 事件路由:readLoop → 带缓冲 channel → 单消费者保序分发(慢 sink 不背压管道)
+	type notifMsg struct {
+		method string
+		params json.RawMessage
+	}
+	notifCh := make(chan notifMsg, 4096)
+	notifStop := make(chan struct{})
+	notifDone := make(chan struct{})
+
+	var (
+		mu              sync.Mutex
+		streamText      strings.Builder // text_delta 实时拼接(主来源,和手机看到的逐字一致)
+		finalText       string          // turn.completed.response 兜底
+		lastUsage       *pb.Usage
+		lastErr         string
+		lastNotif       atomic.Int64 // 最近一次收到通知的时间(看门狗用)
+		approvalWaiting atomic.Bool  // 正在等手机审批:合法静默,看门狗跳过
+	)
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	finish := func() { doneOnce.Do(func() { close(done) }) }
+
+	c := p.client
+	notifHandler := func(method string, params json.RawMessage) {
+		lastNotif.Store(time.Now().UnixMilli())
+		select {
+		case notifCh <- notifMsg{method: method, params: params}:
+		case <-notifStop:
+		}
+	}
+	reqHandler := func(rawID json.RawMessage, method string, params json.RawMessage) bool {
+		switch method {
+		case "interaction/requestPermission":
+			log.Printf("[zcode] 审批请求 原始参数: %.400s", string(params))
+			// 审批分支抽到 handleZcodePermission(P2-6:120s 上界 + 超时 deny
+			// 人话 + 通道故障 -32000;单测可注 fake responder/短预算)。
+			return p.handleZcodePermission(rawID, params, ctx, c, approve, &approvalWaiting, zcodeUIBudget)
+		case "interaction/requestUserInput":
+			return p.handleZcodeUserInput(rawID, params, ctx, c, approve, &approvalWaiting)
+		case "elicitation/create":
+			return p.handleZcodeElicitation(rawID, params, ctx, c, approve, &approvalWaiting)
+		}
+		// 其余(官方 MCP 的 auth headers、provider runtime headers 等)交回客户端层
+		// 统一回 -32601 —— 不伪造应答(与 codex 的第一条规则同款)。
+		return false
+	}
+	c.SetTurnHandlers(notifHandler, reqHandler)
+	defer func() {
+		// Setter 立即发布卸载快照，不需要等下一次 CallCtx。
+		c.SetTurnHandlers(nil, nil)
+		close(notifStop)
+		<-notifDone
+	}()
+
+	var notices nativeNoticeRecorder
+	go func() {
+		defer close(notifDone)
+		for {
+			select {
+			case nm := <-notifCh:
+				if nm.method == "state.updated" {
+					if raw := zcodeStateUpdateSnapshot(nm.params, sid); len(raw) > 0 {
+						p.InvalidateModels()
+						emitRuntimeSelection(p.confirmedZcodeSelection(raw), sink)
+						notices.record("zcode", nm.method, nm.params, sink)
+					}
+					continue
+				}
+				if nm.method != "session/event" {
+					notices.record("zcode", nm.method, nm.params, sink)
+					continue
+				}
+				var ev zcodeEventEnvelope
+				if json.Unmarshal(nm.params, &ev) != nil || ev.SessionID != sid {
+					continue
+				}
+				switch ev.Type {
+				case "session.updated", "settings.updated", "session.modelUpdated":
+					p.recordProjection(req.Thread.ID, ev.Payload)
+					p.InvalidateModels()
+					emitRuntimeSelection(p.confirmedZcodeSelection(ev.Payload), sink)
+					notices.record("zcode", ev.Type, ev.Payload, sink)
+				case "turn.started":
+					log.Printf("[zcode] zcode 已接收任务 session=%s turn=%s", sid, ev.TurnID)
+				case "model.streaming":
+					kind, delta, ok := mapZcodeStreamDelta(ev.Payload)
+					if !ok {
+						continue
+					}
+					switch kind {
+					case "text":
+						mu.Lock()
+						streamText.WriteString(delta)
+						mu.Unlock()
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: delta}}})
+					case "reasoning":
+						// 隐藏推理过程(daemon 侧强制过滤,与 codex.go 同款):
+						// 开关打开时 ThinkingDelta 一帧不出,见 emitThinkingFor。
+						p.emitThinkingFor(req.Thread, delta, sink)
+					}
+				case "tool.updated":
+					if upd, ok := mapZcodeToolCall(ev.Payload); ok {
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+						continue
+					}
+					if upd, ok := mapZcodeToolResult(ev.Payload); ok {
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+						continue
+					}
+					if upd, ok := mapZcodeToolError(ev.Payload); ok {
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+						continue
+					}
+					// scheduled / tool_input_* / batch:P0 不映射(见事件对照表)
+				case "session.titleUpdated":
+					var pl struct {
+						Title string `json:"title"`
+					}
+					if json.Unmarshal(ev.Payload, &pl) == nil && pl.Title != "" && p.TitleHandler != nil {
+						go p.TitleHandler(req.Thread.ID, pl.Title)
+					}
+				case "turn.completed":
+					resp, usage, ok := mapZcodeTurnCompleted(ev.Payload)
+					if ok {
+						mu.Lock()
+						finalText = resp
+						lastUsage = usage
+						if zcodeTurnCompletedIsSuccess(ev.Payload) {
+							lastErr = ""
+						} else {
+							lastErr = "轮次未成功结束(resultType=" + zcodeTurnCompletedResultType(ev.Payload) + ")"
+						}
+						mu.Unlock()
+						// 窗口来自会话快照的 projection(recordProjection 记账),
+						// 手机端用它 + usage 算上下文占用环(审计 S-1;探针实证
+						// projection.totalTokenCount 与 usage.totalTokens 同值)。
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{Usage: &pb.UsageUpdate{
+							Usage:              usage,
+							ModelContextWindow: p.contextWindowFor(req.Thread.ID),
+						}}})
+					}
+					finish()
+				case "turn.failed":
+					msg, ok := mapZcodeTurnFailed(ev.Payload)
+					if ok {
+						mu.Lock()
+						lastErr = msg
+						mu.Unlock()
+					}
+					finish()
+				default:
+					notices.record("zcode", ev.Type, ev.Payload, sink)
+				}
+			case <-notifStop:
+				return
+			}
+		}
+	}()
+
+	// 3) 发起本轮(STARTED 由 server 层统一发,这里不重复)
+	// 图片输入:有图才做能力门控(supportsImage 判定不了放行,与 codex 同语义);
+	// cleanup 在 Run 返回(轮次终局)后删除临时图片 —— live 实测 zcode 在轮次
+	// 开始阶段就把 localPath 读走编码进模型请求(turn.started 事件的 attachments
+	// 回显 + 用户消息 parts 出现 data URL),轮次结束后不再依赖原文件。
+	imageOK := true
+	if len(userImgs) > 0 {
+		imageOK = p.zcodeSupportsImage(req.Thread.ModelID, snapRaw)
+	}
+	sendParams, imgCleanup := zcodeSendParams(sid, userText.String(), userImgs, imageOK)
+	defer imgCleanup()
+	if len(userImgs) > 0 {
+		log.Printf("[zcode] session/send session=%s 输入=%d字 图片=%d张 imageOK=%v", sid, userText.Len(), len(userImgs), imageOK)
+	}
+	if _, err := p.client.CallCtx(ctx, "session/send", sendParams); err != nil {
+		return nil, nil, fmt.Errorf("session/send: %w", err)
+	}
+
+	// 4) 等结束 + 看门狗(与 codex 同口径:150s 无事件且不在等审批 = 失败)
+	lastNotif.Store(time.Now().UnixMilli())
+	turnStart := time.Now()
+	tick := time.NewTicker(10 * time.Second)
+	defer tick.Stop()
+	waitDone := false
+	for !waitDone {
+		select {
+		case <-done:
+			waitDone = true
+		case <-ctx.Done():
+			// 中断 = session/stop(尽力而为);手机断连也要交回已流出的内容
+			_, _ = p.client.Call("session/stop", map[string]string{"sessionId": sid})
+			mu.Lock()
+			partial := streamText.String()
+			mu.Unlock()
+			if partial != "" {
+				return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: partial}}}}, &pb.Usage{}, ctx.Err()
+			}
+			return nil, nil, ctx.Err()
+		case <-tick.C:
+			if !approvalWaiting.Load() {
+				if ms := lastNotif.Load(); ms > 0 && time.Now().UnixMilli()-ms > zcodeWatchdogSilence.Milliseconds() {
+					_, _ = p.client.Call("session/stop", map[string]string{"sessionId": sid})
+					mu.Lock()
+					partial := streamText.String()
+					mu.Unlock()
+					err := fmt.Errorf("zcode %s 无任何事件(任务可能未被接收,session=%s)", zcodeWatchdogSilence, sid)
+					if partial != "" {
+						return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: partial}}}}, &pb.Usage{}, err
+					}
+					return nil, nil, err
+				}
+			}
+			if time.Since(turnStart) > 60*time.Minute {
+				_, _ = p.client.Call("session/stop", map[string]string{"sessionId": sid})
+				log.Printf("[zcode] 轮次超时(60 分钟),已打断 session=%s", sid)
+				return nil, nil, fmt.Errorf("zcode 超时(60 分钟)")
+			}
+		}
+	}
+	log.Printf("[zcode] 一轮完成 session=%s 用时 %v", sid, time.Since(turnStart).Round(time.Millisecond))
+
+	// 正常终局后补发暂存的常驻目标(取消/看门狗路径不补,避免与 session/stop
+	// 竞争;goal 操作本身会驱动桌面端一轮确认 prompt,放在轮次外才安全)。
+	// 异步:不延迟本轮结果返回手机。
+	go p.applyPendingGoal(req.Thread.ID, sid)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if lastErr != "" {
+		return nil, nil, fmt.Errorf("zcode: %s", lastErr)
+	}
+	text := streamText.String()
+	if text == "" {
+		text = finalText
+	}
+	if text == "" {
+		text = "(完成,无文本输出)"
+	}
+	blocks := []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}}
+	return blocks, lastUsage, nil
+}
+
+func (p *ZcodeProvider) InvalidateModels() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modelsAt = time.Time{}
+}

@@ -16,6 +16,9 @@ service HostService {
   rpc Ping(PingRequest) returns (PingResponse);
   // 主机状态推送(daemon 侧工作区变化、模型就绪、更新可用等)
   rpc WatchEvents(WatchEventsRequest) returns (stream HostEvent);
+  // P2:列出本机正在运行的 dev server(daemon 拨常见端口,1s/端口,整扫 ≤8s,
+  // 结果缓存 60s —— 手机手动刷新才重扫)。对齐原作 BrowserService.ListDevServers。
+  rpc ListDevServers(ListDevServersRequest) returns (DevServerList);
 }
 
 message GetHostInfoRequest {}
@@ -42,13 +45,29 @@ message AuthorizeRequest {
   oneof method {
     string pair_code = 1;  // 手机扫二维码/手输的 6 位配对码
     string token = 2;      // 已配对过的长期 token 续期
+    // 设备身份认证(P0-2):先要一个挑战数,再交 Keystore 签名换新 token
+    string challenge_request = 6;          // 填 device_id,语义 = "给这台设备发挑战数"
+    ChallengeAnswer challenge_answer = 7;  // 挑战应答:验签通过后发每设备新 token
   }
   string device_name = 3;  // "Pixel 9" 之类,便于主机端管理
+  // 设备身份(P0-2):稳定的本机 UUID + base64 的 P-256 SPKI 公钥。
+  // 选 P-256 而非 Ed25519:Android Keystore 支持 Ed25519 要 API 33,本项目 minSdk 26。
+  string device_id = 4;
+  string device_pub_key = 5;
+}
+
+// ChallengeAnswer:challenge_request 拿到挑战数后,手机用 Keystore 私钥
+// 对 "device_id:challenge" 做 SHA256withECDSA 签名,签名走 base64。
+message ChallengeAnswer {
+  string challenge = 1;   // 原样带回 daemon 发的挑战数
+  string signature = 2;   // base64(ASN.1 DER ECDSA 签名)
 }
 
 message AuthorizeResponse {
   string token = 1;        // 长期访问 token
   int64 expires_at_unix = 2; // 0 = 永不过期
+  string challenge = 3;    // challenge_request 的应答:随机挑战数(其余分支为空)
+  string device_id = 4;    // 回显注册/认证通过的设备 ID(便于手机端核对)
 }
 
 message PingRequest { int64 client_time_unix_ms = 1; }
@@ -57,7 +76,12 @@ message PingResponse {
   string status = 2; // "ok" / "busy" / "degraded"
 }
 
-message WatchEventsRequest {}
+// ---- P1-5:主机事件流断点续传(只增)----
+message WatchEventsRequest {
+  // 手机已收到的最大主机事件 seq;daemon 先补发仍保留的、seq 更大的落盘事件,
+  // 再进入实时推送。0 = 不补发(只收实时)。
+  int64 after_sequence = 1;
+}
 
 message HostEvent {
   int64 timestamp_unix_ms = 1;
@@ -67,6 +91,9 @@ message HostEvent {
     UpdateAvailable update_available = 4;
     TurnFinishedNotification turn_finished = 5; // 后台 turn 完成(推送场景)
   }
+  // P1-5:全局单调事件序号(daemon events.jsonl),与 TurnServerMessage.sequence
+  // 同一序列空间;0 = 未入事件库(旧 daemon)。
+  int64 sequence = 6;
 }
 
 message WorkspaceChanged { repeated string workspaces = 1; }
@@ -75,4 +102,25 @@ message UpdateAvailable { string version = 1; string notes_url = 2; }
 message TurnFinishedNotification {
   string thread_id = 1;
   string summary = 2; // 一句话结果摘要,可直接进通知栏
+}
+
+// ---- P2:电脑 dev server 探测(手机一键预览,对齐原作 BrowserService)----
+message ListDevServersRequest {
+  // 暂空 = 扫 daemon 内置的常见端口表(3000/3001/4200/5000/5173/5174/8000/
+  // 8080/8081/8888/9000)。预留:以后让手机点名要扫的端口或强制重扫。
+}
+
+// DevServer:电脑上探到的一个 HTTP 服务端口。
+message DevServer {
+  int32 port = 1;           // 监听端口,如 5173
+  string url = 2;           // daemon 本机视角的地址 http://127.0.0.1:5173;
+                            // 手机端要自行把主机部分换成 daemon 的局域网/Tailscale 地址
+  string title = 3;         // 首页 HTML 的 <title> 文本,取不到为空
+  string server_header = 4; // HTTP Server 响应头(如 "Werkzeug/3.0 Python/3.12"),可为空
+}
+
+message DevServerList {
+  repeated DevServer servers = 1;
+  // 结果生成时间(daemon 本地时钟,Unix 毫秒)。手机端可提示"多久前扫的";0 = 旧 daemon。
+  int64 scanned_at_unix_ms = 2;
 }

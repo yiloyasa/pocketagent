@@ -1,0 +1,1417 @@
+// pi.go —— PiProvider:把 PocketAgent 的 gRPC 协议桥接到 pi --mode rpc 子进程。
+//
+// 【讲解】事件对照表(手机上看到的 ← Pi 发来的,0.85.1 实测):
+//
+//	文字逐字蹦出      message_update/text_delta
+//	思考过程          message_update/thinking_delta
+//	"⚙ bash"卡片     toolcall_end → ToolCallUpdate(STARTED)
+//	卡片流式进度      tool_execution_update → ToolCallUpdate(UPDATE,累积值原地替换)
+//	卡片出结果        tool_execution_end → ToolCallUpdate(FINISHED)
+//	审批弹卡          extension_ui_request(confirm/select)→ 经 approve hook
+//	压缩/重试/排队    compaction_*/auto_retry_*/queue_update → CodexEvent
+//	一轮真正结束      agent_settled(【不是】agent_end —— 后面可能还有重试/压缩/排队)
+//	用量              get_session_stats(流式 usage 恒 0,实测)
+//
+// 【进程模型】Pi 一个子进程 = 一个会话(与 codex app-server 不同),所以
+// Thread ↔ 子进程 1:1:clients[threadID] 各自独立、可并行;daemon 重启后按
+// Thread.ExternalSession.SessionFile 重挂载(switch_session + get_state 校验,
+// 调研 §8.3,握手不能省 —— codex 那边"不 resume 就静默吞请求"是同款教训)。
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/piapp"
+	"github.com/pocketagent/daemon/internal/store"
+)
+
+// Pi 会话级参数(对齐 codex 的同名纪律):
+const (
+	// piCallBudget 单条 RPC 命令的等待上界(prompt 受理、get_state 等都该秒回;
+	// switch_session 加载大会话文件可能慢,单独放宽)。
+	piCallBudget = 30 * time.Second
+	// piSwitchBudget switch_session 的等待上界(MB 级会话文件解析)。
+	piSwitchBudget = 60 * time.Second
+	// piSettleWait abort 后等 agent_settled 的上限(abort 应答本身就在 settled 之后)。
+	piSettleWait = 30 * time.Second
+	// piUIBudget 扩展 dialog 审批等手机应答的上界:没有它的请求会永久挂起整轮
+	// (实测:无 timeout 的 confirm 一直等 —— 调研 §4.6)。
+	piUIBudget = 120 * time.Second
+	// piToolClip 工具输出单帧限长(rune),UPDATE 帧高频到达,限制防流拥堵。
+	piToolClip = 8000
+	// modelsTTL 模型列表缓存(Pi 模型列表要拉一个子进程,不能每次都冷启)。
+	modelsTTL = 10 * time.Minute
+	// piUsagePushInterval 轮次进行中用量推送的间隔。pi 的流式 usage 恒 0、
+	// get_session_stats 是唯一真相:不定期推,轮次进行中(尤其长任务)手机端
+	// 上下文窗口卡就恒为 0%(真机实锤,2026-09-19)。5s 足够"会话中可见",
+	// 又不至于让 get_session_stats 的 RPC 频率成为负担。
+	piUsagePushInterval = 5 * time.Second
+)
+
+// PiProvider 桥接 pi --mode rpc。
+type PiProvider struct {
+	textOnly bool
+	// mu 保护 clients/running/runningCtx/modelsCache。
+	mu         sync.Mutex
+	clients    map[string]*piapp.Client   // threadID → 子进程(1 会话 1 进程)
+	running    map[string]bool            // threadID → 有轮次在跑(同线程防重入)
+	runningCtx map[string]context.Context // threadID → 当前轮的 Run ctx(P2-2:重入守卫判断"旧轮已被打断"用)
+
+	// steerMu 保护 active(可插话的线程集合;Run 登记/收尾清除,与 codex_steer 同模式)。
+	steerMu sync.Mutex
+	active  map[string]bool
+
+	modelsCache []pb.ModelInfo
+	modelsAt    time.Time
+
+	// guardPath 守护扩展文件(危险命令强制审批,见 piapp/guard.go)。
+	guardPath string
+
+	// cursors 每线程断点续传游标(threadID → 最近一次从 Pi 拿到的条目 id,
+	// 调研 §8.2),与 clients/running 同受 mu 保护。内存版:daemon 重启后游标
+	// 归零 → 首次重挂载跳过回放、轮次收尾重新建立(随 store 落库可后置)。
+	cursors map[string]string
+
+	// prefsMu 保护桌面偏好内存态(ApplyPrefs 与事件/轮次路径并发读写)。
+	// 【与 codex 的 setMu 同纪律】只存内存,绝不写 Pi 侧用户配置。
+	prefsMu sync.Mutex
+	prefs   DesktopPrefs
+
+	// TitleHandler 标题同步钩子:Pi 会话名变化时回调(server 落库,双端一致)。
+	// P1 只在挂载时把 thread.Title 写给 Pi(set_session_name),回调预留。
+	TitleHandler func(threadID, title string)
+}
+
+// NewPiProvider 构造;守护扩展写到临时目录(固定名,覆盖写,daemon 启动即生效)。
+func NewPiProvider() *PiProvider {
+	p := &PiProvider{
+		clients:    map[string]*piapp.Client{},
+		running:    map[string]bool{},
+		runningCtx: map[string]context.Context{},
+		active:     map[string]bool{},
+		cursors:    map[string]string{},
+	}
+	if dir := os.TempDir(); dir != "" {
+		path := filepath.Join(dir, "pocketagent-pi-guard.ts")
+		if err := os.WriteFile(path, []byte(piapp.RenderGuardExtension(piapp.GuardRules)), 0o644); err == nil {
+			p.guardPath = path
+		} else {
+			log.Printf("[pi] 守护扩展写入失败(危险命令强制审批不可用): %v", err)
+		}
+	}
+	return p
+}
+
+func (p *PiProvider) ID() string          { return "pi" }
+func (p *PiProvider) DisplayName() string { return "Pi(桌面 agent)" }
+
+// ---- 模型列表 ----
+
+// Models 手机端"模型·强度"胶囊的列表。
+//
+// 【必须以 Pi 实际返回为准,不能写死】本机只登录了 zai-coding-cn(调研 §2)。
+// 拉列表要起一个 --no-session 的一次性子进程(几秒),TTL 缓存兜住频率;
+// 失败时至少保住 "pi/default"(跟随 Pi 当前模型,与 codex 的 default 同语义)。
+func (p *PiProvider) Models() []pb.ModelInfo {
+	p.mu.Lock()
+	if len(p.modelsCache) > 0 && time.Since(p.modelsAt) < modelsTTL {
+		out := p.modelsCache
+		p.mu.Unlock()
+		return out
+	}
+	p.mu.Unlock()
+
+	out := []pb.ModelInfo{{
+		Id: "default", Provider: "pi", DisplayName: "Pi(跟随 Pi 当前配置)",
+		Available: true,
+	}}
+	if cached := p.fetchModels(); len(cached) > 0 {
+		out = append(out, cached...)
+	}
+
+	p.mu.Lock()
+	if len(out) > 1 {
+		p.modelsCache = out
+		p.modelsAt = time.Now()
+	}
+	p.mu.Unlock()
+	return out
+}
+
+// fetchModels 用一次性 --no-session 子进程拉 get_available_models。
+func (p *PiProvider) fetchModels() []pb.ModelInfo {
+	c, err := piapp.Start(piapp.StartOptions{ExtraArgs: []string{"--no-session"}})
+	if err != nil {
+		log.Printf("[pi] 模型列表探测失败: %v", err)
+		return nil
+	}
+	defer c.Close()
+	raw, err := c.Call("get_available_models", nil, piCallBudget)
+	if err != nil {
+		log.Printf("[pi] get_available_models 失败: %v", err)
+		return nil
+	}
+	var res struct {
+		Models []struct {
+			ID               string                     `json:"id"`
+			Name             string                     `json:"name"`
+			Provider         string                     `json:"provider"`
+			Reasoning        bool                       `json:"reasoning"`
+			Input            []string                   `json:"input"`
+			ContextWindow    int64                      `json:"contextWindow"`
+			ThinkingLevelMap map[string]json.RawMessage `json:"thinkingLevelMap"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(raw, &res) != nil {
+		return nil
+	}
+	var out []pb.ModelInfo
+	for _, m := range res.Models {
+		// 直接 append 复合字面量:pb 消息含互斥量,append 已有值会被 vet 拒绝
+		out = append(out, pb.ModelInfo{
+			Id:               m.Provider + "/" + m.ID, // Thread.ModelID 形如 "pi/zai-coding-cn/glm-5.3"
+			Provider:         "pi",
+			DisplayName:      m.Name,
+			Available:        true,
+			ContextWindow:    int32(m.ContextWindow),
+			SupportsThinking: m.Reasoning,
+			AvailableEfforts: piModelThinkingLevels(m.Reasoning, m.ThinkingLevelMap),
+			SupportsImages: func() bool {
+				for _, in := range m.Input {
+					if in == "image" {
+						return true // 实测 glm-5.3 input=["text"]:App 据此关图片入口
+					}
+				}
+				return false
+			}(),
+		})
+		if m.Name == "" {
+			out[len(out)-1].DisplayName = m.ID
+		}
+	}
+	return out
+}
+
+// ---- 会话挂载 ----
+
+// clientFor 取(或建)该线程的子进程,并完成重挂载握手。
+//
+// 【握手不能省】ExternalSession.SessionFile 与子进程当前会话不符时必须
+// switch_session + get_state 校验;新会话则从 get_state 回填 SessionFile/SessionID
+// (server 层轮次结束后落库,daemon 重启全靠它)。
+func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c := p.clients[t.ID]
+	if c != nil && c.Alive() {
+		return c, nil
+	}
+	if c != nil {
+		c.Close()
+		delete(p.clients, t.ID)
+	}
+	opts := piapp.StartOptions{
+		Cwd:            workspace,
+		Name:           t.Title,
+		GuardExtension: p.guardPath,
+	}
+	if p.textOnly {
+		opts.GuardExtension = ""
+		opts.ExtraArgs = []string{"--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates"}
+	}
+	nc, err := piapp.Start(opts)
+	if err != nil {
+		return nil, err
+	}
+	nc.SetUIRequestHandler(func(req *piapp.UIRequest) (map[string]any, bool) {
+		// 无轮次上下文的 dialog:失败安全,拒绝(正常路径的审批在 Run 内接线)。
+		return map[string]any{"cancelled": true}, true
+	})
+	// 标题回调:Pi 的 set_session_name(我们挂载时下发,或电脑端 pi -r 同进程改名)
+	// 都会发 session_info_changed 事件(0.85.1 实测:{"name":"...","type":
+	// "session_info_changed"})。用常驻 GlobalHandler 接住它 → TitleHandler →
+	// server 落库,双端标题一致(与 codex/zcode 的 TitleHandler 同语义)。
+	// 【并发纪律】GlobalHandler 跑在 readLoop 里:只做解析 + go 出去,不阻塞;
+	// Setter 在锁内立即发布快照，不依赖后续 CallCtx 才让 readLoop 看见它。
+	// 挂载时回显的 set_session_name 会带 t.Title 原值回来,server 侧有
+	// "标题相同就不写库"守卫,不会形成回调环。
+	threadID := t.ID
+	nc.SetGlobalHandler(func(ev piapp.Event) {
+		if name, ok := MapSessionNameChange(ev.Raw); ok && p.TitleHandler != nil {
+			go p.TitleHandler(threadID, name)
+		}
+	})
+	p.clients[t.ID] = nc
+	return nc, nil
+}
+
+// DropThread 删除线程时回收该线程的 pi 子进程与断点游标(P2-1:pi 一个子进程
+// 就是一个会话,手机删掉 pi 会话后若 piapp.Client 留在 clients,进程会一直空转
+// 到 daemon 重启 —— 进程+游标泄漏)。Close 幂等;线程从没挂载过子进程时静默
+// 返回。server 层 DeleteThread 经最小接口 piThreadDropper 调用(同
+// zcodeSessionCloser 的抽接口模式,单测可注 fake)。
+func (p *PiProvider) DropThread(threadID string) {
+	p.mu.Lock()
+	c := p.clients[threadID]
+	delete(p.clients, threadID)
+	delete(p.cursors, threadID)
+	p.mu.Unlock()
+	if c != nil {
+		c.Close()
+		log.Printf("[pi] 已回收线程 %s 的子进程与游标", threadID)
+	}
+}
+
+// mount 完成会话挂载:重挂载(switch+校验)或新建(get_state 回填)。
+func (p *PiProvider) mount(ctx context.Context, t *store.Thread, c *piapp.Client) error {
+	want := t.ExternalSession.SessionFile
+	if want != "" {
+		if cur := c.SessionFile(); cur != "" && strings.EqualFold(filepath.Clean(cur), filepath.Clean(want)) {
+			return nil // 当前子进程已挂载目标会话
+		}
+		ctx2, cancel := context.WithTimeout(ctx, piSwitchBudget)
+		defer cancel()
+		if err := c.SwitchSession(ctx2, want); err != nil {
+			return fmt.Errorf("重挂载 Pi 会话失败(%s): %w", filepath.Base(want), err)
+		}
+		return nil
+	}
+	// 新会话:取 sessionFile/sessionId 回填(落库由 server 层做)。
+	ctx2, cancel := context.WithTimeout(ctx, piCallBudget)
+	defer cancel()
+	if _, err := c.GetState(ctx2); err != nil {
+		return fmt.Errorf("获取 Pi 会话状态失败: %w", err)
+	}
+	t.ExternalSession = store.ExternalSessionRef{
+		SessionID:   c.SessionID(),
+		SessionFile: c.SessionFile(),
+		Cwd:         t.Workspace,
+	}
+	// 会话名同步(双端一致:电脑端 pi -r 也看到这个名字 —— 调研 §6.4)。
+	if t.Title != "" {
+		_, _ = c.Call("set_session_name", map[string]any{"name": t.Title}, piCallBudget)
+	}
+	return nil
+}
+
+// applyModel 把 Thread.ModelID("pi/<provider>/<model>")与 effort 映射成
+// set_model / set_thinking_level。失败只记日志:模型不可用是"降级继续",
+// 不是"整轮失败"(Pi 会话本身有自己的当前模型)。
+func (p *PiProvider) applyModel(ctx context.Context, c *piapp.Client, t *store.Thread) {
+	spec := strings.TrimPrefix(t.ModelID, "pi/")
+	if spec == "" || spec == t.ModelID || spec == "default" {
+		// 不是 pi/ 前缀或 default:跟随 Pi 当前配置(探针确认 get_state.model 即当前)。
+		return
+	}
+	if prov, model, ok := strings.Cut(spec, "/"); ok {
+		if _, err := c.CallCtx(ctx, "set_model", map[string]any{"provider": prov, "modelId": model}, piCallBudget); err != nil {
+			log.Printf("[pi] set_model %s 失败(沿用当前模型): %v", spec, err)
+		}
+	} else {
+		if _, err := c.CallCtx(ctx, "set_model", map[string]any{"modelId": spec}, piCallBudget); err != nil {
+			log.Printf("[pi] set_model %s 失败(沿用当前模型): %v", spec, err)
+		}
+	}
+	if t.Effort != "" {
+		if _, err := c.CallCtx(ctx, "set_thinking_level", map[string]any{"level": t.Effort}, piCallBudget); err != nil {
+			log.Printf("[pi] set_thinking_level %s 失败: %v", t.Effort, err)
+		}
+	}
+}
+
+// ---- 桌面偏好(PrefsAware)----
+
+// ApplyPrefs 实现 agent.PrefsAware:接收桌面设置页七项偏好的完整快照。
+//
+// 【消费哪些】HideReasoning → 事件路径过滤 ThinkingDelta(emitThinking);
+// Model/Effort → 桌面默认模型/思考强度(applyDesktopDefaults,线程未显式指定
+// 时每轮 Run 跟随)。【不映射哪些、为什么】审批策略/沙箱:Pi 的审批走守护扩展
+// (guard.ts)与 dialog 确认,没有 approvalPolicy/sandboxPolicy 对应面 —— 这两项
+// 仅对 codex 生效;Verbosity/ReasoningSummary/DisablePasteBurst 协议无对应面,
+// 同样收下不消费。完整快照覆盖(照单全收),与 codex 的 ApplyPrefs 同纪律。
+func (p *PiProvider) ApplyPrefs(pref DesktopPrefs) {
+	p.prefsMu.Lock()
+	defer p.prefsMu.Unlock()
+	p.prefs = pref
+}
+
+// hideReasoning 读"隐藏推理过程"开关。
+func (p *PiProvider) hideReasoning() bool {
+	p.prefsMu.Lock()
+	defer p.prefsMu.Unlock()
+	return p.prefs.HideReasoning
+}
+
+// desktopDefaults 读桌面默认(模型, 思考强度);空串 = 未设置 = 跟随 Pi 当前配置。
+func (p *PiProvider) desktopDefaults() (model, effort string) {
+	p.prefsMu.Lock()
+	defer p.prefsMu.Unlock()
+	return p.prefs.Model, p.prefs.Effort
+}
+
+// emitThinking 在"隐藏推理"关闭时把思考增量推给 sink(与 codex.go 的
+// HideReasoning() 分支同款 daemon 侧强制过滤;Pi 协议没有全局开关)。
+// 【为什么抽成方法】Run 的事件泵闭包不便直接单测,把开关判断收敛到这里,
+// 单测钉死"HideReasoning=true 时 ThinkingDelta 一帧不出"。
+func (p *PiProvider) emitThinking(delta string, sink Sink) {
+	if p.hideReasoning() {
+		return
+	}
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+}
+
+// hideReasoningFor 是 hideReasoning 的线程感知版(P2-8,与 codex 的
+// HideReasoningFor 同语义):有设置快照的线程("设置页更改只对新建对话生效"
+// 上线后新建的会话)一律按快照值判定,与当前全局开关无关 —— 老会话不再随
+// 设置页漂移;旧线程(快照 nil)回退全局,保持升级前行为。
+func (p *PiProvider) hideReasoningFor(t *store.Thread) bool {
+	return p.hideReasoning()
+}
+
+// desktopEffortFor 是 desktopDefaults 的线程感知面(P2-8,与 codex 的三级
+// 优先级对齐):线程设置快照(SettingsSnapshot,新建对话那一刻的值)> 全局
+// 偏好(旧线程兜底)。线程显式 Effort 的第一级由 applyDesktopDefaults 的
+// level := t.Effort 处理;快照非 nil 时快照里的空串就是"当时未设置",保持
+// 原值生效、不中途改抓新全局值。桌面默认模型不在此列(pi 消费的七项只有
+// effort/hideReasoning,模型走 Thread.ModelID)。
+func (p *PiProvider) desktopEffortFor(t *store.Thread) string {
+	if t != nil && t.SettingsSnapshot != nil {
+		return t.SettingsSnapshot.Effort
+	}
+	_, effort := p.desktopDefaults()
+	return effort
+}
+
+// emitThinkingFor 是 emitThinking 的线程感知版(P2-8):按 hideReasoningFor 的
+// 快照语义判定(有快照按快照,旧线程回全局),Run 的事件泵走这里;
+// emitThinking 保留给无线程上下文的调用与既有单测。
+func (p *PiProvider) emitThinkingFor(t *store.Thread, delta string, sink Sink) {
+	if p.hideReasoningFor(t) {
+		return
+	}
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+}
+
+// threadModelExplicit 线程是否显式指定了 pi 模型("pi/<provider>/<model>")。
+// 空 / 无 pi/ 前缀 / "pi/default" 都算"跟随"(与 applyModel 的判定一致)。
+func threadModelExplicit(t *store.Thread) bool {
+	spec := strings.TrimPrefix(t.ModelID, "pi/")
+	return spec != "" && spec != t.ModelID && spec != "default"
+}
+
+// applyDesktopDefaults 把桌面设置页的默认模型/思考强度下发到 Pi 会话。
+// 由 Run 在 applyModel 之后调用(每轮开始,会话级状态随之刷新)。
+//
+// 【最小方案取舍】codex 的桌面默认是"每轮 turn/start 都带参数"自然覆盖;Pi 的
+// set_model/set_thinking_level 是会话级状态、没有 per-turn 参数,所以选"每轮
+// Run 开始时下发"这条最短路径(不用在会话创建处再加挂载钩子)。优先级:
+// 线程显式指定 > 桌面默认 > 跟随 Pi 当前配置(不下发)。桌面默认模型只认
+// "pi/..." 前缀 —— 它是全局默认,可能指向其他 provider(glm/codex…),指向
+// 别家时 Pi 侧不下发、沿用 Pi 自己的当前模型。失败只记日志降级继续,与
+// applyModel 同语义。
+func (p *PiProvider) applyDesktopDefaults(ctx context.Context, c *piapp.Client, t *store.Thread) {
+	model, _ := p.desktopDefaults()
+	// 【P2-8】思考强度的"桌面默认"走线程快照语义:有快照的会话按快照装配,
+	// 老会话不再随设置页全局漂移;线程显式 Effort 的第一级优先保持不变。
+	effort := p.desktopEffortFor(t)
+	if threadModelExplicit(t) {
+		// 模型已被 applyModel 下发;线程没钉思考强度时由桌面默认兜底。
+		if t.Effort == "" && effort != "" {
+			p.setThinkingLevel(ctx, c, effort)
+		}
+		return
+	}
+	// 模型跟随:桌面默认是 pi 模型才下发,否则沿用 Pi 当前配置。
+	if ms := strings.TrimPrefix(model, "pi/"); ms != "" && ms != model && ms != "default" {
+		if prov, mid, ok := strings.Cut(ms, "/"); ok {
+			if _, err := c.CallCtx(ctx, "set_model", map[string]any{"provider": prov, "modelId": mid}, piCallBudget); err != nil {
+				log.Printf("[pi] 桌面默认 set_model %s 失败(沿用当前模型): %v", ms, err)
+			}
+		}
+	}
+	// 思考强度:线程显式 > 桌面默认。【顺带补漏】applyModel 只在线程显式指定
+	// pi 模型时才下发 t.Effort("跟随"分支提前 return),这里统一补上。
+	level := t.Effort
+	if level == "" {
+		level = effort
+	}
+	if level != "" {
+		p.setThinkingLevel(ctx, c, level)
+	}
+}
+
+// setThinkingLevel 下发 set_thinking_level(失败只记日志,降级继续)。
+func (p *PiProvider) setThinkingLevel(ctx context.Context, c *piapp.Client, level string) {
+	if _, err := c.CallCtx(ctx, "set_thinking_level", map[string]any{"level": level}, piCallBudget); err != nil {
+		log.Printf("[pi] set_thinking_level %s 失败: %v", level, err)
+	}
+}
+
+// ---- 一轮 ----
+
+// acquireRunning 登记本轮为该线程的 running 轮(P2-2 重入闭环)。
+//
+// 【背景】server 层重入打断会取消旧轮的 Run ctx,但旧 Run 还要发 abort 并等
+// agent_settled 收尾(最长 piSettleWait=30s)才清 p.running —— 期间新轮直接进
+// 会吃 PI_BUSY,手机端表现为"打断后第一轮必失败"("返回后不工作"修复对 pi
+// 不闭环)。现在:旧轮真在跑(runningCtx 未取消)→ 立即 PI_BUSY;旧轮已被打断
+// (runningCtx 已取消)→ 有界轮询等 running 释放(上限 30s,与 abort 收尾的
+// piSettleWait 同口径),等到即登记成功。
+func (p *PiProvider) acquireRunning(threadID string, runCtx context.Context) error {
+	p.mu.Lock()
+	if !p.running[threadID] {
+		p.running[threadID] = true
+		p.runningCtx[threadID] = runCtx
+		p.mu.Unlock()
+		return nil
+	}
+	oldCtx := p.runningCtx[threadID]
+	p.mu.Unlock()
+	if oldCtx == nil || oldCtx.Err() == nil {
+		return &piError{code: "PI_BUSY", msg: "该 Pi 会话已有一轮在执行"}
+	}
+	deadline := time.Now().Add(piSettleWait)
+	for {
+		p.mu.Lock()
+		if !p.running[threadID] {
+			p.running[threadID] = true
+			p.runningCtx[threadID] = runCtx
+			p.mu.Unlock()
+			return nil
+		}
+		p.mu.Unlock()
+		if time.Now().After(deadline) {
+			return &piError{code: "PI_BUSY", msg: "上一轮打断收尾中,请稍后重试"}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Run 执行完整一轮:发 prompt → 消费事件流 → agent_settled 收尾。
+func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
+	t := req.Thread
+
+	// 同线程防重入(server 已有重入打断,这里是 provider 侧防御)。
+	// 【P2-2】runCtx 提前构造:守卫要拿它登记本轮,并据此判断旧轮是否已被打断
+	// (打断后等 abort 收尾释放,见 acquireRunning)。
+	runCtx, runCancel := context.WithCancelCause(ctx)
+	defer runCancel(nil)
+	if err := p.acquireRunning(t.ID, runCtx); err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		p.mu.Lock()
+		p.running[t.ID] = false
+		delete(p.runningCtx, t.ID)
+		p.mu.Unlock()
+	}()
+
+	// 登记"可插话"目标(Steer 用);轮次收尾清除 —— 迟到的 steer 不能插进
+	// 早已结束的轮次(与 codex_steer 的 turnActive 守卫同语义)。
+	p.steerMu.Lock()
+	p.active[t.ID] = true
+	p.steerMu.Unlock()
+	defer func() {
+		p.steerMu.Lock()
+		delete(p.active, t.ID)
+		p.steerMu.Unlock()
+	}()
+
+	// 断线恢复点检测:clientFor 对死亡子进程做"关旧起新"(pi 侧唯一的重挂载
+	// 路径)。prev 与 c 不同(或原先不存在)= 刚重启过,才可能有断线期间的事件
+	// 落在会话文件里;沿用存活子进程时无断点可续。
+	p.mu.Lock()
+	prev := p.clients[t.ID]
+	p.mu.Unlock()
+	c, err := p.clientFor(t, req.Workspace)
+	if err != nil {
+		return nil, nil, &piError{code: "PI_UNAVAILABLE", msg: err.Error()}
+	}
+	if err := p.mount(ctx, t, c); err != nil {
+		return nil, nil, &piError{code: "PI_MOUNT_FAILED", msg: err.Error()}
+	}
+	// 断点续传(调研 §8.2):仅"子进程刚重启 + 已有会话文件"执行三态续传
+	// (增量回放 / 游标失效全量兜底 / 游标推进)。回放只发 CodexEvent 摘要帧,
+	// 不注入正文流 —— textBuf 会拼进本轮最终答案,不能把上一轮尾部混进来。
+	if prev != c && t.ExternalSession.SessionFile != "" {
+		p.replayMissed(ctx, c, t, sink)
+	}
+	if err := p.configureSelection(ctx, c, t, sink); err != nil {
+		return nil, nil, err
+	}
+
+	// 用量基线(本轮增量 = settled 后 stats - 基线;流式 usage 恒 0,实测)。
+	baseline := p.statsQuiet(c)
+
+	// ---- 审批接线:dialog 类 extension_ui_request → approve hook → 手机审批卡 ----
+	//
+	// 【断线/超时回 cancelled】approve 返回 err(server 断线 readerDone / ctx 超时
+	// 120s)或拒绝,一律 cancelled:true,绝不默认放行(调研 §4.6);select 等
+	// 用户真选(选项渲染进反问卡,答案经 note 通道回传),input/editor 带回输入文本。
+	c.SetUIRequestHandler(func(uireq *piapp.UIRequest) (map[string]any, bool) {
+		if !uireq.Dialog() {
+			return nil, false // fire-and-forget(notify/setStatus/setWidget):不回写
+		}
+		actx, acancel := context.WithTimeout(runCtx, piUIBudget)
+		defer acancel()
+		// 内联构造传参:pb 消息按值传给接口会被 vet 拒绝,复合调用结果可以
+		approved, note, aerr := approve(actx, ApprovalCallFromUI(uireq.ID, uireq.Method, uireq.Title, uireq.Message, uireq.Options))
+		if aerr != nil {
+			log.Printf("[pi] 审批 %s(%s)未取得手机决定,回 cancelled: %v", uireq.ID, uireq.Method, aerr)
+			return map[string]any{"cancelled": true}, true
+		}
+		return UIResponseFromDecision(uireq.Method, approved, note), true
+	})
+
+	// ---- 事件泵 ----
+	// readLoop 不能被慢 sink 阻塞:事件先入带缓冲 channel,单消费者保序处理
+	// (与 codex.go 的 notifCh 同模式)。消费 goroutine 里完成"Pi 事件 → pb"映射。
+	type done struct {
+		settled bool
+		aborted bool
+	}
+	notifCh := make(chan piapp.Event, 4096)
+	notifStop := make(chan struct{})
+	notifDone := make(chan struct{})
+	c.SetEventHandler(func(ev piapp.Event) {
+		select {
+		case notifCh <- ev:
+		case <-notifStop:
+		}
+	})
+	defer func() {
+		close(notifStop)
+		<-notifDone
+		c.SetEventHandler(nil)
+	}()
+
+	var (
+		mu        sync.Mutex
+		textBuf   strings.Builder // 最终正文(text_delta 拼接)
+		started   = map[string]bool{}
+		lastUsage *pb.Usage // pb 消息存指针:含互斥量,按值复制会被 vet 拒绝
+		// compacting 压缩进行中(compaction_start/end 维护):中程用量推送暂停。
+		// 手机端已由 CONTEXT_COMPACTED 事件进入"压缩中"状态并清空 turnUsage,
+		// 若中程推送继续顶新数字进去,会把"压缩中"状态闪没(见下方 ticker)。
+		compacting bool
+	)
+
+	var notices nativeNoticeRecorder
+	consume := func(ev piapp.Event) {
+		if ev.Type == "model_changed" || ev.Type == "model_select" || ev.Type == "thinking_level_changed" || ev.Type == "state_changed" {
+			p.InvalidateModels()
+			emitRuntimeSelection(decodeRuntimeSelection("pi", ev.Type, ev.Raw), sink)
+		}
+		switch ev.Type {
+		case "message_update":
+			if d, ok := MapTextDelta(ev.Raw); ok {
+				mu.Lock()
+				textBuf.WriteString(d.Delta)
+				mu.Unlock()
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &d}})
+				return
+			}
+			if d, ok := MapThinkingDelta(ev.Raw); ok {
+				// 隐藏推理过程(daemon 侧强制过滤,与 codex.go 同款):
+				// 开关打开时 ThinkingDelta 一帧不出,见 emitThinkingFor
+				// (P2-8:有快照的线程按快照判定,老会话不随全局漂移)。
+				p.emitThinkingFor(t, d.Delta, sink)
+				return
+			}
+			if upd, ok := MapToolcallEnd(ev.Raw); ok {
+				mu.Lock()
+				started[upd.Call.Id] = true
+				mu.Unlock()
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+				return
+			}
+			// toolcall_start/toolcall_delta:参数拼装过程,STARTED 等 end(见 pi_events.go)
+		case "tool_execution_start":
+			mu.Lock()
+			seen := started[toolCallIDOf(ev.Raw)]
+			mu.Unlock()
+			if seen {
+				return
+			}
+			if upd, ok := MapToolExecStart(ev.Raw); ok {
+				mu.Lock()
+				started[upd.Call.Id] = true
+				mu.Unlock()
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+			}
+		case "tool_execution_update":
+			if upd, ok := MapToolExecUpdate(ev.Raw, piToolClip); ok {
+				// partialResult 是累积值:App 端按 callId 原地替换(UPDATE 相位)
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+			}
+		case "tool_execution_end":
+			if upd, ok := MapToolExecEnd(ev.Raw, piToolClip); ok {
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+			}
+		case "agent_end":
+			// 每低级 run 结束(后面可能还有重试/压缩/排队续跑),不算终局;
+			// 顺带取最新 usage(完整消息里才有真实用量)。
+			if u := usageFromAgentEnd(ev.Raw); u != nil {
+				mu.Lock()
+				lastUsage = u
+				mu.Unlock()
+			}
+		case "agent_settled":
+			// 真终局:settled 之后不再有自动续跑(实测 §11#5)。
+			runCancel(errSettled)
+		case "compaction_start", "compaction_end":
+			// 维护压缩闸门(中程用量推送据此暂停,见下方 ticker),再按原路径
+			// 映射成 CONTEXT_COMPACTED 状态事件上屏。
+			mu.Lock()
+			compacting = ev.Type == "compaction_start"
+			mu.Unlock()
+			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
+			}
+		case "abort":
+			// 自身 abort 的回执(无应答体),无需处理
+		default:
+			if ev.Type == "extension_ui_request" {
+				return // dialog 已由 handler 处理,fire-and-forget 忽略(实测 26 次 setStatus 噪声)
+			}
+			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
+			} else {
+				notices.record("pi", ev.Type, ev.Raw, sink)
+			}
+		}
+	}
+	go func() {
+		defer close(notifDone)
+		for {
+			select {
+			case ev := <-notifCh:
+				consume(ev)
+			case <-notifStop:
+				return
+			}
+		}
+	}()
+
+	// ---- 发 prompt ----
+	message, images := blocksToPrompt(req.InputBlocks)
+	params := map[string]any{"message": message}
+	if len(images) > 0 {
+		params["images"] = images
+	}
+	if _, err := c.CallCtx(runCtx, "prompt", params, piCallBudget); err != nil {
+		// success:false = prompt 在受理前被拒(流式中未带 streamingBehavior、模型不可用…)
+		// 受理后的失败走事件流(不会以第二条 response 出现 —— 文档明说)。
+		return partialText(&mu, &textBuf), nil, &piError{code: "PI_PROMPT_REJECTED", msg: err.Error()}
+	}
+
+	// ---- 轮次中定期用量推送 ----
+	// 【图10 实锤】过去 UsageUpdate 只在收尾发一次:pi 的流式 usage 恒 0、
+	// get_session_stats 是唯一真相,轮次进行中(尤其长任务)手机端上下文窗口卡
+	// 恒为 "0% · 0/窗口"。现在每 piUsagePushInterval 取一次 stats 推中程
+	// UsageUpdate:usage=本轮增量(stats - baseline),total=会话累计,
+	// 窗口=contextUsage.contextWindow —— 与收尾帧同一套口径(UsageUpdateFromStats)。
+	// 【压缩期间暂停】compaction_start 后 stats 会先缩后涨,手机端正显示
+	// "压缩中/已压缩"(turnUsage 已清):中程推送会把旧状态顶掉,故跳过;
+	// 收尾推送不受影响(压缩后 stats 已定稿,即"新一轮用量上报")。
+	// 【并发】sink 由 server 层串行化(thread.go 的 sendMu);get_session_stats
+	// 走 piapp 的 pending 表,与事件流互不干扰(Steer 同款轮中调用)。
+	usageStop := make(chan struct{})
+	usageDone := make(chan struct{})
+	var usageStopOnce sync.Once
+	stopUsagePush := func() {
+		usageStopOnce.Do(func() { close(usageStop) })
+	}
+	go func() {
+		defer close(usageDone)
+		ticker := time.NewTicker(piUsagePushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-usageStop:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				busy := compacting
+				mu.Unlock()
+				if busy {
+					continue
+				}
+				cur := p.statsQuiet(c)
+				if cur == nil {
+					// stats 取不到(超时/子进程临终):保持沉默,绝不推全 0 冒充真实值。
+					continue
+				}
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{Usage: UsageUpdateFromStats(cur, baseline)}})
+			}
+		}
+	}()
+	defer func() {
+		stopUsagePush()
+		<-usageDone
+	}()
+
+	// ---- 等 settled / 取消 / 子进程死亡 ----
+	select {
+	case <-runCtx.Done():
+	case <-c.DeathCh():
+	}
+	cause := context.Cause(runCtx)
+	userStop := ctx.Err() != nil && cause != errSettled // 上层取消(手机取消帧 / CancelTurn / 重入打断)
+	if cause == errSettled {
+		// 正常终局
+	} else if userStop {
+		// 发 abort 并等它干净收尾(abort 的应答在 settled 之后到 —— 文档明说)。
+		abortStart := time.Now()
+		actx, acancel := context.WithTimeout(context.Background(), piSettleWait)
+		_, _ = c.CallCtx(actx, "abort", nil, piSettleWait)
+		acancel()
+		log.Printf("[pi] 用户中止轮次 thread=%s(abort 收尾 %s)", t.ID, time.Since(abortStart).Round(time.Millisecond))
+	} else {
+		// 子进程死亡 / 协议外错误
+		if !c.Alive() {
+			return partialText(&mu, &textBuf), nil, &piError{code: "PI_CRASHED", msg: "Pi 子进程已退出,本轮终止(重发消息会自动重挂载会话)"}
+		}
+		return partialText(&mu, &textBuf), nil, &piError{code: "PI_STREAM_BROKEN", msg: "Pi 事件流中断"}
+	}
+
+	// ---- 收尾:停中程推送 + 推进续传游标 + 用量 + UsageUpdate ----
+	// 先停 ticker 并等它退出,保证收尾的最终 UsageUpdate 是最后一帧
+	// (中程帧与最终帧乱序会让手机端 turnUsage 回跳)。
+	stopUsagePush()
+	<-usageDone
+	// 正常终局/用户中止(abort 收尾后)会话条目已定稿,是每轮一次的最省推进点
+	// (RPC 流式事件本身不带条目 id,逐帧推进不成立 —— 实测)。崩溃路径已在
+	// 上方提前 return:游标故意留在原地,下次重挂载的增量回放才覆盖崩溃前尾部。
+	p.advanceEntryCursor(c, t.ID)
+	final := p.statsQuiet(c)
+	usage := UsageUpdateFromStats(final, baseline)
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{Usage: usage}})
+
+	mu.Lock()
+	finalText := textBuf.String()
+	mu.Unlock()
+	if finalText == "" {
+		// 全程无 text_delta(比如整轮只有工具调用被中止):兜底取 Pi 的最后回复
+		if raw, err := c.Call("get_last_assistant_text", nil, piCallBudget); err == nil {
+			var d struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(raw, &d) == nil {
+				finalText = d.Text
+			}
+		}
+	}
+	blocks := []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: finalText}}}}
+	if userStop {
+		return blocks, nil, ctx.Err()
+	}
+	// 优先用 session stats 的本轮增量;stats 不可用时退 agent_end 携带的 usage。
+	outUsage := usage.Usage
+	if outUsage == nil || (outUsage.GetInputTokens() == 0 && outUsage.GetOutputTokens() == 0 && lastUsage != nil) {
+		outUsage = lastUsage
+	}
+	return blocks, outUsage, nil
+}
+
+// errSettled 用 context.Cause 传递"正常终局"信号(agent_settled → runCancel)。
+var errSettled = errors.New("agent_settled")
+
+// statsQuiet 静默取 get_session_stats(失败返回 nil,不阻塞轮次)。
+func (p *PiProvider) statsQuiet(c *piapp.Client) *piSessionStats {
+	raw, err := c.Call("get_session_stats", nil, piCallBudget)
+	if err != nil {
+		return nil
+	}
+	return parseSessionStats(raw)
+}
+
+// usageFromAgentEnd 从 agent_end 的 messages 里取最后一条 assistant 的 usage。
+func usageFromAgentEnd(raw json.RawMessage) *pb.Usage {
+	var e struct {
+		Messages []struct {
+			Role  string `json:"role"`
+			Usage struct {
+				Input      int64   `json:"input"`
+				Output     int64   `json:"output"`
+				CacheRead  int64   `json:"cacheRead"`
+				CacheWrite int64   `json:"cacheWrite"`
+				Cost       float64 `json:"cost"`
+			} `json:"usage"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(raw, &e) != nil {
+		return nil
+	}
+	for i := len(e.Messages) - 1; i >= 0; i-- {
+		m := e.Messages[i]
+		if m.Role == "assistant" {
+			return &pb.Usage{
+				InputTokens:      m.Usage.Input,
+				OutputTokens:     m.Usage.Output,
+				CacheReadTokens:  m.Usage.CacheRead,
+				CacheWriteTokens: m.Usage.CacheWrite,
+				CostUsd:          m.Usage.Cost,
+			}
+		}
+	}
+	return nil
+}
+
+func toolCallIDOf(raw json.RawMessage) string {
+	var e struct {
+		ToolCallID string `json:"toolCallId"`
+	}
+	if json.Unmarshal(raw, &e) == nil {
+		return e.ToolCallID
+	}
+	return ""
+}
+
+// blocksToPrompt 把输入块转成 Pi 的 prompt 参数(文本拼接 + base64 图片)。
+func blocksToPrompt(blocks []pb.ContentBlock) (string, []any) {
+	var sb strings.Builder
+	var images []any
+	for i := range blocks {
+		switch b := blocks[i].Block.(type) {
+		case *pb.ContentBlock_Text:
+			sb.WriteString(b.Text.Text)
+		case *pb.ContentBlock_Image:
+			// 图片走 base64 进单行 JSON(实测 1MB 图单行 1.34MB,8MB 读缓冲扛住 —— 探针第 9 项)
+			images = append(images, map[string]any{
+				"type":     "image",
+				"data":     base64Of(b.Image.Data),
+				"mimeType": b.Image.MediaType,
+			})
+		}
+	}
+	return sb.String(), images
+}
+
+// partialText 失败路径返回已有文本(TurnFailed.partialText 用)。
+func partialText(mu *sync.Mutex, buf *strings.Builder) []pb.ContentBlock {
+	mu.Lock()
+	defer mu.Unlock()
+	txt := buf.String()
+	if txt == "" {
+		return nil
+	}
+	return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: txt}}}}
+}
+
+// ---- Steerer:运行中插话(对接 server 的 TurnSupplement/TurnInput 体系) ----
+
+// Steer 实现 agent.Steerer:向正在执行的 Pi 轮次插入输入(steer 语义)。
+//
+// 【对接】server.handleMidTurnInput 对实现 Steerer 的 provider 先试插话,
+// 失败自动转排队(Queued 帧 + 终局后续跑)—— 排队路径完全复用,输入绝不丢。
+// Pi 侧用专用 steer 命令(等价于 prompt + streamingBehavior:"steer",
+// 在当前助手轮的工具调用结束后、下一次 LLM 调用前注入)。
+func (p *PiProvider) Steer(ctx context.Context, threadID string, blocks []pb.ContentBlock) (bool, string, error) {
+	p.steerMu.Lock()
+	streaming := p.active[threadID]
+	p.steerMu.Unlock()
+	if !streaming {
+		return false, "", errors.New("当前没有正在运行的轮次")
+	}
+	p.mu.Lock()
+	c := p.clients[threadID]
+	p.mu.Unlock()
+	if c == nil || !c.Alive() {
+		return false, "", errors.New("Pi 子进程不可用")
+	}
+	message, images := blocksToPrompt(blocks)
+	params := map[string]any{"message": message}
+	if len(images) > 0 {
+		params["images"] = images
+	}
+	sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if _, err := c.CallCtx(sctx, "steer", params, 15*time.Second); err != nil {
+		// 轮次刚好结束/Pi 拒绝:交回 server 排队兜底,输入不丢
+		return false, "", err
+	}
+	return true, "", nil
+}
+
+// ---- S 级增量能力:压缩 / 离线导出 / 动态思考档位 / 斜杠命令清单 ----
+//
+// 这组方法供 server 层接线(CompactThread RPC 路由 / ListSlashCommands 面板)与
+// 后续 UI 消费;全部带自有超时,失败返回 piError(结构化进 gRPC 错误),不碰
+// Run 的轮次路径。
+
+// S 项专属超时(compact 要等一次真实 LLM 摘要,export 要渲染整棵会话树)。
+const (
+	piCompactBudget = 180 * time.Second
+	piExportBudget  = 60 * time.Second
+	// piSlashBudget 斜杠面板拉 get_commands 的上界:本地注册面毫秒级应答,
+	// 上界只兜子进程临终一刻(用户每敲一个 "/" 都可能拉一次,不能给长预算)。
+	piSlashBudget = 5 * time.Second
+)
+
+// piDefaultThinkingLevels Pi 档位全集(bundle THINKING_LEVEL_OPTIONS)。
+// 【只做兜底】权威值必须问会话:get_available_thinking_levels 按当前模型的
+// reasoning 能力 + thinkingLevelMap 过滤(实测 glm-5.3 只有 ["low","high","max"])。
+var piDefaultThinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// aliveClient 取该线程还活着的子进程;没有(或已死)返回 nil,由调用方决定
+// 是否冷启重挂载。与 Steer 同款只读快照,不与 Run 抢 clientFor 的重建路径。
+func (p *PiProvider) aliveClient(threadID string) *piapp.Client {
+	p.mu.Lock()
+	c := p.clients[threadID]
+	p.mu.Unlock()
+	if c != nil && !c.Alive() {
+		return nil
+	}
+	return c
+}
+
+// ensureMounted 冷启(或重挂)线程的子进程并完成会话握手。仅在外部能力方法
+// (压缩/导出)发现没有活客户端时调用;与 Run 的 mount 共用,重挂载后
+// ExternalSession 回填/校验语义一致。
+func (p *PiProvider) ensureMounted(t *store.Thread) (*piapp.Client, error) {
+	c, err := p.clientFor(t, t.Workspace)
+	if err != nil {
+		return nil, &piError{code: "PI_UNAVAILABLE", msg: err.Error()}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), piSwitchBudget)
+	defer cancel()
+	if err := p.mount(ctx, t, c); err != nil {
+		return nil, &piError{code: "PI_MOUNT_FAILED", msg: err.Error()}
+	}
+	return c, nil
+}
+
+// CompactThread 实现 pi 侧手动压缩(对齐 codex 的 CompactThread 语义,server
+// CompactThread RPC 按 AgentID 路由到它)。同步等真实压缩完成后返回。
+//
+// 【两道闸,顺序不能换】
+//  1. 轮次在跑 → 拒绝:pi 的 compact 第一步就是 abort 当前轮,放进来等于
+//     悄悄杀掉用户的任务(0.85.1 实测语义,bundle: `await this.abort()`);
+//  2. 会话没落地(SessionFile 空)→ 拒绝:没东西可压,与 codex 路径同文案口径。
+func (p *PiProvider) CompactThread(t *store.Thread) error {
+	p.mu.Lock()
+	busy := p.running[t.ID]
+	p.mu.Unlock()
+	if busy {
+		return &piError{code: "PI_BUSY", msg: "这个会话正在执行任务,等它跑完再压缩"}
+	}
+	if t.ExternalSession.SessionFile == "" {
+		return &piError{code: "PI_NOT_MOUNTED", msg: "这个会话还没有在电脑上落地(先发一条消息),暂时无法压缩"}
+	}
+	c := p.aliveClient(t.ID)
+	if c == nil {
+		nc, err := p.ensureMounted(t)
+		if err != nil {
+			return err
+		}
+		c = nc
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), piCompactBudget)
+	defer cancel()
+	res, err := c.Compact(ctx, "")
+	if err != nil {
+		return &piError{code: "PI_COMPACT_FAILED", msg: err.Error()}
+	}
+	log.Printf("[pi] 手动压缩完成 thread=%s tokens %d → 约 %d", t.ID, res.TokensBefore, res.EstimatedTokensAfter)
+	return nil
+}
+
+// ExportHTML 把会话导出成离线 HTML 存档,落到会话工作区下的
+// .pocketagent-exports/<threadId>.html,返回绝对路径 —— 手机端经现有
+// ReadFile(FileChunk 流)下载链路取文件,手机浏览器直接打开,离线可看。
+//
+// 【为什么落工作区】daemon 不额外引入"导出目录"配置;放会话自己的工作区
+// (隐藏目录),跟随现有文件服务的可见范围与鉴权,不新开攻击面。
+// 【轮次中可导出】export 是只读渲染,不碰运行态,不设 running 闸。
+func (p *PiProvider) ExportHTML(t *store.Thread) (string, error) {
+	if t.ExternalSession.SessionFile == "" {
+		return "", &piError{code: "PI_NOT_MOUNTED", msg: "这个会话还没有在电脑上落地(先发一条消息),暂时无法导出"}
+	}
+	c := p.aliveClient(t.ID)
+	if c == nil {
+		nc, err := p.ensureMounted(t)
+		if err != nil {
+			return "", err
+		}
+		c = nc
+	}
+	out, err := piExportPath(t)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), piExportBudget)
+	defer cancel()
+	got, err := c.ExportHTML(ctx, out)
+	if err != nil {
+		return "", &piError{code: "PI_EXPORT_FAILED", msg: err.Error()}
+	}
+	return got, nil
+}
+
+// piExportPath 导出文件的落盘路径:<工作区>/.pocketagent-exports/<threadId>.html。
+// 抽成纯函数单测钉死布局(手机端按同一约定拼下载路径)。
+func piExportPath(t *store.Thread) (string, error) {
+	ws := strings.TrimSpace(t.Workspace)
+	if ws == "" {
+		return "", &piError{code: "PI_EXPORT_FAILED", msg: "会话没有工作区,无法确定导出位置"}
+	}
+	dir := filepath.Join(ws, ".pocketagent-exports")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", &piError{code: "PI_EXPORT_FAILED", msg: "创建导出目录失败: " + err.Error()}
+	}
+	return filepath.Join(dir, t.ID+".html"), nil
+}
+
+// SlashCommandsFor 返回该线程当前可用的 pi 斜杠命令(ListSlashCommands 面板的
+// pi 数据源,与 zcode 的 zcodeSlashSource.SlashCommandsFor 同签名同语义)。
+//
+// 【数据来源(探针实证)】pi RPC get_commands(0.85.1,cmd/piprobe -mode cmds,
+// 证据 docs/verify/evidence/pi-cmds-probe.md):一次应答带全 extension 命令 /
+// prompt 模板 / 技能("skill:<名>" 前缀形态)。三源都是"prompt 以 /<名> 开头
+// 即可触发"的真命令 —— 名字原样透传,手机点选回填 "/<名> " 后走 prompt RPC,
+// pi 侧原生展开(命令执行 / 技能内容注入),不需要任何自然语言转译。
+//
+// 【只用活客户端,不冷启】没有活子进程(会话没在电脑上落地 / daemon 刚重启)
+// 直接返回 nil:为一个"/"按键冷启一个 node 子进程不划算,与 zcode 路径 3 的
+// "不为看一眼列表凭空建会话"同哲学;会话跑起来后(或重挂载后)自然有数据。
+// 失败记日志回 nil,面板安静收起,绝不把错误抛给输入框。
+func (p *PiProvider) SlashCommandsFor(threadID string) []*pb.SlashCommand {
+	c := p.aliveClient(threadID)
+	if c == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), piSlashBudget)
+	defer cancel()
+	got, err := c.GetCommands(ctx)
+	if err != nil {
+		log.Printf("[pi] 拉取斜杠命令失败(面板收起) thread=%s: %v", threadID, err)
+		return nil
+	}
+	out := make([]*pb.SlashCommand, 0, len(got))
+	for _, sc := range got {
+		out = append(out, &pb.SlashCommand{
+			Name:        sc.Name,
+			Description: sc.Description,
+			// inputHint 有意留空:pi 的 RpcSlashCommand 没有参数提示字段;手机端
+			// 对空 inputHint 的非 codex 命令走 "/命令 " 回填,与 pi 的原生展开语义对齐。
+		})
+	}
+	return out
+}
+
+// ThinkingLevels 该线程当前模型的动态思考档位(get_available_thinking_levels)。
+//
+// 【作为 ModelEffort 档位来源的接入方式】手机"思考强度"选择器现有的档位是
+// codex 语义(low/medium/high/xhigh);Pi 的档位是模型相关的动态集合(实测
+// glm-5.3 只有 low/high/max,thinkingLevelMap 把 off/minimal/medium/xhigh 映成
+// null 被过滤)。proto(model/thread)本轮被提示词优化占用,无法新增
+// "列档位"字段/RPC —— 本轮只做 provider 侧数据源:有活客户端就实时取,
+// 没有就回全集兜底(不起子进程:为一个档位列表冷启太贵)。UI 接线待 proto
+// 增量后补(需求清单见交付报告)。
+func (p *PiProvider) ThinkingLevels(t *store.Thread) []string {
+	if c := p.aliveClient(t.ID); c != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), piCallBudget)
+		defer cancel()
+		if levels, err := c.AvailableThinkingLevels(ctx); err == nil && len(levels) > 0 {
+			return levels
+		}
+	}
+	return nil
+}
+
+// ---- 标题同步(手机端重命名 → Pi 会话,与 TitleHandler 互为反向)----
+
+// sessionNameSetter 重命名同步对 piapp.Client 的窄接口(单测打桩,不依赖子进程;
+// piapp.Client 的 CallCtx 签名天然满足,生产零适配)。
+type sessionNameSetter interface {
+	CallCtx(ctx context.Context, typ string, params map[string]any, timeout time.Duration) (json.RawMessage, error)
+}
+
+// Rename 把手机端的重命名下发到 Pi(set_session_name),电脑端 pi -r 立即可见。
+// 与 TitleHandler 互为反向:那边是"Pi 改名 → 落库",这边是"落库 → Pi 改名"。
+//
+// 【两条短路,都不碰子进程】
+//   - 空标题:与 mount 新会话分支同口径(空名不下发);
+//   - 会话还没在电脑上落地(SessionFile 空):下次 Run 的 mount 新会话分支会用
+//     落库后的 t.Title 下发 set_session_name,天然覆盖,无需此刻起进程。
+//
+// 【其余路径】有活客户端直接下发;没有则冷启重挂载后下发(与 CompactThread
+// 同款"按需起子进程" —— 重命名是低频动作,秒级开销可接受)。不在 mount 的
+// 重挂载分支补下发:电脑端在 daemon 无客户端期间改的名会被库里的旧标题顶掉,
+// "最后一次改名为准"的正确语义由本方法直接下发保证。
+//
+// 【失败语义】返回错误交调用方记日志,不让本地重命名失败 —— 与 codex 的
+// SetCodexThreadName 同款纪律(库内已改名是既成事实)。名字下发后 Pi 回发
+// session_info_changed → TitleHandler → 落库,库内标题已相同,"标题相同不写库"
+// 守卫保证不会形成回调环(见 server.wirePiTitleHandler)。
+func (p *PiProvider) Rename(t *store.Thread, title string) error {
+	trimmed := strings.TrimSpace(title)
+	if trimmed == "" {
+		return nil
+	}
+	if t.ExternalSession.SessionFile == "" {
+		return nil
+	}
+	c := p.aliveClient(t.ID)
+	if c == nil {
+		nc, err := p.ensureMounted(t)
+		if err != nil {
+			return err
+		}
+		c = nc
+	}
+	return p.sendSessionName(c, t.ID, trimmed)
+}
+
+// sendSessionName 下发 set_session_name(抽成方法便于单测注入 [sessionNameSetter] 桩)。
+func (p *PiProvider) sendSessionName(c sessionNameSetter, threadID, title string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), piCallBudget)
+	defer cancel()
+	if _, err := c.CallCtx(ctx, "set_session_name", map[string]any{"name": title}, piCallBudget); err != nil {
+		log.Printf("[pi] 同步新名字失败(本地已改名) thread=%s: %v", threadID, err)
+		return &piError{code: "PI_RENAME_FAILED", msg: "同步新名字到 Pi 失败(本地已改名): " + err.Error()}
+	}
+	log.Printf("[pi] 重命名已同步 thread=%s title=%.60q", threadID, title)
+	return nil
+}
+
+// ---- 错误类型(实现 ErrorInfoCarrier,结构化进 TurnFailed)----
+
+type piError struct {
+	code string
+	msg  string
+}
+
+func (e *piError) Error() string { return e.msg }
+
+func (e *piError) ErrorInfo() *pb.Error {
+	return &pb.Error{Code: e.code, Message: e.msg}
+}
+
+// ---- 断点续传(调研 §8.2:事件缓冲 + 游标续传的 daemon 侧落地)----
+//
+// 三态:
+//  1. 推进:每轮收尾 get_entries 一次,游标推到"最近一次从 Pi 拿到的条目 id"
+//     (RPC 流式事件不带条目 id,逐帧推进不成立;每轮一次 RPC 最省,页内最后
+//     一条即见过的最大位置)。
+//  2. 增量:重挂载后游标有效 → get_entries(since=游标) 权威增量;条目经
+//     piapp.Entry.WireEvents 合成**线上事件形状**,复用现有映射函数(MapTextDelta/
+//     MapToolcallEnd/…)做摘要 —— 回放与实时共用同一映射真相;一条 CodexEvent
+//     (STATUS)上屏,不注入正文流(textBuf 会拼进本轮最终答案,不能混)。
+//  3. 兜底:游标失效(ErrCursorInvalid,Entry not found 等)→ 走现有
+//     switch_session 路径(mount 已完成,历史以 store 会话记录为准),并以全量
+//     get_entries 的 leafId 重锚游标;全量也失败则清空游标,下轮收尾重建。
+//     (rpc.md:get_messages 的 AgentMessage 不带 entryId,重锚必须用全量
+//     get_entries,而不是 get_messages —— 后者只在 get_fork_messages 里带 id。)
+
+// entriesFetcher 断点续传对 piapp.Client 的窄接口(单测打桩,不依赖子进程)。
+type entriesFetcher interface {
+	GetEntries(ctx context.Context, sessionFile, sinceEntryID string) (*piapp.EntriesPage, error)
+}
+
+// cursorOf 读线程游标(与 clients/running 同锁)。
+func (p *PiProvider) cursorOf(threadID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cursors[threadID]
+}
+
+// setCursor 写线程游标;id 为空表示清空。
+func (p *PiProvider) setCursor(threadID, id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if id == "" {
+		delete(p.cursors, threadID)
+		return
+	}
+	p.cursors[threadID] = id
+}
+
+// advanceEntryCursor 推进游标(Run 收尾调用):用脱离轮次生命周期的独立超时
+// (收尾时 runCtx 已取消,但 Pi 会话文件是磁盘真相,照拉不误)。失败只记日志:
+// 游标落后只会让下次回放多补几条,不会丢 —— 续传语义天生幂等。
+func (p *PiProvider) advanceEntryCursor(f entriesFetcher, threadID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), piCallBudget)
+	defer cancel()
+	page, err := f.GetEntries(ctx, p.sessionFileOf(f), p.cursorOf(threadID))
+	if err != nil {
+		log.Printf("[pi] 断点续传游标推进失败(下轮再试) thread=%s: %v", threadID, err)
+		return
+	}
+	if id := page.LastID(); id != "" {
+		p.setCursor(threadID, id)
+	}
+}
+
+// sessionFileOf 取 fetcher 当前挂载的会话文件(用于 GetEntries 的挂载校验)。
+// 真客户端读 SessionFile 缓存;测试桩返回空串(校验自动跳过)。
+func (p *PiProvider) sessionFileOf(f entriesFetcher) string {
+	if c, ok := f.(*piapp.Client); ok {
+		return c.SessionFile()
+	}
+	return ""
+}
+
+// replayMissed 断线重连(子进程重启 → mount 重挂载成功)后的三态续传。
+// 返回是否回放了条目(诊断用)。
+func (p *PiProvider) replayMissed(ctx context.Context, f entriesFetcher, t *store.Thread, sink Sink) bool {
+	sessionFile := t.ExternalSession.SessionFile
+	cur := p.cursorOf(t.ID)
+	if cur == "" {
+		return false // 无游标基线(daemon 重启后内存归零/全新会话):跳过,收尾会重建
+	}
+	page, err := f.GetEntries(ctx, sessionFile, cur)
+	if err != nil {
+		// ---- 兜底:增量不可用 → 现有路径 + 全量重锚 ----
+		log.Printf("[pi] 断点续传:增量拉取失败,转全量兜底 thread=%s: %v", t.ID, err)
+		newCur := ""
+		if full, ferr := f.GetEntries(ctx, sessionFile, ""); ferr != nil {
+			log.Printf("[pi] 断点续传:全量重锚也失败,清空游标(下轮收尾重建) thread=%s: %v", t.ID, ferr)
+		} else {
+			newCur = full.LeafID // 重锚到活动分支叶(废弃分支历史不回放,以会话记录为准)
+		}
+		p.setCursor(t.ID, newCur)
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+			Kind:    pb.CodexEvent_STATUS,
+			Code:    "pi_resume_fallback",
+			Title:   "断线续传",
+			Message: "断线期间的增量不可用,已回退全量:历史以会话记录为准,本轮继续执行。",
+		}}})
+		return false
+	}
+	if len(page.Entries) == 0 {
+		return false // 断线期间没有新条目:游标原位即最新,无需回放
+	}
+	// ---- 增量回放 ----
+	parts := make([]string, 0, len(page.Entries))
+	for i := range page.Entries {
+		parts = append(parts, replayEntryDigest(&page.Entries[i]))
+	}
+	summary := fmt.Sprintf("断线期间补到 %d 条事件:%s", len(page.Entries), strings.Join(parts, ";"))
+	log.Printf("[pi] 断点续传:增量回放 thread=%s since=%s → %s", t.ID, cur, summary)
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+		Kind:    pb.CodexEvent_STATUS,
+		Code:    "pi_resume_replay",
+		Title:   "断线续传",
+		Message: clipRunes(summary, 8000),
+	}}})
+	if id := page.LastID(); id != "" {
+		p.setCursor(t.ID, id) // 推进到见过的最大位置(含废弃分支,字面"最后一条")
+	}
+	return true
+}
+
+// replayEntryDigest 单条回放摘要:条目先经 WireEvents 合成线上形状,再喂给
+// 现有映射函数(MapTextDelta/MapThinkingDelta/MapToolcallEnd/MapToolExecEnd)——
+// 回放与实时共用同一映射管线,格式漂移会被映射函数的既有单测拦住。
+func replayEntryDigest(e *piapp.Entry) string {
+	if e == nil {
+		return "?"
+	}
+	var texts, thinks, calls, ends, failedEnds int
+	toolName := ""
+	for _, ev := range e.WireEvents() {
+		switch ev.Type {
+		case "message_update":
+			if d, ok := MapTextDelta(ev.Raw); ok {
+				texts += len([]rune(d.Delta))
+				continue
+			}
+			if d, ok := MapThinkingDelta(ev.Raw); ok {
+				thinks += len([]rune(d.Delta))
+				continue
+			}
+			if upd, ok := MapToolcallEnd(ev.Raw); ok {
+				calls++
+				toolName = upd.Call.Name
+			}
+		case "tool_execution_end":
+			if upd, ok := MapToolExecEnd(ev.Raw, piToolClip); ok {
+				ends++
+				toolName = upd.Call.Name
+				if !upd.Result.Ok {
+					failedEnds++
+				}
+			}
+		}
+	}
+	if texts > 0 || thinks > 0 || calls > 0 {
+		d := make([]string, 0, 3)
+		if texts > 0 {
+			d = append(d, fmt.Sprintf("正文 %d 字", texts))
+		}
+		if thinks > 0 {
+			d = append(d, fmt.Sprintf("思考 %d 字", thinks))
+		}
+		if calls > 0 {
+			d = append(d, "调用 "+nonEmpty(toolName, "工具"))
+		}
+		return "助手消息(" + strings.Join(d, ", ") + ")"
+	}
+	if ends > 0 {
+		state := "完成"
+		if failedEnds > 0 {
+			state = "失败"
+		}
+		return nonEmpty(toolName, "工具") + " 结果(" + state + ")"
+	}
+	return "条目 " + e.ID // 非 message 条目(会话元数据等):只报 id
+}
+
+// nonEmpty 空串兜底。
+func nonEmpty(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+// Only advertise levels explicitly supported by this model. Pi uses null to disable a level.
+// Mirrors Pi getSupportedThinkingLevels: null disables; missing base levels are supported.
+func piModelThinkingLevels(reasoning bool, mapping map[string]json.RawMessage) []string {
+	if !reasoning {
+		return []string{"off"}
+	}
+	var out []string
+	for _, level := range piDefaultThinkingLevels {
+		raw, exists := mapping[level]
+		if exists && string(raw) == "null" {
+			continue
+		}
+		if (level == "xhigh" || level == "max") && !exists {
+			continue
+		}
+		out = append(out, level)
+	}
+	// Preserve future capability keys instead of imposing our legacy seven-level enum.
+	seen := map[string]bool{}
+	for _, v := range piDefaultThinkingLevels {
+		seen[v] = true
+	}
+	var additional []string
+	for key, value := range mapping {
+		if !seen[key] && string(value) != "null" {
+			additional = append(additional, key)
+		}
+	}
+	sort.Strings(additional)
+	return append(out, additional...)
+}
+
+func (p *PiProvider) InvalidateModels() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modelsAt = time.Time{}
+}

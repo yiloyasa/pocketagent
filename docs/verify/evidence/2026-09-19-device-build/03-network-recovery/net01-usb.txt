@@ -1,0 +1,9 @@
+{
+  "reverse": "UsbFfs tcp:7246 tcp:7246",
+  "startup_TotalTime_ms": 848,
+  "usb_connected": false,
+  "peer": null,
+  "seconds_to_usb": null,
+  "app_label": "已连接 · 局域网直连",
+  "verdict": "FAIL"
+}

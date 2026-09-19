@@ -136,6 +136,135 @@ object PaDownloader {
     }
 
     /**
+     * 从**网页 URL** 下载文件到手机(内置浏览器 setDownloadListener 的落点)。
+     *
+     * 【为什么不用系统 DownloadManager】它把文件丢进系统下载、且我们拿不到统一的
+     * 任务中心进度/离线快照;这里自己用 HttpURLConnection 流式落盘,顺带把中小文件
+     * 存一份到 [OfflineStore](同一 URL 再次打开可离线渲染,与"离线优先"打通)。
+     *
+     * @param cookie 当前 WebView 的 Cookie(百度/抖音等登录态站点下载依赖它)
+     */
+    fun downloadFromUrl(
+        url: String,
+        name: String,
+        mime: String,
+        userAgent: String = "",
+        cookie: String = "",
+        sourceTitle: String = "",
+        threadId: String = "",
+    ) {
+        val ctx = appCtx ?: return
+        val safeName = sanitizeName(name, mime)
+        val taskId = TaskCenter.trackDownload(url, safeName, threadId)
+        TaskCenter.annotateDownload(taskId, sourceTitle)
+        if (running.incrementAndGet() == 1) AgentConnection.startTurnService()
+        scope.launch {
+            var sink: OutputStream? = null
+            var targetUri: String? = null
+            try {
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("Accept", "*/*")
+                    if (userAgent.isNotEmpty()) setRequestProperty("User-Agent", userAgent)
+                    if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
+                }
+                conn.connect()
+                val code = conn.responseCode
+                if (code !in 200..299) throw IllegalStateException("服务器返回 HTTP $code")
+                val total = conn.contentLengthLong
+                val resolvedMime = conn.contentType?.substringBefore(';')?.trim().orEmpty()
+                    .ifBlank { mime.ifBlank { mimeOf(safeName) } }
+                val target = createSink(ctx, safeName, resolvedMime)
+                sink = target.first
+                targetUri = target.third
+                var written = 0L
+                // 小于 4MB 的顺带留一份离线快照(同 URL 再开能离线渲染),太大就只落盘不缓存
+                val keepSnapshot = total in 1..(4L * 1024 * 1024)
+                val buffered = if (keepSnapshot) java.io.ByteArrayOutputStream() else null
+                conn.inputStream.use { input ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        sink.write(buf, 0, n)
+                        written += n
+                        buffered?.write(buf, 0, n)
+                        TaskCenter.updateDownload(
+                            taskId,
+                            if (total > 0) written.toFloat() / total else 0f,
+                            "${fmt(written)}${if (total > 0) " / ${fmt(total)}" else ""}",
+                        )
+                    }
+                }
+                if (total > 0 && written < total) {
+                    throw IllegalStateException("传输不完整:${fmt(written)} / ${fmt(total)}")
+                }
+                sink.flush()
+                if (buffered != null && written > 0) {
+                    OfflineStore.putUrl(url, buffered.toByteArray(), resolvedMime, safeName)
+                }
+                TaskCenter.finishDownload(
+                    taskId, true, "已保存到「${target.second}」",
+                    localUri = target.third, sizeText = fmt(written),
+                )
+                targetUri = null
+            } catch (e: Exception) {
+                deletePartialFile(ctx, targetUri, sink)
+                TaskCenter.finishDownload(taskId, false, "下载失败:${e.message ?: "未知错误"}")
+            } finally {
+                runCatching { sink?.close() }
+                if (running.decrementAndGet() == 0) AgentConnection.stopTurnService()
+            }
+        }
+    }
+
+    /**
+     * 把页面里用 JS 读出来的 base64 内容(blob:/data: 兜底)落盘。
+     * blob: 是浏览器内部的临时 URL,HttpURLConnection 取不到 —— 只能在页面里 fetch 后回传。
+     */
+    fun saveBase64(name: String, mime: String, base64: String) {
+        val ctx = appCtx ?: return
+        val safeName = sanitizeName(name, mime)
+        val taskId = TaskCenter.trackDownload("blob:${System.currentTimeMillis()}:$safeName", safeName)
+        if (running.incrementAndGet() == 1) AgentConnection.startTurnService()
+        scope.launch {
+            var sink: OutputStream? = null
+            var targetUri: String? = null
+            try {
+                val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                val target = createSink(ctx, safeName, mime.ifBlank { mimeOf(safeName) })
+                sink = target.first
+                targetUri = target.third
+                sink.write(bytes)
+                sink.flush()
+                TaskCenter.finishDownload(
+                    taskId, true, "已保存到「${target.second}」",
+                    localUri = target.third, sizeText = fmt(bytes.size.toLong()),
+                )
+                targetUri = null
+            } catch (e: Exception) {
+                deletePartialFile(ctx, targetUri, sink)
+                TaskCenter.finishDownload(taskId, false, "保存失败:${e.message ?: "未知错误"}")
+            } finally {
+                runCatching { sink?.close() }
+                if (running.decrementAndGet() == 0) AgentConnection.stopTurnService()
+            }
+        }
+    }
+
+    /** 文件名规范化:清掉非法字符、缺后缀时按 MIME 补上、限长。 */
+    private fun sanitizeName(name: String, mime: String): String {
+        var n = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "下载文件" }
+        if (!n.contains('.')) {
+            val ext = DocFormatRegistry.extFor(mime)
+            if (ext.isNotEmpty()) n = "$n$ext"
+        }
+        return n.take(120)
+    }
+
+    /**
      * 建一个写入口。
      * API 29+ 走 MediaStore.Downloads(免存储权限,落进系统"下载"目录);
      * 更低版本退到 App 自己的外部目录,避免申请 WRITE_EXTERNAL_STORAGE。
@@ -214,8 +343,29 @@ object PaDownloader {
             toast(ctx, "这个格式没有可打开的应用\n已保存到:${detail.ifEmpty { uri }}")
             return
         }
+        // 【file:// 必须转 content://】API 24+ 直接 ACTION_VIEW 一个 file:// 会抛
+        // FileUriExposedException,被外层 catch 吞掉后就表现为"没有能打开的应用"。
+        // 这里统一经 FileProvider 换成可授权的 content://。
+        val parsed = android.net.Uri.parse(uri)
+        val dataUri: android.net.Uri = if (parsed.scheme == "file") {
+            val path = parsed.path
+            if (path.isNullOrEmpty()) {
+                toast(ctx, "文件位置无效")
+                return
+            }
+            runCatching {
+                androidx.core.content.FileProvider.getUriForFile(
+                    ctx, ctx.packageName + ".fileprovider", java.io.File(path),
+                )
+            }.getOrNull() ?: run {
+                toast(ctx, "这个文件不在可共享的目录内\n已保存到:${detail.ifEmpty { uri }}")
+                return
+            }
+        } else {
+            parsed
+        }
         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-            setDataAndType(android.net.Uri.parse(uri), kind.mime)
+            setDataAndType(dataUri, kind.mime)
             addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -344,8 +494,8 @@ object PaDownloader {
         android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
     }
 
-    /** 后缀 → MIME:统一由 FileKind 提供,避免两处清单走偏。 */
-    private fun mimeOf(name: String): String = fileKindOf(name).mime
+    /** 后缀 → MIME:统一由格式登记表提供,避免两处清单走偏。 */
+    private fun mimeOf(name: String): String = DocFormatRegistry.mimeFor(name)
 
     private fun fmt(bytes: Long): String = when {
         bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1fMB", bytes / 1048576f)

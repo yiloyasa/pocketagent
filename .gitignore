@@ -17,6 +17,8 @@ intermediates/
 # ---------- 编译出的可执行文件 ----------
 *.exe
 *.exe~
+*.exe.*            # 带后缀的旧二进制(如 pocketagentd.exe.prev-20260919)——*.exe 匹配不到
+*.prev-*
 *.dll
 *.so
 *.dylib
@@ -47,6 +49,11 @@ docs/_video_frames_ref/
 .idea/
 *.iml
 local.properties
+android/app/libs/*.aar
+android/app/libs/*.download
+android/app/src/main/assets/sensevoice/*.onnx
+android/app/src/main/assets/sensevoice/tokens.txt
+android/app/src/main/assets/sensevoice/*.download
 captures/
 .externalNativeBuild/
 .cxx/

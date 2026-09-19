@@ -1,0 +1,6 @@
+{
+  "logcat_credential_hits": [],
+  "events_jsonl_size": 118094,
+  "events_jsonl_credential_hits": [],
+  "note": "命中判定基于 token/Bearer/api_key/pair_code 正则; 内容已脱敏"
+}

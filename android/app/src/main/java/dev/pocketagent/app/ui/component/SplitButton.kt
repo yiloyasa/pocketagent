@@ -83,7 +83,9 @@ fun SplitButton(
         Row(
             Modifier
                 .then(if (compact) Modifier else Modifier.fillMaxWidth())
-                .height(buttonHeight)
+                // 【heightIn 而不是 height】主按钮的 caption 要显示"当前生效值"(如模型名),
+                // 固定高度会让两行 caption 被裁掉。给最小高度、允许按需长高。
+                .heightIn(min = buttonHeight)
                 .background(Pa.Card, corner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -107,11 +109,13 @@ fun SplitButton(
                     )
                     if (caption != null && !compact) {
                         Spacer(Modifier.height(1.dp))
+                        // 当前生效值(如模型名)允许折到第二行,不做单行硬截断。
                         Text(
                             caption,
-                            fontSize = 12.5.sp,
+                            fontSize = 13.5.sp,
                             color = Pa.TextSecondary,
-                            maxLines = 1,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -142,7 +146,8 @@ fun SplitButton(
                     painterResource(R.drawable.ic_lucide_chevron_right),
                     contentDescription = "更多选项",
                     tint = Pa.TextSecondary,
-                    modifier = Modifier.size(if (compact) 13.dp else 16.dp).rotate(chevron),
+                    // 入口箭头放大一档:13/16dp 在深色底上偏小(用户反馈"图标过小")。
+                    modifier = Modifier.size(if (compact) 15.dp else 18.dp).rotate(chevron),
                 )
             }
         }
@@ -157,7 +162,7 @@ fun SplitButton(
             ) {
                 Column(
                     Modifier
-                        .widthIn(min = if (compact) 140.dp else 176.dp, max = 264.dp)
+                        .widthIn(min = if (compact) 140.dp else 176.dp, max = 300.dp)
                         .heightIn(max = 288.dp)
                         .verticalScroll(rememberScrollState())
                         .background(Pa.CardHigh, RoundedCornerShape(14.dp))
@@ -185,20 +190,22 @@ fun SplitButton(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
+                                // 选项标题(模型名/档位名)允许折到第二行,不单行硬截断。
                                 Text(
                                     opt.title,
                                     fontSize = 14.5.sp,
                                     color = if (opt.selected) Pa.Accent else Pa.TextPrimary,
                                     fontWeight = if (opt.selected) FontWeight.Medium else FontWeight.Normal,
-                                    maxLines = 1,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                                 if (opt.desc.isNotEmpty()) {
                                     Spacer(Modifier.height(1.dp))
                                     Text(
                                         opt.desc,
-                                        fontSize = 11.5.sp,
+                                        fontSize = 12.5.sp,
                                         color = Pa.TextTertiary,
-                                        maxLines = 1,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
@@ -209,7 +216,7 @@ fun SplitButton(
                                     painterResource(R.drawable.ic_lucide_check),
                                     contentDescription = null,
                                     tint = Pa.Accent,
-                                    modifier = Modifier.size(15.dp),
+                                    modifier = Modifier.size(18.dp),
                                 )
                             }
                         }

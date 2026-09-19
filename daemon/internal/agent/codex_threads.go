@@ -13,6 +13,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -170,14 +171,14 @@ func sortEntries(entries []CodexThreadEntry, sortKey string, asc bool) {
 // ThreadSections 列出 codex 侧的全部分组。
 func (p *CodexProvider) ThreadSections() ([]*pb.ThreadSection, error) {
 	out := []*pb.ThreadSection{}
-	err := p.withClient(func(c *codexapp.Client) error {
+	err := p.withStatusClient(func(ctx context.Context, c *codexapp.Client) error {
 		cursor := ""
 		for page := 0; page < 10; page++ {
 			params := map[string]interface{}{}
 			if cursor != "" {
 				params["cursor"] = cursor
 			}
-			raw, err := c.Call("threadSection/list", params)
+			raw, err := c.CallCtx(ctx, "threadSection/list", params)
 			if err != nil {
 				return err
 			}

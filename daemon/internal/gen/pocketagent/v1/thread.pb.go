@@ -177,7 +177,7 @@ func (x CodexEvent_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CodexEvent_Kind.Descriptor instead.
 func (CodexEvent_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{35, 0}
+	return file_v1_thread_proto_rawDescGZIP(), []int{56, 0}
 }
 
 type ToolCallUpdate_Phase int32
@@ -186,6 +186,9 @@ const (
 	ToolCallUpdate_UNSPECIFIED ToolCallUpdate_Phase = 0
 	ToolCallUpdate_STARTED     ToolCallUpdate_Phase = 1 // 已发起(有 id+name+args)
 	ToolCallUpdate_FINISHED    ToolCallUpdate_Phase = 2 // 已有结果
+	// 进行中进度(多 agent 接入新增,只增不改):Pi 的 tool_execution_update
+	// 持续吐进度,partialResult 是**累积值**,App 端按 callId 原地替换(不追加)。
+	ToolCallUpdate_UPDATE ToolCallUpdate_Phase = 3
 )
 
 // Enum value maps for ToolCallUpdate_Phase.
@@ -194,11 +197,13 @@ var (
 		0: "UNSPECIFIED",
 		1: "STARTED",
 		2: "FINISHED",
+		3: "UPDATE",
 	}
 	ToolCallUpdate_Phase_value = map[string]int32{
 		"UNSPECIFIED": 0,
 		"STARTED":     1,
 		"FINISHED":    2,
+		"UPDATE":      3,
 	}
 )
 
@@ -226,7 +231,488 @@ func (x ToolCallUpdate_Phase) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolCallUpdate_Phase.Descriptor instead.
 func (ToolCallUpdate_Phase) EnumDescriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{39, 0}
+	return file_v1_thread_proto_rawDescGZIP(), []int{60, 0}
+}
+
+type StartReviewRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"` // 会话 id(必须已存在于本地库)
+	// 审查重点(可空):空 = daemon 侧用默认口径(审查会话中拟定的计划);
+	// 非空 = 原样作为 codex 自由指令(custom target 的 instructions)下发。
+	Focus         string `protobuf:"bytes,2,opt,name=focus,proto3" json:"focus,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartReviewRequest) Reset() {
+	*x = StartReviewRequest{}
+	mi := &file_v1_thread_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartReviewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartReviewRequest) ProtoMessage() {}
+
+func (x *StartReviewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartReviewRequest.ProtoReflect.Descriptor instead.
+func (*StartReviewRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *StartReviewRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *StartReviewRequest) GetFocus() string {
+	if x != nil {
+		return x.Focus
+	}
+	return ""
+}
+
+type StartReviewResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 承载本次审查的 codex 线程 id(实测 inline 模式 = 原线程 id,与请求线程
+	// 一致)。手机端只拿它做诊断回指,审查结果完全依赖事件流展示。
+	ReviewId string `protobuf:"bytes,1,opt,name=review_id,json=reviewId,proto3" json:"review_id,omitempty"`
+	// 发起成功(失败走 gRPC 错误,不会出现 false;字段留给未来异步语义)。
+	Started       bool `protobuf:"varint,2,opt,name=started,proto3" json:"started,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartReviewResponse) Reset() {
+	*x = StartReviewResponse{}
+	mi := &file_v1_thread_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartReviewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartReviewResponse) ProtoMessage() {}
+
+func (x *StartReviewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartReviewResponse.ProtoReflect.Descriptor instead.
+func (*StartReviewResponse) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *StartReviewResponse) GetReviewId() string {
+	if x != nil {
+		return x.ReviewId
+	}
+	return ""
+}
+
+func (x *StartReviewResponse) GetStarted() bool {
+	if x != nil {
+		return x.Started
+	}
+	return false
+}
+
+type ListSlashCommandsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"` // 会话 id(必须已存在于本地库)
+	Refresh       bool                   `protobuf:"varint,2,opt,name=refresh,proto3" json:"refresh,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSlashCommandsRequest) Reset() {
+	*x = ListSlashCommandsRequest{}
+	mi := &file_v1_thread_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSlashCommandsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSlashCommandsRequest) ProtoMessage() {}
+
+func (x *ListSlashCommandsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSlashCommandsRequest.ProtoReflect.Descriptor instead.
+func (*ListSlashCommandsRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ListSlashCommandsRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *ListSlashCommandsRequest) GetRefresh() bool {
+	if x != nil {
+		return x.Refresh
+	}
+	return false
+}
+
+// SlashCommand 快照顶层 slashCommands[] 的一项(元素形状为实测:
+// {"description":"…","inputHint":"/goal …","name":"goal"},见
+// daemon/docs/verify/evidence/zcode-p0-probe-raw.log)。
+type SlashCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                            // 命令名(不带斜杠,如 "goal")
+	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`              // 一句话说明
+	InputHint     string                 `protobuf:"bytes,3,opt,name=input_hint,json=inputHint,proto3" json:"input_hint,omitempty"` // 参数提示(如 "/goal [pause|resume|…]",可为空)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SlashCommand) Reset() {
+	*x = SlashCommand{}
+	mi := &file_v1_thread_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SlashCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SlashCommand) ProtoMessage() {}
+
+func (x *SlashCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SlashCommand.ProtoReflect.Descriptor instead.
+func (*SlashCommand) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SlashCommand) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SlashCommand) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *SlashCommand) GetInputHint() string {
+	if x != nil {
+		return x.InputHint
+	}
+	return ""
+}
+
+type ListSlashCommandsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 空 = 非 zcode 会话或快照暂不可用(手机端不显示候选条)。
+	Commands      []*SlashCommand `protobuf:"bytes,1,rep,name=commands,proto3" json:"commands,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSlashCommandsResponse) Reset() {
+	*x = ListSlashCommandsResponse{}
+	mi := &file_v1_thread_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSlashCommandsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSlashCommandsResponse) ProtoMessage() {}
+
+func (x *ListSlashCommandsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSlashCommandsResponse.ProtoReflect.Descriptor instead.
+func (*ListSlashCommandsResponse) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListSlashCommandsResponse) GetCommands() []*SlashCommand {
+	if x != nil {
+		return x.Commands
+	}
+	return nil
+}
+
+type OptimizePromptRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Text  string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"` // 输入栏里的原始文本(trim 后必须非空)
+	// 预留的改写风格:concise = 压缩到一句话;detailed = 展开细节;
+	// 空 = 默认(保持长度量级,把意思说清楚)。daemon 侧按此拼优化指令。
+	Style         string `protobuf:"bytes,2,opt,name=style,proto3" json:"style,omitempty"`
+	AgentId       string `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ModelId       string `protobuf:"bytes,4,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	Effort        string `protobuf:"bytes,5,opt,name=effort,proto3" json:"effort,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OptimizePromptRequest) Reset() {
+	*x = OptimizePromptRequest{}
+	mi := &file_v1_thread_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OptimizePromptRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OptimizePromptRequest) ProtoMessage() {}
+
+func (x *OptimizePromptRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OptimizePromptRequest.ProtoReflect.Descriptor instead.
+func (*OptimizePromptRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *OptimizePromptRequest) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *OptimizePromptRequest) GetStyle() string {
+	if x != nil {
+		return x.Style
+	}
+	return ""
+}
+
+func (x *OptimizePromptRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *OptimizePromptRequest) GetModelId() string {
+	if x != nil {
+		return x.ModelId
+	}
+	return ""
+}
+
+func (x *OptimizePromptRequest) GetEffort() string {
+	if x != nil {
+		return x.Effort
+	}
+	return ""
+}
+
+type OptimizePromptResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Optimized     string                 `protobuf:"bytes,1,opt,name=optimized,proto3" json:"optimized,omitempty"` // 改写后的文本(空 = 服务端已报错,不会出现)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OptimizePromptResponse) Reset() {
+	*x = OptimizePromptResponse{}
+	mi := &file_v1_thread_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OptimizePromptResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OptimizePromptResponse) ProtoMessage() {}
+
+func (x *OptimizePromptResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OptimizePromptResponse.ProtoReflect.Descriptor instead.
+func (*OptimizePromptResponse) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *OptimizePromptResponse) GetOptimized() string {
+	if x != nil {
+		return x.Optimized
+	}
+	return ""
+}
+
+type ExportThreadHtmlRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"` // 要导出的会话 id(必须已存在于本地库)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportThreadHtmlRequest) Reset() {
+	*x = ExportThreadHtmlRequest{}
+	mi := &file_v1_thread_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportThreadHtmlRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportThreadHtmlRequest) ProtoMessage() {}
+
+func (x *ExportThreadHtmlRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportThreadHtmlRequest.ProtoReflect.Descriptor instead.
+func (*ExportThreadHtmlRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ExportThreadHtmlRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+type ExportThreadHtmlResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 电脑上的 HTML 绝对路径(会话工作区/.pocketagent-exports/<threadId>.html)。
+	// 手机端拿它走现有 ReadFile(FileChunk 流)下载;同线程重复导出会覆盖旧文件。
+	Path          string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportThreadHtmlResponse) Reset() {
+	*x = ExportThreadHtmlResponse{}
+	mi := &file_v1_thread_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportThreadHtmlResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportThreadHtmlResponse) ProtoMessage() {}
+
+func (x *ExportThreadHtmlResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportThreadHtmlResponse.ProtoReflect.Descriptor instead.
+func (*ExportThreadHtmlResponse) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ExportThreadHtmlResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
 }
 
 type ApproveGuardianDeniedActionRequest struct {
@@ -240,7 +726,7 @@ type ApproveGuardianDeniedActionRequest struct {
 
 func (x *ApproveGuardianDeniedActionRequest) Reset() {
 	*x = ApproveGuardianDeniedActionRequest{}
-	mi := &file_v1_thread_proto_msgTypes[0]
+	mi := &file_v1_thread_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -252,7 +738,7 @@ func (x *ApproveGuardianDeniedActionRequest) String() string {
 func (*ApproveGuardianDeniedActionRequest) ProtoMessage() {}
 
 func (x *ApproveGuardianDeniedActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[0]
+	mi := &file_v1_thread_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -265,7 +751,7 @@ func (x *ApproveGuardianDeniedActionRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ApproveGuardianDeniedActionRequest.ProtoReflect.Descriptor instead.
 func (*ApproveGuardianDeniedActionRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{0}
+	return file_v1_thread_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ApproveGuardianDeniedActionRequest) GetThreadId() string {
@@ -299,7 +785,7 @@ type ForkThreadRequest struct {
 
 func (x *ForkThreadRequest) Reset() {
 	*x = ForkThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[1]
+	mi := &file_v1_thread_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -311,7 +797,7 @@ func (x *ForkThreadRequest) String() string {
 func (*ForkThreadRequest) ProtoMessage() {}
 
 func (x *ForkThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[1]
+	mi := &file_v1_thread_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -324,7 +810,7 @@ func (x *ForkThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForkThreadRequest.ProtoReflect.Descriptor instead.
 func (*ForkThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{1}
+	return file_v1_thread_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ForkThreadRequest) GetThreadId() string {
@@ -351,7 +837,7 @@ type RollbackThreadRequest struct {
 
 func (x *RollbackThreadRequest) Reset() {
 	*x = RollbackThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[2]
+	mi := &file_v1_thread_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -363,7 +849,7 @@ func (x *RollbackThreadRequest) String() string {
 func (*RollbackThreadRequest) ProtoMessage() {}
 
 func (x *RollbackThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[2]
+	mi := &file_v1_thread_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -376,7 +862,7 @@ func (x *RollbackThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackThreadRequest.ProtoReflect.Descriptor instead.
 func (*RollbackThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{2}
+	return file_v1_thread_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RollbackThreadRequest) GetThreadId() string {
@@ -406,7 +892,7 @@ type ThreadSection struct {
 
 func (x *ThreadSection) Reset() {
 	*x = ThreadSection{}
-	mi := &file_v1_thread_proto_msgTypes[3]
+	mi := &file_v1_thread_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +904,7 @@ func (x *ThreadSection) String() string {
 func (*ThreadSection) ProtoMessage() {}
 
 func (x *ThreadSection) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[3]
+	mi := &file_v1_thread_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +917,7 @@ func (x *ThreadSection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreadSection.ProtoReflect.Descriptor instead.
 func (*ThreadSection) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{3}
+	return file_v1_thread_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ThreadSection) GetId() string {
@@ -477,7 +963,7 @@ type ListThreadSectionsRequest struct {
 
 func (x *ListThreadSectionsRequest) Reset() {
 	*x = ListThreadSectionsRequest{}
-	mi := &file_v1_thread_proto_msgTypes[4]
+	mi := &file_v1_thread_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -489,7 +975,7 @@ func (x *ListThreadSectionsRequest) String() string {
 func (*ListThreadSectionsRequest) ProtoMessage() {}
 
 func (x *ListThreadSectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[4]
+	mi := &file_v1_thread_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -502,7 +988,7 @@ func (x *ListThreadSectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListThreadSectionsRequest.ProtoReflect.Descriptor instead.
 func (*ListThreadSectionsRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{4}
+	return file_v1_thread_proto_rawDescGZIP(), []int{13}
 }
 
 type ListThreadSectionsResponse struct {
@@ -514,7 +1000,7 @@ type ListThreadSectionsResponse struct {
 
 func (x *ListThreadSectionsResponse) Reset() {
 	*x = ListThreadSectionsResponse{}
-	mi := &file_v1_thread_proto_msgTypes[5]
+	mi := &file_v1_thread_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +1012,7 @@ func (x *ListThreadSectionsResponse) String() string {
 func (*ListThreadSectionsResponse) ProtoMessage() {}
 
 func (x *ListThreadSectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[5]
+	mi := &file_v1_thread_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +1025,7 @@ func (x *ListThreadSectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListThreadSectionsResponse.ProtoReflect.Descriptor instead.
 func (*ListThreadSectionsResponse) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{5}
+	return file_v1_thread_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListThreadSectionsResponse) GetSections() []*ThreadSection {
@@ -558,7 +1044,7 @@ type CreateThreadSectionRequest struct {
 
 func (x *CreateThreadSectionRequest) Reset() {
 	*x = CreateThreadSectionRequest{}
-	mi := &file_v1_thread_proto_msgTypes[6]
+	mi := &file_v1_thread_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -570,7 +1056,7 @@ func (x *CreateThreadSectionRequest) String() string {
 func (*CreateThreadSectionRequest) ProtoMessage() {}
 
 func (x *CreateThreadSectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[6]
+	mi := &file_v1_thread_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -583,7 +1069,7 @@ func (x *CreateThreadSectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateThreadSectionRequest.ProtoReflect.Descriptor instead.
 func (*CreateThreadSectionRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{6}
+	return file_v1_thread_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CreateThreadSectionRequest) GetName() string {
@@ -603,7 +1089,7 @@ type RenameThreadSectionRequest struct {
 
 func (x *RenameThreadSectionRequest) Reset() {
 	*x = RenameThreadSectionRequest{}
-	mi := &file_v1_thread_proto_msgTypes[7]
+	mi := &file_v1_thread_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -615,7 +1101,7 @@ func (x *RenameThreadSectionRequest) String() string {
 func (*RenameThreadSectionRequest) ProtoMessage() {}
 
 func (x *RenameThreadSectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[7]
+	mi := &file_v1_thread_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -628,7 +1114,7 @@ func (x *RenameThreadSectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameThreadSectionRequest.ProtoReflect.Descriptor instead.
 func (*RenameThreadSectionRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{7}
+	return file_v1_thread_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RenameThreadSectionRequest) GetSectionId() string {
@@ -654,7 +1140,7 @@ type DeleteThreadSectionRequest struct {
 
 func (x *DeleteThreadSectionRequest) Reset() {
 	*x = DeleteThreadSectionRequest{}
-	mi := &file_v1_thread_proto_msgTypes[8]
+	mi := &file_v1_thread_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -666,7 +1152,7 @@ func (x *DeleteThreadSectionRequest) String() string {
 func (*DeleteThreadSectionRequest) ProtoMessage() {}
 
 func (x *DeleteThreadSectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[8]
+	mi := &file_v1_thread_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -679,7 +1165,7 @@ func (x *DeleteThreadSectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteThreadSectionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteThreadSectionRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{8}
+	return file_v1_thread_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteThreadSectionRequest) GetSectionId() string {
@@ -699,7 +1185,7 @@ type MoveThreadToSectionRequest struct {
 
 func (x *MoveThreadToSectionRequest) Reset() {
 	*x = MoveThreadToSectionRequest{}
-	mi := &file_v1_thread_proto_msgTypes[9]
+	mi := &file_v1_thread_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -711,7 +1197,7 @@ func (x *MoveThreadToSectionRequest) String() string {
 func (*MoveThreadToSectionRequest) ProtoMessage() {}
 
 func (x *MoveThreadToSectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[9]
+	mi := &file_v1_thread_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -724,7 +1210,7 @@ func (x *MoveThreadToSectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveThreadToSectionRequest.ProtoReflect.Descriptor instead.
 func (*MoveThreadToSectionRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{9}
+	return file_v1_thread_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *MoveThreadToSectionRequest) GetThreadId() string {
@@ -749,7 +1235,7 @@ type ListCodexThreadsRequest struct {
 
 func (x *ListCodexThreadsRequest) Reset() {
 	*x = ListCodexThreadsRequest{}
-	mi := &file_v1_thread_proto_msgTypes[10]
+	mi := &file_v1_thread_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -761,7 +1247,7 @@ func (x *ListCodexThreadsRequest) String() string {
 func (*ListCodexThreadsRequest) ProtoMessage() {}
 
 func (x *ListCodexThreadsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[10]
+	mi := &file_v1_thread_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -774,7 +1260,7 @@ func (x *ListCodexThreadsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCodexThreadsRequest.ProtoReflect.Descriptor instead.
 func (*ListCodexThreadsRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{10}
+	return file_v1_thread_proto_rawDescGZIP(), []int{19}
 }
 
 type CodexThreadInfo struct {
@@ -789,7 +1275,7 @@ type CodexThreadInfo struct {
 
 func (x *CodexThreadInfo) Reset() {
 	*x = CodexThreadInfo{}
-	mi := &file_v1_thread_proto_msgTypes[11]
+	mi := &file_v1_thread_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +1287,7 @@ func (x *CodexThreadInfo) String() string {
 func (*CodexThreadInfo) ProtoMessage() {}
 
 func (x *CodexThreadInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[11]
+	mi := &file_v1_thread_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +1300,7 @@ func (x *CodexThreadInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodexThreadInfo.ProtoReflect.Descriptor instead.
 func (*CodexThreadInfo) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{11}
+	return file_v1_thread_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CodexThreadInfo) GetId() string {
@@ -854,7 +1340,7 @@ type ListCodexThreadsResponse struct {
 
 func (x *ListCodexThreadsResponse) Reset() {
 	*x = ListCodexThreadsResponse{}
-	mi := &file_v1_thread_proto_msgTypes[12]
+	mi := &file_v1_thread_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +1352,7 @@ func (x *ListCodexThreadsResponse) String() string {
 func (*ListCodexThreadsResponse) ProtoMessage() {}
 
 func (x *ListCodexThreadsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[12]
+	mi := &file_v1_thread_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +1365,7 @@ func (x *ListCodexThreadsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCodexThreadsResponse.ProtoReflect.Descriptor instead.
 func (*ListCodexThreadsResponse) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{12}
+	return file_v1_thread_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListCodexThreadsResponse) GetThreads() []*CodexThreadInfo {
@@ -898,7 +1384,7 @@ type ImportCodexThreadRequest struct {
 
 func (x *ImportCodexThreadRequest) Reset() {
 	*x = ImportCodexThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[13]
+	mi := &file_v1_thread_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -910,7 +1396,7 @@ func (x *ImportCodexThreadRequest) String() string {
 func (*ImportCodexThreadRequest) ProtoMessage() {}
 
 func (x *ImportCodexThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[13]
+	mi := &file_v1_thread_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -923,7 +1409,7 @@ func (x *ImportCodexThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportCodexThreadRequest.ProtoReflect.Descriptor instead.
 func (*ImportCodexThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{13}
+	return file_v1_thread_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ImportCodexThreadRequest) GetCodexThreadId() string {
@@ -942,7 +1428,7 @@ type ImportCodexThreadResponse struct {
 
 func (x *ImportCodexThreadResponse) Reset() {
 	*x = ImportCodexThreadResponse{}
-	mi := &file_v1_thread_proto_msgTypes[14]
+	mi := &file_v1_thread_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -954,7 +1440,7 @@ func (x *ImportCodexThreadResponse) String() string {
 func (*ImportCodexThreadResponse) ProtoMessage() {}
 
 func (x *ImportCodexThreadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[14]
+	mi := &file_v1_thread_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -967,10 +1453,304 @@ func (x *ImportCodexThreadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportCodexThreadResponse.ProtoReflect.Descriptor instead.
 func (*ImportCodexThreadResponse) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{14}
+	return file_v1_thread_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ImportCodexThreadResponse) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+type ListAgentThreadsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // "pi" / "zcode";空 = 两个都列(codex 走 ListCodexThreads,不在这)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAgentThreadsRequest) Reset() {
+	*x = ListAgentThreadsRequest{}
+	mi := &file_v1_thread_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAgentThreadsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAgentThreadsRequest) ProtoMessage() {}
+
+func (x *ListAgentThreadsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAgentThreadsRequest.ProtoReflect.Descriptor instead.
+func (*ListAgentThreadsRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListAgentThreadsRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+type AgentThreadInfo struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	AgentId         string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`                              // "pi" / "zcode"
+	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`                        // 外部会话 id(Pi 的 sessionId / ZCode 的 sess_*);导入去重与续聊重挂载的关键
+	SessionFile     string                 `protobuf:"bytes,3,opt,name=session_file,json=sessionFile,proto3" json:"session_file,omitempty"`                  // 外部会话文件绝对路径(Pi 必有;ZCode 走协议时为空 —— 续聊只要 sessionId)
+	Cwd             string                 `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`                                                     // 会话绑定的工作目录(Pi 来自文件头 cwd 字段;ZCode 来自 workspace.workspacePath)
+	Title           string                 `protobuf:"bytes,5,opt,name=title,proto3" json:"title,omitempty"`                                                 // 首条用户消息摘要(Pi)/ ZCode 自动命名或首条输入
+	UpdatedAtUnixMs int64                  `protobuf:"varint,6,opt,name=updated_at_unix_ms,json=updatedAtUnixMs,proto3" json:"updated_at_unix_ms,omitempty"` // Pi = 文件修改时间;ZCode = session/list 的 updatedAt
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AgentThreadInfo) Reset() {
+	*x = AgentThreadInfo{}
+	mi := &file_v1_thread_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentThreadInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentThreadInfo) ProtoMessage() {}
+
+func (x *AgentThreadInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentThreadInfo.ProtoReflect.Descriptor instead.
+func (*AgentThreadInfo) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *AgentThreadInfo) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *AgentThreadInfo) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *AgentThreadInfo) GetSessionFile() string {
+	if x != nil {
+		return x.SessionFile
+	}
+	return ""
+}
+
+func (x *AgentThreadInfo) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *AgentThreadInfo) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *AgentThreadInfo) GetUpdatedAtUnixMs() int64 {
+	if x != nil {
+		return x.UpdatedAtUnixMs
+	}
+	return 0
+}
+
+type ListAgentThreadsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Threads       []*AgentThreadInfo     `protobuf:"bytes,1,rep,name=threads,proto3" json:"threads,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAgentThreadsResponse) Reset() {
+	*x = ListAgentThreadsResponse{}
+	mi := &file_v1_thread_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAgentThreadsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAgentThreadsResponse) ProtoMessage() {}
+
+func (x *ListAgentThreadsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAgentThreadsResponse.ProtoReflect.Descriptor instead.
+func (*ListAgentThreadsResponse) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ListAgentThreadsResponse) GetThreads() []*AgentThreadInfo {
+	if x != nil {
+		return x.Threads
+	}
+	return nil
+}
+
+// 导入请求:手机端把 ListAgentThreads 里选中的一项原样回传即可。
+// session_id / session_file 至少有一个非空,daemon 才能在续聊时重挂载外部会话。
+type ImportAgentThreadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	SessionFile   string                 `protobuf:"bytes,3,opt,name=session_file,json=sessionFile,proto3" json:"session_file,omitempty"`
+	Cwd           string                 `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Title         string                 `protobuf:"bytes,5,opt,name=title,proto3" json:"title,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImportAgentThreadRequest) Reset() {
+	*x = ImportAgentThreadRequest{}
+	mi := &file_v1_thread_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImportAgentThreadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImportAgentThreadRequest) ProtoMessage() {}
+
+func (x *ImportAgentThreadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImportAgentThreadRequest.ProtoReflect.Descriptor instead.
+func (*ImportAgentThreadRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ImportAgentThreadRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ImportAgentThreadRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ImportAgentThreadRequest) GetSessionFile() string {
+	if x != nil {
+		return x.SessionFile
+	}
+	return ""
+}
+
+func (x *ImportAgentThreadRequest) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *ImportAgentThreadRequest) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+type ImportAgentThreadResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImportAgentThreadResponse) Reset() {
+	*x = ImportAgentThreadResponse{}
+	mi := &file_v1_thread_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImportAgentThreadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImportAgentThreadResponse) ProtoMessage() {}
+
+func (x *ImportAgentThreadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImportAgentThreadResponse.ProtoReflect.Descriptor instead.
+func (*ImportAgentThreadResponse) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ImportAgentThreadResponse) GetThreadId() string {
 	if x != nil {
 		return x.ThreadId
 	}
@@ -987,7 +1767,7 @@ type GetThreadHistoryRequest struct {
 
 func (x *GetThreadHistoryRequest) Reset() {
 	*x = GetThreadHistoryRequest{}
-	mi := &file_v1_thread_proto_msgTypes[15]
+	mi := &file_v1_thread_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -999,7 +1779,7 @@ func (x *GetThreadHistoryRequest) String() string {
 func (*GetThreadHistoryRequest) ProtoMessage() {}
 
 func (x *GetThreadHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[15]
+	mi := &file_v1_thread_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1012,7 +1792,7 @@ func (x *GetThreadHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetThreadHistoryRequest.ProtoReflect.Descriptor instead.
 func (*GetThreadHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{15}
+	return file_v1_thread_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetThreadHistoryRequest) GetThreadId() string {
@@ -1030,15 +1810,18 @@ func (x *GetThreadHistoryRequest) GetLimit() int32 {
 }
 
 type GetThreadHistoryResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Messages      []*ThreadMessage       `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Messages []*ThreadMessage       `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	// 打开会话时顺带回读的 codex 目标态(仅 codex 线程;非 codex / 读不到 = 缺省,
+	// 手机端有则显示"目标:xxx",无则不占位)。
+	GoalDetail    *CodexGoalDetail `protobuf:"bytes,2,opt,name=goal_detail,json=goalDetail,proto3" json:"goal_detail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetThreadHistoryResponse) Reset() {
 	*x = GetThreadHistoryResponse{}
-	mi := &file_v1_thread_proto_msgTypes[16]
+	mi := &file_v1_thread_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1050,7 +1833,7 @@ func (x *GetThreadHistoryResponse) String() string {
 func (*GetThreadHistoryResponse) ProtoMessage() {}
 
 func (x *GetThreadHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[16]
+	mi := &file_v1_thread_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1063,12 +1846,19 @@ func (x *GetThreadHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetThreadHistoryResponse.ProtoReflect.Descriptor instead.
 func (*GetThreadHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{16}
+	return file_v1_thread_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetThreadHistoryResponse) GetMessages() []*ThreadMessage {
 	if x != nil {
 		return x.Messages
+	}
+	return nil
+}
+
+func (x *GetThreadHistoryResponse) GetGoalDetail() *CodexGoalDetail {
+	if x != nil {
+		return x.GoalDetail
 	}
 	return nil
 }
@@ -1084,7 +1874,7 @@ type ThreadMessage struct {
 
 func (x *ThreadMessage) Reset() {
 	*x = ThreadMessage{}
-	mi := &file_v1_thread_proto_msgTypes[17]
+	mi := &file_v1_thread_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1096,7 +1886,7 @@ func (x *ThreadMessage) String() string {
 func (*ThreadMessage) ProtoMessage() {}
 
 func (x *ThreadMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[17]
+	mi := &file_v1_thread_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1109,7 +1899,7 @@ func (x *ThreadMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreadMessage.ProtoReflect.Descriptor instead.
 func (*ThreadMessage) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{17}
+	return file_v1_thread_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ThreadMessage) GetRole() string {
@@ -1155,13 +1945,29 @@ type Thread struct {
 	GuardianDeniedReviewId string `protobuf:"bytes,13,opt,name=guardian_denied_review_id,json=guardianDeniedReviewId,proto3" json:"guardian_denied_review_id,omitempty"`
 	GuardianDeniedItemId   string `protobuf:"bytes,14,opt,name=guardian_denied_item_id,json=guardianDeniedItemId,proto3" json:"guardian_denied_item_id,omitempty"`
 	GuardianDeniedReason   string `protobuf:"bytes,15,opt,name=guardian_denied_reason,json=guardianDeniedReason,proto3" json:"guardian_denied_reason,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// ---- 多 agent 接入(只增:16~17)----
+	// 会话归属的 agent:"codex" / "pi" / …。老记录缺省 = "codex"(见 store 兼容规则)。
+	// providerFor 按它显式选择 provider,不再静默回退默认。
+	AgentId string `protobuf:"bytes,16,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// 外部 agent 的原生会话引用(Pi/ZCode 通用):daemon 重启后据此 switch_session
+	// 重挂载子进程会话(调研 §8.3 的握手依据)。
+	ExternalSession *ExternalSessionRef `protobuf:"bytes,17,opt,name=external_session,json=externalSession,proto3" json:"external_session,omitempty"`
+	// ---- codex 目标态回读(只增:18)----
+	// 【与字段 4 goal 的分工】4 是 daemon 本库落库的常驻目标(手机设置后写的值);
+	// goal_detail 是打开会话时 daemon 从电脑端 codex 线程**现读**的目标态
+	// (thread/goal/get),带状态机与 token 消耗 —— 重连/换端后以它为准刷新。
+	// 仅 codex 线程填充;读不到/非 codex 会话缺省(手机端"有则显示,无则不占位")。
+	GoalDetail       *CodexGoalDetail   `protobuf:"bytes,18,opt,name=goal_detail,json=goalDetail,proto3" json:"goal_detail,omitempty"`
+	Effort           string             `protobuf:"bytes,19,opt,name=effort,proto3" json:"effort,omitempty"`
+	LastTurnError    string             `protobuf:"bytes,20,opt,name=last_turn_error,json=lastTurnError,proto3" json:"last_turn_error,omitempty"`
+	PendingApprovals []*ApprovalRequest `protobuf:"bytes,21,rep,name=pending_approvals,json=pendingApprovals,proto3" json:"pending_approvals,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Thread) Reset() {
 	*x = Thread{}
-	mi := &file_v1_thread_proto_msgTypes[18]
+	mi := &file_v1_thread_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1173,7 +1979,7 @@ func (x *Thread) String() string {
 func (*Thread) ProtoMessage() {}
 
 func (x *Thread) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[18]
+	mi := &file_v1_thread_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1186,7 +1992,7 @@ func (x *Thread) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Thread.ProtoReflect.Descriptor instead.
 func (*Thread) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{18}
+	return file_v1_thread_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *Thread) GetId() string {
@@ -1294,18 +2100,203 @@ func (x *Thread) GetGuardianDeniedReason() string {
 	return ""
 }
 
-type CreateThreadRequest struct {
+func (x *Thread) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *Thread) GetExternalSession() *ExternalSessionRef {
+	if x != nil {
+		return x.ExternalSession
+	}
+	return nil
+}
+
+func (x *Thread) GetGoalDetail() *CodexGoalDetail {
+	if x != nil {
+		return x.GoalDetail
+	}
+	return nil
+}
+
+func (x *Thread) GetEffort() string {
+	if x != nil {
+		return x.Effort
+	}
+	return ""
+}
+
+func (x *Thread) GetLastTurnError() string {
+	if x != nil {
+		return x.LastTurnError
+	}
+	return ""
+}
+
+func (x *Thread) GetPendingApprovals() []*ApprovalRequest {
+	if x != nil {
+		return x.PendingApprovals
+	}
+	return nil
+}
+
+// CodexGoalDetail codex 线程目标态(thread/goal/get 应答的归一)。
+// daemon 侧现读失败但本地库有目标时,objective 兜底为本地值(status 留空)。
+type CodexGoalDetail struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Objective       string                 `protobuf:"bytes,1,opt,name=objective,proto3" json:"objective,omitempty"`                                       // 目标文本
+	Status          string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`                                             // active / paused / blocked / usageLimited / budgetLimited / complete(空 = 未知)
+	TokensUsed      int64                  `protobuf:"varint,3,opt,name=tokens_used,json=tokensUsed,proto3" json:"tokens_used,omitempty"`                  // 已消耗 token
+	TokenBudget     int64                  `protobuf:"varint,4,opt,name=token_budget,json=tokenBudget,proto3" json:"token_budget,omitempty"`               // 预算上限(0 = 未设)
+	TimeUsedSeconds int64                  `protobuf:"varint,5,opt,name=time_used_seconds,json=timeUsedSeconds,proto3" json:"time_used_seconds,omitempty"` // 已投入秒数
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CodexGoalDetail) Reset() {
+	*x = CodexGoalDetail{}
+	mi := &file_v1_thread_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodexGoalDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodexGoalDetail) ProtoMessage() {}
+
+func (x *CodexGoalDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodexGoalDetail.ProtoReflect.Descriptor instead.
+func (*CodexGoalDetail) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *CodexGoalDetail) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+func (x *CodexGoalDetail) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *CodexGoalDetail) GetTokensUsed() int64 {
+	if x != nil {
+		return x.TokensUsed
+	}
+	return 0
+}
+
+func (x *CodexGoalDetail) GetTokenBudget() int64 {
+	if x != nil {
+		return x.TokenBudget
+	}
+	return 0
+}
+
+func (x *CodexGoalDetail) GetTimeUsedSeconds() int64 {
+	if x != nil {
+		return x.TimeUsedSeconds
+	}
+	return 0
+}
+
+// ExternalSessionRef 指向外部 agent 自己管理的会话事实来源。
+// Pi:session_file 是 ~/.pi/agent/sessions 下的 .jsonl;ZCode 同样以"外部会话 id
+// + 文件路径"重挂载。内容由外部 agent 持有,我们只存引用。
+type ExternalSessionRef struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Workspace     string                 `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
-	ModelId       string                 `protobuf:"bytes,3,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"` // 空 = 用默认模型
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`       // 外部会话 id(Pi 的 sessionId / ZCode 的会话 id)
+	SessionFile   string                 `protobuf:"bytes,2,opt,name=session_file,json=sessionFile,proto3" json:"session_file,omitempty"` // 外部会话文件绝对路径(Pi 的 sessionFile)
+	Cwd           string                 `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`                                    // 外部会话绑定的工作目录(Pi 会话创建后不可换)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExternalSessionRef) Reset() {
+	*x = ExternalSessionRef{}
+	mi := &file_v1_thread_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExternalSessionRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExternalSessionRef) ProtoMessage() {}
+
+func (x *ExternalSessionRef) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExternalSessionRef.ProtoReflect.Descriptor instead.
+func (*ExternalSessionRef) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ExternalSessionRef) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ExternalSessionRef) GetSessionFile() string {
+	if x != nil {
+		return x.SessionFile
+	}
+	return ""
+}
+
+func (x *ExternalSessionRef) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+type CreateThreadRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Workspace string                 `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	Title     string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	ModelId   string                 `protobuf:"bytes,3,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"` // 空 = 用默认模型
+	// 目标 agent:"codex" / "pi" / …;空 = 默认(codex)。多 agent 接入(只增)。
+	AgentId       string `protobuf:"bytes,4,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateThreadRequest) Reset() {
 	*x = CreateThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[19]
+	mi := &file_v1_thread_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1317,7 +2308,7 @@ func (x *CreateThreadRequest) String() string {
 func (*CreateThreadRequest) ProtoMessage() {}
 
 func (x *CreateThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[19]
+	mi := &file_v1_thread_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1330,7 +2321,7 @@ func (x *CreateThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateThreadRequest.ProtoReflect.Descriptor instead.
 func (*CreateThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{19}
+	return file_v1_thread_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CreateThreadRequest) GetWorkspace() string {
@@ -1354,6 +2345,13 @@ func (x *CreateThreadRequest) GetModelId() string {
 	return ""
 }
 
+func (x *CreateThreadRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
 type ListThreadsRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	IncludeArchived bool                   `protobuf:"varint,1,opt,name=include_archived,json=includeArchived,proto3" json:"include_archived,omitempty"`
@@ -1369,7 +2367,7 @@ type ListThreadsRequest struct {
 
 func (x *ListThreadsRequest) Reset() {
 	*x = ListThreadsRequest{}
-	mi := &file_v1_thread_proto_msgTypes[20]
+	mi := &file_v1_thread_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1381,7 +2379,7 @@ func (x *ListThreadsRequest) String() string {
 func (*ListThreadsRequest) ProtoMessage() {}
 
 func (x *ListThreadsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[20]
+	mi := &file_v1_thread_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1394,7 +2392,7 @@ func (x *ListThreadsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListThreadsRequest.ProtoReflect.Descriptor instead.
 func (*ListThreadsRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{20}
+	return file_v1_thread_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListThreadsRequest) GetIncludeArchived() bool {
@@ -1448,7 +2446,7 @@ type ListThreadsResponse struct {
 
 func (x *ListThreadsResponse) Reset() {
 	*x = ListThreadsResponse{}
-	mi := &file_v1_thread_proto_msgTypes[21]
+	mi := &file_v1_thread_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1460,7 +2458,7 @@ func (x *ListThreadsResponse) String() string {
 func (*ListThreadsResponse) ProtoMessage() {}
 
 func (x *ListThreadsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[21]
+	mi := &file_v1_thread_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1473,7 +2471,7 @@ func (x *ListThreadsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListThreadsResponse.ProtoReflect.Descriptor instead.
 func (*ListThreadsResponse) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{21}
+	return file_v1_thread_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ListThreadsResponse) GetThreads() []*Thread {
@@ -1492,7 +2490,7 @@ type GetThreadRequest struct {
 
 func (x *GetThreadRequest) Reset() {
 	*x = GetThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[22]
+	mi := &file_v1_thread_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1504,7 +2502,7 @@ func (x *GetThreadRequest) String() string {
 func (*GetThreadRequest) ProtoMessage() {}
 
 func (x *GetThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[22]
+	mi := &file_v1_thread_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1517,7 +2515,7 @@ func (x *GetThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetThreadRequest.ProtoReflect.Descriptor instead.
 func (*GetThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{22}
+	return file_v1_thread_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GetThreadRequest) GetThreadId() string {
@@ -1530,13 +2528,14 @@ func (x *GetThreadRequest) GetThreadId() string {
 type DeleteThreadRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	LocalOnly     bool                   `protobuf:"varint,2,opt,name=local_only,json=localOnly,proto3" json:"local_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteThreadRequest) Reset() {
 	*x = DeleteThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[23]
+	mi := &file_v1_thread_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1548,7 +2547,7 @@ func (x *DeleteThreadRequest) String() string {
 func (*DeleteThreadRequest) ProtoMessage() {}
 
 func (x *DeleteThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[23]
+	mi := &file_v1_thread_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1561,7 +2560,7 @@ func (x *DeleteThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteThreadRequest.ProtoReflect.Descriptor instead.
 func (*DeleteThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{23}
+	return file_v1_thread_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *DeleteThreadRequest) GetThreadId() string {
@@ -1569,6 +2568,13 @@ func (x *DeleteThreadRequest) GetThreadId() string {
 		return x.ThreadId
 	}
 	return ""
+}
+
+func (x *DeleteThreadRequest) GetLocalOnly() bool {
+	if x != nil {
+		return x.LocalOnly
+	}
+	return false
 }
 
 type ArchiveThreadRequest struct {
@@ -1581,7 +2587,7 @@ type ArchiveThreadRequest struct {
 
 func (x *ArchiveThreadRequest) Reset() {
 	*x = ArchiveThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[24]
+	mi := &file_v1_thread_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1593,7 +2599,7 @@ func (x *ArchiveThreadRequest) String() string {
 func (*ArchiveThreadRequest) ProtoMessage() {}
 
 func (x *ArchiveThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[24]
+	mi := &file_v1_thread_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1606,7 +2612,7 @@ func (x *ArchiveThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveThreadRequest.ProtoReflect.Descriptor instead.
 func (*ArchiveThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{24}
+	return file_v1_thread_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ArchiveThreadRequest) GetThreadId() string {
@@ -1633,7 +2639,7 @@ type RenameThreadRequest struct {
 
 func (x *RenameThreadRequest) Reset() {
 	*x = RenameThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[25]
+	mi := &file_v1_thread_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1645,7 +2651,7 @@ func (x *RenameThreadRequest) String() string {
 func (*RenameThreadRequest) ProtoMessage() {}
 
 func (x *RenameThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[25]
+	mi := &file_v1_thread_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1658,7 +2664,7 @@ func (x *RenameThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameThreadRequest.ProtoReflect.Descriptor instead.
 func (*RenameThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{25}
+	return file_v1_thread_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RenameThreadRequest) GetThreadId() string {
@@ -1685,7 +2691,7 @@ type SetThreadGoalRequest struct {
 
 func (x *SetThreadGoalRequest) Reset() {
 	*x = SetThreadGoalRequest{}
-	mi := &file_v1_thread_proto_msgTypes[26]
+	mi := &file_v1_thread_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +2703,7 @@ func (x *SetThreadGoalRequest) String() string {
 func (*SetThreadGoalRequest) ProtoMessage() {}
 
 func (x *SetThreadGoalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[26]
+	mi := &file_v1_thread_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +2716,7 @@ func (x *SetThreadGoalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetThreadGoalRequest.ProtoReflect.Descriptor instead.
 func (*SetThreadGoalRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{26}
+	return file_v1_thread_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *SetThreadGoalRequest) GetThreadId() string {
@@ -1736,7 +2742,7 @@ type CompactThreadRequest struct {
 
 func (x *CompactThreadRequest) Reset() {
 	*x = CompactThreadRequest{}
-	mi := &file_v1_thread_proto_msgTypes[27]
+	mi := &file_v1_thread_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1748,7 +2754,7 @@ func (x *CompactThreadRequest) String() string {
 func (*CompactThreadRequest) ProtoMessage() {}
 
 func (x *CompactThreadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[27]
+	mi := &file_v1_thread_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1761,7 +2767,7 @@ func (x *CompactThreadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactThreadRequest.ProtoReflect.Descriptor instead.
 func (*CompactThreadRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{27}
+	return file_v1_thread_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CompactThreadRequest) GetThreadId() string {
@@ -1786,7 +2792,7 @@ type TurnClientMessage struct {
 
 func (x *TurnClientMessage) Reset() {
 	*x = TurnClientMessage{}
-	mi := &file_v1_thread_proto_msgTypes[28]
+	mi := &file_v1_thread_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1798,7 +2804,7 @@ func (x *TurnClientMessage) String() string {
 func (*TurnClientMessage) ProtoMessage() {}
 
 func (x *TurnClientMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[28]
+	mi := &file_v1_thread_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1811,7 +2817,7 @@ func (x *TurnClientMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnClientMessage.ProtoReflect.Descriptor instead.
 func (*TurnClientMessage) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{28}
+	return file_v1_thread_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TurnClientMessage) GetMsg() isTurnClientMessage_Msg {
@@ -1899,7 +2905,7 @@ type TurnInput struct {
 
 func (x *TurnInput) Reset() {
 	*x = TurnInput{}
-	mi := &file_v1_thread_proto_msgTypes[29]
+	mi := &file_v1_thread_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1911,7 +2917,7 @@ func (x *TurnInput) String() string {
 func (*TurnInput) ProtoMessage() {}
 
 func (x *TurnInput) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[29]
+	mi := &file_v1_thread_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1924,7 +2930,7 @@ func (x *TurnInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnInput.ProtoReflect.Descriptor instead.
 func (*TurnInput) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{29}
+	return file_v1_thread_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *TurnInput) GetThreadId() string {
@@ -1971,7 +2977,7 @@ type TurnSupplement struct {
 
 func (x *TurnSupplement) Reset() {
 	*x = TurnSupplement{}
-	mi := &file_v1_thread_proto_msgTypes[30]
+	mi := &file_v1_thread_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1983,7 +2989,7 @@ func (x *TurnSupplement) String() string {
 func (*TurnSupplement) ProtoMessage() {}
 
 func (x *TurnSupplement) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[30]
+	mi := &file_v1_thread_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1996,7 +3002,7 @@ func (x *TurnSupplement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnSupplement.ProtoReflect.Descriptor instead.
 func (*TurnSupplement) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{30}
+	return file_v1_thread_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *TurnSupplement) GetBlocks() []*ContentBlock {
@@ -2017,7 +3023,7 @@ type ApprovalDecision struct {
 
 func (x *ApprovalDecision) Reset() {
 	*x = ApprovalDecision{}
-	mi := &file_v1_thread_proto_msgTypes[31]
+	mi := &file_v1_thread_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2029,7 +3035,7 @@ func (x *ApprovalDecision) String() string {
 func (*ApprovalDecision) ProtoMessage() {}
 
 func (x *ApprovalDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[31]
+	mi := &file_v1_thread_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2042,7 +3048,7 @@ func (x *ApprovalDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalDecision.ProtoReflect.Descriptor instead.
 func (*ApprovalDecision) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{31}
+	return file_v1_thread_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ApprovalDecision) GetRequestId() string {
@@ -2075,7 +3081,7 @@ type CancelSignal struct {
 
 func (x *CancelSignal) Reset() {
 	*x = CancelSignal{}
-	mi := &file_v1_thread_proto_msgTypes[32]
+	mi := &file_v1_thread_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2087,7 +3093,7 @@ func (x *CancelSignal) String() string {
 func (*CancelSignal) ProtoMessage() {}
 
 func (x *CancelSignal) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[32]
+	mi := &file_v1_thread_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2100,7 +3106,7 @@ func (x *CancelSignal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelSignal.ProtoReflect.Descriptor instead.
 func (*CancelSignal) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{32}
+	return file_v1_thread_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *CancelSignal) GetReason() string {
@@ -2124,14 +3130,24 @@ type TurnServerMessage struct {
 	//	*TurnServerMessage_Failed
 	//	*TurnServerMessage_CodexEvent
 	//	*TurnServerMessage_ApprovalResolved
-	Msg           isTurnServerMessage_Msg `protobuf_oneof:"msg"`
+	//	*TurnServerMessage_Steered
+	//	*TurnServerMessage_Queued
+	//	*TurnServerMessage_QueueFlushed
+	//	*TurnServerMessage_ResyncRequired
+	Msg isTurnServerMessage_Msg `protobuf_oneof:"msg"`
+	// ---- P1-5 事件断点续传(只增不改:14~15 为新增)----
+	// 全局单调事件序号(daemon events.jsonl 的 seq):daemon 发出的每一个真实
+	// 事件帧都带序号,手机记录收到的最大值;断线重连后用
+	// GetThreadEventsSince(thread_id, after_sequence=lastSequence) 增量补帧。
+	// 0 = 无序号(旧 daemon / 该帧未入事件库),手机端按无续传能力处理。
+	Sequence      int64 `protobuf:"varint,14,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TurnServerMessage) Reset() {
 	*x = TurnServerMessage{}
-	mi := &file_v1_thread_proto_msgTypes[33]
+	mi := &file_v1_thread_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2143,7 +3159,7 @@ func (x *TurnServerMessage) String() string {
 func (*TurnServerMessage) ProtoMessage() {}
 
 func (x *TurnServerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[33]
+	mi := &file_v1_thread_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2156,7 +3172,7 @@ func (x *TurnServerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnServerMessage.ProtoReflect.Descriptor instead.
 func (*TurnServerMessage) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{33}
+	return file_v1_thread_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *TurnServerMessage) GetMsg() isTurnServerMessage_Msg {
@@ -2256,6 +3272,49 @@ func (x *TurnServerMessage) GetApprovalResolved() *ApprovalResolved {
 	return nil
 }
 
+func (x *TurnServerMessage) GetSteered() *Steered {
+	if x != nil {
+		if x, ok := x.Msg.(*TurnServerMessage_Steered); ok {
+			return x.Steered
+		}
+	}
+	return nil
+}
+
+func (x *TurnServerMessage) GetQueued() *Queued {
+	if x != nil {
+		if x, ok := x.Msg.(*TurnServerMessage_Queued); ok {
+			return x.Queued
+		}
+	}
+	return nil
+}
+
+func (x *TurnServerMessage) GetQueueFlushed() *QueueFlushed {
+	if x != nil {
+		if x, ok := x.Msg.(*TurnServerMessage_QueueFlushed); ok {
+			return x.QueueFlushed
+		}
+	}
+	return nil
+}
+
+func (x *TurnServerMessage) GetResyncRequired() *ResyncRequired {
+	if x != nil {
+		if x, ok := x.Msg.(*TurnServerMessage_ResyncRequired); ok {
+			return x.ResyncRequired
+		}
+	}
+	return nil
+}
+
+func (x *TurnServerMessage) GetSequence() int64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
 type isTurnServerMessage_Msg interface {
 	isTurnServerMessage_Msg()
 }
@@ -2303,6 +3362,28 @@ type TurnServerMessage_ApprovalResolved struct {
 	ApprovalResolved *ApprovalResolved `protobuf:"bytes,10,opt,name=approval_resolved,json=approvalResolved,proto3,oneof"`
 }
 
+type TurnServerMessage_Steered struct {
+	// ---- P1-4 运行中继续发消息(只增不改:11~13 为新增帧)----
+	// 该输入已通过 codex 的 turn/steer 插入正在运行的轮次(不新开轮次)。
+	Steered *Steered `protobuf:"bytes,11,opt,name=steered,proto3,oneof"`
+}
+
+type TurnServerMessage_Queued struct {
+	// 该输入已进入 daemon 内存队列,等当前轮次终局后自动执行。
+	Queued *Queued `protobuf:"bytes,12,opt,name=queued,proto3,oneof"`
+}
+
+type TurnServerMessage_QueueFlushed struct {
+	// 队列开始执行:紧跟着会有该轮的 Started 帧与常规增量。
+	QueueFlushed *QueueFlushed `protobuf:"bytes,13,opt,name=queue_flushed,json=queueFlushed,proto3,oneof"`
+}
+
+type TurnServerMessage_ResyncRequired struct {
+	// after_sequence 已超出保留窗口(轮转丢弃)或事件库不可用:立即走
+	// GetThreadHistory 全量回填,不要再增量拼接。本帧是流里的唯一一帧。
+	ResyncRequired *ResyncRequired `protobuf:"bytes,15,opt,name=resync_required,json=resyncRequired,proto3,oneof"`
+}
+
 func (*TurnServerMessage_Started) isTurnServerMessage_Msg() {}
 
 func (*TurnServerMessage_TextDelta) isTurnServerMessage_Msg() {}
@@ -2323,6 +3404,274 @@ func (*TurnServerMessage_CodexEvent) isTurnServerMessage_Msg() {}
 
 func (*TurnServerMessage_ApprovalResolved) isTurnServerMessage_Msg() {}
 
+func (*TurnServerMessage_Steered) isTurnServerMessage_Msg() {}
+
+func (*TurnServerMessage_Queued) isTurnServerMessage_Msg() {}
+
+func (*TurnServerMessage_QueueFlushed) isTurnServerMessage_Msg() {}
+
+func (*TurnServerMessage_ResyncRequired) isTurnServerMessage_Msg() {}
+
+type GetThreadEventsSinceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	AfterSequence int64                  `protobuf:"varint,2,opt,name=after_sequence,json=afterSequence,proto3" json:"after_sequence,omitempty"` // 手机已应用的最大 seq;服务端回放该线程 seq 更大的帧
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetThreadEventsSinceRequest) Reset() {
+	*x = GetThreadEventsSinceRequest{}
+	mi := &file_v1_thread_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetThreadEventsSinceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetThreadEventsSinceRequest) ProtoMessage() {}
+
+func (x *GetThreadEventsSinceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetThreadEventsSinceRequest.ProtoReflect.Descriptor instead.
+func (*GetThreadEventsSinceRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *GetThreadEventsSinceRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *GetThreadEventsSinceRequest) GetAfterSequence() int64 {
+	if x != nil {
+		return x.AfterSequence
+	}
+	return 0
+}
+
+// ResyncRequired:请求的区间已无法可靠回放(典型原因:events.jsonl 轮转把
+// 更早的事件删掉了)。收到本帧后手机端 lastSequence 作废,退回全量回填。
+type ResyncRequired struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"` // 人话原因,仅用于日志/诊断展示
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResyncRequired) Reset() {
+	*x = ResyncRequired{}
+	mi := &file_v1_thread_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResyncRequired) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResyncRequired) ProtoMessage() {}
+
+func (x *ResyncRequired) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResyncRequired.ProtoReflect.Descriptor instead.
+func (*ResyncRequired) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *ResyncRequired) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// Steered 确认:这条输入已插入正在运行的轮次(codex turn/steer 成功)。
+type Steered struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TurnId        string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`                  // 当前运行中轮次的 id(daemon 侧生成)
+	CodexTurnId   string                 `protobuf:"bytes,2,opt,name=codex_turn_id,json=codexTurnId,proto3" json:"codex_turn_id,omitempty"` // codex 侧返回的 turnId(可能为空)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Steered) Reset() {
+	*x = Steered{}
+	mi := &file_v1_thread_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Steered) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Steered) ProtoMessage() {}
+
+func (x *Steered) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Steered.ProtoReflect.Descriptor instead.
+func (*Steered) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *Steered) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *Steered) GetCodexTurnId() string {
+	if x != nil {
+		return x.CodexTurnId
+	}
+	return ""
+}
+
+// Queued 确认:这条输入已排队。position 从 1 起;
+// position == 0 表示队列已满被拒收(上限 10 条),手机端应把该消息
+// 标记为"未送达"而不是"排队中"。
+type Queued struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Position      int32                  `protobuf:"varint,1,opt,name=position,proto3" json:"position,omitempty"` // 第几位(1 起;0 = 被拒收:队列满)
+	Depth         int32                  `protobuf:"varint,2,opt,name=depth,proto3" json:"depth,omitempty"`       // 入队后队列总长
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Queued) Reset() {
+	*x = Queued{}
+	mi := &file_v1_thread_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Queued) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Queued) ProtoMessage() {}
+
+func (x *Queued) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Queued.ProtoReflect.Descriptor instead.
+func (*Queued) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *Queued) GetPosition() int32 {
+	if x != nil {
+		return x.Position
+	}
+	return 0
+}
+
+func (x *Queued) GetDepth() int32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+// QueueFlushed:排队的输入开始执行。turn_id 是即将开始的那一轮的 id;
+// remaining 是出队后队列里还剩几条。
+type QueueFlushed struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TurnId        string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	Remaining     int32                  `protobuf:"varint,2,opt,name=remaining,proto3" json:"remaining,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueFlushed) Reset() {
+	*x = QueueFlushed{}
+	mi := &file_v1_thread_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueFlushed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueFlushed) ProtoMessage() {}
+
+func (x *QueueFlushed) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueFlushed.ProtoReflect.Descriptor instead.
+func (*QueueFlushed) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *QueueFlushed) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *QueueFlushed) GetRemaining() int32 {
+	if x != nil {
+		return x.Remaining
+	}
+	return 0
+}
+
 type ApprovalResolved struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 对应 ApprovalRequest.request_id;为空 = "当前挂着的审批卡"(codex 的
@@ -2336,7 +3685,7 @@ type ApprovalResolved struct {
 
 func (x *ApprovalResolved) Reset() {
 	*x = ApprovalResolved{}
-	mi := &file_v1_thread_proto_msgTypes[34]
+	mi := &file_v1_thread_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2348,7 +3697,7 @@ func (x *ApprovalResolved) String() string {
 func (*ApprovalResolved) ProtoMessage() {}
 
 func (x *ApprovalResolved) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[34]
+	mi := &file_v1_thread_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2361,7 +3710,7 @@ func (x *ApprovalResolved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalResolved.ProtoReflect.Descriptor instead.
 func (*ApprovalResolved) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{34}
+	return file_v1_thread_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ApprovalResolved) GetRequestId() string {
@@ -2410,7 +3759,7 @@ type CodexEvent struct {
 
 func (x *CodexEvent) Reset() {
 	*x = CodexEvent{}
-	mi := &file_v1_thread_proto_msgTypes[35]
+	mi := &file_v1_thread_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2422,7 +3771,7 @@ func (x *CodexEvent) String() string {
 func (*CodexEvent) ProtoMessage() {}
 
 func (x *CodexEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[35]
+	mi := &file_v1_thread_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2435,7 +3784,7 @@ func (x *CodexEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodexEvent.ProtoReflect.Descriptor instead.
 func (*CodexEvent) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{35}
+	return file_v1_thread_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CodexEvent) GetKind() CodexEvent_Kind {
@@ -2572,16 +3921,18 @@ func (x *CodexEvent) GetPlanSteps() []string {
 }
 
 type TurnStarted struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TurnId        string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
-	ModelId       string                 `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	TurnId                 string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	ModelId                string                 `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	Effort                 *string                `protobuf:"bytes,3,opt,name=effort,proto3,oneof" json:"effort,omitempty"`
+	ConfigurationConfirmed bool                   `protobuf:"varint,4,opt,name=configuration_confirmed,json=configurationConfirmed,proto3" json:"configuration_confirmed,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TurnStarted) Reset() {
 	*x = TurnStarted{}
-	mi := &file_v1_thread_proto_msgTypes[36]
+	mi := &file_v1_thread_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2593,7 +3944,7 @@ func (x *TurnStarted) String() string {
 func (*TurnStarted) ProtoMessage() {}
 
 func (x *TurnStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[36]
+	mi := &file_v1_thread_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2606,7 +3957,7 @@ func (x *TurnStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnStarted.ProtoReflect.Descriptor instead.
 func (*TurnStarted) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{36}
+	return file_v1_thread_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *TurnStarted) GetTurnId() string {
@@ -2623,6 +3974,20 @@ func (x *TurnStarted) GetModelId() string {
 	return ""
 }
 
+func (x *TurnStarted) GetEffort() string {
+	if x != nil && x.Effort != nil {
+		return *x.Effort
+	}
+	return ""
+}
+
+func (x *TurnStarted) GetConfigurationConfirmed() bool {
+	if x != nil {
+		return x.ConfigurationConfirmed
+	}
+	return false
+}
+
 type TextDelta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Delta         string                 `protobuf:"bytes,1,opt,name=delta,proto3" json:"delta,omitempty"`
@@ -2632,7 +3997,7 @@ type TextDelta struct {
 
 func (x *TextDelta) Reset() {
 	*x = TextDelta{}
-	mi := &file_v1_thread_proto_msgTypes[37]
+	mi := &file_v1_thread_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2644,7 +4009,7 @@ func (x *TextDelta) String() string {
 func (*TextDelta) ProtoMessage() {}
 
 func (x *TextDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[37]
+	mi := &file_v1_thread_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2657,7 +4022,7 @@ func (x *TextDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TextDelta.ProtoReflect.Descriptor instead.
 func (*TextDelta) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{37}
+	return file_v1_thread_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *TextDelta) GetDelta() string {
@@ -2676,7 +4041,7 @@ type ThinkingDelta struct {
 
 func (x *ThinkingDelta) Reset() {
 	*x = ThinkingDelta{}
-	mi := &file_v1_thread_proto_msgTypes[38]
+	mi := &file_v1_thread_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2688,7 +4053,7 @@ func (x *ThinkingDelta) String() string {
 func (*ThinkingDelta) ProtoMessage() {}
 
 func (x *ThinkingDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[38]
+	mi := &file_v1_thread_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2701,7 +4066,7 @@ func (x *ThinkingDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThinkingDelta.ProtoReflect.Descriptor instead.
 func (*ThinkingDelta) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{38}
+	return file_v1_thread_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ThinkingDelta) GetDelta() string {
@@ -2722,7 +4087,7 @@ type ToolCallUpdate struct {
 
 func (x *ToolCallUpdate) Reset() {
 	*x = ToolCallUpdate{}
-	mi := &file_v1_thread_proto_msgTypes[39]
+	mi := &file_v1_thread_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2734,7 +4099,7 @@ func (x *ToolCallUpdate) String() string {
 func (*ToolCallUpdate) ProtoMessage() {}
 
 func (x *ToolCallUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[39]
+	mi := &file_v1_thread_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2747,7 +4112,7 @@ func (x *ToolCallUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallUpdate.ProtoReflect.Descriptor instead.
 func (*ToolCallUpdate) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{39}
+	return file_v1_thread_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ToolCallUpdate) GetPhase() ToolCallUpdate_Phase {
@@ -2783,7 +4148,7 @@ type ApprovalRequest struct {
 
 func (x *ApprovalRequest) Reset() {
 	*x = ApprovalRequest{}
-	mi := &file_v1_thread_proto_msgTypes[40]
+	mi := &file_v1_thread_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2795,7 +4160,7 @@ func (x *ApprovalRequest) String() string {
 func (*ApprovalRequest) ProtoMessage() {}
 
 func (x *ApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[40]
+	mi := &file_v1_thread_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2808,7 +4173,7 @@ func (x *ApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalRequest.ProtoReflect.Descriptor instead.
 func (*ApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{40}
+	return file_v1_thread_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ApprovalRequest) GetRequestId() string {
@@ -2845,7 +4210,7 @@ type UsageUpdate struct {
 
 func (x *UsageUpdate) Reset() {
 	*x = UsageUpdate{}
-	mi := &file_v1_thread_proto_msgTypes[41]
+	mi := &file_v1_thread_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2857,7 +4222,7 @@ func (x *UsageUpdate) String() string {
 func (*UsageUpdate) ProtoMessage() {}
 
 func (x *UsageUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[41]
+	mi := &file_v1_thread_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2870,7 +4235,7 @@ func (x *UsageUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UsageUpdate.ProtoReflect.Descriptor instead.
 func (*UsageUpdate) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{41}
+	return file_v1_thread_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *UsageUpdate) GetUsage() *Usage {
@@ -2906,7 +4271,7 @@ type TurnCompleted struct {
 
 func (x *TurnCompleted) Reset() {
 	*x = TurnCompleted{}
-	mi := &file_v1_thread_proto_msgTypes[42]
+	mi := &file_v1_thread_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2918,7 +4283,7 @@ func (x *TurnCompleted) String() string {
 func (*TurnCompleted) ProtoMessage() {}
 
 func (x *TurnCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[42]
+	mi := &file_v1_thread_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2931,7 +4296,7 @@ func (x *TurnCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnCompleted.ProtoReflect.Descriptor instead.
 func (*TurnCompleted) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{42}
+	return file_v1_thread_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *TurnCompleted) GetTurnId() string {
@@ -2973,7 +4338,7 @@ type TurnFailed struct {
 
 func (x *TurnFailed) Reset() {
 	*x = TurnFailed{}
-	mi := &file_v1_thread_proto_msgTypes[43]
+	mi := &file_v1_thread_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2985,7 +4350,7 @@ func (x *TurnFailed) String() string {
 func (*TurnFailed) ProtoMessage() {}
 
 func (x *TurnFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[43]
+	mi := &file_v1_thread_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2998,7 +4363,7 @@ func (x *TurnFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnFailed.ProtoReflect.Descriptor instead.
 func (*TurnFailed) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{43}
+	return file_v1_thread_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *TurnFailed) GetTurnId() string {
@@ -3031,7 +4396,7 @@ type CancelTurnRequest struct {
 
 func (x *CancelTurnRequest) Reset() {
 	*x = CancelTurnRequest{}
-	mi := &file_v1_thread_proto_msgTypes[44]
+	mi := &file_v1_thread_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3043,7 +4408,7 @@ func (x *CancelTurnRequest) String() string {
 func (*CancelTurnRequest) ProtoMessage() {}
 
 func (x *CancelTurnRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_thread_proto_msgTypes[44]
+	mi := &file_v1_thread_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3056,7 +4421,7 @@ func (x *CancelTurnRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelTurnRequest.ProtoReflect.Descriptor instead.
 func (*CancelTurnRequest) Descriptor() ([]byte, []int) {
-	return file_v1_thread_proto_rawDescGZIP(), []int{44}
+	return file_v1_thread_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *CancelTurnRequest) GetThreadId() string {
@@ -3066,11 +4431,91 @@ func (x *CancelTurnRequest) GetThreadId() string {
 	return ""
 }
 
+type SubmitApprovalRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	Decision      *ApprovalDecision      `protobuf:"bytes,2,opt,name=decision,proto3" json:"decision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitApprovalRequest) Reset() {
+	*x = SubmitApprovalRequest{}
+	mi := &file_v1_thread_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitApprovalRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitApprovalRequest) ProtoMessage() {}
+
+func (x *SubmitApprovalRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_thread_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitApprovalRequest.ProtoReflect.Descriptor instead.
+func (*SubmitApprovalRequest) Descriptor() ([]byte, []int) {
+	return file_v1_thread_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *SubmitApprovalRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *SubmitApprovalRequest) GetDecision() *ApprovalDecision {
+	if x != nil {
+		return x.Decision
+	}
+	return nil
+}
+
 var File_v1_thread_proto protoreflect.FileDescriptor
 
 const file_v1_thread_proto_rawDesc = "" +
 	"\n" +
-	"\x0fv1/thread.proto\x12\x0epocketagent.v1\x1a\x0fv1/common.proto\"\x84\x01\n" +
+	"\x0fv1/thread.proto\x12\x0epocketagent.v1\x1a\x0fv1/common.proto\"G\n" +
+	"\x12StartReviewRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x14\n" +
+	"\x05focus\x18\x02 \x01(\tR\x05focus\"L\n" +
+	"\x13StartReviewResponse\x12\x1b\n" +
+	"\treview_id\x18\x01 \x01(\tR\breviewId\x12\x18\n" +
+	"\astarted\x18\x02 \x01(\bR\astarted\"Q\n" +
+	"\x18ListSlashCommandsRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x18\n" +
+	"\arefresh\x18\x02 \x01(\bR\arefresh\"c\n" +
+	"\fSlashCommand\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1d\n" +
+	"\n" +
+	"input_hint\x18\x03 \x01(\tR\tinputHint\"U\n" +
+	"\x19ListSlashCommandsResponse\x128\n" +
+	"\bcommands\x18\x01 \x03(\v2\x1c.pocketagent.v1.SlashCommandR\bcommands\"\x8f\x01\n" +
+	"\x15OptimizePromptRequest\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
+	"\x05style\x18\x02 \x01(\tR\x05style\x12\x19\n" +
+	"\bagent_id\x18\x03 \x01(\tR\aagentId\x12\x19\n" +
+	"\bmodel_id\x18\x04 \x01(\tR\amodelId\x12\x16\n" +
+	"\x06effort\x18\x05 \x01(\tR\x06effort\"6\n" +
+	"\x16OptimizePromptResponse\x12\x1c\n" +
+	"\toptimized\x18\x01 \x01(\tR\toptimized\"6\n" +
+	"\x17ExportThreadHtmlRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\".\n" +
+	"\x18ExportThreadHtmlResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\x84\x01\n" +
 	"\"ApproveGuardianDeniedActionRequest\x12\x1b\n" +
 	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x1b\n" +
 	"\treview_id\x18\x02 \x01(\tR\breviewId\x12$\n" +
@@ -3115,16 +4560,39 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x18ImportCodexThreadRequest\x12&\n" +
 	"\x0fcodex_thread_id\x18\x01 \x01(\tR\rcodexThreadId\"8\n" +
 	"\x19ImportCodexThreadResponse\x12\x1b\n" +
-	"\tthread_id\x18\x02 \x01(\tR\bthreadId\"L\n" +
+	"\tthread_id\x18\x02 \x01(\tR\bthreadId\"4\n" +
+	"\x17ListAgentThreadsRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xc3\x01\n" +
+	"\x0fAgentThreadInfo\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12!\n" +
+	"\fsession_file\x18\x03 \x01(\tR\vsessionFile\x12\x10\n" +
+	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12\x14\n" +
+	"\x05title\x18\x05 \x01(\tR\x05title\x12+\n" +
+	"\x12updated_at_unix_ms\x18\x06 \x01(\x03R\x0fupdatedAtUnixMs\"U\n" +
+	"\x18ListAgentThreadsResponse\x129\n" +
+	"\athreads\x18\x01 \x03(\v2\x1f.pocketagent.v1.AgentThreadInfoR\athreads\"\x9f\x01\n" +
+	"\x18ImportAgentThreadRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12!\n" +
+	"\fsession_file\x18\x03 \x01(\tR\vsessionFile\x12\x10\n" +
+	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12\x14\n" +
+	"\x05title\x18\x05 \x01(\tR\x05title\"8\n" +
+	"\x19ImportAgentThreadResponse\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"L\n" +
 	"\x17GetThreadHistoryRequest\x12\x1b\n" +
 	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\"U\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\x97\x01\n" +
 	"\x18GetThreadHistoryResponse\x129\n" +
-	"\bmessages\x18\x01 \x03(\v2\x1d.pocketagent.v1.ThreadMessageR\bmessages\"\x86\x01\n" +
+	"\bmessages\x18\x01 \x03(\v2\x1d.pocketagent.v1.ThreadMessageR\bmessages\x12@\n" +
+	"\vgoal_detail\x18\x02 \x01(\v2\x1f.pocketagent.v1.CodexGoalDetailR\n" +
+	"goalDetail\"\x86\x01\n" +
 	"\rThreadMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x124\n" +
 	"\x06blocks\x18\x02 \x03(\v2\x1c.pocketagent.v1.ContentBlockR\x06blocks\x12+\n" +
-	"\x12created_at_unix_ms\x18\x03 \x01(\x03R\x0fcreatedAtUnixMs\"\xbb\x04\n" +
+	"\x12created_at_unix_ms\x18\x03 \x01(\x03R\x0fcreatedAtUnixMs\"\xf5\x06\n" +
 	"\x06Thread\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1c\n" +
@@ -3142,11 +4610,31 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\barchived\x18\f \x01(\bR\barchived\x129\n" +
 	"\x19guardian_denied_review_id\x18\r \x01(\tR\x16guardianDeniedReviewId\x125\n" +
 	"\x17guardian_denied_item_id\x18\x0e \x01(\tR\x14guardianDeniedItemId\x124\n" +
-	"\x16guardian_denied_reason\x18\x0f \x01(\tR\x14guardianDeniedReason\"d\n" +
+	"\x16guardian_denied_reason\x18\x0f \x01(\tR\x14guardianDeniedReason\x12\x19\n" +
+	"\bagent_id\x18\x10 \x01(\tR\aagentId\x12M\n" +
+	"\x10external_session\x18\x11 \x01(\v2\".pocketagent.v1.ExternalSessionRefR\x0fexternalSession\x12@\n" +
+	"\vgoal_detail\x18\x12 \x01(\v2\x1f.pocketagent.v1.CodexGoalDetailR\n" +
+	"goalDetail\x12\x16\n" +
+	"\x06effort\x18\x13 \x01(\tR\x06effort\x12&\n" +
+	"\x0flast_turn_error\x18\x14 \x01(\tR\rlastTurnError\x12L\n" +
+	"\x11pending_approvals\x18\x15 \x03(\v2\x1f.pocketagent.v1.ApprovalRequestR\x10pendingApprovals\"\xb7\x01\n" +
+	"\x0fCodexGoalDetail\x12\x1c\n" +
+	"\tobjective\x18\x01 \x01(\tR\tobjective\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +
+	"\vtokens_used\x18\x03 \x01(\x03R\n" +
+	"tokensUsed\x12!\n" +
+	"\ftoken_budget\x18\x04 \x01(\x03R\vtokenBudget\x12*\n" +
+	"\x11time_used_seconds\x18\x05 \x01(\x03R\x0ftimeUsedSeconds\"h\n" +
+	"\x12ExternalSessionRef\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
+	"\fsession_file\x18\x02 \x01(\tR\vsessionFile\x12\x10\n" +
+	"\x03cwd\x18\x03 \x01(\tR\x03cwd\"\x7f\n" +
 	"\x13CreateThreadRequest\x12\x1c\n" +
 	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x19\n" +
-	"\bmodel_id\x18\x03 \x01(\tR\amodelId\"\xd7\x01\n" +
+	"\bmodel_id\x18\x03 \x01(\tR\amodelId\x12\x19\n" +
+	"\bagent_id\x18\x04 \x01(\tR\aagentId\"\xd7\x01\n" +
 	"\x12ListThreadsRequest\x12)\n" +
 	"\x10include_archived\x18\x01 \x01(\bR\x0fincludeArchived\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x1f\n" +
@@ -3159,9 +4647,11 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x13ListThreadsResponse\x120\n" +
 	"\athreads\x18\x01 \x03(\v2\x16.pocketagent.v1.ThreadR\athreads\"/\n" +
 	"\x10GetThreadRequest\x12\x1b\n" +
-	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"2\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"Q\n" +
 	"\x13DeleteThreadRequest\x12\x1b\n" +
-	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"O\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x1d\n" +
+	"\n" +
+	"local_only\x18\x02 \x01(\bR\tlocalOnly\"O\n" +
 	"\x14ArchiveThreadRequest\x12\x1b\n" +
 	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x1a\n" +
 	"\barchived\x18\x02 \x01(\bR\barchived\"H\n" +
@@ -3197,7 +4687,7 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\bapproved\x18\x02 \x01(\bR\bapproved\x12\x12\n" +
 	"\x04note\x18\x03 \x01(\tR\x04note\"&\n" +
 	"\fCancelSignal\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x9e\x05\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xb1\a\n" +
 	"\x11TurnServerMessage\x127\n" +
 	"\astarted\x18\x01 \x01(\v2\x1b.pocketagent.v1.TurnStartedH\x00R\astarted\x12:\n" +
 	"\n" +
@@ -3211,8 +4701,27 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\vcodex_event\x18\t \x01(\v2\x1a.pocketagent.v1.CodexEventH\x00R\n" +
 	"codexEvent\x12O\n" +
 	"\x11approval_resolved\x18\n" +
-	" \x01(\v2 .pocketagent.v1.ApprovalResolvedH\x00R\x10approvalResolvedB\x05\n" +
-	"\x03msg\"E\n" +
+	" \x01(\v2 .pocketagent.v1.ApprovalResolvedH\x00R\x10approvalResolved\x123\n" +
+	"\asteered\x18\v \x01(\v2\x17.pocketagent.v1.SteeredH\x00R\asteered\x120\n" +
+	"\x06queued\x18\f \x01(\v2\x16.pocketagent.v1.QueuedH\x00R\x06queued\x12C\n" +
+	"\rqueue_flushed\x18\r \x01(\v2\x1c.pocketagent.v1.QueueFlushedH\x00R\fqueueFlushed\x12I\n" +
+	"\x0fresync_required\x18\x0f \x01(\v2\x1e.pocketagent.v1.ResyncRequiredH\x00R\x0eresyncRequired\x12\x1a\n" +
+	"\bsequence\x18\x0e \x01(\x03R\bsequenceB\x05\n" +
+	"\x03msg\"a\n" +
+	"\x1bGetThreadEventsSinceRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12%\n" +
+	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence\"(\n" +
+	"\x0eResyncRequired\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"F\n" +
+	"\aSteered\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\"\n" +
+	"\rcodex_turn_id\x18\x02 \x01(\tR\vcodexTurnId\":\n" +
+	"\x06Queued\x12\x1a\n" +
+	"\bposition\x18\x01 \x01(\x05R\bposition\x12\x14\n" +
+	"\x05depth\x18\x02 \x01(\x05R\x05depth\"E\n" +
+	"\fQueueFlushed\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x1c\n" +
+	"\tremaining\x18\x02 \x01(\x05R\tremaining\"E\n" +
 	"\x10ApprovalResolved\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
@@ -3264,22 +4773,27 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x04HOOK\x10\x0e\x12\x12\n" +
 	"\x0eSKILLS_CHANGED\x10\x0f\x12\t\n" +
 	"\x05QUEUE\x10\x10\x12\x10\n" +
-	"\fMODEL_SAFETY\x10\x11\"A\n" +
+	"\fMODEL_SAFETY\x10\x11\"\xa2\x01\n" +
 	"\vTurnStarted\x12\x17\n" +
 	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x19\n" +
-	"\bmodel_id\x18\x02 \x01(\tR\amodelId\"!\n" +
+	"\bmodel_id\x18\x02 \x01(\tR\amodelId\x12\x1b\n" +
+	"\x06effort\x18\x03 \x01(\tH\x00R\x06effort\x88\x01\x01\x127\n" +
+	"\x17configuration_confirmed\x18\x04 \x01(\bR\x16configurationConfirmedB\t\n" +
+	"\a_effort\"!\n" +
 	"\tTextDelta\x12\x14\n" +
 	"\x05delta\x18\x01 \x01(\tR\x05delta\"%\n" +
 	"\rThinkingDelta\x12\x14\n" +
-	"\x05delta\x18\x01 \x01(\tR\x05delta\"\xed\x01\n" +
+	"\x05delta\x18\x01 \x01(\tR\x05delta\"\xf9\x01\n" +
 	"\x0eToolCallUpdate\x12:\n" +
 	"\x05phase\x18\x01 \x01(\x0e2$.pocketagent.v1.ToolCallUpdate.PhaseR\x05phase\x121\n" +
 	"\x04call\x18\x02 \x01(\v2\x1d.pocketagent.v1.ToolCallBlockR\x04call\x127\n" +
-	"\x06result\x18\x03 \x01(\v2\x1f.pocketagent.v1.ToolResultBlockR\x06result\"3\n" +
+	"\x06result\x18\x03 \x01(\v2\x1f.pocketagent.v1.ToolResultBlockR\x06result\"?\n" +
 	"\x05Phase\x12\x0f\n" +
 	"\vUNSPECIFIED\x10\x00\x12\v\n" +
 	"\aSTARTED\x10\x01\x12\f\n" +
-	"\bFINISHED\x10\x02\"\x7f\n" +
+	"\bFINISHED\x10\x02\x12\n" +
+	"\n" +
+	"\x06UPDATE\x10\x03\"\x7f\n" +
 	"\x0fApprovalRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x125\n" +
@@ -3302,13 +4816,16 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\v2\x15.pocketagent.v1.ErrorR\x05error\x12!\n" +
 	"\fpartial_text\x18\x03 \x01(\tR\vpartialText\"0\n" +
 	"\x11CancelTurnRequest\x12\x1b\n" +
-	"\tthread_id\x18\x01 \x01(\tR\bthreadId*\xa0\x01\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"r\n" +
+	"\x15SubmitApprovalRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12<\n" +
+	"\bdecision\x18\x02 \x01(\v2 .pocketagent.v1.ApprovalDecisionR\bdecision*\xa0\x01\n" +
 	"\fThreadStatus\x12\x1d\n" +
 	"\x19THREAD_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12THREAD_STATUS_IDLE\x10\x01\x12\x19\n" +
 	"\x15THREAD_STATUS_RUNNING\x10\x02\x12\"\n" +
 	"\x1eTHREAD_STATUS_WAITING_APPROVAL\x10\x03\x12\x1a\n" +
-	"\x16THREAD_STATUS_ARCHIVED\x10\x042\xc1\x0e\n" +
+	"\x16THREAD_STATUS_ARCHIVED\x10\x042\xd6\x14\n" +
 	"\rThreadService\x12K\n" +
 	"\fCreateThread\x12#.pocketagent.v1.CreateThreadRequest\x1a\x16.pocketagent.v1.Thread\x12V\n" +
 	"\vListThreads\x12\".pocketagent.v1.ListThreadsRequest\x1a#.pocketagent.v1.ListThreadsResponse\x12E\n" +
@@ -3320,10 +4837,14 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\rCompactThread\x12$.pocketagent.v1.CompactThreadRequest\x1a\x15.pocketagent.v1.Empty\x12U\n" +
 	"\tStartTurn\x12!.pocketagent.v1.TurnClientMessage\x1a!.pocketagent.v1.TurnServerMessage(\x010\x01\x12F\n" +
 	"\n" +
-	"CancelTurn\x12!.pocketagent.v1.CancelTurnRequest\x1a\x15.pocketagent.v1.Empty\x12e\n" +
-	"\x10GetThreadHistory\x12'.pocketagent.v1.GetThreadHistoryRequest\x1a(.pocketagent.v1.GetThreadHistoryResponse\x12e\n" +
+	"CancelTurn\x12!.pocketagent.v1.CancelTurnRequest\x1a\x15.pocketagent.v1.Empty\x12N\n" +
+	"\x0eSubmitApproval\x12%.pocketagent.v1.SubmitApprovalRequest\x1a\x15.pocketagent.v1.Empty\x12e\n" +
+	"\x10GetThreadHistory\x12'.pocketagent.v1.GetThreadHistoryRequest\x1a(.pocketagent.v1.GetThreadHistoryResponse\x12h\n" +
+	"\x14GetThreadEventsSince\x12+.pocketagent.v1.GetThreadEventsSinceRequest\x1a!.pocketagent.v1.TurnServerMessage0\x01\x12e\n" +
 	"\x10ListCodexThreads\x12'.pocketagent.v1.ListCodexThreadsRequest\x1a(.pocketagent.v1.ListCodexThreadsResponse\x12h\n" +
-	"\x11ImportCodexThread\x12(.pocketagent.v1.ImportCodexThreadRequest\x1a).pocketagent.v1.ImportCodexThreadResponse\x12G\n" +
+	"\x11ImportCodexThread\x12(.pocketagent.v1.ImportCodexThreadRequest\x1a).pocketagent.v1.ImportCodexThreadResponse\x12e\n" +
+	"\x10ListAgentThreads\x12'.pocketagent.v1.ListAgentThreadsRequest\x1a(.pocketagent.v1.ListAgentThreadsResponse\x12h\n" +
+	"\x11ImportAgentThread\x12(.pocketagent.v1.ImportAgentThreadRequest\x1a).pocketagent.v1.ImportAgentThreadResponse\x12G\n" +
 	"\n" +
 	"ForkThread\x12!.pocketagent.v1.ForkThreadRequest\x1a\x16.pocketagent.v1.Thread\x12O\n" +
 	"\x0eRollbackThread\x12%.pocketagent.v1.RollbackThreadRequest\x1a\x16.pocketagent.v1.Thread\x12k\n" +
@@ -3332,7 +4853,11 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x13RenameThreadSection\x12*.pocketagent.v1.RenameThreadSectionRequest\x1a\x1d.pocketagent.v1.ThreadSection\x12X\n" +
 	"\x13DeleteThreadSection\x12*.pocketagent.v1.DeleteThreadSectionRequest\x1a\x15.pocketagent.v1.Empty\x12Y\n" +
 	"\x13MoveThreadToSection\x12*.pocketagent.v1.MoveThreadToSectionRequest\x1a\x16.pocketagent.v1.Thread\x12h\n" +
-	"\x1bApproveGuardianDeniedAction\x122.pocketagent.v1.ApproveGuardianDeniedActionRequest\x1a\x15.pocketagent.v1.EmptyBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x1bApproveGuardianDeniedAction\x122.pocketagent.v1.ApproveGuardianDeniedActionRequest\x1a\x15.pocketagent.v1.Empty\x12e\n" +
+	"\x10ExportThreadHtml\x12'.pocketagent.v1.ExportThreadHtmlRequest\x1a(.pocketagent.v1.ExportThreadHtmlResponse\x12_\n" +
+	"\x0eOptimizePrompt\x12%.pocketagent.v1.OptimizePromptRequest\x1a&.pocketagent.v1.OptimizePromptResponse\x12h\n" +
+	"\x11ListSlashCommands\x12(.pocketagent.v1.ListSlashCommandsRequest\x1a).pocketagent.v1.ListSlashCommandsResponse\x12V\n" +
+	"\vStartReview\x12\".pocketagent.v1.StartReviewRequest\x1a#.pocketagent.v1.StartReviewResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_thread_proto_rawDescOnce sync.Once
@@ -3347,143 +4872,192 @@ func file_v1_thread_proto_rawDescGZIP() []byte {
 }
 
 var file_v1_thread_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_v1_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_v1_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
 var file_v1_thread_proto_goTypes = []any{
 	(ThreadStatus)(0),                          // 0: pocketagent.v1.ThreadStatus
 	(CodexEvent_Kind)(0),                       // 1: pocketagent.v1.CodexEvent.Kind
 	(ToolCallUpdate_Phase)(0),                  // 2: pocketagent.v1.ToolCallUpdate.Phase
-	(*ApproveGuardianDeniedActionRequest)(nil), // 3: pocketagent.v1.ApproveGuardianDeniedActionRequest
-	(*ForkThreadRequest)(nil),                  // 4: pocketagent.v1.ForkThreadRequest
-	(*RollbackThreadRequest)(nil),              // 5: pocketagent.v1.RollbackThreadRequest
-	(*ThreadSection)(nil),                      // 6: pocketagent.v1.ThreadSection
-	(*ListThreadSectionsRequest)(nil),          // 7: pocketagent.v1.ListThreadSectionsRequest
-	(*ListThreadSectionsResponse)(nil),         // 8: pocketagent.v1.ListThreadSectionsResponse
-	(*CreateThreadSectionRequest)(nil),         // 9: pocketagent.v1.CreateThreadSectionRequest
-	(*RenameThreadSectionRequest)(nil),         // 10: pocketagent.v1.RenameThreadSectionRequest
-	(*DeleteThreadSectionRequest)(nil),         // 11: pocketagent.v1.DeleteThreadSectionRequest
-	(*MoveThreadToSectionRequest)(nil),         // 12: pocketagent.v1.MoveThreadToSectionRequest
-	(*ListCodexThreadsRequest)(nil),            // 13: pocketagent.v1.ListCodexThreadsRequest
-	(*CodexThreadInfo)(nil),                    // 14: pocketagent.v1.CodexThreadInfo
-	(*ListCodexThreadsResponse)(nil),           // 15: pocketagent.v1.ListCodexThreadsResponse
-	(*ImportCodexThreadRequest)(nil),           // 16: pocketagent.v1.ImportCodexThreadRequest
-	(*ImportCodexThreadResponse)(nil),          // 17: pocketagent.v1.ImportCodexThreadResponse
-	(*GetThreadHistoryRequest)(nil),            // 18: pocketagent.v1.GetThreadHistoryRequest
-	(*GetThreadHistoryResponse)(nil),           // 19: pocketagent.v1.GetThreadHistoryResponse
-	(*ThreadMessage)(nil),                      // 20: pocketagent.v1.ThreadMessage
-	(*Thread)(nil),                             // 21: pocketagent.v1.Thread
-	(*CreateThreadRequest)(nil),                // 22: pocketagent.v1.CreateThreadRequest
-	(*ListThreadsRequest)(nil),                 // 23: pocketagent.v1.ListThreadsRequest
-	(*ListThreadsResponse)(nil),                // 24: pocketagent.v1.ListThreadsResponse
-	(*GetThreadRequest)(nil),                   // 25: pocketagent.v1.GetThreadRequest
-	(*DeleteThreadRequest)(nil),                // 26: pocketagent.v1.DeleteThreadRequest
-	(*ArchiveThreadRequest)(nil),               // 27: pocketagent.v1.ArchiveThreadRequest
-	(*RenameThreadRequest)(nil),                // 28: pocketagent.v1.RenameThreadRequest
-	(*SetThreadGoalRequest)(nil),               // 29: pocketagent.v1.SetThreadGoalRequest
-	(*CompactThreadRequest)(nil),               // 30: pocketagent.v1.CompactThreadRequest
-	(*TurnClientMessage)(nil),                  // 31: pocketagent.v1.TurnClientMessage
-	(*TurnInput)(nil),                          // 32: pocketagent.v1.TurnInput
-	(*TurnSupplement)(nil),                     // 33: pocketagent.v1.TurnSupplement
-	(*ApprovalDecision)(nil),                   // 34: pocketagent.v1.ApprovalDecision
-	(*CancelSignal)(nil),                       // 35: pocketagent.v1.CancelSignal
-	(*TurnServerMessage)(nil),                  // 36: pocketagent.v1.TurnServerMessage
-	(*ApprovalResolved)(nil),                   // 37: pocketagent.v1.ApprovalResolved
-	(*CodexEvent)(nil),                         // 38: pocketagent.v1.CodexEvent
-	(*TurnStarted)(nil),                        // 39: pocketagent.v1.TurnStarted
-	(*TextDelta)(nil),                          // 40: pocketagent.v1.TextDelta
-	(*ThinkingDelta)(nil),                      // 41: pocketagent.v1.ThinkingDelta
-	(*ToolCallUpdate)(nil),                     // 42: pocketagent.v1.ToolCallUpdate
-	(*ApprovalRequest)(nil),                    // 43: pocketagent.v1.ApprovalRequest
-	(*UsageUpdate)(nil),                        // 44: pocketagent.v1.UsageUpdate
-	(*TurnCompleted)(nil),                      // 45: pocketagent.v1.TurnCompleted
-	(*TurnFailed)(nil),                         // 46: pocketagent.v1.TurnFailed
-	(*CancelTurnRequest)(nil),                  // 47: pocketagent.v1.CancelTurnRequest
-	(*ContentBlock)(nil),                       // 48: pocketagent.v1.ContentBlock
-	(*ToolCallBlock)(nil),                      // 49: pocketagent.v1.ToolCallBlock
-	(*ToolResultBlock)(nil),                    // 50: pocketagent.v1.ToolResultBlock
-	(*Usage)(nil),                              // 51: pocketagent.v1.Usage
-	(*Error)(nil),                              // 52: pocketagent.v1.Error
-	(*Empty)(nil),                              // 53: pocketagent.v1.Empty
+	(*StartReviewRequest)(nil),                 // 3: pocketagent.v1.StartReviewRequest
+	(*StartReviewResponse)(nil),                // 4: pocketagent.v1.StartReviewResponse
+	(*ListSlashCommandsRequest)(nil),           // 5: pocketagent.v1.ListSlashCommandsRequest
+	(*SlashCommand)(nil),                       // 6: pocketagent.v1.SlashCommand
+	(*ListSlashCommandsResponse)(nil),          // 7: pocketagent.v1.ListSlashCommandsResponse
+	(*OptimizePromptRequest)(nil),              // 8: pocketagent.v1.OptimizePromptRequest
+	(*OptimizePromptResponse)(nil),             // 9: pocketagent.v1.OptimizePromptResponse
+	(*ExportThreadHtmlRequest)(nil),            // 10: pocketagent.v1.ExportThreadHtmlRequest
+	(*ExportThreadHtmlResponse)(nil),           // 11: pocketagent.v1.ExportThreadHtmlResponse
+	(*ApproveGuardianDeniedActionRequest)(nil), // 12: pocketagent.v1.ApproveGuardianDeniedActionRequest
+	(*ForkThreadRequest)(nil),                  // 13: pocketagent.v1.ForkThreadRequest
+	(*RollbackThreadRequest)(nil),              // 14: pocketagent.v1.RollbackThreadRequest
+	(*ThreadSection)(nil),                      // 15: pocketagent.v1.ThreadSection
+	(*ListThreadSectionsRequest)(nil),          // 16: pocketagent.v1.ListThreadSectionsRequest
+	(*ListThreadSectionsResponse)(nil),         // 17: pocketagent.v1.ListThreadSectionsResponse
+	(*CreateThreadSectionRequest)(nil),         // 18: pocketagent.v1.CreateThreadSectionRequest
+	(*RenameThreadSectionRequest)(nil),         // 19: pocketagent.v1.RenameThreadSectionRequest
+	(*DeleteThreadSectionRequest)(nil),         // 20: pocketagent.v1.DeleteThreadSectionRequest
+	(*MoveThreadToSectionRequest)(nil),         // 21: pocketagent.v1.MoveThreadToSectionRequest
+	(*ListCodexThreadsRequest)(nil),            // 22: pocketagent.v1.ListCodexThreadsRequest
+	(*CodexThreadInfo)(nil),                    // 23: pocketagent.v1.CodexThreadInfo
+	(*ListCodexThreadsResponse)(nil),           // 24: pocketagent.v1.ListCodexThreadsResponse
+	(*ImportCodexThreadRequest)(nil),           // 25: pocketagent.v1.ImportCodexThreadRequest
+	(*ImportCodexThreadResponse)(nil),          // 26: pocketagent.v1.ImportCodexThreadResponse
+	(*ListAgentThreadsRequest)(nil),            // 27: pocketagent.v1.ListAgentThreadsRequest
+	(*AgentThreadInfo)(nil),                    // 28: pocketagent.v1.AgentThreadInfo
+	(*ListAgentThreadsResponse)(nil),           // 29: pocketagent.v1.ListAgentThreadsResponse
+	(*ImportAgentThreadRequest)(nil),           // 30: pocketagent.v1.ImportAgentThreadRequest
+	(*ImportAgentThreadResponse)(nil),          // 31: pocketagent.v1.ImportAgentThreadResponse
+	(*GetThreadHistoryRequest)(nil),            // 32: pocketagent.v1.GetThreadHistoryRequest
+	(*GetThreadHistoryResponse)(nil),           // 33: pocketagent.v1.GetThreadHistoryResponse
+	(*ThreadMessage)(nil),                      // 34: pocketagent.v1.ThreadMessage
+	(*Thread)(nil),                             // 35: pocketagent.v1.Thread
+	(*CodexGoalDetail)(nil),                    // 36: pocketagent.v1.CodexGoalDetail
+	(*ExternalSessionRef)(nil),                 // 37: pocketagent.v1.ExternalSessionRef
+	(*CreateThreadRequest)(nil),                // 38: pocketagent.v1.CreateThreadRequest
+	(*ListThreadsRequest)(nil),                 // 39: pocketagent.v1.ListThreadsRequest
+	(*ListThreadsResponse)(nil),                // 40: pocketagent.v1.ListThreadsResponse
+	(*GetThreadRequest)(nil),                   // 41: pocketagent.v1.GetThreadRequest
+	(*DeleteThreadRequest)(nil),                // 42: pocketagent.v1.DeleteThreadRequest
+	(*ArchiveThreadRequest)(nil),               // 43: pocketagent.v1.ArchiveThreadRequest
+	(*RenameThreadRequest)(nil),                // 44: pocketagent.v1.RenameThreadRequest
+	(*SetThreadGoalRequest)(nil),               // 45: pocketagent.v1.SetThreadGoalRequest
+	(*CompactThreadRequest)(nil),               // 46: pocketagent.v1.CompactThreadRequest
+	(*TurnClientMessage)(nil),                  // 47: pocketagent.v1.TurnClientMessage
+	(*TurnInput)(nil),                          // 48: pocketagent.v1.TurnInput
+	(*TurnSupplement)(nil),                     // 49: pocketagent.v1.TurnSupplement
+	(*ApprovalDecision)(nil),                   // 50: pocketagent.v1.ApprovalDecision
+	(*CancelSignal)(nil),                       // 51: pocketagent.v1.CancelSignal
+	(*TurnServerMessage)(nil),                  // 52: pocketagent.v1.TurnServerMessage
+	(*GetThreadEventsSinceRequest)(nil),        // 53: pocketagent.v1.GetThreadEventsSinceRequest
+	(*ResyncRequired)(nil),                     // 54: pocketagent.v1.ResyncRequired
+	(*Steered)(nil),                            // 55: pocketagent.v1.Steered
+	(*Queued)(nil),                             // 56: pocketagent.v1.Queued
+	(*QueueFlushed)(nil),                       // 57: pocketagent.v1.QueueFlushed
+	(*ApprovalResolved)(nil),                   // 58: pocketagent.v1.ApprovalResolved
+	(*CodexEvent)(nil),                         // 59: pocketagent.v1.CodexEvent
+	(*TurnStarted)(nil),                        // 60: pocketagent.v1.TurnStarted
+	(*TextDelta)(nil),                          // 61: pocketagent.v1.TextDelta
+	(*ThinkingDelta)(nil),                      // 62: pocketagent.v1.ThinkingDelta
+	(*ToolCallUpdate)(nil),                     // 63: pocketagent.v1.ToolCallUpdate
+	(*ApprovalRequest)(nil),                    // 64: pocketagent.v1.ApprovalRequest
+	(*UsageUpdate)(nil),                        // 65: pocketagent.v1.UsageUpdate
+	(*TurnCompleted)(nil),                      // 66: pocketagent.v1.TurnCompleted
+	(*TurnFailed)(nil),                         // 67: pocketagent.v1.TurnFailed
+	(*CancelTurnRequest)(nil),                  // 68: pocketagent.v1.CancelTurnRequest
+	(*SubmitApprovalRequest)(nil),              // 69: pocketagent.v1.SubmitApprovalRequest
+	(*ContentBlock)(nil),                       // 70: pocketagent.v1.ContentBlock
+	(*ToolCallBlock)(nil),                      // 71: pocketagent.v1.ToolCallBlock
+	(*ToolResultBlock)(nil),                    // 72: pocketagent.v1.ToolResultBlock
+	(*Usage)(nil),                              // 73: pocketagent.v1.Usage
+	(*Error)(nil),                              // 74: pocketagent.v1.Error
+	(*Empty)(nil),                              // 75: pocketagent.v1.Empty
 }
 var file_v1_thread_proto_depIdxs = []int32{
-	6,  // 0: pocketagent.v1.ListThreadSectionsResponse.sections:type_name -> pocketagent.v1.ThreadSection
-	14, // 1: pocketagent.v1.ListCodexThreadsResponse.threads:type_name -> pocketagent.v1.CodexThreadInfo
-	20, // 2: pocketagent.v1.GetThreadHistoryResponse.messages:type_name -> pocketagent.v1.ThreadMessage
-	48, // 3: pocketagent.v1.ThreadMessage.blocks:type_name -> pocketagent.v1.ContentBlock
-	0,  // 4: pocketagent.v1.Thread.status:type_name -> pocketagent.v1.ThreadStatus
-	21, // 5: pocketagent.v1.ListThreadsResponse.threads:type_name -> pocketagent.v1.Thread
-	32, // 6: pocketagent.v1.TurnClientMessage.input:type_name -> pocketagent.v1.TurnInput
-	33, // 7: pocketagent.v1.TurnClientMessage.supplement:type_name -> pocketagent.v1.TurnSupplement
-	34, // 8: pocketagent.v1.TurnClientMessage.approval:type_name -> pocketagent.v1.ApprovalDecision
-	35, // 9: pocketagent.v1.TurnClientMessage.cancel:type_name -> pocketagent.v1.CancelSignal
-	48, // 10: pocketagent.v1.TurnInput.blocks:type_name -> pocketagent.v1.ContentBlock
-	48, // 11: pocketagent.v1.TurnSupplement.blocks:type_name -> pocketagent.v1.ContentBlock
-	39, // 12: pocketagent.v1.TurnServerMessage.started:type_name -> pocketagent.v1.TurnStarted
-	40, // 13: pocketagent.v1.TurnServerMessage.text_delta:type_name -> pocketagent.v1.TextDelta
-	41, // 14: pocketagent.v1.TurnServerMessage.thinking_delta:type_name -> pocketagent.v1.ThinkingDelta
-	42, // 15: pocketagent.v1.TurnServerMessage.tool_call:type_name -> pocketagent.v1.ToolCallUpdate
-	43, // 16: pocketagent.v1.TurnServerMessage.approval_request:type_name -> pocketagent.v1.ApprovalRequest
-	44, // 17: pocketagent.v1.TurnServerMessage.usage:type_name -> pocketagent.v1.UsageUpdate
-	45, // 18: pocketagent.v1.TurnServerMessage.completed:type_name -> pocketagent.v1.TurnCompleted
-	46, // 19: pocketagent.v1.TurnServerMessage.failed:type_name -> pocketagent.v1.TurnFailed
-	38, // 20: pocketagent.v1.TurnServerMessage.codex_event:type_name -> pocketagent.v1.CodexEvent
-	37, // 21: pocketagent.v1.TurnServerMessage.approval_resolved:type_name -> pocketagent.v1.ApprovalResolved
-	1,  // 22: pocketagent.v1.CodexEvent.kind:type_name -> pocketagent.v1.CodexEvent.Kind
-	2,  // 23: pocketagent.v1.ToolCallUpdate.phase:type_name -> pocketagent.v1.ToolCallUpdate.Phase
-	49, // 24: pocketagent.v1.ToolCallUpdate.call:type_name -> pocketagent.v1.ToolCallBlock
-	50, // 25: pocketagent.v1.ToolCallUpdate.result:type_name -> pocketagent.v1.ToolResultBlock
-	49, // 26: pocketagent.v1.ApprovalRequest.action:type_name -> pocketagent.v1.ToolCallBlock
-	51, // 27: pocketagent.v1.UsageUpdate.usage:type_name -> pocketagent.v1.Usage
-	51, // 28: pocketagent.v1.UsageUpdate.total_usage:type_name -> pocketagent.v1.Usage
-	48, // 29: pocketagent.v1.TurnCompleted.final_blocks:type_name -> pocketagent.v1.ContentBlock
-	51, // 30: pocketagent.v1.TurnCompleted.usage:type_name -> pocketagent.v1.Usage
-	52, // 31: pocketagent.v1.TurnFailed.error:type_name -> pocketagent.v1.Error
-	22, // 32: pocketagent.v1.ThreadService.CreateThread:input_type -> pocketagent.v1.CreateThreadRequest
-	23, // 33: pocketagent.v1.ThreadService.ListThreads:input_type -> pocketagent.v1.ListThreadsRequest
-	25, // 34: pocketagent.v1.ThreadService.GetThread:input_type -> pocketagent.v1.GetThreadRequest
-	26, // 35: pocketagent.v1.ThreadService.DeleteThread:input_type -> pocketagent.v1.DeleteThreadRequest
-	27, // 36: pocketagent.v1.ThreadService.ArchiveThread:input_type -> pocketagent.v1.ArchiveThreadRequest
-	28, // 37: pocketagent.v1.ThreadService.RenameThread:input_type -> pocketagent.v1.RenameThreadRequest
-	29, // 38: pocketagent.v1.ThreadService.SetThreadGoal:input_type -> pocketagent.v1.SetThreadGoalRequest
-	30, // 39: pocketagent.v1.ThreadService.CompactThread:input_type -> pocketagent.v1.CompactThreadRequest
-	31, // 40: pocketagent.v1.ThreadService.StartTurn:input_type -> pocketagent.v1.TurnClientMessage
-	47, // 41: pocketagent.v1.ThreadService.CancelTurn:input_type -> pocketagent.v1.CancelTurnRequest
-	18, // 42: pocketagent.v1.ThreadService.GetThreadHistory:input_type -> pocketagent.v1.GetThreadHistoryRequest
-	13, // 43: pocketagent.v1.ThreadService.ListCodexThreads:input_type -> pocketagent.v1.ListCodexThreadsRequest
-	16, // 44: pocketagent.v1.ThreadService.ImportCodexThread:input_type -> pocketagent.v1.ImportCodexThreadRequest
-	4,  // 45: pocketagent.v1.ThreadService.ForkThread:input_type -> pocketagent.v1.ForkThreadRequest
-	5,  // 46: pocketagent.v1.ThreadService.RollbackThread:input_type -> pocketagent.v1.RollbackThreadRequest
-	7,  // 47: pocketagent.v1.ThreadService.ListThreadSections:input_type -> pocketagent.v1.ListThreadSectionsRequest
-	9,  // 48: pocketagent.v1.ThreadService.CreateThreadSection:input_type -> pocketagent.v1.CreateThreadSectionRequest
-	10, // 49: pocketagent.v1.ThreadService.RenameThreadSection:input_type -> pocketagent.v1.RenameThreadSectionRequest
-	11, // 50: pocketagent.v1.ThreadService.DeleteThreadSection:input_type -> pocketagent.v1.DeleteThreadSectionRequest
-	12, // 51: pocketagent.v1.ThreadService.MoveThreadToSection:input_type -> pocketagent.v1.MoveThreadToSectionRequest
-	3,  // 52: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:input_type -> pocketagent.v1.ApproveGuardianDeniedActionRequest
-	21, // 53: pocketagent.v1.ThreadService.CreateThread:output_type -> pocketagent.v1.Thread
-	24, // 54: pocketagent.v1.ThreadService.ListThreads:output_type -> pocketagent.v1.ListThreadsResponse
-	21, // 55: pocketagent.v1.ThreadService.GetThread:output_type -> pocketagent.v1.Thread
-	53, // 56: pocketagent.v1.ThreadService.DeleteThread:output_type -> pocketagent.v1.Empty
-	21, // 57: pocketagent.v1.ThreadService.ArchiveThread:output_type -> pocketagent.v1.Thread
-	21, // 58: pocketagent.v1.ThreadService.RenameThread:output_type -> pocketagent.v1.Thread
-	21, // 59: pocketagent.v1.ThreadService.SetThreadGoal:output_type -> pocketagent.v1.Thread
-	53, // 60: pocketagent.v1.ThreadService.CompactThread:output_type -> pocketagent.v1.Empty
-	36, // 61: pocketagent.v1.ThreadService.StartTurn:output_type -> pocketagent.v1.TurnServerMessage
-	53, // 62: pocketagent.v1.ThreadService.CancelTurn:output_type -> pocketagent.v1.Empty
-	19, // 63: pocketagent.v1.ThreadService.GetThreadHistory:output_type -> pocketagent.v1.GetThreadHistoryResponse
-	15, // 64: pocketagent.v1.ThreadService.ListCodexThreads:output_type -> pocketagent.v1.ListCodexThreadsResponse
-	17, // 65: pocketagent.v1.ThreadService.ImportCodexThread:output_type -> pocketagent.v1.ImportCodexThreadResponse
-	21, // 66: pocketagent.v1.ThreadService.ForkThread:output_type -> pocketagent.v1.Thread
-	21, // 67: pocketagent.v1.ThreadService.RollbackThread:output_type -> pocketagent.v1.Thread
-	8,  // 68: pocketagent.v1.ThreadService.ListThreadSections:output_type -> pocketagent.v1.ListThreadSectionsResponse
-	6,  // 69: pocketagent.v1.ThreadService.CreateThreadSection:output_type -> pocketagent.v1.ThreadSection
-	6,  // 70: pocketagent.v1.ThreadService.RenameThreadSection:output_type -> pocketagent.v1.ThreadSection
-	53, // 71: pocketagent.v1.ThreadService.DeleteThreadSection:output_type -> pocketagent.v1.Empty
-	21, // 72: pocketagent.v1.ThreadService.MoveThreadToSection:output_type -> pocketagent.v1.Thread
-	53, // 73: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:output_type -> pocketagent.v1.Empty
-	53, // [53:74] is the sub-list for method output_type
-	32, // [32:53] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	6,  // 0: pocketagent.v1.ListSlashCommandsResponse.commands:type_name -> pocketagent.v1.SlashCommand
+	15, // 1: pocketagent.v1.ListThreadSectionsResponse.sections:type_name -> pocketagent.v1.ThreadSection
+	23, // 2: pocketagent.v1.ListCodexThreadsResponse.threads:type_name -> pocketagent.v1.CodexThreadInfo
+	28, // 3: pocketagent.v1.ListAgentThreadsResponse.threads:type_name -> pocketagent.v1.AgentThreadInfo
+	34, // 4: pocketagent.v1.GetThreadHistoryResponse.messages:type_name -> pocketagent.v1.ThreadMessage
+	36, // 5: pocketagent.v1.GetThreadHistoryResponse.goal_detail:type_name -> pocketagent.v1.CodexGoalDetail
+	70, // 6: pocketagent.v1.ThreadMessage.blocks:type_name -> pocketagent.v1.ContentBlock
+	0,  // 7: pocketagent.v1.Thread.status:type_name -> pocketagent.v1.ThreadStatus
+	37, // 8: pocketagent.v1.Thread.external_session:type_name -> pocketagent.v1.ExternalSessionRef
+	36, // 9: pocketagent.v1.Thread.goal_detail:type_name -> pocketagent.v1.CodexGoalDetail
+	64, // 10: pocketagent.v1.Thread.pending_approvals:type_name -> pocketagent.v1.ApprovalRequest
+	35, // 11: pocketagent.v1.ListThreadsResponse.threads:type_name -> pocketagent.v1.Thread
+	48, // 12: pocketagent.v1.TurnClientMessage.input:type_name -> pocketagent.v1.TurnInput
+	49, // 13: pocketagent.v1.TurnClientMessage.supplement:type_name -> pocketagent.v1.TurnSupplement
+	50, // 14: pocketagent.v1.TurnClientMessage.approval:type_name -> pocketagent.v1.ApprovalDecision
+	51, // 15: pocketagent.v1.TurnClientMessage.cancel:type_name -> pocketagent.v1.CancelSignal
+	70, // 16: pocketagent.v1.TurnInput.blocks:type_name -> pocketagent.v1.ContentBlock
+	70, // 17: pocketagent.v1.TurnSupplement.blocks:type_name -> pocketagent.v1.ContentBlock
+	60, // 18: pocketagent.v1.TurnServerMessage.started:type_name -> pocketagent.v1.TurnStarted
+	61, // 19: pocketagent.v1.TurnServerMessage.text_delta:type_name -> pocketagent.v1.TextDelta
+	62, // 20: pocketagent.v1.TurnServerMessage.thinking_delta:type_name -> pocketagent.v1.ThinkingDelta
+	63, // 21: pocketagent.v1.TurnServerMessage.tool_call:type_name -> pocketagent.v1.ToolCallUpdate
+	64, // 22: pocketagent.v1.TurnServerMessage.approval_request:type_name -> pocketagent.v1.ApprovalRequest
+	65, // 23: pocketagent.v1.TurnServerMessage.usage:type_name -> pocketagent.v1.UsageUpdate
+	66, // 24: pocketagent.v1.TurnServerMessage.completed:type_name -> pocketagent.v1.TurnCompleted
+	67, // 25: pocketagent.v1.TurnServerMessage.failed:type_name -> pocketagent.v1.TurnFailed
+	59, // 26: pocketagent.v1.TurnServerMessage.codex_event:type_name -> pocketagent.v1.CodexEvent
+	58, // 27: pocketagent.v1.TurnServerMessage.approval_resolved:type_name -> pocketagent.v1.ApprovalResolved
+	55, // 28: pocketagent.v1.TurnServerMessage.steered:type_name -> pocketagent.v1.Steered
+	56, // 29: pocketagent.v1.TurnServerMessage.queued:type_name -> pocketagent.v1.Queued
+	57, // 30: pocketagent.v1.TurnServerMessage.queue_flushed:type_name -> pocketagent.v1.QueueFlushed
+	54, // 31: pocketagent.v1.TurnServerMessage.resync_required:type_name -> pocketagent.v1.ResyncRequired
+	1,  // 32: pocketagent.v1.CodexEvent.kind:type_name -> pocketagent.v1.CodexEvent.Kind
+	2,  // 33: pocketagent.v1.ToolCallUpdate.phase:type_name -> pocketagent.v1.ToolCallUpdate.Phase
+	71, // 34: pocketagent.v1.ToolCallUpdate.call:type_name -> pocketagent.v1.ToolCallBlock
+	72, // 35: pocketagent.v1.ToolCallUpdate.result:type_name -> pocketagent.v1.ToolResultBlock
+	71, // 36: pocketagent.v1.ApprovalRequest.action:type_name -> pocketagent.v1.ToolCallBlock
+	73, // 37: pocketagent.v1.UsageUpdate.usage:type_name -> pocketagent.v1.Usage
+	73, // 38: pocketagent.v1.UsageUpdate.total_usage:type_name -> pocketagent.v1.Usage
+	70, // 39: pocketagent.v1.TurnCompleted.final_blocks:type_name -> pocketagent.v1.ContentBlock
+	73, // 40: pocketagent.v1.TurnCompleted.usage:type_name -> pocketagent.v1.Usage
+	74, // 41: pocketagent.v1.TurnFailed.error:type_name -> pocketagent.v1.Error
+	50, // 42: pocketagent.v1.SubmitApprovalRequest.decision:type_name -> pocketagent.v1.ApprovalDecision
+	38, // 43: pocketagent.v1.ThreadService.CreateThread:input_type -> pocketagent.v1.CreateThreadRequest
+	39, // 44: pocketagent.v1.ThreadService.ListThreads:input_type -> pocketagent.v1.ListThreadsRequest
+	41, // 45: pocketagent.v1.ThreadService.GetThread:input_type -> pocketagent.v1.GetThreadRequest
+	42, // 46: pocketagent.v1.ThreadService.DeleteThread:input_type -> pocketagent.v1.DeleteThreadRequest
+	43, // 47: pocketagent.v1.ThreadService.ArchiveThread:input_type -> pocketagent.v1.ArchiveThreadRequest
+	44, // 48: pocketagent.v1.ThreadService.RenameThread:input_type -> pocketagent.v1.RenameThreadRequest
+	45, // 49: pocketagent.v1.ThreadService.SetThreadGoal:input_type -> pocketagent.v1.SetThreadGoalRequest
+	46, // 50: pocketagent.v1.ThreadService.CompactThread:input_type -> pocketagent.v1.CompactThreadRequest
+	47, // 51: pocketagent.v1.ThreadService.StartTurn:input_type -> pocketagent.v1.TurnClientMessage
+	68, // 52: pocketagent.v1.ThreadService.CancelTurn:input_type -> pocketagent.v1.CancelTurnRequest
+	69, // 53: pocketagent.v1.ThreadService.SubmitApproval:input_type -> pocketagent.v1.SubmitApprovalRequest
+	32, // 54: pocketagent.v1.ThreadService.GetThreadHistory:input_type -> pocketagent.v1.GetThreadHistoryRequest
+	53, // 55: pocketagent.v1.ThreadService.GetThreadEventsSince:input_type -> pocketagent.v1.GetThreadEventsSinceRequest
+	22, // 56: pocketagent.v1.ThreadService.ListCodexThreads:input_type -> pocketagent.v1.ListCodexThreadsRequest
+	25, // 57: pocketagent.v1.ThreadService.ImportCodexThread:input_type -> pocketagent.v1.ImportCodexThreadRequest
+	27, // 58: pocketagent.v1.ThreadService.ListAgentThreads:input_type -> pocketagent.v1.ListAgentThreadsRequest
+	30, // 59: pocketagent.v1.ThreadService.ImportAgentThread:input_type -> pocketagent.v1.ImportAgentThreadRequest
+	13, // 60: pocketagent.v1.ThreadService.ForkThread:input_type -> pocketagent.v1.ForkThreadRequest
+	14, // 61: pocketagent.v1.ThreadService.RollbackThread:input_type -> pocketagent.v1.RollbackThreadRequest
+	16, // 62: pocketagent.v1.ThreadService.ListThreadSections:input_type -> pocketagent.v1.ListThreadSectionsRequest
+	18, // 63: pocketagent.v1.ThreadService.CreateThreadSection:input_type -> pocketagent.v1.CreateThreadSectionRequest
+	19, // 64: pocketagent.v1.ThreadService.RenameThreadSection:input_type -> pocketagent.v1.RenameThreadSectionRequest
+	20, // 65: pocketagent.v1.ThreadService.DeleteThreadSection:input_type -> pocketagent.v1.DeleteThreadSectionRequest
+	21, // 66: pocketagent.v1.ThreadService.MoveThreadToSection:input_type -> pocketagent.v1.MoveThreadToSectionRequest
+	12, // 67: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:input_type -> pocketagent.v1.ApproveGuardianDeniedActionRequest
+	10, // 68: pocketagent.v1.ThreadService.ExportThreadHtml:input_type -> pocketagent.v1.ExportThreadHtmlRequest
+	8,  // 69: pocketagent.v1.ThreadService.OptimizePrompt:input_type -> pocketagent.v1.OptimizePromptRequest
+	5,  // 70: pocketagent.v1.ThreadService.ListSlashCommands:input_type -> pocketagent.v1.ListSlashCommandsRequest
+	3,  // 71: pocketagent.v1.ThreadService.StartReview:input_type -> pocketagent.v1.StartReviewRequest
+	35, // 72: pocketagent.v1.ThreadService.CreateThread:output_type -> pocketagent.v1.Thread
+	40, // 73: pocketagent.v1.ThreadService.ListThreads:output_type -> pocketagent.v1.ListThreadsResponse
+	35, // 74: pocketagent.v1.ThreadService.GetThread:output_type -> pocketagent.v1.Thread
+	75, // 75: pocketagent.v1.ThreadService.DeleteThread:output_type -> pocketagent.v1.Empty
+	35, // 76: pocketagent.v1.ThreadService.ArchiveThread:output_type -> pocketagent.v1.Thread
+	35, // 77: pocketagent.v1.ThreadService.RenameThread:output_type -> pocketagent.v1.Thread
+	35, // 78: pocketagent.v1.ThreadService.SetThreadGoal:output_type -> pocketagent.v1.Thread
+	75, // 79: pocketagent.v1.ThreadService.CompactThread:output_type -> pocketagent.v1.Empty
+	52, // 80: pocketagent.v1.ThreadService.StartTurn:output_type -> pocketagent.v1.TurnServerMessage
+	75, // 81: pocketagent.v1.ThreadService.CancelTurn:output_type -> pocketagent.v1.Empty
+	75, // 82: pocketagent.v1.ThreadService.SubmitApproval:output_type -> pocketagent.v1.Empty
+	33, // 83: pocketagent.v1.ThreadService.GetThreadHistory:output_type -> pocketagent.v1.GetThreadHistoryResponse
+	52, // 84: pocketagent.v1.ThreadService.GetThreadEventsSince:output_type -> pocketagent.v1.TurnServerMessage
+	24, // 85: pocketagent.v1.ThreadService.ListCodexThreads:output_type -> pocketagent.v1.ListCodexThreadsResponse
+	26, // 86: pocketagent.v1.ThreadService.ImportCodexThread:output_type -> pocketagent.v1.ImportCodexThreadResponse
+	29, // 87: pocketagent.v1.ThreadService.ListAgentThreads:output_type -> pocketagent.v1.ListAgentThreadsResponse
+	31, // 88: pocketagent.v1.ThreadService.ImportAgentThread:output_type -> pocketagent.v1.ImportAgentThreadResponse
+	35, // 89: pocketagent.v1.ThreadService.ForkThread:output_type -> pocketagent.v1.Thread
+	35, // 90: pocketagent.v1.ThreadService.RollbackThread:output_type -> pocketagent.v1.Thread
+	17, // 91: pocketagent.v1.ThreadService.ListThreadSections:output_type -> pocketagent.v1.ListThreadSectionsResponse
+	15, // 92: pocketagent.v1.ThreadService.CreateThreadSection:output_type -> pocketagent.v1.ThreadSection
+	15, // 93: pocketagent.v1.ThreadService.RenameThreadSection:output_type -> pocketagent.v1.ThreadSection
+	75, // 94: pocketagent.v1.ThreadService.DeleteThreadSection:output_type -> pocketagent.v1.Empty
+	35, // 95: pocketagent.v1.ThreadService.MoveThreadToSection:output_type -> pocketagent.v1.Thread
+	75, // 96: pocketagent.v1.ThreadService.ApproveGuardianDeniedAction:output_type -> pocketagent.v1.Empty
+	11, // 97: pocketagent.v1.ThreadService.ExportThreadHtml:output_type -> pocketagent.v1.ExportThreadHtmlResponse
+	9,  // 98: pocketagent.v1.ThreadService.OptimizePrompt:output_type -> pocketagent.v1.OptimizePromptResponse
+	7,  // 99: pocketagent.v1.ThreadService.ListSlashCommands:output_type -> pocketagent.v1.ListSlashCommandsResponse
+	4,  // 100: pocketagent.v1.ThreadService.StartReview:output_type -> pocketagent.v1.StartReviewResponse
+	72, // [72:101] is the sub-list for method output_type
+	43, // [43:72] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_v1_thread_proto_init() }
@@ -3492,13 +5066,13 @@ func file_v1_thread_proto_init() {
 		return
 	}
 	file_v1_common_proto_init()
-	file_v1_thread_proto_msgTypes[28].OneofWrappers = []any{
+	file_v1_thread_proto_msgTypes[44].OneofWrappers = []any{
 		(*TurnClientMessage_Input)(nil),
 		(*TurnClientMessage_Supplement)(nil),
 		(*TurnClientMessage_Approval)(nil),
 		(*TurnClientMessage_Cancel)(nil),
 	}
-	file_v1_thread_proto_msgTypes[33].OneofWrappers = []any{
+	file_v1_thread_proto_msgTypes[49].OneofWrappers = []any{
 		(*TurnServerMessage_Started)(nil),
 		(*TurnServerMessage_TextDelta)(nil),
 		(*TurnServerMessage_ThinkingDelta)(nil),
@@ -3509,14 +5083,19 @@ func file_v1_thread_proto_init() {
 		(*TurnServerMessage_Failed)(nil),
 		(*TurnServerMessage_CodexEvent)(nil),
 		(*TurnServerMessage_ApprovalResolved)(nil),
+		(*TurnServerMessage_Steered)(nil),
+		(*TurnServerMessage_Queued)(nil),
+		(*TurnServerMessage_QueueFlushed)(nil),
+		(*TurnServerMessage_ResyncRequired)(nil),
 	}
+	file_v1_thread_proto_msgTypes[57].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_thread_proto_rawDesc), len(file_v1_thread_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   45,
+			NumMessages:   67,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

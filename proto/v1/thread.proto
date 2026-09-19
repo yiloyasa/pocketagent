@@ -25,13 +25,30 @@ service ThreadService {
   rpc StartTurn(stream TurnClientMessage) returns (stream TurnServerMessage);
 
   rpc CancelTurn(CancelTurnRequest) returns (Empty);
+  // Reconnect-safe approval delivery; request_id must still be pending.
+  rpc SubmitApproval(SubmitApprovalRequest) returns (Empty);
 
   // 历史消息(打开旧会话时拉取)
   rpc GetThreadHistory(GetThreadHistoryRequest) returns (GetThreadHistoryResponse);
 
+  // ---- P1-5 事件断点续传(只增)----
+  // 按 seq 增量回放某线程的事件帧(seq > after_sequence,升序),回放完即关流,
+  // 不做 live 跟随。手机断线重连后用它把错过的帧无缝补上,替代"整屏历史回填"。
+  // 若 after_sequence 已超出 daemon 的保留窗口(events.jsonl 轮转丢弃),
+  // 流里只会有一帧 ResyncRequired —— 手机端收到后必须退回 GetThreadHistory 全量回填。
+  rpc GetThreadEventsSince(GetThreadEventsSinceRequest) returns (stream TurnServerMessage);
+
   // 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
   rpc ListCodexThreads(ListCodexThreadsRequest) returns (ListCodexThreadsResponse);
   rpc ImportCodexThread(ImportCodexThreadRequest) returns (ImportCodexThreadResponse);
+
+  // 电脑上其它桌面 agent(pi / zcode)已有的会话:列出 + 导入(绑定为本地线程,可继续聊)。
+  // 【为什么是一对通用 RPC 而不是两对】pi / zcode 的差异只在"列表来源"与
+  // "外部会话引用怎么填",协议面完全同构 —— agent_id 一个参数就能区分,
+  // 开两套 RPC 只会让手机端多写一遍一模一样的接线。codex 不并入:它有
+  // app-server 标题同步 / rollout 删除等专属逻辑,保持原样不动。
+  rpc ListAgentThreads(ListAgentThreadsRequest) returns (ListAgentThreadsResponse);
+  rpc ImportAgentThread(ImportAgentThreadRequest) returns (ImportAgentThreadResponse);
 
   // ---- 会话组织:分组 / 分支 / 回滚 ----
   // 【为什么 fork 和 rollback 必须二次确认】两者都会改变"这个会话之后是什么" ——
@@ -49,6 +66,103 @@ service ThreadService {
   // 审查者(guardian/自动审查)拒绝之后,用户推翻它的结论并要求继续执行。
   // 手机端不提供这个按钮的话,用户看到的就是"任务莫名其妙失败了"。
   rpc ApproveGuardianDeniedAction(ApproveGuardianDeniedActionRequest) returns (Empty);
+
+  // ---- 会话导出:离线 HTML 存档(只增)----
+  // 把整棵会话渲染成离线 HTML 落盘在电脑上(目前由 pi 侧 export_html 能力提供,
+  // 文件固定写在会话工作区的 .pocketagent-exports/<threadId>.html)。返回电脑上的
+  // 绝对路径,手机端用现有 ReadFile(FileChunk 流)下载链路取文件、浏览器离线打开。
+  // 与"导出对话(Markdown)"互补:Markdown 只导出手机选中的正文,HTML 是电脑端
+  // 的完整会话存档(含思考/工具过程)。非 pi 会话 / 未落地 / 导出失败一律走
+  // gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+  rpc ExportThreadHtml(ExportThreadHtmlRequest) returns (ExportThreadHtmlResponse);
+
+  // ---- 对话栏提示词优化(只增)----
+  // 手机输入栏的一键改写:把用户的原始输入交给电脑端 ZCode 的文本生成能力
+  // (app-server 的 workspace/generateText,复用桌面端已登录凭据,零新增配置)
+  // 改写成"给 AI 编程代理的清晰指令"。纯文本进、纯文本出:不建会话、不落库、
+  // 不影响任何线程状态;失败走 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+  rpc OptimizePrompt(OptimizePromptRequest) returns (OptimizePromptResponse);
+
+  // ---- zcode 会话的斜杠命令面板(只增)----
+  // 手机输入栏以 "/" 开头且会话是 zcode 时,输入框上方弹命令候选条;候选数据
+  // 来自 daemon 侧该线程归属 zcode 会话的快照(slashCommands[],来源 ZCode
+  // app-server 的 session/create|resume 应答)。非 zcode 会话 / 拉取失败一律回
+  // **空列表**(这不是错误:手机端按"没有命令面板"处理,绝不 Toast 报错)。
+  rpc ListSlashCommands(ListSlashCommandsRequest) returns (ListSlashCommandsResponse);
+
+  // ---- /计划:发起计划审查(只增)----
+  // 手机端斜杠面板的内置伪命令"/计划"的落点:让电脑端 codex 对当前会话拟定的
+  // 计划发起一轮审查(codex review/start,实测 fire-and-return —— 应答里
+  // turn.status=inProgress 即回,审查产出以 item/* 事件流回**原会话**,手机端
+  // 现有的事件时间线直接可见)。仅 codex 会话支持;其他 agent / 未落地会话
+  // 回 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+  rpc StartReview(StartReviewRequest) returns (StartReviewResponse);
+}
+
+// ---- /计划:发起计划审查(只增,字段号从 1 起,不碰旧消息)----
+
+message StartReviewRequest {
+  string thread_id = 1;  // 会话 id(必须已存在于本地库)
+  // 审查重点(可空):空 = daemon 侧用默认口径(审查会话中拟定的计划);
+  // 非空 = 原样作为 codex 自由指令(custom target 的 instructions)下发。
+  string focus = 2;
+}
+
+message StartReviewResponse {
+  // 承载本次审查的 codex 线程 id(实测 inline 模式 = 原线程 id,与请求线程
+  // 一致)。手机端只拿它做诊断回指,审查结果完全依赖事件流展示。
+  string review_id = 1;
+  // 发起成功(失败走 gRPC 错误,不会出现 false;字段留给未来异步语义)。
+  bool started = 2;
+}
+
+// ---- zcode 会话的斜杠命令面板(只增,字段号从 1 起,不碰旧消息)----
+
+message ListSlashCommandsRequest {
+  string thread_id = 1;  // 会话 id(必须已存在于本地库)
+  bool refresh = 2;
+}
+
+// SlashCommand 快照顶层 slashCommands[] 的一项(元素形状为实测:
+// {"description":"…","inputHint":"/goal …","name":"goal"},见
+// daemon/docs/verify/evidence/zcode-p0-probe-raw.log)。
+message SlashCommand {
+  string name = 1;         // 命令名(不带斜杠,如 "goal")
+  string description = 2;  // 一句话说明
+  string input_hint = 3;   // 参数提示(如 "/goal [pause|resume|…]",可为空)
+}
+
+message ListSlashCommandsResponse {
+  // 空 = 非 zcode 会话或快照暂不可用(手机端不显示候选条)。
+  repeated SlashCommand commands = 1;
+}
+
+// ---- 提示词优化(只增,字段号从 1 起,不碰旧消息)----
+
+message OptimizePromptRequest {
+  string text = 1;    // 输入栏里的原始文本(trim 后必须非空)
+  // 预留的改写风格:concise = 压缩到一句话;detailed = 展开细节;
+  // 空 = 默认(保持长度量级,把意思说清楚)。daemon 侧按此拼优化指令。
+  string style = 2;
+  string agent_id = 3;
+  string model_id = 4;
+  string effort = 5;
+}
+
+message OptimizePromptResponse {
+  string optimized = 1;  // 改写后的文本(空 = 服务端已报错,不会出现)
+}
+
+// ---- 会话导出:离线 HTML 存档(只增,字段号从 1 起,不碰旧消息)----
+
+message ExportThreadHtmlRequest {
+  string thread_id = 1;  // 要导出的会话 id(必须已存在于本地库)
+}
+
+message ExportThreadHtmlResponse {
+  // 电脑上的 HTML 绝对路径(会话工作区/.pocketagent-exports/<threadId>.html)。
+  // 手机端拿它走现有 ReadFile(FileChunk 流)下载;同线程重复导出会覆盖旧文件。
+  string path = 1;
 }
 
 message ApproveGuardianDeniedActionRequest {
@@ -99,6 +213,32 @@ message ListCodexThreadsResponse { repeated CodexThreadInfo threads = 1; }
 message ImportCodexThreadRequest { string codex_thread_id = 1; }
 message ImportCodexThreadResponse { string thread_id = 2; }
 
+// ---- 电脑上 pi / zcode 已有会话(通用,agent_id 区分)----
+
+message ListAgentThreadsRequest {
+  string agent_id = 1;   // "pi" / "zcode";空 = 两个都列(codex 走 ListCodexThreads,不在这)
+}
+message AgentThreadInfo {
+  string agent_id = 1;         // "pi" / "zcode"
+  string session_id = 2;       // 外部会话 id(Pi 的 sessionId / ZCode 的 sess_*);导入去重与续聊重挂载的关键
+  string session_file = 3;     // 外部会话文件绝对路径(Pi 必有;ZCode 走协议时为空 —— 续聊只要 sessionId)
+  string cwd = 4;              // 会话绑定的工作目录(Pi 来自文件头 cwd 字段;ZCode 来自 workspace.workspacePath)
+  string title = 5;            // 首条用户消息摘要(Pi)/ ZCode 自动命名或首条输入
+  int64 updated_at_unix_ms = 6; // Pi = 文件修改时间;ZCode = session/list 的 updatedAt
+}
+message ListAgentThreadsResponse { repeated AgentThreadInfo threads = 1; }
+
+// 导入请求:手机端把 ListAgentThreads 里选中的一项原样回传即可。
+// session_id / session_file 至少有一个非空,daemon 才能在续聊时重挂载外部会话。
+message ImportAgentThreadRequest {
+  string agent_id = 1;
+  string session_id = 2;
+  string session_file = 3;
+  string cwd = 4;
+  string title = 5;
+}
+message ImportAgentThreadResponse { string thread_id = 1; }
+
 message GetThreadHistoryRequest {
   string thread_id = 1;
   int32 limit = 2;   // 0 = 全部
@@ -106,6 +246,9 @@ message GetThreadHistoryRequest {
 
 message GetThreadHistoryResponse {
   repeated ThreadMessage messages = 1;
+  // 打开会话时顺带回读的 codex 目标态(仅 codex 线程;非 codex / 读不到 = 缺省,
+  // 手机端有则显示"目标:xxx",无则不占位)。
+  CodexGoalDetail goal_detail = 2;
 }
 
 message ThreadMessage {
@@ -135,6 +278,41 @@ message Thread {
   string guardian_denied_review_id = 13;
   string guardian_denied_item_id = 14;
   string guardian_denied_reason = 15;
+  // ---- 多 agent 接入(只增:16~17)----
+  // 会话归属的 agent:"codex" / "pi" / …。老记录缺省 = "codex"(见 store 兼容规则)。
+  // providerFor 按它显式选择 provider,不再静默回退默认。
+  string agent_id = 16;
+  // 外部 agent 的原生会话引用(Pi/ZCode 通用):daemon 重启后据此 switch_session
+  // 重挂载子进程会话(调研 §8.3 的握手依据)。
+  ExternalSessionRef external_session = 17;
+  // ---- codex 目标态回读(只增:18)----
+  // 【与字段 4 goal 的分工】4 是 daemon 本库落库的常驻目标(手机设置后写的值);
+  // goal_detail 是打开会话时 daemon 从电脑端 codex 线程**现读**的目标态
+  // (thread/goal/get),带状态机与 token 消耗 —— 重连/换端后以它为准刷新。
+  // 仅 codex 线程填充;读不到/非 codex 会话缺省(手机端"有则显示,无则不占位")。
+  CodexGoalDetail goal_detail = 18;
+  string effort = 19;
+  string last_turn_error = 20;
+  repeated ApprovalRequest pending_approvals = 21;
+}
+
+// CodexGoalDetail codex 线程目标态(thread/goal/get 应答的归一)。
+// daemon 侧现读失败但本地库有目标时,objective 兜底为本地值(status 留空)。
+message CodexGoalDetail {
+  string objective = 1;        // 目标文本
+  string status = 2;           // active / paused / blocked / usageLimited / budgetLimited / complete(空 = 未知)
+  int64 tokens_used = 3;       // 已消耗 token
+  int64 token_budget = 4;      // 预算上限(0 = 未设)
+  int64 time_used_seconds = 5; // 已投入秒数
+}
+
+// ExternalSessionRef 指向外部 agent 自己管理的会话事实来源。
+// Pi:session_file 是 ~/.pi/agent/sessions 下的 .jsonl;ZCode 同样以"外部会话 id
+// + 文件路径"重挂载。内容由外部 agent 持有,我们只存引用。
+message ExternalSessionRef {
+  string session_id = 1;    // 外部会话 id(Pi 的 sessionId / ZCode 的会话 id)
+  string session_file = 2;  // 外部会话文件绝对路径(Pi 的 sessionFile)
+  string cwd = 3;           // 外部会话绑定的工作目录(Pi 会话创建后不可换)
 }
 
 enum ThreadStatus {
@@ -149,6 +327,8 @@ message CreateThreadRequest {
   string workspace = 1;
   string title = 2;
   string model_id = 3;   // 空 = 用默认模型
+  // 目标 agent:"codex" / "pi" / …;空 = 默认(codex)。多 agent 接入(只增)。
+  string agent_id = 4;
 }
 
 message ListThreadsRequest {
@@ -163,7 +343,7 @@ message ListThreadsRequest {
 message ListThreadsResponse { repeated Thread threads = 1; }
 
 message GetThreadRequest { string thread_id = 1; }
-message DeleteThreadRequest { string thread_id = 1; }
+message DeleteThreadRequest { string thread_id = 1; bool local_only = 2; }
 message ArchiveThreadRequest { string thread_id = 1; bool archived = 2; }
 message RenameThreadRequest { string thread_id = 1; string title = 2; }
 message SetThreadGoalRequest { string thread_id = 1; string goal = 2; }
@@ -216,7 +396,59 @@ message TurnServerMessage {
     // 手机端必须立即关闭正在展示的审批卡,否则会残留"幽灵审批卡"
     // (桌面端已放行/拒绝,手机上却还挂着一张点不动也没意义的卡)。
     ApprovalResolved approval_resolved = 10;
+    // ---- P1-4 运行中继续发消息(只增不改:11~13 为新增帧)----
+    // 该输入已通过 codex 的 turn/steer 插入正在运行的轮次(不新开轮次)。
+    Steered steered = 11;
+    // 该输入已进入 daemon 内存队列,等当前轮次终局后自动执行。
+    Queued queued = 12;
+    // 队列开始执行:紧跟着会有该轮的 Started 帧与常规增量。
+    QueueFlushed queue_flushed = 13;
+    // after_sequence 已超出保留窗口(轮转丢弃)或事件库不可用:立即走
+    // GetThreadHistory 全量回填,不要再增量拼接。本帧是流里的唯一一帧。
+    ResyncRequired resync_required = 15;
   }
+  // ---- P1-5 事件断点续传(只增不改:14~15 为新增)----
+  // 全局单调事件序号(daemon events.jsonl 的 seq):daemon 发出的每一个真实
+  // 事件帧都带序号,手机记录收到的最大值;断线重连后用
+  // GetThreadEventsSince(thread_id, after_sequence=lastSequence) 增量补帧。
+  // 0 = 无序号(旧 daemon / 该帧未入事件库),手机端按无续传能力处理。
+  int64 sequence = 14;
+}
+
+// ---- P1-5:增量续传请求与截断提示(新增)----
+
+message GetThreadEventsSinceRequest {
+  string thread_id = 1;
+  int64 after_sequence = 2;  // 手机已应用的最大 seq;服务端回放该线程 seq 更大的帧
+}
+
+// ResyncRequired:请求的区间已无法可靠回放(典型原因:events.jsonl 轮转把
+// 更早的事件删掉了)。收到本帧后手机端 lastSequence 作废,退回全量回填。
+message ResyncRequired {
+  string reason = 1;  // 人话原因,仅用于日志/诊断展示
+}
+
+// ---- P1-4:运行中追加输入的回传消息(新增,字段号全部从 1 起,不动旧消息)----
+
+// Steered 确认:这条输入已插入正在运行的轮次(codex turn/steer 成功)。
+message Steered {
+  string turn_id = 1;        // 当前运行中轮次的 id(daemon 侧生成)
+  string codex_turn_id = 2;  // codex 侧返回的 turnId(可能为空)
+}
+
+// Queued 确认:这条输入已排队。position 从 1 起;
+// position == 0 表示队列已满被拒收(上限 10 条),手机端应把该消息
+// 标记为"未送达"而不是"排队中"。
+message Queued {
+  int32 position = 1;  // 第几位(1 起;0 = 被拒收:队列满)
+  int32 depth = 2;     // 入队后队列总长
+}
+
+// QueueFlushed:排队的输入开始执行。turn_id 是即将开始的那一轮的 id;
+// remaining 是出队后队列里还剩几条。
+message QueueFlushed {
+  string turn_id = 1;
+  int32 remaining = 2;
 }
 
 message ApprovalResolved {
@@ -287,6 +519,8 @@ message CodexEvent {
 message TurnStarted {
   string turn_id = 1;
   string model_id = 2;
+  optional string effort = 3;
+  bool configuration_confirmed = 4;
 }
 
 message TextDelta { string delta = 1; }
@@ -297,6 +531,9 @@ message ToolCallUpdate {
     UNSPECIFIED = 0;
     STARTED = 1;    // 已发起(有 id+name+args)
     FINISHED = 2;   // 已有结果
+    // 进行中进度(多 agent 接入新增,只增不改):Pi 的 tool_execution_update
+    // 持续吐进度,partialResult 是**累积值**,App 端按 callId 原地替换(不追加)。
+    UPDATE = 3;
   }
   Phase phase = 1;
   ToolCallBlock call = 2;
@@ -332,3 +569,8 @@ message TurnFailed {
 }
 
 message CancelTurnRequest { string thread_id = 1; }
+
+message SubmitApprovalRequest {
+  string thread_id = 1;
+  ApprovalDecision decision = 2;
+}

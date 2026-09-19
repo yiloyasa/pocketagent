@@ -3,8 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +20,8 @@ import (
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/store"
+	"github.com/pocketagent/daemon/internal/version"
 )
 
 // CodexProvider 把我们的 gRPC 协议桥接到 codex app-server。
@@ -30,10 +36,11 @@ import (
 //	一轮结束       turn/completed
 type CodexProvider struct {
 	// turnMu 串行化轮次;lifeMu 保护子进程生命周期(两者独立,查模型不阻塞轮次)
-	turnMu sync.Mutex
-	lifeMu sync.Mutex
-	client *codexapp.Client
-	inited bool
+	turnMu     sync.Mutex
+	lifeMu     sync.Mutex
+	client     *codexapp.Client
+	inited     bool
+	turnActive atomic.Bool
 	// 桌面端设置(手机"设置"页写入,thread/start 时带上)
 	setMu          sync.Mutex
 	approvalPolicy string
@@ -46,6 +53,9 @@ type CodexProvider struct {
 	modelVerbosity        string
 	modelReasoningSummary string
 	disablePasteBurst     bool
+	// ProbeHook 是测试注入点:非空时 ReadyCtx 直接调用它,用来确定性地模拟
+	// "codex 不可达(超时/报错)"。生产环境恒为 nil。见 server 的无界阻塞回归测试。
+	ProbeHook func(ctx context.Context) error
 	// 标题同步:codex 自动命名线程时回调(server 层落库,双端可见)
 	TitleHandler func(codexThreadID, title string)
 	// 目标同步:codex 侧 goal 状态机变化时回调(server 层落库)。
@@ -57,6 +67,7 @@ type CodexProvider struct {
 	// 子进程不认识的 threadId 会被 codex 静默吞掉(实测:无报错、无事件、
 	// 永不结束——手机端表现为一直转圈)。
 	threadMap map[string]threadRef
+	threadMu  sync.Mutex
 	gen       atomic.Int32 // codex 子进程代号,每次(重)启 +1
 	// 常驻目标(codex 的 thread/goal/set)。codex 只认"已被 app-server 加载"的线程,
 	// 所以线程还没跑过第一轮(或子进程刚重启还没 resume)时先暂存,等 Run() 拿到
@@ -85,6 +96,22 @@ type CodexProvider struct {
 	// 我们据此提前结束等待、不再 Respond,并让手机端撤掉审批卡(幽灵卡治理)。
 	pendingReqMu    sync.Mutex
 	pendingResolved map[int64]chan struct{}
+
+	// ---- P1-4:运行中插话(turn/steer)----
+	// 我们的 threadID → 当前运行中轮次的 codex threadId + turnId。
+	// 由 turn/started 通知登记(见 Run 的 handleNotif),Run 收尾时清除;
+	// steer 时作为 expectedTurnId 传给 codex(schema 的前置条件校验)。
+	steerMu     sync.Mutex
+	activeSteer map[string]steerTarget
+
+	// ---- 第 28 轮:三类只读查询的 TTL 缓存(见 capabilities_cache.go)----
+	// capabilities(skills/hooks/plugins,30 分钟)/ mcpServers(5 分钟)/
+	// usage(60 秒)。命中零 codex 调用;重拉失败回退旧值;InvalidateAll() 全清。
+	// fetch 闭包在 NewCodexProvider 里接线;零值结构体(&CodexProvider{})的
+	// fetch 为 nil,read 会如实报错而不是 panic。
+	capCache   statusCache[[]*pb.CodexCapability]
+	mcpCache   statusCache[[]*pb.McpServerStatus]
+	usageCache statusCache[*pb.CodexUsage]
 }
 
 // guardianKeep 最多记住多少条审查结论。审查是高频事件(每个被执行的动作一次),
@@ -97,14 +124,44 @@ type threadRef struct {
 }
 
 func NewCodexProvider() *CodexProvider {
-	return &CodexProvider{
+	p := &CodexProvider{
 		threadMap:       map[string]threadRef{},
 		pendingGoals:    map[string]string{},
 		guardianReviews: map[string]*GuardianReview{},
 		guardianLatest:  map[string]string{},
 		compactState:    map[string]compactState{},
 		pendingResolved: map[int64]chan struct{}{},
+		activeSteer:     map[string]steerTarget{},
 	}
+	// ---- 第 28 轮:三类只读查询的缓存接线 ----
+	// fetch 闭包里 key 对 capabilities 是 cwd(技能按目录算),其余两类恒空串。
+	// 预算分级:capabilities(含 plugin/installed)与 mcpServerStatus/list 属重查询,
+	// 重拉放宽到 heavyQueryBudget(45s);usage 本就要新鲜,维持 10s 默认预算。
+	p.capCache = statusCache[[]*pb.CodexCapability]{
+		ttl: capabilitiesTTL,
+		fetch: func(cwd string) ([]*pb.CodexCapability, error) {
+			return p.fetchCapabilitiesDetailed(cwd, heavyQueryBudget)
+		},
+	}
+	p.mcpCache = statusCache[[]*pb.McpServerStatus]{
+		ttl: mcpServersTTL,
+		fetch: func(string) ([]*pb.McpServerStatus, error) {
+			return p.fetchMcpStatusDetailed(heavyQueryBudget)
+		},
+	}
+	p.usageCache = statusCache[*pb.CodexUsage]{
+		ttl: usageTTL,
+		fetch: func(string) (*pb.CodexUsage, error) {
+			out := p.fetchUsageUncached()
+			if out.Error != "" {
+				// 拉取失败:把错误同时走 error 通道(缓存据此回退旧值/透传),
+				// out 本身仍带 Error 字段返回给无缓存时的调用方。
+				return out, fmt.Errorf("%s", out.Error)
+			}
+			return out, nil
+		},
+	}
+	return p
 }
 
 // registerPendingServerRequest 登记"正在等手机应答"的反向请求,
@@ -158,31 +215,48 @@ func (p *CodexProvider) ID() string          { return "codex" }
 func (p *CodexProvider) DisplayName() string { return "OpenAI Codex(桌面 agent)" }
 
 func (p *CodexProvider) Models() []pb.ModelInfo {
+	return p.ModelsCtx(context.Background())
+}
+
+// ModelsCtx 是带 ctx 的模型列表:整段受 ctx 约束(设置页探测与它共用同一个短上界,
+// 不这么做的话"读模型列表"会各自等满默认上界,把探测总时长拖爆)。
+func (p *CodexProvider) ModelsCtx(ctx context.Context) []pb.ModelInfo {
 	out := []pb.ModelInfo{{
 		Id: "default", Provider: "codex", DisplayName: "Codex(跟随桌面配置)",
-		ContextWindow: 272_000, Available: true,
+		// Codex app-server 的真实窗口只在 thread/tokenUsage/updated 中上报。
+		// 模型列表没有可靠的窗口字段时保持 0，客户端必须显示“未知”，
+		// 不能把历史经验值伪装成当前模型窗口。
+		ContextWindow: 0, Available: true,
 	}}
-	if err := p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("model/list", map[string]interface{}{})
+	if err := p.withClientCtx(ctx, clientInitBudget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "model/list", map[string]interface{}{})
 		if err != nil {
 			return err
 		}
 		var res struct {
 			Data []struct {
-				Id              string   `json:"id"`
-				DisplayName     string   `json:"displayName"`
-				Description     string   `json:"description"`
-				InputModalities []string `json:"inputModalities"`
+				Id                        string   `json:"id"`
+				DisplayName               string   `json:"displayName"`
+				Description               string   `json:"description"`
+				InputModalities           []string `json:"inputModalities"`
+				SupportedReasoningEfforts []struct {
+					ReasoningEffort string `json:"reasoningEffort"`
+				} `json:"supportedReasoningEfforts"`
 			} `json:"data"`
 		}
 		if json.Unmarshal(raw, &res) != nil {
 			return nil
 		}
 		for _, m := range res.Data {
-			info := pb.ModelInfo{
-				Id: m.Id, Provider: "codex",
-				DisplayName: m.DisplayName, Available: true,
+			// 直接往切片槽位填字段,避免 protobuf 消息按值 append 拷贝锁(内嵌 MessageState)。
+			out = append(out, pb.ModelInfo{})
+			info := &out[len(out)-1]
+			info.Id, info.Provider, info.Available = m.Id, "codex", true
+			for _, effort := range m.SupportedReasoningEfforts {
+				info.AvailableEfforts = append(info.AvailableEfforts, effort.ReasoningEffort)
 			}
+			info.SupportsThinking = len(info.AvailableEfforts) > 0
+			info.DisplayName = m.DisplayName
 			if m.DisplayName == "" {
 				info.DisplayName = m.Id
 			}
@@ -191,7 +265,6 @@ func (p *CodexProvider) Models() []pb.ModelInfo {
 					info.SupportsImages = true
 				}
 			}
-			out = append(out, info)
 		}
 		return nil
 	}); err != nil {
@@ -200,25 +273,144 @@ func (p *CodexProvider) Models() []pb.ModelInfo {
 	return out
 }
 
+// clientInitBudget 是 initialize 握手的默认上界。
+//
+// 【为什么专门给它一个上界】子进程"起来了但握手不完成"是最坏情况:进程在、
+// initialize 却永远不回(本机实测:token 刷新被 403 地区限制,刷屏
+// "Failed to refresh token")。它发生在本函数内、**全程持有 lifeMu**,
+// 于是所有模型服务调用(设置页读写、模型列表、MCP 详情)一起排队等它 ——
+// 这就是"该界面所有设置项都无法实际生效"的真凶:保存请求永远不返回。
+const clientInitBudget = 8 * time.Second
+
 // withClient 在保证子进程活着的前提下执行 fn;失败自动重启一次。
+//
+// 【无 ctx 的便捷入口】fn 内部的 codex 调用用 c.Call(受 callTimeout=120s 兜底)。
+// 只想把它当"通用的、有界的"执行器时用它。需要把整段操作压进更短上界(探测路径)
+// 时用 withClientCtx。
+//
+// 【重要:只读状态查询请用 withStatusClient】withClient 的 fn 走 120s 兜底,
+// codex 卡死(如 token 刷新 403 死循环)时会**全程持有 lifeMu 长达 120 秒**,
+// 期间所有其它调用(设置页、MCP、同步、会话列表)全部 ErrBusy —— 实测这就是
+// "界面显示连接成功却莫名各种失败"的根源(2026-09-18 daemon.log 连环正忙)。
 func (p *CodexProvider) withClient(fn func(*codexapp.Client) error) error {
-	p.lifeMu.Lock()
+	return p.withClientCtx(context.Background(), clientInitBudget, func(_ context.Context, c *codexapp.Client) error {
+		return fn(c)
+	})
+}
+
+// statusBudget 是只读状态查询(用量/能力/MCP/线程列表等)的整段上界。
+// 10s 足够正常应答,又能在 codex 卡死时快速释放 lifeMu,避免连环 ErrBusy。
+const statusBudget = 10 * time.Second
+
+// withStatusClient 是**只读状态查询**专用入口。生命周期锁只保护“确保
+// app-server 已初始化”这一小段;初始化完成后 fn 不再持有 lifeMu,因此 MCP、
+// skills、hooks、plugins、用量等查询可以在同一客户端上并发执行。每个调用仍
+// 共用自己的 statusBudget,不会因某个查询卡住而把其它只读通道锁住。
+//
+// 【第 28 轮】它只是 withStatusClientBudget(statusBudget, fn) 的默认上界便捷入口;
+// 重查询(如 plugin/installed、mcpServerStatus/list)在缓存重拉时用更宽的预算,
+// 见 withStatusClientBudget 与 capabilities_cache.go。
+func (p *CodexProvider) withStatusClient(fn func(context.Context, *codexapp.Client) error) error {
+	return p.withStatusClientBudget(statusBudget, fn)
+}
+
+// withStatusClientBudget 是带**自定义预算**的只读状态查询入口,行为与
+// withStatusClient 完全一致,只是整段上界由调用方给定(d<=0 时回落到 10s 默认)。
+//
+// 【为什么需要它】"暂时读不到能力列表"的根因是:所有只读查询统一 10s 预算,
+// 而 codex 子进程繁忙时 plugin/installed、mcpServerStatus/list 经常 >10s ——
+// 手机端整页红字。配合 TTL 缓存(capabilities_cache.go)后,重拉只发生在
+// 冷启动/过期瞬间,慢一次可接受,之后 30 分钟内秒回;所以重查询的重拉预算
+// 放宽到 45s,普通查询维持 10s 快速失败。
+func (p *CodexProvider) withStatusClientBudget(d time.Duration, fn func(context.Context, *codexapp.Client) error) error {
+	if d <= 0 {
+		d = statusBudget
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+
+	// 页面初始化可能同时发起多个只读请求。只让第一个请求负责初始化，
+	// 其余请求短暂等待并复用已初始化客户端，避免把正常并发误报成失败。
+	for {
+		err := p.withClientCtx(ctx, clientInitBudget, func(context.Context, *codexapp.Client) error {
+			return nil
+		})
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrBusy) {
+			return err
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	// withClientCtx 已经确保 client 存在且完成 initialize;后续只读调用
+	// 不会触发重启,所以不会在 fn 执行期间关闭这个客户端。
+	return fn(ctx, p.client)
+}
+
+// withClientCtx 是带 ctx 的版本:fn 里的 codex 调用请用 c.CallCtx(ctx, ...),
+// 这样"initialize 握手 + fn 整段"都受同一个 ctx 截止时间约束。
+//
+// 【第 3 轮:给无界阻塞上界 —— 这三点缺一不可】
+//  1. TryLock 替代 Lock:拿不到锁说明另一个调用正在启动/探测 codex,
+//     立即返回 ErrBusy,而不是排队 —— 一个卡死的探测不该把后续所有请求一起拖住;
+//  2. initialize 用 CallCtx 加超时:它是唯一会无限阻塞的点;
+//  3. 调用方没给截止时间时,套一个默认上界(budget),无论如何都有界。
+//
+// 【绝不"超时后用 go 继续等"】那会留下一个还持着 lifeMu 的僵尸 goroutine,
+// 正是本 bug 的形态。这里全程同步:CallCtx 到期即返回,锁随之释放。
+func (p *CodexProvider) withClientCtx(ctx context.Context, budget time.Duration, fn func(context.Context, *codexapp.Client) error) error {
+	if !p.lifeMu.TryLock() {
+		return ErrBusy
+	}
 	defer p.lifeMu.Unlock()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 调用方已用 WithTimeout 给了截止时间就沿用;否则套一层默认上界保底。
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		if budget <= 0 {
+			budget = clientInitBudget
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+
 	try := func() error {
 		if p.client == nil {
 			return errNoClient
 		}
 		if !p.inited {
-			if _, err := p.client.Call("initialize", map[string]interface{}{
-				"clientInfo": map[string]string{"name": "pocketagent", "title": "PocketAgent", "version": "0.1.0"},
+			if _, err := p.client.CallCtx(ctx, "initialize", map[string]interface{}{
+				"clientInfo": map[string]string{"name": "pocketagent", "title": "PocketAgent", "version": version.App},
 			}); err != nil {
 				return err
 			}
 			p.inited = true
 		}
-		return fn(p.client)
+		return fn(ctx, p.client)
 	}
 	err := try()
+	// 超时/取消不是"子进程挂了,重启能救"的情况:重启只会再超时并刷屏。
+	// 直接如实返回,交给调用方降级(设置页会把它翻译成 unreachable)。
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	// 正在执行 turn 时，状态查询失败不能重启共享 app-server。
+	// Run() 持有的是 turnMu，不会持有 lifeMu；如果这里重启，正在跑的
+	// turn 会被强行切断，手机只能收到半截流。
+	if err != nil && err != errNoClient && p.turnActive.Load() {
+		return err
+	}
 	if err == nil || err == errNoClient {
 		if err == errNoClient {
 			// 首次拉起
@@ -259,7 +451,7 @@ func (p *CodexProvider) withClient(fn func(*codexapp.Client) error) error {
 // 这里只做**廉价记录**(加锁写 map / 回调),绝不碰 sink 与手机网络:
 // 它在 readLoop 里被同步调用,一旦阻塞,整条事件管道都会卡住。
 func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
-	c.GlobalHandler = func(method string, params json.RawMessage) {
+	c.SetGlobalHandler(func(method string, params json.RawMessage) {
 		switch {
 		case strings.HasPrefix(method, "item/autoApprovalReview/"),
 			method == "autoApprovalReview/strictReviewRequired", method == "guardianWarning":
@@ -275,7 +467,7 @@ func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 				p.ThreadEventHandlerAsync(h, method, params)
 			}
 		}
-	}
+	})
 }
 
 // ThreadEventHandlerAsync 在独立 goroutine 里回调 server 层。
@@ -303,6 +495,14 @@ func codexThreadIDOf(params json.RawMessage) string {
 
 var errNoClient = fmt.Errorf("codex 子进程未启动")
 
+// ErrBusy 表示另一个调用正持有 codex 生命周期锁(正在初始化/探测)。
+//
+// 【为什么单列而不是排队等锁】排队等锁会把"一次卡死"放大成"全线卡死":
+// 设置页保存、模型列表、MCP 详情会一个接一个地排在同一个锁上。拿到 ErrBusy 的
+// 调用方应降级为"暂时不可用,请稍后重试",这是诚实的 —— 比默默等几十秒强。
+// 导出它,以便 server 层用 errors.Is 区分"正忙"与"真失败"。
+var ErrBusy = fmt.Errorf("codex 正忙(另一个操作正在初始化/探测),请稍后重试")
+
 // ---- 通知/请求的 JSON 形状(只解析用得到的字段)----
 
 type notifCommon struct {
@@ -328,6 +528,56 @@ type itemNotif struct {
 	} `json:"item"`
 }
 
+// agentMessageTextFromItem 从 Codex v2 ThreadItem 提取最终正文。
+// agentMessage 的稳定字段是 type/id/text；保留 content 兼容旧版响应。
+func agentMessageTextFromItem(raw json.RawMessage) string {
+	var item struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &item) != nil || item.Type != "agentMessage" {
+		return ""
+	}
+	var text strings.Builder
+	text.WriteString(item.Text)
+	for _, part := range item.Content {
+		if part.Type == "text" {
+			text.WriteString(part.Text)
+		}
+	}
+	return text.String()
+}
+
+func agentMessageTextFromNotification(raw json.RawMessage) string {
+	var n struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if json.Unmarshal(raw, &n) != nil {
+		return ""
+	}
+	return agentMessageTextFromItem(n.Item)
+}
+
+func agentMessageTextsFromTurn(raw json.RawMessage) string {
+	var n struct {
+		Turn struct {
+			Items []json.RawMessage `json:"items"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &n) != nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, item := range n.Turn.Items {
+		text.WriteString(agentMessageTextFromItem(item))
+	}
+	return text.String()
+}
+
 // approvalCommand 把 command 字段归一成一行命令字符串。
 func approvalCommand(raw json.RawMessage) string {
 	var arr []string
@@ -344,35 +594,66 @@ func approvalCommand(raw json.RawMessage) string {
 func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	p.turnMu.Lock() // 同一时刻只跑一轮(手机端本来也是单会话交互)
 	defer p.turnMu.Unlock()
+	p.turnActive.Store(true)
+	defer p.turnActive.Store(false)
 
 	if err := p.withClient(func(*codexapp.Client) error { return nil }); err != nil {
 		return nil, nil, err
 	}
 
 	// 1) 找到/创建 codex 线程(子进程重启后必须 resume,见 threadRef 注释)
+	// 【输入收集】文本拼接(零裁剪约定不变);图片字节暂存,等下面模型 slug 确定、
+	// 做完能力门控后再映射成 localImage 块(见 turnInputWithImages)。
 	var userText strings.Builder
+	var userImgs []turnImage
 	for i := range req.InputBlocks {
-		if t, ok := req.InputBlocks[i].Block.(*pb.ContentBlock_Text); ok {
+		switch t := req.InputBlocks[i].Block.(type) {
+		case *pb.ContentBlock_Text:
 			userText.WriteString(t.Text.Text)
+		case *pb.ContentBlock_Image:
+			if t.Image != nil && len(t.Image.Data) > 0 {
+				userImgs = append(userImgs, turnImage{data: t.Image.Data, mediaType: t.Image.MediaType})
+			}
 		}
 	}
 	gen := int(p.gen.Load())
 	codexTID := ""
-	if ref, hit := p.threadMap[req.Thread.ID]; hit && ref.gen == gen {
+	// 线程级 config 覆盖(model_verbosity / model_reasoning_summary)。
+	// 放在这里算一次:resume 与 start 都要带上,保证"回答详略/思考摘要"对
+	// 既有会话和新会话都生效(只在新建线程时带,会让老会话永远拿旧偏好)。
+	// 【线程化】有设置快照的会话按快照生成(新建对话语义:之后改设置不影响它),
+	// 旧线程(快照 nil)回退全局。
+	cfgOverride := p.ConfigOverrideFor(req.Thread)
+	if ref, hit := p.codexThreadRef(req.Thread.ID); hit && ref.gen == gen {
 		codexTID = ref.id // 当前子进程仍加载着该线程
 	} else if req.Thread.CodexThreadID != "" {
 		// daemon/子进程重启后内存缓存作废:先把旧线程 resume 进当前子进程
-		if _, err := p.client.Call("thread/resume", map[string]interface{}{"threadId": req.Thread.CodexThreadID}); err != nil {
+		resumeParams := map[string]interface{}{"threadId": req.Thread.CodexThreadID}
+		if len(cfgOverride) > 0 {
+			resumeParams["config"] = cfgOverride
+		}
+		// 同上:resume 也带 config,保证"改了立刻生效"对老会话成立,且可核验。
+		log.Printf("[codex] thread/resume %s config=%v", req.Thread.CodexThreadID, cfgOverride)
+		if _, err := p.client.Call("thread/resume", resumeParams); err != nil {
 			log.Printf("[codex] thread/resume %s 失败: %v(改开新线程)", req.Thread.CodexThreadID, err)
 			req.Thread.CodexThreadID = ""
 		} else {
 			codexTID = req.Thread.CodexThreadID
-			p.threadMap[req.Thread.ID] = threadRef{id: codexTID, gen: gen}
+			p.setCodexThreadRef(req.Thread.ID, threadRef{id: codexTID, gen: gen})
 			log.Printf("[codex] 已 resume 旧线程 %s", codexTID)
 		}
 	}
 	if codexTID == "" {
-		raw, err := p.client.Call("thread/start", map[string]interface{}{"cwd": req.Workspace})
+		startParams := map[string]interface{}{"cwd": req.Workspace}
+		if req.Ephemeral {
+			startParams["ephemeral"] = true
+		}
+		if len(cfgOverride) > 0 {
+			startParams["config"] = cfgOverride
+		}
+		// 与 turn/start 一样打日志:让"回答详略/思考摘要真的带上了"可被外部核验。
+		log.Printf("[codex] thread/start cwd=%s config=%v", req.Workspace, cfgOverride)
+		raw, err := p.client.Call("thread/start", startParams)
 		if err != nil {
 			return nil, nil, fmt.Errorf("thread/start: %w", err)
 		}
@@ -393,8 +674,11 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		if codexTID == "" {
 			codexTID = res.Id
 		}
-		p.threadMap[req.Thread.ID] = threadRef{id: codexTID, gen: gen}
+		p.setCodexThreadRef(req.Thread.ID, threadRef{id: codexTID, gen: gen})
 		req.Thread.CodexThreadID = codexTID // server 层会在轮次后落库
+		if req.Thread.Goal != "" {
+			p.stashGoal(req.Thread.ID, req.Thread.Goal)
+		}
 		log.Printf("[codex] 新建线程 %s", codexTID)
 	}
 
@@ -426,12 +710,19 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		params json.RawMessage
 	}
 	notifCh := make(chan notifMsg, 4096)
+	notifStop := make(chan struct{})
 	notifDone := make(chan struct{})
+	var notices nativeNoticeRecorder
 	handleNotif := func(method string, params json.RawMessage) {
 		switch {
 		case method == "turn/started":
 			// 任务真正进入 codex 的凭据:turn/started 已到达
 			log.Printf("[codex] codex 已接收任务 thread=%s %.140s", codexTID, string(params))
+			// P1-4:登记「当前运行中轮次」的 codex id,供 turn/steer 校验
+			// expectedTurnId(见 codex_steer.go)。turnActive 守卫过滤迟到的旧通知。
+			if n := parseTurnStarted(params); n != nil && n.ThreadId == codexTID {
+				p.setSteerTarget(req.Thread.ID, codexTID, n.Turn.Id)
+			}
 		case method == "item/fileChange/patchUpdated":
 			// 累积"本回合被改动的文件",供文件变更审批卡展示(见 changeFiles 注释)。
 			var n struct {
@@ -502,20 +793,9 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					lastErr = nil
 					mu.Unlock()
 				}
-				// turn.completed 自带最终 items,兜底提取(防 item/completed 竞态漏掉)
+				// turn.completed 自带最终 items,兜底提取(防 item/completed 竞态漏掉)。
 				var sb strings.Builder
-				for _, it := range n.Turn.Items {
-					if it.Type == "agentMessage" {
-						if it.Text != "" {
-							sb.WriteString(it.Text)
-						}
-						for _, ct := range it.Content {
-							if ct.Type == "text" {
-								sb.WriteString(ct.Text)
-							}
-						}
-					}
-				}
+				sb.WriteString(agentMessageTextsFromTurn(params))
 				mu.Lock()
 				if sb.Len() > 0 && finalText.Len() == 0 {
 					// delta 拼接是主来源;items 只在 delta 全丢时兜底
@@ -530,17 +810,34 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				mu.Lock()
 				streamText.WriteString(n.Delta)
 				mu.Unlock()
-				sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: n.Delta}}})
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: n.Delta}}})
 			}
-		case strings.Contains(method, "reasoning") && strings.Contains(method, "delta"):
+		case isReasoningDeltaMethod(method):
 			var n deltaNotif
 			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Delta != "" {
-				sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: n.Delta}}})
+				// 隐藏推理过程(daemon 侧强制过滤):不把思考事件推给手机。
+				// 这是真实的行为改变,不依赖 codex 是否有原生开关 —— 本版本 codex
+				// 的 schema 里根本没有 hide_agent_reasoning 这个配置键。
+				// 【线程化】按本线程的设置快照判定(有快照的会话与全局开关无关);
+				// 旧线程(快照 nil)回退全局。
+				if p.HideReasoningFor(req.Thread) {
+					break
+				}
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: n.Delta}}})
 			}
 		case method == "item/started":
 			var n itemNotif
-			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Item.Type == "commandExecution" {
-				sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
+			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Item.Type == "contextCompaction" {
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+					Kind:     pb.CodexEvent_CONTEXT_COMPACTED,
+					Code:     "started",
+					Title:    "上下文压缩中",
+					Message:  "正在压缩上下文,期间占用率暂不显示。",
+					ThreadId: codexTID,
+					RawJson:  clip(string(params), 8000),
+				}}})
+			} else if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Item.Type == "commandExecution" {
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 					Phase: pb.ToolCallUpdate_STARTED,
 					Call: &pb.ToolCallBlock{
 						Id: n.Item.Id, Name: "shell",
@@ -556,17 +853,20 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			switch n.Item.Type {
 			case "agentMessage":
 				mu.Lock()
-				if n.Item.Text != "" {
-					finalText.WriteString(n.Item.Text)
-				}
-				for _, ct := range n.Item.Content {
-					if ct.Type == "text" {
-						finalText.WriteString(ct.Text)
-					}
-				}
+				finalText.WriteString(agentMessageTextFromNotification(params))
 				mu.Unlock()
+			case "contextCompaction":
+				p.resetCompactState(codexTID)
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+					Kind:     pb.CodexEvent_CONTEXT_COMPACTED,
+					Code:     "completed",
+					Title:    "上下文已压缩",
+					Message:  "上下文已压缩,正在等待新的用量上报。",
+					ThreadId: codexTID,
+					RawJson:  clip(string(params), 8000),
+				}}})
 			case "commandExecution":
-				sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 					Phase: pb.ToolCallUpdate_FINISHED,
 					Call: &pb.ToolCallBlock{
 						Id: n.Item.Id, Name: "shell",
@@ -596,7 +896,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 			log.Printf("[codex] error code=%s status=%d retry=%t: %.240s",
 				event.Code, event.HttpStatus, event.WillRetry, event.Message)
-			sink(pb.TurnServerMessage{
+			sink(&pb.TurnServerMessage{
 				Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: event},
 			})
 			mu.Lock()
@@ -605,7 +905,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		default:
 			if method == "thread/tokenUsage/updated" {
 				if usage := codexTokenUsageUpdate(params, codexTID, ""); usage != nil {
-					sink(pb.TurnServerMessage{
+					sink(&pb.TurnServerMessage{
 						Msg: &pb.TurnServerMessage_Usage{Usage: usage},
 					})
 					// 真实自动压缩:占用率越阈自动调 thread/compact/start,状态机防抖。
@@ -633,25 +933,35 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 			if event := codexNotificationEvent(method, params, codexTID, ""); event != nil {
 				log.Printf("[codex] event method=%s: %.240s", method, event.Message)
-				sink(pb.TurnServerMessage{
+				sink(&pb.TurnServerMessage{
 					Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: event},
 				})
+			} else {
+				notices.record("codex", method, params, sink)
 			}
 		}
 	}
 	// readLoop 里同步调 NotifHandler:慢 sink(手机网络背压)会阻塞整条管道,
 	// 后续事件全部积压。这里只入队,由单消费者 goroutine 保序分发。
-	c.NotifHandler = func(method string, params json.RawMessage) {
+	notifHandler := func(method string, params json.RawMessage) {
 		lastNotif.Store(time.Now().UnixMilli())
-		notifCh <- notifMsg{method: method, params: params}
+		select {
+		case notifCh <- notifMsg{method: method, params: params}:
+		case <-notifStop:
+		}
 	}
 	go func() {
 		defer close(notifDone)
-		for nm := range notifCh {
-			handleNotif(nm.method, nm.params)
+		for {
+			select {
+			case nm := <-notifCh:
+				handleNotif(nm.method, nm.params)
+			case <-notifStop:
+				return
+			}
 		}
 	}()
-	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
+	reqHandler := func(id int64, method string, params json.RawMessage) {
 		log.Printf("[codex] 反向请求 %s 原始参数: %.400s", method, string(params))
 		kind := classifyCodexRequest(method)
 
@@ -700,7 +1010,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			case <-resolved:
 				// 迟到的手机应答会落进 outCh(带缓冲),由 GC 回收,无泄漏。
 				log.Printf("[codex] 反向请求 %s(id=%d)已在桌面端被解决,不再等待手机审批", method, id)
-				sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
 					Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
 				}}})
 				approvalWaiting.Store(false)
@@ -751,44 +1061,65 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			_ = c.Respond(id, map[string]interface{}{"action": action})
 		}
 	}
+	c.SetTurnHandlers(notifHandler, reqHandler)
 	defer func() {
-		c.NotifHandler = nil
-		c.ReqHandler = nil
-		close(notifCh)
-		<-notifDone // 等分发 goroutine 排空,避免漏掉 turn/completed
+		c.SetTurnHandlers(nil, nil)
+		// P1-4:本轮结束,插话目标随之失效(下一个 turn/started 会重新登记)
+		p.clearSteerTarget(req.Thread.ID)
+		close(notifStop)
+		<-notifDone
 	}()
 
 	// 3) 发起本轮(STARTED 由 server 层统一发,这里不再重复)
+	// input 先按纯文本缺省封装;有图片时在下面做完能力门控后重写(见 turnInputWithImages)。
 	startParams := map[string]interface{}{
 		"threadId": codexTID,
-		"input":    []map[string]string{{"type": "text", "text": userText.String()}},
+		"input":    turnInput(userText.String()),
 	}
-	// 手机设置页配置的桌面端策略,每轮显式携带(codex 会话内真实生效)
+	// 手机设置页配置的桌面端策略,每轮显式携带(codex 会话内真实生效)。
+	// 【三级优先级】线程显式覆盖(Thread.ModelID/Effort,会话内 ModelEffortCard)>
+	// 线程设置快照(SettingsSnapshot,新建对话那一刻的值)> 全局偏好(旧线程兜底):
+	// 有快照的会话一律按快照装配审批策略/沙箱/模型/思考强度/思考摘要 —— 设置页
+	// 之后的更改只影响新建对话,不再牵动已有对话的后续轮次;快照里的空串是
+	// "快照那一刻的跟随桌面",同样按原值生效(不会中途改抓新全局值)。
 	p.setMu.Lock()
-	if p.approvalPolicy != "" {
-		startParams["approvalPolicy"] = p.approvalPolicy
+	approvalPolicy, sandbox := p.approvalPolicy, p.sandbox
+	desktopModel, desktopEffort := p.desktopModel, p.desktopEffort
+	desktopSummary := p.modelReasoningSummary
+	if snap := req.Thread.SettingsSnapshot; snap != nil {
+		approvalPolicy = snap.ApprovalPolicy
+		sandbox = snap.Sandbox
+		desktopModel = snap.Model
+		desktopEffort = snap.Effort
+		desktopSummary = snap.ReasoningSummary
 	}
-	if p.sandbox != "" {
+	p.setMu.Unlock()
+	if approvalPolicy != "" {
+		startParams["approvalPolicy"] = approvalPolicy
+	}
+	if sandbox != "" {
 		// v2 协议:sandboxPolicy 是对象;旧键名 "sandbox" 会被拒
 		mode := map[string]string{
 			"read-only":          "readOnly",
 			"workspace-write":    "workspaceWrite",
 			"danger-full-access": "dangerFullAccess",
-		}[p.sandbox]
+		}[sandbox]
 		if mode == "" {
-			mode = p.sandbox
+			mode = sandbox
 		}
 		startParams["sandboxPolicy"] = map[string]interface{}{"type": mode}
 	}
-	desktopModel, desktopEffort := p.desktopModel, p.desktopEffort
-	p.setMu.Unlock()
 	// 模型:线程级指定优先,否则用设置页的桌面默认;codex/default 视为跟随桌面。
 	// 注意:模型 ID 里可能带 "/"(账号组),取最后一段才是模型 slug。
+	// slug 同时供图片能力门控使用(codexSupportsImageInput)。
+	modelSlug := ""
 	if m := req.Thread.ModelID; strings.HasPrefix(m, "codex/") && !strings.HasSuffix(m, "/default") {
-		parts := strings.Split(m, "/")
-		startParams["model"] = parts[len(parts)-1]
+		modelSlug = strings.TrimPrefix(m, "codex/")
 	} else if seg := lastModelSeg(desktopModel); seg != "" {
-		startParams["model"] = seg
+		modelSlug = seg
+	}
+	if modelSlug != "" {
+		startParams["model"] = modelSlug
 	}
 	// 思考强度(手机端会话内可切):low/medium/high/xhigh
 	if e := req.Thread.Effort; e != "" {
@@ -796,13 +1127,30 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	} else if desktopEffort != "" {
 		startParams["effort"] = desktopEffort
 	}
+	// 思考摘要详略(auto/concise/detailed):空 = 跟随桌面,不带该参数
+	if desktopSummary != "" {
+		startParams["summary"] = desktopSummary
+	}
+	// 图片输入:有图才查一次 model/list 做能力门控;无图零开销,纯文本路径与原先完全一致。
+	// cleanup 在 Run 返回(turn 终局)后删除临时图片 —— 这对 resume 也是安全的,
+	// 无需把清理延迟到线程关闭:live 实测(cmd/imgprobe resume,2026-09-19)发图
+	// 一轮后立即删掉临时文件,同会话追问与"杀掉 app-server 重开 + thread/resume
+	// 后追问"都能正确答出图片内容(背景色/黑点数,且该信息从未出现在任何文字
+	// 轮次里);rollout 文件里该图记录为 input_image 的 dataURL 编码(原路径只是
+	// 随附的元文本),即 resume 重放历史用的是编码内容,不按路径重读原文件。
+	if len(userImgs) > 0 {
+		imageOK := p.codexSupportsImageInput(modelSlug)
+		items, imgCleanup := turnInputWithImages(userText.String(), userImgs, imageOK)
+		startParams["input"] = items
+		defer imgCleanup()
+	}
 	logParams := map[string]interface{}{}
 	for k, v := range startParams {
 		if k != "input" {
 			logParams[k] = v
 		}
 	}
-	log.Printf("[codex] turn/start thread=%s %v 输入=%d字", codexTID, logParams, userText.Len())
+	log.Printf("[codex] turn/start thread=%s %v 输入=%d字 图片=%d张", codexTID, logParams, userText.Len(), len(userImgs))
 
 	lastNotif.Store(time.Now().UnixMilli())
 	turnStart := time.Now()
@@ -877,6 +1225,16 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	return blocks, &pb.Usage{}, nil
 }
 
+// isReasoningDeltaMethod 兼容 Codex 的 camelCase 通知名。
+//
+// Codex 当前会发 item/reasoning/summaryTextDelta 与
+// item/reasoning/textDelta。原实现直接查找小写 "delta"，而这两个
+// 方法名的结尾是大写 "Delta"，导致思考事件被静默丢弃。
+func isReasoningDeltaMethod(method string) bool {
+	m := strings.ToLower(method)
+	return strings.Contains(m, "reasoning") && strings.Contains(m, "delta")
+}
+
 // ListCodexThreadsViaAppServer 用 app-server 的 thread/list 拿真实标题
 // (codex 自动命名的 name 字段;rollout 文件里没有,只有首条消息 preview)。
 func (p *CodexProvider) ListCodexThreadsViaAppServer() ([]CodexSessionInfo, error) {
@@ -941,125 +1299,164 @@ func (p *CodexProvider) Warmup() {
 	_ = p.withClient(func(*codexapp.Client) error { return nil })
 }
 
-// SetDesktopSettings 保存手机设置页的桌面端策略(内存 + 当前 app-server 子进程)。
-// 【红线】绝不写 ~/.codex/config.toml:那是用户桌面 codex 的全局配置文件,
-// 之前把 approval_policy 写进去直接改坏了桌面端行为。现在的真实路由路径是:
-// 每轮 turn/start 显式携带 approvalPolicy/sandboxPolicy/model/effort,
-// codex 会话内立刻生效、可在会话数据里验证;config/value/write 只作用于
-// 本 daemon 拉起的 app-server 子进程(纯内存,不落盘、不影响桌面 UI)。
-func (p *CodexProvider) SetDesktopSettings(approvalPolicy, sandbox, model, effort string) {
-	p.setMu.Lock()
-	if approvalPolicy != "" {
-		p.approvalPolicy = approvalPolicy
-	}
-	if sandbox != "" {
-		p.sandbox = sandbox
-	}
-	if model != "" {
-		p.desktopModel = model
-	}
-	if effort != "" {
-		p.desktopEffort = effort
-	}
-	policy, sb, model2, effort2 := p.approvalPolicy, p.sandbox, p.desktopModel, p.desktopEffort
-	p.setMu.Unlock()
-
-	go func() {
-		if p.client == nil {
-			return
-		}
-		for _, kv := range []struct{ k, v string }{
-			{"approval_policy", policy},
-			{"sandbox_mode", sb},
-			{"model", lastModelSeg(model2)},
-			{"model_reasoning_effort", effort2},
-		} {
-			if kv.v == "" {
-				continue
-			}
-			if _, err := p.client.Call("config/value/write", map[string]interface{}{
-				"keyPath":         kv.k,
-				"value":           kv.v,
-				"expectedVersion": nil,
-			}); err != nil {
-				log.Printf("[codex] config/value/write %s 失败(仅内存态,可忽略): %v", kv.k, err)
-			}
-		}
-	}()
+// DesktopPrefs 是手机设置页各项偏好的**最终生效值快照**。
+//
+// 【为什么用一个结构体而不是一堆散参数】
+//  1. presence 合并由 server 层完成(只有客户端显式 set 的字段才写进来),
+//     所以这里空串是**有意义的取值**(跟随桌面 / 默认),provider 侧一律照单全收,
+//     绝不做"非空才覆盖" —— 否则"改回跟随桌面"永远回不来(实测过的真实 bug)。
+//  2. 以后加设置项:这个结构体 + server 的合并 + 手机端 UI 表各加一处,
+//     不必写 8 段重复的 set/read 代码。
+type DesktopPrefs struct {
+	NativeMode        string
+	ApprovalPolicy    string
+	Sandbox           string
+	Model             string
+	Effort            string
+	HideReasoning     bool
+	Verbosity         string
+	ReasoningSummary  string
+	DisablePasteBurst bool
 }
 
-// SetBehaviorSettings 保存"行为与降噪"设置(第 27 轮新增)。
+// ApplyPrefs 用一份**完整快照**覆盖内存态(server 层已按 presence 合并完毕)。
 //
-// 【为什么单独一个方法】上面 4 项是安全/模型类、每轮 turn/start 都要带;
-// 这 4 项是纯 UX 偏好,只走 config/value/write 打到本 daemon 的子进程即可,
-// 不必污染每轮的 startParams。两者生命周期不同,分开更清楚。
+// 【红线】这里只改内存,绝不写 ~/.codex/config.toml。
 //
-// 【同样不落盘】和 SetDesktopSettings 一致:只作用于 daemon 拉起的 app-server
-// 子进程内存态。用户桌面端完全不受影响 —— 这是本项目从第一天起就守的红线。
-func (p *CodexProvider) SetBehaviorSettings(
-	hideAgentReasoning bool,
-	modelVerbosity, modelReasoningSummary string,
-	disablePasteBurst bool,
-) {
-	p.setMu.Lock()
-	p.hideAgentReasoning = hideAgentReasoning
-	if modelVerbosity != "" {
-		p.modelVerbosity = modelVerbosity
-	}
-	if modelReasoningSummary != "" {
-		p.modelReasoningSummary = modelReasoningSummary
-	}
-	p.disablePasteBurst = disablePasteBurst
-	bar, verbosity, summary, burst :=
-		p.hideAgentReasoning, p.modelVerbosity, p.modelReasoningSummary, p.disablePasteBurst
-	p.setMu.Unlock()
-
-	go func() {
-		if p.client == nil {
-			return
-		}
-		for _, kv := range []struct{ k, v string }{
-			{"hide_agent_reasoning", boolStr(bar)},
-			{"model_verbosity", verbosity},
-			{"model_reasoning_summary", summary},
-			{"disable_paste_burst", boolStr(burst)},
-		} {
-			if kv.v == "" {
-				continue
-			}
-			if _, err := p.client.Call("config/value/write", map[string]interface{}{
-				"keyPath":         kv.k,
-				"value":           kv.v,
-				"expectedVersion": nil,
-			}); err != nil {
-				// 老版本 codex 不认这些键:报错只打日志。这是**预期内**的,
-				// 不写入磁盘配置文件 → 不会像当年改 config.toml 那样破坏桌面端。
-				log.Printf("[codex] config/value/write %s 失败(老版本可能不支持,可忽略): %v", kv.k, err)
-			}
-		}
-	}()
-}
-
-// BehaviorSettings 读取"行为与降噪"设置(供 GetCodexSettings 回显)。
-func (p *CodexProvider) BehaviorSettings() (hideAgentReasoning bool, modelVerbosity, modelReasoningSummary string, disablePasteBurst bool) {
+// 【为什么没有 config/value/write —— 别再把它加回来】
+// 第 2 轮实测(见 daemon/cmd/wbprobe):codex app-server 的 config/value/write
+// 有两个硬约束,合起来等于"此路不通":
+//  1. `mergeStrategy` 是 schema 必填字段,不传直接报 missing field mergeStrategy;
+//  2. 传了 mergeStrategy 之后,只要 `filePath` 不是用户 config.toml,
+//     就报 "Only writes to the user config are allowed"。
+//
+// 也就是说:**它唯一能写的就是 ~/.codex/config.toml** —— 正是本项目的红线。
+// 以前那段代码"看起来没出事",仅仅因为缺 mergeStrategy、调用永远失败;
+// 一旦有人"顺手补全参数",就会立刻违反红线。所以整条路径删除,而不是修好它。
+//
+// 真正让设置在 codex 侧生效的路径(全部不落盘、不碰用户配置):
+//   - approvalPolicy / sandboxPolicy / model / effort / summary → 每轮 turn/start;
+//   - model_verbosity / model_reasoning_summary → thread/start、thread/resume 的
+//     `config` 覆盖对象(实测被 app-server 接受)。
+func (p *CodexProvider) ApplyPrefs(pref DesktopPrefs) {
 	p.setMu.Lock()
 	defer p.setMu.Unlock()
-	return p.hideAgentReasoning, p.modelVerbosity, p.modelReasoningSummary, p.disablePasteBurst
+	p.approvalPolicy = pref.ApprovalPolicy
+	p.sandbox = pref.Sandbox
+	p.desktopModel = pref.Model
+	p.desktopEffort = pref.Effort
+	p.hideAgentReasoning = pref.HideReasoning
+	p.modelVerbosity = pref.Verbosity
+	p.modelReasoningSummary = pref.ReasoningSummary
+	p.disablePasteBurst = pref.DisablePasteBurst
 }
 
-// boolStr 把 bool 转成 config/value/write 需要的 TOML 字面量。
-func boolStr(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
-}
-
-// DesktopSettings 读取。
-func (p *CodexProvider) DesktopSettings() (approvalPolicy, sandbox string) {
+// Prefs 读回当前内存态(供 GetCodexSettings 回显与 server 层合并)。
+func (p *CodexProvider) Prefs() DesktopPrefs {
 	p.setMu.Lock()
 	defer p.setMu.Unlock()
-	return p.approvalPolicy, p.sandbox
+	return DesktopPrefs{
+		ApprovalPolicy:    p.approvalPolicy,
+		Sandbox:           p.sandbox,
+		Model:             p.desktopModel,
+		Effort:            p.desktopEffort,
+		HideReasoning:     p.hideAgentReasoning,
+		Verbosity:         p.modelVerbosity,
+		ReasoningSummary:  p.modelReasoningSummary,
+		DisablePasteBurst: p.disablePasteBurst,
+	}
+}
+
+// HideReasoning 是否隐藏推理过程。
+//
+// 【实现层次说清楚】这里返回 true 时,Run() 的 reasoning/delta 分支**不再向手机
+// 推送** ThinkingDelta —— 这是 daemon 侧的行为改变,不依赖 codex 是否原生支持。
+// 客户端另有一个纯显示开关 AgentConnection.showThinking(ChatScreen 用它决定
+// 要不要渲染思考卡);两者叠加时以本开关为准,客户端在写入后会把 showThinking
+// 同步为一致值,避免出现"两种开关打架"。
+func (p *CodexProvider) HideReasoning() bool {
+	p.setMu.Lock()
+	defer p.setMu.Unlock()
+	return p.hideAgentReasoning
+}
+
+// HideReasoningFor 是 HideReasoning 的线程感知版:返回"这个线程这一轮该不该
+// 隐藏思考流"。
+//
+// 【线程化语义】有设置快照的线程("设置页更改只对新建对话生效"上线后新建的
+// 会话)一律按快照值判定,与当前全局开关无关;旧线程(快照 nil)回退全局
+// HideReasoning,保持升级前行为。Pi/ZCode 的事件过滤仍走各自 provider 的全局
+// 广播语义,未线程化(遗留对齐项,见 store.TurnSettings 注释)。
+func (p *CodexProvider) HideReasoningFor(t *store.Thread) bool {
+	return p.HideReasoning()
+}
+
+// ConfigOverrideFor 是 ConfigOverride 的线程感知版:有快照的线程按快照里的
+// verbosity / reasoning_summary 生成 thread/start、thread/resume 的 config 覆盖,
+// 旧线程(快照 nil)回退全局值。键集与 ConfigOverride 相同(只放 codex 确实
+// 支持的两个键),空串不放。
+func (p *CodexProvider) ConfigOverrideFor(t *store.Thread) map[string]interface{} {
+	if t != nil && t.SettingsSnapshot != nil {
+		out := map[string]interface{}{}
+		if v := t.SettingsSnapshot.Verbosity; v != "" {
+			out["model_verbosity"] = v
+		}
+		if v := t.SettingsSnapshot.ReasoningSummary; v != "" {
+			out["model_reasoning_summary"] = v
+		}
+		return out
+	}
+	return p.ConfigOverride()
+}
+
+// ConfigOverride 返回 thread/start、thread/resume 的 `config` 覆盖对象。
+//
+// 【只放 codex 确实支持的键】schema 里只有 model_verbosity / model_reasoning_summary
+// 是有效配置键;hide_agent_reasoning / disable_paste_burst 在**本版本 codex 的
+// schema 里根本不存在**,塞进去只会被拒。空值一律不放,避免给 codex 传空串。
+func (p *CodexProvider) ConfigOverride() map[string]interface{} {
+	p.setMu.Lock()
+	defer p.setMu.Unlock()
+	out := map[string]interface{}{}
+	if p.modelVerbosity != "" {
+		out["model_verbosity"] = p.modelVerbosity
+	}
+	if p.modelReasoningSummary != "" {
+		out["model_reasoning_summary"] = p.modelReasoningSummary
+	}
+	return out
+}
+
+// TurnSummary 返回每轮 turn/start 要带的 summary。
+//
+// 【为什么是 summary 而不是 model_reasoning_summary】turn/start 的参数里,
+// 思考摘要的字段名就叫 `summary`(schema: TurnStartParams.summary → ReasoningSummary),
+// 它按轮覆盖"思考摘要详略",是比 thread 级 config 更直接、可逐轮验证的生效路径。
+func (p *CodexProvider) TurnSummary() string {
+	p.setMu.Lock()
+	defer p.setMu.Unlock()
+	return p.modelReasoningSummary
+}
+
+// Ready 探测 app-server 是否真的可用(会按需拉起子进程并 initialize)。
+//
+// 【为什么要它】设置写入后必须能回答"到底打没打到 codex"。以前所有失败都只
+// log.Printf,App 侧一无所知。这里把"能不能连上 codex"变成一个可判断的错误,
+// 由 server 层转成 setting_status 里的 failed 状态回报给手机。
+func (p *CodexProvider) Ready() error {
+	return p.ReadyCtx(context.Background())
+}
+
+// ReadyCtx 是带 ctx 的探测。ProbeHook 非空时用它(测试注入"永远超时/立即报错"),
+// 否则走真实探测。
+//
+// 【为什么要有 ctx 版本】设置页探测整段(Ready + Account + Requirements)必须
+// 共用一个短上界;没有 ctx 出入口的话,每一小步各自等满默认上界,合计就失控。
+func (p *CodexProvider) ReadyCtx(ctx context.Context) error {
+	if p.ProbeHook != nil {
+		return p.ProbeHook(ctx)
+	}
+	return p.withClientCtx(ctx, clientInitBudget, func(context.Context, *codexapp.Client) error { return nil })
 }
 
 // 【原 McpStatus() 已删除】它返回 []map[string]interface{},只带 name/tools,
@@ -1069,7 +1466,15 @@ func (p *CodexProvider) DesktopSettings() (approvalPolicy, sandbox string) {
 
 // Account 从模型列表里取登录账号(形如 "Codex · xxx@qq.com" 的账号组条目)。
 func (p *CodexProvider) Account() string {
-	for _, m := range p.Models() {
+	return p.AccountCtx(context.Background())
+}
+
+// AccountCtx 是带 ctx 的账号读取(设置页探测与它共用同一个短上界)。
+func (p *CodexProvider) AccountCtx(ctx context.Context) string {
+	// 按下标取址遍历,避免 range 复制 protobuf 消息(内嵌 MessageState 含锁)。
+	ms := p.ModelsCtx(ctx)
+	for i := range ms {
+		m := &ms[i]
 		if strings.Contains(m.DisplayName, "·") {
 			return m.DisplayName
 		}
@@ -1087,9 +1492,191 @@ func mustJSON(v interface{}) string {
 
 // lastModelSeg 取模型 slug:剥掉 "codex/" 前缀与账号组分段;default 表示跟随桌面,返回空。
 func lastModelSeg(m string) string {
-	if m == "" || m == "default" || strings.HasSuffix(m, "/default") {
+	m = strings.TrimPrefix(strings.TrimSpace(m), "codex/")
+	if m == "default" {
 		return ""
 	}
-	parts := strings.Split(m, "/")
-	return parts[len(parts)-1]
+	return m
+}
+
+// turnImage 是待发给 codex 的一张本地图片。
+//
+// 【为什么不直接传 .pocketagent-uploads 的路径】协议层(ImageBlock)只携带图片
+// 字节与 MIME,不带落盘路径;但 codex app-server 与 daemon 同机,把字节落成本机
+// 临时文件后直传绝对路径即可(v2 schema 的 UserInput::LocalImage;live 实测
+// codex 接受该形状,且回复内容与图片内容一致),无需 base64。
+type turnImage struct {
+	data      []byte
+	mediaType string
+}
+
+// turnInput 构造 turn/start 的 input 数组。
+//
+// 【为什么单独抽出来,且里面**什么都不做**】
+// "粘贴长文本时不应中断、不应被截断"是用户明确要求的真实能力:手机端可能一次
+// 粘贴几万字的代码、日志或报错。任何形式的裁剪(len 上限、按行截断、"太长就丢弃")
+// 都会静默丢内容 —— 用户看到的现象是"agent 好像没读到我后半段",极难定位。
+//
+// 所以这里只做**原样封装**:完整送达是硬约定,不是"尽力而为"。
+// 单测 TestTurnInputKeepsLongPasteIntact 用 20 万字输入钉住它,防止以后有人
+// 顺手加个上限。
+//
+// (顺带说明:codex 侧的"粘贴爆破检测"属于它的终端输入层,我们走 stdio JSON-RPC,
+// 不经过那一层,因此也不存在"需要先关掉某个开关才能粘贴"的前置条件。)
+func turnInput(text string) []map[string]interface{} {
+	items, _ := turnInputWithImages(text, nil, true) // 无图:不会有临时文件,cleanup 为空操作
+	return items
+}
+
+// turnInputWithImages 构造带图片的 turn/start input 数组。
+//
+// 【形状】文本 1 块(原样封装,零裁剪约定同上)+ 每张图 1 个
+// {"type":"localImage","path":<本机绝对路径>} 块(schema v2:UserInput::LocalImage)。
+//
+// 【能力门控】imageOK=false(模型 inputModalities 明确不含 image,如 glm-5.3 类
+// 纯文本模型)时不发图片块,降级为文本占位 "[图片:<文件名>]" + 日志 —— codex 至少
+// 知道"用户发了张图",也不会收到自己处理不了、进而在 turn/start 报错的输入。
+//
+// 【临时文件生命周期】图片字节在发送前落成本机临时文件(codex 处理 turn/start 时
+// 才真正读文件),返回的 cleanup 删除它们;调用方须在 turn 结束后调用。turn 终局
+// 即删对后续 resume 也安全:rollout 里图片以 input_image 的 dataURL 编码留档,
+// resume 重放历史不按路径重读原文件(实测依据见 Run 内图片输入分支的注释)。
+func turnInputWithImages(text string, imgs []turnImage, imageOK bool) ([]map[string]interface{}, func()) {
+	items := []map[string]interface{}{{"type": "text", "text": text}}
+	paths := make([]string, 0, len(imgs))
+	for i := range imgs {
+		// 门控不过:连临时文件都不落,直接占位(省一次 IO)。
+		if !imageOK {
+			name := fmt.Sprintf("image-%d%s", i+1, imageExt(imageMediaType(&imgs[i])))
+			log.Printf("[codex] 模型不支持图片输入,图片 %s 降级为文本占位", name)
+			items = append(items, map[string]interface{}{"type": "text", "text": "[图片:" + name + "]"})
+			continue
+		}
+		path, name, err := materializeImage(&imgs[i], i)
+		if err != nil {
+			// 单张图落盘失败不能卡死整轮:降级为占位并留日志。
+			log.Printf("[codex] 图片落盘失败(降级为文本占位): %v", err)
+			items = append(items, map[string]interface{}{"type": "text", "text": "[图片:" + name + "]"})
+			continue
+		}
+		items = append(items, map[string]interface{}{"type": "localImage", "path": path})
+		paths = append(paths, path)
+	}
+	cleanup := func() {
+		for _, p := range paths {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				log.Printf("[codex] 清理图片临时文件失败 %s: %v", p, err)
+			}
+		}
+	}
+	return items, cleanup
+}
+
+// materializeImage 把一张图片字节落成本机临时文件,返回(绝对路径, 文件名)。
+// 文件名形如 pocketagent-img-<序号>-<随机串><扩展名>,扩展名按 MIME 推断
+// (codex 侧靠扩展名识别图片类型)。
+func materializeImage(img *turnImage, idx int) (string, string, error) {
+	f, err := os.CreateTemp("", fmt.Sprintf("pocketagent-img-%d-*%s", idx+1, imageExt(imageMediaType(img))))
+	if err != nil {
+		return "", fmt.Sprintf("image-%d.png", idx+1), err
+	}
+	name := filepath.Base(f.Name())
+	if _, err := f.Write(img.data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", name, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", name, err
+	}
+	return f.Name(), name, nil
+}
+
+// imageMediaType 兜底补全 MIME:协议层没带时按内容嗅探(前 512 字节,png/jpeg/
+// gif/webp 都认得);实在认不出按 image/png 处理,成败交由 codex 侧读字节决定。
+func imageMediaType(img *turnImage) string {
+	if img.mediaType != "" {
+		return img.mediaType
+	}
+	if mt := http.DetectContentType(img.data); strings.HasPrefix(mt, "image/") {
+		return mt
+	}
+	return "image/png"
+}
+
+// imageExt 由 MIME 推断扩展名。
+func imageExt(mediaType string) string {
+	switch mediaType {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
+}
+
+// codexSupportsImageInput 查 model/list,判断本轮实际使用的模型是否声明支持图片输入。
+//
+// 【数据源】v2 schema Model.inputModalities("text"/"image"/"audio";schema 默认
+// ["text","image"])。live 实测(2026-09-19):model/list 各模型均报 [text image]。
+//
+// 【判定不了的都放行】列表拉不到(model/list 失败/超时)、找不到 slug 对应条目、
+// 条目没报 inputModalities —— 一律放行:此时发图最坏是 codex 报错(用户可见),
+// 而静默降级会让"明明支持图的模型永远收不到图"且无感知。只有**明确声明不含
+// image** 才降级为占位。slug 为空 = 跟随桌面默认,按 isDefault 条目判定。
+//
+// 【为何独立短上界、不随 runCtx】门控发生在 turn/start 之前,5s 拉不到列表就放行,
+// 不让"查询能力"拖延或卡死正常轮次。
+func (p *CodexProvider) codexSupportsImageInput(slug string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err := p.client.CallCtx(ctx, "model/list", map[string]interface{}{})
+	if err != nil {
+		log.Printf("[codex] model/list 失败,图片输入按放行处理: %v", err)
+		return true
+	}
+	var res struct {
+		Data []struct {
+			Id              string   `json:"id"`
+			IsDefault       bool     `json:"isDefault"`
+			InputModalities []string `json:"inputModalities"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &res) != nil || len(res.Data) == 0 {
+		return true
+	}
+	for i := range res.Data {
+		m := &res.Data[i]
+		match := (slug == "" && m.IsDefault) || (slug != "" && m.Id == slug)
+		if !match {
+			continue
+		}
+		if len(m.InputModalities) == 0 {
+			return true
+		}
+		for _, mod := range m.InputModalities {
+			if mod == "image" {
+				return true
+			}
+		}
+		log.Printf("[codex] 模型 %q inputModalities=%v 不含 image,图片将降级为文本占位", slug, m.InputModalities)
+		return false
+	}
+	return true // 列表里没有该模型:放行
+}
+
+func (p *CodexProvider) codexThreadRef(id string) (threadRef, bool) {
+	p.threadMu.Lock()
+	defer p.threadMu.Unlock()
+	ref, ok := p.threadMap[id]
+	return ref, ok
+}
+func (p *CodexProvider) setCodexThreadRef(id string, ref threadRef) {
+	p.threadMu.Lock()
+	defer p.threadMu.Unlock()
+	p.threadMap[id] = ref
 }

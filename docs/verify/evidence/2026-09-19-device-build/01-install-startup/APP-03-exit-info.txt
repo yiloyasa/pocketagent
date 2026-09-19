@@ -1,0 +1,68 @@
+ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)
+Last Timestamp of Persistence Into Persistent Storage: 2026-09-19 22:38:37.426
+  package: dev.pocketagent.app
+    Historical Process Exit for uid=10324
+        ApplicationExitInfo #0:
+          timestamp=2026-09-19 23:04:35.234 pid=23448 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:24207 state=empty trace=null
+        ApplicationExitInfo #1:
+          timestamp=2026-09-19 23:04:30.511 pid=22447 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:22877 state=empty trace=null
+        ApplicationExitInfo #2:
+          timestamp=2026-09-19 23:04:25.755 pid=21695 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:22109 state=empty trace=null
+        ApplicationExitInfo #3:
+          timestamp=2026-09-19 23:04:21.030 pid=20546 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:21213 state=empty trace=null
+        ApplicationExitInfo #4:
+          timestamp=2026-09-19 23:04:16.286 pid=19524 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:19995 state=empty trace=null
+        ApplicationExitInfo #5:
+          timestamp=2026-09-19 23:04:11.543 pid=18687 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:19101 state=empty trace=null
+        ApplicationExitInfo #6:
+          timestamp=2026-09-19 23:04:06.784 pid=17849 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:18310 state=empty trace=null
+        ApplicationExitInfo #7:
+          timestamp=2026-09-19 23:04:02.057 pid=17051 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:17491 state=empty trace=null
+        ApplicationExitInfo #8:
+          timestamp=2026-09-19 23:03:57.279 pid=16251 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:16680 state=empty trace=null
+        ApplicationExitInfo #9:
+          timestamp=2026-09-19 23:03:52.496 pid=15437 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:15858 state=empty trace=null
+        ApplicationExitInfo #10:
+          timestamp=2026-09-19 23:03:32.940 pid=14113 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:15010 state=empty trace=null
+        ApplicationExitInfo #11:
+          timestamp=2026-09-19 23:02:22.461 pid=12277 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:13545 state=empty trace=null
+        ApplicationExitInfo #12:
+          timestamp=2026-09-19 23:00:53.444 pid=10036 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:11821 state=empty trace=null
+        ApplicationExitInfo #13:
+          timestamp=2026-09-19 22:59:02.482 pid=8458 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:9541 state=empty trace=null
+        ApplicationExitInfo #14:
+          timestamp=2026-09-19 22:57:34.738 pid=31580 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=400 pss=125MB rss=264MB description=stop dev.pocketagent.app due to from process:8431 state=empty trace=null
+        ApplicationExitInfo #15:
+          timestamp=2026-09-19 22:49:44.867 pid=30274 realUid=10324 packageUid=10324 definingUid=10324 user=0
+          process=dev.pocketagent.app reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 description=stop dev.pocketagent.app due to from process:31236 state=empty trace=null

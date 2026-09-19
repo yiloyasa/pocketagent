@@ -1,0 +1,86 @@
+[
+  {
+    "probe": "modelprobe",
+    "rc": 0,
+    "seconds": 0.17,
+    "lines": 48,
+    "desc": "ListModels 全量 + 会话 model_id + 手机端窗口解析模拟"
+  },
+  {
+    "probe": "verifyext",
+    "rc": 0,
+    "seconds": 52.47,
+    "lines": 37,
+    "desc": "扩展能力/多 agent 可用性校验"
+  },
+  {
+    "probe": "bridgehealth",
+    "rc": 0,
+    "seconds": 0.35,
+    "lines": 2,
+    "desc": "连接与桥接健康"
+  },
+  {
+    "probe": "wbcfgread",
+    "rc": 0,
+    "seconds": 0.31,
+    "lines": 10,
+    "desc": "设置项真值读取 (含 Agent 与模型)"
+  },
+  {
+    "probe": "tlsprobe",
+    "rc": 0,
+    "seconds": 0.4,
+    "lines": 8,
+    "desc": "TLS 指纹核对"
+  },
+  {
+    "probe": "mdnsprobe",
+    "rc": 0,
+    "seconds": 5.38,
+    "lines": 2,
+    "desc": "mDNS 局域网发现真值"
+  },
+  {
+    "probe": "lanprobe",
+    "rc": 0,
+    "seconds": 0.31,
+    "lines": 1,
+    "desc": "局域网地址探测"
+  },
+  {
+    "probe": "eventprobe",
+    "rc": 1,
+    "seconds": 0.26,
+    "lines": 2,
+    "desc": "事件存储/序列真值"
+  },
+  {
+    "probe": "piprobe",
+    "rc": 0,
+    "seconds": 97.17,
+    "lines": 16,
+    "desc": "Pi 原生会话/命令/档位"
+  },
+  {
+    "probe": "zcprobe",
+    "rc": 0,
+    "seconds": 10.39,
+    "lines": 29,
+    "desc": "ZCode 原生会话/模式/套餐"
+  },
+  {
+    "probe": "zcmodelprobe",
+    "rc": 0,
+    "seconds": 7.64,
+    "lines": 24,
+    "desc": "ZCode 模型列表真值"
+  },
+  {
+    "probe": "sectprobe",
+    "rc": 0,
+    "seconds": 0.4,
+    "lines": 29,
+    "desc": "安全项探测"
+  }
+]

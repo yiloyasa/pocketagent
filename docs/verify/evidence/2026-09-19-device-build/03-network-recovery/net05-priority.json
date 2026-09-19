@@ -1,0 +1,11 @@
+{
+  "usb_established": null,
+  "lan_established": [
+    "10.15.50.160:7246",
+    "10.15.8.248:43558",
+    "21440"
+  ],
+  "app_label": "已连接 · 局域网直连",
+  "note": "USB reverse 恢复后, 已连接状态下的表现; 用于 NET-05 \"已连接时不无意义频繁切换\"",
+  "verdict": "PASS(未频繁切换)"
+}

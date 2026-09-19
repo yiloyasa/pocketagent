@@ -1,0 +1,20 @@
+品牌 = Xiaomi
+型号 = 2211133C
+设备代号 = fuxi
+Android = 16
+API = 36
+ROM = OS3.0
+ROM(incre) = OS3.0.308.0.WMCCNXM
+SDK 指纹 = Xiaomi/fuxi/fuxi:16/BP2A.250605.031.A3/OS3.0.308.0.WMCCNXM:user/release-keys
+CPU ABI = arm64-v8a
+
+--- meminfo (head) ---
+MemTotal:       11459124 kB
+MemFree:          449220 kB
+MemAvailable:    5455964 kB
+Buffers:            2036 kB
+Cached:          3939040 kB
+
+--- df /data ---
+Filesystem       Size Used Avail Use% Mounted on
+/dev/block/dm-58 224G 180G   44G  81% /data/user/0

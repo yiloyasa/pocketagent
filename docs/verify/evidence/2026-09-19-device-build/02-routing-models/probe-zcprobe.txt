@@ -1,0 +1,37 @@
+# zcprobe
+# ZCode 原生会话/模式/套餐
+# rc=0 耗时=10.39s @ 22:46:35
+
+== 工作区: C:\Users\yanzi\AppData\Local\Temp\zcprobe-ws-1577041320
+== node: C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe
+== cjs: C:\Users\yanzi\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs
+
+== 步骤1 启动握手
+== app-server stdout 结束: EOF
+  [握手] OK — 未观测到 startup/storagePath 请求(存储初始化以 startup/storageState 通知推进至 ready)
+== 步骤2 runtime/capabilities
+[SEND] {"id":1,"method":"runtime/capabilities","params":{}}
+  [能力] FAIL — 写入 runtime/capabilities: write |1: The pipe is being closed.
+== 步骤3 session/create + session/send("你好,回复 PONG")
+[SEND] {"id":2,"method":"session/create","params":{"mode":"build","workspace":{"workspaceKey":"C:\\Users\\yanzi\\AppData\\Local\\Temp\\zcprobe-ws-1577041320","workspacePath":"C:\\Users\\yanzi\\AppData\\Local\\Temp\\zcprobe-ws-1577041320"}}}
+  [建会话] FAIL — 写入 session/create: write |1: The pipe is being closed.
+
+================ 汇总 ================
+event.type 计数:
+payload.kind 计数(地面真值):
+
+---- 七项结果 ----
+1 握手      : 未观测到 startup/storagePath 请求(存储初始化以 startup/storageState 通知推进至 ready)
+2 能力      : 
+3 建会话+发送: 
+  PONG 验证 : 
+4 流式形状  : 
+5 审批回路  : 
+6 list      : 
+7 resume同  : 
+  resume新  : 
+失败项: 能力: 写入 runtime/capabilities: write |1: The pipe is being closed. | 建会话: 写入 session/create: write |1: The pipe is being closed.
+== 探针结束,总用时 10s
+
+--- stderr ---
+无法定位 CLI ZCode Built-in Provider Config：C:\Users\yanzi\AppData\Local\Programs\ZCode\resources\glm\provider\zcode-builtin.json, C:\Users\yanzi\AppData\config\provider\zcode-builtin.json

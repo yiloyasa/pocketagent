@@ -9,13 +9,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/pocketagent/daemon/internal/agent"
+	"github.com/pocketagent/daemon/internal/eventstore"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/term"
@@ -46,11 +47,27 @@ type Server struct {
 	pb.UnimplementedGitServiceServer
 	pb.UnimplementedModelServiceServer
 
-	cfg Config
+	cfg              Config
+	prefsMu          sync.Mutex
+	approvalSessions sync.Map // threadID -> *turnApprovals
+	// probeOverride 是 codex 探测的测试注入点(生产为 nil,走真实 provider)。
+	// 用于确定性回归:"探测不可用时,保存仍返回成功且值等于落盘值"。
+	probeOverride codexProbe
+	// devices 是设备注册表(P0-2):每设备 token、挑战应答、撤销;
+	// 旧单 token 走它内部的 legacy 回退路径。
+	devices *deviceRegistry
 	// hostID 进程生命周期内稳定(P1 持久化)
 	hostID string
 	// 每线程正在执行的 turn(重入打断用)
 	activeTurns *activeTurns
+	// P1-4:运行中继续发消息的内存队列(上限 10 条/线程;重启即丢,见 turn_queue.go)
+	turnQueue *turnInputQueue
+	// P1-5:事件持久化(~/.pocketagentd/events.jsonl)。发给手机的每一帧与
+	// 主机事件都带全局单调 seq 落盘,断线重连后凭 after_sequence 增量补帧。
+	// DataDir 为空(测试)时是纯内存计数器,行为零分叉。
+	events *eventstore.Store
+	// P1-5:WatchEvents 活跃流注册表(主机事件实时广播用)
+	hostWatch *hostWatchers
 	// syncCodexInFlight 防止 codex 不可用时重复堆积同步:同一时刻只跑一个
 	// syncThreadsFromCodex。否则每次 refresh 都新起一个,会在 withClient 的
 	// 生命周期锁上排队等待(最坏等 codex 的 callTimeout=120s)。
@@ -58,10 +75,21 @@ type Server struct {
 }
 
 func New(cfg Config) *Server {
+	// P1-5:事件存储打开失败不致命 —— Open 内部对文件层错误有降级,
+	// 这里再兜一层:实在建不起来就用内存模式,daemon 其余功能照常。
+	events, err := eventstore.Open(cfg.DataDir)
+	if err != nil {
+		log.Printf("[eventseq] 事件存储初始化失败,退回内存模式: %v", err)
+		events, _ = eventstore.Open("")
+	}
 	srv := &Server{
 		cfg:         cfg,
+		devices:     newDeviceRegistry(cfg.DataDir, cfg.PairCode),
 		hostID:      randomID("host"),
 		activeTurns: newActiveTurns(),
+		turnQueue:   newTurnInputQueue(),
+		events:      events,
+		hostWatch:   newHostWatchers(),
 	}
 	// 存量修复:旧版本一直没实现自动标题,启动时把仍是"新会话…"默认名的
 	// 线程改成各自首条用户消息(已有真实标题的不动)
@@ -74,7 +102,9 @@ func New(cfg Config) *Server {
 				continue
 			}
 			first := ""
-			for _, b := range m.Blocks {
+			// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+			for i := range m.Blocks {
+				b := &m.Blocks[i]
 				if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
 					first = strings.TrimSpace(tb.Text.Text)
 					break
@@ -127,15 +157,44 @@ func New(cfg Config) *Server {
 			srv.SyncThreadEvent(codexTID, method, params)
 		}
 	}
+	// 启动灌入:把已持久化的偏好广播给**所有**实现了 PrefsAware 的 provider
+	// (codex / pi / zcode),与 SetCodexSettings 的广播共用 DesktopPrefsFromStore
+	// 这一份值来源。【为什么必须做】偏好以前只在内存;现在落盘后,daemon 重启会
+	// 拿到一份"空的" provider。不灌回的话,重启后 pi 的 HideReasoning/桌面默认
+	// 模型、zcode 的默认思考强度、codex 的 turn/start 偏好就都不会再生效 ——
+	// 用户看到的就是"改了又变回去"(codex 当年同款问题的根治,推广到全家)。
+	srv.broadcastPrefs(agent.DesktopPrefsFromStore(cfg.Store))
+	// ZCode 标题同步:session.titleUpdated → TitleHandler(与 codex 同语义,
+	// 手机/桌面双端标题一致)。zcode 回调带的是我们自己的线程 ID(见 zcode.go),
+	// 直接按 t.ID 落库即可,不需要 codex 那样的外部 id 映射。
+	if zp, ok := cfg.Providers["zcode"].(*agent.ZcodeProvider); ok {
+		zp.TitleHandler = func(threadID, title string) {
+			for _, t := range cfg.Store.List(true) {
+				if t.ID == threadID && t.Title != title {
+					t.Title = title
+					_ = cfg.Store.Update(t)
+				}
+			}
+		}
+	}
+	// Pi 标题同步:session_info_changed → 落库(与 zcode 同语义;实现见 thread.go)。
+	srv.wirePiTitleHandler()
+	// Resolve legacy RUNNING records before list synchronization can hide their
+	// terminal error. This consults native journals only, never launches a turn.
+	for _, thread := range cfg.Store.List(true) {
+		if thread.Status == pb.ThreadStatus_THREAD_STATUS_RUNNING {
+			srv.recoverNativeResult(context.Background(), thread)
+		}
+	}
 	return srv
 }
 
 // ---- 鉴权 ----
 
 func (s *Server) token() string {
-	// 配对码即口令:token = sha256("pair-code:" + 配对码)。
-	// 【讲解】不存明文,比较用 constant time 防时序侧信道。P1 换成
-	// 每设备独立 token + 存储撤销列表。
+	// 旧单 token(legacy):token = sha256("pair-code:" + 配对码)。
+	// 【兼容】P0-2 起新设备各持独立 token(见 devices.go),这个值仅用于
+	// 存量手机回退比对,不再作为新配对的发放物。
 	sum := sha256.Sum256([]byte("pair-code:" + s.cfg.PairCode))
 	return hex.EncodeToString(sum[:])
 }
@@ -150,7 +209,9 @@ func (s *Server) authorized(ctx context.Context) error {
 	}
 	for _, v := range md.Get("authorization") {
 		if strings.HasPrefix(v, "Bearer ") {
-			if subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(v, "Bearer ")), []byte(s.token())) == 1 {
+			token := strings.TrimPrefix(v, "Bearer ")
+			// 先查设备注册表(每设备 token,常时比较),查不到再回退旧单 token。
+			if _, _, ok := s.devices.Validate(token); ok {
 				return nil
 			}
 		}

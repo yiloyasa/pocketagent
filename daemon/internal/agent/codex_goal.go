@@ -15,9 +15,11 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 )
@@ -28,7 +30,7 @@ import (
 // 拿它去调用会被 codex 静默吞掉(和 thread/start 那个坑同源)。
 func (p *CodexProvider) loadedCodexThreadID(threadID string) string {
 	gen := int(p.gen.Load())
-	if ref, hit := p.threadMap[threadID]; hit && ref.gen == gen {
+	if ref, hit := p.codexThreadRef(threadID); hit && ref.gen == gen {
 		return ref.id
 	}
 	return ""
@@ -39,41 +41,56 @@ func (p *CodexProvider) loadedCodexThreadID(threadID string) string {
 //
 // 下发不了(线程未加载)不算失败:暂存起来等 Run() 补发,调用方照常落库即可。
 func (p *CodexProvider) SetGoal(threadID, goal string) error {
-	if err := p.withClient(func(*codexapp.Client) error { return nil }); err != nil {
-		// 子进程起不来:仍先暂存,等下次 Run 有机会补发。
+	mounted := false
+	err := p.withStatusClient(func(ctx context.Context, c *codexapp.Client) error {
+		id := p.loadedCodexThreadID(threadID)
+		if id == "" {
+			return nil
+		}
+		mounted = true
+		return pushGoalViaContext(ctx, c, id, goal)
+	})
+	if err != nil || !mounted {
 		p.stashGoal(threadID, goal)
-		return err
 	}
-	if codexTID := p.loadedCodexThreadID(threadID); codexTID != "" {
-		return p.pushGoal(codexTID, goal)
-	}
-	p.stashGoal(threadID, goal)
-	return nil
+	return err
 }
 
 // stashGoal 记录/清除待下发目标。
 func (p *CodexProvider) stashGoal(threadID, goal string) {
 	p.goalMu.Lock()
 	defer p.goalMu.Unlock()
-	if strings.TrimSpace(goal) == "" {
-		delete(p.pendingGoals, threadID)
-		return
-	}
 	p.pendingGoals[threadID] = goal
 }
 
 // pushGoal 真正调用 codex 的 goal 接口。
 func (p *CodexProvider) pushGoal(codexTID, goal string) error {
+	return pushGoalVia(p.client, codexTID, goal)
+}
+
+// pushGoalVia 是 pushGoal 的可测核心(同 codexXxxVia 模式:caller 可注入 fake)。
+//
+// 【字段名实锤(2026-09-19 live,codex-cli 0.149.1)】thread/goal/set 的参数名是
+// **objective**(v2 schema ThreadGoalSetParams:properties 只有 threadId / objective /
+// status / tokenBudget,根本没有 goal);旧形状 {"goal":...} 会被 -32600
+// "no goal exists" 拒绝(证据:cmd/codexreadprobe 实测输出)。
+// clear 的参数只有 threadId(ThreadGoalClearParams),两版一致不受影响。
+func pushGoalVia(c codexJSONCaller, codexTID, goal string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return pushGoalViaContext(ctx, c, codexTID, goal)
+}
+func pushGoalViaContext(ctx context.Context, c codexJSONCaller, codexTID, goal string) error {
 	var (
 		raw json.RawMessage
 		err error
 	)
 	if strings.TrimSpace(goal) == "" {
-		raw, err = p.client.Call("thread/goal/clear", map[string]interface{}{"threadId": codexTID})
+		raw, err = c.CallCtx(ctx, "thread/goal/clear", map[string]interface{}{"threadId": codexTID})
 	} else {
-		raw, err = p.client.Call("thread/goal/set", map[string]interface{}{
-			"threadId": codexTID,
-			"goal":     goal,
+		raw, err = c.CallCtx(ctx, "thread/goal/set", map[string]interface{}{
+			"threadId":  codexTID,
+			"objective": goal,
 		})
 	}
 	if err != nil {
@@ -98,15 +115,22 @@ func (p *CodexProvider) applyPendingGoal(threadID, codexTID string) {
 	}
 	if err := p.pushGoal(codexTID, goal); err == nil {
 		log.Printf("[codex] 补发暂存目标 thread=%s", threadID)
+	} else {
+		p.stashGoal(threadID, goal)
 	}
 }
 
 // goalStatusFromNotification 解析 thread/goal/updated 通知里的状态机字段。
 // 返回 (goal, status, tokensUsed, timeUsedSeconds);拿不到时返回零值。
+//
+// 【字段名实锤】外层包裹键是 goal(ThreadGoalUpdatedNotification required:
+// goal/threadId,这一层没写错),但 ThreadGoal 本体的文本字段是 **objective**
+// (v2 schema 与 live 应答一致,同 thread/goal/get 的应答形状);旧代码解析
+// 内层 "goal" 永远拿到空串,通知里目标文本被静默丢掉。
 func goalStatusFromNotification(params json.RawMessage) (string, string, int64, int64) {
 	var n struct {
 		Goal struct {
-			Goal            string `json:"goal"`
+			Objective       string `json:"objective"`
 			Status          string `json:"status"`
 			TokensUsed      int64  `json:"tokensUsed"`
 			TimeUsedSeconds int64  `json:"timeUsedSeconds"`
@@ -115,5 +139,5 @@ func goalStatusFromNotification(params json.RawMessage) (string, string, int64, 
 	if json.Unmarshal(params, &n) != nil {
 		return "", "", 0, 0
 	}
-	return n.Goal.Goal, n.Goal.Status, n.Goal.TokensUsed, n.Goal.TimeUsedSeconds
+	return n.Goal.Objective, n.Goal.Status, n.Goal.TokensUsed, n.Goal.TimeUsedSeconds
 }

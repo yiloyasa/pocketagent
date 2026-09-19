@@ -12,6 +12,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -40,9 +41,19 @@ type CodexRequirements struct {
 // 读不到不是错误:绝大多数用户没有 requirements.toml/MDM 策略,返回零值
 // (Managed=false,三个列表都空)表示"无限制",手机端据此正常渲染全部选项。
 func (p *CodexProvider) Requirements() CodexRequirements {
+	req, _ := p.RequirementsCtx(context.Background())
+	return req
+}
+
+// RequirementsCtx 是带 ctx 的版本,并把"读取失败"**如实返回**给调用方。
+//
+// 【为什么要把 err 暴露出来】读不到时 out 是零值(Managed=false、白名单全空 =
+// 不限制)。但这不等于"真的没有策略" —— 设置页需要区分:读不到时留一句
+// "未能读取电脑端托管策略",别把"读不到"伪装成"没有策略"。
+func (p *CodexProvider) RequirementsCtx(ctx context.Context) (CodexRequirements, error) {
 	var out CodexRequirements
-	err := p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("configRequirements/read", map[string]interface{}{})
+	err := p.withClientCtx(ctx, clientInitBudget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "configRequirements/read", map[string]interface{}{})
 		if err != nil {
 			return err
 		}
@@ -91,20 +102,29 @@ func (p *CodexProvider) Requirements() CodexRequirements {
 	if err != nil {
 		log.Printf("[codex] 读托管策略失败(按无限制处理): %v", err)
 	}
-	return out
+	return out, err
 }
 
 // CodexUsage 读用量与限流。
 //
 // 返回的 CodexUsage 里 error 字段非空表示"读不到",而不是"额度为 0" ——
 // 这个区分很重要:把拉取失败显示成 0% 会让用户以为额度用完了。
+//
+// 【第 28 轮】外面包了一层 TTL 缓存(60 秒):用量面板可能被多次打开/刷新,
+// 60s 内零 codex 调用;重拉失败且有旧值时返回旧值(哪怕过期),避免"暂时读不到"。
 func (p *CodexProvider) Usage() *pb.CodexUsage {
+	out, _ := p.usageCache.read("", "usage")
+	return out
+}
+
+// fetchUsageUncached 是 Usage 的真实拉取(无缓存)。
+func (p *CodexProvider) fetchUsageUncached() *pb.CodexUsage {
 	out := &pb.CodexUsage{Primary: &pb.RateLimitWindow{}, Secondary: &pb.RateLimitWindow{}}
 	var firstErr error
 
 	// 1) 限流窗口 + 积分。这是"还能不能用"的正面回答。
-	err := p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("account/rateLimits/read", map[string]interface{}{})
+	err := p.withStatusClient(func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "account/rateLimits/read", map[string]interface{}{})
 		if err != nil {
 			return err
 		}
@@ -154,8 +174,8 @@ func (p *CodexProvider) Usage() *pb.CodexUsage {
 	}
 
 	// 2) 累计用量(锦上添花:失败不影响限流数据)。
-	if err := p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("account/usage/read", map[string]interface{}{})
+	if err := p.withStatusClient(func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "account/usage/read", map[string]interface{}{})
 		if err != nil {
 			return err
 		}
@@ -197,15 +217,27 @@ type rateWindowJSON struct {
 //
 // 全部**只读**。价值不在"能改",而在回答"为什么某个技能不生效" ——
 // 所以 disabled_reason 比 enabled 更值得搬出来。
-func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
+//
+// 【第 28 轮】外面包了一层 TTL 缓存(30 分钟,key=cwd):以前每次进设置页都要
+// 连打 skills/list + hooks/list + plugin/installed 三个查询,codex 子进程繁忙时
+// 超 10s 预算就整页红字。现在 30 分钟内秒回;重拉预算放宽到 45s;重拉失败且
+// 有旧值时返回旧值。cwd 是缓存 key —— 技能列表按目录算,目录变了必须重拉。
+func (p *CodexProvider) CapabilitiesDetailed(cwd string) ([]*pb.CodexCapability, error) {
+	return p.capCache.read(cwd, "capabilities")
+}
+
+// fetchCapabilitiesDetailed 是 CapabilitiesDetailed 的真实拉取(无缓存),
+// 三个子查询各自受 budget 约束。
+func (p *CodexProvider) fetchCapabilitiesDetailed(cwd string, budget time.Duration) ([]*pb.CodexCapability, error) {
 	out := []*pb.CodexCapability{}
+	var errs []string
 	if cwd == "" {
 		cwd = "."
 	}
 
 	// ---- 技能 ----
-	_ = p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("skills/list", map[string]interface{}{"cwds": []string{cwd}})
+	if err := p.withStatusClientBudget(budget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "skills/list", map[string]interface{}{"cwds": []string{cwd}})
 		if err != nil {
 			return err
 		}
@@ -249,11 +281,13 @@ func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		errs = append(errs, "skills: "+err.Error())
+	}
 
 	// ---- hooks ----
-	_ = p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("hooks/list", map[string]interface{}{"cwds": []string{cwd}})
+	if err := p.withStatusClientBudget(budget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "hooks/list", map[string]interface{}{"cwds": []string{cwd}})
 		if err != nil {
 			return err
 		}
@@ -291,11 +325,13 @@ func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		errs = append(errs, "hooks: "+err.Error())
+	}
 
 	// ---- 已安装插件 ----
-	_ = p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("plugin/installed", map[string]interface{}{"cwds": []string{cwd}})
+	if err := p.withStatusClientBudget(budget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "plugin/installed", map[string]interface{}{"cwds": []string{cwd}})
 		if err != nil {
 			return err
 		}
@@ -332,7 +368,9 @@ func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		errs = append(errs, "plugins: "+err.Error())
+	}
 
 	// 稳定排序:同名能力在不同机器上顺序一致,便于肉眼对比与截图核对。
 	sort.SliceStable(out, func(i, j int) bool {
@@ -341,6 +379,16 @@ func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
 		}
 		return out[i].Name < out[j].Name
 	})
+	if len(errs) > 0 {
+		return out, fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return out, nil
+}
+
+// Capabilities 保留旧的只返回列表的调用形状,兼容已有诊断工具与测试。
+// 新的 RPC 路径使用 CapabilitiesDetailed,不会再吞掉读取错误。
+func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
+	out, _ := p.CapabilitiesDetailed(cwd)
 	return out
 }
 
@@ -348,10 +396,18 @@ func (p *CodexProvider) Capabilities(cwd string) []*pb.CodexCapability {
 //
 // 【为什么必须补】只转发 name/tools/status 的话,"某个 MCP 用不了"这件事在手机上
 // 完全看不出来 —— 用户只会觉得"这个工具怎么不好使"。authStatus 直接回答"是不是授权问题"。
+//
+// 【第 28 轮】外面包了一层 TTL 缓存(5 分钟):mcpServerStatus/list 是重查询,
+// codex 繁忙时常超 10s;缓存 miss 的重拉放宽到 45s,失败且有旧值时返回旧值。
 func (p *CodexProvider) McpStatusDetailed() ([]*pb.McpServerStatus, error) {
+	return p.mcpCache.read("", "mcpServers")
+}
+
+// fetchMcpStatusDetailed 是 McpStatusDetailed 的真实拉取(无缓存)。
+func (p *CodexProvider) fetchMcpStatusDetailed(budget time.Duration) ([]*pb.McpServerStatus, error) {
 	out := []*pb.McpServerStatus{}
-	err := p.withClient(func(c *codexapp.Client) error {
-		raw, err := c.Call("mcpServerStatus/list", map[string]interface{}{})
+	err := p.withStatusClientBudget(budget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallCtx(ctx, "mcpServerStatus/list", map[string]interface{}{})
 		if err != nil {
 			return err
 		}

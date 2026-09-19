@@ -24,7 +24,10 @@ object ThreadUsageStore {
         val turn: Usage?,
         val total: Usage?,
         val contextWindow: Long,
+        val contextWindowKnown: Boolean,
         val updatedAt: Long,
+        /** 最近一次上下文压缩时间(0 = 未压缩过);压缩后 turn 被作废,靠它回显压缩状态。 */
+        val compactedAt: Long = 0L,
     )
 
     fun init(ctx: Context) {
@@ -75,9 +78,26 @@ object ThreadUsageStore {
         }
         usageToJson(turn)?.let { obj.put("turn", it) }
         usageToJson(total)?.let { obj.put("total", it) }
-        if (contextWindow > 0) obj.put("cw", contextWindow)
+        if (contextWindow > 0) {
+            obj.put("cw", contextWindow)
+            obj.put("cwKnown", true)
+        }
         obj.put("at", System.currentTimeMillis())
         p.edit().putString(threadId, obj.toString()).apply()
+    }
+
+    /**
+     * 上下文压缩同步:作废已缓存的"本 turn 占用"(压缩前的数字已失真,可能超出
+     * 实际窗口,绝不能重开会话时再回显),并记下压缩时间。
+     *
+     * 合并语义与 [save] 一致:total(全程累计)与窗口大小不受影响,只清 turn。
+     * JSON 变换抽成纯函数 [markCompactedJson],便于 JVM 单测钉住。
+     */
+    fun markCompacted(threadId: String, nowMs: Long = System.currentTimeMillis()) {
+        if (threadId.isBlank()) return
+        val p = prefs ?: return
+        val merged = markCompactedJson(p.getString(threadId, null), nowMs)
+        p.edit().putString(threadId, merged).apply()
     }
 
     /** 回收:会话在电脑端被删后清掉残留的用量键。 */
@@ -96,11 +116,30 @@ object ThreadUsageStore {
             Snapshot(
                 turn = jsonToUsage(o.optString("turn")),
                 total = jsonToUsage(o.optString("total")),
-                contextWindow = o.optLong("cw"),
+                // 旧版本没有真实性标记，不能把旧的默认值重新当作 Codex 实测窗口。
+                contextWindow = if (o.optBoolean("cwKnown", false)) o.optLong("cw") else 0L,
+                contextWindowKnown = o.optBoolean("cwKnown", false) && o.optLong("cw") > 0,
                 updatedAt = o.optLong("at"),
+                compactedAt = o.optLong("compactAt"),
             )
         } catch (_: Exception) {
             null
         }
     }
+}
+
+/**
+ * 压缩落盘的纯 JSON 变换:删掉 "turn"(陈旧占用),写入 "compactAt"。
+ * 纯函数:同样的输入恒得同样的输出,不碰 SharedPreferences,可 JVM 单测。
+ */
+internal fun markCompactedJson(raw: String?, nowMs: Long): String {
+    val o = try {
+        raw?.let { org.json.JSONObject(it) } ?: org.json.JSONObject()
+    } catch (_: Exception) {
+        org.json.JSONObject()
+    }
+    o.remove("turn")
+    o.put("compactAt", nowMs)
+    o.put("at", nowMs)
+    return o.toString()
 }

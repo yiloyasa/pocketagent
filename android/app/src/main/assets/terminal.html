@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <link rel="stylesheet" href="vendor/xterm/xterm.css">
   <style>
-    :root { color-scheme: dark; }
+    /* 【P1-7 键栏】--kb-h = 键栏实际高度,由 JS 测量后写入 documentElement。
+       #terminal 的 top 让位给它;键栏显隐只改这一个变量,top 一变,
+       #terminal 的真实 clientHeight 就变,既有 ResizeObserver → fitAndReport
+       链路自然重跑 fit 并向 PTY 上报新行数,不另起炉灶、不破坏高度链。 */
+    :root { color-scheme: dark; --kb-h: 0px; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -22,7 +26,10 @@
     #terminal {
       position: absolute;
       left: 0;
-      top: 0;
+      /* 【P1-7 键栏】top 不再恒为 0:键栏可见时 = --kb-h(键栏实测高度),隐藏时 = 0。
+         仍保持 absolute + bottom:0 锚定,高度永远来自 WebView 真实布局,
+         fit 的 clientHeight 依赖(P5 黑屏修复)不受影响。 */
+      top: var(--kb-h);
       right: 0;
       bottom: 0;
       padding: 4px 6px;
@@ -42,9 +49,93 @@
     }
     #terminal .xterm-viewport { scrollbar-width: none; }
     #terminal .xterm-viewport::-webkit-scrollbar { display: none; }
+    /* ---- 【P1-7 终端辅助键栏】两行按键条,位于终端区上方(WebView 顶部,
+       即 Compose 头部之下)。配色跟随页面纯黑主题:近黑底 + #e7eaf0 前景,
+       粘滞 Ctrl 用光标色 #72b7ff 点亮,按下态整体提亮。 ---- */
+    body.kb-off #keybar { display: none; }
+    #keybar {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      z-index: 10;
+      padding: 4px 4px 2px;
+      background: #0b0d12;
+      border-bottom: 1px solid #1c2230;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+    }
+    .kb-row { display: flex; gap: 4px; }
+    .kb-row + .kb-row { margin-top: 4px; }
+    .kb-key {
+      flex: 1;
+      height: 40px; /* 触控目标:两行各 40px,整栏高 91px(4+40+4+40+2+1 边框) */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #161a23;
+      color: #e7eaf0;
+      border: 1px solid #232a3a;
+      border-radius: 8px;
+      font: 600 13px/1 Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    }
+    .kb-key.kb-down { background: #26304a; border-color: #3d4a6b; } /* 按下反馈 */
+    .kb-key.kb-sticky { background: #72b7ff; border-color: #72b7ff; color: #0b0d12; } /* Ctrl 粘滞点亮 */
+    /* 键栏隐藏后的恢复浮钮:半透明小钮贴页面右上角,只在隐藏态出现 */
+    #kbShow {
+      display: none;
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      z-index: 11;
+      width: 44px;
+      height: 30px;
+      align-items: center;
+      justify-content: center;
+      background: rgba(22, 26, 35, 0.72);
+      color: #e7eaf0;
+      border: 1px solid #232a3a;
+      border-radius: 8px;
+      font: 600 14px/1 Menlo, Consolas, monospace;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+    }
+    body.kb-off #kbShow { display: flex; }
   </style>
 </head>
 <body>
+  <!-- 【P1-7 终端辅助键栏】两行按键条,终端区上方(WebView 顶部 = Compose 头部之下)。
+       Row1:Esc / Tab / Ctrl(粘滞) / ↑↓←→ / "-";
+       Row2:常用 shell 符号 / | ~ $ 与 ^C ^D ^L 组合快捷键;末尾 ▾ 为收起钮。
+       隐藏后由右上角浮钮 ▴ 恢复;显隐状态存 localStorage(键 pa.keybar.hidden)。 -->
+  <div id="keybar">
+    <div class="kb-row">
+      <div class="kb-key" data-k="esc" role="button">Esc</div>
+      <div class="kb-key" data-k="tab" role="button">Tab</div>
+      <div class="kb-key" data-k="ctrl" role="button">Ctrl</div>
+      <div class="kb-key" data-k="up" role="button">↑</div>
+      <div class="kb-key" data-k="down" role="button">↓</div>
+      <div class="kb-key" data-k="left" role="button">←</div>
+      <div class="kb-key" data-k="right" role="button">→</div>
+      <div class="kb-key" data-k="-" role="button">-</div>
+    </div>
+    <div class="kb-row">
+      <div class="kb-key" data-k="/" role="button">/</div>
+      <div class="kb-key" data-k="|" role="button">|</div>
+      <div class="kb-key" data-k="~" role="button">~</div>
+      <div class="kb-key" data-k="$" role="button">$</div>
+      <div class="kb-key" data-k="^c" role="button">^C</div>
+      <div class="kb-key" data-k="^d" role="button">^D</div>
+      <div class="kb-key" data-k="^l" role="button">^L</div>
+      <div class="kb-key" data-k="toggle" role="button">▾</div>
+    </div>
+  </div>
+  <!-- 键栏隐藏后的恢复浮钮(半透明,贴右上角,不常驻) -->
+  <div id="kbShow" role="button">▴</div>
   <div id="terminal"></div>
   <script>
     // 【竞态修复】gRPC 输出可能先于本页加载完成到达。
@@ -186,8 +277,46 @@
         }, true);
       })();
 
+      // ---- 【P1-7 键栏 · Ctrl 粘滞态】共享状态与工具函数 ----
+      // 定义在外层:软键盘路径(term.onData)和键栏路径(pressKey)共用同一份状态,
+      // 无论从哪边消耗粘滞态,高亮都同步。
+      var kbSticky = false;
+      var kbCtrlBtn = document.querySelector('#keybar [data-k="ctrl"]');
+      function kbSetSticky(on) {
+        kbSticky = on;
+        if (kbCtrlBtn) kbCtrlBtn.classList.toggle('kb-sticky', on);
+      }
+      // Ctrl+字符 → 控制字节。字母取标准 1..26;标点按"共享键位的位移形态"
+      // 取值(与桌面终端/xterm 惯例一致):
+      //   '-'(=_)/'/'(=?)→ 0x1F, '|'(=\)→ 0x1C, '~'(=^)→ 0x1E, '$'(=4)→ 0x04
+      // 没有惯例映射的字符返回 -1,由调用方原样放行。
+      function kbCtrlByte(ch) {
+        var c = ch.charCodeAt(0);
+        if (ch >= 'a' && ch <= 'z') return c - 96;
+        if (ch >= 'A' && ch <= 'Z') return c - 64;
+        if (ch === '-') return 0x1f;
+        if (ch === '/') return 0x1f;
+        if (ch === '|') return 0x1c;
+        if (ch === '~') return 0x1e;
+        if (ch === '$') return 0x04;
+        return -1;
+      }
+
       // 按键/粘贴输入 → Android 桥 → gRPC
       term.onData(function (data) {
+        // 【P1-7】键栏点亮的粘滞 Ctrl 对软键盘输入同样生效:
+        // 只改造"单个可打印 ASCII 字符"(软键盘单键击就是这种),
+        // 粘贴/转义序列原样放行。改造后仍走 AndroidTerm.onKey 这唯一发送路径。
+        if (kbSticky) {
+          if (data.length === 1) {
+            var code = data.charCodeAt(0);
+            if (code >= 32 && code < 127) {
+              var b = kbCtrlByte(data);
+              if (b > 0) data = String.fromCharCode(b);
+            }
+          }
+          kbSetSticky(false); // 任意后续输入都会消耗粘滞态
+        }
         if (window.AndroidTerm) AndroidTerm.onKey(data);
       });
 
@@ -217,6 +346,95 @@
           sendSeq('\u001b');
         }
       }, true);
+
+      // ---- 【P1-7 终端辅助键栏】软键盘打不出的键:两行按键条 ----
+      // 发送路径:全部复用上面的 sendSeq(AndroidTerm.onKey),不开第二条路。
+      // 触控:touchstart 里 preventDefault —— 不产生合成 click、不转移焦点,
+      // 因此点键不会唤起软键盘,也不干扰 xterm 输入区;桌面/RENDER-TEST 场景
+      // 由 mousedown 兜底(touchstart 已 preventDefault,不会双发)。
+      (function () {
+        var bar = document.getElementById('keybar');
+        var showBtn = document.getElementById('kbShow');
+        if (!bar || !showBtn) return;
+        var LS_KEY = 'pa.keybar.hidden';
+        // 方向键 CSI 序列尾字母(VT 顺序:A上 B下 C右 D左)
+        var ARROWS = { up: 'A', down: 'B', left: 'D', right: 'C' };
+        // 直接发送的单键:Esc、Tab,以及组合快捷键 ^C/^D/^L(等价 Ctrl+C/D/L)
+        var DIRECT = { esc: '\u001b', tab: '\t', '^c': '\u0003', '^d': '\u0004', '^l': '\u000c' };
+
+        function pressKey(k) {
+          if (k === 'ctrl') { kbSetSticky(!kbSticky); return; } // 粘滞开关,只点亮/熄灭,不发字节
+          var seq = null;
+          if (ARROWS[k]) {
+            // 普通方向键 = CSI A/B/C/D;粘滞 Ctrl = CSI 1;5 A/B/C/D(修饰符参数 5=Ctrl)
+            seq = kbSticky ? '\u001b[1;5' + ARROWS[k] : '\u001b[' + ARROWS[k];
+          } else if (DIRECT[k]) {
+            seq = DIRECT[k];
+          } else if (k.length === 1) {
+            if (kbSticky) {
+              var b = kbCtrlByte(k);
+              seq = b > 0 ? String.fromCharCode(b) : k;
+            } else {
+              seq = k;
+            }
+          }
+          kbSetSticky(false); // Ctrl 以外的任何键都会消耗粘滞态(含 Esc/Tab)
+          if (seq != null) sendSeq(seq);
+        }
+
+        function bindKey(el) {
+          var k = el.getAttribute('data-k');
+          el.addEventListener('touchstart', function (ev) {
+            ev.preventDefault();
+            el.classList.add('kb-down'); // 按下反馈,120ms 后自动撤掉
+            setTimeout(function () { el.classList.remove('kb-down'); }, 120);
+            pressKey(k);
+          }, false);
+          el.addEventListener('mousedown', function (ev) {
+            ev.preventDefault(); // 防焦点转移
+            pressKey(k);
+          }, false);
+        }
+        var keyEls = bar.querySelectorAll('.kb-key');
+        for (var i = 0; i < keyEls.length; i++) {
+          // toggle(收起钮)有自己的监听,不走 pressKey
+          if (keyEls[i].getAttribute('data-k') !== 'toggle') bindKey(keyEls[i]);
+        }
+        // 长按键不弹系统菜单/不进入选择
+        bar.addEventListener('contextmenu', function (ev) { ev.preventDefault(); }, false);
+
+        // 显隐:切 body class + 改 --kb-h 变量。#terminal top 随之变化,
+        // 既有 ResizeObserver → fitAndReport 自动重跑 fit 并向 PTY 上报新行数。
+        function applyVisibility(show) {
+          document.body.classList.toggle('kb-off', !show);
+          document.documentElement.style.setProperty(
+            '--kb-h', show ? bar.offsetHeight + 'px' : '0px');
+          try { localStorage.setItem(LS_KEY, show ? '0' : '1'); } catch (e) {}
+          if (window.AndroidTerm) {
+            AndroidTerm.report('KEYBAR ' + (show ? 'on h=' + bar.offsetHeight : 'off'));
+          }
+        }
+        // Row2 末尾收起钮 → 隐藏;隐藏后右上角浮钮 → 恢复
+        var toggleBtn = bar.querySelector('[data-k="toggle"]');
+        function onToggle(ev) { ev.preventDefault(); applyVisibility(false); }
+        function onShow(ev) { ev.preventDefault(); applyVisibility(true); }
+        if (toggleBtn) {
+          toggleBtn.addEventListener('touchstart', onToggle, false);
+          toggleBtn.addEventListener('mousedown', onToggle, false);
+        }
+        showBtn.addEventListener('touchstart', onShow, false);
+        showBtn.addEventListener('mousedown', onShow, false);
+
+        // 状态存 localStorage,下次进页面保持用户的选择(存储不可用时默认显示)
+        var saved = '0';
+        try { saved = localStorage.getItem(LS_KEY) || '0'; } catch (e) {}
+        applyVisibility(saved !== '1');
+        // 页面自检:键栏初始化完成,真机 logcat(PaTerm tag)验证
+        if (window.AndroidTerm) {
+          AndroidTerm.report('KEYBAR-READY keys=' + keyEls.length + ' h=' + bar.offsetHeight);
+        }
+      })();
+
 
       // 【布局竞态修复】WebView 的 AndroidView 首次布局完成前 #terminal 高度≈0,
       // 过早 fit 会得到 1 行 0 高的终端(黑屏元凶)。用 ResizeObserver 等到

@@ -7,6 +7,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,15 +15,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -45,13 +49,19 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.component.DocFormatRegistry
+import dev.pocketagent.app.ui.component.OfflineStore
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.WebDownloadBridge
+import dev.pocketagent.app.ui.component.WebNavPolicy
 import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import pocketagent.v1.DevServer
+import pocketagent.v1.ListDevServersRequest
 import pocketagent.v1.ReadFileRequest
 
 /**
@@ -93,6 +103,35 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     //   localUri 非空 = 正在看手机上的文件(已在本地,可分享)。
     var pcPath by remember { mutableStateOf("") }
     var localUri by remember { mutableStateOf("") }
+    // 【脚本桥的注册状态】只对可信来源(App 预览 / 本地文件 / 私网 daemon)挂载
+    // WebDownloadBridge;公网站点一律卸载 —— 否则任意页面一行 JS 就能落盘任意文件。
+    // 初值按【初始 URL】判定:pc:/content:/空起始页都是 App 预览(可信),
+    // 直接以公网 http(s) 开场的则初值为 false,与 factory 里的注册保持一致。
+    var bridgeRegistered by remember {
+        mutableStateOf(!(initialUrl.startsWith("http://") || initialUrl.startsWith("https://")))
+    }
+    // ---- 电脑 dev server 面板(P2,对齐原作 BrowserService.ListDevServers)----
+    var showServers by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+    var servers by remember { mutableStateOf<List<DevServer>>(emptyList()) }
+    var scanHint by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * 按当前页面来源同步脚本桥的挂载/卸载。
+     * 只在来源可信(image/data/about、file/content、私网 http(s))时保留桥;
+     * 状态未变化时直接返回,避免每个页面都重复 add/remove。
+     */
+    fun applyBridgePolicy(w: WebView?, url: String?) {
+        if (w == null) return
+        val trusted = WebNavPolicy.trustedBridgeSource(url.orEmpty())
+        if (trusted == bridgeRegistered) return
+        if (trusted) {
+            w.addJavascriptInterface(WebDownloadBridge(ctx), WebDownloadBridge.JS_NAME)
+        } else {
+            w.removeJavascriptInterface(WebDownloadBridge.JS_NAME)
+        }
+        bridgeRegistered = trusted
+    }
 
     // 【返回层级 · 分级回退】页面内还有历史 → 先网页后退;退无可退 → 才离开浏览器。
     // 之前没有 BackHandler,系统返回键会直接 pop 掉整个路由,导致用户
@@ -242,7 +281,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 }
             }
         }
-        if (!name.contains('.')) name += extForMime(mime)
+        if (!name.contains('.')) name += DocFormatRegistry.extFor(mime)
         pageTitle = name
         scope.launch {
             try {
@@ -259,6 +298,54 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
         }
     }
 
+    /**
+     * 问 daemon"电脑上正跑着哪些 dev server"(HostService.ListDevServers)。
+     * daemon 侧拨常见端口并发探测(1s/端口、整扫 ≤8s),结果缓存 60s ——
+     * 这里的"重新扫描"一分钟内多次点也只会在过期后真正重扫。
+     */
+    fun refreshDevServers() {
+        scope.launch {
+            scanning = true
+            scanHint = null
+            try {
+                val list = withContext(Dispatchers.IO) {
+                    AgentConnection.hostService()
+                        .listDevServers(ListDevServersRequest.newBuilder().build())
+                        .serversList
+                }
+                servers = list
+                if (list.isEmpty()) {
+                    scanHint = "没发现正在运行的 dev server(常见端口 3000/5173/8000/8080…)"
+                }
+            } catch (e: Exception) {
+                scanHint = "扫描失败:${e.message ?: "请先连接电脑"}"
+            } finally {
+                scanning = false
+            }
+        }
+    }
+
+    /**
+     * 点列表里的一项 → WebView 加载 [devServerPreviewUrl] 拼出的地址。
+     * USB 反向隧道只反代 daemon 的 7246,dev 端口不过隧道 —— 这里提前说人话,
+     * 别让用户对着错误页猜原因;真正的加载失败由 onReceivedError 的失败页兜底。
+     */
+    fun openDevServer(s: DevServer) {
+        val addr = AgentConnection.connAddress.value
+        val url = devServerPreviewUrl(addr, s.port)
+        if (url.isEmpty()) {
+            android.widget.Toast.makeText(ctx, "还不知道电脑的地址,请先连接电脑", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        if (addr.substringBeforeLast(':') == "127.0.0.1") {
+            android.widget.Toast.makeText(
+                ctx, "USB 连接打不开电脑端口;请在同一 WiFi 下(局域网/Tailscale)再试", android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+        showServers = false
+        webRef?.loadUrl(url)
+    }
+
     /** 地址栏回车:电脑路径走 pc 模式,手机文件走 content 模式,其余当网址/搜索词。 */
     fun submit(raw: String) {
         val t = raw.trim()
@@ -269,6 +356,48 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 val pc = toPcPath(t)
                 if (pc != null) openPcFile(pc) else webRef?.loadUrl(normalizeUrl(t))
             }
+        }
+    }
+
+    /**
+     * 网页下载入口(setDownloadListener 的落点)。
+     *  · http/https → 交给 [PaDownloader.downloadFromUrl](带 UA/Cookie);
+     *  · blob:/data: → 注入 JS 读成 base64 回传(浏览器内部 URL,原生取不到);
+     *  · 其它 scheme → 属于外跳,给可见反馈而不是静默。
+     */
+    fun handleDownload(url: String, userAgent: String, contentDisposition: String, mime: String) {
+        val name = WebNavPolicy.fileNameFromDisposition(contentDisposition, url)
+        when {
+            url.startsWith("http://") || url.startsWith("https://") -> {
+                val cookie = runCatching {
+                    android.webkit.CookieManager.getInstance().getCookie(url)
+                }.getOrNull().orEmpty()
+                PaDownloader.downloadFromUrl(
+                    url = url, name = name, mime = mime,
+                    userAgent = userAgent, cookie = cookie, sourceTitle = pageTitle,
+                )
+                android.widget.Toast.makeText(ctx, "已开始下载:$name", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            url.startsWith("blob:") || url.startsWith("data:") -> {
+                // 【安全】blob/data 只能靠页面内 JS + 脚本桥落盘,而桥仅在可信来源挂载。
+                // 公网站点不注入(否则等于把"任意文件落盘"入口交给整个公网),给可见提示。
+                if (!bridgeRegistered) {
+                    android.widget.Toast.makeText(
+                        ctx, "已限制:该站点不支持此类下载", android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                    return
+                }
+                val w = webRef
+                if (w == null) {
+                    android.widget.Toast.makeText(ctx, "下载失败:页面未就绪", android.widget.Toast.LENGTH_LONG).show()
+                    return
+                }
+                w.evaluateJavascript(blobFetchJs(url, name, mime), null)
+                android.widget.Toast.makeText(ctx, "正在获取文件…", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            else -> android.widget.Toast.makeText(
+                ctx, "该链接需要跳转到外部 App", android.widget.Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
@@ -322,6 +451,17 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     }
                 }
             }, bg = Pa.Card)
+            Spacer(Modifier.width(8.dp))
+            // 【电脑预览入口】问 daemon 要本机 dev server 清单,点开即预览(P2)。
+            // 首次展开自动扫一次;之后再展开沿用结果,面板里有"重新扫描"。
+            IconActionButton(
+                R.drawable.ic_lucide_monitor, "电脑预览",
+                {
+                    showServers = !showServers
+                    if (showServers && servers.isEmpty() && !scanning) refreshDevServers()
+                },
+                bg = if (showServers) Pa.AccentDim else Pa.Card,
+            )
         }
 
         // ---------- 第二行:标题 + 下载/分享 + 前进/后退 + 手机/桌面切换 + 外部打开 ----------
@@ -442,6 +582,83 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
             }
         }
 
+        // ---------- 电脑 dev server 面板(P2):展开时列在网页本体上方 ----------
+        // 列表最多 11 行(端口表大小),限高 + 可滚动,不挤掉网页本体。
+        if (showServers) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .heightIn(max = 240.dp)
+                    .verticalScroll(rememberScrollState())
+                    .background(Pa.Card, RoundedCornerShape(14.dp)),
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("电脑上的 dev server", Modifier.weight(1f), fontSize = 13.sp, color = Pa.TextPrimary)
+                    if (scanning) {
+                        Text("扫描中…", fontSize = 11.sp, color = Pa.TextTertiary)
+                    } else {
+                        Text(
+                            "重新扫描", fontSize = 11.sp, color = Pa.Accent,
+                            modifier = Modifier.clickable { refreshDevServers() },
+                        )
+                    }
+                }
+                when {
+                    scanning && servers.isEmpty() -> Text(
+                        "正在拨 3000/5173/8000/8080 等常见端口…",
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        fontSize = 11.sp, color = Pa.TextTertiary,
+                    )
+                    servers.isEmpty() -> Text(
+                        scanHint ?: "没有正在运行的 dev server",
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        fontSize = 11.sp, color = Pa.TextTertiary,
+                    )
+                    else -> servers.forEach { s ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { openDevServer(s) }
+                                .padding(horizontal = 14.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(":${s.port}", fontSize = 13.sp, color = Pa.Accent)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    s.title.ifBlank {
+                                        s.serverHeader.ifBlank { "HTTP 服务" }
+                                    },
+                                    fontSize = 12.5.sp, color = Pa.TextPrimary,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                                if (s.serverHeader.isNotBlank()) {
+                                    Text(
+                                        s.serverHeader, fontSize = 10.sp, color = Pa.TextTertiary,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            Text("打开 →", fontSize = 11.sp, color = Pa.TextSecondary)
+                        }
+                    }
+                }
+                if (servers.isNotEmpty()) {
+                    Text(
+                        "手机与电脑需在同一网络(WiFi / Tailscale)",
+                        Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                        fontSize = 10.sp, color = Pa.TextTertiary,
+                    )
+                }
+            }
+        }
+
         // ---------- 网页本体(weight 占满剩余高度,不会把顶栏挤出可视区) ----------
         AndroidView(
             modifier = Modifier
@@ -478,39 +695,90 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     // 4) 明确的缓存策略:跟系统一致走默认(有网用网络、无网回缓存),
                     //    避免因隐式 LOAD_NO_CACHE 导致每次都是全新会话、登录态丢失。
                     settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+                    // 5) [本轮新增] 多窗口 / 新窗口:很多站点(target=_blank、window.open)
+                    //    点开新窗口时若未开启此项,WebView 直接什么都不做 —— 用户会以为"浏览器坏了"。
+                    //    配套的 onCreateWindow 见下方 WebChromeClient。
+                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    settings.setSupportMultipleWindows(true)
+                    // 6) [本轮新增] 部分 H5 视频/动效默认要求"用户手势"才播放,遥控场景常看不到内容;
+                    //    同时确保图片默认加载(百度/抖音的封面多为懒加载 img)。
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    settings.loadsImagesAutomatically = true
+                    // 7) [第二轮·安全收严] 关闭本地/内容文件访问。
+                    //    实测:App 预览走 loadDataWithBaseURL(baseUrl=null),WebView 回报
+                    //    about:blank/data:;已下载文件由 ContentResolver 在 Kotlin 侧读成字节
+                    //    再喂给 WebView —— WebView 自身**从不**加载 file:///content:// 主文档。
+                    //    因此关闭这三项不影响预览与打开(API 30+ 本就默认关闭),只收窄攻击面。
+                    settings.allowFileAccess = false
+                    settings.allowUniversalAccessFromFileURLs = false
+                    settings.allowContentAccess = false
                     setBackgroundColor(if (Pa.IsDark) 0xFF0B0B0D.toInt() else 0xFFFFFFFF.toInt())
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
                             request: android.webkit.WebResourceRequest,
                         ): Boolean {
+                            val url = request.url.toString()
                             // 【页内动作按钮】二进制提示页把「下载到手机 / 用系统应用打开」
                             // 做成链接,靠这个伪协议回传给原生层执行 —— 否则用户只能看着
                             // 一句"不支持预览"和一个死掉的下载图标。
-                            val url = request.url.toString()
-                            if (!url.startsWith("pa-action://")) return false
-                            when (url.removePrefix("pa-action://")) {
-                                "download" -> {
-                                    if (pcPath.isNotEmpty()) {
-                                        PaDownloader.downloadFromPc(pcPath, pageTitle)
-                                        android.widget.Toast.makeText(
-                                            ctx, "已开始下载到手机", android.widget.Toast.LENGTH_SHORT,
-                                        ).show()
+                            if (url.startsWith("pa-action://")) {
+                                when (url.removePrefix("pa-action://")) {
+                                    "download" -> {
+                                        if (pcPath.isNotEmpty()) {
+                                            PaDownloader.downloadFromPc(pcPath, pageTitle)
+                                            android.widget.Toast.makeText(
+                                                ctx, "已开始下载到手机", android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                    "open" -> {
+                                        PaDownloader.openLocalFile(
+                                            ctx = ctx,
+                                            uri = localUri,
+                                            title = pageTitle,
+                                            onOpenInBrowser = null,
+                                        )
                                     }
                                 }
-                                "open" -> {
-                                    PaDownloader.openLocalFile(
-                                        ctx = ctx,
-                                        uri = localUri,
-                                        title = pageTitle,
-                                        onOpenInBrowser = null,
-                                    )
-                                }
+                                return true
                             }
-                            return true
+                            // WebView 能自己处理的 scheme:放行(返回 false 让 WebView 加载)。
+                            if (WebNavPolicy.isWebScheme(url)) return false
+                            // 【外跳 scheme 绝不崩溃】intent:// / baiduboxapp:// / snssdk1128:// /
+                            // weixin:// 这些 WebView 加载不了;直接 loadUrl 会白屏,直接 startActivity
+                            // 又可能抛 ActivityNotFoundException。这里尝试交给外部 App,
+                            // 成功/失败都给可见反馈,绝不把异常丢给系统。
+                            if (WebNavPolicy.isExternalScheme(url)) {
+                                val opened = runCatching {
+                                    val intent = if (url.startsWith("intent://")) {
+                                        android.content.Intent.parseUri(
+                                            url, android.content.Intent.URI_INTENT_SCHEME,
+                                        )
+                                    } else {
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url),
+                                        )
+                                    }
+                                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    ctx.startActivity(intent)
+                                    true
+                                }.getOrDefault(false)
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    if (opened) "已跳转到外部 App"
+                                    else "该链接需要跳转到外部 App(本机未安装对应应用)",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                                return true
+                            }
+                            return false
                         }
 
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                            // 【安全】按当前来源同步脚本桥:可信(App 预览/本地/私网)才挂,
+                            // 公网站点在内容加载前就把桥卸载,页面 JS 拿不到原生入口。
+                            applyBridgePolicy(view, url)
                             if (isRemote(url)) {
                                 input = url.orEmpty()
                                 // 离开本地渲染页时清掉缓存(切换视图不再错误复用旧内容),
@@ -524,6 +792,8 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         }
 
                         override fun onPageFinished(view: WebView?, url: String?) {
+                            // 兜底再同步一次(某些跳转路径 onPageStarted 的 url 可能为空)
+                            applyBridgePolicy(view, url)
                             if (isRemote(url)) input = url.orEmpty()
                             progress = 1f
                             canGoBack = view?.canGoBack() ?: false
@@ -535,17 +805,28 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                             request: android.webkit.WebResourceRequest?,
                             error: android.webkit.WebResourceError?,
                         ) {
-                            // 只有主文档失败才弹失败页,子资源失败不打断阅读
-                            if (request?.isForMainFrame == true) {
-                                progress = 1f
-                                view?.loadDataWithBaseURL(
-                                    null,
-                                    errorPage(
-                                        request.url?.toString().orEmpty(),
-                                        error?.description?.toString() ?: "无法访问该地址",
-                                    ),
-                                    "text/html", "utf-8", null,
-                                )
+                            // 只有主文档失败才处理,子资源失败不打断阅读
+                            if (request?.isForMainFrame != true) return
+                            progress = 1f
+                            val url = request.url?.toString().orEmpty()
+                            // 【离线优先】同一 URL 命中本地快照就直接渲染,不再白屏等超时。
+                            scope.launch {
+                                val snap = withContext(Dispatchers.IO) { OfflineStore.getUrl(url) }
+                                if (snap != null) {
+                                    renderBytes(
+                                        snap.name.ifBlank { pageTitle.ifBlank { url } },
+                                        snap.bytes, snap.mime,
+                                    )
+                                    android.widget.Toast.makeText(
+                                        ctx, "离线:显示本地网页快照", android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    view?.loadDataWithBaseURL(
+                                        null,
+                                        errorPage(url, error?.description?.toString() ?: "无法访问该地址"),
+                                        "text/html", "utf-8", null,
+                                    )
+                                }
                             }
                         }
 
@@ -576,24 +857,32 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         }
 
                         // HTTPS 证书有问题时,WebView 默认静默取消 → 又是一片白。
-                        // 这里仍然拒绝加载(安全红线不动),但把原因显示出来,
-                        // 否则用户只会觉得"这个浏览器坏了"。
+                        // 【安全收严】只对"明确受信任的本地/自建"场景放行(回环 / 私网 /
+                        // Tailscale 虚拟网内的自签证书,常见于本地开发服务器);公网站点一律
+                        // cancel。绝不 proceed() 所有证书错误 —— 那是中间人攻击的漏洞。
                         @Suppress("DEPRECATION")
                         override fun onReceivedSslError(
                             view: WebView?,
                             handler: android.webkit.SslErrorHandler?,
                             error: android.net.http.SslError?,
                         ) {
-                            handler?.cancel()
-                            progress = 1f
-                            view?.loadDataWithBaseURL(
-                                null,
-                                errorPage(
-                                    error?.url.orEmpty(),
-                                    "HTTPS 证书校验未通过,已阻止加载(不会忽略证书错误)",
-                                ),
-                                "text/html", "utf-8", null,
-                            )
+                            val errorUrl = error?.url.orEmpty()
+                            val host = runCatching { android.net.Uri.parse(errorUrl).host }
+                                .getOrNull().orEmpty()
+                            if (WebNavPolicy.trustedLocalHost(host)) {
+                                handler?.proceed()
+                                android.widget.Toast.makeText(
+                                    ctx, "已信任本地自签证书:$host", android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                handler?.cancel()
+                                progress = 1f
+                                view?.loadDataWithBaseURL(
+                                    null,
+                                    errorPage(errorUrl, "HTTPS 证书校验未通过,已阻止加载(不会忽略证书错误)"),
+                                    "text/html", "utf-8", null,
+                                )
+                            }
                         }
                     }
                     webChromeClient = object : WebChromeClient() {
@@ -604,6 +893,59 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         override fun onReceivedTitle(view: WebView?, title: String?) {
                             if (!title.isNullOrBlank() && title != "about:blank") pageTitle = title
                         }
+
+                        // 【新窗口】站内 target=_blank / window.open 时若这里不处理,点开毫无反应
+                        // (用户会认为"浏览器坏了")。用一个一次性子 WebView 截获目标 URL,
+                        // 再在本 WebView 里加载 —— 这样返回键还能回到上一页。
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: android.os.Message?,
+                        ): Boolean {
+                            val parent = view ?: return false
+                            val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                            val child = WebView(parent.context)
+                            child.webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    v: WebView,
+                                    req: android.webkit.WebResourceRequest,
+                                ): Boolean {
+                                    val target = req.url.toString()
+                                    if (!WebNavPolicy.isWebScheme(target)) {
+                                        // 外跳 scheme:交给外部 App(失败静默不崩)
+                                        runCatching {
+                                            parent.context.startActivity(
+                                                android.content.Intent(
+                                                    android.content.Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(target),
+                                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        }
+                                    } else {
+                                        parent.loadUrl(target)
+                                    }
+                                    v.destroy()
+                                    return true
+                                }
+                            }
+                            transport.webView = child
+                            resultMsg.sendToTarget()
+                            return true
+                        }
+                    }
+                    // 下载:站点触发的下载交给 PaDownloader(http/https 直下,blob/data 走 JS 兜底)
+                    setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                        handleDownload(url, userAgent, contentDisposition, mimeType ?: "")
+                    }
+                    // blob:/data: 兜底通道。**仅当初始页属可信来源时才默认挂载**
+                    // (pc:/content:/本地起始页都是 App 预览,回报 about:blank/data:);
+                    // 若一开场就是公网 URL 则不挂 —— 不存在"先挂上、等 onPageStarted 再摘"的窗口。
+                    // 之后每次页面开始/完成都由 applyBridgePolicy 按来源同步:
+                    // 公网站点在内容加载前即被卸载,页面 JS 拿不到这个原生入口。
+                    val initialRemote = initialUrl.startsWith("http://") || initialUrl.startsWith("https://")
+                    if (!initialRemote) {
+                        addJavascriptInterface(WebDownloadBridge(context), WebDownloadBridge.JS_NAME)
                     }
                     webRef = this
                     when {
@@ -664,27 +1006,7 @@ private fun isRemote(url: String?): Boolean =
     url != null && (url.startsWith("http://") || url.startsWith("https://") ||
         url.startsWith("file:") || url.startsWith("ftp:"))
 
-/** MIME → 后缀:content:// 查不到 DISPLAY_NAME 时用它兜出可判定的文件名。 */
-private fun extForMime(mime: String): String = when {
-    mime.startsWith("text/markdown") -> ".md"
-    mime.startsWith("text/html") -> ".html"
-    mime.startsWith("text/plain") -> ".txt"
-    mime.startsWith("text/csv") -> ".csv"
-    mime.startsWith("image/png") -> ".png"
-    mime.startsWith("image/jpeg") -> ".jpg"
-    mime.startsWith("image/gif") -> ".gif"
-    mime.startsWith("image/webp") -> ".webp"
-    mime.startsWith("application/json") -> ".json"
-    mime.contains("spreadsheetml") -> ".xlsx"
-    mime.contains("wordprocessingml") -> ".docx"
-    mime.contains("presentationml") -> ".pptx"
-    mime == "application/pdf" -> ".pdf"
-    mime.contains("vnd.android.package-archive") -> ".apk"
-    mime.contains("zip") -> ".zip"
-    mime.startsWith("video/") -> ".mp4"
-    mime.startsWith("audio/") -> ".mp3"
-    else -> ""
-}
+// MIME → 后缀的映射已统一到 DocFormatRegistry.extFor(此处原先的私有重复实现已删除)。
 
 /**
  * 剥掉 pc: 地址携带的预览缓存元数据(`?_pas=<size>&_pam=<mtime>`),得到干净路径。
@@ -766,6 +1088,11 @@ private fun errorPage(target: String, reason: String): String {
         <div style="margin-top:14px;color:${p.hint};font-size:12px">
           若这是电脑上的文件,请确认路径存在、且电脑端 agent 正在运行。
         </div>
+        ${if (isPcPreviewUrl(target)) {
+            "<div style=\"margin-top:10px;color:${p.hint};font-size:12px\">" +
+                "如果是电脑上的 dev server:手机和电脑要在同一网络(WiFi / Tailscale)," +
+                "且服务需监听 0.0.0.0(全部网卡)而不是仅 127.0.0.1。</div>"
+        } else ""}
       </div>
     </body>
 """.trimIndent()
@@ -820,4 +1147,56 @@ private fun normalizeUrl(raw: String): String {
     if (t.startsWith("about:") || t.startsWith("data:")) return t
     return if (t.contains('.') && !t.contains(' ')) "https://$t"
     else "https://www.bing.com/search?q=" + java.net.URLEncoder.encode(t, "UTF-8")
+}
+
+/**
+ * dev server 的手机侧加载地址:把端口挂到**当前 daemon 连接地址**的主机部分。
+ *
+ * 【为什么要换主机】daemon 探测的是 127.0.0.1(它自己的回环),手机照抄的话
+ * 127.0.0.1 指向手机本身。dev server 一般监听 0.0.0.0,所以把 daemon 的
+ * 局域网 / Tailscale 地址接上来才打得通。
+ *
+ * 纯函数(单测覆盖 DevServerPreviewUrlTest):
+ *  · "192.168.1.5:7246" + 5173 → "http://192.168.1.5:5173"
+ *  · "127.0.0.1:7246"(USB 反向隧道)→ 原样拼出回环地址(调用方负责提示
+ *    "USB 打不开 dev 端口,需同 WiFi"),拼装与提示分离,本函数保持纯粹;
+ *  · 空串 / 没有冒号的畸形地址 → ""(调用方隐藏动作并提示先连接)。
+ */
+internal fun devServerPreviewUrl(connAddress: String, port: Int): String {
+    val t = connAddress.trim()
+    if (!t.contains(':')) return ""
+    val host = t.substringBeforeLast(':')
+    if (host.isEmpty()) return ""
+    return "http://$host:$port"
+}
+
+/**
+ * 是否"直连电脑 dev server"的地址(私网/回环/Tailscale 的 http)。
+ * 失败页据此追加同网段提示;纯函数,单测覆盖。
+ */
+internal fun isPcPreviewUrl(url: String): Boolean {
+    if (!url.startsWith("http://")) return false
+    val host = url.removePrefix("http://").substringBefore('/').substringBeforeLast(':')
+    return Regex("^(127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.|100\\.)")
+        .containsMatchIn(host)
+}
+
+/**
+ * 让页面用 JS 把 blob:/data: 内容读成 base64 并回传原生(见 [WebDownloadBridge])。
+ * blob: 是浏览器内部 URL,原生 HttpURLConnection 取不到,只能这样"绕一圈"。
+ * url/name/mime 全部走 JSON 引号,避免注入与转义问题。
+ */
+private fun blobFetchJs(url: String, name: String, mime: String): String {
+    val js = WebDownloadBridge.JS_NAME
+    return "(function(){try{" +
+        "var u=${org.json.JSONObject.quote(url)},nm=${org.json.JSONObject.quote(name)}," +
+        "mt=${org.json.JSONObject.quote(mime)};" +
+        "fetch(u).then(function(r){return r.blob();}).then(function(b){" +
+        "var fr=new FileReader();" +
+        "fr.onload=function(){var s=fr.result||'';var i=s.indexOf(',');" +
+        "$js.onData(nm, mt||b.type, i>=0?s.substring(i+1):s);};" +
+        "fr.onerror=function(){$js.onError('读取失败');};" +
+        "fr.readAsDataURL(b);" +
+        "}).catch(function(e){$js.onError(String(e));});" +
+        "}catch(e){$js.onError(String(e));}})();"
 }

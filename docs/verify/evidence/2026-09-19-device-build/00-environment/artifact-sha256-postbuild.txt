@@ -1,0 +1,3 @@
+APK path=G:\项目1\pocketagent\build\app-debug.apk
+size=249693873
+sha256=554c87b1359de44603bf04744a1bfd06a62ef1cb7ea0e3759c75a74bbd16aae5

@@ -75,9 +75,13 @@ message CodexCapability {
   string status = 9;           // hook 的最近运行状态;plugin 的 availability
 }
 
-message ListCodexCapabilitiesResponse { repeated CodexCapability items = 1; }
+message ListCodexCapabilitiesResponse {
+  repeated CodexCapability items = 1;
+  // 非空表示本次读取失败或部分失败;空列表不再被误解为“没有能力”。
+  string error = 2;
+}
 
-message GetCodexSettingsRequest {}
+message GetCodexSettingsRequest { string agent_id = 1; string thread_id = 2; }
 
 message CodexSettings {
   string approval_policy = 1; // untrusted / on-request / never
@@ -103,18 +107,101 @@ message CodexSettings {
   repeated string allowed_web_search_modes = 12;  // 空 = 无限制
   bool managed = 13;                              // 是否处在托管(受策略约束)状态
   string managed_note = 14;                       // 策略来源与影响的人话说明
+
+  // ---- 逐项真实状态(第 2 轮新增,字段号从 15 起,旧字段语义一字未动)----
+  // 【为什么必须逐项回报】"设置页所有开关点了都没用"这个用户反馈的根子,是
+  // 手机端**无法区分**四种截然不同的状态:已生效 / 已保存但没打到 codex /
+  // 当前 codex 版本压根不支持 / 连接失败。以前一律显示"已保存",用户以为生效了。
+  // 现在由 daemon 按真实能力逐项回报,手机端据此如实渲染,不再假装成功。
+  repeated CodexSettingStatus setting_status = 15;
+
+  // ---- 桌面只读回显(新增,字段号从 16 起,旧字段语义一字未动)----
+  // 【与上面 1~15 的分工】上面的值是 daemon 自己落盘/下发的取值;下面三个字段
+  // 回答另一件事:"电脑端 codex 此刻实际生效的是什么"。数据全部来自只读桌面口子
+  // (config/read、modelProvider/capabilities/read、windowsSandbox/readiness,
+  // 见 daemon internal/agent/codex_read.go),daemon 绝不借它们写任何桌面配置。
+  // 读取失败时 desktop_echo_error 说明原因,各值留空 —— "读不到"不与"没有"混淆。
+  CodexDesktopConfigSummary desktop_config_summary = 16; // 电脑端当前真实配置(七项可调项的桌面对照值)
+  CodexProviderCaps provider_caps = 17;                  // provider 级能力声明(图像生成/联网搜索徽标)
+  string sandbox_readiness = 18;                         // Windows 沙箱就绪度:ready / notConfigured / updateRequired
+  string desktop_echo_error = 19;                        // 桌面只读回显失败原因(空 = 读取成功)
+
+  // ---- "应用到所有会话(含已有)"的回执(仅 SetCodexSettings 返回时非零)----
+  // 请求里 apply_to_existing_threads=true 时,daemon 把新值批量写进所有存量
+  // codex 会话的设置快照,这里是实际写到的会话数;GetCodexSettings / 未勾选时为 0。
+  int32 applied_threads = 20;
+  string native_mode = 21;
+  repeated string native_modes = 22;
+  string native_permissions_note = 23;
+}
+
+// CodexDesktopConfigSummary 电脑端 config/read 的归一快照。
+//
+// 只挑与手机设置页七项可调项能对照的值(原始 config 对象里的 Raw 不透传,
+// 避免把 desktop 大对象刷到手机上)。空字段 = 电脑端该项未显式配置
+// (codex 使用内置默认),手机端对该项不显示"电脑端当前"副文案。
+message CodexDesktopConfigSummary {
+  string model = 1;           // 桌面当前模型(账号组限定长 id 已由 daemon 取末段对齐模型列表)
+  string provider = 2;        // 桌面当前 provider id(如 openai)
+  string effort = 3;          // 思考强度(low / medium / high / …)
+  string summary = 4;         // 思考摘要(concise / detailed)
+  string verbosity = 5;       // 回答详略(low / medium / high)
+  string sandbox_mode = 6;    // 沙箱模式(read-only / workspace-write / danger-full-access)
+  string approval_policy = 7; // 审批策略(untrusted / on-request / never;granular 对象形状归一为 "granular")
+}
+
+// CodexProviderCaps modelProvider/capabilities/read 的应答(provider 级能力声明)。
+// 用途:模型页解释"为什么某模型不可用"(如图像生成/联网搜索当前 provider 给不给)。
+message CodexProviderCaps {
+  bool image_generation = 1; // 该 provider 支持图像生成
+  bool web_search = 2;       // 该 provider 支持联网搜索
+  bool namespace_tools = 3;  // 命名空间工具开关(诊断用)
+}
+
+// 单个设置项的真实状态。
+//
+// 【形状为什么定死成 key/state/detail 三条】
+// key 与 CodexSettings 的字段稳定对应(approval_policy / sandbox / model / effort /
+// hide_agent_reasoning / model_verbosity / model_reasoning_summary / disable_paste_burst)。
+// state 用**稳定字符串而不是 enum**:以后加状态(比如"等模型支持")不必动 proto,
+// 手机端遇到不认识的 state 时兜底显示原文而不是崩 —— 与 kind→显示名 同一套扩展纪律。
+// 以后新增设置项:daemon 侧状态表 + 手机端 文案表各加一处,proto 一个字不用改。
+message CodexSettingStatus {
+  string key = 1;    // 与 CodexSettings 字段稳定对应(见上)
+  // state 取值(稳定字符串,加状态不必动本文件):
+  //   applied / saved_not_applied / unsupported / failed / follow_desktop
+  string state = 2;
+  string detail = 3; // 人话原因,如"当前 codex 版本无 disable_paste_burst 这个配置键"
 }
 
 message SetCodexSettingsRequest {
-  string approval_policy = 1;
-  string sandbox = 2;
-  string model = 3;
-  string effort = 4;
-  // 空 = 不改动该项(与既有 4 个字段同一套"非空才覆盖"语义)
-  bool hide_agent_reasoning = 5;
-  string model_verbosity = 6;
-  string model_reasoning_summary = 7;
-  bool disable_paste_burst = 8;
+  // 【presence 语义 —— 8 个字段全部 optional,这是一条统一纪律】
+  //   present → 应用该值(空串是有意义的取值:跟随桌面 / 默认)
+  //   absent  → 不改该项
+  //
+  // 为什么不能用"零值 = 不改":字符串字段有一模一样的 bug ——
+  //   - 默认模型的「跟随桌面配置」写入的是 model=""，而 daemon 侧 `if req.Model != ""`
+  //     会直接跳过 → 用户**永远回不到"跟随桌面"**;
+  //   - 思考强度、审批策略、沙箱的"跟随桌面"取值同样是空串。
+  // bool 更是如此:普通 bool 的 false 既是"关掉"又是"没传"，用户**无法把开关关回去**。
+  // 客户端 writeCodex 每次从完整状态出发、8 个字段一律显式 set(含 setModel("")),
+  // 于是行为完全确定,旧的"零值即不改"歧义彻底消失。
+  optional string approval_policy = 1;
+  optional string sandbox = 2;
+  optional string model = 3;
+  optional string effort = 4;
+  optional bool hide_agent_reasoning = 5;
+  optional string model_verbosity = 6;
+  optional string model_reasoning_summary = 7;
+  optional bool disable_paste_burst = 8;
+  // "应用到所有会话(含已有)":true 时,本次合并后的新值除了走"仅新建"的默认
+  // 语义外,还会被 daemon 批量写进**所有存量 codex 会话**的设置快照
+  // (store.Thread.SettingsSnapshot),让已有会话的后续轮次立刻按新值装配。
+  // false/缺省 = 保持"仅新建对话生效"的快照语义(默认行为不变)。
+  optional bool apply_to_existing_threads = 9;
+  string agent_id = 10;
+  optional string native_mode = 11;
+  string thread_id = 12;
 }
 
 message ListMcpServersRequest {}
@@ -137,10 +224,21 @@ message McpServerStatus {
 
 message ListMcpServersResponse {
   repeated McpServerStatus servers = 1;
+  // 非空表示本次读取失败;与确实没有 MCP 服务器区分开。
+  string error = 2;
 }
 
-message ListModelsRequest {}
-message ListModelsResponse { repeated ModelInfo models = 1; }
+message ListModelsRequest {
+  string agent_id = 1;
+  bool refresh = 2;
+  string thread_id = 3;
+}
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+  string current_model_id = 2;
+  optional string current_effort = 3;
+  string state_error = 4; // metadata unavailable; never a fabricated unsupported capability
+}
 
 message ModelInfo {
   string id = 1;              // "anthropic/claude-sonnet-4" 风格
@@ -150,6 +248,12 @@ message ModelInfo {
   bool supports_thinking = 5;
   bool supports_images = 6;
   bool available = 7;         // key 已配置且连通
+  // ---- 动态思考档位(只增,字段号顺延 8)----
+  // 该模型/agent 实际可用的思考强度取值,daemon 从 provider 的动态档位能力填充
+  // (pi:get_available_thinking_levels,随模型变化 —— 实测 glm-5.3 只有
+  // low/high/max;会话没挂载时回 pi 全集兜底)。codex/zcode 无动态档位 →
+  // 留空 = 手机端用内置默认档(low/medium/high/xhigh)。
+  repeated string available_efforts = 8;
 }
 
 message SetDefaultModelRequest { string model_id = 1; }

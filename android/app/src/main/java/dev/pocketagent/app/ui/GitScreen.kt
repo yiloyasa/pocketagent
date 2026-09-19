@@ -749,9 +749,33 @@ private fun GitTab(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 /** 变更行:路径 + 暂存/工作区状态码(带颜色,和 git status 的语感一致)。 */
+/** git porcelain 状态字母 → 中文标签(纯函数,可单测);空串 = 无改动。 */
+internal fun gitStatusLabel(letter: String): String = when (letter) {
+    "" -> "-"
+    "M" -> "修改"
+    "A" -> "新增"
+    "D" -> "删除"
+    "R" -> "改名"
+    "C" -> "复制"
+    "U" -> "冲突"
+    "T" -> "类型变化"
+    "?" -> "未跟踪"
+    else -> letter // 未知状态原样显示,不吞
+}
+
+/** 是否未跟踪文件(porcelain `??`:两列都是 "?")。 */
+internal fun isUntrackedChange(staged: String, worktree: String): Boolean =
+    staged == "?" && worktree == "?"
+
 @Composable
 private fun ChangeRow(c: GitFileChange) {
     val staged = c.stagedStatus.isNotEmpty() && c.worktreeStatus.isEmpty()
+    val untracked = isUntrackedChange(c.stagedStatus, c.worktreeStatus)
+    // 路径拆两段:文件名必须**永远完整可读**(旧实现整串末尾省略,
+    // 长路径下 android/app/.../Foo.kt 的文件名整个被切掉,只剩目录前缀);
+    // 目录段单独一行小字,末尾省略也不影响辨认。
+    val fileName = c.path.substringAfterLast('/')
+    val dirPart = c.path.substringBeforeLast('/', "")
     Column(
         Modifier
             .fillMaxWidth()
@@ -762,18 +786,23 @@ private fun ChangeRow(c: GitFileChange) {
             Box(
                 Modifier
                     .size(20.dp)
-                    .background(if (staged) Pa.Accent.copy(alpha = 0.18f) else Pa.Hover, RoundedCornerShape(6.dp)),
+                    .background(
+                        if (staged) Pa.Accent.copy(alpha = 0.18f) else Pa.Hover,
+                        RoundedCornerShape(6.dp),
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    (c.worktreeStatus.ifEmpty { c.stagedStatus }).take(2).ifEmpty { "?" },
+                    // 未跟踪显示"新"而不是"?"(用户反馈:?? 看不懂);
+                    // 其余保持工作区优先的单字母 + 中文在下方说明行里。
+                    if (untracked) "新" else (c.worktreeStatus.ifEmpty { c.stagedStatus }).take(2).ifEmpty { "?" },
                     fontSize = 10.sp,
                     color = if (staged) Pa.Accent else Pa.TextSecondary,
                 )
             }
             Spacer(Modifier.width(9.dp))
             Text(
-                c.path,
+                fileName,
                 Modifier.weight(1f),
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
@@ -785,8 +814,24 @@ private fun ChangeRow(c: GitFileChange) {
                 Text("已暂存", fontSize = 10.sp, color = Pa.Accent)
             }
         }
+        if (dirPart.isNotEmpty()) {
+            Text(
+                dirPart,
+                Modifier.padding(top = 2.dp, start = 29.dp),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Pa.TextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         Text(
-            "暂存:${c.stagedStatus.ifEmpty { "-" }} · 工作区:${c.worktreeStatus.ifEmpty { "-" }} · 左滑可暂存/丢弃",
+            // 状态字母翻成中文:暂存:M/工作区:? 这种写法就是把 git 内部表示直接糊用户脸上。
+            if (untracked) {
+                "未跟踪 · 左滑可暂存/丢弃"
+            } else {
+                "暂存:${gitStatusLabel(c.stagedStatus)} · 工作区:${gitStatusLabel(c.worktreeStatus)} · 左滑可暂存/丢弃"
+            },
             Modifier.padding(top = 3.dp, start = 29.dp),
             fontSize = 10.sp,
             color = Pa.TextTertiary,

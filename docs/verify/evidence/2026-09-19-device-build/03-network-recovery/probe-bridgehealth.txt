@@ -1,0 +1,6 @@
+# bridgehealth
+# 连接与桥接健康
+# rc=0 耗时=0.35s @ 22:44:41
+
+HOST version=0.2.2 tls_pin=verified lan=10.15.50.160 tailscale=100.92.193.109 auth_required=false
+CAPABILITIES [agent:codex agent:echo agent:pi:0.85.1 agent:zcode agent_settings:codex agent_settings:pi agent_settings:zcode text_generation:codex text_generation:pi text_generation:zcode terminal fs git agent event_sequence]

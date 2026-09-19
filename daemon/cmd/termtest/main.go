@@ -2,19 +2,34 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
 func main() {
-	conn, err := grpc.NewClient("127.0.0.1:7262", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 特例:termtest 打的是手工起的测试 daemon(7262,通常 -plaintext 明文),
+	// 默认保持明文兼容旧行为;要连 TLS 端口时显式加 -tls。
+	addr := flag.String("addr", "127.0.0.1:7262", "daemon 地址(ip:port)")
+	tlsMode := flag.Bool("tls", false, "连 TLS(自签证书,诊断用跳过校验;指纹核对走 tlsprobe)")
+	flag.Parse()
+
+	var creds credentials.TransportCredentials
+	if *tlsMode {
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // 探针仅本机诊断用
+	} else {
+		creds = insecure.NewCredentials()
+	}
+	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(creds))
 	must(err)
 	defer conn.Close()
 

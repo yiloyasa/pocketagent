@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import android.widget.Toast
+import dev.pocketagent.app.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,6 +66,7 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.TaskCenter
+import dev.pocketagent.app.ui.component.SenseVoiceModelManager
 import dev.pocketagent.app.ui.component.fileKindOf
 import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.component.parseHumanSize
@@ -72,9 +75,13 @@ import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
 import dev.pocketagent.app.ui.theme.AgentTheme
 import dev.pocketagent.app.ui.theme.Pa
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import pocketagent.v1.CodexCapability
 import pocketagent.v1.CodexSettings
@@ -91,9 +98,15 @@ import pocketagent.v1.ModelInfo
 import pocketagent.v1.RateLimitWindow
 import pocketagent.v1.SetCodexSettingsRequest
 
+// 非 codex 的可切换 agent 清单("切换 Agent"列表 = codex + 这一份)。
+// 【图 7 实锤的修复】此前这份硬编码列表漏了 zcode —— 主页网格、品牌图标表
+// (AGENT_BRAND_ICON)、daemon 的 provider 注册表里 zcode 都在,唯独设置页
+// "切换 Agent"从这份清单构建,于是用户看到的列表只有
+// Codex/OpenCode/Claude/Pi/Hermes,ZCode 永远切不到。补上后与主页同源同序。
 private val OTHER_AGENT_OPTIONS = listOf(
+    "zcode" to "ZCode",
     "opencode" to "OpenCode",
-    "claude" to "Claude",
+    "claude-code" to "Claude",
     "pi" to "Pi",
     "hermes" to "Hermes",
 )
@@ -285,22 +298,13 @@ private fun ManagedPolicyNote(text: String) {
 }
 
 /**
- * agent id → 品牌图标:与主页网格用的是**同一组 drawable**,
- * 不再用 cpu 线性图标占位(用户反馈:设置里的 Agent 图标和主页对不上)。
- * 主页叫 claude-code,这里历史上叫 claude,两个 id 都映射到同一张图。
+ * agent id → 品牌图标。
+ *
+ * 【为什么只是转发】映射表已收敛到 AgentBrand.kt 的 [AGENT_BRAND_ICON] 唯一一份。
+ * 这里以前另有一份 private map,与主页的 id 写法不一致,正是
+ * "设置里的 Agent 图标和主页对不上"的根因。
  */
-private val AGENT_ICON = mapOf(
-    "codex" to R.drawable.agent_codex,
-    "opencode" to R.drawable.agent_opencode,
-    "claude" to R.drawable.agent_claudecode,
-    "claude-code" to R.drawable.agent_claudecode,
-    "pi" to R.drawable.agent_pi,
-    "hermes" to R.drawable.agent_hermes,
-    "dsh" to R.drawable.agent_dsh,
-    "zcode" to R.drawable.agent_zcode,
-)
-
-private fun agentIcon(id: String): Int? = AGENT_ICON[id]
+private fun agentIcon(id: String): Int? = agentBrandIcon(id)
 
 private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
 
@@ -329,9 +333,12 @@ fun SettingsScreen(
     val ctx = LocalContext.current
     var addr by remember { mutableStateOf(AgentConnection.configuredAddress()) }
     var token by remember { mutableStateOf(AgentConnection.token) }
-    var settings by remember { mutableStateOf<CodexSettings?>(null) }
+    var settings by remember(AgentConnection.selectedAgent) { mutableStateOf<CodexSettings?>(null) }
+    val writeMutex = remember { Mutex() }
+    var writeVersion by remember { mutableStateOf(0) }
     var mcpList by remember { mutableStateOf(listOf<McpServerStatus>()) }
     var mcpLoading by remember { mutableStateOf(true) }
+    var mcpError by remember { mutableStateOf<String?>(null) }
     // 用量/限流:以前只把 account/rateLimits/updated 当告警转发,没有可查看的面板,
     // 用户想知道"还有没有额度"只能回到电脑上。
     var codexUsage by remember { mutableStateOf<CodexUsage?>(null) }
@@ -351,24 +358,30 @@ fun SettingsScreen(
     var connectionSaving by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
     var settingsFeedback by remember { mutableStateOf<String?>(null) }
+    // 【应用范围】七项调整默认只对**新建**会话生效(daemon 侧快照语义:已有会话
+    // 保持创建那一刻的设置)。用户质疑"改了是否真生效"的根源就是这条默认规则
+    // 与"改了立刻全生效"的预期冲突 —— 这里提供一个显式开关:开启后每次保存
+    // 都会附带"应用到所有会话(含已有)",daemon 把新值批量写进存量 codex 会话的
+    // 设置快照。默认关 = 保持快照语义,不静默改老会话。
+    var applyToExistingThreads by remember { mutableStateOf(false) }
     // 默认模型选择器(完整选择弹窗,主按钮触发)
     var showModelPicker by remember { mutableStateOf(false) }
     var modelChoices by remember { mutableStateOf(listOf<ModelInfo>()) }
+    var modelError by remember { mutableStateOf<String?>(null) }
+    var hostError by remember { mutableStateOf<String?>(null) }
     val runningAgent = AgentConnection.selectedAgent
     val connectionError = AgentConnection.connError.collectAsState().value
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
 
-    // 模型候选(默认模型选择器用)
-    LaunchedEffect(connectionEpoch) {
-        try {
-            withContext(Dispatchers.IO) {
-                modelChoices = AgentConnection.modelService()
-                    .listModels(ListModelsRequest.newBuilder().build())
-                    .modelsList
-            }
-        } catch (_: Exception) {
-            // 连不上时保持为空,选择器会给出提示
-        }
+    /**
+     * 逐项真实状态:key → state。
+     *
+     * 【为什么必须有它】"设置页所有开关点了都没用"的根子,是手机端**无法区分**
+     * 已生效 / 未生效 / 不支持 / 连接失败 —— 以前一律显示"已保存"。现在 daemon 按
+     * 真实能力逐项回报(setting_status),这里原样取用,由 [settingStateInfo] 映射成文案。
+     */
+    val settingStates: Map<String, String> = remember(settings) {
+        settings?.settingStatusList.orEmpty().associate { it.key to it.state }
     }
 
     fun showSettingsFeedback(message: String) {
@@ -382,17 +395,124 @@ fun SettingsScreen(
         }
     }
 
-    LaunchedEffect(connectionEpoch) {
+    /** 只重新读取设置,不提交当前值。顶部“重试”必须走这条读路径。 */
+    fun refreshCodexSettings(showFeedback: Boolean = false) {
+        scope.launch {
+            try {
+                val refreshed = withContext(Dispatchers.IO) {
+                    AgentConnection.modelService()
+                        .getCodexSettings(GetCodexSettingsRequest.newBuilder().setAgentId(runningAgent).build())
+                }
+                settings = refreshed
+                val refreshedModels = withContext(Dispatchers.IO) {
+                    AgentConnection.modelServiceSlow().listModels(ListModelsRequest.newBuilder().setAgentId(runningAgent).setRefresh(true).build()).modelsList
+                }
+                modelChoices = modelChoices.filter { it.provider != runningAgent } + refreshedModels
+                settingsError = null
+                AgentConnection.showThinking = !refreshed.hideAgentReasoning
+                if (showFeedback) showSettingsFeedback("已重新读取")
+            } catch (e: Exception) {
+                settingsError = "无法加载 Codex 设置：${e.message ?: "连接失败"}"
+                if (showFeedback) showSettingsFeedback("读取失败")
+            }
+        }
+    }
+
+    LaunchedEffect(connectionEpoch, runningAgent) {
+        mcpLoading = true
+        capabilitiesLoading = true
+        usageLoading = true
+        mcpError = null
+        capabilitiesError = null
         try {
             withContext(Dispatchers.IO) {
                 settings = AgentConnection.modelService()
-                    .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
-                host = AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
+                    .getCodexSettings(GetCodexSettingsRequest.newBuilder().setAgentId(runningAgent).build())
+            }
+            // 【两个"隐藏思考"开关的权威对齐】daemon 的 hide_agent_reasoning 决定
+            // 是否推送思考事件;客户端的 showThinking 决定是否渲染思考卡。
+            // 进程重启后本地开关可能与 daemon 漂移(用户反馈:关了隐藏仍看不到思考),
+            // 每次加载设置都以 daemon 为权威校准一次。
+            settings?.let {
+                AgentConnection.showThinking = !it.hideAgentReasoning
+                AgentConnection.saveAgentDefaults(runningAgent, it.model, it.effort)
             }
         } catch (e: Exception) {
             settingsError = "无法加载 Codex 设置：${e.message ?: "连接失败"}"
         }
-        // 三个面板依次拉取,但**每个面板有自己的 loading 标志**。
+        // 账户、模型、MCP、能力、用量各自执行;一个通道失败不会取消兄弟通道。
+        supervisorScope {
+            async {
+                try {
+                    host = withContext(Dispatchers.IO) {
+                        AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
+                    }
+                    hostError = null
+                } catch (e: Exception) {
+                    hostError = e.message ?: "连接失败"
+                }
+            }
+            async {
+                try {
+                    modelChoices = withContext(Dispatchers.IO) {
+                        AgentConnection.modelServiceSlow()
+                            .listModels(ListModelsRequest.newBuilder().build())
+                            .modelsList
+                    }
+                    modelError = null
+                } catch (e: Exception) {
+                    modelError = e.message ?: "连接失败"
+                }
+            }
+            async {
+                try {
+                    val response = withContext(Dispatchers.IO) {
+                        AgentConnection.modelServiceSlow()
+                            .listMcpServers(ListMcpServersRequest.newBuilder().build())
+                    }
+                    if (response.error.isNotBlank()) {
+                        mcpList = emptyList()
+                        mcpError = response.error
+                    } else {
+                        mcpList = response.serversList
+                        mcpError = null
+                    }
+                } catch (e: Exception) {
+                    mcpError = e.message ?: "连接失败"
+                } finally {
+                    mcpLoading = false
+                }
+            }
+            async {
+                try {
+                    val response = withContext(Dispatchers.IO) {
+                        AgentConnection.modelServiceSlow()
+                            .listCodexCapabilities(ListCodexCapabilitiesRequest.newBuilder().build())
+                    }
+                    capabilities = response.itemsList
+                    capabilitiesError = response.error.takeIf { it.isNotBlank() }
+                } catch (e: Exception) {
+                    capabilitiesError = e.message ?: "连接失败"
+                } finally {
+                    capabilitiesLoading = false
+                }
+            }
+            async {
+                try {
+                    codexUsage = withContext(Dispatchers.IO) {
+                        AgentConnection.modelServiceSlow()
+                            .getCodexUsage(GetCodexUsageRequest.newBuilder().build())
+                    }
+                } catch (e: Exception) {
+                    codexUsage = CodexUsage.newBuilder()
+                        .setError(e.message ?: "连接失败")
+                        .build()
+                } finally {
+                    usageLoading = false
+                }
+            }
+        }
+        /* 三个面板原本在这里串行读取;现在由 supervisorScope 按通道并发执行。
         //
         // 【为什么不是并发】试过并发,结果三个调用一起失败:
         // UNAVAILABLE: Channel shutdownNow invoked。原因是自动重连探活会在
@@ -407,44 +527,7 @@ fun SettingsScreen(
         // 而那个标志只代表"设置本体"读完了 —— 于是"还在读取"会被显示成
         // "未获取到 MCP 列表" / "未报告任何技能",用户据此以为 MCP 没配、
         // 技能没装,而真相只是还没回来。
-        try {
-            mcpList = withContext(Dispatchers.IO) {
-                AgentConnection.modelServiceSlow()
-                    .listMcpServers(ListMcpServersRequest.newBuilder().build())
-                    .serversList
-            }
-        } catch (e: Exception) {
-            if (settingsError == null) settingsError = "无法加载 MCP 列表：${e.message ?: "连接失败"}"
-        } finally {
-            mcpLoading = false
-        }
-        try {
-            capabilities = withContext(Dispatchers.IO) {
-                AgentConnection.modelServiceSlow()
-                    .listCodexCapabilities(ListCodexCapabilitiesRequest.newBuilder().build())
-                    .itemsList
-            }
-        } catch (e: Exception) {
-            // 不抢占 settingsError(它属于设置本体),但要留下自己的原因,
-            // 供面板区分"读不到"和"确实没有"。
-            capabilitiesError = e.message ?: "连接失败"
-        } finally {
-            capabilitiesLoading = false
-        }
-        // 用量:读不到时 daemon 会把原因放在 usage.error 里带回来,这里不把它当异常 ——
-        // "读不到"本身就是要展示给用户的信息(未登录 / 地区不支持 / 网络)。
-        try {
-            codexUsage = withContext(Dispatchers.IO) {
-                AgentConnection.modelServiceSlow()
-                    .getCodexUsage(GetCodexUsageRequest.newBuilder().build())
-            }
-        } catch (e: Exception) {
-            codexUsage = CodexUsage.newBuilder()
-                .setError(e.message ?: "连接失败")
-                .build()
-        } finally {
-            usageLoading = false
-        }
+        读取失败只更新对应通道的 error,不写 settingsError。*/
     }
 
     /**
@@ -465,6 +548,9 @@ fun SettingsScreen(
         reasoningSummary: String? = null,
         pasteBurst: Boolean? = null,
     ) {
+        val version = ++writeVersion
+        val targetAgent = if (hideReasoning != null) "codex" else runningAgent
+        val displayAgent = runningAgent
         val previous = settings ?: CodexSettings.getDefaultInstance()
         val optimistic = previous.toBuilder()
         approval?.let { optimistic.setApprovalPolicy(it) }
@@ -482,25 +568,53 @@ fun SettingsScreen(
         // 但侧边栏底部、会话页模型条读的是 AgentConnection.selectedModel
         // —— 两个存储原本互不通信,导致"设置选了 DeepSeek、侧栏还显示跟随桌面配置"。
         // 这里把最终值同步到本地一份,新会话按它初始化。
-        model?.let { AgentConnection.setGlobalModel(it) }
         showSettingsFeedback("保存中…")
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    settings = AgentConnection.modelService().setCodexSettings(
-                        SetCodexSettingsRequest.newBuilder()
-                            .setApprovalPolicy(next.approvalPolicy)
-                            .setSandbox(next.sandbox)
-                            .setModel(next.model)
-                            .setEffort(next.effort)
-                            .setHideAgentReasoning(next.hideAgentReasoning)
-                            .setModelVerbosity(next.modelVerbosity)
-                            .setModelReasoningSummary(next.modelReasoningSummary)
-                            .setDisablePasteBurst(next.disablePasteBurst)
+                val returned = writeMutex.withLock { withContext(Dispatchers.IO) {
+                    AgentConnection.modelService().setCodexSettings(
+                        SetCodexSettingsRequest.newBuilder().apply {
+                            setAgentId(targetAgent)
+                            approval?.let { setApprovalPolicy(it) }
+                            sandbox?.let { setSandbox(it) }
+                            model?.let { setModel(it) }
+                            effort?.let { setEffort(it) }
+                            hideReasoning?.let { setHideAgentReasoning(it) }
+                            verbosity?.let { setModelVerbosity(it) }
+                            reasoningSummary?.let { setModelReasoningSummary(it) }
+                            pasteBurst?.let { setDisablePasteBurst(it) }
+                            setApplyToExistingThreads(applyToExistingThreads)
+                        }
                             .build())
+                } }
+                if (version != writeVersion) return@launch
+                if (AgentConnection.selectedAgent == displayAgent) {
+                    settings = if (targetAgent == displayAgent) returned
+                        else previous.toBuilder().setHideAgentReasoning(returned.hideAgentReasoning).build()
                 }
-                showSettingsFeedback("已保存")
+                if (hideReasoning == null) AgentConnection.saveAgentDefaults(targetAgent, returned.model, returned.effort)
+                // 【诚实反馈】daemon 逐项回报真实状态:有 failed / saved_not_applied 时
+                // 就别再说"已保存"(那会被理解成"已生效")。真问题由顶部横幅+逐项小字呈现。
+                // 勾了"应用到所有会话"时,daemon 还会回执实际写到的存量会话数,
+                // 按 counts 如实说"应用到 N 个",不把两件事混成一句含糊的"已保存"。
+                val states = returned.settingStatusList.map { it.state }
+                val feedback = when {
+                    states.any { it == "failed" } -> "已保存,但应用失败"
+                    states.any { it == "saved_not_applied" } -> "已保存,尚未生效"
+                    applyToExistingThreads && returned.appliedThreads > 0 ->
+                        "已保存,并应用到 ${returned.appliedThreads} 个已有会话"
+                    applyToExistingThreads -> "已保存(没有需要更新的已有会话)"
+                    else -> "已保存"
+                }
+                showSettingsFeedback(feedback)
+                // 【两个"隐藏思考"开关的联动】daemon 侧 hide_agent_reasoning=true 会让它
+                // **不再推送**思考事件;而客户端还有一个纯显示开关 AgentConnection.showThinking
+                // (ChatScreen 用它决定要不要渲染思考卡)。两者叠加会出现"点了隐藏推理、
+                // 可客户端还开着"的矛盾状态 —— 这里以 daemon 侧为权威,把它同步一致。
+                hideReasoning?.let { AgentConnection.showThinking = !it }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                if (version != writeVersion) return@launch
                 settings = previous
                 settingsError = "设置保存失败：${e.message ?: "连接失败"}"
                 showSettingsFeedback("保存失败")
@@ -578,9 +692,21 @@ fun SettingsScreen(
     // ---------------- 二级页路由(不引入导航组件,设置页自洽) ----------------
     var subPage by remember { mutableStateOf<String?>(if (openUserData) "userdata" else null) }
 
-    // 返回层级:二级页 → 一级页;一级页 → 退出设置(此前物理返回直接退出,层级断裂)
+    // 二级页"只记一层"的返回目标:记下该二级页是被哪一层打开的(本题只需一层,不引入完整
+    // 导航栈)。从首页进入的二级页保持 null,行为不变;项 3a 的"查看全部技能与插件"由
+    // Agent 与模型页打开时置为 "agent",返回才能回到 Agent 与模型页而非设置首页。
+    var subPageReturn by remember { mutableStateOf<String?>(null) }
+
+    // 从二级页返回:优先回到"打开它的那一层",否则回一级页。物理返回与二级页顶部返回箭头
+    // 共用同一逻辑,避免两条返回路径行为不一致。
+    val backFromSubPage: () -> Unit = {
+        if (subPageReturn != null) { subPage = subPageReturn; subPageReturn = null }
+        else subPage = null
+    }
+
+    // 返回层级:二级页 →(打开它的那一层)→ 一级页 → 退出设置(此前物理返回直接退出,层级断裂)
     androidx.activity.compose.BackHandler(enabled = true) {
-        if (subPage != null) subPage = null else onBack()
+        if (subPage != null) backFromSubPage() else onBack()
     }
 
     if (subPage == "userdata") {
@@ -600,8 +726,22 @@ fun SettingsScreen(
         )
         return
     }
+    if (subPage == "daemon") {
+        DaemonPage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) }, writer = codexWriter, models = modelChoices, capabilities = host?.capabilitiesList.orEmpty())
+        return
+    }
     if (subPage == "appearance") {
         AppearancePage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) })
+        return
+    }
+    if (subPage == "capabilities") {
+        // 项 3a:技能/插件统一到**一个**二级页(不再每个 kind 一个"展开更多"弹窗)。
+        CapabilitiesPage(
+            onBack = backFromSubPage,
+            capabilities = capabilities,
+            loading = capabilitiesLoading,
+            error = capabilitiesError,
+        )
         return
     }
     if (subPage == "agent") {
@@ -612,6 +752,7 @@ fun SettingsScreen(
             modelChoices = modelChoices,
             mcpList = mcpList,
             mcpLoading = mcpLoading,
+            mcpError = mcpError,
             codexUsage = codexUsage,
             usageLoading = usageLoading,
             capabilities = capabilities,
@@ -619,9 +760,15 @@ fun SettingsScreen(
             capabilitiesError = capabilitiesError,
             host = host,
             writeCodex = codexWriter,
+            settingStates = settingStates,
+            applyToExistingThreads = applyToExistingThreads,
+            onToggleApplyToAll = { applyToExistingThreads = it },
+            onRetrySettings = { refreshCodexSettings(showFeedback = true) },
             onFeedback = { showSettingsFeedback(it) },
             onShowModelPicker = { showModelPicker = true },
             onShowApprovalPreview = { showApprovalPreview = true },
+            // 打开二级页时记下返回目标("agent"),返回才会回到本页而非设置首页。
+            onOpenCapabilities = { subPageReturn = "agent"; subPage = "capabilities" },
         )
         // 【必须在 return 之前渲染】AgentPage 是二级页,上面 return 之后下面的
         // 一级页渲染点永远不会执行 —— 预览按钮点了没反应/要退出二级页才冒出来的根因。
@@ -630,8 +777,11 @@ fun SettingsScreen(
         }
         if (showModelPicker) {
             ModelPickerDialog(
-                models = modelChoices,
+                // 只列 codex 自己的模型:"默认模型"是 codex 的桌面默认值,
+                // pi/zcode 的模型混进来会让人误选别的 agent 的模型(见模型与思考区注释)。
+                models = modelChoices.filter { it.provider == runningAgent },
                 selected = settings?.model.orEmpty(),
+                agentId = runningAgent,
                 onPick = {
                     writeCodex(model = it)
                     showModelPicker = false
@@ -714,7 +864,7 @@ fun SettingsScreen(
                             fontSize = 12.sp,
                             color = when {
                                 message.contains("失败") -> Pa.RedText
-                                message.contains("保存中") -> Pa.Accent
+                                message.contains("保存中") || message.contains("未生效") -> Pa.Accent
                                 else -> Pa.GreenText
                             },
                         )
@@ -792,6 +942,8 @@ fun SettingsScreen(
                             divider = true,
                             onClick = { subPage = "appearance" },
                         )
+                        SettingRow(title = "Daemon 桥接与输入", desc = "连接策略 · 全局对话显示 · 语音 · 实验功能",
+                            icon = R.drawable.ic_lucide_server, chevron = true, divider = true, onClick = { subPage = "daemon" })
                         SettingRow(
                             title = "用户数据管理",
                             desc = "连接 · 下载内容",
@@ -839,7 +991,7 @@ fun SettingsScreen(
                         SettingRow(
                             title = "版本",
                             icon = R.drawable.ic_lucide_info,
-                            value = "v0.1.0",
+                            value = "v${BuildConfig.VERSION_NAME}",
                             divider = true,
                         )
                         SettingRow(
@@ -860,8 +1012,10 @@ fun SettingsScreen(
     // 默认模型选择弹窗(完整选择器,由"默认模型"SplitButton 主按钮触发)
     if (showModelPicker) {
         ModelPickerDialog(
-            models = modelChoices,
+            // 只列 codex 自己的模型(与上方"默认模型"候选同一套收窄,理由同)。
+            models = modelChoices.filter { it.provider == runningAgent },
             selected = settings?.model.orEmpty(),
+            agentId = runningAgent,
             onPick = {
                 writeCodex(model = it)
                 showModelPicker = false
@@ -886,18 +1040,26 @@ private fun GroupLabel(icon: Int, title: String) {
         Spacer(Modifier.width(7.dp))
         Text(
             title,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             color = Pa.TextSecondary,
             fontWeight = FontWeight.SemiBold,
         )
     }
 }
 
-/** 二级页骨架:返回 + 标题 + 可滚动内容。 */
+/**
+ * 二级页骨架:返回 + 标题 + 内容。
+ *
+ * [scrollable] = true(默认):外层 Column 提供 verticalScroll,内容用普通 Column 堆。
+ * [scrollable] = false:**内容自己负责滚动**(内容内含 LazyColumn)。
+ * 【为什么需要这个开关】LazyColumn 套在 verticalScroll 的 Column 里会因为
+ * "无限高度"直接崩 —— 技能与插件页要按分组懒加载(可能上百条),必须走 LazyColumn。
+ */
 @Composable
 private fun SubPageScaffold(
     title: String,
     onBack: () -> Unit,
+    scrollable: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     Column(Modifier.fillMaxSize().background(Pa.Bg)) {
@@ -912,15 +1074,26 @@ private fun SubPageScaffold(
             Spacer(Modifier.width(10.dp))
             Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Pa.TextPrimary)
         }
-        Column(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            content = content,
-        )
+        if (scrollable) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                content = content,
+            )
+        } else {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                content = content,
+            )
+        }
     }
 }
 
@@ -1006,57 +1179,6 @@ private fun AppearancePage(
             Spacer(Modifier.height(6.dp))
         }
 
-        SectionBlock(icon = R.drawable.ic_lucide_brain, title = "对话内容") {
-            Spacer(Modifier.height(10.dp))
-            // 显示思考过程(展示/隐藏)
-            SplitButton(
-                label = "显示思考过程",
-                mainLabel = if (AgentConnection.showThinking) "展示" else "隐藏",
-                onMainClick = {
-                    AgentConnection.showThinking = !AgentConnection.showThinking
-                    onFeedback(
-                        if (AgentConnection.showThinking) "将流式显示思考过程" else "将只显示对话结果",
-                    )
-                },
-                options = listOf(
-                    SplitOption("展示", selected = AgentConnection.showThinking) {
-                        AgentConnection.showThinking = true
-                        onFeedback("将流式显示思考过程")
-                    },
-                    SplitOption("隐藏", selected = !AgentConnection.showThinking) {
-                        AgentConnection.showThinking = false
-                        onFeedback("将只显示对话结果")
-                    },
-                ),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            // 工具详情(折叠/展开)
-            SplitButton(
-                label = "工具详情",
-                mainLabel = if (AgentConnection.toolDetailsExpanded) "展开" else "折叠",
-                onMainClick = {
-                    AgentConnection.toolDetailsExpanded = !AgentConnection.toolDetailsExpanded
-                    onFeedback("工具详情设置已保存")
-                },
-                options = listOf(
-                    SplitOption(
-                        "折叠", selected = !AgentConnection.toolDetailsExpanded,
-                    ) {
-                        AgentConnection.toolDetailsExpanded = false
-                        onFeedback("工具详情设置已保存")
-                    },
-                    SplitOption(
-                        "展开", selected = AgentConnection.toolDetailsExpanded,
-                    ) {
-                        AgentConnection.toolDetailsExpanded = true
-                        onFeedback("工具详情设置已保存")
-                    },
-                ),
-            )
-            Spacer(Modifier.height(6.dp))
-        }
-
         SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "显示模式") {
             Spacer(Modifier.height(10.dp))
             val modeOptions = listOf(
@@ -1090,7 +1212,156 @@ private fun AppearancePage(
             )
             Spacer(Modifier.height(6.dp))
         }
+
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+/**
+ * 一条能力(skill / hook / plugin)的展示行。
+ *
+ * 【description 优先级】disabledReason(为什么用不了)→ description → 来源 xxx。
+ * enabled=false 却不说明原因时,用户只会觉得"我装的技能没生效",所以在右侧
+ * 额外标一个"已停用"。三项都空就整行留白,不硬凑一句废话。
+ */
+@Composable
+private fun CapabilityRowItem(c: CodexCapability, divider: Boolean) {
+    val desc = listOfNotNull(
+        c.disabledReason.takeIf { it.isNotBlank() },
+        c.description.takeIf { it.isNotBlank() },
+        c.source.takeIf { it.isNotBlank() }?.let { "来源 $it" },
+    ).firstOrNull().orEmpty()
+    SettingRow(
+        title = c.name.ifBlank { "(未命名)" },
+        desc = desc,
+        divider = divider,
+        control = {
+            if (!c.enabled) {
+                Text("已停用", fontSize = 11.sp, color = Pa.TextTertiary)
+            }
+        },
+    )
+}
+
+/**
+ * 一行设置项的"真实状态"小字(项 3b)。
+ *
+ * 【只在非"已生效"时出现】已生效没必要刷屏;而"未生效 / 当前 codex 版本不支持 /
+ * 连接失败"必须让用户看见 —— 这三种状态的共同点是"用户以为改了,其实没改"。
+ * 重试统一放在本页顶部，避免同一次 Codex 探测失败在每一项下面重复显示。
+ */
+@Composable
+private fun SettingStateLine(key: String, states: Map<String, String>, _onRetry: () -> Unit) {
+    val info = states[key]?.let { settingStateInfo(it) }
+    if (info != null && info.level != "ok") {
+        val color = when (info.level) {
+            "error" -> Pa.RedText
+            "warn" -> Pa.Accent
+            else -> Pa.TextTertiary
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(info.text, fontSize = 12.sp, color = color)
+        }
+    }
+}
+
+/**
+ * 一行设置项的"电脑端当前值"只读回显小字(桌面只读回显,只增)。
+ *
+ * 【它与 [SettingStateLine] 的分工】SettingStateLine 说"手机改的这项生效了没有";
+ * 本行说"电脑端此刻实际生效的是什么"(daemon 的 desktop_config_summary,来自
+ * 只读的 config/read)—— 用户把某项留在"跟随桌面"时,真实生效值就在这里。
+ * 只在读到了真实值时显示,无值不占位;纯展示,不改七项的可调性。
+ */
+@Composable
+private fun DesktopEchoLine(settings: CodexSettings?, key: String) {
+    val line = DesktopEchoLogic.desktopEchoLine(settings, key) ?: return
+    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        Text(line, fontSize = 11.sp, color = Pa.TextTertiary)
+    }
+}
+
+/**
+ * 二级页:技能与插件(项 3a 的合并目标)。
+ *
+ * 【为什么要合并成一个页面】以前「能力 · 技能与插件」区块里,每个 kind 各有一行
+ * "展开更多(N)",而它们的 onClick **全都**打开同一个弹窗 —— 于是用户看到
+ * "两个入口点开的页面内容完全相同"。现在区块里只剩唯一入口,点击进入这里。
+ *
+ * 【四态必须分清】读取中 / 读失败(给出原文)/ 确实为空 / 有数据。
+ * 绝不允许把"还在读"渲染成"未报告任何技能、hooks 或插件"—— 那会让用户去重装技能。
+ *
+ * 【分组顺序固定】技能 → Hooks → 插件,未知 kind 附在后面且**不丢弃**
+ * (见 [capabilityKindOrder]);组内按名称稳定排序,避免每次打开位置抖动。
+ */
+@Composable
+private fun CapabilitiesPage(
+    onBack: () -> Unit,
+    capabilities: List<CodexCapability>,
+    loading: Boolean,
+    error: String?,
+) {
+    var query by remember { mutableStateOf("") }
+    SubPageScaffold(title = "技能与插件", onBack = onBack, scrollable = false) {
+        when {
+            loading -> {
+                Box(
+                    Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text("正在读取…", fontSize = 13.sp, color = Pa.TextTertiary) }
+            }
+
+            error != null -> Column(Modifier.fillMaxWidth().padding(vertical = 24.dp)) {
+                Text("暂时读不到能力列表", fontSize = 14.sp, color = Pa.RedText)
+                Spacer(Modifier.height(6.dp))
+                Text(error, fontSize = 11.sp, color = Pa.TextTertiary)
+            }
+
+            capabilities.isEmpty() -> Box(
+                Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text("这台电脑上的 Codex 未报告任何技能、hooks 或插件", fontSize = 13.sp, color = Pa.TextTertiary) }
+
+            else -> {
+                val filtered = filterCapabilities(capabilities, query)
+                val groups = groupCapabilities(filtered)
+                SettingsTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = "搜索名称或来源",
+                )
+                Spacer(Modifier.height(10.dp))
+                if (filtered.isEmpty()) {
+                    // 有数据但被搜索过滤光了:如实说是"没匹配",不要复用"未报告任何"。
+                    Box(
+                        Modifier.fillMaxWidth().padding(vertical = 30.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("没有匹配「$query」的技能、hooks 或插件", fontSize = 12.sp, color = Pa.TextTertiary) }
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxWidth().weight(1f),
+                        contentPadding = PaddingValues(bottom = 20.dp),
+                    ) {
+                        groups.forEach { (kind, list) ->
+                            item(key = "header-$kind") {
+                                Text(
+                                    capabilityKindLabel(kind) + " · " + list.size,
+                                    fontSize = 11.sp,
+                                    color = Pa.TextTertiary,
+                                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                                )
+                            }
+                            items(list, key = { c -> kind + ":" + c.path + ":" + c.name }) { c ->
+                                CapabilityRowItem(c, divider = true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1130,7 +1401,7 @@ class CodexWriter(
     ) = CodexWriter(
         approval, sandbox, model, effort,
         hideReasoning, verbosity, reasoningSummary, pasteBurst,
-    )
+    ).also { it.onCommit = onCommit }
 
     /**
      * 真正落库。全参数为 null 表示"不改任何一项" —— 与既有四件套同一套语义,
@@ -1156,6 +1427,7 @@ private fun AgentPage(
     modelChoices: List<ModelInfo>,
     mcpList: List<McpServerStatus>,
     mcpLoading: Boolean,
+    mcpError: String?,
     codexUsage: CodexUsage?,
     usageLoading: Boolean,
     capabilities: List<CodexCapability>,
@@ -1163,14 +1435,24 @@ private fun AgentPage(
     capabilitiesError: String?,
     host: HostInfo?,
     writeCodex: CodexWriter,
+    /** 逐项真实状态(key → state),来自 daemon 的 setting_status。 */
+    settingStates: Map<String, String>,
+    /** 应用范围开关:"应用到所有会话(含已有)"。默认关 = 仅新建会话生效(快照语义)。 */
+    applyToExistingThreads: Boolean,
+    onToggleApplyToAll: (Boolean) -> Unit,
+    /** 重试:把当前快照重新提交一次(失败项可恢复)。 */
+    onRetrySettings: () -> Unit,
     onFeedback: (String) -> Unit,
     onShowModelPicker: () -> Unit,
     onShowApprovalPreview: () -> Unit,
+    /** 打开"查看全部技能与插件"二级页;由父级负责记下返回目标,本页不直接操作路由状态。 */
+    onOpenCapabilities: () -> Unit,
 ) {
     SubPageScaffold(title = "Agent 与模型", onBack = onBack) {
+        TextButton(onClick=onRetrySettings) { Text("刷新 Agent 状态和模型",color=Pa.Accent) }
         SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "切换 Agent") {
             Spacer(Modifier.height(10.dp))
-            val agentChoices = listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS
+            val agentChoices = buildAgents(host?.capabilitiesList.orEmpty()).map { it.id to it.name }
             agentChoices.forEachIndexed { i, (id, name) ->
                 SettingRow(
                     title = name,
@@ -1182,7 +1464,9 @@ private fun AgentPage(
                     chevron = true,
                     divider = i != agentChoices.lastIndex,
                     onClick = {
-                        if (runningAgent != id) {
+                        val installed=buildAgents(host?.capabilitiesList.orEmpty()).any { it.id==id && it.available }
+                        if (!installed) onFeedback("该 Agent 尚未安装或尚未接入")
+                        else if (runningAgent != id) {
                             AgentConnection.switchAgent(id)
                             onFeedback("已切换到 ${agentDisplay(id)}")
                         }
@@ -1192,6 +1476,30 @@ private fun AgentPage(
         }
 
         if (runningAgent == "codex") {
+            // 顶部诚实状态条:只要存在"未生效 / 不支持 / 连接失败"就出现,并可一键重试。
+            // 【绝不静默】以前这里的失败全被吞掉,用户只看到"已保存"。
+            val note = overallSettingNote(settingStates.values.toList())
+            if (note != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        .padding(start = 13.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_triangle_alert), null,
+                        tint = Pa.Accent, modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Text(note, Modifier.weight(1f), fontSize = 11.5.sp, color = Pa.TextSecondary)
+                    TextButton(onClick = onRetrySettings) {
+                        Text("重试", color = Pa.Accent, fontSize = 12.sp)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
             SectionBlock(icon = R.drawable.ic_lucide_shield, title = "权限与安全") {
                 Spacer(Modifier.height(10.dp))
                 // 托管策略:被 requirements.toml 约束时,只渲染白名单里的取值。
@@ -1207,8 +1515,56 @@ private fun AgentPage(
                     Spacer(Modifier.height(10.dp))
                 }
 
+                // 【说明小字 + 显式应用范围】设置页更改默认只对新建对话生效:已有对话
+                // 保持创建那一刻的设置(daemon 侧按线程快照装配参数),不被之后的更改
+                // 牵动。用户质疑"改了是否真生效"正源于此 —— 下面给一个显式开关,
+                // 开启后每次保存都把新值批量写进已有会话的快照(daemon 回执条数,
+                // 反馈文案如实说"应用到 N 个"),默认保持"仅新建"不变。
+                Text(
+                    "更改默认对新建对话生效,已有对话保持原设置",
+                    fontSize = 11.sp,
+                    color = Pa.TextSecondary,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                SettingRow(
+                    title = "应用到所有会话(含已有)",
+                    desc = "开启后保存的每一项同时写入已有会话;关闭 = 仅新建会话生效",
+                    divider = true,
+                    control = {
+                        Switch(
+                            checked = applyToExistingThreads,
+                            onCheckedChange = onToggleApplyToAll,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = Pa.Accent,
+                                uncheckedTrackColor = Pa.Hover,
+                                uncheckedBorderColor = Color.Transparent,
+                            ),
+                        )
+                    },
+                )
+
+                // 【桌面只读回显】Windows 沙箱就绪度一行(windowsSandbox/readiness,
+                // 只读诊断):读不到/老 daemon 不占位。电脑端配置读取失败时也在这里
+                // 如实说一句 —— "读不到"不能被误读成"没有值"。
+                DesktopEchoLogic.sandboxReadinessLine(settings)?.let { line ->
+                    Text(
+                        line,
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                }
+                if (settings?.desktopEchoError?.isNotBlank() == true) {
+                    Text(
+                        "电脑端当前值暂时读不到:${settings.desktopEchoError}",
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                }
+
                 // 审批策略
-                val approvalOptions = filterByManagedPolicy(
+                val approvalFiltered = filterByManagedPolicy(
                     listOf(
                         Triple("untrusted", "仅信任", "只自动执行白名单命令"),
                         Triple("on-request", "按需询问", "运行命令前先征求批准"),
@@ -1216,7 +1572,7 @@ private fun AgentPage(
                     ),
                     allowedApproval,
                 ) { it.first }
-                if (approvalOptions.isEmpty()) {
+                if (approvalFiltered.isEmpty()) {
                     // 白名单里的取值我们一个都不认识(codex 加了新的策略档位)。
                     // 这种情况给一个不可点的只读行,而不是让下面的下标访问崩掉。
                     SettingRow(
@@ -1225,6 +1581,12 @@ private fun AgentPage(
                         divider = true,
                     )
                 } else {
+                    // 【第 2 轮补齐】追加"跟随桌面"(空串=不覆盖电脑配置):此前用户一旦设了
+                    // 具体值就再也回不到跟随桌面 —— 唯一缺口在候选列表。必须在
+                    // filterByManagedPolicy **之后**追加("不覆盖"不该被白名单禁掉);放在
+                    // else 内,保证上面的"白名单过滤后为空"兜底仍可达、不被追成永不触发。
+                    // 索引与 onMainClick 循环逻辑保持原样(从"跟随桌面"点一下切到第一个真实档位)。
+                    val approvalOptions = withFollowDesktop(approvalFiltered)
                     // 【不能 coerceAtLeast(0)】codex 没报告这个值时(桌面未显式配置,
                     // 用 codex 自己的默认),退回列表第一项会让界面显示"仅信任" ——
                     // 用户会以为自己已经处在那个模式里,而实际生效的是别的值。
@@ -1247,15 +1609,22 @@ private fun AgentPage(
                             SplitOption(
                                 title = label,
                                 desc = desc,
-                                selected = settings?.approvalPolicy == id,
+                                // 空串(id 为空)= 跟随桌面,字段为空串或缺省时选中;其余按值匹配。
+                                selected = if (id.isEmpty()) {
+                                    settings?.approvalPolicy.isNullOrEmpty()
+                                } else {
+                                    settings?.approvalPolicy == id
+                                },
                             ) { writeCodex.copy(approval = id).commit() }
                         },
                     )
                 }
+                SettingStateLine("approval_policy", settingStates, onRetrySettings)
+                DesktopEchoLine(settings, "approval_policy")
                 Spacer(Modifier.height(8.dp))
 
                 // 沙箱模式
-                val sandboxOptions = filterByManagedPolicy(
+                val sandboxFiltered = filterByManagedPolicy(
                     listOf(
                         Triple("read-only", "只读", "只能读取文件"),
                         Triple("workspace-write", "工作区可写", "仅工作区内可写"),
@@ -1263,13 +1632,15 @@ private fun AgentPage(
                     ),
                     allowedSandbox,
                 ) { it.first }
-                if (sandboxOptions.isEmpty()) {
+                if (sandboxFiltered.isEmpty()) {
                     SettingRow(
                         title = "沙箱模式",
                         desc = "当前取值 ${settings?.sandbox.orEmpty()} 不在 App 支持的选项内",
                         divider = true,
                     )
                 } else {
+                    // 【第 2 轮补齐】同审批策略:在过滤结果之上追加"跟随桌面",放在 else 内。
+                    val sandboxOptions = withFollowDesktop(sandboxFiltered)
                     // 同上:取值未知时如实显示"跟随桌面",不假装选中第一项。
                     val sandboxIdx = sandboxOptions
                         .indexOfFirst { it.first == settings?.sandbox }
@@ -1289,11 +1660,17 @@ private fun AgentPage(
                             SplitOption(
                                 title = label,
                                 desc = desc,
-                                selected = settings?.sandbox == id,
+                                selected = if (id.isEmpty()) {
+                                    settings?.sandbox.isNullOrEmpty()
+                                } else {
+                                    settings?.sandbox == id
+                                },
                             ) { writeCodex.copy(sandbox = id).commit() }
                         },
                     )
                 }
+                SettingStateLine("sandbox", settingStates, onRetrySettings)
+                DesktopEchoLine(settings, "sandbox")
                 Spacer(Modifier.height(10.dp))
 
                 Box(
@@ -1314,12 +1691,18 @@ private fun AgentPage(
                 val currentModelName = settings?.model?.takeIf { it.isNotEmpty() }
                     ?.let { id -> modelChoices.find { it.id == id }?.displayName ?: id }
                     ?: "跟随桌面配置"
+                // 【provider 收窄】"默认模型"写的是 codex 的桌面默认值,候选只保留
+                // codex 自己的模型。此前这里是全量列表 —— zcode 并入 ListModels 后
+                // (设置页 ZCode 分区的数据源),混在一起会让用户把 "zcode/…" 选进
+                // codex 设置,turn/start 传给 codex 必然报错。列表不该给出"选了必错"
+                // 的选项;pi/zcode 的模型在各自分区内展示。
+                val codexModels = modelChoices.filter { it.provider == runningAgent }
                 // 默认模型:主=完整选择器,下拉=快速切换
                 SplitButton(
                     label = "默认模型",
                     caption = currentModelName,
                     onMainClick = {
-                        if (modelChoices.isEmpty()) {
+                        if (codexModels.isEmpty()) {
                             onFeedback("未获取到模型列表,请检查连接")
                         } else {
                             onShowModelPicker()
@@ -1333,10 +1716,10 @@ private fun AgentPage(
                                 selected = settings?.model.isNullOrEmpty(),
                             ) { writeCodex.copy(model = "").commit() },
                         )
-                        if (modelChoices.isEmpty()) {
+                        if (codexModels.isEmpty()) {
                             add(SplitOption("未获取到模型列表", "请检查连接后重试") { })
                         } else {
-                            modelChoices.forEach { m ->
+                            codexModels.forEach { m ->
                                 add(
                                     SplitOption(
                                         title = m.displayName.ifBlank { m.id },
@@ -1354,132 +1737,167 @@ private fun AgentPage(
                         }
                     },
                 )
+                SettingStateLine("model", settingStates, onRetrySettings)
+                // 【桌面只读回显】provider 能力徽标(modelProvider/capabilities/read):
+                // 解释"为什么某模型不可用"—— 图像生成/联网搜索是 provider 级声明,
+                // 不是模型页的开关。没读到时不渲染,不把"没读到"说成"不支持"。
+                val capsBadges = DesktopEchoLogic.providerCapsBadges(settings)
+                if (capsBadges.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        capsBadges.forEach { badge ->
+                            Text(
+                                badge,
+                                fontSize = 10.5.sp,
+                                color = Pa.TextSecondary,
+                                modifier = Modifier
+                                    .background(Pa.Hover, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                }
+                DesktopEchoLine(settings, "model")
                 Spacer(Modifier.height(8.dp))
 
                 // 思考强度
                 // 【第 27 轮补齐】官方枚举还有 none(完全关闭推理,最快)
                 // 与 max(比 xhigh 更强)。这两档是否可用取决于模型,
                 // 所以文案里点明"需模型支持",避免用户选了没反应以为是 bug。
-                val effortOptions = listOf(
-                    Triple("none", "关闭", "不做推理,最快(需模型支持)"),
-                    Triple("low", "低", "最快,浅推理"),
-                    Triple("medium", "中", "速度与深度平衡"),
-                    Triple("high", "高", "更慢,更细"),
-                    Triple("xhigh", "极高", "最慢,最细"),
-                    Triple("max", "最高", "超过极高(需模型支持)"),
-                )
+                // 【第 2 轮补齐】末尾追加"跟随桌面"(空串=不覆盖电脑配置),否则设了具体档位
+                // 就再也回不去。本项无托管策略过滤,直接在候选之上追加。
+                val effortOptions = effortsFor(modelChoices, settings?.model.orEmpty(), runningAgent)
+                    .map { Triple(it.id, it.label, "") }
                 val effortIdx = effortOptions
                     .indexOfFirst { it.first == settings?.effort }
-                    .coerceAtLeast(0)
+                // 未知/为空时如实显示"跟随桌面",不 coerceAtLeast(0) 假装成"关闭"。
+                val effortLabel = if (effortIdx >= 0) effortOptions[effortIdx].second else "跟随桌面"
                 SplitButton(
                     label = "思考强度",
-                    mainLabel = effortOptions[effortIdx].second,
+                    mainLabel = effortLabel,
                     onMainClick = {
-                        val next = effortOptions[(effortIdx + 1) % effortOptions.size]
+                        val next = effortOptions[if (effortIdx >= 0) (effortIdx + 1) % effortOptions.size else 0]
                         writeCodex.copy(effort = next.first).commit()
                     },
                     options = effortOptions.map { (id, label, desc) ->
                         SplitOption(
                             title = label,
                             desc = desc,
-                            selected = settings?.effort == id,
+                            selected = if (id.isEmpty()) {
+                                settings?.effort.isNullOrEmpty()
+                            } else {
+                                settings?.effort == id
+                            },
                         ) { writeCodex.copy(effort = id).commit() }
                     },
                 )
+                SettingStateLine("effort", settingStates, onRetrySettings)
+                DesktopEchoLine(settings, "effort")
                 Spacer(Modifier.height(6.dp))
             }
 
-            SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "行为与降噪") {
+            SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "Codex 输出偏好") {
                 Spacer(Modifier.height(10.dp))
                 // 【边界说明】这些偏好只作用于"从 App 发起的任务"。
                 // daemon 把它们写进自己拉起的 app-server 子进程内存态,
                 // 不会改写用户桌面 codex 的 config.toml。
                 Text(
-                    "仅影响从 App 发起的任务,不改动电脑上的 Codex 配置。",
+                    "以下参数仅控制 Codex 生成方式；所有 Agent 的思考/工具显示在 Daemon 设置中统一管理。",
                     fontSize = 11.sp, color = Pa.TextTertiary,
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
 
-                SettingRow(
-                    title = "隐藏推理过程",
-                    desc = "不再推送思考事件,只留结论(手机端刷屏最少)",
-                    divider = true,
-                    control = {
-                        Switch(
-                            checked = settings?.hideAgentReasoning == true,
-                            onCheckedChange = { writeCodex.copy(hideReasoning = it).commit() },
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = Pa.Accent,
-                                uncheckedTrackColor = Pa.Hover,
-                                uncheckedBorderColor = Color.Transparent,
-                            ),
-                        )
-                    },
-                )
-
-                val verbosityOptions = listOf(
-                    Triple("low", "精简", "直给结论,少展开解释"),
-                    Triple("medium", "适中", "默认,结论与说明平衡"),
-                    Triple("high", "详细", "展开更多背景与推导"),
+                // 【第 2 轮补齐】末尾追加"跟随桌面",否则设了具体值回不去。
+                val verbosityOptions = withFollowDesktop(
+                    listOf(
+                        Triple("low", "精简", "直给结论,少展开解释"),
+                        Triple("medium", "适中", "默认,结论与说明平衡"),
+                        Triple("high", "详细", "展开更多背景与推导"),
+                    ),
                 )
                 val verbosityIdx = verbosityOptions
                     .indexOfFirst { it.first == settings?.modelVerbosity }
-                    .coerceAtLeast(0)
+                // 【不能 coerceAtLeast(0)】取不到值(跟随桌面)时退回第一项会让界面显示
+                // "精简" —— 与真实生效值不符。如实写"跟随桌面",并一个选项都不标选中。
+                val verbosityLabel = if (verbosityIdx >= 0) verbosityOptions[verbosityIdx].second else "跟随桌面"
                 SplitButton(
                     label = "回答详略",
-                    mainLabel = verbosityOptions[verbosityIdx].second,
+                    mainLabel = verbosityLabel,
                     onMainClick = {
-                        val next = verbosityOptions[(verbosityIdx + 1) % verbosityOptions.size]
+                        val next = verbosityOptions[if (verbosityIdx >= 0) (verbosityIdx + 1) % verbosityOptions.size else 0]
                         writeCodex.copy(verbosity = next.first).commit()
                     },
                     options = verbosityOptions.map { (id, label, desc) ->
                         SplitOption(
                             title = label,
                             desc = desc,
-                            selected = settings?.modelVerbosity == id,
+                            selected = if (id.isEmpty()) {
+                                settings?.modelVerbosity.isNullOrEmpty()
+                            } else {
+                                settings?.modelVerbosity == id
+                            },
                         ) { writeCodex.copy(verbosity = id).commit() }
                     },
                 )
+                SettingStateLine("model_verbosity", settingStates, onRetrySettings)
+                DesktopEchoLine(settings, "model_verbosity")
                 Spacer(Modifier.height(8.dp))
 
-                val summaryOptions = listOf(
-                    Triple("concise", "精简", "思考摘要只留关键结论"),
-                    Triple("detailed", "详细", "保留较完整的推理脉络"),
+                // 【第 2 轮补齐】末尾追加"跟随桌面",否则设了具体值回不去。
+                val summaryOptions = withFollowDesktop(
+                    listOf(
+                        Triple("concise", "精简", "思考摘要只留关键结论"),
+                        Triple("detailed", "详细", "保留较完整的推理脉络"),
+                    ),
                 )
                 val summaryIdx = summaryOptions
                     .indexOfFirst { it.first == settings?.modelReasoningSummary }
-                    .coerceAtLeast(0)
+                // 同上:未知取值如实显示"跟随桌面",不假装选中第一项。
+                val summaryLabel = if (summaryIdx >= 0) summaryOptions[summaryIdx].second else "跟随桌面"
                 SplitButton(
                     label = "思考摘要",
-                    mainLabel = summaryOptions[summaryIdx].second,
+                    mainLabel = summaryLabel,
                     onMainClick = {
-                        val next = summaryOptions[(summaryIdx + 1) % summaryOptions.size]
+                        val next = summaryOptions[if (summaryIdx >= 0) (summaryIdx + 1) % summaryOptions.size else 0]
                         writeCodex.copy(reasoningSummary = next.first).commit()
                     },
                     options = summaryOptions.map { (id, label, desc) ->
                         SplitOption(
                             title = label,
                             desc = desc,
-                            selected = settings?.modelReasoningSummary == id,
+                            selected = if (id.isEmpty()) {
+                                settings?.modelReasoningSummary.isNullOrEmpty()
+                            } else {
+                                settings?.modelReasoningSummary == id
+                            },
                         ) { writeCodex.copy(reasoningSummary = id).commit() }
                     },
                 )
+                SettingStateLine("model_reasoning_summary", settingStates, onRetrySettings)
+                DesktopEchoLine(settings, "model_reasoning_summary")
                 Spacer(Modifier.height(8.dp))
 
+                // 粘贴长文本不中断
+                // 【为什么这里不是开关 —— 别再把它改回置灰开关】
+                // codex app-server 侧**没有任何等效配置键**:随包 schema 逐字核对过,
+                // 全部 schema 文件里 paste / burst 零命中(唯一相近的 model_verbosity /
+                // model_reasoning_summary 与粘贴无关)。而"粘贴爆破检测"属于 codex 的
+                // **终端输入层** —— 本 App 走的是 stdio JSON-RPC,根本不经过那一层,
+                // 所以它既不可能中断粘贴,也没有什么可"关掉"的。
+                // 结论:"粘贴长文本不中断"是本通道的**既有事实**,不是待开启的功能。
+                //   证据链:手机端 → daemon 全程只做原样封装(daemon 侧 turnInput),
+                //   不做任何裁剪;daemon 每轮把实际送出的输入字数写进日志
+                //   (`[codex] turn/start … 输入=N字`),可逐轮核对。
+                // 旧版这里放了一个置灰开关 + "当前 codex 版本不支持该项",看起来就是占位 UI,
+                // 且"不支持"三个字反而让用户以为功能缺失。现在改成如实说明 + "已内置"徽标。
                 SettingRow(
                     title = "粘贴长文本不中断",
-                    desc = "粘贴大段代码时不触发爆破检测,避免被截断",
+                    desc = "已内置:粘贴的长文本原样完整送达电脑端,不做任何裁剪",
                     divider = false,
                     control = {
-                        Switch(
-                            checked = settings?.disablePasteBurst == true,
-                            onCheckedChange = { writeCodex.copy(pasteBurst = it).commit() },
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = Pa.Accent,
-                                uncheckedTrackColor = Pa.Hover,
-                                uncheckedBorderColor = Color.Transparent,
-                            ),
-                        )
+                        Text("已内置", fontSize = 11.sp, color = Pa.Green)
                     },
                 )
                 Spacer(Modifier.height(6.dp))
@@ -1492,13 +1910,9 @@ private fun AgentPage(
             }
 
             SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "能力 · 技能与插件") {
-                // 数量过多时默认只展示前 DEFAULT_VISIBLE_PER_KIND 条,避免 29 个技能
-                // 把整页铺满;被折叠的条目点"展开更多"用底部弹窗看全部。
-                val DEFAULT_VISIBLE_PER_KIND = 3
-                val EXPAND_SHEET_MAX_HEIGHT = 420.dp
-                // 放在分支前:确保「读取中 / 为空」的提前 return 不会把它跳过。
-                var showAllCapabilities by remember { mutableStateOf(false) }
-
+                // 项 3a:区块内只保留**唯一入口**,点击进入二级页「技能与插件」。
+                // 以前每个 kind 各有一行"展开更多(N)",onClick 却全指向同一个弹窗,
+                // 用户看到"两个入口点开的页面完全相同";现在统一为一个页面。
                 Spacer(Modifier.height(10.dp))
                 if (capabilities.isEmpty()) {
                     // 四态必须分清:还在读 / 读失败 / 读完确实没有 / 有数据。
@@ -1516,117 +1930,30 @@ private fun AgentPage(
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
+                    // 汇总(固定顺序 + 未知 kind 不丢弃,与二级页共用同一套纯函数),
+                    // 作为唯一入口的 desc;数量写在右侧 value 位。
                     val byKind = capabilities.groupBy { it.kind }
-                    // 顺序固定:技能 → hooks → 插件。用 codex 返回的顺序会随
-                    // 目录扫描结果抖动,同一台机器每次打开位置都不一样。
-                    val kindsOrder = listOf("skill" to "技能", "hook" to "Hooks", "plugin" to "插件")
-                    // 弹窗要列出所有分类的全部条目,提前算好总数供标题复用。
-                    val totalCapabilityCount = byKind.values.sumOf { it.size }
-
-                    // 折叠列表与弹窗共用同一套条目渲染(含"为什么用不了 / 已停用")。
-                    @Composable
-                    fun CapabilityItemRow(c: CodexCapability, divider: Boolean) {
-                        // 描述优先给"为什么用不了":enabled=false 却不说明原因,
-                        // 用户只会觉得"我装的技能没生效"。三项都空就整行留白,
-                        // 不硬凑一句废话。
-                        val desc = listOfNotNull(
-                            c.disabledReason.takeIf { it.isNotBlank() },
-                            c.description.takeIf { it.isNotBlank() },
-                            c.source.takeIf { it.isNotBlank() }?.let { "来源 $it" },
-                        ).firstOrNull().orEmpty()
-                        // control 是必填的 RowScope 槽位(默认空实现),所以
-                        // 这里不做"传 null 表示没有控件",而是在槽位内部判断。
-                        SettingRow(
-                            title = c.name.ifBlank { "(未命名)" },
-                            desc = desc,
-                            divider = divider,
-                            control = {
-                                if (!c.enabled) {
-                                    Text("已停用", fontSize = 11.sp, color = Pa.TextTertiary)
-                                }
-                            },
-                        )
+                    val summary = capabilityKindOrder(byKind.keys).joinToString(" · ") { k ->
+                        capabilityKindLabel(k) + " " + byKind[k].orEmpty().size
                     }
-
-                    kindsOrder.forEach { (kind, label) ->
-                        val items = byKind[kind].orEmpty()
-                        if (items.isEmpty()) return@forEach
-                        Text(
-                            "$label · ${items.size}",
-                            fontSize = 11.sp,
-                            color = Pa.TextTertiary,
-                            modifier = Modifier.padding(bottom = 4.dp),
-                        )
-                        val visible = items.take(DEFAULT_VISIBLE_PER_KIND)
-                        val hasMore = items.size > DEFAULT_VISIBLE_PER_KIND
-                        visible.forEachIndexed { i, c ->
-                            // 折叠视图里最后一条可见项:若还有被折叠的条目,保留
-                            // 分隔线与"展开更多"行衔接;否则按原逻辑(非末项才分隔)。
-                            val isLastVisible = i == visible.lastIndex
-                            CapabilityItemRow(c, divider = !(isLastVisible && !hasMore))
-                        }
-                        if (hasMore) {
-                            SettingRow(
-                                title = "展开更多(${items.size - DEFAULT_VISIBLE_PER_KIND})",
-                                desc = "",
-                                divider = false,
-                                chevron = true,
-                                onClick = { showAllCapabilities = true },
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                    }
-
-                    // 弹窗:列出所有分类的全部条目,内容可上下滑动(用 LazyColumn,勿用 Column 硬塞)。
-                    if (showAllCapabilities) {
-                        androidx.compose.material3.AlertDialog(
-                            onDismissRequest = { showAllCapabilities = false },
-                            containerColor = Pa.CardHigh,
-                            title = {
-                                Text(
-                                    "技能与插件($totalCapabilityCount 个)",
-                                    color = Pa.TextPrimary, fontSize = 17.sp,
-                                )
-                            },
-                            text = {
-                                LazyColumn(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(max = EXPAND_SHEET_MAX_HEIGHT),
-                                ) {
-                                    kindsOrder.forEach { (kind, label) ->
-                                        val items = byKind[kind].orEmpty()
-                                        if (items.isEmpty()) return@forEach
-                                        item {
-                                            Text(
-                                                "$label · ${items.size}",
-                                                fontSize = 11.sp,
-                                                color = Pa.TextTertiary,
-                                                modifier = Modifier.padding(vertical = 4.dp),
-                                            )
-                                        }
-                                        items.forEachIndexed { i, c ->
-                                            item {
-                                                CapabilityItemRow(c, divider = i != items.lastIndex)
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            confirmButton = {
-                                TextButton(onClick = { showAllCapabilities = false }) {
-                                    Text("收起", color = Pa.AccentText, fontSize = 15.sp)
-                                }
-                            },
-                        )
-                    }
+                    SettingRow(
+                        title = "查看全部技能与插件",
+                        desc = summary,
+                        value = capabilities.size.toString() + " 个",
+                        chevron = true,
+                        onClick = onOpenCapabilities,
+                    )
                 }
             }
 
             SectionBlock(icon = R.drawable.ic_lucide_server, title = "集成 · MCP 服务器") {
                 if (mcpList.isEmpty()) {
                     Text(
-                        if (mcpLoading) "正在读取…" else "未获取到 MCP 列表",
+                        when {
+                            mcpLoading -> "正在读取…"
+                            mcpError != null -> "暂时读不到 MCP 列表：$mcpError"
+                            else -> "这台电脑未配置 MCP 服务器"
+                        },
                         fontSize = 12.sp, color = Pa.TextTertiary,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
@@ -1658,23 +1985,149 @@ private fun AgentPage(
                 }
             }
         } else {
-            SectionBlock(icon = R.drawable.ic_lucide_info, title = agentDisplay(runningAgent)) {
-                Text(
-                    "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
-                        "可先在上方「切换 Agent」里回到 Codex。",
-                    fontSize = 12.sp, color = Pa.TextTertiary,
-                    modifier = Modifier.padding(vertical = 12.dp),
-                )
+            // 【图 7 实锤的修复】切到 Pi/ZCode 时,这里原来永远是一句
+            // "接入完成后在此显示"的占位文案 —— 即使 agent 已点亮、会话能跑。
+            // 现在按 agent 给真实内容(数据全部来自已有数据源,不新增 RPC):
+            //  - Pi:模型清单 + 动态思考档位(daemon 用最近 pi 会话当探针拿
+            //    PiProvider.ThinkingLevels 的实时档位)+ 全局默认模型/强度;
+            //  - ZCode:模型清单 + 桌面默认强度 + 额度入口(本批占位)。
+            when (runningAgent) {
+                "pi", "zcode" -> AgentDefaultsSection(runningAgent, settings, modelChoices, writeCodex, onShowModelPicker)
+                else -> if (host?.capabilitiesList?.contains("agent_settings:$runningAgent") == true) {
+                    AgentDefaultsSection(runningAgent,settings,modelChoices,writeCodex,onShowModelPicker)
+                } else SectionBlock(icon = R.drawable.ic_lucide_info, title = agentDisplay(runningAgent)) {
+                    Text(
+                        "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
+                            "可先在上方「切换 Agent」里回到 Codex。",
+                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                }
             }
         }
 
-        SectionBlock(icon = R.drawable.ic_lucide_user, title = "Codex 账户") {
-            SettingRow(
-                title = host?.displayName ?: "…",
-                desc = "已登录 · 模型与用量走桌面端账号",
-            )
+        if(runningAgent=="codex") SectionBlock(icon = R.drawable.ic_lucide_user, title = "Codex 账户") {
+            SettingRow(title=settings?.account?.takeIf { it.isNotBlank() } ?: "由 Codex 原生账户提供",
+                desc="模型与用量来自当前桌面 Agent，不以电脑名称推断登录状态")
         }
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** 思考强度 id → 中文短标签(未知取值原样返回,不猜)。 */
+private fun effortLabel(id: String): String = when (id) {
+    "none" -> "关闭"
+    "low" -> "低"
+    "medium" -> "中"
+    "high" -> "高"
+    "xhigh" -> "极高"
+    "max" -> "最高"
+    else -> id
+}
+
+/**
+ * 设置页 · Pi 分区(真实内容,替代"接入完成后在此显示"占位)。
+ *
+ * 【数据来源(不新增 RPC,全部已有通道)】
+ *  - 模型清单 / 动态思考档位:ListModels。daemon 侧对 pi 模型统一填
+ *    available_efforts(dynamicEffortsFor 用最近更新的 pi 会话当探针,走
+ *    PiProvider.ThinkingLevels 实时拉 get_available_thinking_levels,子进程
+ *    没挂载时回档位全集)—— 这正是"从最近 pi 会话拿思考档位"的现成通道;
+ *  - 全局默认模型/思考强度:设置页七项经 broadcastPrefs 对 pi 同样生效
+ *    (PiProvider 实现 PrefsAware),这里的默认值就是 pi 新会话的起点。
+ * 会话内的单独覆盖(会话页模型·强度卡)仍以会话为准,本分区只回答"默认是什么"。
+ */
+@Composable
+private fun PiStatusSection(settings: CodexSettings?, modelChoices: List<ModelInfo>) {
+    SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "Pi") {
+        Spacer(Modifier.height(10.dp))
+        val piModels = modelChoices.filter { it.provider == "pi" }
+        // 动态思考档位:pi 的模型共享同一份(daemon 侧按 provider 算一次)
+        val efforts = piModels
+            .firstNotNullOfOrNull { m -> m.availableEffortsList.takeIf { l -> l.isNotEmpty() } }
+        SettingRow(
+            title = "默认模型",
+            desc = "随设置页更新,pi 新会话按它启动",
+            value = settings?.model?.takeIf { it.isNotEmpty() }
+                ?.let { id -> modelChoices.find { it.id == id }?.displayName ?: id }
+                ?: "跟随桌面配置",
+            divider = true,
+        )
+        SettingRow(
+            title = "思考强度",
+            desc = "设置页全局默认,对 pi 会话真实生效",
+            value = settings?.effort?.takeIf { it.isNotEmpty() }?.let { effortLabel(it) } ?: "跟随桌面",
+            divider = true,
+        )
+        SettingRow(
+            title = "可用模型",
+            desc = if (piModels.isEmpty()) "未获取到 pi 模型(请检查连接后重试)"
+            else piModels.joinToString(" · ") { it.displayName.ifBlank { it.id } },
+            value = if (piModels.isEmpty()) "—" else "${piModels.size} 个",
+            divider = efforts != null,
+        )
+        if (efforts != null) {
+            SettingRow(
+                title = "动态思考档位",
+                desc = efforts.joinToString(" / "),
+                value = "${efforts.size} 档",
+                divider = false,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "会话内可单独覆盖模型与强度;以上默认值随设置页更新。",
+            fontSize = 11.sp, color = Pa.TextTertiary,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+    }
+}
+
+/**
+ * 设置页 · ZCode 分区(真实内容:模型 + 额度入口)。
+ *
+ * 【模型】同 Pi:来自 ListModels(daemon 侧已把 zcode 并入全局列表;模型表
+ * 首拉要建一个一次性 ZCode 会话,TTL 缓存兜住频率,失败时至少有
+ * "zcode/default 跟随桌面"兜底项)。
+ * 【额度】本批只留**入口占位**:ZCode 的额度接口还没接,给一个点了如实说
+ * "开发中"的入口 —— 绝不画假数字、不显示"0%"(那会被读成"额度用完了"),
+ * 下批接真实数据后再换成用量面板。
+ */
+@Composable
+private fun ZCodeStatusSection(
+    settings: CodexSettings?,
+    modelChoices: List<ModelInfo>,
+    onFeedback: (String) -> Unit,
+) {
+    SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "ZCode") {
+        Spacer(Modifier.height(10.dp))
+        val zcModels = modelChoices.filter { it.provider == "zcode" }
+        SettingRow(
+            title = "思考强度(桌面默认)",
+            desc = "设置页全局默认,对 ZCode 会话真实生效",
+            value = settings?.effort?.takeIf { it.isNotEmpty() }?.let { effortLabel(it) } ?: "跟随桌面",
+            divider = true,
+        )
+        SettingRow(
+            title = "可用模型",
+            desc = if (zcModels.isEmpty()) "未获取到 ZCode 模型(请确认电脑端 ZCode 已安装并启动)"
+            else zcModels.joinToString(" · ") { it.displayName.ifBlank { it.id } },
+            value = if (zcModels.isEmpty()) "—" else "${zcModels.size} 个",
+            divider = true,
+        )
+        SettingRow(
+            title = "额度与用量",
+            desc = "ZCode 配额使用情况",
+            value = "入口",
+            chevron = true,
+            onClick = { onFeedback("额度显示开发中,下一批接入") },
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "会话的模型与思考档位在会话内切换;额度展示下一批接入。",
+            fontSize = 11.sp, color = Pa.TextTertiary,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
     }
 }
 
@@ -1758,6 +2211,8 @@ private fun SettingsTextField(
 private fun ModelPickerDialog(
     models: List<ModelInfo>,
     selected: String,
+    /** 当前运行的 agent id:模型行左侧显示对应品牌图标。 */
+    agentId: String,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1790,6 +2245,7 @@ private fun ModelPickerDialog(
                     title = "跟随桌面配置",
                     subtitle = "使用电脑上当前 agent 的默认模型",
                     selected = selected.isEmpty(),
+                    agentId = agentId,
                     onClick = { onPick("") },
                 )
                 if (models.isEmpty()) {
@@ -1810,6 +2266,7 @@ private fun ModelPickerDialog(
                             }
                         },
                         selected = selected == m.id,
+                        agentId = agentId,
                         onClick = { onPick(m.id) },
                     )
                 }
@@ -1823,6 +2280,8 @@ private fun ModelChoiceRow(
     title: String,
     subtitle: String,
     selected: Boolean,
+    /** 提供该模型的 agent id:用来显示品牌图标,让"这模型是谁给的"一眼可辨。 */
+    agentId: String = "",
     onClick: () -> Unit,
 ) {
     Row(
@@ -1836,22 +2295,34 @@ private fun ModelChoiceRow(
             .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 品牌图标(28dp,与行内 15sp 标题同档次);未知 agent 不留空洞占位。
+        // tint = Color.Unspecified:品牌图标要原色,不能被主题色染掉。
+        agentBrandIcon(agentId)?.let { res ->
+            Icon(
+                painterResource(res), null,
+                tint = Color.Unspecified,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+        }
         Column(Modifier.weight(1f)) {
+            // 【不截断】以前是 maxLines=1 + 省略号,长模型名(如带日期/后缀的
+            // "gpt-5.3-codex-high-2026")只能读半截。用户明确要求"名称完整可见",
+            // 这里去掉行数上限,让它按需换行完整显示。
             Text(
                 title,
                 fontSize = 15.sp,
                 color = if (selected) Pa.Accent else Pa.TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             if (subtitle.isNotEmpty()) {
                 Text(subtitle, fontSize = 10.5.sp, color = Pa.TextTertiary)
             }
         }
         if (selected) {
+            Spacer(Modifier.width(8.dp))
             Icon(
                 painterResource(R.drawable.ic_lucide_check), null,
-                tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                tint = Pa.Accent, modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -2004,12 +2475,12 @@ fun SettingRow(
                 Spacer(Modifier.width(12.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 15.sp, color = Pa.TextPrimary, maxLines = 1)
+                Text(title, fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
                 if (desc.isNotEmpty()) {
                     Text(
                         desc,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = Pa.TextTertiary,
                         maxLines = 2,
                     )
@@ -2019,7 +2490,7 @@ fun SettingRow(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     value,
-                    fontSize = 13.5.sp,
+                    fontSize = 14.5.sp,
                     color = Pa.TextTertiary,
                     maxLines = 1,
                 )
@@ -2147,14 +2618,129 @@ private fun UserDataPage(
                         color = Pa.TextPrimary,
                     )
                     Text(
+                        // 【不截断】原先 maxLines=1 + Ellipsis 会把长地址再裁一次,
+                        // 用户根本抄不全。地址是"可操作信息",必须完整可读。
                         if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
                         fontSize = 10.5.sp,
                         color = Pa.TextTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+
+            // ---- 三种连接方式的完整地址(项 4)----
+            // 【为什么单独列出来】以前这里只有一行小字显示**单个**地址,用户反映
+            // "只显示 Tailscale,看不到 USB 与局域网"。现在把 AgentConnection 已知的
+            // 全部端点(USB 直连 / 局域网直连 / Tailscale)完整列出:完整 ip:port +
+            // 一句可执行说明 + 当前通道选中标记,点按即可复制。
+            val endpoints = AgentConnection.endpoints()
+            if (endpoints.isEmpty()) {
+                Text(
+                    "尚未发现可用地址。插上 USB 后在电脑上执行 adb reverse tcp:7246 tcp:7246," +
+                        "或让手机与电脑处于同一局域网 / Tailscale。",
+                    Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    fontSize = 11.sp, color = Pa.TextTertiary,
+                )
+            } else {
+                endpoints.forEach { ep ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .pressable(haptic = true) {
+                                // 复制完整地址:整行可点,右侧给可见的"复制"提示。
+                                val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                    as android.content.ClipboardManager
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("地址", ep.addr))
+                                Toast.makeText(ctx, "已复制 " + ep.addr, Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(7.dp)
+                                .background(if (ep.active) Pa.Green else Pa.TextTertiary, CircleShape),
+                        )
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    ep.label,
+                                    fontSize = 12.5.sp,
+                                    color = Pa.TextPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                if (ep.active) {
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(
+                                        "使用中",
+                                        Modifier
+                                            .background(Pa.AccentDim, RoundedCornerShape(50))
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                                        fontSize = 9.5.sp,
+                                        color = Pa.Accent,
+                                    )
+                                }
+                            }
+                            // 完整 ip:port:不设 maxLines / 不用 Ellipsis,长地址也要看全。
+                            Text(
+                                ep.addr,
+                                Modifier.padding(top = 2.dp),
+                                fontSize = 12.sp,
+                                color = Pa.TextSecondary,
+                            )
+                            if (ep.detail.isNotBlank()) {
+                                Text(
+                                    ep.detail,
+                                    Modifier.padding(top = 1.dp),
+                                    fontSize = 10.sp,
+                                    color = Pa.TextTertiary,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("复制", fontSize = 11.5.sp, color = Pa.Accent)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+
+            // ---- 已锁定主机指纹(P0-1 TOFU)----
+            // 展示已锁定指纹的前 16 位十六进制;「清除」后回到首连信任 —— daemon 重装
+            // 或电脑换证书导致的"指纹不匹配"就从这里解开。随 connectionEpoch 重读,
+            // 首次成功握手锁定后这一行会自动出现。
+            val epochForPin = AgentConnection.connectionEpoch.collectAsState().value
+            val lockedPin = remember(epochForPin) { AgentConnection.lockedFingerprint() }
+            if (lockedPin != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "已锁定主机指纹",
+                            fontSize = 12.5.sp,
+                            color = Pa.TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            lockedPin.take(16) + "…(SHA-256,首次连接时锁定)",
+                            Modifier.padding(top = 2.dp),
+                            fontSize = 10.5.sp,
+                            color = Pa.TextTertiary,
+                        )
+                    }
+                    Text(
+                        "清除",
+                        Modifier.pressable(haptic = true) {
+                            AgentConnection.clearHostPin()
+                            Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
+                        },
+                        fontSize = 11.5.sp,
+                        color = Pa.Red,
+                    )
+                }
+            }
+
             if (errorMessage != null) {
                 Text(
                     errorMessage + (if (errorAddress.isNotEmpty()) "\n地址:" + errorAddress else ""),
@@ -2163,6 +2749,7 @@ private fun UserDataPage(
                         .background(Pa.Bg, RoundedCornerShape(12.dp))
                         .padding(11.dp),
                     fontSize = 11.sp,
+                    // 【不省略】失败地址同样必须完整可读,方便用户排查。
                     color = Pa.Red,
                 )
                 Spacer(Modifier.height(10.dp))
@@ -2375,6 +2962,8 @@ private fun CacheSection(
     var snapshotBytes by remember { mutableLongStateOf(0L) }
     var tempBytes by remember { mutableLongStateOf(0L) }
     var browserBytes by remember { mutableLongStateOf(0L) }
+    // 网页快照缓存(OfflineStore 的 pa_offline/pa_url 分区,与上面几项互不重叠)。
+    var urlSnapBytes by remember { mutableLongStateOf(0L) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     var confirmClearTasks by remember { mutableStateOf(false) }
 
@@ -2384,6 +2973,8 @@ private fun CacheSection(
         val sn = dev.pocketagent.app.ui.component.ThreadSnapshot.usage()
         val tp = dev.pocketagent.app.ui.component.PaCache.tempUsage(ctx)
         val br = webDataUsage(ctx)
+        // 网页快照缓存占用(独立口径,不与 PreviewCache/ThreadSnapshot/PaCache 重叠)
+        val us = dev.pocketagent.app.ui.component.OfflineStore.usage()
         // 真实目录大小 —— 这两个数字就是系统存储页看到的口径
         val cd = dev.pocketagent.app.ui.component.PaCache.cacheUsage(ctx)
         val fd = dev.pocketagent.app.ui.component.PaCache.filesUsage(ctx)
@@ -2392,6 +2983,7 @@ private fun CacheSection(
             snapshotBytes = sn
             tempBytes = tp
             browserBytes = br
+            urlSnapBytes = us
             cacheBytes = cd
             userBytes = fd
         }
@@ -2452,6 +3044,22 @@ private fun CacheSection(
             }
         }
 
+        // ---- 清理网页快照缓存(仅在有占用时出现;与上面几项口径互不重叠) ----
+        if (urlSnapBytes > 0) {
+            CacheActionRow(
+                title = "清空网页快照缓存",
+                desc = "断网浏览将失效",
+            ) {
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val x = dev.pocketagent.app.ui.component.OfflineStore.clear("url")
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        reload()
+                        toastMsg = "已释放 ${sizeText(x)}"
+                    }
+                }
+            }
+        }
+
         // ---- 清理浏览器数据 ----
         CacheActionRow(
             title = "清理浏览器数据",
@@ -2489,6 +3097,12 @@ private fun CacheSection(
             Text(
                 "下载 ${if (downloadUnknown) "占用未知" else sizeText(downloadBytes)} · $downloadCount 个文件" +
                     " · 任务条目 $taskCount 条;文件本体在系统下载目录,只能在上方列表逐条删除。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "网页快照 ${sizeText(urlSnapBytes)} = 断网时可回看的网页内容(pa_offline/pa_url 分区);" +
+                    "与上面几项口径互不重叠,「清空网页快照缓存」只清它。",
                 Modifier.padding(bottom = 4.dp),
                 fontSize = 10.5.sp, color = Pa.TextTertiary,
             )
@@ -2549,8 +3163,8 @@ private fun CacheSection(
 @Composable
 private fun StatCell2(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-        Text(value, fontSize = 13.sp, color = Pa.TextPrimary)
-        Text(label, Modifier.padding(top = 2.dp), fontSize = 10.sp, color = Pa.TextTertiary)
+        Text(value, fontSize = 13.5.sp, color = Pa.TextPrimary)
+        Text(label, Modifier.padding(top = 2.dp), fontSize = 11.5.sp, color = Pa.TextTertiary)
     }
 }
 
@@ -2570,8 +3184,8 @@ private fun CacheActionRow(
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 13.sp, color = if (danger) Pa.Red else Pa.TextPrimary)
-            Text(desc, Modifier.padding(top = 2.dp), fontSize = 10.5.sp, color = Pa.TextTertiary)
+            Text(title, fontSize = 14.sp, color = if (danger) Pa.Red else Pa.TextPrimary)
+            Text(desc, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = Pa.TextTertiary)
         }
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
@@ -2620,4 +3234,197 @@ private fun webDataUsage(ctx: android.content.Context): Long {
             if (f.isDirectory) (f.listFiles()?.sumOf { size(it) } ?: 0L) else f.length()
         size(dir)
     }.getOrDefault(0L)
+}
+
+@Composable
+private fun AgentDefaultsSection(agentId: String, settings: CodexSettings?, models: List<ModelInfo>, writer: CodexWriter, openModels: () -> Unit) {
+    val choices = models.filter { it.provider == agentId }
+    if(agentId=="zcode") NativePermissionsSection(agentId, initial=settings)
+    SectionBlock(icon = R.drawable.ic_lucide_cpu, title = agentDisplay(agentId)) {
+        SplitButton(label = "默认模型", mainLabel = choices.find { it.id == settings?.model }?.displayName ?: "跟随 Agent 默认",
+            onMainClick = openModels,
+            options = listOf(SplitOption("跟随 Agent 默认", selected = settings?.model.isNullOrEmpty()) { writer.copy(model="").commit() }) +
+                choices.filter { !it.id.endsWith("/default") }.map { m -> SplitOption(m.displayName, selected=m.id==settings?.model) { writer.copy(model=m.id).commit() } })
+        val levels = effortsFor(choices, settings?.model.orEmpty(), agentId)
+        SplitButton(label = "思考强度", mainLabel = effortLabelOf(settings?.effort.orEmpty()),
+            onMainClick = {
+                val index = levels.indexOfFirst { it.id == settings?.effort }
+                writer.copy(effort=levels[(index+1)%levels.size].id).commit()
+            }, options = levels.map { e -> SplitOption(e.label, selected=e.id==settings?.effort) { writer.copy(effort=e.id).commit() } })
+        Text("${(levels.size-1).coerceAtLeast(0)} 个已报告档位 · 下次发送时应用", fontSize=12.sp, color=Pa.TextSecondary,
+            modifier=Modifier.padding(vertical=10.dp))
+    }
+}
+
+@Composable
+private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer: CodexWriter, models: List<ModelInfo>, capabilities: List<String>) {
+    SubPageScaffold(title = "Daemon 桥接与输入", onBack = onBack) {
+        SectionBlock(icon = R.drawable.ic_lucide_server, title = "连接策略") {
+            Text("USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",
+                fontSize = 13.sp, color = Pa.TextSecondary, modifier = Modifier.padding(vertical=12.dp))
+        }
+        SectionBlock(icon = R.drawable.ic_lucide_brain, title = "全局对话显示") {
+            Spacer(Modifier.height(10.dp))
+            // 显示思考过程(展示/隐藏)
+            SplitButton(
+                label = "显示思考过程",
+                mainLabel = if (AgentConnection.showThinking) "展示" else "隐藏",
+                onMainClick = {
+                    writer.copy(hideReasoning = AgentConnection.showThinking).commit()
+                    onFeedback(
+                        if (AgentConnection.showThinking) "将流式显示思考过程" else "将只显示对话结果",
+                    )
+                },
+                options = listOf(
+                    SplitOption("展示", selected = AgentConnection.showThinking) {
+                        writer.copy(hideReasoning = false).commit()
+                        onFeedback("将流式显示思考过程")
+                    },
+                    SplitOption("隐藏", selected = !AgentConnection.showThinking) {
+                        writer.copy(hideReasoning = true).commit()
+                        onFeedback("将只显示对话结果")
+                    },
+                ),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // 工具详情(折叠/展开)
+            SplitButton(
+                label = "工具详情",
+                mainLabel = if (AgentConnection.toolDetailsExpanded) "展开" else "折叠",
+                onMainClick = {
+                    AgentConnection.toolDetailsExpanded = !AgentConnection.toolDetailsExpanded
+                    onFeedback("工具详情设置已保存")
+                },
+                options = listOf(
+                    SplitOption(
+                        "折叠", selected = !AgentConnection.toolDetailsExpanded,
+                    ) {
+                        AgentConnection.toolDetailsExpanded = false
+                        onFeedback("工具详情设置已保存")
+                    },
+                    SplitOption(
+                        "展开", selected = AgentConnection.toolDetailsExpanded,
+                    ) {
+                        AgentConnection.toolDetailsExpanded = true
+                        onFeedback("工具详情设置已保存")
+                    },
+                ),
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+
+        // 实验功能:提示词优化(默认关;依赖电脑端 ZCode 且消耗其 Token Plan 配额)
+        SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "实验功能") {
+            Spacer(Modifier.height(10.dp))
+            SplitButton(
+                label = "优化提示词按钮",
+                caption = "在会话输入栏显示「优化」按钮,把口语化输入改写成给 AI 的清晰指令;由下方选定的 Agent 与模型生成，会消耗对应配额",
+                mainLabel = if (AgentConnection.optimizePromptEnabled) "开" else "关",
+                onMainClick = {
+                    AgentConnection.optimizePromptEnabled = !AgentConnection.optimizePromptEnabled
+                    onFeedback(if (AgentConnection.optimizePromptEnabled) "已在输入栏启用优化按钮" else "已关闭优化按钮")
+                },
+                options = listOf(
+                    SplitOption("开", selected = AgentConnection.optimizePromptEnabled) {
+                        AgentConnection.optimizePromptEnabled = true
+                        onFeedback("已在输入栏启用优化按钮")
+                    },
+                    SplitOption("关", selected = !AgentConnection.optimizePromptEnabled) {
+                        AgentConnection.optimizePromptEnabled = false
+                        onFeedback("已关闭优化按钮")
+                    },
+                ),
+            )
+            val optimizerAgents = models.map { it.provider }.distinct().filter {
+                "text_generation:$it" in capabilities || (capabilities.none { c -> c.startsWith("text_generation:") } && it in setOf("codex","pi","zcode"))
+            }
+            SplitButton(label="优化使用的 Agent", mainLabel=agentDisplay(AgentConnection.optimizeAgent),
+                onMainClick={ if(optimizerAgents.isNotEmpty()) {
+                    val index=optimizerAgents.indexOf(AgentConnection.optimizeAgent)
+                    AgentConnection.setOptimizer(optimizerAgents[(index+1)%optimizerAgents.size], "")
+                } },
+                options=optimizerAgents.map { id -> SplitOption(agentDisplay(id), selected=id==AgentConnection.optimizeAgent) { AgentConnection.setOptimizer(id, "") } })
+            val optimizerModels=models.filter { it.provider==AgentConnection.optimizeAgent && !it.id.endsWith("/default") }
+            SplitButton(label="优化使用的模型", mainLabel=optimizerModels.find { it.id==AgentConnection.optimizeModel }?.displayName ?: "Agent 默认模型",
+                onMainClick={ if(optimizerModels.isNotEmpty()) AgentConnection.setOptimizer(AgentConnection.optimizeAgent,optimizerModels.first().id) },
+                options=listOf(SplitOption("Agent 默认模型", selected=AgentConnection.optimizeModel.isEmpty()) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent, "") }) +
+                    optimizerModels.map { m -> SplitOption(m.displayName, selected=m.id==AgentConnection.optimizeModel) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent,m.id) } })
+            Spacer(Modifier.height(6.dp))
+        }
+
+        // 【端侧语音】离线识别模型管理:系统识别不可用的设备(无识别服务 ROM/无 GMS)
+        // 靠它落地语音输入 —— 下载 / 进度 / 失败重试 / 删除释放空间。
+        SectionBlock(icon = R.drawable.ic_lucide_mic, title = "语音识别") {
+            Spacer(Modifier.height(10.dp))
+            val context = LocalContext.current
+            LaunchedEffect(Unit) { SenseVoiceModelManager.init(context) }
+            val speech by SenseVoiceModelManager.state.collectAsState()
+            SettingRow(
+                title = "SenseVoice Small INT8（App 内置）",
+                desc = speech.error
+                    ?: "符合中文输入习惯 · 自动标点与数字规范化 · 音频不离开设备",
+                value = when {
+                    speech.ready -> "已就绪"
+                    speech.preparing -> "初始化 ${speech.preparedBytes * 100 / SenseVoiceModelManager.TOTAL_BYTES}%"
+                    else -> "内置"
+                },
+                divider = false,
+            )
+            Text(
+                "有系统识别服务时可直接使用；否则使用 App 内置 SenseVoice。录音权限被拒绝时只请求权限，不提供外部模型下载入口。",
+                fontSize = 11.sp,
+                color = Pa.TextSecondary,
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+internal fun NativePermissionsSection(agentId: String, threadId: String = "", initial: CodexSettings? = null) {
+    val scope=rememberCoroutineScope()
+    var native by remember(agentId,threadId,initial) { mutableStateOf(initial) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var refresh by remember { mutableStateOf(0) }
+    LaunchedEffect(agentId,threadId,refresh) {
+        if(initial!=null && refresh==0 && threadId.isBlank()) return@LaunchedEffect
+        busy=true
+        try {
+            native=withContext(Dispatchers.IO) { AgentConnection.modelServiceSlow().getCodexSettings(
+                GetCodexSettingsRequest.newBuilder().setAgentId(agentId).setThreadId(threadId).build()) }
+            error=null
+        } catch(e: Exception) { error=e.message } finally { busy=false }
+    }
+    fun select(mode: String) {
+        if(busy) return
+        busy=true
+        scope.launch {
+            try {
+                native=withContext(Dispatchers.IO) { AgentConnection.modelServiceSlow().setCodexSettings(
+                    SetCodexSettingsRequest.newBuilder().setAgentId(agentId).setThreadId(threadId).setNativeMode(mode).build()) }
+                error=null
+            } catch(e: Exception) { error="模式未修改：${e.message}" } finally { busy=false }
+        }
+    }
+    val options=native?.nativeModesList.orEmpty().distinct()
+    SectionBlock(icon=R.drawable.ic_lucide_shield,title=if(threadId.isBlank()) "ZCode 权限默认值" else "当前会话权限") {
+        SplitButton(label="原生权限模式",mainLabel=if(busy) "同步中…" else nativeModeLabel(native?.nativeMode.orEmpty()),
+            onMainClick={refresh++}, options=buildList {
+                if(threadId.isBlank()) add(SplitOption("跟随原生默认",selected=native?.nativeMode.isNullOrEmpty()) { select("") })
+                options.forEach { value -> add(SplitOption(nativeModeLabel(value), desc=value,selected=native?.nativeMode==value) { select(value) }) }
+            })
+        Text(error ?: native?.nativePermissionsNote.orEmpty(),fontSize=11.sp,color=Pa.TextSecondary,modifier=Modifier.padding(vertical=8.dp))
+        if(threadId.isBlank()) Text("默认值用于新建会话；已有会话在对话的更多菜单中调整。",fontSize=11.sp,color=Pa.TextTertiary)
+    }
+}
+internal fun nativeModeLabel(mode: String): String = when(mode) {
+    "" -> "跟随原生默认"
+    "build" -> "标准构建（build）"
+    "edit" -> "自动编辑（edit）"
+    "auto" -> "原生自动审批（auto）"
+    "yolo" -> "跳过审批（yolo）"
+    "plan" -> "计划（原生处理）"
+    else -> mode
 }

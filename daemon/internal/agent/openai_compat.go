@@ -143,8 +143,10 @@ func (p *OpenAICompatible) Run(ctx context.Context, req TurnRequest, sink Sink, 
 	// 2) 工具循环:最多 25 轮,防止模型无限自嗨
 	for round := 0; round < 25; round++ {
 		assistantBlocks, calls, finish, roundUsage, err := p.streamOnce(ctx, model, msgs, oaTools, sink)
-		usage.InputTokens += roundUsage.InputTokens
-		usage.OutputTokens += roundUsage.OutputTokens
+		if roundUsage != nil { // 无用量帧时 streamOnce 返回 nil,累计值保持不变
+			usage.InputTokens += roundUsage.InputTokens
+			usage.OutputTokens += roundUsage.OutputTokens
+		}
 		if err != nil {
 			return finalBlocks, &usage, err
 		}
@@ -159,8 +161,9 @@ func (p *OpenAICompatible) Run(ctx context.Context, req TurnRequest, sink Sink, 
 		if len(calls) > 0 {
 			// 把这轮的正文文本也带上
 			var sb strings.Builder
-			for _, b := range assistantBlocks {
-				if t, ok := b.Block.(*pb.ContentBlock_Text); ok {
+			// 按下标取址遍历,避免 range 复制 protobuf 消息(内嵌 MessageState 含锁)。
+			for i := range assistantBlocks {
+				if t, ok := assistantBlocks[i].Block.(*pb.ContentBlock_Text); ok {
 					sb.WriteString(t.Text.Text)
 				}
 			}
@@ -181,7 +184,8 @@ func (p *OpenAICompatible) Run(ctx context.Context, req TurnRequest, sink Sink, 
 }
 
 // streamOnce 发起一次流式请求,把增量实时喂给 sink,返回这轮的完整块。
-func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []oaMessage, tools []oaTool, sink Sink) (blocks []pb.ContentBlock, calls []oaToolCall, finish string, usage pb.Usage, err error) {
+// usage 改为指针返回:protobuf 消息内嵌 MessageState 含锁,按值 return 会拷贝锁。
+func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []oaMessage, tools []oaTool, sink Sink) (blocks []pb.ContentBlock, calls []oaToolCall, finish string, usage *pb.Usage, err error) {
 	body, _ := json.Marshal(oaRequest{Model: model, Messages: msgs, Tools: tools, Stream: true})
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -221,6 +225,9 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 		}
 		if len(ev.Choices) == 0 {
 			if ev.Usage != nil {
+				if usage == nil {
+					usage = &pb.Usage{}
+				}
 				usage.InputTokens = int64(ev.Usage.PromptTokens)
 				usage.OutputTokens = int64(ev.Usage.CompletionTokens)
 			}
@@ -231,11 +238,11 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 			finish = *ch.FinishReason
 		}
 		if d := ch.Delta.ReasoningContent; d != "" {
-			sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: d}}})
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: d}}})
 		}
 		if d := ch.Delta.Content; d != "" {
 			text.WriteString(d)
-			sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: d}}})
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: d}}})
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			acc, ok := callAcc[tc.Index]
@@ -275,7 +282,7 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 // 执行 → 通知结果(FINISHED)。返回给模型看的结果文本。
 func execWithApproval(ctx context.Context, tools []Tool, c oaToolCall, ws string, sink Sink, approve ApprovalHook) string {
 	callBlock := &pb.ToolCallBlock{Id: c.ID, Name: c.Function.Name, JsonArgs: c.Function.Arguments}
-	sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_STARTED, Call: callBlock,
 	}}})
 
@@ -284,7 +291,8 @@ func execWithApproval(ctx context.Context, tools []Tool, c oaToolCall, ws string
 		return "未知工具: " + c.Function.Name
 	}
 	if tool.Dangerous && approve != nil {
-		ok, note, err := approve(ctx, *callBlock)
+		// 【vet】直接传 callBlock 指针(原来解引用拷贝一份会被 copylocks 拒绝)。
+		ok, note, err := approve(ctx, callBlock)
 		if err != nil {
 			return "审批通道错误: " + err.Error()
 		}
@@ -299,7 +307,7 @@ func execWithApproval(ctx context.Context, tools []Tool, c oaToolCall, ws string
 	} else {
 		resultText = out
 	}
-	sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_FINISHED, Call: callBlock,
 		Result: &pb.ToolResultBlock{CallId: c.ID, Ok: err == nil, Output: clip(resultText, 8000)},
 	}}})
@@ -315,7 +323,9 @@ func blocksToOpenAI(role string, blocks []pb.ContentBlock) []oaMessage {
 	var calls []oaToolCall
 	pendingResults := map[string]string{}
 
-	for _, b := range blocks {
+	// 按下标取址遍历,避免 range 复制 protobuf 消息(内嵌 MessageState 含锁)。
+	for i := range blocks {
+		b := &blocks[i]
 		switch v := b.Block.(type) {
 		case *pb.ContentBlock_Text:
 			texts = append(texts, map[string]interface{}{"type": "text", "text": v.Text.Text})

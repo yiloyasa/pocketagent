@@ -59,12 +59,12 @@ class ThreadSnapshotTest {
     @Test
     fun trimsMessagesByByteBudget() {
         val fat = "x".repeat(5_000) // 单条成本约 10KB
-        val msgs = (0 until 40).map { ThreadSnapshot.Msg("user", "$it:$fat") }
+        val msgs = (0 until 60).map { ThreadSnapshot.Msg("user", "$it:$fat") }
         ThreadSnapshot.saveMessages("t1", msgs)
 
         val loaded = ThreadSnapshot.loadMessages("t1")!!
-        assertEquals(20, loaded.size) // 200KB / 10KB
-        assertTrue("应保留最新的", loaded.last().text.startsWith("39:"))
+        assertEquals(40, loaded.size) // 400KB(P1-8)/ 10KB
+        assertTrue("应保留最新的", loaded.last().text.startsWith("59:"))
     }
 
     @Test
@@ -88,16 +88,21 @@ class ThreadSnapshotTest {
 
     @Test
     fun evictsOldestThreadSnapshots() {
+        // P1-8 口径:构造 55 个线程,验证条数上限 50(最旧的被淘汰)。
+        // 先存满 50 个(不触发淘汰),再显式写 mtime 保证淘汰顺序确定,随后每多存一个
+        // 就淘汰当前最旧的一个 —— 最终恰好剩 50 个最新的。
         val base = System.currentTimeMillis() - 1_000_000
-        repeat(35) { i ->
+        repeat(50) { i ->
             ThreadSnapshot.saveMessages("t$i", listOf(ThreadSnapshot.Msg("user", "hi")))
             msgFile("t$i").setLastModified(base + i * 1_000L)
         }
-        ThreadSnapshot.saveMessages("t35", listOf(ThreadSnapshot.Msg("user", "hi")))
+        repeat(5) { j ->
+            ThreadSnapshot.saveMessages("t${50 + j}", listOf(ThreadSnapshot.Msg("user", "hi")))
+        }
 
-        val kept = (0..35).filter { msgFile("t$it").isFile }
-        assertEquals(30, kept.size)
-        assertEquals((6..35).toList(), kept) // 最旧的 t0..t5 被淘汰
+        val kept = (0..54).filter { msgFile("t$it").isFile }
+        assertEquals(50, kept.size)
+        assertEquals((5..54).toList(), kept) // 最旧的 t0..t4 被淘汰
     }
 
     @Test

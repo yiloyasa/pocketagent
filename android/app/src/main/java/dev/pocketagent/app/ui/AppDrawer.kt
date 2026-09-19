@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import androidx.activity.compose.BackHandler
+import dev.pocketagent.app.BuildConfig
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.MutableTransitionState
@@ -425,7 +426,7 @@ private fun DrawerPanel(
                     color = Pa.TextTertiary,
                     maxLines = 1,
                 )
-                Text("v0.1.0", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                Text("v${BuildConfig.VERSION_NAME}", fontSize = 10.5.sp, color = Pa.TextTertiary)
             }
         }
     }

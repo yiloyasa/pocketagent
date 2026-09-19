@@ -3,19 +3,25 @@ package main
 // R11 修复验证:codex 会话列表/导入、自动标题、断流后审批解锁。
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
-var addr = "127.0.0.1:7246"
+// 探针的连接参数:-addr 指定 daemon,-plaintext 回明文(默认 TLS 自签)。
+var (
+	addr      = "127.0.0.1:7246"
+	plaintext = false
+)
 
 func must(err error) {
 	if err != nil {
@@ -24,16 +30,28 @@ func must(err error) {
 }
 
 func conn() *grpc.ClientConn {
-	c, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// daemon 生产默认 TLS(自签证书)。诊断用 InsecureSkipVerify 跳过自签校验;
+	// 指纹核对走 tlsprobe。-plaintext=true 回明文(对付 -plaintext 起的测试 daemon)。
+	var creds credentials.TransportCredentials
+	if plaintext {
+		creds = insecure.NewCredentials()
+	} else {
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // 探针仅本机诊断用
+	}
+	c, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
 	must(err)
 	return c
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	flag.StringVar(&addr, "addr", "127.0.0.1:7246", "daemon 地址(ip:port)")
+	flag.BoolVar(&plaintext, "plaintext", false, "连明文 gRPC(对付 -plaintext 起的测试 daemon);默认 TLS")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 1 {
 		log.Fatal("用法: r11probe list | import <id> | title | approval")
 	}
-	switch os.Args[1] {
+	switch args[0] {
 	case "list":
 		c := conn()
 		defer c.Close()
@@ -49,14 +67,14 @@ func main() {
 				time.UnixMilli(t.UpdatedAtUnixMs).Format("01-02 15:04"))
 		}
 	case "import":
-		if len(os.Args) < 3 {
+		if len(args) < 2 {
 			log.Fatal("需要 codexThreadId")
 		}
 		c := conn()
 		defer c.Close()
 		tc := pb.NewThreadServiceClient(c)
 		resp, err := tc.ImportCodexThread(context.Background(),
-			&pb.ImportCodexThreadRequest{CodexThreadId: os.Args[2]})
+			&pb.ImportCodexThreadRequest{CodexThreadId: args[1]})
 		must(err)
 		hist, err := tc.GetThreadHistory(context.Background(),
 			&pb.GetThreadHistoryRequest{ThreadId: resp.ThreadId})

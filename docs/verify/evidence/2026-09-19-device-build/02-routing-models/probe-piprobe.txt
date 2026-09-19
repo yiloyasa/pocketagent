@@ -1,0 +1,20 @@
+# piprobe
+# Pi 原生会话/命令/档位
+# rc=0 耗时=97.17s @ 22:46:25
+
+== Pi P0 探针开始 ==
+node=C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe
+cli=G:\Claude Code\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js
+pi version=0.85.1
+[1] daemon 真实环境拉起(干净 env,不经 pi.ps1) —— 通过
+[2] get_state 握手 —— 通过
+[3] 一轮对话(text_delta → agent_settled) —— 通过
+[4] 工具调用事件 + partialResult 累积 —— 通过
+[5] abort 中断 —— 通过
+[6] 审批 extension_ui_request(注入扩展 confirm) —— 通过
+[9] 体积(~1MB base64 图片分帧) —— 通过
+[10] 扩展干扰记录(4 个扩展包) —— 通过
+[7] switch_session 恢复历史 —— 通过
+[8] get_entries(since=) 游标 —— 通过
+== 探针结束 ==
+报告已写入: G:\项目1\pocketagent\docs\verify\evidence\pi-p0-probe.md

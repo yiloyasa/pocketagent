@@ -1,0 +1,334 @@
+M .gitignore
+ M android/app/build.gradle.kts
+ M android/app/src/main/AndroidManifest.xml
+ M android/app/src/main/assets/terminal.html
+ M android/app/src/main/java/dev/pocketagent/app/AgentConnection.kt
+ M android/app/src/main/java/dev/pocketagent/app/ConnectionDiagnostics.kt
+ M android/app/src/main/java/dev/pocketagent/app/MainActivity.kt
+ M android/app/src/main/java/dev/pocketagent/app/TurnKeepAliveService.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/AppDrawer.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/BrowserScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/ChatScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/ContextUsageCard.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/GitScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/HomeScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/ListBannerState.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/Onboarding.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/SettingsScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/TerminalScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/ThreadsScreen.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/TurnSession.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/component/PaCache.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/component/PaDownloader.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/component/SplitButton.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/component/ThreadSnapshot.kt
+ M android/app/src/main/java/dev/pocketagent/app/ui/component/ThreadUsageStore.kt
+ M android/app/src/main/proto/v1/fs.proto
+ M android/app/src/main/proto/v1/host.proto
+ M android/app/src/main/proto/v1/model.proto
+ M android/app/src/main/proto/v1/terminal.proto
+ M android/app/src/main/proto/v1/thread.proto
+ M android/app/src/test/java/dev/pocketagent/app/AgentConnectionCandidatesTest.kt
+ M android/app/src/test/java/dev/pocketagent/app/ConnectionDiagnosticsTest.kt
+ M android/app/src/test/java/dev/pocketagent/app/ui/ContextWindowResolveTest.kt
+ M android/app/src/test/java/dev/pocketagent/app/ui/component/ThreadSnapshotTest.kt
+ M android/build-ascii.ps1
+ M daemon/cmd/cfgtest/main.go
+ M daemon/cmd/chatprobe/main.go
+ M daemon/cmd/e2etest/main.go
+ M daemon/cmd/lanprobe/main.go
+ M daemon/cmd/localverify/main.go
+ M daemon/cmd/mcptest/main.go
+ M daemon/cmd/pocketagentd/main.go
+ M daemon/cmd/r11probe/main.go
+ M daemon/cmd/resumetest/main.go
+ M daemon/cmd/sectprobe/main.go
+ M daemon/cmd/smoketest/main.go
+ M daemon/cmd/termtest/main.go
+ M daemon/cmd/tlprobe/main.go
+ M daemon/cmd/verify/main.go
+ M daemon/cmd/verifyext/main.go
+ M daemon/go.mod
+ M daemon/go.sum
+ M daemon/internal/agent/codex.go
+ M daemon/internal/agent/codex_capabilities.go
+ M daemon/internal/agent/codex_goal.go
+ M daemon/internal/agent/codex_requests.go
+ M daemon/internal/agent/codex_threads.go
+ M daemon/internal/agent/echo.go
+ M daemon/internal/agent/openai_compat.go
+ M daemon/internal/agent/provider.go
+ M daemon/internal/codexapp/client.go
+ M daemon/internal/gen/pocketagent/v1/common.pb.go
+ M daemon/internal/gen/pocketagent/v1/fs.pb.go
+ M daemon/internal/gen/pocketagent/v1/fs_grpc.pb.go
+ M daemon/internal/gen/pocketagent/v1/git.pb.go
+ M daemon/internal/gen/pocketagent/v1/git_grpc.pb.go
+ M daemon/internal/gen/pocketagent/v1/host.pb.go
+ M daemon/internal/gen/pocketagent/v1/host_grpc.pb.go
+ M daemon/internal/gen/pocketagent/v1/model.pb.go
+ M daemon/internal/gen/pocketagent/v1/model_grpc.pb.go
+ M daemon/internal/gen/pocketagent/v1/terminal.pb.go
+ M daemon/internal/gen/pocketagent/v1/terminal_grpc.pb.go
+ M daemon/internal/gen/pocketagent/v1/thread.pb.go
+ M daemon/internal/gen/pocketagent/v1/thread_grpc.pb.go
+ M daemon/internal/server/fork_seed_test.go
+ M daemon/internal/server/fs.go
+ M daemon/internal/server/host.go
+ M daemon/internal/server/model.go
+ M daemon/internal/server/model_ext.go
+ M daemon/internal/server/server.go
+ M daemon/internal/server/terminal.go
+ M daemon/internal/server/thread.go
+ M daemon/internal/server/thread_ext.go
+ M daemon/internal/store/store.go
+ M daemon/internal/term/manager.go
+ M "docs/review/2026-09-17-codex\346\216\245\345\205\245\345\244\215\346\240\270\346\212\245\345\221\212.md"
+ M "docs/review/2026-09-17-pi-\346\216\245\345\205\245\350\260\203\347\240\224\344\270\216\346\226\271\346\241\210.md"
+ M proto/v1/fs.proto
+ M proto/v1/host.proto
+ M proto/v1/model.proto
+ M proto/v1/terminal.proto
+ M proto/v1/thread.proto
+?? android/app/libs/
+?? android/app/src/main/assets/sensevoice/
+?? android/app/src/main/java/dev/pocketagent/app/DeviceKey.kt
+?? android/app/src/main/java/dev/pocketagent/app/PinTrustManager.kt
+?? android/app/src/main/java/dev/pocketagent/app/TokenStore.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/AgentBrand.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/DesktopEchoLogic.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/GoalDisplayLogic.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/PromptOptimizeLogic.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/SlashCommandsLogic.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/TurnDelivery.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/WorkflowBCapability.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/DocFormatRegistry.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/MdnsDiscovery.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/OfflineStore.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/PaNotifications.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/SenseVoiceModelFiles.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/SenseVoiceModelManager.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/SenseVoiceRecognizer.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/SenseVoiceSession.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/TurnCheckpointStore.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/VoskModelManager.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/VoskVoiceRecognizer.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/WebDownloadBridge.kt
+?? android/app/src/main/java/dev/pocketagent/app/ui/component/WebNavPolicy.kt
+?? android/app/src/test/java/dev/pocketagent/app/AgentConnectionEndpointsWorkflowC.kt
+?? android/app/src/test/java/dev/pocketagent/app/AgentConnectionTofuAndMdnsTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/DeviceAuthFlowTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/PinTrustManagerTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/TokenStoreMigrationTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/AgentAvailabilityTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/AgentBadgeAndFilterTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/AgentPcSessionsTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/ChatModelRoutingTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/CodexWriterRegressionTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/DesktopEchoLogicTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/DevServerPreviewUrlTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/ExportChatBodyTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/ExportHtmlGateTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/GoalDisplayLogicTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/HistoryThinkingRestoreTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/ListBannerO1Test.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/ModelEffortOptionsTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/MultiAgentToggleTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/NewThreadAgentSelectionTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/OnboardingAgentCapabilityTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/PaNotificationAndVoiceTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/PromptOptimizeLogicTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/QAReviewUsageAndOrganizeTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/RuntimeStateRegressionTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/SectionCoverageNoteTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/SessionConfigAndCompactionTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/SlashCommandsLogicTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/TurnDeliveryAndOfflineTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/TurnEventResumeTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/VoskVoiceFallbackTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/WorkflowBCapabilityTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/DocFormatRegistryWorkflowC.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/MdnsDiscoveryTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/OfflineStoreWorkflowC.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/QAReviewOfflineAndFormatTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/SenseVoiceModelFilesTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/SenseVoiceSessionTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/ThreadSnapshotO1Test.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/TurnCheckpointStoreTest.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/WebDownloadBridgeWorkflowC.kt
+?? android/app/src/test/java/dev/pocketagent/app/ui/component/WebNavPolicyWorkflowC.kt
+?? daemon/cmd/bridgehealth/
+?? daemon/cmd/codexgoalprobe/
+?? daemon/cmd/codexreadprobe/
+?? daemon/cmd/eventprobe/
+?? daemon/cmd/hexprobe/
+?? daemon/cmd/imgprobe/
+?? daemon/cmd/mdnsprobe/
+?? daemon/cmd/modelprobe/
+?? daemon/cmd/piprobe/
+?? daemon/cmd/pisteerprobe/
+?? daemon/cmd/ptyctrlprobe/
+?? daemon/cmd/termctrl/
+?? daemon/cmd/tlsprobe/
+?? daemon/cmd/wbcfgread/
+?? daemon/cmd/wbempty/
+?? daemon/cmd/wbfix/
+?? daemon/cmd/wbprobe/
+?? daemon/cmd/wbset/
+?? daemon/cmd/zcmodelprobe/
+?? daemon/cmd/zcprobe/
+?? daemon/docs/
+?? daemon/internal/agent/capabilities_cache.go
+?? daemon/internal/agent/capabilities_cache_test.go
+?? daemon/internal/agent/codex_block_test.go
+?? daemon/internal/agent/codex_commands.go
+?? daemon/internal/agent/codex_commands_test.go
+?? daemon/internal/agent/codex_effect_test.go
+?? daemon/internal/agent/codex_goal_test.go
+?? daemon/internal/agent/codex_image_input_test.go
+?? daemon/internal/agent/codex_input_test.go
+?? daemon/internal/agent/codex_output_test.go
+?? daemon/internal/agent/codex_read.go
+?? daemon/internal/agent/codex_read_test.go
+?? daemon/internal/agent/codex_reasoning_test.go
+?? daemon/internal/agent/codex_review.go
+?? daemon/internal/agent/codex_review_test.go
+?? daemon/internal/agent/codex_snapshot_test.go
+?? daemon/internal/agent/codex_steer.go
+?? daemon/internal/agent/codex_steer_test.go
+?? daemon/internal/agent/current_selection.go
+?? daemon/internal/agent/current_selection_test.go
+?? daemon/internal/agent/native_notifications.go
+?? daemon/internal/agent/native_notifications_test.go
+?? daemon/internal/agent/native_recovery.go
+?? daemon/internal/agent/native_recovery_test.go
+?? daemon/internal/agent/native_validation_test.go
+?? daemon/internal/agent/pi.go
+?? daemon/internal/agent/pi_delete.go
+?? daemon/internal/agent/pi_delete_test.go
+?? daemon/internal/agent/pi_events.go
+?? daemon/internal/agent/pi_events_test.go
+?? daemon/internal/agent/pi_prefs_effect_test.go
+?? daemon/internal/agent/pi_rename_test.go
+?? daemon/internal/agent/pi_resume_test.go
+?? daemon/internal/agent/pi_running_test.go
+?? daemon/internal/agent/pi_selection.go
+?? daemon/internal/agent/pi_selection_test.go
+?? daemon/internal/agent/pi_sessions.go
+?? daemon/internal/agent/pi_sessions_test.go
+?? daemon/internal/agent/pi_slevel_test.go
+?? daemon/internal/agent/pi_zcode_snapshot_semantics_test.go
+?? daemon/internal/agent/text_generator.go
+?? daemon/internal/agent/zcode.go
+?? daemon/internal/agent/zcode_apply_model_test.go
+?? daemon/internal/agent/zcode_approval_test.go
+?? daemon/internal/agent/zcode_controls_live_test.go
+?? daemon/internal/agent/zcode_ctrl_test.go
+?? daemon/internal/agent/zcode_history_test.go
+?? daemon/internal/agent/zcode_image_input.go
+?? daemon/internal/agent/zcode_image_input_test.go
+?? daemon/internal/agent/zcode_live_test.go
+?? daemon/internal/agent/zcode_prefs_effect_test.go
+?? daemon/internal/agent/zcode_selection.go
+?? daemon/internal/agent/zcode_selection_test.go
+?? daemon/internal/agent/zcode_sessions.go
+?? daemon/internal/agent/zcode_sessions_live_test.go
+?? daemon/internal/agent/zcode_sessions_test.go
+?? daemon/internal/agent/zcode_slash_test.go
+?? daemon/internal/agent/zcode_test.go
+?? daemon/internal/agent/zcode_threadmap_test.go
+?? daemon/internal/codexapp/client_test.go
+?? daemon/internal/codexapp/handler_concurrency_test.go
+?? daemon/internal/eventstore/
+?? daemon/internal/mdns/
+?? daemon/internal/piapp/
+?? daemon/internal/server/agent_commands.go
+?? daemon/internal/server/agent_commands_test.go
+?? daemon/internal/server/agents_sessions.go
+?? daemon/internal/server/agents_sessions_limit_test.go
+?? daemon/internal/server/agents_sessions_test.go
+?? daemon/internal/server/apply_to_existing_test.go
+?? daemon/internal/server/approval_resume.go
+?? daemon/internal/server/approval_resume_test.go
+?? daemon/internal/server/auth_p0p2_test.go
+?? daemon/internal/server/codex_block_test.go
+?? daemon/internal/server/codex_desktop_echo_test.go
+?? daemon/internal/server/devices.go
+?? daemon/internal/server/devices_test.go
+?? daemon/internal/server/dynamic_adapters_test.go
+?? daemon/internal/server/event_sequence.go
+?? daemon/internal/server/event_sequence_test.go
+?? daemon/internal/server/fs_lock_test.go
+?? daemon/internal/server/fs_read_mtime_test.go
+?? daemon/internal/server/host_preview.go
+?? daemon/internal/server/host_preview_test.go
+?? daemon/internal/server/model_efforts_test.go
+?? daemon/internal/server/model_lock_test.go
+?? daemon/internal/server/native_result_recovery.go
+?? daemon/internal/server/native_settings.go
+?? daemon/internal/server/native_settings_test.go
+?? daemon/internal/server/pi_compact_route_test.go
+?? daemon/internal/server/pi_export_route_test.go
+?? daemon/internal/server/prefs_broadcast_test.go
+?? daemon/internal/server/prompt_opt.go
+?? daemon/internal/server/prompt_opt_test.go
+?? daemon/internal/server/qa_review_workflow_b_test.go
+?? daemon/internal/server/slash_commands.go
+?? daemon/internal/server/slash_commands_ledger_test.go
+?? daemon/internal/server/slash_commands_test.go
+?? daemon/internal/server/terminal_lifecycle_test.go
+?? daemon/internal/server/thread_delete_pi_test.go
+?? daemon/internal/server/thread_history_zcode_test.go
+?? daemon/internal/server/thread_provider_test.go
+?? daemon/internal/server/thread_review.go
+?? daemon/internal/server/thread_review_test.go
+?? daemon/internal/server/thread_snapshot_test.go
+?? daemon/internal/server/thread_steer_queue_test.go
+?? daemon/internal/server/thread_thinking.go
+?? daemon/internal/server/thread_thinking_test.go
+?? daemon/internal/server/turn_concurrency_test.go
+?? daemon/internal/server/turn_overrides_test.go
+?? daemon/internal/server/turn_queue.go
+?? daemon/internal/server/turn_transport.go
+?? daemon/internal/server/turn_transport_test.go
+?? daemon/internal/server/workflow_b_test.go
+?? daemon/internal/store/store_compat_test.go
+?? daemon/internal/store/store_concurrency_test.go
+?? daemon/internal/store/store_snapshot_batch_test.go
+?? daemon/internal/store/store_snapshot_test.go
+?? daemon/internal/store/workflow_b_test.go
+?? daemon/internal/term/ctrl.go
+?? daemon/internal/term/ctrl_other.go
+?? daemon/internal/term/ctrl_test.go
+?? daemon/internal/term/input_translate.go
+?? daemon/internal/term/manager_idle_test.go
+?? daemon/internal/tlscert/
+?? daemon/internal/version/
+?? daemon/internal/zcodeapp/
+?? daemon/pi-e2e-proof-20260919.png
+?? daemon/pocketagentd.exe.diag
+?? daemon/pocketagentd.exe.diag2
+?? daemon/pocketagentd.exe.diag3
+?? daemon/pocketagentd.exe.diag4
+?? daemon/pocketagentd.exe.prev-20260918
+?? daemon/pocketagentd.exe.prev-ctrlc-20260918
+?? daemon/pocketagentd.exe.prev-final
+?? daemon/pocketagentd.exe.prev-final2
+?? daemon/pocketagentd.exe.prev-p0p1-full
+?? daemon/pocketagentd.exe.prev-piguideof-20260919
+?? daemon/pocketagentd.exe.prev-pistderr-20260919
+?? daemon/pocketagentd.exe.prev-termidle-20260918
+?? daemon/pocketagentd.exe.prev-zcodeenv-20260919
+?? docs/plans/2026-09-18-p0p1-optimization.md
+?? docs/plans/2026-09-19-multi-agent-pi-zcode.md
+?? docs/plans/2026-09-19-real-device-release-audit-plan.md
+?? docs/review/2026-09-19-0.2.2-mobile-native-adapters.md
+?? docs/review/2026-09-19-provider-coverage-audit.md
+?? docs/review/2026-09-19-quality-patrol-2.md
+?? docs/review/2026-09-19-quality-patrol.md
+?? docs/review/2026-09-19-settings-snapshot-handoff.md
+?? docs/verify/evidence/README.md
+?? docs/verify/evidence/pi-cmds-probe.md
+?? docs/verify/evidence/pi-p0-probe.md
+?? docs/verify/evidence/pi-s-probe.md
+?? tools/check_terminal_html.py

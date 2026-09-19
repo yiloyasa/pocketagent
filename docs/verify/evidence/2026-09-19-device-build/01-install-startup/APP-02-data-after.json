@@ -1,0 +1,18 @@
+{
+  "shared_prefs": {
+    "shared_prefs/pa_secure.xml": {
+      "sha256": "c9fbb57be05bcdde…",
+      "size": "1144"
+    },
+    "shared_prefs/agent_conn.xml": {
+      "sha256": "0fc6559b4460c514…",
+      "size": "346"
+    }
+  },
+  "files": {
+    "files/profileInstalled": {
+      "sha256": "8eda9f81e75de8c4…",
+      "size": "24"
+    }
+  }
+}

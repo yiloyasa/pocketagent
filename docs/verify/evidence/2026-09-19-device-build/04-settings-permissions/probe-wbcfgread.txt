@@ -1,0 +1,14 @@
+# wbcfgread
+# 设置项真值读取 (含 Agent 与模型)
+# rc=0 耗时=0.31s @ 22:44:41
+
+approval="never" sandbox="danger-full-access" model="codex/dexacct.MThkMjI1ZGQyNTAyYTJkNDAwMGY.ZW5kcG9pbnRfMWEwNmNlODhkMTBfNmRmYTA4.Z3B0LTUuNi1zb2w" effort="medium"
+verbosity="low" summary="detailed" hide=false paste=true
+  approval_policy            state=applied          detail=每轮 turn/start 携带 approvalPolicy
+  sandbox                    state=applied          detail=每轮 turn/start 携带 sandboxPolicy
+  model                      state=applied          detail=每轮 turn/start 携带 model
+  effort                     state=applied          detail=每轮 turn/start 携带 effort
+  model_reasoning_summary    state=applied          detail=turn/start 携带 summary + thread config 覆盖
+  model_verbosity            state=applied          detail=thread/start、thread/resume 的 config 覆盖
+  hide_agent_reasoning       state=applied          detail=由 daemon 过滤思考事件实现(非 codex 原生开关)
+  disable_paste_burst        state=unsupported      detail=当前 codex 版本无 disable_paste_burst 这个配置键

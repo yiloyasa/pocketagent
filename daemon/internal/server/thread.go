@@ -7,11 +7,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/store"
+	"google.golang.org/protobuf/proto"
 )
 
 // ---------- Thread CRUD ----------
@@ -24,17 +26,33 @@ import (
 // 重启后留下一个点了就报错的僵尸按钮。所以这里每次从 provider 现取。
 func (s *Server) threadToPB(t *store.Thread) *pb.Thread {
 	out := &pb.Thread{
-		Id: t.ID, Title: t.Title, Workspace: t.Workspace, Goal: t.Goal,
-		ModelId: t.ModelID, Status: t.Status,
+		LastTurnError: t.LastTurnError,
+		Id:            t.ID, Title: t.Title, Workspace: t.Workspace, Goal: t.Goal,
+		ModelId: t.ModelID, Status: t.Status, Effort: t.Effort,
 		CreatedAtUnixMs: t.CreatedAt, UpdatedAtUnixMs: t.UpdatedAt,
 		MessageCount: int32(len(t.Messages)),
 		// 把桥接的 codex 线程 id 透出:手机端据此把"活跃"与"电脑"里的
 		// 同一个会话合并为一条(否则会显示两份)。
 		CodexThreadId: t.CodexThreadID,
 		SectionId:     t.SectionID,
+		// 多 agent 接入:会话归属与外部会话引用(手机端渲染 agent 徽标/筛选)。
+		AgentId: threadAgentID(t),
+		ExternalSession: func() *pb.ExternalSessionRef {
+			if t.ExternalSession.SessionFile == "" && t.ExternalSession.SessionID == "" {
+				return nil
+			}
+			return &pb.ExternalSessionRef{
+				SessionId:   t.ExternalSession.SessionID,
+				SessionFile: t.ExternalSession.SessionFile,
+				Cwd:         t.ExternalSession.Cwd,
+			}
+		}(),
 		// 归档只有一个事实来源(Status),这里只是把它翻译成布尔量,
 		// 免得手机端要同时判断 status==ARCHIVED 和 archived 两个字段。
 		Archived: t.Status == pb.ThreadStatus_THREAD_STATUS_ARCHIVED,
+	}
+	if approvals, ok := s.approvalSessions.Load(t.ID); ok {
+		out.PendingApprovals = approvals.(*turnApprovals).snapshot()
 	}
 	if p := s.codexProvider(); p != nil && t.CodexThreadID != "" {
 		if g := p.GuardianLatest(t.CodexThreadID); g != nil {
@@ -72,19 +90,70 @@ func (s *Server) CreateThread(ctx context.Context, req *pb.CreateThreadRequest) 
 			ws = s.cfg.Workspace
 		}
 	}
+	// 多 agent:请求指定 agent(codex/pi/…)。不存在就显式报错 —— 静默建一个
+	// 跑在别的 agent 上的会话,比报错误导得多(调研 §7.1 的隐患)。
+	agentID := strings.TrimSpace(req.AgentId)
+	if agentID == "" {
+		agentID = "codex" // 老客户端不带 agent_id:维持 codex 语义
+	}
+	if _, ok := s.cfg.Providers[agentID]; !ok {
+		return nil, errFailedPrecondition("电脑上没有可用的 " + agentID + " agent(未安装或未配置)")
+	}
 	model := req.ModelId
-	if model == "" {
-		model = s.defaultModelID()
+	if model == "" || !strings.HasPrefix(model, agentID+"/") {
+		model = s.defaultModelIDFor(agentID)
 	}
 	title := req.Title
 	if title == "" {
 		title = "新会话 " + time.Now().Format("01-02 15:04")
 	}
-	t := &store.Thread{ID: randomID("th"), Title: title, Workspace: ws, ModelID: model}
+	t := &store.Thread{ID: randomID("th"), Title: title, Workspace: ws, ModelID: model, AgentID: agentID}
+	// ---- 设置快照:"设置页更改只对新建对话生效"(2026-09-19)----
+	// 把此刻生效的桌面偏好(与启动灌入 / SetCodexSettings 广播同源的
+	// DesktopPrefsFromStore,即"经 ApplyPrefs 后的值")拷进线程落库。
+	// 之后用户再改设置,本会话的后续轮次仍按这份快照装配参数 —— 老会话的
+	// 行为不被设置页牵动;要吃到新设置就新建对话。
+	// 注意:只快照"新建"这一刻;导入/同步进来的既有桌面会话不动
+	// (它们本来就是"已有对话",走全局兜底语义)。
+	t.SettingsSnapshot = turnSettingsFromPrefs(agent.DesktopPrefsFromStore(s.cfg.Store))
+	if agentID != "codex" {
+		d := s.cfg.Store.AgentDefaults(agentID)
+		t.SettingsSnapshot = &d
+	}
 	if err := s.cfg.Store.Create(t); err != nil {
 		return nil, errInternal(err)
 	}
 	return s.threadToPB(t), nil
+}
+
+// turnSettingsFromPrefs 从一份完整桌面偏好里提取"会路由进 turn 的七项",
+// 作为线程级设置快照(DisablePasteBurst 不进 turn 参数,不入快照)。
+func turnSettingsFromPrefs(p agent.DesktopPrefs) *store.TurnSettings {
+	return &store.TurnSettings{
+		ApprovalPolicy:   p.ApprovalPolicy,
+		Sandbox:          p.Sandbox,
+		Model:            p.Model,
+		Effort:           p.Effort,
+		Verbosity:        p.Verbosity,
+		ReasoningSummary: p.ReasoningSummary,
+		HideReasoning:    p.HideReasoning,
+	}
+}
+
+// defaultModelIDFor 给指定 agent 的默认模型 id("<agent>/<首个模型>")。
+// 模型列表拉不到时退回 "<agent>/default"(codex/pi 都有 default 兜底项)。
+func (s *Server) defaultModelIDFor(agent string) string {
+	if agent != "codex" {
+		if d := s.cfg.Store.AgentDefaults(agent); d.Model != "" {
+			return d.Model
+		}
+	}
+	if p, ok := s.cfg.Providers[agent]; ok {
+		if ms := p.Models(); len(ms) > 0 {
+			return p.ID() + "/" + ms[0].Id
+		}
+	}
+	return agent + "/default"
 }
 
 // ListThreads 会话列表。
@@ -159,24 +228,64 @@ func (s *Server) GetThread(ctx context.Context, req *pb.GetThreadRequest) (*pb.T
 	if !ok {
 		return nil, errNotFound("会话不存在")
 	}
-	return s.threadToPB(t), nil
+	t = s.recoverNativeResult(ctx, t)
+	out := s.threadToPB(t)
+	// codex 目标态回读:打开会话时以电脑端为准刷新(手机端有则显示"目标:xxx")。
+	out.GoalDetail = s.goalDetailFor(ctx, t)
+	return out, nil
 }
 
 func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) (*pb.Empty, error) {
-	// 先取出来:若这个会话绑定了电脑上的 codex 线程,删除时要一并清掉它的 rollout,
-	// 否则手机端删了、桌面 codex 里还在(表现为"删除会话未成功运行")。
-	var codexID string
-	if t, ok := s.cfg.Store.Get(req.ThreadId); ok {
-		codexID = t.CodexThreadID
+	t, ok := s.cfg.Store.Get(req.ThreadId)
+	if !ok {
+		return &pb.Empty{}, nil
 	}
-	if err := s.cfg.Store.Delete(req.ThreadId); err != nil {
-		return nil, errInternal(err)
+	if s.activeTurns.Has(t.ID) || t.Status == pb.ThreadStatus_THREAD_STATUS_RUNNING {
+		return nil, errFailedPrecondition("会话正在运行，请先停止任务再删除或移除")
 	}
-	if codexID != "" {
-		if err := agent.DeleteCodexSession(codexID); err != nil {
-			// rollout 不存在 / 已被桌面端清理都属正常,记日志但不让删除失败
-			log.Printf("删除 codex 会话 %s 的 rollout 失败: %v", codexID, err)
+	id := threadAgentID(t)
+	if !req.LocalOnly {
+		switch id {
+		case "codex":
+			if t.CodexThreadID != "" {
+				if err := agent.DeleteCodexSession(t.CodexThreadID); err != nil {
+					return nil, errInternal(err)
+				}
+			}
+		case "zcode":
+			if t.ExternalSession.SessionID != "" {
+				p, ok := s.cfg.Providers[id].(zcodeSessionCloser)
+				if !ok {
+					return nil, errUnavailable("ZCode 暂不可用，未删除会话")
+				}
+				if err := p.CloseSession(t.ExternalSession.SessionID); err != nil {
+					return nil, errInternal(err)
+				}
+			}
+		case "pi":
+			if p, ok := s.cfg.Providers[id].(piThreadDropper); ok {
+				p.DropThread(t.ID)
+			}
+			if err := agent.DeletePiSession(t.ExternalSession.SessionFile, t.ExternalSession.SessionID); err != nil {
+				return nil, errInternal(err)
+			}
 		}
+	} else {
+		sid := t.ExternalSession.SessionID
+		if id == "codex" {
+			sid = t.CodexThreadID
+		}
+		if err := s.cfg.Store.SetSessionHidden(id, sid, true); err != nil {
+			return nil, errInternal(err)
+		}
+	}
+	if id == "pi" && req.LocalOnly {
+		if p, ok := s.cfg.Providers[id].(piThreadDropper); ok {
+			p.DropThread(t.ID)
+		}
+	}
+	if err := s.cfg.Store.Delete(t.ID); err != nil {
+		return nil, errInternal(err)
 	}
 	return &pb.Empty{}, nil
 }
@@ -214,6 +323,9 @@ func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest
 	if !ok {
 		return nil, errNotFound("会话不存在")
 	}
+	if threadAgentID(t) != "codex" && threadAgentID(t) != "zcode" {
+		return nil, errFailedPrecondition("该 Agent 未提供原生目标模式")
+	}
 	t.Goal = req.Goal
 	if err := s.cfg.Store.Update(t); err != nil {
 		return nil, errInternal(err)
@@ -222,24 +334,93 @@ func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest
 	// 不下发的话它根本不知道用户设了目标,表现就是"我明明设了目标,它没当回事"。
 	// 下发失败不影响落库结果(线程还没被 app-server 加载时是正常情况,
 	// provider 会暂存并在第一轮 Run 拿到 codex threadId 后补发)。
-	if p, ok := s.cfg.Providers["codex"].(*agent.CodexProvider); ok && t.CodexThreadID != "" {
+	if p, ok := s.cfg.Providers["codex"].(*agent.CodexProvider); ok && threadAgentID(t) == "codex" {
 		if err := p.SetGoal(t.ID, req.Goal); err != nil {
 			log.Printf("[goal] 下发失败(已落库,稍后补发)thread=%s: %v", t.ID, err)
+		}
+	}
+	// zcode 线程按归属 agent 路由到 session/goal(2026-09-19 控制面探针实证:
+	// {sessionId, action:"set"|"clear", objective},与 codex 的双方法同语义;
+	// provider 侧同样暂存、Run 终局补发)。抽接口与 zcodeHistorySource 同款,
+	// 单测可注入 fake。
+	if threadAgentID(t) == "zcode" {
+		if p, ok := s.cfg.Providers["zcode"].(zcodeGoalPusher); ok {
+			if err := p.SetGoal(t.ID, req.Goal); err != nil {
+				log.Printf("[goal] zcode 下发失败(已落库,稍后补发)thread=%s: %v", t.ID, err)
+			}
 		}
 	}
 	return s.threadToPB(t), nil
 }
 
-func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest) (*pb.Empty, error) {
-	// 真实压缩:落到 codex 的 thread/compact/start,由桌面端 agent 真正执行。
-	// 手动压缩入口(手机端可后续接),与自动压缩共用同一条 codex 通道。
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+// piThreadCompactor pi 侧真实压缩能力(server 层类型断言探测,同
+// zcodeHistorySource 的模式:抽最小接口,单测可注 fake,不依赖真子进程)。
+// 生产由 *agent.PiProvider 实现(CompactThread,2026-09-19 审计 §7-4 S 项)。
+type piThreadCompactor interface {
+	CompactThread(t *store.Thread) error
+}
+
+// piThreadDropper pi 侧删除回收能力(P2-1:DropThread = Close 子进程 + 清
+// clients/cursors,DeleteThread 时同步调用;抽最小接口同上,单测可注 fake)。
+type piThreadDropper interface {
+	DropThread(threadID string)
+}
+
+// zcodeGoalPusher / zcodeCompacter / zcodeSessionCloser zcode 侧控制面能力的
+// 最小接口(生产由 *agent.ZcodeProvider 实现;抽接口同上,单测可注 fake):
+// SetGoal = session/goal 下发,CompactSession = session/compact,CloseSession =
+// session/close(真删除语义,DeleteThread 时同步)。
+type (
+	zcodeGoalPusher interface {
+		SetGoal(threadID, goal string) error
 	}
+	zcodeCompacter interface {
+		CompactSession(sessionID string) error
+	}
+	zcodeSessionCloser interface {
+		CloseSession(sessionID string) error
+	}
+)
+
+func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest) (*pb.Empty, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
 	if !ok {
 		return nil, errNotFound("会话不存在")
+	}
+	// pi 路径:落 pi 的 compact 命令(同步等真实压缩完成;运行中/未落地由
+	// provider 侧闸门拒绝并给结构化错误)。会话归属以 AgentID 为准(显式失败,
+	// 不静默换人)—— 与 providerForThread 同纪律。
+	if threadAgentID(t) == "pi" {
+		pc, ok := s.cfg.Providers["pi"].(piThreadCompactor)
+		if !ok {
+			return nil, errUnavailable("电脑上没有可用的 pi")
+		}
+		if err := pc.CompactThread(t); err != nil {
+			return nil, errInternal(err)
+		}
+		return &pb.Empty{}, nil
+	}
+	// zcode 路径:压缩落到桌面端 session/compact(2026-09-19 控制面探针实证
+	// {sessionId} → {response, snapshot};轮次进行中 zcode 以 -32010 拒绝,
+	// 错误原样转 gRPC 错误码)。
+	if threadAgentID(t) == "zcode" {
+		if t.ExternalSession.SessionID == "" {
+			return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法压缩")
+		}
+		zc, ok := s.cfg.Providers["zcode"].(zcodeCompacter)
+		if !ok {
+			return nil, errUnavailable("电脑上没有可用的 zcode")
+		}
+		if err := zc.CompactSession(t.ExternalSession.SessionID); err != nil {
+			return nil, errInternal(err)
+		}
+		return &pb.Empty{}, nil
+	}
+	// codex 路径(原有):真实压缩落到 codex 的 thread/compact/start,由桌面端
+	// agent 真正执行。手动压缩入口(手机端可后续接),与自动压缩共用同一条 codex 通道。
+	p := s.codexProvider()
+	if p == nil {
+		return nil, errUnavailable("电脑上没有可用的 codex")
 	}
 	if t.CodexThreadID == "" {
 		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法压缩")
@@ -282,15 +463,38 @@ func (s *Server) RenameThread(ctx context.Context, req *pb.RenameThreadRequest) 
 			log.Printf("[rename] 同步标题到 codex 失败(本地已改名)thread=%s: %v", t.ID, err)
 		}
 	}
+	// pi 会话改名同步:set_session_name 下发到 pi 子进程(失败仅日志,
+	// 本地已改名是既成事实 —— 与 codex 同纪律)。
+	if threadAgentID(t) == "pi" {
+		if p, ok := s.cfg.Providers["pi"].(*agent.PiProvider); ok {
+			if err := p.Rename(t, req.Title); err != nil {
+				log.Printf("[rename] 同步标题到 pi 失败(本地已改名)thread=%s: %v", t.ID, err)
+			}
+		}
+	}
 	return s.threadToPB(t), nil
 }
 
 // GetThreadHistory 返回历史消息。数据来自我们自己的存储(两类 provider 统一):
 // codex 桥接时 server 层同样会把用户输入/最终回复落库。
+//
+// 【zcode 导入线程的惰性历史拉取】从桌面端导入的 ZCode 会话只绑
+// ExternalSession.SessionID,导入前的历史不在本地库 —— 首次打开这类线程且
+// 本地一条消息都没有时,调 ZcodeProvider.HistoryFor(resume 返回完整
+// messages[])把历史落库缓存,之后(以及打过一轮之后)一律走本地,不再在线。
+// 拉取失败降级返回已有内容+日志,绝不把历史页打挂;codex/pi 路径零改动。
 func (s *Server) GetThreadHistory(ctx context.Context, req *pb.GetThreadHistoryRequest) (*pb.GetThreadHistoryResponse, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
 	if !ok {
 		return nil, errNotFound("会话不存在")
+	}
+	t = s.recoverNativeResult(ctx, t)
+	if threadAgentID(t) == "zcode" && t.ExternalSession.SessionID != "" {
+		s.maybePullZcodeImportedHistory(ctx, t)
+		// Get returns an owned snapshot, not a live store pointer.
+		if current, found := s.cfg.Store.Get(t.ID); found {
+			t = current
+		}
 	}
 	msgs := t.Messages
 	if req.Limit > 0 && int(req.Limit) < len(msgs) {
@@ -306,7 +510,132 @@ func (s *Server) GetThreadHistory(ctx context.Context, req *pb.GetThreadHistoryR
 			Role: m.Role, Blocks: blocks, CreatedAtUnixMs: m.CreatedAt,
 		})
 	}
+	// codex 目标态回读:与 GetThread 同源(打开会话即刷新,重连后以电脑端为准)。
+	// 非 codex 会话 / 读不到时为 nil,手机端不占位。
+	out.GoalDetail = s.goalDetailFor(ctx, t)
 	return out, nil
+}
+
+// ---------- codex 目标态回读(thread/goal/get 的 RPC 出口)----------
+
+// goalDetailFor 打开会话时现读电脑端 codex 线程的常驻目标(只读)。
+//
+// 【为什么不在 threadToPB 里做】threadToPB 是列表/创建/归档等所有路径共用的
+// 转换器,每条都带一次 RPC 会把会话列表拖慢;这里只在**单线程**读路径
+// (GetThread / GetThreadHistory)按需现读。非 codex 会话、没落地到电脑的
+// 会话(CodexThreadID 空)直接返回 nil,零开销。
+func (s *Server) goalDetailFor(ctx context.Context, t *store.Thread) *pb.CodexGoalDetail {
+	if t == nil || threadAgentID(t) != "codex" || t.CodexThreadID == "" {
+		return nil
+	}
+	p, ok := s.cfg.Providers["codex"].(*agent.CodexProvider)
+	if !ok {
+		return nil // 测试/无 codex 环境:注入 fake 不走这里,生产缺 codex 时不拖累读路径
+	}
+	gctx, cancel := context.WithTimeout(ctx, codexGoalReadBudget)
+	defer cancel()
+	g, err := p.ReadThreadGoal(gctx, t.CodexThreadID)
+	if err != nil {
+		// 读不到不是错误:降级为本地库目标(手机设过就照常显示),绝不把历史页打挂。
+		log.Printf("[goal] 回读失败(按本地目标展示)thread=%s codex=%s: %v", t.ID, t.CodexThreadID, err)
+		return goalDetailFrom(nil, t.Goal)
+	}
+	return goalDetailFrom(g, t.Goal)
+}
+
+// codexGoalReadBudget 目标回读的上界。provider 侧 thread/goal/get 走
+// withStatusClient(内部自带 10s 状态查询上界),这里再给一个更早的显式上界:
+// 打开历史页不应等目标态太久,到点降级为本地值。
+const codexGoalReadBudget = 8 * time.Second
+
+// goalDetailFrom 把 codex 目标态 + 本地兜底翻成协议消息(纯函数,可单测)。
+//
+// 【兜底语义】codex 侧没设目标(g==nil)但本地库有(手机设置后落过库,
+// 可能尚未补发到 codex)→ objective 用本地值,status 留空;两边都空 → nil
+// (手机端"有则显示,无则不占位")。codex 有值时 objective 为空也用本地补。
+func goalDetailFrom(g *agent.CodexGoalState, localGoal string) *pb.CodexGoalDetail {
+	if g == nil {
+		if strings.TrimSpace(localGoal) == "" {
+			return nil
+		}
+		return &pb.CodexGoalDetail{Objective: localGoal}
+	}
+	out := &pb.CodexGoalDetail{
+		Objective:       g.Objective,
+		Status:          g.Status,
+		TokensUsed:      g.TokensUsed,
+		TokenBudget:     g.TokenBudget,
+		TimeUsedSeconds: g.TimeUsedSeconds,
+	}
+	if strings.TrimSpace(out.Objective) == "" {
+		out.Objective = localGoal
+	}
+	return out
+}
+
+// zcodeHistorySource 是 ZcodeProvider 历史拉取能力的最小接口(生产由
+// *agent.ZcodeProvider 实现;抽接口是为了 server 单测注入 fake,不依赖真进程)。
+type zcodeHistorySource interface {
+	HistoryFor(ctx context.Context, sessionID string) ([]agent.HistoryMsg, error)
+}
+
+// zcodeHistoryBudget 单次导入历史拉取的整段上界:与 zcode 侧只读查询同级
+// (冷启子进程 + resume)。到点即降级,历史页不能等出无限转圈。
+const zcodeHistoryBudget = 20 * time.Second
+
+// zcodeHistoryMu 串行化"首次拉取导入历史":同一导入线程被并发打开时,
+// 防止两个请求各拉一次、各 append 一份(双写翻倍)。进程级锁足矣 ——
+// 缓存落库后这段逻辑根本不会再进。
+var zcodeHistoryMu sync.Mutex
+
+// maybePullZcodeImportedHistory 导入的 zcode 线程本地还没有任何消息时,
+// 拉一次桌面端历史并落库缓存。失败降级(已有内容原样返回),不影响本次请求。
+func (s *Server) maybePullZcodeImportedHistory(ctx context.Context, t *store.Thread) {
+	if t == nil || len(t.Messages) > 0 {
+		return // 已有落库 = 首次拉取的缓存,或导入后的新轮次:复用,不在线
+	}
+	zcodeHistoryMu.Lock()
+	defer zcodeHistoryMu.Unlock()
+	// 双检:重取快照确认并发下没被先到者拉完。
+	cur, ok := s.cfg.Store.Get(t.ID)
+	if !ok || len(cur.Messages) > 0 {
+		return
+	}
+	src, ok := s.cfg.Providers["zcode"].(zcodeHistorySource)
+	if !ok {
+		log.Printf("[zcode] 导入线程 %s 拉历史:zcode provider 不可用,按已有内容返回", t.ID)
+		return
+	}
+	hctx, cancel := context.WithTimeout(ctx, zcodeHistoryBudget)
+	defer cancel()
+	history, err := src.HistoryFor(hctx, cur.ExternalSession.SessionID)
+	if err != nil {
+		log.Printf("[zcode] 拉取导入历史失败(降级为已有内容)thread=%s session=%s: %v",
+			t.ID, cur.ExternalSession.SessionID, err)
+		return
+	}
+	if len(history) == 0 {
+		return // 空历史不缓存:保留下次打开再试的机会
+	}
+	now := time.Now().UnixMilli()
+	for _, h := range history {
+		createdAt := h.CreatedAtUnixMs
+		if createdAt <= 0 {
+			createdAt = now // 兜底:应答缺 time.created 时按导入时刻起算
+		}
+		cur.Messages = append(cur.Messages, store.StoredMessage{
+			Role:      h.Role,
+			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: h.Text}}}},
+			CreatedAt: createdAt,
+		})
+	}
+	// Update 合并本次追加,不覆盖拉取期间其他请求更新的元数据。
+	if err := s.cfg.Store.Update(cur); err != nil {
+		log.Printf("[zcode] 导入历史落盘失败(内存版本次可见,重启后重拉)thread=%s: %v", t.ID, err)
+		return
+	}
+	log.Printf("[zcode] 导入历史已拉取并缓存 %d 条 thread=%s session=%s",
+		len(history), t.ID, cur.ExternalSession.SessionID)
 }
 
 // ---------- StartTurn:整个产品的心脏 ----------
@@ -332,20 +661,73 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	if !ok {
 		return errNotFound("会话不存在")
 	}
-	// 重入打断:同线程上一轮还在跑(比如手机返回后 agent 仍在执行),
-	// 先打断它并等它释放,避免新 turn 被串行锁卡死 —— 修复"返回后不工作"
-	if cancelPrev := s.activeTurns.Cancel(t.ID); cancelPrev != nil {
-		cancelPrev()
-		time.Sleep(300 * time.Millisecond) // 给旧轮 time 释放锁
+	// Reserve the whole stream (including queued turns and final persistence).
+	// Cancellation is not completion: never overlap a replacement with an old
+	// provider that is still unwinding. Waiting is bounded by the phone context.
+	streamRunCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+	waitCtx, waitCancel := context.WithTimeout(stream.Context(), 5*time.Second)
+	lease, err := s.activeTurns.acquire(waitCtx, t.ID, streamCancel)
+	waitCancel()
+	if err != nil {
+		return errFailedPrecondition("上一轮仍在收尾，请稍后重试")
+	}
+	defer s.activeTurns.Clear(t.ID, lease)
+	t, ok = s.cfg.Store.Get(input.ThreadId)
+	if !ok {
+		return errNotFound("会话不存在")
 	}
 
-	provider := s.providerFor(t.ModelID)
+	// 【会话内切换模型 / 思考强度 —— 2026-09-18 修复】
+	// proto 里 TurnInput.model_id / effort 本来就是"每轮覆盖(可选)",App 每轮都会把
+	// 该会话当前选定的值送上来(ChatScreen 进入会话时断言 + TurnSession 发帧)。
+	// 但这里过去**从来没读过这两个字段**:provider 取的是建会话时落库的 t.ModelID,
+	// 强度取的是 t.Effort(一直是空)→ "在会话里换成 GPT-5.6 / 高强度"永远无效,
+	// 实际跑的还是设置页默认模型与桌面强度。实测:会话里选 GPT-5.6 Sol + 高,
+	// 电脑端 turn_context 里却是 deepseek-flash + low。
+	//
+	// 现在:以本轮上报为准覆盖到线程上(空串是**有意义的取值** = 跟随桌面配置,
+	// 所以是赋值而不是"非空才覆盖"),下面的 Store.Update 会连同落库,
+	// 于是"只影响本轮及之后"成立、重启 daemon 不丢,且依然不碰桌面 config.toml。
+	applyTurnOverrides(t, input)
+
 	turnID := randomID("turn")
 
-	sink := func(ev pb.TurnServerMessage) {
-		_ = stream.Send(&ev)
+	// 【死连接防线】手机掉了(TCP 半死)时,stream.Send 会在流控窗口满后**无限阻塞**;
+	// 而 sink 的调用方是 codex 事件分发的唯一消费者 —— 它一堵,codex 的 readLoop
+	// 跟着堵,手机上看到的就是"输出一小段后长时间停顿"(2026-09-18 用户反馈实锤)。
+	// 防线:① 发送前先查流是否已死(keepalive 杀死/对端 RST),死了直接丢弃,
+	// 轮次继续在电脑上跑、结果照常落库(R10 语义不变);② 一旦 Send 报错,
+	// 标记死亡,后续事件不再尝试 —— 最多只堵一次 Send(等 keepalive 检出),
+	// 而不是每条消息都顺序堵一遍。
+	var wireTurnID atomic.Value
+	wireTurnID.Store(turnID)
+	transport := newTurnTransport(stream.Context(), func(ev *pb.TurnServerMessage) {
+		ev.Sequence = s.recordTurnFrame(t.ID, wireTurnID.Load().(string), ev)
+	}, stream.Send)
+	defer transport.finish()
+	sink := agent.Sink(transport.emit)
+
+	// 【项4:思考流落库】sink 总线外再包一层"思考记录器":ThinkingDelta 边推边记,
+	// 轮次终局时前置为 ThinkingBlock 随 assistant 消息落库 —— 否则思考文本只活在
+	// 手机内存里,重启 app / 重进会话后历史恢复就看不到思考卡(用户实锤的
+	// "关掉隐藏推理后思考卡会消失")。实现见 thread_thinking.go。
+	var thinkBuf *turnThinkingBuf
+	sink, thinkBuf = thinkingRecorder(sink)
+
+	// provider 必须在 sink 就绪后取:选不出(该会话的 agent 不可用)也要能发
+	// TurnFailed 帧,而不是让手机对着一个啥都没发生的流干等(显式失败,不回退)。
+	provider, perr := s.providerForThread(t)
+	if perr != nil {
+		log.Printf("[turn] %s", perr.Error())
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Failed{Failed: &pb.TurnFailed{
+			TurnId: turnID,
+			Error:  &pb.Error{Code: "AGENT_UNAVAILABLE", Message: perr.Error()},
+		}}})
+		return nil
 	}
-	sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
+
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
 		TurnId: turnID, ModelId: t.ModelID,
 	}}})
 
@@ -353,14 +735,19 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	// 【R10】轮次生命周期与手机连接解耦:USB/WiFi 闪断不再杀掉电脑上正在跑
 	// 的任务 —— 结果照常落库,手机重连后轮询历史就能拿回完整回复。
 	// 只有手机显式"取消"帧、同线程重入打断或 30 分钟上限会中止轮次。
-	approvalCh := make(chan *pb.ApprovalDecision, 4)
-	runCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// 重入打断的注册(此前漏接:Cancel 永远拿不到旧轮取消函数)
-	s.activeTurns.Set(t.ID, cancel)
-	defer s.activeTurns.Clear(t.ID)
+	approvals := newTurnApprovals()
+	s.approvalSessions.Store(t.ID, approvals)
+	defer s.approvalSessions.CompareAndDelete(t.ID, approvals)
+	// streamRunCtx 覆盖"这条流上跑过的所有轮次"(含 P1-4 的排队续跑);
+	// 每一轮再派生自己的 runCtx 给 provider。手机取消帧拉闸 streamRunCtx =
+	// 当前轮与排队输入一起停(终局判定处统一收口)。
+	// rt 供读手查询"当前轮次 id / 能否插话"。排队续跑会换轮次甚至换 provider
+	// (排队输入自带模型覆盖),两边都经它读写,避免数据竞争。
+	rt := &turnRuntime{}
+	rt.update(turnID, provider)
+	defer rt.stop(s.turnQueue, t.ID)
 
-	// 后台读手:继续收手机后续帧(审批/取消/补充),分发给对应通道
+	// 后台读手:继续收手机后续帧(审批/取消/运行中新输入),分发给对应通道
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
@@ -369,117 +756,270 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 			if err != nil {
 				return // 流断开 = 只停读;轮次继续在电脑上跑(见上)
 			}
+			if streamRunCtx.Err() != nil {
+				return
+			}
 			switch m := msg.Msg.(type) {
 			case *pb.TurnClientMessage_Approval:
-				select {
-				case approvalCh <- m.Approval:
-				default:
-				}
+				approvals.deliver(m.Approval)
 			case *pb.TurnClientMessage_Cancel:
-				cancel()
+				// 用户"终止任务":streamCancel 连当前轮与排队输入一起停,
+				// 队列在终局判定处清空 —— 取消之后不该再自动跑排队的消息。
+				streamCancel()
 				return
+			case *pb.TurnClientMessage_Input:
+				// P1-4:运行中继续发消息 —— codex 走 turn/steer 插入,
+				// 其余入内存队列,当前轮终局后由下面的续跑循环自动执行。
+				s.handleMidTurnInput(t, m.Input, rt, sink)
 			case *pb.TurnClientMessage_Supplement:
 				// P1:中途补充上下文
 			}
 		}
 	}()
 
-	approve := func(actx context.Context, call pb.ToolCallBlock) (bool, string, error) {
+	// 【vet】call 为指针:pb 消息按值传会被 copylocks 拒绝;只读入参,不改内容。
+	approve := func(actx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 		reqID := randomID("apr")
+		approvalCh := approvals.add(reqID)
+		defer approvals.remove(reqID)
 		// 原因文案跟着动作类型走(而不是对所有类型都写"危险操作"):
 		// 反问类请求被贴"危险操作"会让人误判出了事故。
-		sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalRequest{ApprovalRequest: &pb.ApprovalRequest{
-			RequestId: reqID, Action: &call, Reason: agent.ApprovalReason(call),
-		}}})
+		request := &pb.ApprovalRequest{RequestId: reqID, Action: call, Reason: agent.ApprovalReason(call)}
+		approvals.attach(request)
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalRequest{ApprovalRequest: request}})
+		defer sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{RequestId: reqID, Note: "审批已结束"}}})
+		waitCtx, waitCancel := context.WithTimeout(actx, 2*time.Minute)
+		defer waitCancel()
 		select {
 		case d := <-approvalCh:
 			return d.Approved, d.Note, nil
-		case <-readerDone:
-			// 手机断开不是用户的“拒绝”。不能伪造审批决定；结束本轮并
-			// 让客户端通过恢复机制重新读取状态，避免下滑/断网变成拒绝。
-			log.Printf("[turn] 手机已断开,未提交审批决定 %s", reqID)
-			return false, "手机已断开连接,未提交审批决定", io.ErrUnexpectedEOF
-		case <-actx.Done():
-			return false, "", actx.Err()
+		case <-waitCtx.Done():
+			return false, "", waitCtx.Err()
+		case <-streamRunCtx.Done():
+			return false, "", streamRunCtx.Err()
 		}
 	}
 
-	// 3) 记录用户输入,跑 agent
+	// 3) 记录用户输入,跑 agent;P1-4:当前轮终局后,排队的输入逐条作为新输入继续跑
 	userBlocks := derefBlocks(input.Blocks)
 	t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: userBlocks, CreatedAt: time.Now().UnixMilli()})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
 	_ = s.cfg.Store.Update(t)
 
-	blocks, usagePtr, runErr := provider.Run(runCtx, agent.TurnRequest{
-		Thread: t, InputBlocks: userBlocks, Workspace: t.Workspace,
-	}, sink, approve)
+	inputBlocks := userBlocks
+	for {
+		// 每轮独立的取消函数:CancelTurn RPC / 重入打断拿到的是"当前这一轮"的;
+		// streamRunCtx(手机取消帧)被取消时会连带取消这里的子 ctx。
+		// 【先取 Err 再 cancel】cancel 之后再查 runCtx.Err() 永远非 nil,
+		// 会把"正常完成"误判成"用户要停"。
+		runCtx, cancel := context.WithCancel(streamRunCtx)
+		blocks, usagePtr, runErr := provider.Run(runCtx, agent.TurnRequest{
+			Thread: t, InputBlocks: inputBlocks, Workspace: t.Workspace,
+		}, sink, approve)
+		userStopped := runCtx.Err() != nil
+		cancel()
+		// 【项4】取走本轮累积的思考文本,前置为 ThinkingBlock 一起落库;
+		// take 已清空缓冲,排队续跑的下一轮从空缓冲开始(思考不串轮次)。
+		persistBlocks := prependThinkingBlock(blocks, thinkBuf.take())
 
-	// 4) 落库 + 收尾帧
-	now := time.Now().UnixMilli()
-	// 自动标题:仍是默认"新会话…"时,用第一条用户消息起名(codex 自动命名会再覆盖)
-	if strings.HasPrefix(t.Title, "新会话") {
-		for _, m := range t.Messages {
-			if m.Role != "user" {
-				continue
+		// 4) 落库 + 收尾帧(排队续跑的每一轮走完全相同的收尾)
+		now := time.Now().UnixMilli()
+		// 自动标题:仍是默认"新会话…"时,用第一条用户消息起名(codex 自动命名会再覆盖)
+		current, _ := s.cfg.Store.Get(t.ID)
+		if strings.HasPrefix(t.Title, "新会话") && current != nil && current.Title == t.Title {
+			for _, m := range t.Messages {
+				if m.Role != "user" {
+					continue
+				}
+				first := ""
+				// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+				for i := range m.Blocks {
+					b := &m.Blocks[i]
+					if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
+						first = strings.TrimSpace(tb.Text.Text)
+						break
+					}
+				}
+				if first == "" {
+					continue
+				}
+				r := []rune(first)
+				if len(r) > 24 {
+					r = r[:24]
+				}
+				t.Title = string(r)
+				break
 			}
-			first := ""
-			for _, b := range m.Blocks {
+		}
+		t.LastTurnError = ""
+		if runErr != nil {
+			t.LastTurnError = runErr.Error()
+			partial := ""
+			// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+			for i := range blocks {
+				b := &blocks[i]
 				if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
-					first = strings.TrimSpace(tb.Text.Text)
-					break
+					partial += tb.Text.Text
 				}
 			}
-			if first == "" {
-				continue
+			// 手机断连/超时/出错也要留住已产出的内容:app 端断流恢复靠轮询
+			// 历史判断"电脑跑完了没有",这里不落库它就永远等不到
+			if partial != "" {
+				t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
 			}
-			r := []rune(first)
-			if len(r) > 24 {
-				r = r[:24]
+			t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
+			failedError := &pb.Error{Code: "AGENT_ERROR", Message: runErr.Error()}
+			if carrier, ok := runErr.(agent.ErrorInfoCarrier); ok {
+				if info := carrier.ErrorInfo(); info != nil {
+					failedError = info
+				}
 			}
-			t.Title = string(r)
-			break
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Failed{Failed: &pb.TurnFailed{
+				TurnId: turnID, Error: failedError, PartialText: partial,
+			}}})
+		} else {
+			t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
+			t.Usage.InputTokens += usagePtr.GetInputTokens()
+			t.Usage.OutputTokens += usagePtr.GetOutputTokens()
+			t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
+			// final_blocks 同步带思考块:手机端终局帧只提取文本(finalText),
+			// 不会被重复渲染;离线快照/事件回放路径拿到的与落库一致。
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Completed{Completed: &pb.TurnCompleted{
+				TurnId: turnID, FinalBlocks: refBlocks(persistBlocks), Usage: usagePtr,
+			}}})
 		}
-	}
-	if runErr != nil {
-		partial := ""
-		for _, b := range blocks {
-			if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
-				partial += tb.Text.Text
+		if err := s.cfg.Store.Update(t); err != nil {
+			return errInternal(err)
+		}
+		// 【P1-5】轮次终局发一条主机事件(带 seq 落盘 + WatchEvents 广播):
+		// 手机不在 StartTurn 流上(后台推送场景)也能感知"跑完了"。
+		if runErr != nil {
+			s.emitTurnFinished(t.ID, truncateTitle("任务失败:"+runErr.Error(), 80))
+		} else {
+			summary := "任务完成"
+			if txt := firstUserText(blocks); txt != "" {
+				summary = truncateTitle(txt, 80)
 			}
+			s.emitTurnFinished(t.ID, summary)
 		}
-		// 手机断连/超时/出错也要留住已产出的内容:app 端断流恢复靠轮询
-		// 历史判断"电脑跑完了没有",这里不落库它就永远等不到
-		if partial != "" {
-			t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: blocks, CreatedAt: now})
+		// 用户主动停(取消帧 / CancelTurn RPC / 重入打断):清空队列并结束。
+		// "终止任务"的按钮语义就是停 —— 绝不能停完又自动把排队的跑起来。
+		if userStopped {
+			rt.stop(s.turnQueue, t.ID)
+			return nil
 		}
-		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
-		failedError := &pb.Error{Code: "AGENT_ERROR", Message: runErr.Error()}
-		if carrier, ok := runErr.(agent.ErrorInfoCarrier); ok {
-			if info := carrier.ErrorInfo(); info != nil {
-				failedError = info
-			}
+		// P1-4 续跑:取出队首输入作为新一轮。帧序:上一轮终局 → QueueFlushed
+		// (手机把"排队中"标签收回普通消息)→ Started → 常规增量。
+		next, ok := rt.next(s.turnQueue, t.ID)
+		if !ok {
+			return nil
 		}
-		sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Failed{Failed: &pb.TurnFailed{
-			TurnId: turnID, Error: failedError, PartialText: partial,
+		// 排队输入自带的模型/强度覆盖在这里才生效(与首轮同语义:只影响本轮及之后),
+		// 换模型 = 换 provider(同 agent 内),和首轮的选择逻辑保持一致;
+		// 选不到显式失败(发 Failed 帧),绝不静默回退别的 agent。
+		applyTurnOverrides(t, &pb.TurnInput{ModelId: next.modelID, Effort: next.effort})
+		provider, perr = s.providerForThread(t)
+		if perr != nil {
+			log.Printf("[turn] 排队续跑选择 provider 失败: %v", perr.Error())
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Failed{Failed: &pb.TurnFailed{
+				TurnId: turnID,
+				Error:  &pb.Error{Code: "AGENT_UNAVAILABLE", Message: perr.Error()},
+			}}})
+			return nil
+		}
+		turnID = randomID("turn")
+		wireTurnID.Store(turnID)
+		rt.update(turnID, provider)
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_QueueFlushed{QueueFlushed: &pb.QueueFlushed{
+			TurnId: turnID, Remaining: int32(s.turnQueue.Len(t.ID)),
 		}}})
-	} else {
-		t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: blocks, CreatedAt: now})
-		t.Usage.InputTokens += usagePtr.GetInputTokens()
-		t.Usage.OutputTokens += usagePtr.GetOutputTokens()
-		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
-		sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Completed{Completed: &pb.TurnCompleted{
-			TurnId: turnID, FinalBlocks: refBlocks(blocks), Usage: usagePtr,
+		t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: next.blocks, CreatedAt: time.Now().UnixMilli()})
+		t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+		_ = s.cfg.Store.Update(t)
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
+			TurnId: turnID, ModelId: t.ModelID,
 		}}})
+		inputBlocks = next.blocks
 	}
-	if err := s.cfg.Store.Update(t); err != nil {
-		return errInternal(err)
-	}
-	return nil
 }
 
 // ---------- provider 选择 ----------
 
+// wirePiTitleHandler 把 Pi 的标题回调接到本地库(仿 zcode/codex 同款落库)。
+// Pi 侧在会话名变化(set_session_name 回显 / 电脑端同进程改名)时触发回调;
+// 这里按线程 ID 找到会话、标题有变化才写库(防挂载回显形成回调环)。
+// 【为什么主体在本文件】server.go 的 New 只保留一行调用,逻辑与测试都收在
+// thread.go(pi S 项的接线域,2026-09-19 审计 §7-7)。
+func (s *Server) wirePiTitleHandler() {
+	pp, ok := s.cfg.Providers["pi"].(*agent.PiProvider)
+	if !ok {
+		return
+	}
+	pp.TitleHandler = func(threadID, title string) {
+		for _, t := range s.cfg.Store.List(true) {
+			if t.ID != threadID || t.Title == title {
+				continue
+			}
+			t.Title = title
+			_ = s.cfg.Store.Update(t)
+			log.Printf("[pi] 标题同步落库 thread=%s title=%.60q", threadID, title)
+		}
+	}
+}
+
+// threadAgentID 线程归属 agent:AgentID 缺省(旧库记录)= "codex",
+// 与"老记录全是 codex 会话"的事实一致(store 兼容规则)。
+func threadAgentID(t *store.Thread) string {
+	if t == nil || t.AgentID == "" {
+		return "codex"
+	}
+	return t.AgentID
+}
+
+// providerForThread 按线程归属的 agent **显式**选择 provider。
+//
+// 【为什么不再静默回退默认】旧 providerFor 按 ModelID 前缀选,前缀认不出就退
+// 默认 provider —— 单 agent 时代无害,多 agent 之后会变成"我明明选了 Pi,
+// 结果发给 Codex 了"(调研 §7.1)。现在:**带归属(AgentID)的会话**找不到
+// 对应 provider 就是硬错误,由调用方转 TurnFailed(人话),绝不悄悄换人干活。
+//
+// 【旧库兼容路径】AgentID 为空的老记录(2026-09-18 前全部如此)保持原有行为:
+// 先按 ModelID 前缀选,认不出退默认 provider —— 老用户升级后一行不变。
+// 注意 ModelID 可能是空串(App 每轮发空串 = "跟随桌面配置",见 applyTurnOverrides),
+// 此时同样走默认 provider,不能硬编码成 codex(测试环境里默认可能根本不是它)。
+func (s *Server) providerForThread(t *store.Thread) (agent.Provider, error) {
+	if t != nil && t.AgentID != "" {
+		if p, ok := s.cfg.Providers[t.AgentID]; ok {
+			return p, nil
+		}
+		return nil, errFailedPrecondition(agentUnavailableHint(t.AgentID))
+	}
+	// ---- 旧库兼容路径(AgentID 空)----
+	if t != nil {
+		if i := indexByte(t.ModelID, '/'); i > 0 {
+			if p, ok := s.cfg.Providers[t.ModelID[:i]]; ok {
+				return p, nil
+			}
+		}
+	}
+	if p := s.defaultProvider(); p != nil {
+		return p, nil
+	}
+	return nil, errFailedPrecondition(agentUnavailableHint("codex"))
+}
+
+// agentUnavailableHint 找不到会话归属 agent 时的人话(手机端直接展示)。
+func agentUnavailableHint(agentID string) string {
+	if agentID == "pi" {
+		return "电脑上没有可用的 Pi agent(node 或 pi cli.js 未找到)。安装后重启 daemon 即可,本会话的历史不会丢。"
+	}
+	return "电脑上没有可用的 " + agentID + " agent。请检查它是否已安装/已配置,或新建一个其它 agent 的会话。"
+}
+
 // providerFor 依据模型 ID 前缀("glm/glm-4.7")找到对应 provider。
+//
+// 【多 agent 之后只允许两处调用】非线程路径(无归属上下文)的模型→provider 解析;
+// 一切"这个线程用谁跑"的判断一律走 providerForThread(显式失败)。
 func (s *Server) providerFor(modelID string) agent.Provider {
 	if i := indexByte(modelID, '/'); i >= 0 {
 		if p, ok := s.cfg.Providers[modelID[:i]]; ok {
@@ -487,6 +1027,24 @@ func (s *Server) providerFor(modelID string) agent.Provider {
 		}
 	}
 	return s.defaultProvider()
+}
+
+// applyTurnOverrides 把一轮 TurnInput 里的模型/思考强度覆盖写到线程上。
+//
+// 【为什么单独抽出来】这是"会话内切模型/切强度"唯一真正生效的地方
+// (调用点见 StartTurn 的注释)。抽成纯函数才能被单测钉住 —— 它此前压根不存在,
+// 于是这个功能静默失效了很久:App 每轮都在发,daemon 一个字都没读。
+//
+// 【空串为什么是赋值,而不是"跳过"】空串在这里是**用户明确选中的取值**
+// "跟随桌面配置"(App 的 picker 里就是空串)。写成"非空才覆盖"的话,用户在会话里
+// 切回"跟随桌面"就再也回不去 —— 与 SetCodexSettingsRequest 用 presence 躲开的
+// 是同一个坑,只是这里靠"App 每轮必发该字段"的约定来消歧。
+func applyTurnOverrides(t *store.Thread, in *pb.TurnInput) {
+	if t == nil || in == nil {
+		return
+	}
+	t.ModelID = strings.TrimSpace(in.GetModelId())
+	t.Effort = strings.TrimSpace(in.GetEffort())
 }
 
 // defaultProvider 按固定优先级挑一个可用 provider,echo 兜底。
@@ -533,7 +1091,10 @@ func derefBlocks(in []*pb.ContentBlock) []pb.ContentBlock {
 	out := make([]pb.ContentBlock, 0, len(in))
 	for _, b := range in {
 		if b != nil {
-			out = append(out, *b)
+			// 【vet】槽位填充 + proto.Merge:逐字段复制(含 unknownFields),语义等价于
+			// *b 整体拷贝,但绕开 append/赋值对 pb 消息的按值拷贝(内嵌 MessageState 含锁)。
+			out = append(out, pb.ContentBlock{})
+			proto.Merge(&out[len(out)-1], b)
 		}
 	}
 	return out
@@ -569,35 +1130,103 @@ func truncateTitle(s string, n int) string {
 // activeTurns 记录每线程正在执行的 turn 的取消函数(重入打断用)。
 type activeTurns struct {
 	mu sync.Mutex
-	m  map[string]context.CancelFunc
+	m  map[string]*activeTurn
+}
+
+type activeTurn struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func newActiveTurns() *activeTurns {
-	return &activeTurns{m: map[string]context.CancelFunc{}}
+	return &activeTurns{m: map[string]*activeTurn{}}
 }
 
-func (a *activeTurns) Set(threadID string, cancel context.CancelFunc) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.m == nil {
-		a.m = map[string]context.CancelFunc{}
+func (a *activeTurns) acquire(ctx context.Context, threadID string, cancel context.CancelFunc) (*activeTurn, error) {
+	for {
+		a.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+		prev := a.m[threadID]
+		if prev == nil {
+			lease := &activeTurn{cancel: cancel, done: make(chan struct{})}
+			a.m[threadID] = lease
+			a.mu.Unlock()
+			return lease, nil
+		}
+		a.mu.Unlock()
+		prev.cancel()
+		select {
+		case <-prev.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	a.m[threadID] = cancel
 }
 
-func (a *activeTurns) Clear(threadID string) {
+func (a *activeTurns) Clear(threadID string, lease *activeTurn) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.m, threadID)
+	if a.m[threadID] == lease {
+		delete(a.m, threadID)
+		close(lease.done)
+	}
 }
 
 // Cancel 取消并返回是否确有在跑的轮次。
 func (a *activeTurns) Cancel(threadID string) context.CancelFunc {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	c, ok := a.m[threadID]
-	if ok {
-		delete(a.m, threadID)
+	if c := a.m[threadID]; c != nil {
+		return c.cancel
 	}
-	return c
+	return nil
+}
+
+// ---------- 会话导出:离线 HTML 存档 ----------
+
+// piThreadExporter pi 侧离线导出能力的最小接口(生产由 *agent.PiProvider 实现;
+// 抽接口同 zcodeHistorySource 模式,单测可注 fake,不依赖真子进程)。
+type piThreadExporter interface {
+	ExportHTML(t *store.Thread) (string, error)
+}
+
+// ExportThreadHtml 把会话导出成离线 HTML 存档(PiProvider.ExportHTML 的 RPC 出口,
+// 2026-09-19 审计 §7-4 交付)。返回电脑上的绝对路径,手机端经现有 ReadFile
+// (FileChunk 流)下载链路取文件、浏览器离线打开。
+//
+// 【路由纪律与 CompactThread 一致】会话归属以 AgentID 为准,显式失败不静默换人:
+// 目前只有 pi 提供离线导出能力,codex/zcode 会话直接人话报错 —— 绝不悄悄降级成
+// "导出纯文本",免得用户以为拿到的是电脑端的完整会话存档。
+// 本段是独立追加(放在文件末尾),不触碰 GetThreadHistory 的 zcode 历史拉取区。
+func (s *Server) ExportThreadHtml(ctx context.Context, req *pb.ExportThreadHtmlRequest) (*pb.ExportThreadHtmlResponse, error) {
+	if strings.TrimSpace(req.GetThreadId()) == "" {
+		return nil, errInvalidArg("缺少会话 id")
+	}
+	t, ok := s.cfg.Store.Get(req.ThreadId)
+	if !ok {
+		return nil, errNotFound("会话不存在")
+	}
+	if threadAgentID(t) != "pi" {
+		return nil, errFailedPrecondition("目前只有 Pi 会话支持导出 HTML 存档")
+	}
+	exp, ok := s.cfg.Providers["pi"].(piThreadExporter)
+	if !ok {
+		return nil, errUnavailable("电脑上没有可用的 pi,无法导出")
+	}
+	path, err := exp.ExportHTML(t)
+	if err != nil {
+		// pi 的失败原因(未落地/渲染失败)原样透传,手机端 Toast 可直接展示
+		return nil, errInternal(err)
+	}
+	return &pb.ExportThreadHtmlResponse{Path: path}, nil
+}
+
+func (a *activeTurns) Has(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.m[id]
+	return ok
 }

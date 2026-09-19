@@ -1,0 +1,21 @@
+{
+  "shared_prefs": {
+    "readable": true,
+    "listing": "total 18\ndrwxrwx--x 2 u0_a321 u0_a321 3452 2026-09-19 21:47 .\ndrwx------ 6 u0_a321 u0_a321 3452 2026-09-19 21:43 ..\n-rw-rw---- 1 u0_a321 u0_a321  486 2026-09-19 21:47 agent_conn.xml\n-rw-rw---- 1 u0_a321 u0_a321  111 2026-09-19 21:44 pa_onboarding.xml\n-rw-rw---- 1 u0_a321 u0_a321 1258 2026-09-19 21:46 pa_secure.xml"
+  },
+  "files": {
+    "readable": true,
+    "listing": "total 19\ndrwxrwx--x 5 u0_a321 u0_a321 3452 2026-09-19 21:47 .\ndrwx------ 6 u0_a321 u0_a321 3452 2026-09-19 21:43 ..\ndrwx------ 2 u0_a321 u0_a321 3452 2026-09-19 21:43 pa_snap\n-rw------- 1 u0_a321 u0_a321   24 2026-09-19 21:47 profileInstalled\ndrwx------ 2 u0_a321 u0_a321 3452 2026-09-19 21:44 sensevoice-int8\ndrwx------ 2 u0_a321 u0_a321 3452 2026-09-19 21:43 turn-checkpoints"
+  },
+  "databases": {
+    "readable": false,
+    "listing": ""
+  },
+  "scanned_files": [
+    "shared_prefs/agent_conn.xml (485 字节)",
+    "shared_prefs/pa_onboarding.xml (110 字节)",
+    "shared_prefs/pa_secure.xml (1257 字节)",
+    "files/profileInstalled (19 字节)"
+  ],
+  "plaintext_credential_hits": []
+}

@@ -1,5 +1,6 @@
 package dev.pocketagent.app
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,7 +16,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +47,7 @@ import dev.pocketagent.app.ui.TerminalScreen
 import dev.pocketagent.app.ui.ThreadsScreen
 import dev.pocketagent.app.ui.component.PaCache
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.ThreadPins
 import dev.pocketagent.app.ui.component.ThreadSnapshot
@@ -59,9 +63,17 @@ class MainActivity : ComponentActivity() {
         TaskCenter.init(this) // 任务中心:恢复未读数与任务清单(杀进程不丢)
         ThreadUsageStore.init(this) // 会话上下文用量缓存:重开会话时回显
         ThreadPins.init(this) // 会话置顶偏好
+        dev.pocketagent.app.ui.component.TurnCheckpointStore.init(this)
+        dev.pocketagent.app.ui.TurnSession.restoreRunningCheckpoints()
         ThreadSnapshot.init(this) // 会话离线快照:断线时列表/最近消息仍可读
         PaDownloader.init(this) // 下载到手机(会话输出/电脑文件)
         PaCache.init(this) // 缓存管家:启动时清扫崩溃残留的临时文件(pa_pdf_* / pa_ziplist*)
+        // 【P1-6】本地通知:建渠道 + 动态注册审批动作接收器 + 启动逐秒监控。
+        // 必须在 TaskCenter.init 之后(种子要读任务清单)。
+        PaNotifications.init(this)
+        // 【P1-6】通知深链:冷启动带 extra(thread_id)时记录待导航会话,
+        // RootNav 组合后消费;热启动(复用实例)走 onNewIntent 同一入口。
+        PaNotifications.onLaunchIntent(intent)
         AgentConnection.startAutoReconnect() // 断线自动重连(USB→Tailscale 回退),恢复后全局刷新
         enableEdgeToEdge()
         setContent {
@@ -77,6 +89,29 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // ---- P1-6:通知深链热启动(通知点击时 app 还活着 → 复用本实例) ----
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        PaNotifications.onLaunchIntent(intent)
+    }
+
+    // ---- P1-6:前台标志(通知"任务完成"只在后台发)+ 通知运行时权限申请 ----
+    override fun onResume() {
+        super.onResume()
+        PaNotifications.appInForeground = true
+        PaNotifications.maybeRequestNotificationPermission(this)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        PaNotifications.appInForeground = false
+    }
+
+    // P1-6:通知权限申请结果刻意不做任何处理 —— ComponentActivity 已把
+    // onRequestPermissionsResult 收进 ActivityResultRegistry(不可再 override),
+    // 默认行为即"静默跳过":用户拒绝后 areNotificationsEnabled() 为 false,
+    // 发通知侧会直接跳过,想开再去系统设置。
 }
 
 /**
@@ -98,6 +133,18 @@ private fun RootNav() {
         openHomeDrawer += 1
     }
     val view = LocalView.current
+
+    // 【P1-6】通知深链:通知点进来自动打开对应会话。onCreate 冷启动与
+    // onNewIntent 热启动都汇到 PaNotifications.pendingChatNavigation,
+    // 这里统一消费后清空,避免重组时重复导航。
+    val pendingChat by PaNotifications.pendingChatNavigation.collectAsState()
+    LaunchedEffect(pendingChat) {
+        val tid = pendingChat ?: return@LaunchedEffect
+        if (tid.isNotBlank()) {
+            nav.navigate("chat/$tid") { launchSingleTop = true }
+        }
+        PaNotifications.clearPendingChatNavigation()
+    }
 
     SideEffect {
         val window = (context as? ComponentActivity)?.window ?: return@SideEffect

@@ -1,0 +1,16 @@
+{
+  "cert_files": [
+    "certs/server-cert.pem 676 bytes",
+    "certs/server-key.pem 227 bytes"
+  ],
+  "handshake": {
+    "tls_version": "TLSv1.3",
+    "cipher": "TLS_AES_128_GCM_SHA256",
+    "cert_sha256_fingerprint": "a12a872b4172740084bf178f4ea2877d57b83d4c045070ede8f2ecfe216a8fd9",
+    "cert_der_len": 459
+  },
+  "plaintext_probe_verdict": "REJECTED",
+  "plaintext_probe_detail": "连接被服务端直接关闭 (EOF), 未回任何协议数据 -> 强制 TLS",
+  "verdict": "PASS",
+  "note": "默认无 -plaintext 时 daemon 走 TLS 自签证书; 鉴权开关见 SEC-03 组 (本轮 -pair-code 未设置)"
+}

@@ -1,0 +1,45 @@
+# verifyext
+# 扩展能力/多 agent 可用性校验
+# rc=0 耗时=52.47s @ 22:44:41
+
+=== 只读面:用量 / 能力 / 托管策略 / MCP ===
+~ GetCodexUsage: 读不到但带回原因(正确行为): account/rateLimits/read: context deadline exceeded
+ok ListCodexCapabilities: 共 43 项(skill=30 hook=0 plugin=13)
+     - [plugin] browser enabled=true 来源="openai-bundled" 状态="AVAILABLE" 禁用原因=""
+     - [plugin] chrome enabled=true 来源="openai-bundled" 状态="AVAILABLE" 禁用原因=""
+     - [plugin] codex-app-tools enabled=true 来源="openai-bundled" 状态="AVAILABLE" 禁用原因=""
+ok GetCodexSettings: approval="never" sandbox="danger-full-access" model="codex/dexacct.MThkMjI1ZGQyNTAyYTJkNDAwMGY.ZW5kcG9pbnRfMWEwNmNlODhkMTBfNmRmYTA4.Z3B0LTUuNi1zb2w"
+     托管=false 说明=""
+     允许的 approval=[] sandbox=[] webSearch=[](空列表=无限制)
+ok ListMcpServers: 共 5 个
+     - codex_app 工具=0 状态="ready" 鉴权="unsupported" 版本="" 标题="codex-app-tools@openai-bundled" 资源=0 错误=""
+     - codex_apps 工具=322 状态="ready" 鉴权="bearerToken" 版本="0.1.0" 标题="plugin-runtime" 资源=0 错误=""
+     - cua_repl 工具=3 状态="ready" 鉴权="unsupported" 版本="1.5.0" 标题="rmcp" 资源=0 错误=""
+     - idalib 工具=0 状态="ready" 鉴权="unsupported" 版本="" 标题="ida-pro-mcp@mrexodia" 资源=0 错误=""
+     - node_repl 工具=4 状态="ready" 鉴权="unsupported" 版本="1.5.0" 标题="rmcp" 资源=0 错误=""
+
+=== 会话组织:分组 / 归档 / 搜索 ===
+ok ListThreadSections: 现有 2 个分组
+ok CreateThreadSection: id=01a0ba20-618f-7eb0-8835-2725e06fc2ce name="验证分组-可删"
+ok RenameThreadSection: name="验证分组-已改名"
+ok MoveThreadToSection: 会话 th-a1268d748fb58cfc 已进入分组 01a0ba20-618f-7eb0-8835-2725e06fc2ce
+ok ListThreads(section_id): 分组过滤命中 1 条
+ok MoveThreadToSection: 传空 section_id 已把会话移出分组
+ok 分组 thread_count 回填: 0
+     (已清理验证分组 01a0ba20-618f-7eb0-8835-2725e06fc2ce)
+ok ForkThread: 新会话 th-f6b532345acb1a32 标题="严格修复以下多 Agent 应用问题：  · 分支" codex=01a0ba20-638f-7570-9cce-2d37879f4f8a
+     (已清理验证会话 th-f6b532345acb1a32)
+ok ListThreads: 活跃 23 条(sectionId 已带出)
+     - th-a1268d748fb58cfc "严格修复以下多 Agent 应用问题： Codex 目标模式：修复其不进行更改且逻辑理解错误，使其真实适配 Codex…" archived=false section=""
+     - th-93401f02b9a0f70e "-agent" archived=false section=""
+ok ListThreads(include_archived=true): 25 条(≥ 活跃数 23)
+ok ListThreads(search_term="严"): 命中 3 条
+ok ListThreads(sort_key=updated): 23 条,已按更新时间倒序
+
+=== 审查者推翻入口 ===
+ok ApproveGuardianDeniedAction: 假 id 被拒,理由是 "rpc error: code = NotFound desc = 会话不存在"
+
+ok RollbackThread: num_turns=0 被拒,理由是 "rpc error: code = InvalidArgument desc = 回滚回合数必须大于 0"
+~ RollbackThread 正向路径: SKIP(需要带真实回合的会话,本机 codex 登录被地区策略拒绝,拿不到回合;不会为凑通过去回滚真实会话)
+
+全部检查通过

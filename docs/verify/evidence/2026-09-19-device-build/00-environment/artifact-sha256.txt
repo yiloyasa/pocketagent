@@ -1,0 +1,11 @@
+APK
+  path   = G:\项目1\pocketagent\build\app-debug.apk
+  size   = 249693873 bytes (238.13 MB)
+  mtime  = 2026-09-19 21:33:23
+  sha256 = 554c87b1359de44603bf04744a1bfd06a62ef1cb7ea0e3759c75a74bbd16aae5
+
+Daemon
+  path   = G:\项目1\pocketagent\daemon\pocketagentd.exe
+  size   = 24051200 bytes (22.94 MB)
+  mtime  = 2026-09-19 21:34:06
+  sha256 = f220d385321a2ecf5702d6a6fb63c452abb2800d97f1e7dd9dae5c6624cf9b4c

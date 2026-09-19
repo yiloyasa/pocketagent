@@ -16,7 +16,7 @@ service FileSystemService {
   rpc ListRoots(ListRootsRequest) returns (ListRootsResponse);
   // 大文件分块流
   rpc ReadFile(ReadFileRequest) returns (stream FileChunk);
-  rpc WriteFile(WriteFileRequest) returns (Empty);          // 整写
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse); // 整写(带乐观锁,返回新修改时间)
   rpc ReadFileDiff(ReadFileDiffRequest) returns (FileDiff); // 未保存改动 vs git HEAD
   rpc CreateDirectory(CreateDirectoryRequest) returns (Empty);
   rpc DeleteEntry(DeleteEntryRequest) returns (Empty);
@@ -53,6 +53,10 @@ message FileChunk {
   bytes data = 1;
   int64 total_size = 2; // 仅首块携带
   bool text = 3;        // UTF-8 文本可直显,否则当二进制
+  // 【乐观锁配套】该文件读取时刻的修改时间(UnixMilli)。每个分块都带同一值,
+  // 客户端取任意一块即可拿到;手机端编辑保存时回填 WriteFileRequest 的
+  // expected_modified_at_ms。目录/不存在语义照旧(不读文件就没有该值)。
+  int64 modified_unix_ms = 4;
 }
 
 message WriteFileRequest {
@@ -60,6 +64,16 @@ message WriteFileRequest {
   bytes data = 2;
   bool create = 3;   // 不存在则创建
   bool truncate = 4; // 覆盖写
+  // 【乐观锁】调用方读文件时记下的修改时间(UnixMilli)。大于 0 时服务端校验:
+  // 与磁盘当前值不等(含文件已被删)则拒绝写入,防止手机与电脑并行编辑互相覆盖。
+  // 0 / 缺省 = 不校验(兼容旧客户端与"强制覆盖"场景)。对齐原作 WriteWorkspaceTextFile。
+  int64 expected_modified_at_ms = 5;
+}
+
+message WriteFileResponse {
+  // 写入完成后磁盘上的新修改时间(UnixMilli)。客户端保存它,作为下一次
+  // 乐观锁写入的 expected_modified_at_ms。读取失败时为 0。
+  int64 new_modified_at_ms = 1;
 }
 
 message ReadFileDiffRequest { string path = 1; }

@@ -1,0 +1,79 @@
+{
+  "density": {
+    "wm_size": "Physical size: 1080x2400",
+    "wm_density": "Physical density: 440",
+    "lcd_density": null,
+    "dpi": 440,
+    "scale": 2.75,
+    "note": "dp = px / scale"
+  },
+  "typed_ok": true,
+  "send": {
+    "w": 50,
+    "h": 50,
+    "bounds": [
+      945,
+      1316,
+      995,
+      1366
+    ]
+  },
+  "mic": {
+    "w": 50,
+    "h": 50,
+    "bounds": [
+      824,
+      1316,
+      874,
+      1366
+    ]
+  },
+  "add": {
+    "w": 55,
+    "h": 55,
+    "bounds": [
+      78,
+      1314,
+      133,
+      1369
+    ]
+  },
+  "model_row": {
+    "w": 1014,
+    "h": 104,
+    "bounds": [
+      33,
+      1182,
+      1047,
+      1286
+    ]
+  },
+  "screen_after": [
+    "菜单",
+    "新会话 09-19 23:01",
+    "导出对话",
+    "更多",
+    "RELEASE_AUDIT_LONG_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "展开编辑",
+    "切换模型与思考强度",
+    "Codex(跟随桌面配置)",
+    "选择模型",
+    "添加附件",
+    "项目 Git",
+    "完全访问",
+    "上下文窗口 —",
+    "—",
+    "语音输入",
+    "发送"
+  ],
+  "send_dp": {
+    "w": 18.2,
+    "h": 18.2
+  },
+  "mic_dp": {
+    "w": 18.2,
+    "h": 18.2
+  },
+  "slash_items": [],
+  "slash_present": false
+}

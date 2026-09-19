@@ -29,9 +29,13 @@ const (
 	ThreadService_CompactThread_FullMethodName               = "/pocketagent.v1.ThreadService/CompactThread"
 	ThreadService_StartTurn_FullMethodName                   = "/pocketagent.v1.ThreadService/StartTurn"
 	ThreadService_CancelTurn_FullMethodName                  = "/pocketagent.v1.ThreadService/CancelTurn"
+	ThreadService_SubmitApproval_FullMethodName              = "/pocketagent.v1.ThreadService/SubmitApproval"
 	ThreadService_GetThreadHistory_FullMethodName            = "/pocketagent.v1.ThreadService/GetThreadHistory"
+	ThreadService_GetThreadEventsSince_FullMethodName        = "/pocketagent.v1.ThreadService/GetThreadEventsSince"
 	ThreadService_ListCodexThreads_FullMethodName            = "/pocketagent.v1.ThreadService/ListCodexThreads"
 	ThreadService_ImportCodexThread_FullMethodName           = "/pocketagent.v1.ThreadService/ImportCodexThread"
+	ThreadService_ListAgentThreads_FullMethodName            = "/pocketagent.v1.ThreadService/ListAgentThreads"
+	ThreadService_ImportAgentThread_FullMethodName           = "/pocketagent.v1.ThreadService/ImportAgentThread"
 	ThreadService_ForkThread_FullMethodName                  = "/pocketagent.v1.ThreadService/ForkThread"
 	ThreadService_RollbackThread_FullMethodName              = "/pocketagent.v1.ThreadService/RollbackThread"
 	ThreadService_ListThreadSections_FullMethodName          = "/pocketagent.v1.ThreadService/ListThreadSections"
@@ -40,6 +44,10 @@ const (
 	ThreadService_DeleteThreadSection_FullMethodName         = "/pocketagent.v1.ThreadService/DeleteThreadSection"
 	ThreadService_MoveThreadToSection_FullMethodName         = "/pocketagent.v1.ThreadService/MoveThreadToSection"
 	ThreadService_ApproveGuardianDeniedAction_FullMethodName = "/pocketagent.v1.ThreadService/ApproveGuardianDeniedAction"
+	ThreadService_ExportThreadHtml_FullMethodName            = "/pocketagent.v1.ThreadService/ExportThreadHtml"
+	ThreadService_OptimizePrompt_FullMethodName              = "/pocketagent.v1.ThreadService/OptimizePrompt"
+	ThreadService_ListSlashCommands_FullMethodName           = "/pocketagent.v1.ThreadService/ListSlashCommands"
+	ThreadService_StartReview_FullMethodName                 = "/pocketagent.v1.ThreadService/StartReview"
 )
 
 // ThreadServiceClient is the client API for ThreadService service.
@@ -58,11 +66,26 @@ type ThreadServiceClient interface {
 	// 服务端 → 客户端:文本增量/工具调用/审批请求/turn 结束。
 	StartTurn(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TurnClientMessage, TurnServerMessage], error)
 	CancelTurn(ctx context.Context, in *CancelTurnRequest, opts ...grpc.CallOption) (*Empty, error)
+	// Reconnect-safe approval delivery; request_id must still be pending.
+	SubmitApproval(ctx context.Context, in *SubmitApprovalRequest, opts ...grpc.CallOption) (*Empty, error)
 	// 历史消息(打开旧会话时拉取)
 	GetThreadHistory(ctx context.Context, in *GetThreadHistoryRequest, opts ...grpc.CallOption) (*GetThreadHistoryResponse, error)
+	// ---- P1-5 事件断点续传(只增)----
+	// 按 seq 增量回放某线程的事件帧(seq > after_sequence,升序),回放完即关流,
+	// 不做 live 跟随。手机断线重连后用它把错过的帧无缝补上,替代"整屏历史回填"。
+	// 若 after_sequence 已超出 daemon 的保留窗口(events.jsonl 轮转丢弃),
+	// 流里只会有一帧 ResyncRequired —— 手机端收到后必须退回 GetThreadHistory 全量回填。
+	GetThreadEventsSince(ctx context.Context, in *GetThreadEventsSinceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TurnServerMessage], error)
 	// 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
 	ListCodexThreads(ctx context.Context, in *ListCodexThreadsRequest, opts ...grpc.CallOption) (*ListCodexThreadsResponse, error)
 	ImportCodexThread(ctx context.Context, in *ImportCodexThreadRequest, opts ...grpc.CallOption) (*ImportCodexThreadResponse, error)
+	// 电脑上其它桌面 agent(pi / zcode)已有的会话:列出 + 导入(绑定为本地线程,可继续聊)。
+	// 【为什么是一对通用 RPC 而不是两对】pi / zcode 的差异只在"列表来源"与
+	// "外部会话引用怎么填",协议面完全同构 —— agent_id 一个参数就能区分,
+	// 开两套 RPC 只会让手机端多写一遍一模一样的接线。codex 不并入:它有
+	// app-server 标题同步 / rollout 删除等专属逻辑,保持原样不动。
+	ListAgentThreads(ctx context.Context, in *ListAgentThreadsRequest, opts ...grpc.CallOption) (*ListAgentThreadsResponse, error)
+	ImportAgentThread(ctx context.Context, in *ImportAgentThreadRequest, opts ...grpc.CallOption) (*ImportAgentThreadResponse, error)
 	// ---- 会话组织:分组 / 分支 / 回滚 ----
 	// 【为什么 fork 和 rollback 必须二次确认】两者都会改变"这个会话之后是什么" ——
 	// fork 会分出一条新会话,rollback 会直接丢掉最近 N 个回合。手机上误触的代价比
@@ -77,6 +100,33 @@ type ThreadServiceClient interface {
 	// 审查者(guardian/自动审查)拒绝之后,用户推翻它的结论并要求继续执行。
 	// 手机端不提供这个按钮的话,用户看到的就是"任务莫名其妙失败了"。
 	ApproveGuardianDeniedAction(ctx context.Context, in *ApproveGuardianDeniedActionRequest, opts ...grpc.CallOption) (*Empty, error)
+	// ---- 会话导出:离线 HTML 存档(只增)----
+	// 把整棵会话渲染成离线 HTML 落盘在电脑上(目前由 pi 侧 export_html 能力提供,
+	// 文件固定写在会话工作区的 .pocketagent-exports/<threadId>.html)。返回电脑上的
+	// 绝对路径,手机端用现有 ReadFile(FileChunk 流)下载链路取文件、浏览器离线打开。
+	// 与"导出对话(Markdown)"互补:Markdown 只导出手机选中的正文,HTML 是电脑端
+	// 的完整会话存档(含思考/工具过程)。非 pi 会话 / 未落地 / 导出失败一律走
+	// gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+	ExportThreadHtml(ctx context.Context, in *ExportThreadHtmlRequest, opts ...grpc.CallOption) (*ExportThreadHtmlResponse, error)
+	// ---- 对话栏提示词优化(只增)----
+	// 手机输入栏的一键改写:把用户的原始输入交给电脑端 ZCode 的文本生成能力
+	// (app-server 的 workspace/generateText,复用桌面端已登录凭据,零新增配置)
+	// 改写成"给 AI 编程代理的清晰指令"。纯文本进、纯文本出:不建会话、不落库、
+	// 不影响任何线程状态;失败走 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+	OptimizePrompt(ctx context.Context, in *OptimizePromptRequest, opts ...grpc.CallOption) (*OptimizePromptResponse, error)
+	// ---- zcode 会话的斜杠命令面板(只增)----
+	// 手机输入栏以 "/" 开头且会话是 zcode 时,输入框上方弹命令候选条;候选数据
+	// 来自 daemon 侧该线程归属 zcode 会话的快照(slashCommands[],来源 ZCode
+	// app-server 的 session/create|resume 应答)。非 zcode 会话 / 拉取失败一律回
+	// **空列表**(这不是错误:手机端按"没有命令面板"处理,绝不 Toast 报错)。
+	ListSlashCommands(ctx context.Context, in *ListSlashCommandsRequest, opts ...grpc.CallOption) (*ListSlashCommandsResponse, error)
+	// ---- /计划:发起计划审查(只增)----
+	// 手机端斜杠面板的内置伪命令"/计划"的落点:让电脑端 codex 对当前会话拟定的
+	// 计划发起一轮审查(codex review/start,实测 fire-and-return —— 应答里
+	// turn.status=inProgress 即回,审查产出以 item/* 事件流回**原会话**,手机端
+	// 现有的事件时间线直接可见)。仅 codex 会话支持;其他 agent / 未落地会话
+	// 回 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+	StartReview(ctx context.Context, in *StartReviewRequest, opts ...grpc.CallOption) (*StartReviewResponse, error)
 }
 
 type threadServiceClient struct {
@@ -190,6 +240,16 @@ func (c *threadServiceClient) CancelTurn(ctx context.Context, in *CancelTurnRequ
 	return out, nil
 }
 
+func (c *threadServiceClient) SubmitApproval(ctx context.Context, in *SubmitApprovalRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, ThreadService_SubmitApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *threadServiceClient) GetThreadHistory(ctx context.Context, in *GetThreadHistoryRequest, opts ...grpc.CallOption) (*GetThreadHistoryResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetThreadHistoryResponse)
@@ -199,6 +259,25 @@ func (c *threadServiceClient) GetThreadHistory(ctx context.Context, in *GetThrea
 	}
 	return out, nil
 }
+
+func (c *threadServiceClient) GetThreadEventsSince(ctx context.Context, in *GetThreadEventsSinceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TurnServerMessage], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ThreadService_ServiceDesc.Streams[1], ThreadService_GetThreadEventsSince_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetThreadEventsSinceRequest, TurnServerMessage]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ThreadService_GetThreadEventsSinceClient = grpc.ServerStreamingClient[TurnServerMessage]
 
 func (c *threadServiceClient) ListCodexThreads(ctx context.Context, in *ListCodexThreadsRequest, opts ...grpc.CallOption) (*ListCodexThreadsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -214,6 +293,26 @@ func (c *threadServiceClient) ImportCodexThread(ctx context.Context, in *ImportC
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ImportCodexThreadResponse)
 	err := c.cc.Invoke(ctx, ThreadService_ImportCodexThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ListAgentThreads(ctx context.Context, in *ListAgentThreadsRequest, opts ...grpc.CallOption) (*ListAgentThreadsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAgentThreadsResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ListAgentThreads_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ImportAgentThread(ctx context.Context, in *ImportAgentThreadRequest, opts ...grpc.CallOption) (*ImportAgentThreadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ImportAgentThreadResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ImportAgentThread_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +399,46 @@ func (c *threadServiceClient) ApproveGuardianDeniedAction(ctx context.Context, i
 	return out, nil
 }
 
+func (c *threadServiceClient) ExportThreadHtml(ctx context.Context, in *ExportThreadHtmlRequest, opts ...grpc.CallOption) (*ExportThreadHtmlResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportThreadHtmlResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ExportThreadHtml_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) OptimizePrompt(ctx context.Context, in *OptimizePromptRequest, opts ...grpc.CallOption) (*OptimizePromptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OptimizePromptResponse)
+	err := c.cc.Invoke(ctx, ThreadService_OptimizePrompt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ListSlashCommands(ctx context.Context, in *ListSlashCommandsRequest, opts ...grpc.CallOption) (*ListSlashCommandsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSlashCommandsResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ListSlashCommands_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) StartReview(ctx context.Context, in *StartReviewRequest, opts ...grpc.CallOption) (*StartReviewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartReviewResponse)
+	err := c.cc.Invoke(ctx, ThreadService_StartReview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ThreadServiceServer is the server API for ThreadService service.
 // All implementations must embed UnimplementedThreadServiceServer
 // for forward compatibility.
@@ -316,11 +455,26 @@ type ThreadServiceServer interface {
 	// 服务端 → 客户端:文本增量/工具调用/审批请求/turn 结束。
 	StartTurn(grpc.BidiStreamingServer[TurnClientMessage, TurnServerMessage]) error
 	CancelTurn(context.Context, *CancelTurnRequest) (*Empty, error)
+	// Reconnect-safe approval delivery; request_id must still be pending.
+	SubmitApproval(context.Context, *SubmitApprovalRequest) (*Empty, error)
 	// 历史消息(打开旧会话时拉取)
 	GetThreadHistory(context.Context, *GetThreadHistoryRequest) (*GetThreadHistoryResponse, error)
+	// ---- P1-5 事件断点续传(只增)----
+	// 按 seq 增量回放某线程的事件帧(seq > after_sequence,升序),回放完即关流,
+	// 不做 live 跟随。手机断线重连后用它把错过的帧无缝补上,替代"整屏历史回填"。
+	// 若 after_sequence 已超出 daemon 的保留窗口(events.jsonl 轮转丢弃),
+	// 流里只会有一帧 ResyncRequired —— 手机端收到后必须退回 GetThreadHistory 全量回填。
+	GetThreadEventsSince(*GetThreadEventsSinceRequest, grpc.ServerStreamingServer[TurnServerMessage]) error
 	// 电脑上 codex 已有的会话:列出 + 导入(绑定为本地线程,可继续聊)
 	ListCodexThreads(context.Context, *ListCodexThreadsRequest) (*ListCodexThreadsResponse, error)
 	ImportCodexThread(context.Context, *ImportCodexThreadRequest) (*ImportCodexThreadResponse, error)
+	// 电脑上其它桌面 agent(pi / zcode)已有的会话:列出 + 导入(绑定为本地线程,可继续聊)。
+	// 【为什么是一对通用 RPC 而不是两对】pi / zcode 的差异只在"列表来源"与
+	// "外部会话引用怎么填",协议面完全同构 —— agent_id 一个参数就能区分,
+	// 开两套 RPC 只会让手机端多写一遍一模一样的接线。codex 不并入:它有
+	// app-server 标题同步 / rollout 删除等专属逻辑,保持原样不动。
+	ListAgentThreads(context.Context, *ListAgentThreadsRequest) (*ListAgentThreadsResponse, error)
+	ImportAgentThread(context.Context, *ImportAgentThreadRequest) (*ImportAgentThreadResponse, error)
 	// ---- 会话组织:分组 / 分支 / 回滚 ----
 	// 【为什么 fork 和 rollback 必须二次确认】两者都会改变"这个会话之后是什么" ——
 	// fork 会分出一条新会话,rollback 会直接丢掉最近 N 个回合。手机上误触的代价比
@@ -335,6 +489,33 @@ type ThreadServiceServer interface {
 	// 审查者(guardian/自动审查)拒绝之后,用户推翻它的结论并要求继续执行。
 	// 手机端不提供这个按钮的话,用户看到的就是"任务莫名其妙失败了"。
 	ApproveGuardianDeniedAction(context.Context, *ApproveGuardianDeniedActionRequest) (*Empty, error)
+	// ---- 会话导出:离线 HTML 存档(只增)----
+	// 把整棵会话渲染成离线 HTML 落盘在电脑上(目前由 pi 侧 export_html 能力提供,
+	// 文件固定写在会话工作区的 .pocketagent-exports/<threadId>.html)。返回电脑上的
+	// 绝对路径,手机端用现有 ReadFile(FileChunk 流)下载链路取文件、浏览器离线打开。
+	// 与"导出对话(Markdown)"互补:Markdown 只导出手机选中的正文,HTML 是电脑端
+	// 的完整会话存档(含思考/工具过程)。非 pi 会话 / 未落地 / 导出失败一律走
+	// gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+	ExportThreadHtml(context.Context, *ExportThreadHtmlRequest) (*ExportThreadHtmlResponse, error)
+	// ---- 对话栏提示词优化(只增)----
+	// 手机输入栏的一键改写:把用户的原始输入交给电脑端 ZCode 的文本生成能力
+	// (app-server 的 workspace/generateText,复用桌面端已登录凭据,零新增配置)
+	// 改写成"给 AI 编程代理的清晰指令"。纯文本进、纯文本出:不建会话、不落库、
+	// 不影响任何线程状态;失败走 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+	OptimizePrompt(context.Context, *OptimizePromptRequest) (*OptimizePromptResponse, error)
+	// ---- zcode 会话的斜杠命令面板(只增)----
+	// 手机输入栏以 "/" 开头且会话是 zcode 时,输入框上方弹命令候选条;候选数据
+	// 来自 daemon 侧该线程归属 zcode 会话的快照(slashCommands[],来源 ZCode
+	// app-server 的 session/create|resume 应答)。非 zcode 会话 / 拉取失败一律回
+	// **空列表**(这不是错误:手机端按"没有命令面板"处理,绝不 Toast 报错)。
+	ListSlashCommands(context.Context, *ListSlashCommandsRequest) (*ListSlashCommandsResponse, error)
+	// ---- /计划:发起计划审查(只增)----
+	// 手机端斜杠面板的内置伪命令"/计划"的落点:让电脑端 codex 对当前会话拟定的
+	// 计划发起一轮审查(codex review/start,实测 fire-and-return —— 应答里
+	// turn.status=inProgress 即回,审查产出以 item/* 事件流回**原会话**,手机端
+	// 现有的事件时间线直接可见)。仅 codex 会话支持;其他 agent / 未落地会话
+	// 回 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
+	StartReview(context.Context, *StartReviewRequest) (*StartReviewResponse, error)
 	mustEmbedUnimplementedThreadServiceServer()
 }
 
@@ -375,14 +556,26 @@ func (UnimplementedThreadServiceServer) StartTurn(grpc.BidiStreamingServer[TurnC
 func (UnimplementedThreadServiceServer) CancelTurn(context.Context, *CancelTurnRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelTurn not implemented")
 }
+func (UnimplementedThreadServiceServer) SubmitApproval(context.Context, *SubmitApprovalRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitApproval not implemented")
+}
 func (UnimplementedThreadServiceServer) GetThreadHistory(context.Context, *GetThreadHistoryRequest) (*GetThreadHistoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetThreadHistory not implemented")
+}
+func (UnimplementedThreadServiceServer) GetThreadEventsSince(*GetThreadEventsSinceRequest, grpc.ServerStreamingServer[TurnServerMessage]) error {
+	return status.Error(codes.Unimplemented, "method GetThreadEventsSince not implemented")
 }
 func (UnimplementedThreadServiceServer) ListCodexThreads(context.Context, *ListCodexThreadsRequest) (*ListCodexThreadsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListCodexThreads not implemented")
 }
 func (UnimplementedThreadServiceServer) ImportCodexThread(context.Context, *ImportCodexThreadRequest) (*ImportCodexThreadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ImportCodexThread not implemented")
+}
+func (UnimplementedThreadServiceServer) ListAgentThreads(context.Context, *ListAgentThreadsRequest) (*ListAgentThreadsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAgentThreads not implemented")
+}
+func (UnimplementedThreadServiceServer) ImportAgentThread(context.Context, *ImportAgentThreadRequest) (*ImportAgentThreadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ImportAgentThread not implemented")
 }
 func (UnimplementedThreadServiceServer) ForkThread(context.Context, *ForkThreadRequest) (*Thread, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForkThread not implemented")
@@ -407,6 +600,18 @@ func (UnimplementedThreadServiceServer) MoveThreadToSection(context.Context, *Mo
 }
 func (UnimplementedThreadServiceServer) ApproveGuardianDeniedAction(context.Context, *ApproveGuardianDeniedActionRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApproveGuardianDeniedAction not implemented")
+}
+func (UnimplementedThreadServiceServer) ExportThreadHtml(context.Context, *ExportThreadHtmlRequest) (*ExportThreadHtmlResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExportThreadHtml not implemented")
+}
+func (UnimplementedThreadServiceServer) OptimizePrompt(context.Context, *OptimizePromptRequest) (*OptimizePromptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OptimizePrompt not implemented")
+}
+func (UnimplementedThreadServiceServer) ListSlashCommands(context.Context, *ListSlashCommandsRequest) (*ListSlashCommandsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSlashCommands not implemented")
+}
+func (UnimplementedThreadServiceServer) StartReview(context.Context, *StartReviewRequest) (*StartReviewResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartReview not implemented")
 }
 func (UnimplementedThreadServiceServer) mustEmbedUnimplementedThreadServiceServer() {}
 func (UnimplementedThreadServiceServer) testEmbeddedByValue()                       {}
@@ -598,6 +803,24 @@ func _ThreadService_CancelTurn_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ThreadService_SubmitApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).SubmitApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_SubmitApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).SubmitApproval(ctx, req.(*SubmitApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ThreadService_GetThreadHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetThreadHistoryRequest)
 	if err := dec(in); err != nil {
@@ -615,6 +838,17 @@ func _ThreadService_GetThreadHistory_Handler(srv interface{}, ctx context.Contex
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _ThreadService_GetThreadEventsSince_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetThreadEventsSinceRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ThreadServiceServer).GetThreadEventsSince(m, &grpc.GenericServerStream[GetThreadEventsSinceRequest, TurnServerMessage]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ThreadService_GetThreadEventsSinceServer = grpc.ServerStreamingServer[TurnServerMessage]
 
 func _ThreadService_ListCodexThreads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListCodexThreadsRequest)
@@ -648,6 +882,42 @@ func _ThreadService_ImportCodexThread_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ThreadServiceServer).ImportCodexThread(ctx, req.(*ImportCodexThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ListAgentThreads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAgentThreadsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ListAgentThreads(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ListAgentThreads_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ListAgentThreads(ctx, req.(*ListAgentThreadsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ImportAgentThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ImportAgentThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ImportAgentThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ImportAgentThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ImportAgentThread(ctx, req.(*ImportAgentThreadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -796,6 +1066,78 @@ func _ThreadService_ApproveGuardianDeniedAction_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ThreadService_ExportThreadHtml_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportThreadHtmlRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ExportThreadHtml(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ExportThreadHtml_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ExportThreadHtml(ctx, req.(*ExportThreadHtmlRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_OptimizePrompt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OptimizePromptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).OptimizePrompt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_OptimizePrompt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).OptimizePrompt(ctx, req.(*OptimizePromptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ListSlashCommands_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSlashCommandsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ListSlashCommands(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ListSlashCommands_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ListSlashCommands(ctx, req.(*ListSlashCommandsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_StartReview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartReviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).StartReview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_StartReview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).StartReview(ctx, req.(*StartReviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ThreadService_ServiceDesc is the grpc.ServiceDesc for ThreadService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -840,6 +1182,10 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ThreadService_CancelTurn_Handler,
 		},
 		{
+			MethodName: "SubmitApproval",
+			Handler:    _ThreadService_SubmitApproval_Handler,
+		},
+		{
 			MethodName: "GetThreadHistory",
 			Handler:    _ThreadService_GetThreadHistory_Handler,
 		},
@@ -850,6 +1196,14 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ImportCodexThread",
 			Handler:    _ThreadService_ImportCodexThread_Handler,
+		},
+		{
+			MethodName: "ListAgentThreads",
+			Handler:    _ThreadService_ListAgentThreads_Handler,
+		},
+		{
+			MethodName: "ImportAgentThread",
+			Handler:    _ThreadService_ImportAgentThread_Handler,
 		},
 		{
 			MethodName: "ForkThread",
@@ -883,6 +1237,22 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ApproveGuardianDeniedAction",
 			Handler:    _ThreadService_ApproveGuardianDeniedAction_Handler,
 		},
+		{
+			MethodName: "ExportThreadHtml",
+			Handler:    _ThreadService_ExportThreadHtml_Handler,
+		},
+		{
+			MethodName: "OptimizePrompt",
+			Handler:    _ThreadService_OptimizePrompt_Handler,
+		},
+		{
+			MethodName: "ListSlashCommands",
+			Handler:    _ThreadService_ListSlashCommands_Handler,
+		},
+		{
+			MethodName: "StartReview",
+			Handler:    _ThreadService_StartReview_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -890,6 +1260,11 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _ThreadService_StartTurn_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "GetThreadEventsSince",
+			Handler:       _ThreadService_GetThreadEventsSince_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "v1/thread.proto",

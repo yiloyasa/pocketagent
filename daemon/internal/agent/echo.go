@@ -38,9 +38,9 @@ func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appr
 
 	stream := func(delta string, isThinking bool) {
 		if isThinking {
-			sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
 		} else {
-			sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: delta}}})
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: delta}}})
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
@@ -50,7 +50,7 @@ func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appr
 	// 真的调一次工具(不需要审批的 list_dir)
 	tools := StdTools()
 	callID := "call_echo_1"
-	sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_STARTED,
 		Call:  &pb.ToolCallBlock{Id: callID, Name: "list_dir", JsonArgs: `{"path":"."}`},
 	}}})
@@ -65,7 +65,7 @@ func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appr
 		}
 		resultText = strings.Join(lines, "\n")
 	}
-	sink(pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 		Phase:  pb.ToolCallUpdate_FINISHED,
 		Call:   &pb.ToolCallBlock{Id: callID, Name: "list_dir", JsonArgs: `{"path":"."}`},
 		Result: &pb.ToolResultBlock{CallId: callID, Ok: err == nil, Output: resultText},

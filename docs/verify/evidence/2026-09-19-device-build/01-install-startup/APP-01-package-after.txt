@@ -1,0 +1,304 @@
+Activity Resolver Table:
+  Non-Data Actions:
+      android.intent.action.MAIN:
+        1d28dc0 dev.pocketagent.app/.MainActivity filter 570af9
+          Action: "android.intent.action.MAIN"
+          Category: "android.intent.category.LAUNCHER"
+
+Receiver Resolver Table:
+  Non-Data Actions:
+      androidx.profileinstaller.action.SAVE_PROFILE:
+        ffdba3e dev.pocketagent.app/androidx.profileinstaller.ProfileInstallReceiver filter a745db5
+          Action: "androidx.profileinstaller.action.SAVE_PROFILE"
+      androidx.profileinstaller.action.INSTALL_PROFILE:
+        ffdba3e dev.pocketagent.app/androidx.profileinstaller.ProfileInstallReceiver filter 7bb609f
+          Action: "androidx.profileinstaller.action.INSTALL_PROFILE"
+      androidx.profileinstaller.action.SKIP_FILE:
+        ffdba3e dev.pocketagent.app/androidx.profileinstaller.ProfileInstallReceiver filter c32c5ec
+          Action: "androidx.profileinstaller.action.SKIP_FILE"
+      androidx.profileinstaller.action.BENCHMARK_OPERATION:
+        ffdba3e dev.pocketagent.app/androidx.profileinstaller.ProfileInstallReceiver filter 7173c4a
+          Action: "androidx.profileinstaller.action.BENCHMARK_OPERATION"
+
+Domain verification status:
+
+Permissions:
+  Permission [dev.pocketagent.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION] (b6660ab):
+    sourcePackage=dev.pocketagent.app
+    uid=10324 gids=[] type=0 prot=signature
+    perm=PermissionInfo{b4d7308 dev.pocketagent.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION}
+    flags=0x0
+
+Registered ContentProviders:
+  dev.pocketagent.app/androidx.startup.InitializationProvider:
+    Provider{9369aa1 dev.pocketagent.app/androidx.startup.InitializationProvider}
+  dev.pocketagent.app/androidx.core.content.FileProvider:
+    Provider{8e314c6 dev.pocketagent.app/androidx.core.content.FileProvider}
+
+ContentProvider Authorities:
+  [dev.pocketagent.app.fileprovider]:
+    Provider{8e314c6 dev.pocketagent.app/androidx.core.content.FileProvider}
+      applicationInfo=ApplicationInfo{285c87 dev.pocketagent.app}
+  [dev.pocketagent.app.androidx-startup]:
+    Provider{9369aa1 dev.pocketagent.app/androidx.startup.InitializationProvider}
+      applicationInfo=ApplicationInfo{4cab7b4 dev.pocketagent.app}
+
+Key Set Manager:
+  [dev.pocketagent.app]
+      Signing KeySets: 484
+
+Packages:
+  Package [dev.pocketagent.app] (f73b082):
+    appId=10324
+    pkg=Package{7813fdd dev.pocketagent.app}
+    codePath=/data/app/~~sPgjNU9X8leIhfSSTmYMxw==/dev.pocketagent.app-IA6R82SiZuxD2AaoG5MsXw==
+    resourcePath=/data/app/~~sPgjNU9X8leIhfSSTmYMxw==/dev.pocketagent.app-IA6R82SiZuxD2AaoG5MsXw==
+    legacyNativeLibraryDir=/data/app/~~sPgjNU9X8leIhfSSTmYMxw==/dev.pocketagent.app-IA6R82SiZuxD2AaoG5MsXw==/lib
+    extractNativeLibs=true
+    primaryCpuAbi=arm64-v8a
+    secondaryCpuAbi=null
+    cpuAbiOverride=null
+    versionCode=5 minSdk=26 targetSdk=35
+    minExtensionVersions=[]
+    versionName=0.2.2
+    hiddenApiEnforcementPolicy=2
+    usesNonSdkApi=false
+    isMiuiPreinstall=false
+    splits=[base]
+    apkSigningVersion=2
+    flags=[ DEBUGGABLE HAS_CODE ALLOW_CLEAR_USER_DATA ]
+    privateFlags=[ PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION ALLOW_AUDIO_PLAYBACK_CAPTURE PRIVATE_FLAG_ALLOW_NATIVE_HEAP_POINTER_TAGGING ]
+    forceQueryable=false
+    pageSizeCompat=0
+    queriesIntents=[Intent { act=android.speech.RecognitionService }]
+    scannedAsStoppedSystemApp=false
+    supportsScreens=[small, medium, large, xlarge, resizeable, anyDensity]
+    timeStamp=2026-09-19 22:38:46
+    lastUpdateTime=2026-09-19 22:38:50
+    installerPackageName=null
+    installerPackageUid=-1
+    initiatingPackageName=com.android.shell
+    originatingPackageName=null
+    packageSource=1
+    appMetadataFilePath=null
+    appMetadataSource=0
+    signatures=PackageSignatures{56bb752 version:2, signatures:[de123361], past signatures:[]}
+    installPermissionsFixed=false
+    pkgFlags=[ DEBUGGABLE HAS_CODE ALLOW_CLEAR_USER_DATA ]
+    privatePkgFlags=[ PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION ALLOW_AUDIO_PLAYBACK_CAPTURE PRIVATE_FLAG_ALLOW_NATIVE_HEAP_POINTER_TAGGING ]
+    apexModuleName=null
+    declared permissions:
+      dev.pocketagent.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION: prot=signature
+    requested permissions:
+      android.permission.POST_NOTIFICATIONS
+      android.permission.FOREGROUND_SERVICE
+      android.permission.CHANGE_WIFI_MULTICAST_STATE
+      android.permission.INTERNET
+      dev.pocketagent.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+      android.permission.FOREGROUND_SERVICE_DATA_SYNC
+      android.permission.ACCESS_NETWORK_STATE
+      android.permission.REQUEST_INSTALL_PACKAGES
+      android.permission.RECORD_AUDIO
+    install permissions:
+      android.permission.FOREGROUND_SERVICE: granted=true
+      android.permission.CHANGE_WIFI_MULTICAST_STATE: granted=true
+      android.permission.INTERNET: granted=true
+      dev.pocketagent.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION: granted=true
+      android.permission.FOREGROUND_SERVICE_DATA_SYNC: granted=true
+      android.permission.ACCESS_NETWORK_STATE: granted=true
+    User 0: ceDataInode=1949643 deDataInode=1945414 installed=true hidden=false suspended=false distractionFlags=0 stopped=true notLaunched=true enabled=0 instant=false virtual=false quarantined=false
+      installReason=0
+      dataDir=/data/user/0/dev.pocketagent.app
+      firstInstallTime=2026-09-19 22:38:50
+      uninstallReason=0
+      overlay paths:
+        /product/overlay/GestureLineOverlay.apk
+        /data/resource-cache/com.android.systemui-neutral-GOMD.frro
+        /data/resource-cache/com.android.systemui-accent-vBAM.frro
+        /data/resource-cache/com.android.systemui-dynamic-NNpR.frro
+      legacy overlay paths:
+        /product/overlay/GestureLineOverlay.apk
+      gids=[3003]
+      runtime permissions:
+        android.permission.POST_NOTIFICATIONS: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+        android.permission.RECORD_AUDIO: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+    User 12: ceDataInode=0 deDataInode=0 installed=false hidden=false suspended=false distractionFlags=0 stopped=true notLaunched=true enabled=0 instant=false virtual=false quarantined=false
+      installReason=0
+      dataDir=null
+      firstInstallTime=1970-01-01 08:00:00
+      uninstallReason=0
+      gids=[3003]
+      runtime permissions:
+    User 999: ceDataInode=0 deDataInode=0 installed=false hidden=false suspended=false distractionFlags=0 stopped=true notLaunched=true enabled=0 instant=false virtual=false quarantined=false
+      installReason=0
+      dataDir=null
+      firstInstallTime=1970-01-01 08:00:00
+      uninstallReason=0
+      gids=[3003]
+      runtime permissions:
+
+Queries:
+  system apps queryable: false
+  queries via forceQueryable:
+  queries via package name:
+  queries via component:
+    [com.android.inputdevices,com.android.server.telecom,com.miui.aod,com.miui.cleanmaster,com.miui.thirdappassistant,com.qualcomm.qti.xrvd.service,com.xiaomi.mirror,com.miui.qr,com.bsp.catchlog,com.xiaomi.aon,com.miui.powerkeeper,com.xiaomi.joyose,com.android.providers.settings,com.xiaomi.mtb,com.xiaomi.touchservice,com.android.DeviceAsWebcam,com.miui.contentcatcher,com.android.dynsystem,com.miui.audiomonitor,com.xiaomi.aiasst.vision,com.wapi.wapicertmanage,com.android.keychain,com.miui.touchassistant,miui.systemui.plugin,com.xiaomi.mi_connect_service,com.android.settings,com.miui.cit,com.xiaomi.barrage,com.xiaomi.gnss.polaris,com.xiaomi.aiasst.service,com.miui.uireporter,com.android.systemui,com.miui.securitycore,android,com.miui.bugreport,com.xiaomi.otrpbroker,com.android.provision,com.xiaomi.trustservice,com.xiaomi.location.fused,com.miui.wmsvc,com.xiaomi.misettings,com.miui.notification,com.xiaomi.digitalkey,com.qualcomm.qti.services.systemhelper,com.android.localtransport,vendor.qti.frameworks.utils,com.miui.daemon,com.miui.securitycenter,com.android.location.fused,com.miui.misightservice,com.miui.screenrecorder]:
+      dev.pocketagent.app
+    [com.st.android.nfc_extensions_16,com.android.nfc,com.miui.tsmclient]:
+      dev.pocketagent.app
+    com.miui.backup:
+      dev.pocketagent.app
+    com.xiaomi.finddevice:
+      dev.pocketagent.app
+    air.tv.douyu.android:
+      dev.pocketagent.app
+    rwy.baoan.netsupervisor:
+      dev.pocketagent.app
+    com.autonavi.minimap:
+      dev.pocketagent.app
+    com.sankuai.meituan:
+      dev.pocketagent.app
+    com.android.contacts:
+      dev.pocketagent.app
+    com.android.browser:
+      dev.pocketagent.app
+    com.tencent.wework:
+      dev.pocketagent.app
+    com.miui.packageinstaller:
+      dev.pocketagent.app
+    com.miui.personalassistant:
+      dev.pocketagent.app
+    com.xiaomi.gamecenter.sdk.service:
+      dev.pocketagent.app
+    com.android.settings.intelligence:
+      dev.pocketagent.app
+    com.miui.carlink:
+      dev.pocketagent.app
+    com.miui.nextpay:
+      dev.pocketagent.app
+    com.miui.hybrid:
+      dev.pocketagent.app
+    com.xiaomi.minigame:
+      dev.pocketagent.app
+    com.miui.securityadd:
+      dev.pocketagent.app
+    com.xiaomi.market:
+      dev.pocketagent.app
+    com.miui.systemAdSolution:
+      dev.pocketagent.app
+    com.xiaomi.account:
+      dev.pocketagent.app
+    com.miui.greenguard:
+      dev.pocketagent.app
+    com.xiaomi.payment:
+      dev.pocketagent.app
+    com.moonshot.kimichat:
+      dev.pocketagent.app
+    com.xiaomi.simactivate.service:
+      dev.pocketagent.app
+    com.xiaomi.xmsf:
+      dev.pocketagent.app
+    com.xiaomi.mis:
+      dev.pocketagent.app
+    com.mdk.ear:
+      dev.pocketagent.app
+    com.mipay.wallet:
+      dev.pocketagent.app
+    com.xunmeng.pinduoduo:
+      dev.pocketagent.app
+    com.MobileTicket:
+      dev.pocketagent.app
+    com.wisedu.cpdaily:
+      dev.pocketagent.app
+    com.tmri.app.main:
+      dev.pocketagent.app
+    com.mi.health:
+      dev.pocketagent.app
+    com.miui.newhome:
+      dev.pocketagent.app
+    com.greenpoint.android.mc10086.activity:
+      dev.pocketagent.app
+    com.duokan.phone.remotecontroller:
+      dev.pocketagent.app
+    com.android.email:
+      dev.pocketagent.app
+    com.miui.gallery:
+      dev.pocketagent.app
+    com.mfashiongallery.emag:
+      dev.pocketagent.app
+    com.miui.notes:
+      dev.pocketagent.app
+    com.xiaomi.shop:
+      dev.pocketagent.app
+    com.taobao.taobao:
+      dev.pocketagent.app
+    com.android.providers.downloads.ui:
+      dev.pocketagent.app
+    com.baidu.input_mi:
+      dev.pocketagent.app
+    com.iflytek.inputmethod.miui:
+      dev.pocketagent.app
+    com.shizi.tool.p3:
+      dev.pocketagent.app
+    com.android.calendar:
+      dev.pocketagent.app
+    com.android.soundrecorder:
+      dev.pocketagent.app
+    com.netease.uuremote:
+      dev.pocketagent.app
+    com.gentle.ppcat:
+      dev.pocketagent.app
+    com.hupu.shihuo:
+      dev.pocketagent.app
+    com.netease.cloudmusic:
+      dev.pocketagent.app
+    com.shizhuang.duapp:
+      dev.pocketagent.app
+    cn.adidas.app:
+      dev.pocketagent.app
+    com.tencent.mm:
+      dev.pocketagent.app
+    com.ct.client:
+      dev.pocketagent.app
+    com.newcapec.mobile.ncp:
+      dev.pocketagent.app
+    com.cainiao.wireless:
+      dev.pocketagent.app
+    com.xunlei.downloadprovider:
+      dev.pocketagent.app
+    com.qiekj.user:
+      dev.pocketagent.app
+    com.taobao.idlefish:
+      dev.pocketagent.app
+    com.jingdong.app.mall:
+      dev.pocketagent.app
+    dev.pocketagent.app:
+      com.xiaomi.mibrain.speech
+    com.zzw.october:
+      dev.pocketagent.app
+    com.xiaomi.aicr:
+      dev.pocketagent.app
+    com.xingin.xhs:
+      dev.pocketagent.app
+    com.quark.browser:
+      dev.pocketagent.app
+    com.netease.edu.ucmooc:
+      dev.pocketagent.app
+    com.cloudora.android:
+      dev.pocketagent.app
+  queryable via interaction:
+    User 0:
+    User 12:
+    User 999:
+  queryable via uses-library:
+
+Dexopt state:
+  [dev.pocketagent.app]
+    path: /data/app/~~sPgjNU9X8leIhfSSTmYMxw==/dev.pocketagent.app-IA6R82SiZuxD2AaoG5MsXw==/base.apk
+      arm64: [status=run-from-apk] [reason=unknown] [primary-abi]
+        [location is error]
+    base APK odex file size: Oops,Some thing wrong when get dex file output paths!
+
+Compiler stats:
+  [dev.pocketagent.app]
+     base.apk - 1684

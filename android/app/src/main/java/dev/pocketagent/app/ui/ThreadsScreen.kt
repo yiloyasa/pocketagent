@@ -84,11 +84,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pocketagent.v1.CreateThreadRequest
+import pocketagent.v1.AgentThreadInfo
 import pocketagent.v1.CodexThreadInfo
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostInfo
 import pocketagent.v1.ImportCodexThreadRequest
+import pocketagent.v1.ImportAgentThreadRequest
 import pocketagent.v1.ListCodexThreadsRequest
+import pocketagent.v1.ListAgentThreadsRequest
 import pocketagent.v1.ListModelsRequest
 import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ListThreadSectionsRequest
@@ -129,6 +132,9 @@ fun ThreadsScreen(
     // 【筛选维度】全部 / 已归档 / 未分组 / 某个分组 —— 单值互斥(见 ThreadOrganize.kt)。
     // 以前这里是 showArchived 一个布尔量,加上分组后布尔量表达不了第三、第四态。
     var filter by remember { mutableStateOf(THREAD_FILTER_ALL) }
+    // 【agent 筛选维度】与分组/归档正交:按会话归属 agent 过滤(agent_id 缺省 = codex)。
+    // 与上面的单值互斥不是一回事 —— 这里是叠加的交集(见 matchesAgentFilter)。
+    var agentFilter by remember(AgentConnection.selectedAgent) { mutableStateOf(AgentConnection.selectedAgent) }
     // codex 侧的分组(事实来源在电脑上:在电脑上分的组,手机上立刻能看到)。
     var sections by remember { mutableStateOf(listOf<PSection>()) }
     // 分组管理面板:新建 / 重命名 / 删除
@@ -143,6 +149,16 @@ fun ThreadsScreen(
     // 电脑上**尚未导入**的 codex 会话:导入过的会以本地会话身份出现,不会在这里重复一条。
     var pcThreads by remember { mutableStateOf(listOf<CodexThreadInfo>()) }
     var importingId by remember { mutableStateOf("") }
+    // 电脑上尚未导入的 Pi / ZCode 会话(ListAgentThreads 按 agent 通用列出)。
+    // 与 codex 的 pcThreads 分开存:codex 有自己的标题同步/删除语义,互不掺和。
+    var agentPcThreads by remember { mutableStateOf(listOf<AgentThreadInfo>()) }
+    var pcActionConfirm by remember { mutableStateOf<Pair<AgentThreadInfo,String>?>(null) }
+    var pendingPcActions by remember { mutableStateOf(setOf<String>()) }
+    // Pi/ZCode 电脑会话的独立错误位:按 agent 分源各记一个(合并单槽时,筛"Pi"
+    // 弹出的红字可能是 ZCode 未装引起 —— 巡逻 P2-c)。只在筛到对应 agent 时展示,
+    // 避免"没装 ZCode"在默认视图里天天弹红字。
+    var agentPcErrorPi by remember { mutableStateOf<String?>(null) }
+    var agentPcErrorZcode by remember { mutableStateOf<String?>(null) }
     // 置顶(本地偏好):置顶项排在最前
     var pinned by remember { mutableStateOf(ThreadPins.all()) }
     // 行内重命名:把该行原地换成输入框。
@@ -286,6 +302,37 @@ fun ThreadsScreen(
                         emptyList()
                     }
                 }
+                // 电脑上未导入的 Pi/ZCode 会话:与 codex 同一时机拉取。按 agent 分
+                // 两次请求:空参虽一次拿回两族,但任一侧失败都分不清是哪侧(daemon
+                // 对单独请求才透传该侧错误),分源才能各记错误位(巡逻 P2-c)。
+                // 【去重依据】本地线程的 external_session.session_id 就是外部会话 id,
+                // 已导入的不再以"电脑会话"身份重复出现。
+                val importedExternalIds = all.map { it.externalSession.sessionId }.filter { it.isNotEmpty() }.toSet()
+                agentPcThreads = buildList {
+                    try {
+                        addAll(
+                            AgentConnection.threadService()
+                                .listAgentThreads(ListAgentThreadsRequest.newBuilder().setAgentId("pi").build())
+                                .threadsList
+                                .filter { it.sessionId !in importedExternalIds },
+                        )
+                        agentPcErrorPi = null
+                    } catch (e: Exception) {
+                        agentPcErrorPi = "读取电脑上的 Pi 会话失败:" + (e.message ?: "连接失败")
+                    }
+                    try {
+                        addAll(
+                            AgentConnection.threadService()
+                                .listAgentThreads(ListAgentThreadsRequest.newBuilder().setAgentId("zcode").build())
+                                .threadsList
+                                .filter { it.sessionId !in importedExternalIds },
+                        )
+                        agentPcErrorZcode = null
+                    } catch (e: Exception) {
+                        // ZCode 没装/没起来时这条会失败:只记到 ZCode 名下,筛"Pi"不受牵连。
+                        agentPcErrorZcode = "读取电脑上的 ZCode 会话失败:" + (e.message ?: "连接失败")
+                    }
+                }
                 loadError = null
                 offline = false
 
@@ -296,25 +343,29 @@ fun ThreadsScreen(
                     dev.pocketagent.app.ui.component.ThreadSnapshot.pruneStalePrefs(live)
                 }
             }
-            // 【离线快照】拉取成功就落一份本地副本:断网时列表还能照常显示
-            // (遥控器形态下,"上次连上时有哪些会话"本身就是有用信息)。
-            // threads 现在是未裁剪的全量(见上面的注释),所以快照天然是全量的。
-            dev.pocketagent.app.ui.component.ThreadSnapshot.saveThreads(
-                threads.map {
-                    dev.pocketagent.app.ui.component.ThreadSnapshot.Row(
-                        id = it.id,
-                        title = it.title,
-                        updatedAtUnixMs = it.updatedAtUnixMs,
-                        workspace = it.workspace,
-                        codexThreadId = it.codexThreadId,
-                        archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
-                        sectionId = it.sectionId,
-                    )
-                },
-            )
+            // 【离线快照 · P1-8】拉取成功就把未裁剪的全量异步落一份本地副本:断网时
+            // 列表照常显示(遥控器形态下,"上次连上时有哪些会话"本身就是有用信息)。
+            // 落盘走 IO 线程:50 会话×400KB 量级的 JSON 序列化不能占着主线程。
+            withContext(Dispatchers.IO) {
+                dev.pocketagent.app.ui.component.ThreadSnapshot.saveThreadsSnapshot(
+                    threads.map {
+                        dev.pocketagent.app.ui.component.ThreadSnapshot.Row(
+                            id = it.id,
+                            title = it.title,
+                            updatedAtUnixMs = it.updatedAtUnixMs,
+                            workspace = it.workspace,
+                            codexThreadId = it.codexThreadId,
+                            archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
+                            sectionId = it.sectionId,
+                            agentId = it.agentId,
+                        )
+                    },
+                )
+            }
         } catch (e: Exception) {
             // 连不上就退回快照:有快照 → 显示并标明是离线副本;没有 → 保持原报错。
-            val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.loadThreads()
+            // 快照文件损坏时 readThreadsSnapshot 返回空列表(不崩),走无快照分支。
+            val snap = dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadsSnapshot()
                 .filter {
                     matchesThreadFilter(
                         sectionId = it.sectionId,
@@ -323,24 +374,36 @@ fun ThreadsScreen(
                     )
                 }
             if (snap.isNotEmpty()) {
-                threads = snap.map {
-                    PThread.newBuilder()
-                        .setId(it.id)
-                        .setTitle(it.title)
-                        .setUpdatedAtUnixMs(it.updatedAtUnixMs)
-                        .setWorkspace(it.workspace)
-                        .setCodexThreadId(it.codexThreadId)
-                        .build()
+                // 【重建要带上分组与归档位】PThread 若丢掉 section_id/归档状态,
+                // 渲染层的 matchesThreadFilter 再筛一次时会把离线行误筛掉 ——
+                // 表现为"离线时选中的分组/归档页变空",快照明明有数据却显示空态。
+                threads = snap.map { r ->
+                    val b = PThread.newBuilder()
+                        .setId(r.id)
+                        .setTitle(r.title)
+                        .setUpdatedAtUnixMs(r.updatedAtUnixMs)
+                        .setWorkspace(r.workspace)
+                        .setCodexThreadId(r.codexThreadId)
+                        .setSectionId(r.sectionId)
+                        .setAgentId(r.agentId)
+                    if (r.archived) b.setStatus(ThreadStatus.THREAD_STATUS_ARCHIVED)
+                    b.build()
                 }
                 pcThreads = emptyList()
                 pcError = null
+                agentPcThreads = emptyList()
+                agentPcErrorPi = null
+                agentPcErrorZcode = null
                 val at = dev.pocketagent.app.ui.component.ThreadSnapshot.threadsSnapshotAt()
                 // 纯函数构造横幅:区分"连不上 daemon"(真离线)与"连得上但 codex 无响应"
                 // (中性,不写"离线"),避免和上方的"已连接"连接卡自相矛盾。
+                // 时间用钟表时刻 HH:mm(P1-8 口径「离线快照 · HH:mm」),注入以便单测。
                 val banner = buildListBanner(
                     connectionOk = hostReached,
                     snapshotAtMs = at,
-                    agoText = { ms -> dev.pocketagent.app.ui.component.agoText(ms) },
+                    formatTime = { ms ->
+                        java.text.SimpleDateFormat("HH:mm").format(java.util.Date(ms))
+                    },
                 )
                 loadError = banner.message
                 // 配色跟随横幅语义:真离线(黄·快照)与 codex 无响应(中性)都不按硬错误红;
@@ -448,9 +511,45 @@ fun ThreadsScreen(
         )
     }
 
+    /**
+     * 打开电脑上的 Pi/ZCode 会话:ImportAgentThread 绑定为本地线程后直接进入
+     * (与 codex 电脑会话"点一下导入并开聊"同款交互)。Pi 导入即有完整历史;
+     * ZCode 只绑元信息,发第一条消息时由 daemon session/resume 重挂载续聊。
+     */
+    fun importAgentPc(a: AgentThreadInfo, onDone: (String) -> Unit) {
+        val key = agentPcKey(a)
+        if (importingId.isNotEmpty()) return
+        importingId = key
+        scope.launch {
+            try {
+                val tid = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService()
+                        .importAgentThread(
+                            ImportAgentThreadRequest.newBuilder()
+                                .setAgentId(a.agentId)
+                                .setSessionId(a.sessionId)
+                                .setSessionFile(a.sessionFile)
+                                .setCwd(a.cwd)
+                                .setTitle(a.title)
+                                .build())
+                        .threadId
+                }
+                onDone(tid)
+            } catch (e: Exception) {
+                Toast.makeText(
+                    ctx,
+                    "打开电脑会话失败：${e.message ?: "连接失败"}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                refresh()
+            } finally {
+                importingId = ""
+            }
+        }
+    }
+
     /** 提交行内重命名:空串视为取消;失败回滚标题。 */
-    fun commitRename(t: PThread) {
-        val title = renameField.text.trim()
+    fun commitRename(t: PThread) {        val title = renameField.text.trim()
         renamingId = null
         if (title.isEmpty() || title == t.title) return
         val finalTitle = title.take(80)
@@ -721,6 +820,22 @@ fun ThreadsScreen(
                 }
             }
 
+            // ---- agent 筛选 chips:全部 / Codex / Pi / ZCode(与分组筛选叠加) ----
+            // 【为什么单独一排】分组回答"会话在哪个筐里",agent 回答"谁干的",
+            // 两个维度正交;塞进同一条横向滚动会让人以为它们互斥。
+            // 只有 daemon 报了对应 agent 才可能有色卡,但 chip 恒显示:
+            // 灰 chip 点了也是空列表,不如让人知道"有这个维度"。
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip2("全部 agent", agentFilter == AGENT_FILTER_ALL) { agentFilter = AGENT_FILTER_ALL }
+                FilterChip2("Codex", agentFilter == AGENT_FILTER_CODEX) { agentFilter = AGENT_FILTER_CODEX }
+                FilterChip2("Pi", agentFilter == AGENT_FILTER_PI) { agentFilter = AGENT_FILTER_PI }
+                FilterChip2("ZCode", agentFilter == AGENT_FILTER_ZCODE) { agentFilter = AGENT_FILTER_ZCODE }
+            }
+
             // 当前筛选的说明(分组名可能被横向滚出屏幕,这里给一句"你在看什么")
             val activeSectionName = sections.firstOrNull { it.id == filter }?.name
             // 【筛选指向了一个我们列不出来的分组】分两种情形,都不该让用户对着一个
@@ -761,8 +876,29 @@ fun ThreadsScreen(
                             filter = filter,
                         )
                     }
+                    // 【agent 筛选】叠加交集:分组/归档决定"哪一批会话",
+                    // agent 决定"这批里看谁干的"(agent_id 缺省按 codex 归属)。
+                    .filter { matchesAgentFilter(it.agentId, agentFilter) }
                     .forEach { add(SessionRow.Local(it, pinKey(it, null))) }
-                if (filter == THREAD_FILTER_ALL) pcThreads.forEach { add(SessionRow.Pc(it)) }
+                // 电脑上未导入的会话只在"全部"里露面:它们没有分组信息,
+                // 放进分组视图会让用户以为"这个分组里有几条没归组的"。
+                if (filter == THREAD_FILTER_ALL) {
+                    // codex 电脑会话(agent 筛到 codex/全部时显示)
+                    if (matchesAgentFilter("", agentFilter)) {
+                        pcThreads.distinctBy { it.id }.forEach { add(SessionRow.Pc(it)) }
+                    }
+                    // Pi/ZCode 电脑会话(筛到对应 agent 或全部时显示;去重已在拉取时做)。
+                    // 【必须再按 agentId 过滤】一条 RPC 拿回的是 pi+zcode 混合列表,
+                    // 筛到单一 agent 时不能把另一家的电脑会话也混进来。
+                    if (agentFilter == AGENT_FILTER_ALL || agentFilter == AGENT_FILTER_PI ||
+                        agentFilter == AGENT_FILTER_ZCODE
+                    ) {
+                        agentPcThreads
+                            .filter { pcAgentVisible(it.agentId, agentFilter) }
+                            .distinctBy { "${it.agentId}:${it.sessionId}" }
+                            .forEach { add(SessionRow.PcAgent(it)) }
+                    }
+                }
             }.sortedWith(
                 compareByDescending<SessionRow> { it.pinKey in pinnedKeys }
                     .thenByDescending { it.sortKey },
@@ -779,6 +915,26 @@ fun ThreadsScreen(
                 rows.isEmpty() -> {
                     Column(Modifier.fillMaxSize()) {
                     pcError?.let { message ->
+                        Text(
+                            message,
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            fontSize = 12.sp,
+                            color = Pa.Red,
+                        )
+                    }
+                    // Pi/ZCode 电脑会话的读取失败:只在筛到对应 agent 时展示对应侧
+                    // 的错误(分源各记,筛"Pi"不弹 ZCode 未装的红字,反之亦然;
+                    // 空态 = 该筛选下没有任何会话,正好把失败原因讲清楚)。
+                    val agentPcMessage = when (agentFilter) {
+                        AGENT_FILTER_PI -> agentPcErrorPi
+                        AGENT_FILTER_ZCODE -> agentPcErrorZcode
+                        else -> null
+                    }
+                    agentPcMessage?.let { message ->
                         Text(
                             message,
                             Modifier
@@ -825,13 +981,14 @@ fun ThreadsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(
-                            items = rows,
-                            key = { r ->
-                                when (r) {
-                                    is SessionRow.Local -> "l-${r.t.id}"
-                                    is SessionRow.Pc -> "p-${r.c.id}"
-                                }
-                            },
+                            items = rows.distinctBy { it.key },
+                                key = { r ->
+                                    when (r) {
+                                        is SessionRow.Local -> "l-${r.t.id}"
+                                        is SessionRow.Pc -> "p-${r.c.id}"
+                                        is SessionRow.PcAgent -> "pa-${r.a.agentId}-${r.a.sessionId}"
+                                    }
+                                },
                         ) { row ->
                             when (row) {
                                 is SessionRow.Local -> {
@@ -983,6 +1140,47 @@ fun ThreadsScreen(
                                         PcSessionCard(info = c, importing = importingId == c.id)
                                     }
                                 }
+                                is SessionRow.PcAgent -> {
+                                    val a = row.a
+                                    val key = agentPcKey(a)
+                                    val isPinned = row.pinKey in pinnedKeys
+                                    SwipeRevealRow(
+                                        rowKey = key,
+                                        openKey = openKey,
+                                        actions = listOf(
+                                            SwipeAction("pin", if (isPinned) "取消置顶" else "置顶", R.drawable.ic_lucide_pin, Pa.AccentText),
+                                            SwipeAction("archive", "App归档", R.drawable.ic_lucide_archive, Pa.AccentText),
+                                            SwipeAction("remove", "移除", R.drawable.ic_lucide_x, Pa.AccentText),
+                                            SwipeAction("delete", "删除", R.drawable.ic_lucide_trash_2, Color.White, destructive=true),
+                                        ),
+                                        onAction = { act ->
+                                            openKey.value = null
+                                            if (act.id == "pin") {
+                                                ThreadPins.toggle(row.pinKey)
+                                                pinned = ThreadPins.all()
+                                            } else if (key !in pendingPcActions) pcActionConfirm = a to act.id
+                                        },
+                                        rowBackground = Pa.Card,
+                                        onClick = {
+                                            if (openKey.value != null) {
+                                                openKey.value = null
+                                            } else {
+                                                importAgentPc(a) { tid -> onOpenThread(tid) }
+                                            }
+                                        },
+                                    ) {
+                                        Column(Modifier.animateItem()) {
+                                            PcAgentSessionCard(info = a, importing = importingId == key || key in pendingPcActions)
+                                            if (key in pendingPcActions) {
+                                                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment=Alignment.CenterVertically) {
+                                                    androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=2.dp,color=Pa.Accent)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text("正在同步会话操作…",fontSize=12.sp,color=Pa.TextSecondary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         item { Spacer(Modifier.height(80.dp)) }
@@ -1011,6 +1209,37 @@ fun ThreadsScreen(
         }
     }
 
+    pcActionConfirm?.let { (session, action) ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pcActionConfirm = null },
+            title = { Text(when(action) { "delete" -> "删除电脑端会话"; "remove" -> "从 App 移除"; else -> "在 App 中归档" }) },
+            text = { Text(if(action=="delete") "将删除「${session.title}」及其电脑端会话记录。" else "电脑端原始会话保留。${if(action=="archive") "可在 App 已归档列表恢复。" else "从 App 列表隐藏。"}") },
+            dismissButton = { TextButton(onClick={pcActionConfirm=null}) { Text("取消") } },
+            confirmButton = { TextButton(onClick={
+                pcActionConfirm=null
+                val key=agentPcKey(session)
+                pendingPcActions=pendingPcActions+key
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            val tid=AgentConnection.threadService().importAgentThread(
+                                ImportAgentThreadRequest.newBuilder().setAgentId(session.agentId).setSessionId(session.sessionId)
+                                    .setSessionFile(session.sessionFile).setCwd(session.cwd).setTitle(session.title).build()).threadId
+                            if(action=="archive") AgentConnection.threadService().archiveThread(
+                                ArchiveThreadRequest.newBuilder().setThreadId(tid).setArchived(true).build())
+                            else AgentConnection.threadService().deleteThread(
+                                DeleteThreadRequest.newBuilder().setThreadId(tid).setLocalOnly(action=="remove").build())
+                        }
+                        agentPcThreads=agentPcThreads.filterNot { agentPcKey(it)==key }
+                        doRefresh()
+                    } catch(e: Exception) {
+                        Toast.makeText(ctx,"操作未完成：${e.message}",Toast.LENGTH_LONG).show()
+                    } finally { pendingPcActions=pendingPcActions-key }
+                }
+            }) { Text("确认") } },
+        )
+    }
+
     // 新建会话抽屉:选工作区(在哪个文件夹里工作)
     if (showNewThread) {
         NewThreadSheet(
@@ -1019,9 +1248,9 @@ fun ThreadsScreen(
                 showNewThread = false
                 scope.launch {
                     try {
-                        val builder = CreateThreadRequest.newBuilder()
+                        val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
                         if (AgentConnection.selectedModel.isNotEmpty()) {
-                            builder.setModelId(AgentConnection.selectedModel)
+                            builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
                         }
                         if (ws.isNotBlank()) {
                             builder.setWorkspace(ws)
@@ -1066,6 +1295,14 @@ fun ThreadsScreen(
                 // "未分组"的含义:在**点击之前**就可见(不能点了才弹说明)
                 Text(
                     ungroupedHint(),
+                    Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
+                    fontSize = 11.5.sp, color = Pa.TextTertiary,
+                )
+                // 【分组覆盖范围说明】用户实锤:要明确"分组功能覆盖哪些 Agent"。
+                // 分组是 PocketAgent 自己的组织功能(daemon 库的 ThreadSection),
+                // 不是某家 agent 的目录概念 —— 三家 agent 的会话都能移进同一个分组。
+                Text(
+                    SECTION_COVERAGE_NOTE,
                     Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
                     fontSize = 11.5.sp, color = Pa.TextTertiary,
                 )
@@ -1143,18 +1380,39 @@ fun ThreadsScreen(
  * 合成一条流之后,置顶/排序才有统一的依据。
  */
 private sealed class SessionRow {
+    abstract val key: String
     abstract val sortKey: Long
     abstract val pinKey: String
 
     class Local(val t: PThread, override val pinKey: String) : SessionRow() {
+        override val key: String get() = "l-${t.id}"
         override val sortKey: Long get() = t.updatedAtUnixMs
     }
 
     class Pc(val c: CodexThreadInfo) : SessionRow() {
+        override val key: String get() = "p-${c.id}"
         override val sortKey: Long get() = c.updatedAtUnixMs
         override val pinKey: String get() = c.id
     }
+
+    /** 电脑上未导入的 Pi/ZCode 会话:agent_id + sessionId 双键,跨 agent 不撞 key。 */
+    class PcAgent(val a: AgentThreadInfo) : SessionRow() {
+        override val key: String get() = "pa-${a.agentId}-${a.sessionId}"
+        override val sortKey: Long get() = a.updatedAtUnixMs
+        override val pinKey: String get() = agentPcKey(a)
+    }
 }
+
+/** Pi/ZCode 电脑会话的稳定键(置顶/导入防抖共用)。 */
+internal fun agentPcKey(a: AgentThreadInfo): String = a.agentId + ":" + a.sessionId
+
+/**
+ * Pi/ZCode 电脑会话在当前 agent 筛选下是否可见(纯函数,单测钉死)。
+ * 列表来源是 pi+zcode 混合的一条 RPC 应答,筛到单一 agent 时必须按归属过滤,
+ * 不能把另一家的电脑会话混进来(与 matchesAgentFilter 同口径,缺省 codex 无关)。
+ */
+internal fun pcAgentVisible(agentId: String, agentFilter: String): Boolean =
+    agentFilter == AGENT_FILTER_ALL || threadAgentIdOf(agentId) == agentFilter
 
 /** 连接状态卡:未连接=中性;已连接=主机名+规格+外网直连行。 */
 @Composable
@@ -1268,6 +1526,15 @@ private fun ThreadCard(
             )
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // 【agent 徽标】按会话归属 agent 选图(agent_id 缺省 = codex):
+                // 多 agent 之后列表里混着不同 agent 的会话,一眼可辨。
+                Image(
+                    bitmap = agentBitmap(agentBadgeRes(t.agentId)),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    contentScale = ContentScale.Crop,
+                )
+                Spacer(Modifier.width(7.dp))
                 if (pinned) {
                     Icon(
                         painterResource(R.drawable.ic_lucide_pin), "已置顶",
@@ -1356,6 +1623,65 @@ private fun PcSessionCard(
 }
 
 /**
+ * "电脑"里的 Pi/ZCode 历史会话卡:点一下导入并打开。与 codex 的 PcSessionCard
+ * 同一骨架,差别只有两处:头部带 agent 徽标(与本地会话卡同款图)、
+ * 副标签是"pi 会话"/"zcode 会话"。
+ */
+@Composable
+private fun PcAgentSessionCard(
+    info: AgentThreadInfo,
+    importing: Boolean,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable
+            .background(Pa.Card, RoundedCornerShape(18.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                bitmap = agentBitmap(agentBadgeRes(info.agentId)),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                contentScale = ContentScale.Crop,
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                info.title.ifEmpty { "(未命名会话)" },
+                Modifier.weight(1f),
+                fontSize = 15.sp,
+                color = Pa.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+            Text(
+                if (importing) "正在打开…" else threadAgentIdOf(info.agentId) + " 会话",
+                fontSize = 10.sp,
+                color = Pa.Accent,
+            )
+            Text("  ·  ", fontSize = 10.sp, color = Pa.TextTertiary)
+            Text(
+                java.text.SimpleDateFormat("MM-dd HH:mm")
+                    .format(java.util.Date(info.updatedAtUnixMs)),
+                fontSize = 12.sp,
+                color = Pa.TextSecondary,
+            )
+            if (info.cwd.isNotEmpty()) {
+                Text(
+                    "  ·  " + shortWorkspace(info.cwd),
+                    fontSize = 12.sp,
+                    color = Pa.TextTertiary,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
  * 新建会话抽屉:先选"在哪个文件夹里工作"。
  * 工作区通过文件式目录选择器浏览电脑选定,真实传给 codex(rollout 的 cwd),
  * 桌面端在同项目下可见本会话。所有新建对话入口共用。
@@ -1373,10 +1699,28 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
         containerColor = Pa.CardHigh,
         shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
     ) {
-        Text(
-            "新建会话", Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-            fontSize = 17.sp, color = Pa.TextPrimary,
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "新建会话", Modifier.weight(1f),
+                fontSize = 17.sp, color = Pa.TextPrimary,
+            )
+            // 确认态:本次创建将使用的 agent,与唯一选中源 AgentConnection.selectedAgent
+            // 一致(设置页/主页切换后这里同步变化),避免"切了 Pi 仍建出 codex 会话"的错觉。
+            agentBrandIcon(AgentConnection.selectedAgent)?.let { res ->
+                Icon(
+                    painterResource(res), null,
+                    tint = Color.Unspecified, modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                selectedAgentLabel(AgentConnection.selectedAgent),
+                fontSize = 12.sp, color = Pa.TextSecondary,
+            )
+        }
         Text(
             "选择这个会话在电脑上的工作文件夹(agent 只在该文件夹里干活)",
             Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
@@ -1482,6 +1826,40 @@ fun FilterChip2(label: String, selected: Boolean, onClick: () -> Unit) {
         Text(label, fontSize = 13.sp, color = if (selected) Pa.Accent else Pa.TextSecondary)
     }
 }
+
+// ---- agent 归属:徽标选择与筛选(纯函数,单测覆盖 AgentBadgeAndFilterTest)----
+
+/** agent 筛选值:空串 = 全部(与 THREAD_FILTER_ALL 同款单值语义)。 */
+internal const val AGENT_FILTER_ALL = ""
+internal const val AGENT_FILTER_CODEX = "codex"
+internal const val AGENT_FILTER_PI = "pi"
+internal const val AGENT_FILTER_ZCODE = "zcode"
+
+/**
+ * 分组覆盖范围说明(分组 UI 的说明小字,单测锁定文案不回退)。
+ * 【口径】分组是 PocketAgent 的本地组织功能(daemon 库的 ThreadSection,
+ * 手机/电脑两端同源),不依赖也不改动任何 agent 自己的会话目录 ——
+ * Codex / Pi / ZCode 的会话都能移入同一个分组。
+ */
+internal const val SECTION_COVERAGE_NOTE =
+    "分组是 PocketAgent 的本地整理功能,Codex、Pi、ZCode 的会话都可以移入"
+
+/**
+ * 会话归属 agent:agent_id 缺省(旧库记录)= "codex",
+ * 与 daemon 侧 threadAgentID 的兼容规则一致,两端判定不会打架。
+ */
+internal fun threadAgentIdOf(agentId: String): String = agentId.ifEmpty { AGENT_FILTER_CODEX }
+
+/** agent 徽标选图:空 = codex;pi/zcode 各用官方图;未知 agent 兜底 codex。 */
+internal fun agentBadgeRes(agentId: String): Int = when (threadAgentIdOf(agentId)) {
+    AGENT_FILTER_PI -> R.drawable.agent_pi
+    AGENT_FILTER_ZCODE -> R.drawable.agent_zcode
+    else -> R.drawable.agent_codex
+}
+
+/** agent 筛选判定(纯函数):全部放行;否则按归属(缺省 codex)精确匹配。 */
+internal fun matchesAgentFilter(agentId: String, filter: String): Boolean =
+    filter == AGENT_FILTER_ALL || threadAgentIdOf(agentId) == filter
 
 /** 抽屉操作行:图标 + 文案(重命名/归档/删除)。 */
 @Composable
@@ -1599,6 +1977,13 @@ private fun SectionManagerSheet(
             Text(
                 if (manage == null) "新建分组" else "分组设置",
                 fontSize = 17.sp, color = Pa.TextPrimary,
+            )
+            // 【分组覆盖范围说明】与长按"移动到分组"面板同一句话:分组覆盖全部
+            // agent 的会话,新建/改名/删除分组的动作也只影响 PocketAgent 自己的整理。
+            Text(
+                SECTION_COVERAGE_NOTE,
+                Modifier.padding(top = 4.dp),
+                fontSize = 11.sp, color = Pa.TextTertiary,
             )
             if (manage != null) {
                 Text(

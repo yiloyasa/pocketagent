@@ -157,7 +157,9 @@ type askUserParams struct {
 //
 // changedFiles 只在文件变更/补丁两类里用到:它们是"用户点允许时会改哪些文件"的唯一来源,
 // 少了它审批卡就回到了"用户不知道自己在允许什么"的老问题。
-func buildApprovalCall(kind codexRequestKind, method string, params json.RawMessage, changedFiles []string) pb.ToolCallBlock {
+// 【vet】返回指针:pb 消息含锁,调用方按值接住再传 hook 会被 copylocks 拒绝;
+// 直接返回新构造的指针,内容与原值语义完全一致。
+func buildApprovalCall(kind codexRequestKind, method string, params json.RawMessage, changedFiles []string) *pb.ToolCallBlock {
 	switch kind {
 	case reqApprovalCommand:
 		var a commandApprovalParams
@@ -169,7 +171,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 		if id == "" {
 			id = a.ApprovalId
 		}
-		return pb.ToolCallBlock{
+		return &pb.ToolCallBlock{
 			Id:   id,
 			Name: toolNameShell,
 			JsonArgs: mustJSON(map[string]interface{}{
@@ -182,7 +184,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 	case reqApprovalFileChange:
 		var a fileChangeApprovalParams
 		_ = json.Unmarshal(params, &a)
-		return pb.ToolCallBlock{
+		return &pb.ToolCallBlock{
 			Id:   a.ItemId,
 			Name: toolNameFileChange,
 			JsonArgs: mustJSON(map[string]interface{}{
@@ -205,7 +207,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 		} else {
 			paths = changedFiles
 		}
-		return pb.ToolCallBlock{
+		return &pb.ToolCallBlock{
 			Id:   a.CallId,
 			Name: toolNamePatch,
 			JsonArgs: mustJSON(map[string]interface{}{
@@ -222,7 +224,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 		// permissions 是嵌套对象:原样透传,手机端做人类可读的摘要。
 		var perms interface{}
 		_ = json.Unmarshal(a.Permissions, &perms)
-		return pb.ToolCallBlock{
+		return &pb.ToolCallBlock{
 			Id:   a.ItemId,
 			Name: toolNamePerms,
 			JsonArgs: mustJSON(map[string]interface{}{
@@ -253,7 +255,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 		if id == "" {
 			id = a.ServerName
 		}
-		return pb.ToolCallBlock{
+		return &pb.ToolCallBlock{
 			Id:   id,
 			Name: name,
 			JsonArgs: mustJSON(map[string]interface{}{
@@ -263,14 +265,15 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 			}),
 		}
 	}
-	return pb.ToolCallBlock{}
+	return &pb.ToolCallBlock{}
 }
 
 // ApprovalReason 按动作类型给出人话原因。
 //
 // 以前这里对所有类型都写死"agent 请求执行危险操作" —— 反问类请求(request_user_input)
 // 被贴上这句话,既不准确也让人以为出了什么问题。原因描述跟着动作类型走。
-func ApprovalReason(call pb.ToolCallBlock) string {
+// 【vet】参数为指针:pb 消息按值传会被 copylocks 拒绝;只读访问,nil 安全(GetName 零值返回 "")。
+func ApprovalReason(call *pb.ToolCallBlock) string {
 	switch call.GetName() {
 	case toolNameShell:
 		return "agent 请求执行命令"

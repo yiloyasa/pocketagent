@@ -1,0 +1,24 @@
+{
+  "app_id": "APP-02",
+  "base_version": "0.2.0",
+  "base_versionCode": "3",
+  "after_version": "0.2.2",
+  "after_versionCode": "5",
+  "upgrade_success": true,
+  "upgrade_seconds": 11.8,
+  "firstInstallTime_preserved": true,
+  "files_before": 3,
+  "files_after": 3,
+  "files_kept": 3,
+  "files_lost": [],
+  "launch_TotalTime_ms": 0,
+  "ui_nodes": 4,
+  "ui_head": [
+    "允许“PocketAgent”发送通知？ | ",
+    "包括消息推送、桌面图标角标、声音和振动提醒等，可在“设置”中修改。 | ",
+    "拒绝 | ",
+    "始终允许 | "
+  ],
+  "crash_buffer": "",
+  "verdict": "PASS"
+}

@@ -1,0 +1,848 @@
+--------- beginning of system
+09-19 22:39:26.536 I/MIUIInput( 2825): [MotionEvent] publisher action=0x1, deviceId=7, 244540618, channel 'c59deea NotificationShade'
+09-19 22:39:26.536 I/MiuiSplitInputMethodImpl( 2825): Skip onPointerDownOutsideFocusLocked
+--------- beginning of main
+09-19 22:39:26.537 D/STM     (12710): send() action=1 source=4098 rawX=997.5 rawY=194.5
+09-19 22:39:26.538 D/EventBus(12710): No subscribers registered for event class com.xiaomi.xms.event.msg.RawSystemTouchMsg
+09-19 22:39:26.538 D/EventBus(12710): No subscribers registered for event class wh.h
+09-19 22:39:26.548 I/MIUIInput(20392): [MotionEvent] ViewRootImpl windowName 'DockAssistantView', { action=ACTION_UP, id[0]=0, pointerCount=1, eventTime=244540618, downTime=244540552, phoneEventTime=1789828766532 } moveCount:0
+09-19 22:39:26.548 I/SidebarCoverView(20392): onTouch : 1
+09-19 22:39:26.548 I/SidebarCoverView(20392): fsgState : 0
+09-19 22:39:26.548 D/MiuiMultiWindowUtils(20392): supportMultiWindow: isSupportDevice = -1
+09-19 22:39:26.548 I/DockFeature(20392): isSupportDock: isSupportFreeform=true	isPhone=true	isAboveMiui125=true	isSupportDock=true	isDevBuild=false
+09-19 22:39:26.548 D/SidebarTouchListener(20392): onTouch: 	action = 1	isLeftShow = false
+09-19 22:39:26.553 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_intercept
+09-19 22:39:26.553 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:26.554 D/NPVCInjector( 5692): onMiuiIntercept fullCollapse=true fullExp=false hidePanelPending=false 
+09-19 22:39:26.554 D/NPVCInjector( 5692): cancelFlingSpring mHidePanelPending=false
+09-19 22:39:26.558 D/MiuiNotificationSwipeCallback( 5692): setCanChildBeDismissed isPLaying: false isSlideMenuShowing: false
+09-19 22:39:26.558 D/MiuiNotificationSwipeHelper( 5692): onDownUpdate
+09-19 22:39:26.565 I/DockWindowManager(20392): hideOrShowSidebarWithAnimation: isShow = true caller = hideOrShowSidebar
+09-19 22:39:26.575 D/MiuiNotificationSwipeHelper( 5692): initializeRow
+09-19 22:39:26.582 I/MIUIInput( 5692): [MotionEvent] ViewRootImpl windowName 'NotificationShade', { action=ACTION_UP, id[0]=0, pointerCount=1, eventTime=244540618, downTime=244540552, phoneEventTime=1789828766531 } moveCount:0
+09-19 22:39:26.583 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_intercept
+09-19 22:39:26.583 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:26.591 I/GameToastWindowManager(20392): removeNewWildToastView: exit
+09-19 22:39:26.592 I/DockWindowManager(20392): removeTurboLayout why dockView not Add! panel isNull: false
+09-19 22:39:26.592 I/SidebarLayoutUtils(20392): resizeWindow: fullScreen = false
+09-19 22:39:26.592 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:26.597 D/SidebarLayoutUtils(20392): getSidebarY: wrapper currentHeight = 121
+09-19 22:39:26.598 D/vendor.xiaomi.hardware.mimd@2.0-service( 1822): psi 8  is reloaded.
+09-19 22:39:26.603 I/SidebarLayoutUtils(20392): adjustLayoutMargins: fullScreen = false
+09-19 22:39:26.603 D/MiuiMultiWindowUtils(20392): supportMultiWindow: isSupportDevice = -1
+09-19 22:39:26.603 I/DockFeature(20392): isSupportDock: isSupportFreeform=true	isPhone=true	isAboveMiui125=true	isSupportDock=true	isDevBuild=false
+09-19 22:39:26.604 D/MiBridge( 5692): requestCpuHighFreq---- uid: 1000 level: 1 timeoutms:2000
+09-19 22:39:26.605 D/MiBridge( 5692): requestCpuHighFreq handle: 1
+09-19 22:39:26.605 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:26.605 D/CpuBoostUtil( 5692): boostCpuToMax:0
+09-19 22:39:26.606 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:26.606 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:26.607 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:26.607 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:26.607 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:26.608 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:26.608 W/MiuiBooster( 3259): "MiuiBoosterService requestCpuHighFreq: 1000, 1, 2000"
+09-19 22:39:26.607 D/SidebarLayoutUtils(20392): getLpTopMargin: 0
+09-19 22:39:26.609 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:26.609 D/SidebarLayoutUtils(20392): getLpTopMargin: 0
+09-19 22:39:26.609 I/DockWindowManager(20392): hideOrShowSidebarWithAnimation: isShow = true caller = removeTurboLayout
+09-19 22:39:26.609 W/MiuiBooster( 3259): "[OPT-TF-CPU/GPU] Permission not granted : 1000"
+09-19 22:39:26.609 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:26.609 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:26.609 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:26.610 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:26.610 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:26.611 I/GTGuideManager(20392): removeGtView: null
+09-19 22:39:26.616 I/SidebarCoverView(20392): onTouch : 4
+09-19 22:39:26.616 I/SidebarCoverView(20392): fsgState : 0
+09-19 22:39:26.617 D/MiuiMultiWindowUtils(20392): supportMultiWindow: isSupportDevice = -1
+09-19 22:39:26.617 I/DockFeature(20392): isSupportDock: isSupportFreeform=true	isPhone=true	isAboveMiui125=true	isSupportDock=true	isDevBuild=false
+09-19 22:39:26.617 D/SidebarTouchListener(20392): onTouch: 	action = 4	isLeftShow = false
+09-19 22:39:26.619 D/VRI[DockAssistantView](20392): getMiuiFreeformStackInfo mTmpFrames.miuiFreeFormStackInfo: null
+09-19 22:39:26.620 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:26.620 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:26.621 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:26.621 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:26.622 D/RegionSamplingImageView(20392): updateSamplingRect view samplingBounds: Rect(992, 121 - 1080, 429)
+09-19 22:39:26.624 I/SDM     ( 2040): HWEventsDRM::SetEventState: Setup vsync event for CRTC 167, Connector 65
+09-19 22:39:26.626 D/RegionSamplingImageView(20392): updateSamplingRect: com.miui.dock.sidebar.RegionSamplingImageView{f073f7b V.ED..... ......ID 0,0-88,308 #7f0b0bab app:id/sidebar_background} Rect(1024, 153 - 1071, 397)
+09-19 22:39:26.627 D/RegionSamplingHelper(20392): updateSamplingRect sampledRegion: Rect(1024, 153 - 1071, 397),mSamplingRequestBounds: Rect(1024, 153 - 1071, 397)
+09-19 22:39:26.627 D/HWUI    (20392): DDRE Debug DrawPath: smoothCornerEnabled = true
+09-19 22:39:26.639 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:26.641 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:26.643 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:26.643 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:26.644 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:26.746 I/sensors-hal( 1949): handle_sns_std_sensor_event:65, light_event: ts=296365358208546, lux: 22.3
+09-19 22:39:26.747 D/SRE     ( 2089): sensorCallback mDisplayId = 0 dataCallback value=<  22.2500,   0.0000,   0.0000>,time=296365358208546, sensor=5, temperature(K)=   0.0000
+09-19 22:39:26.748 D/libsensor-displayalgo( 3410): brightness:1812,R:0.0,G:0.0,B:0.0,EVENT C:1833.0,R:877.5,G:640.0,B:326.0, lux: 23.1, clone:0, dc:0, last_lux_beforeMedian:22.911230,last_cct_beforeMedian:4945.411621
+09-19 22:39:26.748 D/SRE     ( 2089): setSREStrength mDisplayId = 0, mLastLux = 22, lux = 22, mSREEnabled = 1, mLastFreezeStatus = 0, freeze = 0
+09-19 22:39:26.794 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:26.824 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:26.826 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:26.826 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:26.826 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:26.827 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:26.827 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:26.842 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:26.855 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:26.858 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:26.858 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:26.859 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:26.987 D/MiBridge( 5692): cancelCpuHighFreq---uid: 1000
+09-19 22:39:26.987 W/MiuiBooster( 3259): "MiuiBoosterService cancelCpuHighFreq: 1000"
+09-19 22:39:26.987 W/MiuiBooster( 3259): "[OPT-TF-CPU/GPU] Permission not granted : 1000"
+09-19 22:39:26.988 D/MiBridge( 5692): cancelCpuHighFreq ret: 0
+09-19 22:39:26.988 D/CpuBoostUtil( 5692): cancelCpuHighFreq:0
+09-19 22:39:26.997 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:27.015 W/lyra-mdns-core(12876): _deal_timeout query _lyra-mdns._udp.local[0C] timeout!
+09-19 22:39:27.041 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:27.042 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:27.042 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:27.042 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:27.043 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:27.043 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:27.073 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:27.073 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:27.078 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:27.200 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:27.203 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:27.204 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:27.204 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:27.206 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:27.206 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:27.207 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:27.226 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:27.238 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:27.238 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:27.240 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:27.403 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:27.443 D/JavaheapMonitor( 5681): Java heap used=24M max=256M, proc: com.android.phone
+09-19 22:39:27.443 V/JavaheapMonitor( 5681): Check java heap usage finished! Next check delay: 300000
+09-19 22:39:27.501 D/SchedBoostThread( 2825): thread tid=27531, priority is set to -10
+09-19 22:39:27.502 D/SchedBoostThread( 2825): thread tid=27590, priority is set to -10
+09-19 22:39:27.531 I/cnss-daemon( 3316): nl80211 response handler invoked
+09-19 22:39:27.531 I/WifiHAL ( 2012): event received NL80211_CMD_VENDOR, vendor_id = 0x1374, subcmd = 0xd
+09-19 22:39:27.531 I/cnss-daemon( 3316): nl80211_response_handler: cmd 103, vendorID 4980, subcmd 13  received
+09-19 22:39:27.538 D/JavaheapMonitor(17938): Java heap used=3M max=256M, proc: com.google.android.gms.unstable
+09-19 22:39:27.539 V/JavaheapMonitor(17938): Check java heap usage finished! Next check delay: 300000
+09-19 22:39:27.607 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:27.739 I/MIUIInput( 2825): [MotionEvent] notifyMotion - eventTime=244541824684000, deviceId=7, source=0x1002, policyFlags=0x0, action=0x0, flags=0x80, downTime=244541824684000
+09-19 22:39:27.741 I/MIUIInput( 2825): [MotionEvent] publisher action=0x0, deviceId=7, 244541824, channel 'c59deea NotificationShade'
+09-19 22:39:27.742 I/MIUIInput( 2825): [MotionEvent] publisher action=0x0, deviceId=7, 244541824, channel '[Gesture Monitor] onehanded-touch'
+09-19 22:39:27.742 I/MIUIInput( 2825): [MotionEvent] publisher action=0x0, deviceId=7, 244541824, channel '[Gesture Monitor] WMShell'
+09-19 22:39:27.742 I/MIUIInput( 2825): [MotionEvent] publisher action=0x0, deviceId=7, 244541824, channel '[Gesture Monitor] miui-gesture'
+09-19 22:39:27.743 I/MIUIInput( 5692): [MotionEvent] ViewRootImpl windowName 'NotificationShade', { action=ACTION_DOWN, id[0]=0, pointerCount=1, eventTime=244541824, downTime=244541824, phoneEventTime=1789828767737 } moveCount:0
+09-19 22:39:27.743 I/MiuiSplitInputMethodImpl( 2825): Skip onPointerDownOutsideFocusLocked
+09-19 22:39:27.744 I/MiuiSplitInputMethodImpl( 2825): Skip onPointerDownOutsideFocusLocked
+09-19 22:39:27.744 I/MiuiSplitInputMethodImpl( 2825): Skip onPointerDownOutsideFocusLocked
+09-19 22:39:27.744 I/MiuiSplitInputMethodImpl( 2825): Skip onPointerDownOutsideFocusLocked
+09-19 22:39:27.745 I/MiuiSplitInputMethodImpl( 2825): Skip onPointerDownOutsideFocusLocked
+09-19 22:39:27.745 D/OneHandedTutorialHandler( 5692): resetDraggingState: false
+09-19 22:39:27.747 D/SchedBoost( 2825): handleSceneBoost type: 17, active :true
+09-19 22:39:27.747 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.747 D/SchedBoostThread( 2825): thread tid=27531, priority is set to 1
+09-19 22:39:27.748 D/SchedBoostThread( 2825): thread tid=27590, priority is set to 1
+09-19 22:39:27.749 D/STM     (12710): send() action=0 source=4098 rawX=874.5 rawY=339.5
+09-19 22:39:27.750 D/EventBus(12710): No subscribers registered for event class com.xiaomi.xms.event.msg.RawSystemTouchMsg
+09-19 22:39:27.750 D/MulWinSwitchEventHandler( 5692): isInterceptDownEvent::isInExcludeRegion: region = SkRegion((39,0,1041,121)(39,121,1080,259)(0,259,1,260)(39,259,1080,260)(39,260,1080,429)(39,429,1041,502)(0,2344,1080,2400)) eventX = 874.5 eventY = 339.5
+09-19 22:39:27.752 I/SidebarCoverView(20392): onTouch : 4
+09-19 22:39:27.753 I/SidebarCoverView(20392): fsgState : 0
+09-19 22:39:27.754 D/EventBus(12710): No subscribers registered for event class wh.h
+09-19 22:39:27.754 E/captain (12710): match failed, caused by java.util.regex.PatternSyntaxException: Syntax error in regexp pattern near index 1
+09-19 22:39:27.754 E/captain (12710): *.activity.StartActivity
+09-19 22:39:27.754 E/captain (12710):  ^
+09-19 22:39:27.754 E/captain (12710): 	at com.android.icu.util.regex.PatternNative.compileImpl(Native Method)
+09-19 22:39:27.754 E/captain (12710): 	at com.android.icu.util.regex.PatternNative.<init>(PatternNative.java:53)
+09-19 22:39:27.754 E/captain (12710): 	at com.android.icu.util.regex.PatternNative.create(PatternNative.java:49)
+09-19 22:39:27.754 E/captain (12710): 	at java.util.regex.Pattern.compile(Pattern.java:3533)
+09-19 22:39:27.754 E/captain (12710): 	at java.util.regex.Pattern.<init>(Pattern.java:1419)
+09-19 22:39:27.754 E/captain (12710): 	at java.util.regex.Pattern.compile(Pattern.java:921)
+09-19 22:39:27.754 E/captain (12710): 	at kotlin.text.Regex.<init>(SourceFile:3)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.repo.TrialRepo.p(Unknown Source:76)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.repo.TrialRepo.n(Unknown Source:125)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.observer.SystemTouchObserver.b(Unknown Source:145)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.observer.SystemTouchObserver$onReceive$$inlined$runOnIO$1.invokeSuspend(Unknown Source:41)
+09-19 22:39:27.754 E/captain (12710): 	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(Unknown Source:11)
+09-19 22:39:27.754 E/captain (12710): 	at kotlinx.coroutines.x0.run(Unknown Source:130)
+09-19 22:39:27.754 E/captain (12710): 	at kotlinx.coroutines.internal.m$a.run(Unknown Source:3)
+09-19 22:39:27.754 E/captain (12710): 	at ng.k.run(Unknown Source:2)
+09-19 22:39:27.754 E/captain (12710): 	at ng.a$a.run(Unknown Source:63)
+09-19 22:39:27.754 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_intercept
+09-19 22:39:27.754 D/MiuiMultiWindowUtils(20392): supportMultiWindow: isSupportDevice = -1
+09-19 22:39:27.754 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:27.754 E/captain (12710): match failed, caused by java.util.regex.PatternSyntaxException: Syntax error in regexp pattern near index 1
+09-19 22:39:27.754 E/captain (12710): *.activity.LauncherActivity
+09-19 22:39:27.754 E/captain (12710):  ^
+09-19 22:39:27.754 E/captain (12710): 	at com.android.icu.util.regex.PatternNative.compileImpl(Native Method)
+09-19 22:39:27.754 E/captain (12710): 	at com.android.icu.util.regex.PatternNative.<init>(PatternNative.java:53)
+09-19 22:39:27.754 E/captain (12710): 	at com.android.icu.util.regex.PatternNative.create(PatternNative.java:49)
+09-19 22:39:27.754 E/captain (12710): 	at java.util.regex.Pattern.compile(Pattern.java:3533)
+09-19 22:39:27.754 E/captain (12710): 	at java.util.regex.Pattern.<init>(Pattern.java:1419)
+09-19 22:39:27.754 E/captain (12710): 	at java.util.regex.Pattern.compile(Pattern.java:921)
+09-19 22:39:27.754 E/captain (12710): 	at kotlin.text.Regex.<init>(SourceFile:3)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.repo.TrialRepo.p(Unknown Source:76)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.repo.TrialRepo.n(Unknown Source:125)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.observer.SystemTouchObserver.b(Unknown Source:145)
+09-19 22:39:27.754 E/captain (12710): 	at com.xiaomi.xms.captain.engine.observer.SystemTouchObserver$onReceive$$inlined$runOnIO$1.invokeSuspend(Unknown Source:41)
+09-19 22:39:27.754 E/captain (12710): 	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(Unknown Source:11)
+09-19 22:39:27.754 E/captain (12710): 	at kotlinx.coroutines.x0.run(Unknown Source:130)
+09-19 22:39:27.754 E/captain (12710): 	at kotlinx.coroutines.internal.m$a.run(Unknown Source:3)
+09-19 22:39:27.754 E/captain (12710): 	at ng.k.run(Unknown Source:2)
+09-19 22:39:27.754 E/captain (12710): 	at ng.a$a.run(Unknown Source:63)
+09-19 22:39:27.754 I/DockFeature(20392): isSupportDock: isSupportFreeform=true	isPhone=true	isAboveMiui125=true	isSupportDock=true	isDevBuild=false
+09-19 22:39:27.755 D/SidebarTouchListener(20392): onTouch: 	action = 4	isLeftShow = false
+09-19 22:39:27.755 D/NPVCInjector( 5692): onMiuiIntercept fullCollapse=true fullExp=false hidePanelPending=false 
+09-19 22:39:27.756 D/NPVCInjector( 5692): cancelFlingSpring mHidePanelPending=false
+09-19 22:39:27.758 D/MiuiNotificationSwipeCallback( 5692): setCanChildBeDismissed isPLaying: false isSlideMenuShowing: false
+09-19 22:39:27.758 D/MiuiNotificationSwipeHelper( 5692): onDownUpdate
+09-19 22:39:27.758 D/MiuiNotificationSwipeHelper( 5692): initializeRow
+09-19 22:39:27.762 I/SDM     ( 2040): HWEventsDRM::SetEventState: Setup vsync event for CRTC 167, Connector 65
+09-19 22:39:27.786 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.786 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.787 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.787 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.791 D/SystemGestureExclusionListener( 7689): onSystemGestureExclusionChanged: systemGestureExclusion = SkRegion((40,0,1041,121)(40,121,992,242)), systemGestureExclusionUnrestricted = null
+09-19 22:39:27.799 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.799 D/ScrollScenario( 2825): ScrollState: scroll start on dev.pocketagent.app
+09-19 22:39:27.800 D/SchedBoost( 2825): handleSceneBoost type: 18, active :true
+09-19 22:39:27.801 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.808 D/JavaheapMonitor( 5266): Java heap used=5M max=256M, proc: com.miui.miwallpaper
+09-19 22:39:27.808 V/JavaheapMonitor( 5266): Check java heap usage finished! Next check delay: 300000
+09-19 22:39:27.809 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:27.811 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_intercept
+09-19 22:39:27.811 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:27.812 I/BoostHelper( 5692): boost: add myTid: 5692
+09-19 22:39:27.812 I/BoostHelper( 5692): boost: add mRenderThreadTid: 6140
+09-19 22:39:27.812 I/BoostHelper( 5692): boostThread sched thread [5692, 6140, 6135, 6124] is run,mod=1
+09-19 22:39:27.814 D/SchedBoostThread( 2825): thread tid=5692, priority is set to 1
+09-19 22:39:27.814 D/SchedBoostThread( 2825): thread tid=6140, priority is set to 1
+09-19 22:39:27.816 D/StatusBar##isHomeStatusBarAllowed( 5692): newValue: false
+09-19 22:39:27.816 D/StatusBar##isHomeStatusBarAllowed( 5692): newValue: false
+09-19 22:39:27.817 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:27.817 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:27.818 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:27.818 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:27.819 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:27.819 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:27.819 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:27.819 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:27.821 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_heads_up_height_changed
+09-19 22:39:27.821 D/DynamicIslandTouchDebug( 5692): entry: 0|com.tencent.mobileqq|518|null|10307, headsUpHeight: 361
+09-19 22:39:27.826 D/SchedBoost( 2825): dev.pocketagent.app boosting, skip reset priority
+09-19 22:39:27.826 D/TouchInteractionService( 7689): onSystemUiFlagsChanged, mSystemUiStateFlags=50000000
+09-19 22:39:27.826 D/NavStubGestureListener( 7689): onSystemUiFlagsChanged, newFlag:1342177280
+09-19 22:39:27.826 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowStatusBar    old= true   new=true
+09-19 22:39:27.826 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowNavBar    old= true   new=true
+09-19 22:39:27.826 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  isImmersiveNew    old= false   new=false
+09-19 22:39:27.826 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged, mDisableHomeRecents = false, disableHomeRecents = false, isHomeDisabled = false, isRecentDisabled = false
+09-19 22:39:27.828 D/KeyguardViewMediator( 5692): readyForKeyguardDone
+09-19 22:39:27.829 D/MiuiFreeFormManagerService( 2825): getAllFreeFormStackInfosOnDisplay list=0
+09-19 22:39:27.830 D/ExpandableNotificationRowInjector( 5692): updateMiniWindowBar: isPinned: false, mIsInModal: false, isHeadsUpAnimatingAway: false, currentStatus: 0
+09-19 22:39:27.831 W/TouchableRegionManager( 5692): onHeadsUpPinnedModeChanged
+09-19 22:39:27.831 D/GestureObserver( 5692): update disable state, disabled true, mNotificationPanelExpand true, mControlCenterExpand false, mInPinnedMode false, mKeyguardShowing false
+09-19 22:39:27.833 D/VRI[NotificationShade]( 5692): getMiuiFreeformStackInfo mTmpFrames.miuiFreeFormStackInfo: null
+09-19 22:39:27.834 D/GestureObserver( 5692): notifySystemUIState : false,true
+09-19 22:39:27.835 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.835 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.835 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.836 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.836 D/TouchInteractionService( 7689): onSystemUiFlagsChanged, mSystemUiStateFlags=2000000050000000
+09-19 22:39:27.836 D/RecentsImpl( 7689): onSysUIFlagsChanged，changedFlags=2000000000000000, mLastResumedClassName=dev.pocketagent.app.MainActivity, mForegroundPackageName=dev.pocketagent.app
+09-19 22:39:27.836 W/RecentsImpl( 7689): updateGestureWindowVisibleImpl, className=dev.pocketagent.app.MainActivity
+09-19 22:39:27.836 D/RecentsImpl( 7689): useSysUiFlagsUpdateGestureWindowVisible, notification or quickSettings showing
+09-19 22:39:27.837 D/MiuiMirrorInputMethodImpl( 2825): shouldUpdateImeParent:false,inputMethodParent.getParent() != touchedDisplay.getImeContainer()?false,touchedDisplay:Display{#0 state=ON size=1080x2400 ROTATION_0},ime window:190061707,imeParent:6857493
+09-19 22:39:27.837 D/RecentsImpl( 7689): updateGestureWindowVisibleImpl, use SysUIFlags update gesture, return
+09-19 22:39:27.837 D/NavStubGestureListener( 7689): onSystemUiFlagsChanged, newFlag:2305843010555871232
+09-19 22:39:27.837 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowStatusBar    old= true   new=true
+09-19 22:39:27.838 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.838 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_touch
+09-19 22:39:27.838 D/ControlCenterEventHandler( 5692): handleTouchEvent 2 false
+09-19 22:39:27.838 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:27.838 D/NPVCInjector( 5692): MNPVC touch: stretching=false collapsing=false mPanelStretching=false mPanelCollapsing=false mPanelOpening=false fullCollapsedOnDown=true fullExpOnDown=false mHidePanelPending=false
+09-19 22:39:27.837 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowNavBar    old= true   new=true
+09-19 22:39:27.840 D/RecentsImpl( 7689): showBackStubWindow, show gesture stub view
+09-19 22:39:27.840 D/BarFollowAnimation( 2825): current status bar control target is : Window{c59deea u0 NotificationShade}
+09-19 22:39:27.840 D/SystemGestureExclusionListener( 7689): onSystemGestureExclusionChanged: systemGestureExclusion = SkRegion((39,0,1041,121)(39,121,992,242)), systemGestureExclusionUnrestricted = null
+09-19 22:39:27.840 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  isImmersiveNew    old= false   new=false
+09-19 22:39:27.841 D/WindowManager( 2825): updateSystemBarAttributes displayId: 16777216 Window{c59deea u0 NotificationShade} winAppearance=
+09-19 22:39:27.840 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged, mDisableHomeRecents = false, disableHomeRecents = false, isHomeDisabled = false, isRecentDisabled = false
+09-19 22:39:27.841 D/RecentsImpl( 7689): hideNavStubView
+09-19 22:39:27.841 D/WindowManager( 2825): wms.Input focus has changed to Window{c59deea u0 NotificationShade} display=0 updateInputWindows = true
+09-19 22:39:27.841 D/NavStubView_Touch( 7689): setKeepHidden    old=false   new=true
+09-19 22:39:27.841 I/MultiSenceManagerInternalStub( 2825): getInstance
+09-19 22:39:27.841 D/NavStubView_Touch( 7689): updateTouchable    old=false   new=true
+09-19 22:39:27.841 D/NavStubView_Touch( 7689):   updateTouchable---requestApplyInsets
+09-19 22:39:27.841 D/ScrollScenario( 2825): ScrollState: scroll end on dev.pocketagent.app
+09-19 22:39:27.841 D/ScrollScenario( 2825): ScrollState: scroll start on com.android.systemui
+09-19 22:39:27.841 D/SchedBoost( 2825): handleSceneBoost type: 18, active :false
+09-19 22:39:27.841 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.842 D/SchedBoost( 2825): handleSceneBoost type: 18, active :true
+09-19 22:39:27.842 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.843 D/WmSystemUiDebug( 2825): on system bar attributes changed displayId=16777216 appearance= appearanceRegions=[AppearanceRegion{ bounds=[0,0][1080,2400]}] navbarColorManagedByIme=false behavior=2 requestedVisibleTypes=[statusBars navigationBars captionBar systemGestures mandatorySystemGestures tappableElement displayCutout windowDecor systemOverlays] packageName=com.android.systemui letterboxDetails=[]
+09-19 22:39:27.843 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.843 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.843 D/MiuiFreeFormManagerService( 2825): getAllFreeFormStackInfosOnDisplay list=0
+09-19 22:39:27.843 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.843 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.843 W/GestureStubView_Left( 7689): adaptRotation   currentRotation=0   mRotation=0
+09-19 22:39:27.844 D/GestureStubView_Left( 7689): resetRenderProperty: showGestureStub   isLayoutParamChanged=false
+09-19 22:39:27.844 D/VibratorManagerService( 2825): Canceling vibration
+09-19 22:39:27.844 W/ActivityManagerServiceImpl( 2825): Sending non-protected broadcast com.android.systemui.fsgesture from system 5692:com.android.systemui/1000 pkg com.android.systemui. Callers=
+09-19 22:39:27.846 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:27.847 D/GestureStubView_Left( 7689): showGestureStub
+09-19 22:39:27.847 W/GestureStubView_Right( 7689): adaptRotation   currentRotation=0   mRotation=0
+09-19 22:39:27.847 D/GestureStubView_Right( 7689): resetRenderProperty: showGestureStub   isLayoutParamChanged=false
+09-19 22:39:27.847 D/GestureStubView_Right( 7689): showGestureStub
+09-19 22:39:27.849 D/VibratorManagerService( 2825): Canceling vibration
+09-19 22:39:27.849 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:27.850 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:27.851 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:27.851 V/NoteApp (12100): [com.miui.notes|FloatService][pid@12100|tid@2-main|onReceive: isEnter = true typeFrom = typefrom_status_bar_expansion]
+09-19 22:39:27.851 V/NoteApp (12100): [com.miui.notes|FloatWindowManager][pid@12100|tid@2-main|hideOrShowCoverView: isShow = false]
+09-19 22:39:27.852 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:27.853 D/SystemGestureExclusionListener( 7689): onSystemGestureExclusionChanged: systemGestureExclusion = SkRegion(), systemGestureExclusionUnrestricted = null
+09-19 22:39:27.853 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_touch
+09-19 22:39:27.853 D/ControlCenterEventHandler( 5692): handleTouchEvent 2 false
+09-19 22:39:27.853 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:27.853 D/NPVCInjector( 5692): MNPVC touch: stretching=false collapsing=false mPanelStretching=false mPanelCollapsing=false mPanelOpening=false fullCollapsedOnDown=true fullExpOnDown=false mHidePanelPending=false
+09-19 22:39:27.853 I/DockWindowManager(20392): hideOrShowSidebar: isShow = false
+09-19 22:39:27.854 D/MiuiBubbleController( 5692): onReceive broadcast info:[intent.getSender() = com.android.systemui, action = com.android.systemui.fsgesture]
+09-19 22:39:27.854 D/MiuiBubbleController( 5692): set mIsStatusBarExpand:true
+09-19 22:39:27.854 D/MulWinSwitchSettingsObserver( 5692): onReceive: com.android.systemui.fsgesture, isEnter=true, typeFrom=typefrom_status_bar_expansion
+09-19 22:39:27.855 D/CommandQueueCallback( 5692): onSystemBarAttributesChanged (16777216, 0)
+09-19 22:39:27.855 I/MIUIInput( 2825): [MotionEvent] notifyMotion - eventTime=244541941523000, deviceId=7, source=0x1002, policyFlags=0x0, action=0x1, flags=0x80, downTime=244541824684000
+09-19 22:39:27.855 D/RingtonePlayer( 5692): stopAsync()
+09-19 22:39:27.855 D/RingtonePlayer( 5692): stop
+09-19 22:39:27.855 D/RingtonePlayer( 5692): stopAsync()
+09-19 22:39:27.855 D/RingtonePlayer( 5692): stop
+09-19 22:39:27.855 I/MIUIInput( 2825): [MotionEvent] publisher action=0x1, deviceId=7, 244541941, channel 'c59deea NotificationShade'
+09-19 22:39:27.855 I/MIUIInput( 2825): [MotionEvent] publisher action=0x1, deviceId=7, 244541941, channel '[Gesture Monitor] onehanded-touch'
+09-19 22:39:27.855 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_touch
+09-19 22:39:27.855 I/MIUIInput( 2825): [MotionEvent] publisher action=0x1, deviceId=7, 244541941, channel '[Gesture Monitor] WMShell'
+09-19 22:39:27.855 D/ControlCenterEventHandler( 5692): handleTouchEvent 2 false
+09-19 22:39:27.856 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:27.856 D/NPVCInjector( 5692): MNPVC touch: stretching=false collapsing=false mPanelStretching=false mPanelCollapsing=false mPanelOpening=false fullCollapsedOnDown=true fullExpOnDown=false mHidePanelPending=false
+09-19 22:39:27.856 I/MIUIInput( 2825): [MotionEvent] publisher action=0x1, deviceId=7, 244541941, channel '[Gesture Monitor] miui-gesture'
+09-19 22:39:27.856 D/ScrollScenario( 2825): ScrollState: fling start on com.android.systemui
+09-19 22:39:27.856 D/ScrollScenario( 2825): ScrollState: scroll end on com.android.systemui
+09-19 22:39:27.856 I/MIUIInput( 5692): [MotionEvent] ViewRootImpl windowName 'NotificationShade', { action=ACTION_UP, id[0]=0, pointerCount=1, eventTime=244541941, downTime=244541824, phoneEventTime=1789828767854 } moveCount:4
+09-19 22:39:27.856 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_external_touch
+09-19 22:39:27.856 D/ControlCenterEventHandler( 5692): handleTouchEvent 1 false
+09-19 22:39:27.856 I/ControlCenterControllerImpl( 5692): isPanelEnabled: true, disableWhenHeadsUpShowing: true, expandableInKeyguard: false, keyguardShowing: false, keyguardFadingAway: false, chargeAnimShowing: false, isDeviceInteractive: true
+09-19 22:39:27.856 D/SchedBoost( 2825): handleSceneBoost type: 19, active :true
+09-19 22:39:27.856 D/NPVCInjector( 5692): MNPVC touch: 1 mPanelIntercepting=false mPanelStretching=false mPanelCollapsing=false mPanelOpening=false fullCollapsedOnDown=true fullExpOnDown=false mHidePanelPending=false
+09-19 22:39:27.856 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.857 D/SchedBoost( 2825): handleSceneBoost type: 18, active :false
+09-19 22:39:27.857 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:27.858 D/MulWinSwitchDecorViewModel( 5692): onFsgestureEntered: isEnter=true
+09-19 22:39:27.859 D/NPVCInjector( 5692): hidePanelPending=true
+09-19 22:39:27.859 D/STM     (12710): send() action=1 source=4098 rawX=970.5 rawY=110.5
+09-19 22:39:27.859 D/EventBus(12710): No subscribers registered for event class com.xiaomi.xms.event.msg.RawSystemTouchMsg
+09-19 22:39:27.859 D/EventBus(12710): No subscribers registered for event class wh.h
+09-19 22:39:27.860 E/GreezeManager( 2825): can not found the app for com.xiaomi.smarthome#0
+09-19 22:39:27.860 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 D/GestureStubView_Left( 7689): gatherTransparentRegion: need render w:62  h:2400
+09-19 22:39:27.861 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.861 D/GestureStubView_Right( 7689): gatherTransparentRegion: need render w:62  h:2400
+09-19 22:39:27.861 W/NavStubView_Touch( 7689): onComputeInternalInsets  bounds=Rect(0, 0 - 1080, 56)   mHideGestureLine=true   mIsShowNavBar=true   mKeepHidden=true   mDisableTouch=false   mUseEmptyTouchableRegion=true
+09-19 22:39:27.861 D/NavStubView( 7689): Hot Area Rect: Rect(345, 2344 - 735, 2400)
+09-19 22:39:27.861 W/NavStubView_Touch( 7689):   onComputeInternalInsets  empty
+09-19 22:39:27.861 W/NavStubView_Touch( 7689):   onComputeInternalInsets  path.addRect: NavStubTraggeRange=NavStubTraggeRange{mLeftRange=RectF(0.0, 0.0, 0.0, 0.0), mCenterRange=RectF(0.0, 0.0, 0.0, 0.0), mRightRange=RectF(0.0, 0.0, 0.0, 0.0)}
+09-19 22:39:27.861 D/RecentsImpl( 7689): mFsgReceiver, onReceive, sender=com.android.systemui, typeFrom=typefrom_status_bar_expansion, isEnter=true
+09-19 22:39:27.861 D/RecentsImpl( 7689): mFsgReceiver, onReceive, intercept broadcast
+09-19 22:39:27.861 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.861 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.862 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.862 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.863 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:27.863 D/BufferQueueProducer(20392): [VRI[DockAssistantView]#0(BLAST Consumer)0](id:4fa800000000,api:1,p:20392,c:20392) disconnect: api 1 (caller=20392)
+09-19 22:39:27.865 D/AurogonBandwidthController( 2825): skinTemperature:30.384
+09-19 22:39:27.865 D/AurogonBandwidthController( 2825): skinTemperature:30.384
+09-19 22:39:27.865 I/DisplayPolicyStubImpl( 2825): com.android.server.wm.WindowState hide ime, enable touchboost
+09-19 22:39:27.866 I/DisplayPolicyStubImpl( 2825): com.android.server.wm.WindowState hide ime, enable touchboost
+09-19 22:39:27.866 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.866 D/BufferQueueProducer(12100): [VRI[]#1199(BLAST Consumer)1199](id:2f44000004af,api:1,p:12100,c:12100) disconnect: api 1 (caller=12100)
+09-19 22:39:27.867 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.867 D/MiuiInputManagerService( 2825): unregisterSrollToTopListener, windowId: 19233890
+09-19 22:39:27.867 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.867 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.868 W/InsetsSource(27531): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.876 I/AnimationScenario( 2825): Big data animation scenario state changed to: true, type is 523
+09-19 22:39:27.876 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.877 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.877 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.877 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.880 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.880 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.880 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.881 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.882 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.882 W/InsetsSource(12100): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.882 W/InsetsSource(12100): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.882 W/InsetsSource(12100): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.883 D/SystemPerformanceHinter( 2825): startSession#HighPerfSession-d0-WindowAnimation
+09-19 22:39:27.883 W/curitycenter:ui(20392): Binder 0xb4000072a6793b60 destroyed after setInheritRt before being parceled.
+09-19 22:39:27.883 W/com.miui.notes(12100): Binder 0xb4000072a679efc0 destroyed after setInheritRt before being parceled.
+09-19 22:39:27.883 D/BufferQueueConsumer(20392): [VRI[DockAssistantView]#0(BLAST Consumer)0](id:4fa800000000,api:0,p:-1,c:20392) disconnect: caller 20392
+09-19 22:39:27.883 D/BufferQueueConsumer(12100): [VRI[]#1199(BLAST Consumer)1199](id:2f44000004af,api:0,p:-1,c:12100) disconnect: caller 12100
+09-19 22:39:27.886 D/BufferQueueProducer(20392): [VRI[DockAssistantView]#1(BLAST Consumer)1](id:4fa800000001,api:1,p:20392,c:20392) disconnect: api 1 (caller=20392)
+09-19 22:39:27.888 I/SmartPower: com.miui.securitycenter:ui/1000(20392)( 2825): visible->invisible(824623ms) R(become invisible) adj=200.
+09-19 22:39:27.890 I/AnimationScenario( 2825): Big data animation scenario state changed to: true, type is 523
+09-19 22:39:27.890 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:27.890 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:27.890 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:27.891 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:27.892 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.892 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =121 hasIntersection =false
+09-19 22:39:27.892 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.892 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:27.892 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =121 hasIntersection =false
+09-19 22:39:27.892 W/curitycenter:ui(20392): Binder 0xb4000072a6794b80 destroyed after setInheritRt before being parceled.
+09-19 22:39:27.893 D/BufferQueueConsumer(20392): [VRI[DockAssistantView]#1(BLAST Consumer)1](id:4fa800000001,api:0,p:-1,c:20392) disconnect: caller 20392
+09-19 22:39:27.896 D/StatusBar##isHomeStatusBarAllowed( 5692): newValue: true
+09-19 22:39:27.896 D/StatusBar##isHomeStatusBarAllowed( 5692): newValue: true
+09-19 22:39:27.991 I/MiuiNetworkPolicy( 2825): bandwidth: 0 KB/s, Max bandwidth: 1587 KB/s
+09-19 22:39:27.994 D/GestureObserver( 5692): update disable state, disabled false, mNotificationPanelExpand false, mControlCenterExpand false, mInPinnedMode false, mKeyguardShowing false
+09-19 22:39:27.994 D/TouchInteractionService( 7689): onSystemUiFlagsChanged, mSystemUiStateFlags=2000000010000000
+09-19 22:39:27.994 D/NavStubGestureListener( 7689): onSystemUiFlagsChanged, newFlag:2305843009482129408
+09-19 22:39:27.994 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowStatusBar    old= true   new=true
+09-19 22:39:27.995 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowNavBar    old= true   new=true
+09-19 22:39:27.995 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  isImmersiveNew    old= false   new=false
+09-19 22:39:27.995 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged, mDisableHomeRecents = false, disableHomeRecents = false, isHomeDisabled = false, isRecentDisabled = false
+09-19 22:39:27.995 D/SchedBoost( 2825): dev.pocketagent.app already boosted, skip boost priority
+09-19 22:39:27.995 D/KeyguardViewMediator( 5692): readyForKeyguardDone
+09-19 22:39:27.996 W/ActivityManagerServiceImpl( 2825): Sending non-protected broadcast com.android.systemui.fsgesture from system 5692:com.android.systemui/1000 pkg com.android.systemui. Callers=
+09-19 22:39:27.997 D/GestureObserver( 5692): notifySystemUIState : false,false
+09-19 22:39:27.997 D/TouchInteractionService( 7689): onSystemUiFlagsChanged, mSystemUiStateFlags=10000000
+09-19 22:39:27.997 D/RecentsImpl( 7689): onSysUIFlagsChanged，changedFlags=2000000000000000, mLastResumedClassName=dev.pocketagent.app.MainActivity, mForegroundPackageName=dev.pocketagent.app
+09-19 22:39:27.997 W/RecentsImpl( 7689): updateGestureWindowVisibleImpl, className=dev.pocketagent.app.MainActivity
+09-19 22:39:27.997 D/RecentsImpl( 7689): useSysUiFlagsUpdateGestureWindowVisible, unlock
+09-19 22:39:27.998 D/MiuiBubbleController( 5692): onReceive broadcast info:[intent.getSender() = com.android.systemui, action = com.android.systemui.fsgesture]
+09-19 22:39:27.998 D/MiuiBubbleController( 5692): set mIsStatusBarExpand:false
+09-19 22:39:27.998 D/NavStubGestureListener( 7689): onSystemUiFlagsChanged, newFlag:268435456
+09-19 22:39:27.998 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowStatusBar    old= true   new=true
+09-19 22:39:27.998 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  mIsShowNavBar    old= true   new=true
+09-19 22:39:27.998 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged  isImmersiveNew    old= false   new=false
+09-19 22:39:27.998 D/NavStubView_Touch( 7689): onSystemUiFlagsChanged, mDisableHomeRecents = false, disableHomeRecents = false, isHomeDisabled = false, isRecentDisabled = false
+09-19 22:39:27.998 D/RecentsImpl( 7689): showNavStubView
+09-19 22:39:27.998 D/NavStubView_Touch( 7689): setKeepHidden    old=true   new=false
+09-19 22:39:27.998 D/NavStubView_Touch( 7689): updateTouchable    old=true   new=false
+09-19 22:39:27.998 D/NavStubView_Touch( 7689):   updateTouchable---requestApplyInsets
+09-19 22:39:27.998 D/MulWinSwitchSettingsObserver( 5692): onReceive: com.android.systemui.fsgesture, isEnter=false, typeFrom=typefrom_status_bar_expansion
+09-19 22:39:27.998 D/RecentsImpl( 7689): showBackStubWindow, show gesture stub view
+09-19 22:39:27.998 D/MulWinSwitchDecorViewModel( 5692): onFsgestureEntered: isEnter=false
+09-19 22:39:27.998 W/GestureStubView_Left( 7689): adaptRotation   currentRotation=0   mRotation=0
+09-19 22:39:27.998 D/HWUI    ( 5692): setMiShadow closed
+09-19 22:39:27.999 D/GestureStubView_Left( 7689): resetRenderProperty: showGestureStub   isLayoutParamChanged=false
+09-19 22:39:27.999 V/NoteApp (12100): [com.miui.notes|FloatService][pid@12100|tid@2-main|onReceive: isEnter = false typeFrom = typefrom_status_bar_expansion]
+09-19 22:39:27.999 D/GestureStubView_Left( 7689): showGestureStub
+09-19 22:39:27.999 V/NoteApp (12100): [com.miui.notes|FloatWindowManager][pid@12100|tid@2-main|hideOrShowCoverView: isShow = true]
+09-19 22:39:27.999 W/GestureStubView_Right( 7689): adaptRotation   currentRotation=0   mRotation=0
+09-19 22:39:27.999 D/GestureStubView_Right( 7689): resetRenderProperty: showGestureStub   isLayoutParamChanged=false
+09-19 22:39:27.999 D/GestureStubView_Right( 7689): showGestureStub
+09-19 22:39:28.000 E/GreezeManager( 2825): can not found the app for com.xiaomi.smarthome#0
+09-19 22:39:28.000 D/MiuiFreeFormManagerService( 2825): getAllFreeFormStackInfosOnDisplay list=0
+09-19 22:39:28.000 I/DockWindowManager(20392): hideOrShowSidebar: isShow = true
+09-19 22:39:28.001 D/ExpandableNotificationRowInjector( 5692): updateMiniWindowBar: isPinned: false, mIsInModal: false, isHeadsUpAnimatingAway: true, currentStatus: 0
+09-19 22:39:28.002 D/MiuiFreeFormManagerService( 2825): getAllFreeFormStackInfosOnDisplay list=0
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.008 W/InsetsSource( 7689): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.009 W/NavStubView_Touch( 7689): onComputeInternalInsets  bounds=Rect(0, 0 - 1080, 56)   mHideGestureLine=true   mIsShowNavBar=true   mKeepHidden=false   mDisableTouch=false   mUseEmptyTouchableRegion=false
+09-19 22:39:28.009 D/GestureStubView_Left( 7689): gatherTransparentRegion: need render w:62  h:2400
+09-19 22:39:28.009 D/NavStubView( 7689): Hot Area Rect: Rect(345, 2344 - 735, 2400)
+09-19 22:39:28.009 W/NavStubView_Touch( 7689):   onComputeInternalInsets  path.addRect: NavStubTraggeRange=NavStubTraggeRange{mLeftRange=RectF(0.0, 0.0, 0.0, 0.0), mCenterRange=RectF(0.0, 0.0, 1080.0, 56.0), mRightRange=RectF(0.0, 0.0, 0.0, 0.0)}
+09-19 22:39:28.009 D/GestureStubView_Right( 7689): gatherTransparentRegion: need render w:62  h:2400
+09-19 22:39:28.010 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:28.012 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.012 D/RecentsImpl( 7689): mFsgReceiver, onReceive, sender=com.android.systemui, typeFrom=typefrom_status_bar_expansion, isEnter=false
+09-19 22:39:28.012 D/DynamicIslandWindowViewController( 5692): handleDynamicIsland: action_heads_up_height_changed
+09-19 22:39:28.012 D/DynamicIslandTouchDebug( 5692): entry: null, headsUpHeight: 0
+09-19 22:39:28.012 D/RecentsImpl( 7689): mFsgReceiver, onReceive, intercept broadcast
+09-19 22:39:28.012 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.012 D/KeyguardPanelViewController( 5692): vis=false shouleBe=false BarState=0
+09-19 22:39:28.012 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.012 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.014 D/VRI[NotificationShade]( 5692): getMiuiFreeformStackInfo mTmpFrames.miuiFreeFormStackInfo: null
+09-19 22:39:28.014 I/SmartPower: com.miui.securitycenter:ui/1000(20392)( 2825): invisible->visible(127ms) R(become visible) adj=200.
+09-19 22:39:28.014 W/com.miui.notes(12100): type=1400 audit(0.0:475548): avc:  denied  { read } for  name="u:object_r:vendor_display_prop:s0" dev="tmpfs" ino=507 scontext=u:r:platform_app:s0:c512,c768 tcontext=u:object_r:vendor_display_prop:s0 tclass=file permissive=0 app=com.miui.notes
+09-19 22:39:28.015 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.015 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.015 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.015 W/InsetsSource(12100): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.016 W/InsetsSource(12100): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.016 W/InsetsSource(12100): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.016 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.016 D/WindowManager( 2825): relayoutVisibleWindow: Window{34f2826 u0 DockAssistantView EXITING} mAnimatingExit=true, mRemoveOnExit=false, mDestroying=false
+09-19 22:39:28.017 W/libc    (12100): Access denied finding property "vendor.display.enable_optimal_refresh_rate"
+09-19 22:39:28.018 D/MiBridge( 5692): requestCpuHighFreq---- uid: 1000 level: 1 timeoutms:2000
+09-19 22:39:28.018 D/MiBridge( 5692): requestCpuHighFreq handle: 1
+09-19 22:39:28.018 D/CpuBoostUtil( 5692): boostCpuToMax:0
+09-19 22:39:28.018 W/MiuiBooster( 3259): "MiuiBoosterService requestCpuHighFreq: 1000, 1, 2000"
+09-19 22:39:28.019 W/MiuiBooster( 3259): "[OPT-TF-CPU/GPU] Permission not granted : 1000"
+09-19 22:39:28.019 I/AnimationScenario( 2825): Big data animation scenario state changed to: true, type is 523
+09-19 22:39:28.020 W/libc    (12100): Access denied finding property "vendor.display.enable_optimal_refresh_rate"
+09-19 22:39:28.014 W/com.miui.notes(12100): type=1400 audit(0.0:475549): avc:  denied  { read } for  name="u:object_r:vendor_display_prop:s0" dev="tmpfs" ino=507 scontext=u:r:platform_app:s0:c512,c768 tcontext=u:object_r:vendor_display_prop:s0 tclass=file permissive=0 app=com.miui.notes
+09-19 22:39:28.020 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.021 D/BoostHelper( 5692): onFrameDraw processId:6135,viewRoot:24855592
+09-19 22:39:28.021 I/QS      ( 5692): setListening false
+09-19 22:39:28.021 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.021 D/QS      ( 5692): setExpanded false
+09-19 22:39:28.021 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.021 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.022 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.023 D/VRI[DockAssistantView](20392): vri.Setup new sync=wmsSync-VRI[DockAssistantView]#6
+09-19 22:39:28.024 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.024 D/VRI[]   (12100): vri.Setup new sync=wmsSync-VRI[]#2
+09-19 22:39:28.024 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.024 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{c59deea u0 NotificationShade} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.025 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.026 D/MiuiMirrorInputMethodImpl( 2825): shouldUpdateImeParent:false,inputMethodParent.getParent() != touchedDisplay.getImeContainer()?false,touchedDisplay:Display{#0 state=ON size=1080x2400 ROTATION_0},ime window:190061707,imeParent:6857493
+09-19 22:39:28.026 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.028 D/BarFollowAnimation( 2825): current status bar control target is : Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity}
+09-19 22:39:28.029 D/KeyguardPanelViewInjector( 5692): resetKeyguardMoveHelper
+09-19 22:39:28.030 D/NotificationPanelExpandController( 5692): hide false
+09-19 22:39:28.030 D/WindowManager( 2825): updateSystemBarAttributes displayId: 16777216 Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} winAppearance=
+09-19 22:39:28.030 D/NotificationPanelExpandController( 5692): expand height changed to 0.0
+09-19 22:39:28.030 D/WindowManager( 2825): wms.Input focus has changed to Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} display=0 updateInputWindows = true
+09-19 22:39:28.030 I/MultiSenceManagerInternalStub( 2825): getInstance
+09-19 22:39:28.030 D/ScrollScenario( 2825): ScrollState: fling end on com.android.systemui
+09-19 22:39:28.030 D/ScrollScenario( 2825): ScrollState: fling start on dev.pocketagent.app
+09-19 22:39:28.031 D/SchedBoost( 2825): handleSceneBoost type: 19, active :false
+09-19 22:39:28.031 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:28.031 D/WmSystemUiDebug( 2825): on system bar attributes changed displayId=16777216 appearance= appearanceRegions=[AppearanceRegion{ bounds=[0,0][1080,2400]}] navbarColorManagedByIme=false behavior=1 requestedVisibleTypes=[statusBars navigationBars captionBar systemGestures mandatorySystemGestures tappableElement displayCutout windowDecor systemOverlays] packageName=dev.pocketagent.app letterboxDetails=[]
+09-19 22:39:28.031 D/SchedBoost( 2825): handleSceneBoost type: 19, active :true
+09-19 22:39:28.031 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:28.031 W/WindowOnBackDispatcher( 5692): sendCancelIfRunning: isInProgress=false callback=com.android.systemui.back.domain.interactor.BackActionInteractor$callback$2@831c18d
+09-19 22:39:28.032 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:28.033 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:28.033 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:28.033 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:28.034 D/CoreBackPreview( 2825): Window{c59deea u0 NotificationShade}: Setting back callback null
+09-19 22:39:28.034 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:28.034 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:28.034 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:28.036 D/KeyguardViewMediator( 5692): readyForKeyguardDone
+09-19 22:39:28.036 D/ControlCenterControllerImpl( 5692): disable1: 0 -> 0 (diff1: 0)
+09-19 22:39:28.036 D/ControlCenterControllerImpl( 5692): disable2: 0 -> 0 (diff1: 0)
+09-19 22:39:28.036 D/ControlCenterControllerImpl( 5692): panelEnabled changed from true to true
+09-19 22:39:28.038 I/IPCThreadState( 7689): oneway function results for code 31 on binder at 0xb4000071f67dd8c0 will be dropped but finished with status UNKNOWN_TRANSACTION
+09-19 22:39:28.039 D/VRI[DockAssistantView](20392): vri.reportDrawFinished 0 0 Rect(992, 121 - 1080, 429)
+09-19 22:39:28.040 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.040 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.040 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.041 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.041 D/SchedBoost( 2825): com.android.systemui boosting, skip reset priority
+09-19 22:39:28.041 D/VRI[]   (12100): vri.reportDrawFinished 0 0 Rect(0, 259 - 1, 260)
+09-19 22:39:28.042 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.042 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.042 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.042 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.042 D/WindowManager( 2825): relayoutVisibleWindow: Window{b1b7db9 u0 com.miui.securitycenter/.FloatingWindow EXITING} mAnimatingExit=true, mRemoveOnExit=false, mDestroying=false
+09-19 22:39:28.043 I/Layer   ( 2298): sf.setBuffer drawingN:2 frN:1 DockAssistantView#105007
+09-19 22:39:28.044 I/AnimationScenario( 2825): Big data animation scenario state changed to: true, type is 523
+09-19 22:39:28.045 D/BufferQueueProducer( 5692): [VRI[NotificationShade]#4053(BLAST Consumer)4053](id:163c0000108c,api:1,p:5692,c:5692) disconnect: api 1 (caller=5692)
+09-19 22:39:28.045 D/WindowManager( 2825): wms.finishDrawingLocked: mDrawState=COMMIT_DRAW_PENDING Window{e79aa57 u0 com.miui.notes} in Surface(name=#105245)/@0xfbd553c
+09-19 22:39:28.046 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.046 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =121 hasIntersection =false
+09-19 22:39:28.046 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.046 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.046 W/InsetsSource(20392): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =121 hasIntersection =false
+09-19 22:39:28.047 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.047 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.048 E/FrameEvents(20392): addRelease: Did not find frame.
+09-19 22:39:28.048 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.048 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.048 D/VRI[DockAssistantView](20392): vri.Setup new sync=wmsSync-VRI[DockAssistantView]#8
+09-19 22:39:28.048 D/WindowManager( 2825): wms.commitFinishDrawingLocked: mDrawState=READY_TO_SHOW Window{e79aa57 u0 com.miui.notes} in Surface(name=#105245)/@0xfbd553c
+09-19 22:39:28.049 D/HWUI    (20392): DDRE Debug DrawPath: smoothCornerEnabled = true
+09-19 22:39:28.050 D/VRI[DockAssistantView](20392): vri.reportDrawFinished 0 0 Rect(992, 121 - 1080, 429)
+09-19 22:39:28.050 I/DisplayPolicyStubImpl( 2825): com.android.server.wm.WindowState hide ime, enable touchboost
+09-19 22:39:28.050 I/DisplayPolicyStubImpl( 2825): com.android.server.wm.WindowState hide ime, enable touchboost
+09-19 22:39:28.051 W/ndroid.systemui( 5692): Binder 0xb4000072a6834a80 destroyed after setInheritRt before being parceled.
+09-19 22:39:28.051 D/BufferQueueConsumer( 5692): [VRI[NotificationShade]#4053(BLAST Consumer)4053](id:163c0000108c,api:0,p:-1,c:5692) disconnect: caller 5692
+09-19 22:39:28.052 D/CommandQueueCallback( 5692): onSystemBarAttributesChanged (16777216, 0)
+09-19 22:39:28.052 D/DisplayContentStubImpl( 2825): onNewImeFrame: isImeVisible = false, imeFrame = Rect(0, 0 - 0, 0)
+09-19 22:39:28.052 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.053 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.053 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.054 W/InsetsSource(27531): Has no intersection or mTmpFrame.height(), return Insets.NONE mTmpFrame.height() =0 hasIntersection =false
+09-19 22:39:28.061 I/WindowManager( 2825): wms.showSurfaceRobustly mWin:Window{e79aa57 u0 com.miui.notes} in Surface(name=#105245)/@0xfbd553c
+09-19 22:39:28.063 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:28.064 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:28.064 I/Layer   ( 2298): sf.setBuffer drawingN:219 frN:1 com.miui.securitycenter/.FloatingWindow#105009
+09-19 22:39:28.064 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:28.066 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.068 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:28.070 E/FrameEvents(20392): addRelease: Did not find frame.
+09-19 22:39:28.070 D/MiuiInputManagerService( 2825): unregisterSrollToTopListener, windowId: 96750205
+09-19 22:39:28.072 I/HandWritingStubImpl(27531): refreshLastKeyboardType: 1
+09-19 22:39:28.072 I/HandWritingStubImpl(27531): getCurrentKeyboardType: 1
+09-19 22:39:28.076 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.077 I/ImeTracker( 2825): dev.pocketagent.app:5fdde7f4: onRequestHide at ORIGIN_SERVER reason HIDE_SAME_WINDOW_FOCUSED_WITHOUT_EDITOR fromUser false
+09-19 22:39:28.077 I/InputMethodManagerServiceImpl( 2825): Skip shouldIgnoreHideCurrentInputForBackDisplay check.
+09-19 22:39:28.077 W/SecurityInputMethodSwitcher( 2825): first check switch to security ime: false
+09-19 22:39:28.078 D/InsetsController(27531): hide(ime(), fromIme=false)
+09-19 22:39:28.078 W/SecurityInputMethodSwitcher( 2825): double check switch to security ime: false
+09-19 22:39:28.078 I/ImeTracker(27531): dev.pocketagent.app:5fdde7f4: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+09-19 22:39:28.078 W/SecurityInputMethodSwitcher( 2825): switch to other input method from security ime:false mayChangeToMiuiSecurityInputMethod: false current focus window: android.os.BinderProxy@fd5d3a
+09-19 22:39:28.078 D/InputMethodManagerService( 2825): startInputUncheckedLocked:set client state as:ClientState{f1b2221 mUid=10324 mPid=27531 mSelfReportedDisplayId=0}
+09-19 22:39:28.078 D/InputMethodManagerServiceImpl( 2825): ime switch to security: false , switch to normal ime: false , switch from security: false
+09-19 22:39:28.082 I/bdmiime (16073): onStartInput called,  restarting：false, fieldId： 0, inputType：0, imeOptions： 0
+09-19 22:39:28.084 I/InputMethodService(16073): inputmethod dismissSystemCLipBoard
+09-19 22:39:28.085 D/goa     (16073): refreshData: LogoMenuActivitiesData(logoMenuData=[], sceneMap={})
+09-19 22:39:28.085 D/goa     (16073): isShowLogoAnimation: triggers is null, return false
+09-19 22:39:28.088 I/bdmiime (16073):  tempDarkMode = true ,darkMode = true
+09-19 22:39:28.089 I/bdmiime (16073): updateForNightMode  isNight true
+09-19 22:39:28.090 I/bdmiime (16073): getSysParam -> orientation isPortrait = true
+09-19 22:39:28.090 I/bdmiime (16073): getKeyboardWidth sW=1080 bW=1080
+09-19 22:39:28.091 I/bdmiime (16073): initGlobal bw:1080, bl:0, br:1080, bh:644, lsh:0, sw:1080, sh:2400, 1080, rw:1080, rh:2400, as:3.3, ss: 2.75, pad:false,cd:7851C0-7004D3-EGG56F-1603B3-0EF7C0-34|WL4-A584YD, way:0, mini0
+09-19 22:39:28.094 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.098 I/curitycenter:ui(20392): This is non sticky GC, maxfree is 33554432 minfree is 8388608
+09-19 22:39:28.099 D/JavaheapMonitor(20392): Java heap used=6M max=256M, proc: com.miui.securitycenter:ui
+09-19 22:39:28.099 V/JavaheapMonitor(20392): Check java heap usage finished! Next check delay: 300000
+09-19 22:39:28.124 I/bdmiime (16073): SkinRender#currentSkinType:0
+09-19 22:39:28.125 I/bdmiime (16073): setIsNight = true, isNightFollowSystemSetByUser true, isNightFollowSystem = false, userManualNightMode = 1, isDarkMode = true
+09-19 22:39:28.125 I/bdmiime (16073): loadPref: isFloatingMode : false, isPcMode : false, model : com.baidu.lr5@3882d11
+09-19 22:39:28.126 I/bdmiime (16073): is sys vibra:true
+09-19 22:39:28.126 I/bdmiime (16073): switchPcMode newPcMode = false
+09-19 22:39:28.142 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.158 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.175 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.191 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.211 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:28.244 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:28.245 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:28.245 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:28.246 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:28.246 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:28.246 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:28.258 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.263 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:28.277 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:28.279 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:28.279 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:28.280 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:28.290 D/RefreshRateSelector( 2298): Touch Boost
+09-19 22:39:28.313 D/SchedBoostThread( 2825): thread tid=5692, priority is set to -10
+09-19 22:39:28.314 D/SchedBoostThread( 2825): thread tid=6140, priority is set to -4
+09-19 22:39:28.376 D/MiuiInputManagerService( 2825): registerSrollToTopListener, windowId: 19233890, listener: miui.hardware.input.IScrollToTopListener$Stub$Proxy@9a48c58
+09-19 22:39:28.413 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:28.425 D/MiuiFreeFormManagerService( 2825): getAllFreeFormStackInfosOnDisplay list=0
+09-19 22:39:28.427 D/ExpandableNotificationRowInjector( 5692): updateMiniWindowBar: isPinned: false, mIsInModal: false, isHeadsUpAnimatingAway: false, currentStatus: 0
+09-19 22:39:28.428 D/MiuiFreeFormManagerService( 2825): getAllFreeFormStackInfosOnDisplay list=0
+09-19 22:39:28.429 D/HWUI    ( 5692): setMiShadow closed
+09-19 22:39:28.430 D/MiBridge( 5692): cancelCpuHighFreq---uid: 1000
+09-19 22:39:28.430 D/MiBridge( 5692): cancelCpuHighFreq ret: 0
+09-19 22:39:28.430 W/MiuiBooster( 3259): "MiuiBoosterService cancelCpuHighFreq: 1000"
+09-19 22:39:28.430 D/CpuBoostUtil( 5692): cancelCpuHighFreq:0
+09-19 22:39:28.430 W/MiuiBooster( 3259): "[OPT-TF-CPU/GPU] Permission not granted : 1000"
+09-19 22:39:28.439 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.439 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.440 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.440 I/FlashLightView#95286054( 5692): Remove frameCallback with view detached. enableFrameLoop=true.
+09-19 22:39:28.451 D/FlashLightView#95286054( 5692): Add frameCallback with view attached isRunning=false enableFrameLoop=true.
+09-19 22:39:28.459 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:28.460 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:28.460 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:28.461 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:28.461 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:28.461 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:28.464 I/AnimationScenario( 2825): Big data animation scenario state changed to: false, type is 523
+09-19 22:39:28.465 W/ActivityManagerServiceImpl( 2825): Sending non-protected broadcast miui.intent.action.CYCLE_CHECK from system uid 1000 pkg android. Callers=com.android.server.am.BroadcastController.checkBroadcastFromSystem:2218 com.android.server.am.BroadcastController.broadcastIntentLockedTraced:1703 com.android.server.am.BroadcastController.broadcastIntentLocked:857 com.android.server.am.BroadcastController.broadcastIntentInPackage:824 com.android.server.am.ActivityManagerService$LocalService.broadcastIntentInPackage:18853 
+09-19 22:39:28.465 D/AlarmManager( 2825): mBroadcastRefCount -> 1
+09-19 22:39:28.472 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.472 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.473 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.479 E/AlarmManager( 2825): not align this alarm: Alarm{cb0c7ed type 2 origWhen 296397091 whenElapsed 296397091 android}, reason=0
+09-19 22:39:28.483 D/AlarmManager( 2825): mBroadcastRefCount -> 0
+09-19 22:39:28.483 D/AlarmManager( 2825): mPendingIntent -> PendingIntent{e05ca74: PendingIntentRecord{5debb9d android broadcastIntent}}
+09-19 22:39:28.485 D/SLM-SRV-SLAService( 2825): checktemp temperature = 30384 temperature_average = 29429 isPerformanceMode = false thermal_enable_slm = true
+09-19 22:39:28.486 I/android_os_HwBinder( 2825): HwBinder: Starting thread pool for getting: vendor.xiaomi.hardware.micharge@1.0::IMiCharge/default
+09-19 22:39:28.487 D/JavaheapMonitor( 9668): Java heap used=2M max=256M, proc: com.miui.wmsvc
+09-19 22:39:28.487 D/SystemPerformanceHinter( 2825): endSession#HighPerfSession-d0-WindowAnimation
+09-19 22:39:28.487 I/vendor.xiaomi.hardware.micharge@1.0-service( 2092): ReadFilePathValue path = /sys/class/power_supply/battery/temp value = 275
+09-19 22:39:28.488 V/JavaheapMonitor( 9668): Check java heap usage finished! Next check delay: 300000
+09-19 22:39:28.488 D/BarFollowAnimation( 2825): pairAppearanceRegionAndWin win=Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} 0
+09-19 22:39:28.488 D/BarFollowAnimation( 2825): isAppTaskBarOnTop win:Window{3248deb u0 dev.pocketagent.app/dev.pocketagent.app.MainActivity} (mCurrentTopTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mAssociatedTask:Task{e1d3483 #12138 type=standard A=10324:dev.pocketagent.app} : true); (mHomeTask:Task{a8d8be6 #11857 type=home} : false); mReparentToOriginParent:false mLastAppBarVisible:true mLastHomeBarVisible:false
+09-19 22:39:28.488 I/android_os_HwBinder( 2825): HwBinder: Starting thread pool for getting: vendor.xiaomi.hardware.micharge@1.0::IMiCharge/default
+09-19 22:39:28.488 D/MiuiRefreshRatePolicy( 2825): reset
+09-19 22:39:28.490 I/vendor.xiaomi.hardware.micharge@1.0-service( 2092): ReadFilePathValue path = /sys/class/power_supply/battery/charge_control_limit value = 0
+09-19 22:39:28.492 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:28.494 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:28.494 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:28.494 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:28.495 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:28.540 D/WifiStaIfaceHidlImpl( 2825): getCachedScanData is not implemented by HIDL
+09-19 22:39:28.541 I/wificond( 3248): station_bandwidth: (
+09-19 22:39:28.542 D/MiuiWifiCommonBase( 2825): band: 1, compensate: 0
+09-19 22:39:28.553 E/PhoneAdapter( 5681): get ntnphones failed, exception: java.lang.IllegalStateException: not support satellite!
+09-19 22:39:28.558 E/AmlWifiScoreReportInjector( 2825): current network is in roaming environment
+09-19 22:39:28.614 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:28.627 I/system_server( 2825): This is sticky GC, maxfree is 33554432 minfree is 8388608
+09-19 22:39:28.638 W/System  ( 2825): A resource failed to call release. 
+09-19 22:39:28.671 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:28.672 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:28.672 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:28.673 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:28.673 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:28.673 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:28.691 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:28.691 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:28.691 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:28.692 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:28.692 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:28.692 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:28.692 W/SDM     ( 2040): HWCSession::PostBuffer: CWB Buffer with handle id 19 is already available in Queue for processing!
+09-19 22:39:28.708 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:28.708 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:28.710 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:28.790 D/AurogonBandwidthController( 2825): skinTemperature:30.384
+09-19 22:39:28.792 D/AurogonBandwidthController( 2825): skinTemperature:30.384
+09-19 22:39:28.794 D/AurogonBandwidthController( 2825): skinTemperature:30.384
+09-19 22:39:28.816 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:28.856 E/HyperSentinel( 2825): ->pid:2825,processName:"system_server",Rss Memory Size Change 823556kb -> 655732kb
+09-19 22:39:28.857 D/AurogonBandwidthController( 2825): skinTemperature:30.534
+09-19 22:39:28.858 D/AurogonBandwidthController( 2825): skinTemperature:30.534
+09-19 22:39:29.020 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:29.086 W/uiautomator(27901): type=1400 audit(0.0:475550): avc:  denied  { read } for  name="u:object_r:qemu_sf_lcd_density_prop:s0" dev="tmpfs" ino=365 scontext=u:r:shell:s0 tcontext=u:object_r:qemu_sf_lcd_density_prop:s0 tclass=file permissive=0
+09-19 22:39:29.086 W/uiautomator(27901): type=1400 audit(0.0:475551): avc:  denied  { read } for  name="u:object_r:qemu_sf_lcd_density_prop:s0" dev="tmpfs" ino=365 scontext=u:r:shell:s0 tcontext=u:object_r:qemu_sf_lcd_density_prop:s0 tclass=file permissive=0
+09-19 22:39:29.092 W/libc    (27901): Access denied finding property "qemu.sf.lcd_density"
+09-19 22:39:29.093 W/libc    (27901): Access denied finding property "qemu.sf.lcd_density"
+09-19 22:39:29.113 W/AccessibilityNodeInfoDumper(27901): Fetch time: 8ms
+09-19 22:39:29.119 W/MagnificationConnectionManager( 2825): requestConnection duplicated request: connect=false, mConnectionState=DISCONNECTED
+09-19 22:39:29.119 D/AccessibilityManagerService( 2825): restoreCurrentUserForTestAutomationIfNeededLocked(): ignoring because device doesn't support visible background users
+09-19 22:39:29.120 W/SettingsProvider( 2825): Failed to notify for 999: content://settings/secure/accessibility_enabled
+09-19 22:39:29.120 W/SettingsProvider( 2825): java.lang.SecurityException: Failed to find provider settings for user 999; expected to find a valid ContentProvider for this authority
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at com.android.server.content.ContentService.notifyChange(ContentService.java:463)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.content.ContentResolver.notifyChange(ContentResolver.java:2946)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.content.ContentResolver.notifyChange(ContentResolver.java:2935)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.content.ContentResolver.notifyChange(ContentResolver.java:2929)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at com.android.providers.settings.SettingsProvider$SettingsRegistry$MyHandler.handleMessage(SettingsProvider.java:4238)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.os.Handler.dispatchMessage(Handler.java:114)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.os.Looper.loopOnce(Looper.java:274)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.os.Looper.loop(Looper.java:369)
+09-19 22:39:29.120 W/SettingsProvider( 2825): 	at android.os.HandlerThread.run(HandlerThread.java:85)
+09-19 22:39:29.124 D/AndroidRuntime(27901): callMain: return with no error.
+09-19 22:39:29.124 D/AndroidRuntime(27901): Shutting down VM
+09-19 22:39:29.125 W/IPCThreadState(27901): call to talkWithDriver in joinThreadPool returned error: -9 (Bad file descriptor), FD: -1
+09-19 22:39:29.126 W/IPCThreadState(27901): call to talkWithDriver in joinThreadPool returned error: -9 (Bad file descriptor), FD: -1
+09-19 22:39:29.126 W/IPCThreadState(27901): call to talkWithDriver in joinThreadPool returned error: -9 (Bad file descriptor), FD: -1
+09-19 22:39:29.135 D/BatterySaverPolicy( 2825): accessibility changed to false, updating policy.
+09-19 22:39:29.136 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:29.138 I/vendor.qti.hardware.display.composer-service( 2040): FrameNotifyProcess Sensor: notify citsensorservice to trigger cwb
+09-19 22:39:29.138 I/libsensor-parseRGB( 3410): request dump start for mRequestDisplayId 0
+09-19 22:39:29.138 D/vendor.xiaomi.sensor.citsensorservice@2.0-service( 3410): handle id:19 wxh:1280x2400 uwxuh:1080x2400 size: 9216000 fd:17 fd_meta:18 flags:0x228 usage:0x33  format:0x3 layer_count: 1 reserved_size = 0
+09-19 22:39:29.138 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:29.139 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 1.
+09-19 22:39:29.139 W/SDM     ( 2040): HWCSession::GetDisplayIndex: Display index not found for display 3.
+09-19 22:39:29.139 D/SDM     ( 2040): HWCSession::SetCWBOutputBuffer: CWB config passed by cwb_client : tappoint 1  CWB_ROI : (591.000000 22.000000 717.000000 148.000000). Display 0
+09-19 22:39:29.153 I/SDM     ( 2040): HWEventsDRM::SetEventState: Setup vsync event for CRTC 167, Connector 65
+09-19 22:39:29.168 D/SDM     ( 2040): HWDeviceDRM::SetupConcurrentWriteback: Tear down the Concurrent Writeback topology
+09-19 22:39:29.170 D/SDM     ( 2040): HWCSession::NotifyCWBStatus: Notify the client about buffer status 0. Display: 0
+09-19 22:39:29.171 I/SDM     ( 2040): HWCSession::ProcessCWBStatus: CWB queue is empty. display_index: 0
+09-19 22:39:29.172 D/libsensor-parseRGB( 3410): the value of RGB [0.000000 0.000000 0.000000]
+09-19 22:39:29.206 W/ActivityManagerServiceImpl( 2825): Sending non-protected broadcast com.modemenhance.ACTION_MODEMWIFI_RSSI_POLL from system 5681:com.android.phone/1001 pkg com.android.phone. Callers=
+09-19 22:39:29.210 W/m.android.phone( 5681): type=1400 audit(0.0:475552): avc:  denied  { read } for  name="u:object_r:vendor_wlan_eht_prop:s0" dev="tmpfs" ino=632 scontext=u:r:radio:s0 tcontext=u:object_r:vendor_wlan_eht_prop:s0 tclass=file permissive=0
+09-19 22:39:29.215 W/libc    ( 5681): Access denied finding property "persist.vendor.wlan.disable.eht"
+09-19 22:39:29.216 D/SlaveWifiManager( 5681): getWifiSlaveConnectionInfo
+09-19 22:39:29.222 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:29.380 I/NetworkAccelerateSwitchService( 2825): EVENT_RSSI_POLL. mRssiPoll=true
+09-19 22:39:29.381 I/NetworkAccelerateSwitchService( 2825): checkWifiRssiAndLinkSpeed rssi:39
+09-19 22:39:29.381 I/NetworkAccelerateSwitchService( 2825): checkWifiRssiAndLinkSpeed mWifiFastFade:false mWifiFastFadeAdjustThreshold:false
+09-19 22:39:29.381 I/NetworkAccelerateSwitchService( 2825): getAverageWifiRssi:32
+09-19 22:39:29.382 D/NetworkAccelerateSwitchService( 2825): checkIntervalModeChange mMovementState:false mIntervalMode:0 mIsBadLinkLayerQoE:false mBadLinkLayerQoETimes = 0
+09-19 22:39:29.424 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:29.426 I/Finsky  (23397): [124] AIM: AppInfoManager-Perf > Destroying AppInfoManager ...
+09-19 22:39:29.539 I/WifiHAL ( 2012): event received NL80211_CMD_VENDOR, vendor_id = 0x1374, subcmd = 0xd
+09-19 22:39:29.539 I/cnss-daemon( 3316): nl80211 response handler invoked
+09-19 22:39:29.539 I/cnss-daemon( 3316): nl80211_response_handler: cmd 103, vendorID 4980, subcmd 13  received
+09-19 22:39:29.627 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:29.772 D/JavaheapMonitor( 5692): Java heap used=68M max=256M, proc: com.android.systemui
+09-19 22:39:29.773 V/JavaheapMonitor( 5692): Check java heap usage finished! Next check delay: 180000
+09-19 22:39:29.831 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:29.993 D/libEGL  (27531): Worker thread exit 482159969280
+09-19 22:39:29.997 I/app_process(27901): hook_module_exit libgui_unisoc_utils.so over, handle:0x0
+09-19 22:39:30.035 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:30.044 I/adbd    ( 3434): in ShellService: cat /sdcard/_u.xml
+09-19 22:39:30.132 I/adbd    ( 3434): in ShellService: screencap -p /sdcard/_u.png
+09-19 22:39:30.237 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:30.245 W/libc    (27940): Access denied finding property "persist.vendor.audio.cpupror.schedDy"
+09-19 22:39:30.238 W/screencap(27940): type=1400 audit(0.0:475553): avc:  denied  { read } for  name="u:object_r:vendor_audio_prop:s0" dev="tmpfs" ino=456 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_audio_prop:s0 tclass=file permissive=0
+09-19 22:39:30.250 D/MI-SF   ( 2298): setIdleFps choose FPS:60, mode:0
+09-19 22:39:30.260 W/screencap(27940): Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: SurfaceFlingerAIDL
+09-19 22:39:30.260 W/BpBinder(27940): Linking to death on android.gui.ISurfaceComposer but there are no threads (yet?) listening to incoming transactions. See ProcessState::startThreadPool and ProcessState::setThreadPoolMaxThreadCount. Generally you should setup the binder threadpool before other initialization steps.
+09-19 22:39:30.260 W/ProcessState(27940): Extra binder thread started, but 0 threads requested. Do not use *startThreadPool when zero threads are requested.
+09-19 22:39:30.261 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerNames:(no_layer_names), blurRadius:0, scale:(1.000000,1.000000), blends:(no_color_mode)
+09-19 22:39:30.262 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:dev.pocketagent.app/dev.pocketagent.app.MainActivity#105207
+09-19 22:39:30.262 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:StatusBar1#130
+09-19 22:39:30.262 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:#104756
+09-19 22:39:30.262 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:com.miui.securitycenter/.FloatingWindow#105009
+09-19 22:39:30.262 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:GestureStub#29691
+09-19 22:39:30.262 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:GestureStubLeft#29690
+09-19 22:39:30.263 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:GestureStubRight#29692
+09-19 22:39:30.263 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:#105245
+09-19 22:39:30.263 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:DockAssistantView#105007
+09-19 22:39:30.263 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:RoundCornerTop#117
+09-19 22:39:30.263 I/SurfaceFlinger( 2298): SF-MICapture: mode:0, layerName:RoundCornerBottom#118
+09-19 22:39:30.268 E/HWComposer( 2298): getLuts: getLuts failed for display 4630947006070067843: UNSUPPORTED (8)
+09-19 22:39:30.439 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:30.441 I/AdrenoUtils(27940): <ReadGpuID:407>: Reading chip ID through GSL
+09-19 22:39:30.522 W/MediaProvider( 9968): isAppCloneUserPair for user 0: false
+09-19 22:39:30.543 V/NoteApp (12100): [com.miui.notes|FloatService][pid@12100|tid@2-main| mContentObserver.onChange  uri content://media/external/images/media/1000128708]
+09-19 22:39:30.546 D/libsensor-displayalgo( 3410): brightness:1812,R:0.0,G:0.0,B:0.0,EVENT C:1918.0,R:911.0,G:674.0,B:342.5, lux: 24.3, clone:0, dc:0, last_lux_beforeMedian:23.060608,last_cct_beforeMedian:4880.866211
+09-19 22:39:30.641 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:30.770 I/ActivityManager( 2825): Broadcasting: Intent { act=android.intent.action.MEDIA_SCANNER_SCAN_FILE dat=file:///... flg=0x400000 }
+09-19 22:39:30.775 I/MediaProvider( 9968): receive action = android.intent.action.MEDIA_SCANNER_SCAN_FILE schemeSpecificPart = ///sdcard/_u.png
+09-19 22:39:30.776 W/JobInfo ( 2825): Job 'com.android.providers.media.module/com.android.providers.media.MediaService#-300' has a deadline with no functional constraints. The deadline won't improve job execution latency. Consider removing the deadline.
+09-19 22:39:30.786 I/ActivityManager( 2825): Enqueued broadcast Intent { act=android.intent.action.MEDIA_SCANNER_SCAN_FILE dat=file:///... flg=0x400000 }: 0
+09-19 22:39:30.792 I/whetstone.activity( 2825): Power Event callback listener is empty for resId=256
+09-19 22:39:30.792 D/BatteryStatsManagerStub( 2825): notifyEvent for resId=256 used 0ms
+09-19 22:39:30.799 I/MediaProvider( 9968): Begin Intent { act=android.intent.action.MEDIA_SCANNER_SCAN_FILE dat=file:///... flg=0x1400010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService }
+09-19 22:39:30.806 I/screencap(27940): hook_module_exit libgui_unisoc_utils.so over, handle:0x0
+09-19 22:39:30.820 I/ActivityManager( 2825): Broadcast completed: result=0
+09-19 22:39:30.825 V/NoteApp (12100): [com.miui.notes|FloatService][pid@12100|tid@2-main| mContentObserver.onChange  uri content://media/external/images/media/1000128708]
+09-19 22:39:30.827 D/ActionExecute( 2825): frozen uid = 10303 reason=check binder
+09-19 22:39:30.827 I/MediaProvider( 9968): End Intent { act=android.intent.action.MEDIA_SCANNER_SCAN_FILE dat=file:///... flg=0x1400010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService }
+09-19 22:39:30.828 D/ActionExecute( 2825): setPkgData uid = 10303 time=0
+09-19 22:39:30.828 D/ExternalInterface( 2825): setUidState, uid = 10303 allow = false
+09-19 22:39:30.828 D/MiSensorServiceImpl( 2825): PowerKeeperSensor stop iUid:10303 but app has Controlled
+09-19 22:39:30.828 D/ActionExecute( 2825): setPkgData uid = 10303 time=3000
+09-19 22:39:30.831 I/whetstone.activity( 2825): Power Event callback listener is empty for resId=256
+09-19 22:39:30.831 D/BatteryStatsManagerStub( 2825): notifyEvent for resId=256 used 0ms
+09-19 22:39:30.835 I/ActivityManager( 2825): unbindService com.android.server.am.ActiveServices@3f2214d conn=android.app.LoadedApk$ServiceDispatcher$InnerConnection@8a517f6 callingPid=2825 callers: com.android.server.job.JobServiceContext.handleFinishedLocked:1412 com.android.server.job.JobServiceContext.doCallbackLocked:1288 com.android.server.job.JobServiceContext.doDequeueWork:938 com.android.server.job.JobServiceContext$JobCallback.dequeueWork:305 android.app.job.IJobCallback$Stub.onTransact:289 android.os.Binder.execTransactInternal:1428 android.os.Binder.execTransact:1372 <bottom of call stack> <bottom of call stack> <bottom of call stack> 
+09-19 22:39:30.843 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:30.890 I/adbd    ( 3434): in ShellService: dumpsys activity activities
+09-19 22:39:30.925 W/dumpsys (27949): Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: activity
+09-19 22:39:30.950 D/CompatibilityInfo( 2825): mCompatibilityFlags - 0
+09-19 22:39:30.950 D/CompatibilityInfo( 2825): applicationDensity - 440
+09-19 22:39:30.950 D/CompatibilityInfo( 2825): applicationScale - 1.0
+09-19 22:39:30.958 D/CompatibilityInfo( 2825): mCompatibilityFlags - 0
+09-19 22:39:30.959 D/CompatibilityInfo( 2825): applicationDensity - 440
+09-19 22:39:30.959 D/CompatibilityInfo( 2825): applicationScale - 1.0
+09-19 22:39:30.962 D/CompatibilityInfo( 2825): mCompatibilityFlags - 0
+09-19 22:39:30.962 D/CompatibilityInfo( 2825): applicationDensity - 440
+09-19 22:39:30.962 D/CompatibilityInfo( 2825): applicationScale - 1.0
+09-19 22:39:30.994 I/MiuiNetworkPolicy( 2825): bandwidth: 0 KB/s, Max bandwidth: 1587 KB/s
+09-19 22:39:31.019 I/adbd    ( 3434): in ShellService: export ANDROID_LOG_TAGS=''; exec logcat '-b' 'crash' '-d' '-v' 'time'
+09-19 22:39:31.031 D/ScrollScenario( 2825): ScrollState: fling end on dev.pocketagent.app
+09-19 22:39:31.032 D/SchedBoost( 2825): handleSceneBoost type: 19, active :false
+09-19 22:39:31.032 I/ProcessManager( 2825): getRenderThreadTidByPid, caller=2825
+09-19 22:39:31.032 D/SchedBoostThread( 2825): thread tid=27531, priority is set to -10
+09-19 22:39:31.032 D/SchedBoostThread( 2825): thread tid=27590, priority is set to -10
+09-19 22:39:31.045 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:31.060 D/MI-SF   ( 2298): setIdleFps choose FPS:60, mode:0
+09-19 22:39:31.124 I/adbd    ( 3434): in ShellService: dumpsys activity exit-info dev.pocketagent.app
+09-19 22:39:31.165 W/dumpsys (27956): Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: activity
+09-19 22:39:31.247 I/MiStcImpl( 2040): Dispatching command: 35 SET_HISTOGRAM
+09-19 22:39:31.252 I/adbd    ( 3434): in ShellService: export ANDROID_LOG_TAGS=''; exec logcat '-d' '-v' 'time' '-t' '800'

@@ -1,0 +1,8 @@
+APK=G:\项目1\pocketagent\build\app-debug.apk
+rc=0
+耗时=11.9s
+
+tapped '继续安装' (311, 2232)
+Performing Streamed Install
+Success
+

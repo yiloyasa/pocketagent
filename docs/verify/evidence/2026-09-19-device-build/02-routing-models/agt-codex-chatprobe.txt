@@ -1,0 +1,23 @@
+# agent=codex marker=PAAGTCODEX230637 rc=0 耗时=25.1s thread=th-a2b43b2f2177918f
+
+[probe] thread=th-a2b43b2f2177918f created
+[  28ms] STARTED
+[ 345ms] EVENT #2 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[ 353ms] EVENT #3 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[ 401ms] EVENT #4 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[ 514ms] EVENT #5 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[24.551s] TEXT_DELTA +"PA"
+[24.552s] TEXT_DELTA +"AG"
+[24.552s] TEXT_DELTA +"TC"
+[24.552s] TEXT_DELTA +"ODE"
+[24.826s] TEXT_DELTA +"X"
+[24.826s] TEXT_DELTA +"230"
+[24.826s] TEXT_DELTA +"637"
+[24.875s] EVENT #13 (case *pocketagentv1.TurnServerMessage_Usage)
+[24.875s] EVENT #14 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[24.875s] EVENT #15 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[24.916s] EVENT #16 (case *pocketagentv1.TurnServerMessage_CodexEvent)
+[24.917s] COMPLETED
+
+[probe] done in 24.917s, events=17
+[probe] final text: "PAAGTCODEX230637"

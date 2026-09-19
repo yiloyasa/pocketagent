@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -79,9 +80,13 @@ func (s *Server) ReadFile(req *pb.ReadFileRequest, stream pb.FileSystemService_R
 	defer f.Close()
 
 	// 文件真实大小:首块要把它带给客户端,否则进度条分母会退化成"首块长度"
-	var fileSize int64
+	var fileSize, modifiedMs int64
 	if st, statErr := f.Stat(); statErr == nil {
 		fileSize = st.Size()
+		// 【乐观锁配套】读取时刻的修改时间(UnixMilli),每个分块都带同一值:
+		// 客户端取任意一块即可拿到,编辑保存时回填 WriteFileRequest 的
+		// expected_modified_at_ms。与上面 fileSize 共用同一次 f.Stat,不额外查盘。
+		modifiedMs = st.ModTime().UnixMilli()
 	}
 
 	buf := make([]byte, 64*1024)
@@ -99,6 +104,7 @@ func (s *Server) ReadFile(req *pb.ReadFileRequest, stream pb.FileSystemService_R
 			}
 			if err := stream.Send(&pb.FileChunk{
 				Data: chunk, TotalSize: totalIf(first, fileSize), Text: first && utf8.Valid(chunk),
+				ModifiedUnixMs: modifiedMs,
 			}); err != nil {
 				return err
 			}
@@ -124,7 +130,10 @@ func totalIf(first bool, v int64) int64 {
 	return 0
 }
 
-func (s *Server) WriteFile(ctx context.Context, req *pb.WriteFileRequest) (*pb.Empty, error) {
+// WriteFile 整写文件。带乐观锁(对齐原作 WriteWorkspaceTextFile 的 expected_modified_at_ms):
+// expected > 0 时先核对磁盘上的修改时间,不等(含文件已被删)则拒绝写入,
+// 防止手机与电脑并行编辑互相覆盖。expected = 0 时不校验,兼容旧客户端与"强制覆盖"。
+func (s *Server) WriteFile(ctx context.Context, req *pb.WriteFileRequest) (*pb.WriteFileResponse, error) {
 	path, err := filepath.Abs(req.Path)
 	if err != nil {
 		return nil, errInvalidArg("解析文件路径失败: " + err.Error())
@@ -134,6 +143,23 @@ func (s *Server) WriteFile(ctx context.Context, req *pb.WriteFileRequest) (*pb.E
 	if isPocketAgentUploadPath(path) {
 		if !s.isKnownWorkspaceUpload(path) {
 			return nil, errInvalidArg("附件目标不在当前会话工作区内")
+		}
+	}
+	// 【乐观锁前置校验】必须在打开/截断文件之前做,否则 O_TRUNC 已把旧内容毁了。
+	// 文件不存在也拒绝:expected > 0 说明调用方基于"读到的旧版本"在编辑,
+	// 文件没了多半是刚被其他端删除,覆盖写等于复活旧内容。
+	if req.ExpectedModifiedAtMs > 0 {
+		st, statErr := os.Stat(path)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil, errFailedPrecondition("文件已被其他端删除,请刷新后重试(当前文件不存在)")
+			}
+			return nil, errInvalidArg("读取文件状态失败: " + statErr.Error())
+		}
+		if cur := st.ModTime().UnixMilli(); cur != req.ExpectedModifiedAtMs {
+			return nil, errFailedPrecondition(fmt.Sprintf(
+				"文件已被其他端修改,请刷新后重试(服务器当前修改时间: %d,你提交的期望值: %d)",
+				cur, req.ExpectedModifiedAtMs))
 		}
 	}
 	// create 时自动补齐父目录(手机附件上传到 .pocketagent-uploads 等新目录的场景)
@@ -155,11 +181,20 @@ func (s *Server) WriteFile(ctx context.Context, req *pb.WriteFileRequest) (*pb.E
 	if err != nil {
 		return nil, errInvalidArg("打开文件失败: " + err.Error())
 	}
-	defer f.Close()
 	if _, err := f.Write(req.Data); err != nil {
+		f.Close()
 		return nil, errInternal(err)
 	}
-	return &pb.Empty{}, nil
+	// 先关闭再 stat:Windows 上写句柄未关时查到的修改时间可能滞后。
+	if err := f.Close(); err != nil {
+		return nil, errInternal(err)
+	}
+	// 把新修改时间还给客户端,它就是下一轮保存的 expected_modified_at_ms。
+	var newMod int64
+	if st, statErr := os.Stat(path); statErr == nil {
+		newMod = st.ModTime().UnixMilli()
+	}
+	return &pb.WriteFileResponse{NewModifiedAtMs: newMod}, nil
 }
 
 func isPocketAgentUploadPath(path string) bool {

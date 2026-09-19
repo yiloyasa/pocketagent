@@ -1,0 +1,33 @@
+{
+  "app_id": "APP-01",
+  "install_success": true,
+  "install_seconds": 11.9,
+  "versionName": "0.2.2",
+  "versionCode": "5",
+  "clean_install_confirmed": true,
+  "first_launch_TotalTime_ms": 825,
+  "dialogs_auto_handled": [
+    "始终允许",
+    "跳过",
+    "跳过",
+    "跳过",
+    "跳过",
+    "跳过"
+  ],
+  "foreground_activity": "dev.pocketagent.app/.MainActivity",
+  "ui_nodes": 9,
+  "ui_head": [
+    "跳过",
+    "欢迎使用 PocketAgent",
+    "用手机,遥控家里电脑上的 AI agent。",
+    "手机是遥控器",
+    "通勤、沙发上也能给电脑上的 agent 派活",
+    "电脑是算力",
+    "Codex / Pi / ZCode 等 agent 实际在你的电脑上运行",
+    "数据不强制上云:电脑在你手里,手机只是延伸。",
+    "下一步"
+  ],
+  "crash_buffer": "",
+  "fatal_lines": [],
+  "verdict": "PASS"
+}

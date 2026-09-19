@@ -1,0 +1,7 @@
+# app04-long-input 前台=com.android.quicksearchbox/.SearchActivityTransparent
+
+暂无其他“本机”结果                                                          ox:id/tv_card_center_left_text [98,191][977,325]
+                                           切换搜索引擎                   .quicksearchbox:id/search_icon [75,1307][183,1415] CLICK
+RELEASE_AUDIT_LONG_yyyyyyyyyyyyyyyyyyyyyyy                          d.quicksearchbox:id/query_text [183,1294][793,1429] CLICK
+                                           清除输入                     .quicksearchbox:id/search_func [805,1331][865,1391] CLICK
+搜索                                         搜索按钮                     searchbox:id/search_in_web_btn [895,1294][975,1429] CLICK

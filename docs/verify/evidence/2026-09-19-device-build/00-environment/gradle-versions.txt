@@ -1,0 +1,7 @@
+namespace = "dev.pocketagent.app"
+compileSdk = 35
+applicationId = "dev.pocketagent.app"
+minSdk = 26 // 和原作 Mobile Codex 一致
+targetSdk = 35
+versionCode = 5
+versionName = "0.2.2"

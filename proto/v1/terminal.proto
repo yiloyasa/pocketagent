@@ -43,6 +43,7 @@ message TerminalServerMessage {
     TerminalOutput output = 2;
     TerminalExit exit = 3;
     TerminalError error = 4;
+    Resumed resumed = 5;
   }
 }
 
@@ -62,6 +63,14 @@ message TerminalExit {
 message TerminalError {
   string session_id = 1;
   string message = 2;
+}
+
+// Resumed:Attach 复用了已存在的存活会话时,服务端在 Opened 前先发这一帧,
+// 提示客户端"这是恢复旧会话"(PTY 无回放,静默 shell 不会有首字节输出)。
+// 旧客户端忽略未知 oneof 字段即可,天然兼容。
+message Resumed {
+  string session_id = 1;  // 复用的会话 id
+  int64 attached_ms = 2;  // 该会话自打开以来已存活的时长(毫秒)
 }
 
 message ListTerminalsRequest {}

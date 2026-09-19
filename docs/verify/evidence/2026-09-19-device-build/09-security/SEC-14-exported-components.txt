@@ -1,0 +1,5 @@
+activity  exported=true     dev.pocketagent.app.MainActivity  <- Launcher
+service   exported=false    dev.pocketagent.app.TurnKeepAliveService
+provider  exported=false    androidx.core.content.FileProvider
+provider  exported=false    androidx.startup.InitializationProvider
+receiver  exported=true     androidx.profileinstaller.ProfileInstallReceiver

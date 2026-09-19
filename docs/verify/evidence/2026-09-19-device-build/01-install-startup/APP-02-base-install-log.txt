@@ -1,0 +1,8 @@
+APK=G:\pa\android-planreview\app\build\outputs\apk\debug\app-debug.apk
+rc=0
+耗时=6.1s
+
+tapped '继续安装' (311, 2232)
+Performing Streamed Install
+Success
+

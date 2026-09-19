@@ -26,8 +26,9 @@ func msg(role, text string) store.StoredMessage {
 
 // textOf 取回消息文本,便于断言"带的是哪一份历史"。
 func textOf(m store.StoredMessage) string {
-	for _, b := range m.Blocks {
-		if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
+	// 按下标取址遍历,避免 range 复制 protobuf 消息(内嵌 MessageState 含锁)。
+	for i := range m.Blocks {
+		if tb, ok := m.Blocks[i].Block.(*pb.ContentBlock_Text); ok {
 			return tb.Text.Text
 		}
 	}

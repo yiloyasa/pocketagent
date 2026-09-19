@@ -1,0 +1,11 @@
+assets/sensevoice/model.int8.onnx        size=239233841   
+  apk   = c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51
+  expect= c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51
+  MATCH
+
+assets/sensevoice/tokens.txt             size=315894      
+  apk   = f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc
+  expect= f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc
+  MATCH
+
+总体: PASS

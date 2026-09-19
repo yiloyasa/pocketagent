@@ -1,0 +1,12 @@
+# tlsprobe
+# TLS 指纹核对
+# rc=0 耗时=0.40s @ 22:44:42
+
+地址:     127.0.0.1:7246
+主题:     CN=pocketagent-daemon,O=PocketAgent
+签发者:   CN=pocketagent-daemon,O=PocketAgent
+有效期:   2026-09-17 ~ 2046-09-13
+SHA-256:  a12a872b4172740084bf178f4ea2877d57b83d4c045070ede8f2ecfe216a8fd9
+指纹前16: a12a872b41727400…
+ALPN:     h2
+TLS版本:  TLS 1.3

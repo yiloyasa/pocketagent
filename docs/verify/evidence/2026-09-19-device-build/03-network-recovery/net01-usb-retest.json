@@ -1,0 +1,13 @@
+{
+  "reverse_active": true,
+  "usb_established": null,
+  "lan_established": [
+    "10.15.50.160:7246",
+    "10.15.8.248:46022",
+    "21440"
+  ],
+  "seconds": 0.3,
+  "app_label": "已连接 · 局域网直连",
+  "verdict": "FAIL(仍走局域网)",
+  "note": "在无任何已存地址的情况下冷启动, USB reverse 在场"
+}

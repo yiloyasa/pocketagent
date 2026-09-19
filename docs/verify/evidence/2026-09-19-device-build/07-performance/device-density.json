@@ -1,0 +1,8 @@
+{
+  "wm_size": "Physical size: 1080x2400",
+  "wm_density": "Physical density: 440",
+  "lcd_density": null,
+  "dpi": 440,
+  "scale": 2.75,
+  "note": "dp = px / scale"
+}

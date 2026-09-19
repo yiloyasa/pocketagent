@@ -8,19 +8,27 @@ package agent
 
 import (
 	"context"
+	"log"
 	"os"
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
 // Sink 接收过程事件,server 层把它转成 gRPC 流消息推给手机。
-type Sink func(pb.TurnServerMessage)
+//
+// 【vet】参数为指针:pb 消息内嵌 MessageState(含锁),按值传会被 go vet copylocks
+// 拒绝(字面量定义处报 "func passes lock by value")。所有权随调用转移,
+// 实现方只读不入库原指针、不得修改入参内容。
+type Sink func(ev *pb.TurnServerMessage)
 
 // ApprovalHook 在执行危险工具前询问手机用户"允许吗?"。
 // 返回 (是否允许, 用户备注)。P0 的 echo provider 不会触发它。
-type ApprovalHook func(ctx context.Context, call pb.ToolCallBlock) (bool, string, error)
+// 【vet】参数为指针:pb 消息按值传会被 go vet copylocks 拒绝;hook 只读入参,
+// 不得修改其内容。
+type ApprovalHook func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error)
 
 // ErrorInfoCarrier lets the server preserve structured provider diagnostics
 // (HTTP status, URL and retryability) in the final TurnFailed frame.
@@ -30,6 +38,7 @@ type ErrorInfoCarrier interface {
 
 // TurnRequest 一轮 agent 执行的输入。
 type TurnRequest struct {
+	Ephemeral   bool
 	Thread      *store.Thread
 	InputBlocks []pb.ContentBlock
 	Workspace   string
@@ -43,6 +52,58 @@ type Provider interface {
 	// Run 执行完整一轮:内部可能多次调模型 API(工具循环),
 	// 过程事件经 sink 发出,返回最终 assistant 消息块。
 	Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error)
+}
+
+// Steerer 是「运行中还能插话」的可选扩展能力(P1-4)。
+//
+// codex 走原生 turn/steer 把新输入插进正在运行的轮次;不支持该能力的 provider
+// (echo / OpenAI 兼容)由 server 层排队,当前轮次终局后自动作为新输入继续跑。
+// server 层用类型断言探测该接口, provider 想支持就实现它,不想支持就不用管。
+type Steerer interface {
+	// Steer 向 threadID 正在执行的轮次插入一条输入。
+	// steered=false 表示「此刻插不进去」(轮次未开始/已结束/上游拒绝),
+	// 调用方应退回排队;codexTurnID 是上游应答里的轮次 id(可为空,诊断用)。
+	Steer(ctx context.Context, threadID string, blocks []pb.ContentBlock) (steered bool, codexTurnID string, err error)
+}
+
+// PrefsAware 是「消费桌面端设置(手机设置页七项偏好)」的可选扩展能力。
+//
+// 【与 Steerer 同款取舍】server 层用类型断言探测,provider 想消费就实现,
+// 不想就不用管:echo / OpenAI 兼容 provider 没有"桌面偏好"概念,不该被迫实现
+// 空方法。codex 的 ApplyPrefs 签名天然一致(七项设置的原始消费方),无需适配器;
+// pi / zcode 各自消费语义上说得通的子集:
+//   - pi:HideReasoning(事件路径过滤 ThinkingDelta)+ 桌面默认 model/effort;
+//   - zcode:HideReasoning(同款过滤)+ 桌面默认 effort(进 setModel 的
+//     options.reasoningLevel)。审批策略/沙箱不映射 —— ZCode 权限模式固定
+//     mode:"build"(红线),审批策略/沙箱仅对 codex 生效。
+type PrefsAware interface {
+	// ApplyPrefs 用一份**完整快照**覆盖内存态(server 层已按 presence 合并完毕;
+	// 空串是有意义的取值 = 跟随桌面,provider 侧照单全收,不做"非空才覆盖")。
+	ApplyPrefs(DesktopPrefs)
+}
+
+// 编译期钉死:三个桌面 agent provider 都必须消费桌面偏好。
+var (
+	_ PrefsAware = (*CodexProvider)(nil)
+	_ PrefsAware = (*PiProvider)(nil)
+	_ PrefsAware = (*ZcodeProvider)(nil)
+)
+
+// DesktopPrefsFromStore 从持久化存储组装一份完整偏好快照。
+// server 的设置广播(SetCodexSettings)与启动灌入(New)共用同一来源,
+// 保证两条路径灌进 provider 的值永远一致(model/effort 取全局默认的落盘字段)。
+func DesktopPrefsFromStore(st *store.FileStore) DesktopPrefs {
+	prefs := st.CodexPrefs()
+	return DesktopPrefs{
+		ApprovalPolicy:    prefs.ApprovalPolicy,
+		Sandbox:           prefs.Sandbox,
+		Model:             st.DefaultModelID(),
+		Effort:            st.DefaultEffort(),
+		HideReasoning:     prefs.HideReasoning,
+		Verbosity:         prefs.Verbosity,
+		ReasoningSummary:  prefs.ReasoningSummary,
+		DisablePasteBurst: prefs.DisablePasteBurst,
+	}
 }
 
 // DetectProviders 根据环境变量自动发现可用 provider。
@@ -81,6 +142,23 @@ func DetectProviders() map[string]Provider {
 		m["codex"] = NewCodexProvider()
 	}
 
+	// pi(桌面 agent 桥接,Pi coding agent):node + cli.js 都定位得到、
+	// --version 能出号就注册(探测是廉价的本地命令,不起子进程会话)。
+	// 【zcode 注册点占位】zcode provider 由 T3 智能体在此处并列注册
+	// (internal/agent/zcode*.go),主模型合并时接入。
+	if node, cli, err := piapp.LocatePi(); err == nil {
+		if v := piapp.Version(node, cli); v != "" {
+			log.Printf("[providers] pi 探测成功: version=%s cli=%s", v, cli)
+			m["pi"] = NewPiProvider()
+		} else {
+			log.Printf("[providers] pi 存在但 --version 失败(node=%s),不注册", node)
+		}
+	}
+
+	// zcode(桌面 agent 桥接):装了 node + ZCode 的 zcode.cjs 才注册,
+	// 与 codex/pi 并列(ZCode Protocol app-server --stdio)。
+	RegisterZcode(m)
+
 	// echo 永远在场:没有任何 key 时也能把整条链路(手机→协议→daemon)跑通。
 	m["echo"] = NewEcho()
 	return m
@@ -94,3 +172,6 @@ type ModelSpec struct {
 	Thinking      bool
 	Images        bool
 }
+
+// ModelCatalogRefresher invalidates adapter-owned metadata without restarting any active Agent.
+type ModelCatalogRefresher interface{ InvalidateModels() }
