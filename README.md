@@ -52,7 +52,7 @@ pocketagent/
 
 | 目录 | 用途 | 大小 |
 |---|---|---|
-| `pocketagent/` | 源码仓库（git） | **758 MB**（含 `.git` 27 MB） |
+| `pocketagent/` | 源码仓库（git） | **642 MB**（含 `.git` 28 MB） |
 | `_archives/` | 清理隔离备份（见 §9.3） | 155 MB |
 | `.pocketagent-uploads/` | 手机上传的截图/附件（daemon 接收，活数据） | 0.5 MB（根）/ 2.5 MB（`pocketagent/` 内） |
 | `.workbuddy/` | 助手记忆（非项目文档） | 276 KB |
@@ -168,9 +168,8 @@ adb install build/app-debug.apk
 
 | 项 | 值 |
 |---|---|
-| Git | `8cc0c5e`（分支 `main`，**27 提交**） |
+| Git | `fc3b806`（分支 `main`，**28 提交**）｜工作树**干净（0 未提交）** |
 | 版本 | **0.2.2 / versionCode 5** |
-| 工作树 | **616 项未提交**（`git status --porcelain -uall`：522 未跟踪 + 94 已跟踪改动；折叠口径 327） |
 | 契约 | **6 服务 / 64 RPC**（Thread 29、Git 10、Fs 9、Model 8、Host 5、Terminal 3），7 个 proto / 1347 行 |
 | 代码 | daemon 手写 Go **234 文件 / 48559 行**（测试 112/17455、`cmd` 42/7991、生产 80/23113）；生成 13/15499；android main 74 `.kt` / 31323 行、test 62 / 7053 |
 | APK | debug **238.13 MB**，`sha256=554c87b1359de446…` |
@@ -233,7 +232,8 @@ adb install build/app-debug.apk
 | E 错误汇总 | 抽取的 ERROR/WARN 行 | 长期 |
 
 **铁律**：成功日志不长期留盘；`*.log` 禁止入库；**归档只搬不删**；运行中的日志禁止直接删；
-`docs/verify/evidence/**` 神圣不可清理。
+`docs/verify/evidence/**` **磁盘上不可清理**（但**不入库**：截图/录屏/UI dump 由
+`docs/verify/evidence/.gitignore` 排除，仅 `*.md` 结论文档与 `*.json/*.txt` 冻结记录入库）。
 
 ### 9.2 清理工具（`tools/ops/`）
 
@@ -245,6 +245,10 @@ adb install build/app-debug.apk
 `_archives/` 现存三份：`_trashbackup_20260915`(445 KB)、`_trashbackup_20260918`(4 KB)、
 **`_trashbackup_20260919`(154 MB)** —— 后者含 C 盘 535 项搬移、日志归档、以及
 `_backup-unique/`（`_backup` 删除前抢救出的 **55 个 git 无法还原**的文件，31 MB）。
+
+另有两份**删除台账**（逐条列出被删路径，可据此复核/找回）：
+`_docs-discarded_20260920-manifest.json`（过程性文档 109 个）、
+`_residual-cleanup_20260920-manifest.json`（残留 16 项 / 97 MB）。
 
 > 已删除的 git 冗余备份 `_backup/pocketagent-pre-p0p1-20260918`（99.2 MB）：
 > 其 `HEAD` 与主仓库同为 `8cc0c5e`、27 提交主仓库全有、工作树 713/810 逐字节一致、0 个"比现在新"的文件
