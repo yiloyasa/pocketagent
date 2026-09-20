@@ -1,0 +1,132 @@
+{
+  "generated_at": "2026-09-20 12:33:35",
+  "round": "2026-09-20-night (批次5: T-01/T-03/T-05/T-07/T-18)",
+  "run_mode": "run",
+  "gated_note": "voi10 不进 --all: pm clear 会清配对, 仅显式 --suite voi10 执行",
+  "summary": {
+    "PASS": 6,
+    "FAIL": 0,
+    "BLOCKED": 3
+  },
+  "results": [
+    {
+      "suite": "net01",
+      "id": "NET-21a",
+      "title": "USB reverse 在场冷启动: 127.0.0.1 通道胜出",
+      "verdict": "PASS",
+      "attribution": "",
+      "unblock": "",
+      "notes": "对端=127.0.0.1:60284 耗时=0.0s (口径=pc-netstat) App标签='已连接 · 局域网直连'",
+      "evidence": [
+        "net01\\NET-21a-reverse-list.txt",
+        "net01\\NET-21a-port-raw.txt",
+        "net01\\NET-21a-home.png",
+        "net01\\NET-21a-result.json"
+      ]
+    },
+    {
+      "suite": "slash",
+      "id": "SLA-21a",
+      "title": "三类会话敲\"/\": 卡面弹出与内容源正确(codex/pi/zcode)",
+      "verdict": "BLOCKED",
+      "attribution": "用例缺陷",
+      "unblock": "按 evidence 里 sheet dump 修正定位词后重跑",
+      "notes": "codex=BLOCKED sheet 未按预期出现 按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑; pi=BLOCKED sheet 未按预期出现 按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑; zcode=BLOCKED sheet 未按预期出现 按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑",
+      "evidence": [
+        "slash\\SLA-21a-codex-final-state.txt",
+        "slash\\SLA-21a-pi-final-state.txt",
+        "slash\\SLA-21a-zcode-final-state.txt",
+        "slash\\SLA-21a-result.json"
+      ]
+    },
+    {
+      "suite": "slash",
+      "id": "SLA-21c",
+      "title": "未知助手会话敲\"/\": 空态\"该助手暂无可用命令\"",
+      "verdict": "BLOCKED",
+      "attribution": "环境依赖",
+      "unblock": "需存在一个非 codex/pi/zcode 的可用助手会话(接入第 4 个 provider 或 daemon 侧造数)后重跑; 空态文案已由 JVM 单测钉住(SlashCommandsLogic SLASH_UNKNOWN_AGENT_HINT)",
+      "notes": "黑盒无法新建\"未知 agent\"会话",
+      "evidence": [
+        "slash\\SLA-21c-threads-dump.txt"
+      ]
+    },
+    {
+      "suite": "smoke",
+      "id": "SMK-21a",
+      "title": "主页连接状态卡",
+      "verdict": "PASS",
+      "attribution": "",
+      "unblock": "",
+      "notes": "13 个文本节点; 连接卡='已连接 · 局域网直连'",
+      "evidence": [
+        "smoke\\SMK-21a-dump.txt",
+        "smoke\\SMK-21a-screen.png"
+      ]
+    },
+    {
+      "suite": "smoke",
+      "id": "SMK-21b",
+      "title": "会话列表",
+      "verdict": "PASS",
+      "attribution": "",
+      "unblock": "",
+      "notes": "23 个文本节点",
+      "evidence": [
+        "smoke\\SMK-21b-dump.txt",
+        "smoke\\SMK-21b-screen.png"
+      ]
+    },
+    {
+      "suite": "smoke",
+      "id": "SMK-21c",
+      "title": "文件页",
+      "verdict": "PASS",
+      "attribution": "",
+      "unblock": "",
+      "notes": "13 个文本节点",
+      "evidence": [
+        "smoke\\SMK-21c-dump.txt",
+        "smoke\\SMK-21c-screen.png"
+      ]
+    },
+    {
+      "suite": "smoke",
+      "id": "SMK-21d",
+      "title": "Git 页",
+      "verdict": "PASS",
+      "attribution": "",
+      "unblock": "",
+      "notes": "15 个文本节点",
+      "evidence": [
+        "smoke\\SMK-21d-dump.txt",
+        "smoke\\SMK-21d-screen.png"
+      ]
+    },
+    {
+      "suite": "smoke",
+      "id": "SMK-21e",
+      "title": "设置页",
+      "verdict": "PASS",
+      "attribution": "",
+      "unblock": "",
+      "notes": "9 个文本节点",
+      "evidence": [
+        "smoke\\SMK-21e-dump.txt",
+        "smoke\\SMK-21e-screen.png"
+      ]
+    },
+    {
+      "suite": "touch",
+      "id": "TCH-21a",
+      "title": "输入区四节点触控箱>=132px(48dp)且长文本不塌",
+      "verdict": "BLOCKED",
+      "attribution": "环境依赖",
+      "unblock": "先建一个会话再重跑",
+      "notes": "无法进入聊天页",
+      "evidence": [
+        "touch\\TCH-21a-no-chat.txt"
+      ]
+    }
+  ]
+}

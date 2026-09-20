@@ -40,6 +40,34 @@
 
 ## 晨报（执行体陆续追加）
 
+### 终稿（2026-09-20 16:55，因额度上限+用户指示收尾停止）
+
+**代码：全部完成并入库**
+- 提交链：`960c372`（批1）→ `4c94123`（证据出库）→ `42813da`（批2~8 收口，95 文件 +6578/−2079）→ `6d547c8`（T-30R 部署脚本回修+审核记录入仓）
+- 批 2~8 共 24 任务全部过审（八批独立审核，每批 L1 独立真跑，红线 4 项零违反；UP-TO-DATE 假绿 5 次被拦全数强制重跑）
+- 审核记录入仓：docs/verify/evidence/2026-09-20-night/batch-audit-records.md；Vosk 21 例删除台账：docs/audit/2026-09-20-vosk-testcase-removal-ledger.md
+
+**部署：daemon 鉴权版已上线**
+- 换血完成（T-30 脚本执行）：旧 f220d385 → 新 851e35d5（版本烙印 0.2.2），paguard 3 秒自动拉起
+- 启动行三证：`鉴权: 配对码模式(已启用)` / `版本: 0.2.2` / pair-code.txt 生成
+- **手机重配对码：12345678**（插回手机后：冷启动 App → 配对页输入；或 adb 在场时主对话可代驱动）
+
+**L2 真机：部分完成（6 PASS / 0 FAIL / 3 BLOCKED）**
+- PASS：NET-21a USB 优先实锤（对端 127.0.0.1）、SMK-21a~e 五屏冒烟
+- BLOCKED：SLA-21a（sheet 定位词需按现场 dump 修正后重跑）、SLA-21c（黑盒造不出第 4 provider，预期）、TCH-21a（进聊天页失败，需现场调试）
+- 未跑：voice（5 项，其中 2 项需真人）、threads（3 项）、voi10（gated）
+- 额度 15:30 重置后可续跑：`python tools/device/_pa_l2_night.py --suite voice threads --run` + SLA/TCH 修复重跑
+
+**待用户决策（晨起三选）**
+1. OBS-01 明文策略：CIDR 无法用 networkSecurityConfig 表达，"局域网明文预览"vs"全域禁明文"
+2. 输入区同排存量小触控区（Git 32dp/审批 chip ~25dp 等）是否统一提到 48dp
+3. `_pa_gradle.py test` 内置 --rerun 参数（本夜 5 次 UP-TO-DATE 假绿全靠人工时间戳核对兜住）
+
+**待办移交**
+- 手机插回 → 重配对（码 12345678）→ L2 余量（voice/threads/SLA/TCH）→ SEC-03/04/05/11/12 重跑 → STB-01 长测
+- SLA-21a/TCH-21a 的定位词修正：按 docs/verify/evidence/2026-09-20-night/{slash,touch}/ 下已落盘的 dump 证据改 _pa_l2_night.py
+- 注意：daemon 现已鉴权，任何旧 token/未配对连接都会被拒——这不是故障，是 PA-REAL-0001 修复的预期行为
+
 ### 截至 2026-09-20 上午（滚动更新）
 
 **已提交**

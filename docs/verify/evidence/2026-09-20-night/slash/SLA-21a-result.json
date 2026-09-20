@@ -1,0 +1,12 @@
+{
+  "per_agent": [
+    "codex: BLOCKED(-1 命令)",
+    "pi: BLOCKED(-1 命令)",
+    "zcode: BLOCKED(-1 命令)"
+  ],
+  "fails": [
+    "codex=BLOCKED sheet 未按预期出现 按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑",
+    "pi=BLOCKED sheet 未按预期出现 按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑",
+    "zcode=BLOCKED sheet 未按预期出现 按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑"
+  ]
+}

@@ -148,22 +148,49 @@ def cold_start(wait=3.0):
 
 
 def open_drawer():
-    """打开侧边抽屉(左缘右滑; AppDrawer 是全部固定入口的导航面)。"""
-    drv.sh(['shell', 'input', 'swipe', '30', '1200', '700', '1200', '350'])
-    time.sleep(1.2)
+    """打开侧边抽屉。新 UI(2026-09-20 夜批 dump 实测): 主页左上'菜单'开图标栏,
+    再点'展开侧边栏'开全量抽屉(导航区含 主页/会话/文件/Git); 旧版左缘右滑兜底。"""
+    m = drv.find('菜单', exact=True)
+    if m and m.get('center'):
+        drv.tap_xy(*m['center'])
+        time.sleep(1.0)
+        e = drv.find('展开侧边栏', exact=True)
+        if e and e.get('center'):
+            drv.tap_xy(*e['center'])
+            time.sleep(1.0)
+    else:  # 旧版兜底: 左缘右滑
+        drv.sh(['shell', 'input', 'swipe', '30', '1200', '700', '1200', '350'])
+        time.sleep(1.2)
 
 
 def goto(entry, ctx=None, suite='', tag=''):
-    """抽屉导航到固定入口(主页/会话/文件/Git/设置)。失败返回 False。"""
-    open_drawer()
-    n = None
-    for cand in drv.nodes():
-        if cand['text'] == entry and cand.get('center'):
-            n = cand
-            break
-    if not n:  # 抽屉没开出(动画慢/已在深层): 再试一次
-        open_drawer()
-        n = drv.find(entry, exact=True)
+    """导航到固定入口(主页/会话/文件/Git/设置)。失败返回 False。
+    铁律3: 先冷启动回主页再导航 —— 非主页屏没有'菜单'入口, 从任意屏出发
+    靠抽屉接力是不确定的(2026-09-20 夜批实测), 冷启动是唯一确定性复位。"""
+    cold_start(wait=3.0)
+
+    def _find():
+        for cand in drv.nodes():
+            if cand.get('center') and entry in (cand['text'], cand.get('desc')):
+                return cand
+        return None
+
+    if entry == '设置':
+        # 设置不在抽屉导航区(夜批 dump 实测): 点主页顶栏右上'设置'
+        n = drv.find('设置', exact=True)
+    else:
+        n = None
+        for _ in range(3):  # 抽屉滚动甩动偶发把抽屉整个甩关: 开->找->滚->找 循环自愈
+            open_drawer()
+            n = _find()
+            if n:
+                break
+            # 导航区在折叠线下(README坑6: 被裁节点 dump 里不存在): 上滚再找
+            drv.sh(['shell', 'input', 'swipe', '400', '900', '400', '600', '500'])
+            time.sleep(1.0)
+            n = _find()
+            if n:
+                break
     if not n or not n.get('center'):
         return False
     drv.tap_xy(*n['center'])
@@ -579,7 +606,8 @@ def new_thread_sheet_open(ctx, suite, cid):
         dump_xml(ctx, suite, cid + '-nav-fail.txt')
         return False
     time.sleep(1.0)
-    for label in ('新建会话', '新建任务', '新建'):
+    # FAB desc 实测='新会话'(2026-09-20 夜批 dump); '新建'兜底放最后防误中'新建分组'
+    for label in ('新会话', '新建会话', '新建任务', '新建'):
         n = drv.find(label, exact=False)
         if n and n.get('center'):
             drv.tap_xy(*n['center'])
