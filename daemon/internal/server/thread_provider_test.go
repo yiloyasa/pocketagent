@@ -77,7 +77,7 @@ func TestThreadAgentIDDefaultsToCodex(t *testing.T) {
 
 // CreateThread 带 agent_id:pi 会话落 AgentID,不存在的 agent 显式报错。
 func TestCreateThreadWithAgentID(t *testing.T) {
-	echo := &seqProvider{id: "pi"}
+	echo := &modelListProvider{plainProvider: plainProvider{id: "pi"}}
 	srv := New(Config{Store: mustStore(t), Providers: map[string]agent.Provider{"pi": echo}})
 
 	resp, err := srv.CreateThread(ctxBG(), &pb.CreateThreadRequest{Title: "pi 会话", AgentId: "pi"})
@@ -107,6 +107,19 @@ func (PiProviderStub) Models() []pb.ModelInfo { return nil }
 
 func (PiProviderStub) Run(_ context.Context, _ agent.TurnRequest, _ agent.Sink, _ agent.ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	return nil, nil, nil
+}
+
+// modelListProvider 在 plainProvider 上带一个模型表(default 哨兵 + 一个具名模型):
+// defaultModelIDFor 不再伪造 "<agent>/default"(2026-09-20),CreateThread 需要
+// provider 真实报告模型列表才能解析默认模型 —— 本假体供"关注归属/快照、不关注
+// 模型表内容"的测试兜位。
+type modelListProvider struct{ plainProvider }
+
+func (p *modelListProvider) Models() []pb.ModelInfo {
+	return []pb.ModelInfo{
+		{Id: "default", Provider: p.id, DisplayName: "跟随桌面配置", Available: true},
+		{Id: "model-a", Provider: p.id, DisplayName: "Model A", Available: true},
+	}
 }
 
 func mustStore(t *testing.T) *store.FileStore {

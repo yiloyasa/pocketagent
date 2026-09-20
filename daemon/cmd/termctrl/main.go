@@ -2,6 +2,7 @@
 // 验证 Ctrl+C 经 daemon→ConPTY 链路能否中断子进程。
 //
 // 三种模式:
+//
 //	go run ./cmd/termctrl            诊断模式:打印各阶段输出(历史行为)
 //	go run ./cmd/termctrl -verify    验证模式:3 秒内断言 ping 被中断,
 //	                                 退出码 0=通过,1=失败(部署后回归用)

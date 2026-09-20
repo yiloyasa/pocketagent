@@ -87,16 +87,16 @@ func main() {
 		{"model_reasoning_effort", "high"},
 		{"model_verbosity", "medium"},
 		{"model_reasoning_summary", "concise"},
-		{"hide_agent_reasoning", "true"},  // 预期:不支持
-		{"disable_paste_burst", "true"},   // 预期:不支持
+		{"hide_agent_reasoning", "true"}, // 预期:不支持
+		{"disable_paste_burst", "true"},  // 预期:不支持
 	}
 	for _, kv := range keys {
 		// 正确形状:必须带 mergeStrategy(required)
 		_, err := c.Call("config/value/write", map[string]interface{}{
-			"keyPath":       kv.k,
-			"value":         kv.v,
-			"mergeStrategy": "upsert",
-			"filePath":      tmp,
+			"keyPath":         kv.k,
+			"value":           kv.v,
+			"mergeStrategy":   "upsert",
+			"filePath":        tmp,
 			"expectedVersion": nil,
 		})
 		if err != nil {

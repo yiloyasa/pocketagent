@@ -54,6 +54,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -127,14 +128,10 @@ import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.UsageCache
 import dev.pocketagent.app.ui.component.UsageSnapshot
+import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE
 import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY
 import dev.pocketagent.app.ui.component.VOICE_ERROR_MIC_BLOCKED
-import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_ENGINE
-import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_MODEL
 import dev.pocketagent.app.ui.component.UndoBarHost
-import dev.pocketagent.app.ui.component.VoskModelManager
-import dev.pocketagent.app.ui.component.VoskModelPhase
-import dev.pocketagent.app.ui.component.VoskVoiceRecognizer
 import dev.pocketagent.app.ui.component.SenseVoiceModelManager
 import dev.pocketagent.app.ui.component.SenseVoiceRecognizer
 import dev.pocketagent.app.ui.component.keyboardAwareBottomPadding
@@ -877,6 +874,17 @@ private const val EXPAND_HINT_THRESHOLD = 80
 private const val ATTACH_CHIP_NAME_MAX = 80
 
 /**
+ * 【PA-REAL-0004 回归常量】输入区可点控件的最小触控箱边长(dp)。
+ * Material 无障碍规范最小交互尺寸 = 48dp;440dpi(换算比 2.75)下折算 132px ——
+ * uiautomator dump 里发送/语音/附件/"切换模型与思考强度"四节点的 bounds
+ * 两条边都必须 ≥ 132px(复核清单见缺陷单回归结果)。
+ * 视觉图标保持 18–20dp 不变,只放大不可见的触控/命中区域;布局上这四个
+ * 控件都在 Column 的独立行里,箱子放大不挤压输入框。
+ * JVM 断言见 ChatInputTouchTargetTest(Compose 布局 JVM 测不了,常量是能钉的部分)。
+ */
+internal const val INPUT_TOUCH_TARGET_DP = 48
+
+/**
  * 会话页。
  *
  * 需要 ExperimentalLayoutApi 的 opt-in,只为一处:
@@ -934,14 +942,13 @@ fun ChatScreen(
     // 配合输入区的 animateContentSize 构成"文本飞入输入框"的过渡感。
     var voiceLandedTick by remember { mutableStateOf(0) }
 
-    // ---- 【端侧回落】Vosk 模型管理:进页幂等初始化(磁盘扫描在 IO),状态驱动引擎选择 ----
+    // ---- 【端侧兜底】SenseVoice 内置模型:进页幂等初始化(解压校验在 IO),状态驱动引擎选择 ----
     // 系统识别可用性只查一次(部分 ROM 预检就是 false,真机无识别服务 + 无 GMS 云识别)。
     LaunchedEffect(Unit) {
         SenseVoiceModelManager.init(ctx.applicationContext)
     }
     val senseModelState by SenseVoiceModelManager.state.collectAsState()
     val senseReady = senseModelState.ready
-    val voskReady = false // Legacy Vosk is no longer a user-facing engine.
     val sysVoiceAvailable = remember {
         runCatching { SpeechRecognizer.isRecognitionAvailable(ctx) }.getOrDefault(false)
     }
@@ -951,11 +958,6 @@ fun ChatScreen(
     // gotCallback = start 之后是否收到过识别器任一关键回调;watchdog = 当前这轮超时协程。
     val voiceGotCallback = remember { AtomicBoolean(false) }
     val voiceWatchdog = remember { AtomicReference<Job?>(null) }
-    // 【P2-d】模型暖标记:本识别器实例是否收到过识别器回调(Vosk 的 onAlive 在模型
-    // 载入内存并开始收音后才到)。看门狗触发时用它区分"Vosk 首次冷加载中"与"服务
-    // 真死区",提示文案据此分流。识别器重建(voskReady 翻转)或重进页面即重置 ——
-    // 新实例的模型要重新往内存里加载,又是一次"首次加载"。
-    val voiceModelWarm = remember(voskReady) { AtomicBoolean(false) }
     // 【静默失败修复·回退】系统引擎是否已判死(死区超时/致命错误码):置位后识别器随
     // remember 键翻转自动重建为端侧 SenseVoice。声明必须在 startVoiceWatchdog 之前 ——
     // Kotlin 局部函数引用不了其后声明的局部变量(看门狗超时分支要写它)。
@@ -980,7 +982,7 @@ fun ChatScreen(
     // LISTENING 且零回调 —— 某些 ROM 预检可用但识别服务实际"死区",UI 会永远卡在脉动
     // 图标上 —— 此时主动抛 DeadZoneTimeout 事件,状态机回 IDLE 并弹人话提示。
     // 判定逻辑抽成纯函数 voiceDeadZoneTimedOut(JVM 单测锁定)。
-    // 【P2-d】提示文案按"是否 Vosk 首次冷加载"分流(见 voiceDeadZoneToast,JVM 单测锁定)。
+    // 【P2-d】提示文案按"是否端侧首次冷加载"分流(见 voiceDeadZoneToast,JVM 单测锁定)。
     fun startVoiceWatchdog() {
         voiceGotCallback.set(false)
         voiceWatchdog.getAndSet(null)?.cancel()
@@ -998,39 +1000,33 @@ fun ChatScreen(
                     if (voiceDeadZoneShouldRetireSystem(sysVoiceAvailable && !systemVoiceFailed)) {
                         systemVoiceFailed = true
                     }
-                    // 【P2-d 收敛】Vosk 已不再是用户可选引擎(createVoiceRecognizer 恒传
-                    // voskReady=false),"首次冷加载"文案只剩历史语义;端侧 SenseVoice 的
-                    // onAlive 在进录音态后立刻到(真冷加载发生在停止后的转写段,有周期性
-                    // 回活喂狗),零回调撞满看门狗一律按"服务无响应"提示,不再误报
-                    // "正在加载语音模型"(旧判定 pickVoiceEngine(…, VoskModelManager
-                    // .isReady()) 会在残留 legacy Vosk 模型的机器上误报)。
-                    val firstVoskLoad = false
-                    Log.d("PaVoice", "死区超时兜底触发 elapsed=${elapsedMs}ms firstVoskLoad=$firstVoskLoad")
-                    dispatchVoice(VoiceEvent.DeadZoneTimeout(firstVoskLoad))
+                    // 【P2-d 收敛】端侧 SenseVoice 的 onAlive 在进录音态后立刻到
+                    // (真冷加载发生在停止后的转写段,有周期性回活喂狗),零回调撞满
+                    // 看门狗一律按"服务无响应"提示,不误报"正在加载语音模型"
+                    // (按"冷加载中"分流只是历史引擎的旧语义,恒传 false)。
+                    val firstColdLoad = false
+                    Log.d("PaVoice", "死区超时兜底触发 elapsed=${elapsedMs}ms firstColdLoad=$firstColdLoad")
+                    dispatchVoice(VoiceEvent.DeadZoneTimeout(firstColdLoad))
                 }
             },
         )
     }
 
-    // 本机优先的识别器:系统识别可用用系统(在线质量好);不可用而端侧 Vosk 模型就绪
-    // 用端侧引擎;都不行 = null(按钮降级,点击时引导下载语音模型)。回调都回主线程统一
+    // 本机优先的识别器(两级):系统识别可用用系统(在线质量好);不可用而端侧 SenseVoice
+    // 模型就绪用端侧引擎;都不行 = null(按钮降级,点击时给人话提示)。回调都回主线程统一
     // 交给 dispatchVoice 驱动状态机;onAlive 喂死区看门狗。
-    // 【注意 key】voskReady 从 false→true(模型下载完成/磁盘扫描发现已就绪)时重建识别器,
-    // 旧识别器经 DisposableEffect(voiceRecognizer) 自动销毁 —— "下完自动可用"。
+    // 【注意 key】senseReady 翻转(内置模型首次解压校验完成)时重建识别器,旧识别器经
+    // DisposableEffect(voiceRecognizer) 自动销毁 —— "初始化完自动可用"。
     // systemVoiceFailed 声明已上移至 startVoiceWatchdog 之前(局部函数引用顺序要求)
     val voiceRecognizer = remember(sysVoiceAvailable, systemVoiceFailed, senseReady) {
-        Log.d("PaVoice", "创建识别器开始 sys=$sysVoiceAvailable voskReady=$voskReady")
+        Log.d("PaVoice", "创建识别器开始 sys=$sysVoiceAvailable bundled=$senseReady")
         createVoiceRecognizer(
             ctx,
             sysAvailable = sysVoiceAvailable && !systemVoiceFailed,
-            voskReady = false,
             senseReady = senseReady,
             onAlive = {
                 // 【死区兜底】任一关键回调到达 = 服务活着:置位并撤掉超时协程
                 voiceGotCallback.set(true)
-                // 【P2-d】回调到过 = 模型已暖(Vosk 首次加载已完成),此后看门狗再触发
-                // 就不是"加载中",按服务死区提示
-                voiceModelWarm.set(true)
                 voiceWatchdog.getAndSet(null)?.let {
                     Log.d("PaVoice", "看门狗:收到识别器回调,取消死区超时")
                     it.cancel()
@@ -1045,11 +1041,6 @@ fun ChatScreen(
                 if (sysVoiceAvailable && !systemVoiceFailed && systemVoiceRetireNeeded(code)) {
                     scope.launch(Dispatchers.Main.immediate) { systemVoiceFailed=true }
                 }
-                // 【模型加载失败回连】VOICE_ERROR_VOSK_MODEL = 端侧模型加载失败:
-                // "文件在但内容坏"型损坏会让状态滞留 READY 反复失败,这里回连一次
-                // 磁盘复核,把半损坏目录打回 FAILED 引导重下(refreshFromDisk 有
-                // DOWNLOADING 挡板,幂等安全)。判定在纯函数 voiceModelRefreshNeeded。
-                if (voiceModelRefreshNeeded(code)) VoskModelManager.refreshFromDisk()
                 dispatchVoice(VoiceEvent.RecognitionFailed(voiceErrorKind(code)))
             },
         ).also { Log.d("PaVoice", "创建识别器结果 可用=${it != null}") }
@@ -1100,13 +1091,11 @@ fun ChatScreen(
                 currentVoiceRecognizer?.start()
             }
             if (fx.stop) {
-                // 主动停止:立即换上"收尾看门狗" —— 停止后端侧引擎还有秒级"模型加载
-                // +转写"空窗,识别器在转写期间会周期性回 onAlive 喂狗;若停止后 8 秒
-                // 零回调(引擎真死了),DeadZoneTimeout 兜底把 UI 收回 IDLE 并给人话
-                // 提示,绝不让波形无限空转(旧行为是直接撤狗 + UI 立刻回 IDLE,
-                // 转写空窗内用户看到"点了没反应")。
+                // 主动停止:reducer 在点击停止的瞬间已把状态置回 IDLE(见 voiceReduce)。
+                // 停止听写后,已开始的转写结果仍会经结果回调落入输入框;如后续引入
+                // "转写中"独立状态,可再补停止后的兜底提示。(此处曾挂一个"收尾看门狗",
+                // 但其超时分支的 listening 守卫在停止后恒为假,属永不触发的死代码,已删。)
                 currentVoiceRecognizer?.stopListening()
-                startVoiceWatchdog()
             }
             fx.append?.let { spoken ->
                 input = joinVoiceText(input, spoken)
@@ -2392,8 +2381,10 @@ fun ChatScreen(
                                     Text(
                                         when {
                                             offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
-                                            // 【P1-9】听写/转写中:placeholder 提示(停止后端侧转写
-                                            // 有秒级空窗,UI 保持"语音输入中",不再显得没反应)
+                                            // 【P1-9】听写进行中:placeholder 提示。仅 LISTENING 态展示,
+                                            // 点击停止后状态机立即回 IDLE、占位符随之切回常规文案;
+                                            // 停止听写后,已开始的转写结果仍会经结果回调落入输入框,
+                                            // 如后续引入"转写中"独立状态,可再补停止后的兜底提示。
                                             voiceUi.listening -> "语音输入中…"
                                             else -> "随心输入,发给电脑上的 agent…"
                                         },
@@ -2427,6 +2418,9 @@ fun ChatScreen(
                 // 现在无条件显示全文;工具行里的模型 chip 仍作点击入口。
                 Row(Modifier.fillMaxWidth().pressable { showModelCard = true }
                     .semantics { contentDescription = "切换模型与思考强度" }
+                    // PA-REAL-0004:整行高度 ≥48dp(实测 37.8dp)。heightIn 在 padding 外层,
+                    // 内容(verticalAlignment=CenterVertically)在 48dp 内居中,只是上下多留白。
+                    .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
                     .padding(horizontal=16.dp, vertical=8.dp), verticalAlignment=Alignment.CenterVertically) {
                     Text(modelName + if(effortLabel != "默认") " · $effortLabel" else "",
                         modifier=Modifier.weight(1f), fontSize=12.sp, color=Pa.TextSecondary,
@@ -2451,7 +2445,8 @@ fun ChatScreen(
                     // [+ 附件]
                     Box(
                         Modifier
-                            .size(32.dp)
+                            // PA-REAL-0004:触控箱 ≥48dp(原 32dp);图标仍 20dp 居中,视觉不变。
+                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                             .pressable { pickFiles.launch("*/*") },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -2638,7 +2633,9 @@ fun ChatScreen(
                     }
                     Box(
                         Modifier
-                            .requiredSize(40.dp)
+                            // PA-REAL-0004:触控箱 ≥48dp(原 40dp);涟漪/波形/图标的绘制尺寸
+                            // 都不变,只是不可见的命中区放大。点击处理逻辑(语音状态机)未动。
+                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                             .pressable {
                                 micRippleTick++ // 【动画 ①】按下即起涟漪(不依赖识别结果)
                                 val granted = ContextCompat.checkSelfPermission(
@@ -2706,22 +2703,30 @@ fun ChatScreen(
                     val inserting = st.running
                     Box(
                         Modifier
-                            .requiredSize(40.dp)
+                            // PA-REAL-0004:触控箱 ≥48dp(原 40dp)。Accent 圆底下沉一层保持
+                            // 40dp 视觉不变(按下缩放仍作用于整体),只放大不可见命中区。
+                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                             .pressable(scaleDown = 0.88f, enabled = sendEnabled) {
                                 if (send(input)) input = ""
-                            }
-                            .background(if (sendEnabled) Pa.Accent else Pa.Hover, CircleShape),
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            painterResource(
-                                if (inserting) AppR.drawable.ic_lucide_list_checks
-                                else AppR.drawable.ic_lucide_arrow_up
-                            ),
-                            if (inserting) "插入运行中任务" else "发送",
-                            tint = if (sendEnabled) Color.White else Pa.TextTertiary,
-                            modifier = Modifier.size(18.dp),
-                        )
+                        Box(
+                            Modifier
+                                .requiredSize(40.dp)
+                                .background(if (sendEnabled) Pa.Accent else Pa.Hover, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painterResource(
+                                    if (inserting) AppR.drawable.ic_lucide_list_checks
+                                    else AppR.drawable.ic_lucide_arrow_up
+                                ),
+                                if (inserting) "插入运行中任务" else "发送",
+                                tint = if (sendEnabled) Color.White else Pa.TextTertiary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -4580,7 +4585,7 @@ internal enum class VoiceInputState { IDLE, LISTENING, NO_PERMISSION, UNAVAILABL
 
 /**
  * 识别失败的分类(与 SpeechRecognizer 错误码的映射在 glue 层 [voiceErrorKind])。
- * 【ENGINE】端侧 Vosk 引擎专用(模型加载失败/识别器或录音器异常),系统识别不会产生。
+ * 【ENGINE】端侧 SenseVoice 引擎专用(识别器/录音器异常),系统识别不会产生。
  * 【MIC_BLOCKED】端侧引擎报"运行时权限已给但仍采不了音"(错误码 102):MIUI 等国产
  *  ROM 在运行时权限之外还有独立的「录音」开关,或麦克风被其他应用占用 —— 人话提示
  *  直接给"去哪里开"的可行动指引(此前的静默失败点:102 漏映射落 OTHER,用户只看到
@@ -4611,12 +4616,13 @@ internal sealed interface VoiceEvent {
      * 但 8 秒内 onReadyForSpeech/onPartialResults/onResults/onError 一个回调都没有 ——
      * 个别 ROM 的识别服务实际处于"死区",不兜底 UI 会永远卡在 LISTENING。
      *
-     * 【P2-d】@param firstVoskLoad true = 端侧 Vosk 引擎本识别器实例尚无一次成功识别
+     * 【P2-d】@param firstColdLoad true = 端侧引擎本识别器实例尚无一次成功识别
      * (模型还在往内存加载):零回调多半是加载慢而非服务死区,提示文案换成
      * "正在加载语音模型,请稍候再试"(见 [voiceDeadZoneToast])。默认 false 兼容
-     * 系统引擎与已暖场景,老路径文案不变。
+     * 系统引擎与已暖场景,老路径文案不变。现役 SenseVoice 的 onAlive 在进录音态
+     * 后立刻到达,组合层恒传 false(保留参数 = 文案分流语义仍被单测锁定)。
      */
-    data class DeadZoneTimeout(val firstVoskLoad: Boolean = false) : VoiceEvent
+    data class DeadZoneTimeout(val firstColdLoad: Boolean = false) : VoiceEvent
 }
 
 /**
@@ -4667,10 +4673,10 @@ internal fun voiceReduce(current: VoiceInputUi, event: VoiceEvent): VoiceInputUi
     is VoiceEvent.RecognitionFailed -> current.copy(state = VoiceInputState.IDLE, toast = voiceErrorText(event.kind))
     is VoiceEvent.DeadZoneTimeout -> {
         // 【死区兜底】服务零响应:主动回 IDLE + 人话提示,不让 UI 卡在 LISTENING 干等。
-        // 【P2-d】Vosk 首次冷加载撞看门狗 ≠ 服务死区:文案按真相分流(纯函数,可单测)
+        // 【P2-d】端侧首次冷加载撞看门狗 ≠ 服务死区:文案按真相分流(纯函数,可单测)
         current.copy(
             state = VoiceInputState.IDLE,
-            toast = voiceDeadZoneToast(event.firstVoskLoad),
+            toast = voiceDeadZoneToast(event.firstColdLoad),
         )
     }
 }
@@ -4717,21 +4723,21 @@ internal fun joinVoiceText(existing: String, spoken: String): String = when {
     else -> "$existing $spoken"
 }
 
-// ---- 端侧回落:引擎选择决策(纯函数,JVM 单测锁定) ----
+// ---- 端侧兜底:引擎选择决策(纯函数,JVM 单测锁定) ----
 
-/** 语音识别引擎:系统识别(在线优先,质量好)/ 端侧 Vosk(离线,无 GMS 依赖的回落)。 */
-internal enum class VoiceEngineKind { SYSTEM, VOSK, UNAVAILABLE }
+/** 语音识别引擎:系统识别(在线优先,质量好)/ 端侧 SenseVoice(离线,无 GMS 依赖的兜底)。 */
+internal enum class VoiceEngineKind { SYSTEM, SENSEVOICE, UNAVAILABLE }
 
 /**
- * 引擎选择决策表:
- *  · 系统可用            → SYSTEM(在线质量好,Vosk 只做回落);
- *  · 系统不可用+模型就绪 → VOSK(小米等无识别服务 ROM 的唯一落地);
- *  · 都不行              → UNAVAILABLE(UI 引导下载语音模型,下完 voskReady 翻转
- *    后识别器自动重建为 VOSK,不再是 UNAVAILABLE)。
+ * 引擎选择决策表(两级):
+ *  · 系统可用            → SYSTEM(在线质量好,端侧只做兜底);
+ *  · 系统不可用+模型就绪 → SENSEVOICE(小米等无识别服务 ROM 的落地);
+ *  · 都不行              → UNAVAILABLE(点击麦克风给人话提示,内置模型初始化完成后
+ *    识别器随 senseReady 重建为 SENSEVOICE,不再是 UNAVAILABLE)。
  */
-internal fun pickVoiceEngine(sysAvailable: Boolean, voskReady: Boolean): VoiceEngineKind = when {
+internal fun pickVoiceEngine(sysAvailable: Boolean, senseReady: Boolean): VoiceEngineKind = when {
     sysAvailable -> VoiceEngineKind.SYSTEM
-    voskReady -> VoiceEngineKind.VOSK
+    senseReady -> VoiceEngineKind.SENSEVOICE
     else -> VoiceEngineKind.UNAVAILABLE
 }
 
@@ -4756,14 +4762,14 @@ internal fun voiceDeadZoneTimedOut(
 
 /**
  * 死区超时的人话提示(纯函数,JVM 单测锁定):
- * 【P2-d】端侧 Vosk 首次点击要先花秒级(极端 8 秒以上)把模型载入内存,这期间
+ * 【P2-d】端侧引擎首次点击要先花秒级(极端 8 秒以上)把模型载入内存,这期间
  * 零回调撞满看门狗的真相是"正在加载模型"而非"服务无响应" —— 文案说真话,引导
  * 稍候再试(此刻点重试仍有效:上一会话模型加载完成后照常收音、照常出结果)。
  *
- * @param firstVoskLoad true = 端侧 Vosk 引擎本识别器实例尚无一次成功识别(冷加载中)
+ * @param firstColdLoad true = 端侧引擎本识别器实例尚无一次成功识别(冷加载中)
  */
-internal fun voiceDeadZoneToast(firstVoskLoad: Boolean): String =
-    if (firstVoskLoad) "正在加载语音模型,请稍候再试" else "语音服务无响应,请重试或检查语音服务"
+internal fun voiceDeadZoneToast(firstColdLoad: Boolean): String =
+    if (firstColdLoad) "正在加载语音模型,请稍候再试" else "语音服务无响应,请重试或检查语音服务"
 
 /** 错误分类 → 人话提示(Toast 用)。 */
 internal fun voiceErrorText(kind: VoiceErrorKind): String = when (kind) {
@@ -4797,14 +4803,16 @@ internal interface PaVoiceRecognizer {
     fun destroy()
 }
 
-/** SpeechRecognizer 错误码(含端侧 Vosk 自定义码)→ 状态机分类。 */
+/** SpeechRecognizer 错误码(含端侧引擎自定义码)→ 状态机分类。 */
 internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> VoiceErrorKind.NO_MATCH
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> VoiceErrorKind.BUSY
     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> VoiceErrorKind.INSUFFICIENT_PERMISSIONS
     SpeechRecognizer.ERROR_CLIENT -> VoiceErrorKind.CLIENT
-    // 【端侧回落】Vosk 自定义错误码(100+):统一归"端侧引擎异常"
-    VOICE_ERROR_VOSK_ENGINE, VOICE_ERROR_VOSK_MODEL -> VoiceErrorKind.ENGINE
+    // 【端侧兜底】端侧引擎自定义错误码(100+):归"端侧引擎异常"
+    // (旧遗留引擎的 101=模型加载失败已随 2026-09-20 摘除移除:该码不再由任何
+    //  引擎产生,若出现落 else 兜底 OTHER,不误报引擎异常)
+    VOICE_ERROR_ENGINE -> VoiceErrorKind.ENGINE
     // 【静默失败修复】端侧引擎的"麦克风被拦"(MIUI「录音」开关/被其他应用占用)与
     // "引擎忙"此前漏映射,落到 OTHER 只会说"识别失败,请重试"——MIUI 用户在安全
     // 中心关了「录音」开关时,永远得不到"去哪里开"的可行动指引(真机主诉根因之一)。
@@ -4812,17 +4820,6 @@ internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
     VOICE_ERROR_ENGINE_BUSY -> VoiceErrorKind.BUSY
     else -> VoiceErrorKind.OTHER
 }
-
-/**
- * 端侧错误码 → 是否需要回连模型磁盘复核(纯函数,JVM 单测锁定)。
- *
- * 仅 [VOICE_ERROR_VOSK_MODEL](模型加载失败)触发:模型目录"文件在但内容坏"时
- * 状态机会滞留 READY,每轮识别重复失败而设置页仍显示"已下载"——识别器 onError
- * 报此码时组合层回连 [VoskModelManager.refreshFromDisk],磁盘复核把半损坏目录
- * 打回 FAILED 引导重下。[VOICE_ERROR_VOSK_ENGINE](录音器/识别器运行异常)与
- * 模型目录完整性无关,不触发;系统识别错误码更不会产生 100/101。
- */
-internal fun voiceModelRefreshNeeded(code: Int): Boolean = code == VOICE_ERROR_VOSK_MODEL
 
 /**
  * 系统识别错误码 → 是否应弃用系统引擎改选端侧(纯函数,JVM 单测锁定)。
@@ -4852,10 +4849,11 @@ internal fun systemVoiceRetireNeeded(code: Int): Boolean =
 internal fun voiceDeadZoneShouldRetireSystem(systemEngineSelected: Boolean): Boolean = systemEngineSelected
 
 /**
- * 创建语音识别器 —— 引擎选择统一入口(决策表 [pickVoiceEngine],JVM 单测锁定):
- *  · SYSTEM      → [createSystemVoiceRecognizer](在线质量好,Vosk 只做回落);
- *  · VOSK        → 端侧 [VoskVoiceRecognizer](小米等无识别服务 ROM 且模型已就绪);
- *  · UNAVAILABLE → null(点击麦克风时引导下载语音模型,下完自动翻身为 VOSK)。
+ * 创建语音识别器 —— 引擎选择统一入口(两级,语义与决策表 [pickVoiceEngine] 一致,
+ * 决策表 JVM 单测锁定):
+ *  · SYSTEM      → [createSystemVoiceRecognizer](在线质量好,端侧只做兜底);
+ *  · SENSEVOICE  → 端侧 [SenseVoiceRecognizer](小米等无识别服务 ROM 的落地,模型内置);
+ *  · UNAVAILABLE → null(点击麦克风给人话提示,内置模型初始化完成后随 senseReady 重建)。
  * 必须在主线程调用(组合层 remember 里,满足)。
  *
  * 【回调契约】onResult/onErrorEvent/onAlive 语义见 [createSystemVoiceRecognizer]。
@@ -4863,7 +4861,6 @@ internal fun voiceDeadZoneShouldRetireSystem(systemEngineSelected: Boolean): Boo
 private fun createVoiceRecognizer(
     context: Context,
     sysAvailable: Boolean,
-    voskReady: Boolean,
     senseReady: Boolean = false,
     onResult: (String) -> Unit,
     onErrorEvent: (Int) -> Unit,
@@ -4886,7 +4883,7 @@ private fun createVoiceRecognizer(
  * 【V-1 修复】
  *  1. 先用 [SpeechRecognizer.isRecognitionAvailable] 预检 —— 部分无识别服务的 ROM 上
  *     createSpeechRecognizer 不抛、startListening 也全静默(连 onError 都不回调),
- *     预检不过直接返回 null,让上层走"回落 Vosk / 引导下载模型"分支;
+ *     预检不过直接返回 null,让上层走"端侧 SenseVoice 兜底"分支;
  *  2. startListening 包 try/catch,个别 ROM 会同步抛,兜底映射为 ERROR_CLIENT,
  *     让状态机回 IDLE 并弹人话提示,而不是无声卡死;
  *  3. EXTRA_PREFER_OFFLINE 改 false(在线优先):无离线包的设备上强求离线必吃错误

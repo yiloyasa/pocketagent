@@ -39,15 +39,6 @@ func TestMapSessionNameChange(t *testing.T) {
 	}
 }
 
-// TestPiThinkingLevelsFallback 无子进程时回全集兜底(piDefaultThinkingLevels
-// = bundle THINKING_LEVEL_OPTIONS);且必须返回拷贝,调用方改了不能污染兜底。
-func TestPiThinkingLevelsFallback(t *testing.T) {
-	p := NewPiProvider()
-	if out := p.ThinkingLevels(&store.Thread{ID: "th-x"}); len(out) != 0 {
-		t.Fatalf("Unknown model must not advertise unsupported levels: %v", out)
-	}
-}
-
 // TestPiCompactThreadRunningGuard 轮次在跑时压缩必须被拒:pi 的 compact 第一步
 // 是 abort 当前轮(实测语义),放进来等于悄悄杀任务。
 func TestPiCompactThreadRunningGuard(t *testing.T) {

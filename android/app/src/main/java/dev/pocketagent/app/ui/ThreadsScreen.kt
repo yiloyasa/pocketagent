@@ -457,11 +457,20 @@ fun ThreadsScreen(
                 threads = cur
             },
             onCommit = {
-                withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().deleteThread(
-                        DeleteThreadRequest.newBuilder().setThreadId(t.id).build())
+                try {
+                    withContext(Dispatchers.IO) {
+                        AgentConnection.threadService().deleteThread(
+                            DeleteThreadRequest.newBuilder().setThreadId(t.id).build())
+                    }
+                } catch (e: Exception) {
+                    // daemon 拒绝(如"会话正在运行,请先停止")不能静默:行已被乐观
+                    // 移除,用户必须知道操作没成(下面 refresh 会把行复原)。
+                    Toast.makeText(
+                        ctx, threadOpFailureText("删除", e.message), Toast.LENGTH_LONG,
+                    ).show()
                 }
-                // 删除会连带清掉电脑上的 rollout:立刻刷新,电脑列表里那条也随之消失
+                // 删除会连带清掉电脑上的 rollout:立刻刷新,电脑列表里那条也随之消失;
+                // 失败路径靠同一次刷新把乐观移除的行复原,不让会话"凭空消失"。
                 refresh()
             },
         )
@@ -477,10 +486,19 @@ fun ThreadsScreen(
             message = (if (target) "已归档「" else "已恢复「") + t.title.ifEmpty { "未命名" } + "」",
             onUndo = { threads = before },
             onCommit = {
-                withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().archiveThread(
-                        ArchiveThreadRequest.newBuilder()
-                            .setThreadId(t.id).setArchived(target).build())
+                try {
+                    withContext(Dispatchers.IO) {
+                        AgentConnection.threadService().archiveThread(
+                            ArchiveThreadRequest.newBuilder()
+                                .setThreadId(t.id).setArchived(target).build())
+                    }
+                } catch (e: Exception) {
+                    // 归档/恢复被拒不能静默:行已从当前视图移除,刷新前先说人话。
+                    Toast.makeText(
+                        ctx,
+                        threadOpFailureText(if (target) "归档" else "恢复", e.message),
+                        Toast.LENGTH_LONG,
+                    ).show()
                 }
                 refresh()
             },
@@ -496,15 +514,22 @@ fun ThreadsScreen(
             message = "已删除 codex 会话「" + c.title.ifEmpty { "未命名会话" } + "」",
             onUndo = { pcThreads = before },
             onCommit = {
-                withContext(Dispatchers.IO) {
-                    val tid = AgentConnection.threadService()
-                        .importCodexThread(
-                            ImportCodexThreadRequest.newBuilder()
-                                .setCodexThreadId(c.id)
-                                .build())
-                        .threadId
-                    AgentConnection.threadService().deleteThread(
-                        DeleteThreadRequest.newBuilder().setThreadId(tid).build())
+                try {
+                    withContext(Dispatchers.IO) {
+                        val tid = AgentConnection.threadService()
+                            .importCodexThread(
+                                ImportCodexThreadRequest.newBuilder()
+                                    .setCodexThreadId(c.id)
+                                    .build())
+                            .threadId
+                        AgentConnection.threadService().deleteThread(
+                            DeleteThreadRequest.newBuilder().setThreadId(tid).build())
+                    }
+                } catch (e: Exception) {
+                    // 导入+删除两步任何一步失败都要说人话,不能让行悄悄回来。
+                    Toast.makeText(
+                        ctx, threadOpFailureText("删除", e.message), Toast.LENGTH_LONG,
+                    ).show()
                 }
                 refresh()
             },
@@ -1413,6 +1438,15 @@ internal fun agentPcKey(a: AgentThreadInfo): String = a.agentId + ":" + a.sessio
  */
 internal fun pcAgentVisible(agentId: String, agentFilter: String): Boolean =
     agentFilter == AGENT_FILTER_ALL || threadAgentIdOf(agentId) == agentFilter
+
+/**
+ * 会话操作失败的人话 Toast 文案(纯函数,单测钉住 ThreadOpFeedbackTest)。
+ * undo 提交窗口到点后的真删/归档走后台协程,daemon 拒绝(如"会话正在运行,
+ * 请先停止任务再删除")原样拼入 —— 那本来就是写给用户看的话;连接类异常没有
+ * message 时给"连接失败"。绝不显示"未知/错误"这类字眼(AUDIT §3.3-3)。
+ */
+internal fun threadOpFailureText(op: String, detail: String?): String =
+    "${op}失败：${detail?.takeIf { it.isNotBlank() } ?: "连接失败"}"
 
 /** 连接状态卡:未连接=中性;已连接=主机名+规格+外网直连行。 */
 @Composable

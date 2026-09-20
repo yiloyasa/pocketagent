@@ -39,7 +39,10 @@ func TestCreateThreadSnapshotsPrefsAtCreationTime(t *testing.T) {
 		t.Fatalf("建 store 失败: %v", err)
 	}
 	srv := New(Config{Store: st, Providers: map[string]agent.Provider{
-		"codex": &plainProvider{id: "codex"}, // 不实现 PrefsAware:本测试只看快照落库
+		// 带模型表:defaultModelIDFor 已不伪造 "<agent>/default"(2026-09-20),
+		// CreateThread 需要 provider 真实报告模型;本测试只看快照落库,
+		// 模型表内容无关断言。仍不实现 PrefsAware。
+		"codex": &modelListProvider{plainProvider: plainProvider{id: "codex"}},
 	}})
 	seedGlobalPrefs(t, st, store.CodexPrefs{
 		ApprovalPolicy:   "on-request",

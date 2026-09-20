@@ -17,7 +17,10 @@ import (
 // worker on a native error. Replacing it could interrupt another session.
 func (p *ZcodeProvider) withControlClient(ctx context.Context, fn func(context.Context, *zcodeapp.Client) error) error {
 	if !p.lifeMu.TryLock() {
-		return ErrBusy
+		// 与 withClientCtx 同款忙哨兵(PA-REAL-0003/T-25):这里同样是 zcode 自己
+		// 在忙,不得窜用 codex 的 ErrBusy 文案;ErrZcodeBusy 经 Unwrap 挂在
+		// ErrBusy 之下,server 层 errors.Is(_, ErrBusy) 的"可重试/正忙"分级不回归。
+		return ErrZcodeBusy
 	}
 	defer p.lifeMu.Unlock()
 	if ctx == nil {

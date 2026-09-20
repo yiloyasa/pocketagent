@@ -8,6 +8,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -44,10 +45,19 @@ type Thread struct {
 	ExternalSession ExternalSessionRef `json:"external_session,omitempty"`
 	// 思考强度(low/medium/high/xhigh);空 = 跟随桌面默认
 	Effort string `json:"effort,omitempty"`
-	// 所属分组(codex 侧 threadSection 的 id);空 = 未分组。
-	// 分组本身存在于 codex,这里只缓存"这条会话在哪个组",
-	// 免得列一次会话就要为每条去问一次 codex。
+	// 所属分组的 id;空 = 未分组。
+	// 【覆盖范围】codex 会话的分组事实在 codex 侧(这里缓存"在哪个组",免得列
+	// 一次会话就为每条去问一次 codex);pi/zcode 没有 agent 自己的分组概念,
+	// 移动分组纯本地落库(2026-09-20 T-05),本字段就是它们的分组事实来源。
 	SectionID string `json:"section_id,omitempty"`
+	// 用户手动改过的标题(钉住)。【为什么需要】没有标题下发通道的 agent(如
+	// zcode)无法把手机上的新名字回写给子进程,它的自动命名事件(session/
+	// titleUpdated)若无条件落库,会把用户刚改的名字顶掉 —— "改了又变回去"。
+	// 重命名时若探测到该会话的 agent 不具备下发能力,置位本字段;之后的自动
+	// 命名回调一律跳过(见 server.applyZcodeTitle)。有下发通道的(pi/codex)
+	// 双端同源,不置位,电脑端发起的改名照常同步回手机。
+	// 【兼容】旧库 JSON 无此字段 → false,行为与升级前一致(只增不破坏)。
+	TitlePinned bool `json:"title_pinned,omitempty"`
 	// ---- 设置快照("设置页更改只对新建对话生效"的事实来源)----
 	// 新建会话那一刻生效的桌面设置(会路由进 turn 的七项)。之后用户在设置页
 	// 改审批策略/沙箱/模型/思考强度/回答详略/思考摘要/隐藏推理,只影响**新建**
@@ -146,20 +156,25 @@ type CodexPrefs struct {
 	DisablePasteBurst bool   `json:"disable_paste_burst"`
 }
 
+// persistedData 是 threads.json 的落盘形状。提为具名类型是为了启动加载时
+// 先解析进临时变量、成功后才整体替换 s.data —— 解析到一半失败也不会把半截
+// 数据留在内存里(P2-5 损坏自愈路径依赖这一点)。
+type persistedData struct {
+	Threads          map[string]*Thread `json:"threads"`
+	DefaultWorkspace string             `json:"default_workspace"`
+	DefaultModelID   string             `json:"default_model_id"`
+	DefaultEffort    string             `json:"default_effort"`
+	// codex 偏好:approval/sandbox/行为与降噪。以前这几项只在 provider 内存里,
+	// daemon 一重启就丢 —— 这就是用户说的"改了又变回去"。
+	Codex          CodexPrefs              `json:"codex"`
+	AgentDefaults  map[string]TurnSettings `json:"agent_defaults,omitempty"`
+	HiddenSessions map[string]bool         `json:"hidden_sessions,omitempty"`
+}
+
 type FileStore struct {
 	mu   sync.Mutex
 	path string
-	data struct {
-		Threads          map[string]*Thread `json:"threads"`
-		DefaultWorkspace string             `json:"default_workspace"`
-		DefaultModelID   string             `json:"default_model_id"`
-		DefaultEffort    string             `json:"default_effort"`
-		// codex 偏好:approval/sandbox/行为与降噪。以前这几项只在 provider 内存里,
-		// daemon 一重启就丢 —— 这就是用户说的"改了又变回去"。
-		Codex          CodexPrefs              `json:"codex"`
-		AgentDefaults  map[string]TurnSettings `json:"agent_defaults,omitempty"`
-		HiddenSessions map[string]bool         `json:"hidden_sessions,omitempty"`
-	}
+	data persistedData
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
@@ -167,21 +182,72 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	s.data.Threads = map[string]*Thread{}
 	raw, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
-		return s, nil
+		return s, nil // 首次运行:空库不是错误,维持原状。
 	}
 	if err != nil {
+		// 【P2-5 取舍边界】读文件本身的 I/O 错误(权限被收走、磁盘系统性故障)
+		// 不做自愈:这类问题往往是整个目录/磁盘级的,静默换空库会让用户在
+		// "数据还在"的假象下继续写入、覆盖掉抢救机会 —— 如实上报,由调用方
+		// 终止启动。只有"文件在、内容坏"(解析失败)才走下面的隔离自愈。
 		return nil, err
 	}
-	if err := json.Unmarshal(raw, &s.data); err != nil {
-		return nil, err
+	var loaded persistedData
+	if err := json.Unmarshal(raw, &loaded); err != nil {
+		// 【P2-5 损坏自愈】磁盘坏块、用户误编辑等外部因素会把 threads.json
+		// 弄坏;此前直接报错 → daemon Fatal 拒绝启动,会话真值全库"消失"且
+		// 无法自救。现在:把坏文件改名留档(同目录,保留原始字节供用户/开发者
+		// 抢救),打醒目日志,然后空库正常启动 —— 数据坏 ≠ 服务死。
+		qPath, qErr := quarantineCorruptFile(s.path)
+		if qErr != nil {
+			// 连改名都失败 = I/O 层也出了问题(目录只读/文件被占用),按上面
+			// 同一取舍:不静默空库,如实上报。
+			return nil, fmt.Errorf("threads.json 解析失败(%v),且隔离留档也失败: %w", err, qErr)
+		}
+		hint := "没有可用的 threads.json.bak,只能从留档文件手工抢救"
+		if st, statErr := os.Stat(s.path + ".bak"); statErr == nil && !st.IsDir() {
+			hint = fmt.Sprintf("可用 threads.json.bak 手动恢复(复制回 threads.json): %s", s.path+".bak")
+		}
+		log.Printf("[store] ERROR: threads.json 无法解析,已隔离留档并以空库启动 | 原错误: %v | 留档: %s | 恢复提示: %s",
+			err, qPath, hint)
+		return s, nil
 	}
+	s.data = loaded
 	if s.data.Threads == nil {
 		s.data.Threads = map[string]*Thread{}
 	}
 	for _, t := range s.data.Threads {
 		t.generation = new(byte)
 	}
+	// 【P2-5 启动备份】每次成功加载,把刚读到的好版本复制为 .bak("上一次好
+	// 版本"),下次损坏自愈时日志据此指路。自动从 .bak 恢复刻意不做:把旧数据
+	// 盖回新数据是产品决策,这里只留证据与提示,不擅自替用户选。
+	backupLastGood(s.path, raw)
 	return s, nil
+}
+
+// quarantineCorruptFile 把解析失败的 threads.json 原地改名为
+// threads.json.corrupt-<unix 秒>,同目录保留原始字节作证据。
+func quarantineCorruptFile(path string) (string, error) {
+	qPath := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+	if err := os.Rename(path, qPath); err != nil {
+		return "", err
+	}
+	return qPath, nil
+}
+
+// backupLastGood 尽力而为地把 raw(本次成功解析的 threads.json 原始字节)
+// 复制为 <path>.bak,同样走 tmp+rename,避免半截 .bak 反过来毒害恢复。
+// 备份失败只告警不阻塞 —— 它是自愈的辅助证据,绝不能变成新的"启动即死"点。
+func backupLastGood(path string, raw []byte) {
+	bak := path + ".bak"
+	tmp := bak + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		log.Printf("[store] WARNING: 启动备份写入失败(不影响启动,仅影响损坏后的恢复提示): %v", err)
+		return
+	}
+	if err := os.Rename(tmp, bak); err != nil {
+		log.Printf("[store] WARNING: 启动备份落位失败(不影响启动,仅影响损坏后的恢复提示): %v", err)
+	}
 }
 
 func (s *FileStore) saveLocked() error {
@@ -269,7 +335,8 @@ func cloneThread(t *Thread) *Thread {
 		ID:            t.ID, Title: t.Title, Workspace: t.Workspace, Goal: t.Goal,
 		ModelID: t.ModelID, CodexThreadID: t.CodexThreadID, AgentID: t.AgentID,
 		ExternalSession: t.ExternalSession, Effort: t.Effort, SectionID: t.SectionID,
-		Status: t.Status, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		TitlePinned: t.TitlePinned,
+		Status:      t.Status, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
 		generation: t.generation,
 	}
 	if t.SettingsSnapshot != nil {
@@ -338,6 +405,7 @@ func mergeThread(current, base, value *Thread) (*Thread, error) {
 	mergeValue(&out.ExternalSession.Cwd, base.ExternalSession.Cwd, value.ExternalSession.Cwd)
 	mergeValue(&out.Effort, base.Effort, value.Effort)
 	mergeValue(&out.SectionID, base.SectionID, value.SectionID)
+	mergeValue(&out.TitlePinned, base.TitlePinned, value.TitlePinned)
 	mergeValue(&out.Status, base.Status, value.Status)
 	mergeValue(&out.CreatedAt, base.CreatedAt, value.CreatedAt)
 	if !reflect.DeepEqual(base.SettingsSnapshot, value.SettingsSnapshot) {

@@ -56,7 +56,7 @@ func main() {
 	must(err)
 	must(stream.Send(&pb.TurnClientMessage{Msg: &pb.TurnClientMessage_Input{Input: &pb.TurnInput{
 		ThreadId: th.Id,
-		Blocks: []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "你好,请介绍一下自己"}}}},
+		Blocks:   []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "你好,请介绍一下自己"}}}},
 	}}}))
 	text := ""
 	tools := 0

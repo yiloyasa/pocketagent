@@ -290,7 +290,13 @@ func execWithApproval(ctx context.Context, tools []Tool, c oaToolCall, ws string
 	if tool == nil {
 		return "未知工具: " + c.Function.Name
 	}
-	if tool.Dangerous && approve != nil {
+	if tool.Dangerous && approve == nil {
+		// 【P0-1】危险工具遇到审批通道缺失(TestModel 诊断 RPC 等路径传 nil):
+		// 宁可不执行,也绝不能绕过审批直接跑 —— 那是连问都不问就动用户电脑。
+		// 回人话错误文本给模型;非危险工具不受影响,照常执行。
+		return "审批通道不可用,已拒绝执行危险工具"
+	}
+	if tool.Dangerous {
 		// 【vet】直接传 callBlock 指针(原来解引用拷贝一份会被 copylocks 拒绝)。
 		ok, note, err := approve(ctx, callBlock)
 		if err != nil {

@@ -98,21 +98,24 @@ import pocketagent.v1.ModelInfo
 import pocketagent.v1.RateLimitWindow
 import pocketagent.v1.SetCodexSettingsRequest
 
-// 非 codex 的可切换 agent 清单("切换 Agent"列表 = codex + 这一份)。
-// 【图 7 实锤的修复】此前这份硬编码列表漏了 zcode —— 主页网格、品牌图标表
-// (AGENT_BRAND_ICON)、daemon 的 provider 注册表里 zcode 都在,唯独设置页
-// "切换 Agent"从这份清单构建,于是用户看到的列表只有
-// Codex/OpenCode/Claude/Pi/Hermes,ZCode 永远切不到。补上后与主页同源同序。
-private val OTHER_AGENT_OPTIONS = listOf(
+/**
+ * agent id → 展示名映射(**仅展示用途,非能力名单** —— P1-6 动态化边界)。
+ *
+ * 「切换 Agent」列表的 agent 集合来自 [buildAgents](按 HostInfo.capabilities
+ * 动态构建,daemon 新增 provider 自动进列表);本表只负责"id → 人话名"的展示翻译,
+ * 缺省 id 由 [agentDisplay] 直接回退显示 id 原文(AUDIT §3.3:未知值显示原生原文)。
+ * 【图 7 实锤的历史坑】此前"切换 Agent"列表由硬编码名单构建,漏了 zcode 导致
+ * 永远切不到 —— 名单职责已移交动态数据源,本表不再参与任何能力判定,
+ * 只做展示翻译(缺省有兜底,不存在"漏了就切不到"的失败模式)。
+ */
+private val AGENT_DISPLAY = mapOf(
+    "codex" to "Codex",
     "zcode" to "ZCode",
     "opencode" to "OpenCode",
     "claude-code" to "Claude",
     "pi" to "Pi",
     "hermes" to "Hermes",
 )
-
-/** agent id → 展示名(二级页标题、agent 列表共用)。 */
-private val AGENT_DISPLAY = (listOf("codex" to "Codex") + OTHER_AGENT_OPTIONS).toMap()
 
 /**
  * 按托管策略(configRequirements)过滤可选项。
@@ -641,7 +644,7 @@ fun SettingsScreen(
                     AgentConnection.connectWithFallback()
                 }
             } catch (e: Exception) {
-                settingsError = "连接失败：${e.message ?: "未知错误"}"
+                settingsError = "连接失败：${humanizeError(e)}"
                 null
             }
             connectionSaving = false
@@ -664,7 +667,7 @@ fun SettingsScreen(
                 withContext(Dispatchers.IO) { AgentConnection.setCredentials(addr, token) }
                 Toast.makeText(ctx, "凭证已保存,自动重连将接管", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                settingsError = "保存失败：${e.message ?: "未知错误"}"
+                settingsError = "保存失败：${humanizeError(e)}"
             }
         }
     }
@@ -677,7 +680,7 @@ fun SettingsScreen(
             val connected = try {
                 withContext(Dispatchers.IO) { AgentConnection.connectWithFallback(freshChannel = true) }
             } catch (e: Exception) {
-                settingsError = "重扫失败：${e.message ?: "未知错误"}"
+                settingsError = "重扫失败：${humanizeError(e)}"
                 null
             }
             connectionSaving = false
@@ -1988,8 +1991,8 @@ private fun AgentPage(
             // 【图 7 实锤的修复】切到 Pi/ZCode 时,这里原来永远是一句
             // "接入完成后在此显示"的占位文案 —— 即使 agent 已点亮、会话能跑。
             // 现在按 agent 给真实内容(数据全部来自已有数据源,不新增 RPC):
-            //  - Pi:模型清单 + 动态思考档位(daemon 用最近 pi 会话当探针拿
-            //    PiProvider.ThinkingLevels 的实时档位)+ 全局默认模型/强度;
+            //  - Pi:模型清单 + 动态思考档位(ListModels 里 daemon 动态返回
+            //    的 available_efforts)+ 全局默认模型/强度;
             //  - ZCode:模型清单 + 桌面默认强度 + 额度入口(本批占位)。
             when (runningAgent) {
                 "pi", "zcode" -> AgentDefaultsSection(runningAgent, settings, modelChoices, writeCodex, onShowModelPicker)
@@ -2030,9 +2033,8 @@ private fun effortLabel(id: String): String = when (id) {
  *
  * 【数据来源(不新增 RPC,全部已有通道)】
  *  - 模型清单 / 动态思考档位:ListModels。daemon 侧对 pi 模型统一填
- *    available_efforts(dynamicEffortsFor 用最近更新的 pi 会话当探针,走
- *    PiProvider.ThinkingLevels 实时拉 get_available_thinking_levels,子进程
- *    没挂载时回档位全集)—— 这正是"从最近 pi 会话拿思考档位"的现成通道;
+ *    available_efforts(按该模型自身的 reasoning 能力 + thinkingLevelMap
+ *    动态过滤档位全集,不依赖活会话探针)—— 手机端原样展示,不造本地名单;
  *  - 全局默认模型/思考强度:设置页七项经 broadcastPrefs 对 pi 同样生效
  *    (PiProvider 实现 PrefsAware),这里的默认值就是 pi 新会话的起点。
  * 会话内的单独覆盖(会话页模型·强度卡)仍以会话为准,本分区只回答"默认是什么"。
@@ -2787,9 +2789,9 @@ private fun UserDataPage(
         SectionBlock(
             icon = R.drawable.ic_lucide_download,
             title = "下载内容 · " + doneCount + " 个文件" +
-                // 总计:用户问"到底占了我多少空间"。查不到真实体积就如实标「未知」,不用 0 冒充。
+                // 总计:用户问"到底占了我多少空间"。查不到真实体积就如实标「无法获取」,不用 0 冒充。
                 when {
-                    downloadUnknown -> " · 占用未知"
+                    downloadUnknown -> " · 占用无法获取"
                     downloadBytes > 0 -> " · 共 " + humanSize(downloadBytes)
                     else -> ""
                 },
@@ -2887,10 +2889,10 @@ private fun UserDataPage(
                                     )
                                 }
                                 d.status == TaskCenter.Status.DONE -> {
-                                    // 文件本体真丢了(被系统/清理软件删掉)或位置未知:如实告知,
+                                    // 文件本体真丢了(被系统/清理软件删掉)或定位不到:如实告知,
                                     // 绝不装作能打开;只给删除(移除死条目)。
                                     Text(
-                                        if (d.localUri.isEmpty()) "位置未知" else "文件已被删除",
+                                        if (d.localUri.isEmpty()) "文件位置无法获取" else "文件已被删除",
                                         Modifier.padding(end = 6.dp),
                                         fontSize = 10.5.sp, color = Pa.Red,
                                     )
@@ -3002,8 +3004,8 @@ private fun CacheSection(
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
             StatCell2("缓存", sizeText(cacheBytes), Modifier.weight(1f))
             StatCell2("用户数据", sizeText(userBytes), Modifier.weight(1f))
-            // 下载占用:查不到真实体积就如实标「未知」,绝不用 0 冒充
-            StatCell2("下载", if (downloadUnknown) "未知" else sizeText(downloadBytes), Modifier.weight(1f))
+            // 下载占用:查不到真实体积就如实标「无法获取」,绝不用 0 冒充
+            StatCell2("下载", if (downloadUnknown) "无法获取" else sizeText(downloadBytes), Modifier.weight(1f))
         }
 
         // ---- 清理动作:一行标题 + 一行短后果(≤16 字),完整说明收进下方「详情」 ----
@@ -3095,7 +3097,7 @@ private fun CacheSection(
                 fontSize = 10.5.sp, color = Pa.TextTertiary,
             )
             Text(
-                "下载 ${if (downloadUnknown) "占用未知" else sizeText(downloadBytes)} · $downloadCount 个文件" +
+                "下载 ${if (downloadUnknown) "占用无法获取" else sizeText(downloadBytes)} · $downloadCount 个文件" +
                     " · 任务条目 $taskCount 条;文件本体在系统下载目录,只能在上方列表逐条删除。",
                 Modifier.padding(bottom = 4.dp),
                 fontSize = 10.5.sp, color = Pa.TextTertiary,

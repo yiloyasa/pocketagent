@@ -78,26 +78,31 @@ data class AgentInfo(
 /**
  * agent 网格可用性判定(纯函数,单测覆盖 AgentAvailabilityTest)。
  *
- * 【点亮规则】
- *  - codex:恒可用(基线 agent,不走 capabilities 判定);
- *  - pi / zcode:仅当 HostInfo.capabilities 含 "agent:<id>" 前缀时可用 ——
+ * 【P1-6 动态化后的点亮规则 —— 能力判定一律以 daemon 动态数据为唯一真源】
+ *  - 基线可用(baseAvailable,如 codex)恒点亮;
+ *  - 其余一律看 HostInfo.capabilities 是否含 "agent:<id>" 前缀 ——
  *    旧格式 "agent:pi" 与新格式 "agent:pi:v0.85.1"(带探测版本号)都点亮,
- *    "agent:pika" 这类别的 id 不会误匹配。daemon 侧未部署对应 provider 时
- *    字段缺失,网格维持灰显"电脑端未安装"(点磁贴看安装引导),
- *    daemon 升级后无需发版自动点亮;
- *  - 其余 agent:保持基线(尚未接入,当前全部不可用)。
+ *    "agent:pika" 这类别的 id 不会误匹配,大小写不敏感兜一手;
+ *  - 不认识的新 agent id(daemon 侧新增第 4 个 provider)无需改本文件,
+ *    daemon 报了 "agent:<新id>" 就自动点亮(README §7:静态名单是债,能透传就透传)。
  */
 internal fun resolveAgentAvailability(agentId: String, baseAvailable: Boolean, capabilities: List<String>): Boolean =
-    when (agentId) {
-        "pi", "zcode" -> capabilities.any {
-            it.equals("agent:$agentId", ignoreCase = true) ||
-                it.startsWith("agent:$agentId:", ignoreCase = true)
-        }
-        else -> baseAvailable
+    baseAvailable || capabilities.any {
+        it.equals("agent:$agentId", ignoreCase = true) ||
+            it.startsWith("agent:$agentId:", ignoreCase = true)
     }
 
-/** 走 capabilities 动态点亮、灰显=「电脑端未安装」(给安装引导)的 agent;其余为尚未接入的基线项。 */
-internal val capabilityDrivenAgents = setOf("codex", "pi", "zcode")
+/**
+ * 【展示目录,非能力名单】尚未接入 daemon 数据源的占位 agent
+ * (opencode/claude-code/hermes/dsh):磁贴作为「接入中」的展示位保留。
+ *
+ * 【与能力判定的边界(P1-6 动态化)】任何 agent 的可用性一律由
+ * HostInfo.capabilities("agent:<id>")动态决定(见 [resolveAgentAvailability]),
+ * 本集合只决定灰显态的副文字口径("接入中" vs "电脑端未安装"),不参与点亮。
+ * daemon 侧新增的 agent id 不在本集合 → 自动按能力驱动型展示(灰显="电脑端未安装"),
+ * 因此本集合只随 agent 真正接入而**减少**、不随新 agent 增加(白名单只减不增)。
+ */
+internal val placeholderDisplayAgents = setOf("opencode", "claude-code", "hermes", "dsh")
 
 /**
  * 从 capabilities 提取 agent 已装版本(纯函数):daemon 报 "agent:pi:v0.85.1"
@@ -109,12 +114,12 @@ internal fun resolveAgentInstalledVersion(agentId: String, capabilities: List<St
         ?.split(":")?.getOrNull(2)?.takeIf { it.isNotBlank() }
 
 /**
- * 灰显磁贴副文字(纯函数):能力驱动型=电脑端未安装(真实原因,替代过时的"开发中");
- * 尚未接入的基线 agent(opencode/claude-code/hermes/dsh)=接入中。
+ * 灰显磁贴副文字(纯函数):占位展示目录内=接入中(daemon 无此 agent 的数据源);
+ * 其余(含 daemon 动态报上来的新 id)=电脑端未安装(真实原因,替代过时的"开发中")。
  */
 internal fun unavailableLabel(agentId: String): String =
-    if (agentId in capabilityDrivenAgents) AgentGuideCopy.SUBTITLE_NOT_INSTALLED
-    else AgentGuideCopy.SUBTITLE_INTEGRATING
+    if (agentId in placeholderDisplayAgents) AgentGuideCopy.SUBTITLE_INTEGRATING
+    else AgentGuideCopy.SUBTITLE_NOT_INSTALLED
 
 /**
  * 引导弹窗文案(集中常量,便于后续调整)。detect=判断依据(与 daemon 侧探测
@@ -152,7 +157,15 @@ internal fun agentGuideCopy(agentId: String): AgentGuide = when (agentId) {
     else -> AgentGuide(AgentGuideCopy.DETECT_INTEGRATING, AgentGuideCopy.INSTALL_INTEGRATING)
 }
 
-/** 网格清单(纯函数,单测覆盖):基线表 + capabilities 动态点亮。 */
+/**
+ * 网格清单(纯函数,单测覆盖):基线表 + capabilities 动态点亮 + daemon 新增 agent 动态追加。
+ *
+ * 【P1-6 边界说明】基线 7 项是**展示目录**(展示名/图标/连接方式文案),不是能力名单:
+ *  - 可用性一律由 [resolveAgentAvailability] 按 capabilities 动态判定,基线表不点亮任何东西;
+ *  - opencode/claude-code/hermes/dsh 为占位展示项(daemon 无数据源,见 placeholderDisplayAgents);
+ *  - daemon 报了基线表没有的 "agent:<新id>" → 走 extra 追加,展示名缺省回退 **id 原文**
+ *    (AUDIT §3.3:未知值显示原生原文),图标用通用 CPU 图标 —— 新 agent 零改动自动进网格。
+ */
 internal fun buildAgents(capabilities: List<String>): List<AgentInfo> = listOf(
     AgentInfo("codex", "Codex", "app-server", "Codex app-server 后端", R.drawable.agent_codex, true),
     AgentInfo("opencode", "OpenCode", "stdio", "HTTP + SSE 会话后端", R.drawable.agent_opencode, false),
@@ -648,15 +661,15 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
             Column(Modifier.weight(1f)) {
                 Text(agent.name, fontSize = 19.sp, color = Pa.TextPrimary)
                 Text(
-                    // 状态行:未接入型固定"接入中";能力驱动型分"已装 vX"/"电脑端未安装"两态
+                    // 状态行:占位展示项固定"接入中";能力驱动型分"已装 vX"/"电脑端未安装"两态
                     when {
-                        agent.id !in capabilityDrivenAgents -> AgentGuideCopy.SUBTITLE_INTEGRATING
+                        agent.id in placeholderDisplayAgents -> AgentGuideCopy.SUBTITLE_INTEGRATING
                         installedVersion != null -> "已装 $installedVersion"
                         else -> AgentGuideCopy.SUBTITLE_NOT_INSTALLED
                     },
                     fontSize = 12.sp,
                     color = when {
-                        agent.id !in capabilityDrivenAgents -> Pa.TextSecondary
+                        agent.id in placeholderDisplayAgents -> Pa.TextSecondary
                         installedVersion != null -> Pa.Green
                         else -> Pa.Red
                     },
@@ -670,7 +683,7 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
             GuideBlock("怎么判断的", guide.detect)
             GuideBlock("怎么装", guide.install)
         }
-        if (agent.id in capabilityDrivenAgents && installedVersion == null) {
+        if (agent.id !in placeholderDisplayAgents && installedVersion == null) {
             Text(
                 "装好后重连 daemon,磁贴自动点亮",
                 Modifier.padding(horizontal = 20.dp, vertical = 6.dp),

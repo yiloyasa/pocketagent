@@ -123,7 +123,7 @@ func (r *runner) runSMode() {
 			status = "失败"
 		}
 		r.add(result{n: 5, name: "follow_up(空闲时机)", status: status,
-			note: fmt.Sprintf("success=true;空闲投递后 agent_start=%d settled=%v 排队文本出现在回复=%v(空闲即跑/排队续跑的判据)", runs, settled, textOK),
+			note:  fmt.Sprintf("success=true;空闲投递后 agent_start=%d settled=%v 排队文本出现在回复=%v(空闲即跑/排队续跑的判据)", runs, settled, textOK),
 			proof: pickLines(p.dump(), []string{`"type":"follow_up"`, `"type":"queue_update"`}, 4)})
 	}
 
@@ -160,7 +160,7 @@ func (r *runner) runSMode() {
 			status = "失败"
 		}
 		r.add(result{n: 6, name: "follow_up(运行中时机)", status: status,
-			note: fmt.Sprintf("follow_up success=%v;queue_update 事件 %d 次;follow_up 轮的回复出现=%v settled=%v(排队后在本 settled 周期内续跑)", boolOf(fu2["success"]), queueEvents, textOK, settled),
+			note:  fmt.Sprintf("follow_up success=%v;queue_update 事件 %d 次;follow_up 轮的回复出现=%v settled=%v(排队后在本 settled 周期内续跑)", boolOf(fu2["success"]), queueEvents, textOK, settled),
 			proof: pickLines(p.dump(), []string{`"type":"queue_update"`, `"type":"follow_up"`}, 5)})
 	}
 
@@ -192,12 +192,12 @@ func (r *runner) runSMode() {
 	} else if boolOf(cp["success"]) {
 		raw, _ := json.Marshal(cp["data"])
 		r.add(result{n: 8, name: "compact(小会话)", status: "通过",
-			note: "真压缩成功;结果键应为 summary/firstKeptEntryId/tokensBefore/estimatedTokensAfter/usage/details",
+			note:  "真压缩成功;结果键应为 summary/firstKeptEntryId/tokensBefore/estimatedTokensAfter/usage/details",
 			proof: []string{clip(string(raw), 500)}})
 	} else {
 		raw, _ := json.Marshal(cp)
 		r.add(result{n: 8, name: "compact(小会话)", status: "通过",
-			note: "小会话被拒(预期错误路径:Nothing to compact / Already compacted);成功应答形状见 bundle 摘录",
+			note:  "小会话被拒(预期错误路径:Nothing to compact / Already compacted);成功应答形状见 bundle 摘录",
 			proof: []string{clip(string(raw), 300)}})
 	}
 }

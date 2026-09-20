@@ -69,3 +69,6 @@ desktop.ini
 # ---------- 例外：Gradle Wrapper 必须入库 ----------
 # 没有它 ./gradlew 无法自举，构建会直接失败
 !gradle/wrapper/gradle-wrapper.jar
+
+# ---------- Python 字节码缓存 ----------
+__pycache__/

@@ -152,7 +152,8 @@ object PaNotificationPolicy {
                 else -> jsonArgs
             }
         }
-        return summarizeForNotification(raw.ifBlank { actionName.ifBlank { "未知的操作" } }, max)
+        // AUDIT §3.3:参数解析不出人话时给中性表述,禁显「未知的操作」
+        return summarizeForNotification(raw.ifBlank { actionName.ifBlank { "新的操作请求" } }, max)
     }
 
     /** 审批通知折叠后的详情(BigTextStyle):完整 JSON 截到 [max] 字,够看清在批准什么。 */

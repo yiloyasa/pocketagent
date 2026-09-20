@@ -51,7 +51,10 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		// ^ P1-5:声明支持事件断点续传(帧带 sequence / GetThreadEventsSince /
 		// WatchEvents.after_sequence)。手机端只在看到该能力时才走增量恢复路径,
 		// 旧 daemon 无此声明 → 手机自动退回历史全量回填,互不踩脚。
-		AuthRequired:  s.cfg.PairCode != "",
+		// 【PA-REAL-0001】auth_required 如实反映:配对码模式(默认)= true;
+		// 显式 -insecure-no-auth = false。空配对码的异常配置同样按 true 报告
+		// (服务确实在拒绝未授权请求)。
+		AuthRequired:  s.authRequired(),
 		DefaultShell:  shell,
 		TailscaleIpv4: detectTailscaleIP(),
 		LanIpv4:       detectLanIP(),
@@ -61,6 +64,10 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 // HostID 返回本 daemon 的稳定主机标识(进程内随机生成)。
 // 供 cmd/pocketagentd 的 mDNS 广播取 TXT id(P0-3),不影响其他语义。
 func (s *Server) HostID() string { return s.hostID }
+
+// authRequired 报告"本 daemon 是否在鉴权":唯一关闭方式是显式
+// -insecure-no-auth。GetHostInfo 用它如实回答手机端"要不要走配对流程"。
+func (s *Server) authRequired() bool { return !s.cfg.InsecureNoAuth }
 
 // agentCapability 生成单个 agent 的能力串(capabilities 生成段的辅助函数)。
 //
@@ -183,10 +190,17 @@ func detectTailscaleIP() string {
 //	challenge_request        → 给已注册设备发随机挑战数;
 //	challenge_answer         → 验 Keystore 签名,验过发新 token。
 //
-// GetHostInfo 的 auth_required 语义保持不变。
+// GetHostInfo 的 auth_required 语义保持不变(见 authRequired)。
 func (s *Server) Authorize(ctx context.Context, req *pb.AuthorizeRequest) (*pb.AuthorizeResponse, error) {
+	// 【PA-REAL-0001】两种新情形:
+	//   insecure-no-auth → 无鉴权模式,无需配对(回环限制由拦截器把守),回空 token;
+	//   空 PairCode       → 异常配置(正常启动必自动生成),fail closed 拒绝,
+	//                      绝不能像旧版那样静默返回"空 token 全放行"。
+	if s.cfg.InsecureNoAuth {
+		return &pb.AuthorizeResponse{Token: "", ExpiresAtUnix: 0}, nil
+	}
 	if s.cfg.PairCode == "" {
-		return &pb.AuthorizeResponse{Token: "", ExpiresAtUnix: 0}, nil // 未启用鉴权
+		return nil, errFailedPrecondition("服务端未配置配对码,拒绝配对;请重启 daemon(自动生成配对码)或以 -insecure-no-auth 显式关闭鉴权(仅限本机)")
 	}
 	switch m := req.Method.(type) {
 	case *pb.AuthorizeRequest_PairCode:

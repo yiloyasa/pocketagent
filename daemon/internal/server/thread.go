@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"sort"
@@ -92,16 +93,24 @@ func (s *Server) CreateThread(ctx context.Context, req *pb.CreateThreadRequest) 
 	}
 	// 多 agent:请求指定 agent(codex/pi/…)。不存在就显式报错 —— 静默建一个
 	// 跑在别的 agent 上的会话,比报错误导得多(调研 §7.1 的隐患)。
+	// 【尽力接入(2026-09-20 动态化,AUDIT 附录 A 第 1 项)】只要 agent_id 在
+	// 注册表里就接,不问它"在不在任何名单";不在才报错,文案动态列举当前可用
+	// 的 agent(新增 provider 自动出现,不写死任何名单)。
 	agentID := strings.TrimSpace(req.AgentId)
 	if agentID == "" {
 		agentID = "codex" // 老客户端不带 agent_id:维持 codex 语义
 	}
 	if _, ok := s.cfg.Providers[agentID]; !ok {
-		return nil, errFailedPrecondition("电脑上没有可用的 " + agentID + " agent(未安装或未配置)")
+		return nil, errFailedPrecondition("电脑上没有可用的 " + agentID +
+			" agent(未安装或未配置)。当前可用: " + strings.Join(s.availableAgentIDs(), ", "))
 	}
 	model := req.ModelId
 	if model == "" || !strings.HasPrefix(model, agentID+"/") {
-		model = s.defaultModelIDFor(agentID)
+		m, merr := s.defaultModelIDFor(agentID)
+		if merr != nil {
+			return nil, errFailedPrecondition(merr.Error())
+		}
+		model = m
 	}
 	title := req.Title
 	if title == "" {
@@ -140,20 +149,47 @@ func turnSettingsFromPrefs(p agent.DesktopPrefs) *store.TurnSettings {
 	}
 }
 
-// defaultModelIDFor 给指定 agent 的默认模型 id("<agent>/<首个模型>")。
-// 模型列表拉不到时退回 "<agent>/default"(codex/pi 都有 default 兜底项)。
-func (s *Server) defaultModelIDFor(agent string) string {
-	if agent != "codex" {
-		if d := s.cfg.Store.AgentDefaults(agent); d.Model != "" {
-			return d.Model
+// defaultModelIDFor 给指定 agent 的默认模型 id。
+//
+// 【不伪造 ID(2026-09-20 整改,AUDIT 附录 A 第 3 项)】以前列表拉不到就凭空
+// 返回 "<agent>/default" —— 原生删掉/没提供 default 哨兵时,落库的是一个
+// 不存在的 ID。现在按确定性优先级解析,解析不出如实报错(调用方给人话):
+//  1. 设置页为该 agent 落盘的默认模型(AgentDefaults;codex 维持全局默认语义);
+//  2. provider 模型列表里的 "default" 哨兵(跟随桌面当前配置,codex/pi/zcode 都有);
+//  3. 模型列表首项;
+//  4. 都没有 → 明确报错,绝不编造 ID。
+func (s *Server) defaultModelIDFor(agentID string) (string, error) {
+	if agentID != "codex" {
+		if d := s.cfg.Store.AgentDefaults(agentID); d.Model != "" {
+			return d.Model, nil
 		}
 	}
-	if p, ok := s.cfg.Providers[agent]; ok {
-		if ms := p.Models(); len(ms) > 0 {
-			return p.ID() + "/" + ms[0].Id
+	p, ok := s.cfg.Providers[agentID]
+	if !ok {
+		return "", fmt.Errorf("电脑上没有可用的 %s agent,无法确定默认模型", agentID)
+	}
+	ms := p.Models()
+	// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+	for i := range ms {
+		if ms[i].Id == "default" {
+			return p.ID() + "/default", nil
 		}
 	}
-	return agent + "/default"
+	if len(ms) > 0 {
+		return p.ID() + "/" + ms[0].Id, nil
+	}
+	return "", fmt.Errorf("电脑上的 %s 还没有可用的模型,暂时无法确定默认模型", agentID)
+}
+
+// availableAgentIDs 当前注册表里可用的 agent ID(字典序)。仅供报错文案动态
+// 列举 —— 任何"是否接入"的判断都直接查 s.cfg.Providers,不经过任何名单。
+func (s *Server) availableAgentIDs() []string {
+	ids := make([]string, 0, len(s.cfg.Providers))
+	for id := range s.cfg.Providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // ListThreads 会话列表。
@@ -366,6 +402,14 @@ type piThreadDropper interface {
 	DropThread(threadID string)
 }
 
+// titlePusher 重命名下发能力的最小接口(生产由 *agent.PiProvider 实现 ——
+// set_session_name;codex 走专用通道 SetCodexThreadName,不经本接口)。
+// RenameThread 用它探测"新标题能不能传到子进程侧":不能的(zcode)本地钉住
+// TitlePinned,防止自动命名回调把用户改的名字顶回去(T-05)。
+type titlePusher interface {
+	Rename(t *store.Thread, title string) error
+}
+
 // zcodeGoalPusher / zcodeCompacter / zcodeSessionCloser zcode 侧控制面能力的
 // 最小接口(生产由 *agent.ZcodeProvider 实现;抽接口同上,单测可注 fake):
 // SetGoal = session/goal 下发,CompactSession = session/compact,CloseSession =
@@ -449,12 +493,31 @@ func (s *Server) CancelTurn(ctx context.Context, req *pb.CancelTurnRequest) (*pb
 //
 // 这里额外把标题写回 codex:否则电脑上还是旧标题,用户在电脑上找会话时会以为
 // 自己在手机上改的名字没生效。
+//
+// 【无下发通道的 agent:改名要钉住(T-05)】codex 走 SetCodexThreadName、pi 走
+// titlePusher(set_session_name),改名能传到子进程侧,双端同源;zcode 没有
+// 这样的通道,改名只能落在本地库 —— 若不钉住,它下一轮的自动命名回调
+// (session/titleUpdated → applyZcodeTitle)会把用户刚改的名字顶掉,表现为
+// "改名成功,聊了一句又变回去了"。探测方式用能力接口而不是写死 agent 名单:
+// 有下发能力的 agent 不钉(电脑端发起的改名照常同步回来),没有的钉,
+// 未来新 agent 接入自动获得合理默认(能透传就透传,不能就本地钉住)。
 func (s *Server) RenameThread(ctx context.Context, req *pb.RenameThreadRequest) (*pb.Thread, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
 	if !ok {
 		return nil, errNotFound("会话不存在")
 	}
 	t.Title = req.Title
+	// codex 的下发通道在下方(SetCodexThreadName);其余 agent 有 titlePusher
+	// 能力才算"能传到子进程侧"。
+	canPropagate := threadAgentID(t) == "codex"
+	if !canPropagate {
+		if _, ok := s.cfg.Providers[threadAgentID(t)].(titlePusher); ok {
+			canPropagate = true
+		}
+	}
+	if !canPropagate {
+		t.TitlePinned = true
+	}
 	if err := s.cfg.Store.Update(t); err != nil {
 		return nil, errInternal(err)
 	}
@@ -804,7 +867,9 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	userBlocks := derefBlocks(input.Blocks)
 	t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: userBlocks, CreatedAt: time.Now().UnixMilli()})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
-	_ = s.cfg.Store.Update(t)
+	// P2-4:启动轮的输入落库属"尽力而为"(流已开,错误无法回传给手机),
+	// 但失败必须留痕 —— 否则磁盘异常期间整轮历史静默丢失。
+	logStoreUpdateErr("turn-start", t.ID, s.cfg.Store.Update(t))
 
 	inputBlocks := userBlocks
 	for {
@@ -935,7 +1000,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		}}})
 		t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: next.blocks, CreatedAt: time.Now().UnixMilli()})
 		t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
-		_ = s.cfg.Store.Update(t)
+		logStoreUpdateErr("queued-turn-start", t.ID, s.cfg.Store.Update(t))
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
 			TurnId: turnID, ModelId: t.ModelID,
 		}}})
@@ -961,9 +1026,27 @@ func (s *Server) wirePiTitleHandler() {
 				continue
 			}
 			t.Title = title
-			_ = s.cfg.Store.Update(t)
+			logStoreUpdateErr("pi-title-sync", threadID, s.cfg.Store.Update(t))
 			log.Printf("[pi] 标题同步落库 thread=%s title=%.60q", threadID, title)
 		}
+	}
+}
+
+// applyZcodeTitle 把 zcode 的标题回调落库(自动命名同步,与 codex/pi 同语义)。
+//
+// 【钉住守卫(T-05)】被用户手动改名钉住(TitlePinned)的线程跳过:zcode 没有
+// "把手机上的新名字回写给 zcode"的通道,自动命名事件(session/titleUpdated)
+// 若无条件落库,用户刚改的名字会在下一轮被顶掉。抽成函数:server.go 的接线
+// 只剩一行,规则本身可被单测钉住(与 wirePiTitleHandler 的"逻辑收在 thread.go"
+// 同一安排)。
+func applyZcodeTitle(st *store.FileStore, threadID, title string) {
+	for _, t := range st.List(true) {
+		if t.ID != threadID || t.Title == title || t.TitlePinned {
+			continue
+		}
+		t.Title = title
+		logStoreUpdateErr("zcode-title-sync", threadID, st.Update(t))
+		log.Printf("[zcode] 标题同步落库 thread=%s title=%.60q", threadID, title)
 	}
 }
 
@@ -1047,12 +1130,31 @@ func applyTurnOverrides(t *store.Thread, in *pb.TurnInput) {
 	t.Effort = strings.TrimSpace(in.GetEffort())
 }
 
-// defaultProvider 按固定优先级挑一个可用 provider,echo 兜底。
+// defaultProvider 挑默认 provider(2026-09-20 动态化,体检 P1-5):
+//  1. 设置页落盘的默认模型(store.DefaultModelID)的 provider 前缀 —— 用户
+//     显式选过的默认,优先兑现(provider 不在注册表则作废,继续往下);
+//  2. 没有设置:注册表里 ID 字典序第一个非 echo provider(Go map 无序,字典序
+//     是确定性的"第一个");
+//  3. echo 永远最后兜底(零配置也能跑通整条链路)。
+//
+// 全程不写死任何 agent 名单,未来新增 provider 一视同仁。
 func (s *Server) defaultProvider() agent.Provider {
-	for _, id := range []string{"codex", "glm", "deepseek"} {
-		if p, ok := s.cfg.Providers[id]; ok {
-			return p
+	if id := s.cfg.Store.DefaultModelID(); id != "" {
+		if i := indexByte(id, '/'); i > 0 {
+			if p, ok := s.cfg.Providers[id[:i]]; ok {
+				return p
+			}
 		}
+	}
+	ids := make([]string, 0, len(s.cfg.Providers))
+	for id := range s.cfg.Providers {
+		if id != "echo" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if len(ids) > 0 {
+		return s.cfg.Providers[ids[0]]
 	}
 	return s.cfg.Providers["echo"]
 }

@@ -84,8 +84,8 @@ func TestZcodeGoalStash(t *testing.T) {
 	p.stashGoal("th1", "目标B")
 	p.stashGoal("th1", "  ")
 	if goal, ok := p.takePendingGoal("th1"); !ok || goal != "  " {
-        t.Fatal("clear must remain pending until delivered")
-    }
+		t.Fatal("clear must remain pending until delivered")
+	}
 	// 线程之间互不干扰
 	p.stashGoal("thA", "目标A")
 	p.stashGoal("thB", "目标B")

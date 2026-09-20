@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github.com/pocketagent/daemon/internal/hidewin"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -31,6 +32,11 @@ type Client struct {
 	nextID    int64
 	pending   map[int64]chan rpcResp
 	handlerMu sync.Mutex
+
+	// waitOnce 保证 cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait):意外退出
+	// (readLoop EOF,要拿退出码写死因日志)与 Close 主动收尸两条路径共用
+	// reapWithLog(与 piapp/zcodeapp 同款,2026-09-20 补,P1-7)。
+	waitOnce sync.Once
 
 	// 通知(服务器 → 客户端,无需应答):item 更新、delta、turn 生命周期
 	//
@@ -126,7 +132,14 @@ func Start() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stderr = os.Stderr // 诊断信息透传到 daemon 日志
+	// stderr 单独收进 daemon 日志(绝不混进 stdout —— 那里只允许 JSON-RPC 协议帧;
+	// 也绝不透传 os.Stderr:生产 daemon 由 paguard/WMI 拉起(CREATE_NO_WINDOW,
+	// 无控制台),os.Stderr 无人接收,codex 的死因输出全丢 —— piapp/zcodeapp
+	// 当年同款病,2026-09-20 补齐 codexapp,范式与二者一致)。
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("启动 codex app-server 失败: %w", err)
 	}
@@ -138,7 +151,32 @@ func Start() (*Client, error) {
 	}
 	c.syncHandlers() // readLoop 的读面就位(此刻 handler 均为 nil:上层 Start 之后才装)
 	go c.readLoop()
+	// stderr 逐行落 daemon.log([codex-stderr] 前缀,与 [pi-stderr]/[zcode-stderr]
+	// 同款)。子进程退出 → 管道写端关闭 → drainStderr 读到 EOF 自然返回,goroutine
+	// 不泄漏;收尸(cmd.Wait)由 reapWithLog 独占(waitOnce 保证只一次),这里
+	// 绝不重复 Wait(exec.Cmd 不允许二次 Wait)。
+	go drainStderr(stderr, func(l string) { log.Printf("[codex-stderr] %s", l) })
 	return c, nil
+}
+
+// drainStderr 逐行收子进程 stderr,每行交给 line 回调(生产注入 log.Printf 落
+// daemon.log,测试注入 bytes.Buffer 收集器)。核心抽成自由函数以便单测 ——
+// 管道与进程生命周期缠在一起时无法直接测(AUDIT §4:缺陷即测试)。
+//
+// 终止条件:子进程退出 → 管道写端关闭 → Scanner 读到 EOF → 本函数返回,
+// 调用方 goroutine 随之结束,不泄漏。收尸(cmd.Wait)归 reapWithLog(独占),
+// 这里绝不 Wait。非 EOF 的读取错误(如收尸方先一步关了管道)记一行回调即返回,
+// 不 panic、不重试 —— 空行原样透传、无换行的截断行(进程死于半行输出)照收,
+// 死因诊断一行都不能丢。
+func drainStderr(r io.Reader, line func(string)) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 单行上限 1MB(stderr 是诊断文本,不是协议帧,给足余量)
+	for sc.Scan() {
+		line(sc.Text())
+	}
+	if err := sc.Err(); err != nil {
+		line("读取异常: " + err.Error())
+	}
 }
 
 type wireMsg struct {
@@ -288,14 +326,17 @@ func (c *Client) readLoop() {
 		line, err := c.stdout.ReadBytes('\n')
 		if len(line) > 0 {
 			if debug {
-				// 原始帧日志:诊断"事件明明发了但收不到"类问题
-				os.Stderr.Write([]byte("[raw] " + fmt.Sprintf("%.400s", line) + "\n"))
+				// 原始帧日志:诊断"事件明明发了但收不到"类问题。走 log 落
+				// daemon.log(与 [codex-stderr] 同款)—— 后台 daemon 无控制台,
+				// os.Stderr 直写无人接收,调试帧全丢(T-24 回归:
+				// client_debug_ast_test.go 钉死 readLoop 内不得再直写 os.Stderr)。
+				log.Printf("[codex-debug] [raw] %.400s", line)
 			}
 			var m wireMsg
 			if json.Unmarshal(line, &m) == nil {
 				c.dispatch(&m)
 			} else if debug {
-				os.Stderr.Write([]byte("[raw-UNPARSED] len=" + fmt.Sprint(len(line)) + "\n"))
+				log.Printf("[codex-debug] [raw-UNPARSED] len=%d", len(line))
 			}
 		}
 		if err != nil {
@@ -306,6 +347,10 @@ func (c *Client) readLoop() {
 				delete(c.pending, id)
 			}
 			c.mu.Unlock()
+			// 【死因日志】EOF 只是症状,退出码才是死因:收尸并把退出码落
+			// daemon.log(与 Close 收尸共用 reapWithLog,Once 保证只 Wait 一次;
+			// 与 piapp/zcodeapp 同款,2026-09-20 补)。
+			go c.reapWithLog("意外退出(stdout 关闭)")
 			return
 		}
 	}
@@ -357,12 +402,49 @@ type rpcResp struct {
 	err error
 }
 
-// Close 结束子进程。
+// PID 返回子进程 PID(日志定位用);未知返回 0。
+func (c *Client) PID() int {
+	if c.cmd != nil && c.cmd.Process != nil {
+		return c.cmd.Process.Pid
+	}
+	return 0
+}
+
+// reapWithLog 收尸(cmd.Wait)并把退出码写进标准 log(daemon.log)。
+// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用;waitOnce 保证
+// cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait)。正常 Kill 关闭时退出码
+// 非 0 属预期,日志里带 why 字段区分,不会被误读成崩溃。
+func (c *Client) reapWithLog(why string) {
+	if c.cmd == nil {
+		return
+	}
+	c.waitOnce.Do(func() {
+		err := c.cmd.Wait()
+		code := -1
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.Exited() {
+			code = ee.ExitCode()
+		}
+		log.Printf("[codex] codex app-server 子进程退出(%s) PID=%d 退出码=%d err=%v", why, c.PID(), code, err)
+	})
+}
+
+// Close 结束子进程并收割。
+//
+// 【为什么 Kill 后必须 Wait】exec.Cmd 明确要求调用方 Wait 收割子进程:只 Kill
+// 不 Wait 会泄漏进程句柄与管道 —— 长跑 daemon 每次重启 codex 子进程都 Close
+// 一次,泄漏会持续累积,且退出码无人记录、崩溃无从诊断(P1-7)。收尸走
+// reapWithLog(退出码落 daemon.log),放专门 goroutine,不拖住 Close 调用方
+// (piapp/zcodeapp 同款,范式来自 term/manager.go:Kill 后 goroutine Wait)。
 func (c *Client) Close() {
-	if c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
+	cmd := c.cmd
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	_ = c.stdin.Close()
+	c.writeMu.Unlock()
+	if cmd != nil {
+		go c.reapWithLog("Close 主动关闭")
+	}
 }

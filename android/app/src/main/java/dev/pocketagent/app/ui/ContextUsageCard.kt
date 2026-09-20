@@ -49,8 +49,8 @@ import pocketagent.v1.Usage
  * 与"我想知道窗口用了多少"这件正事无关,已全部删除。
  *
  * 【断网可读】数字来自实时上报,但断网时退回本地缓存([cachedAt] 非空即表示这是
- * 最后一次已知值),并显示"离线 · 最后更新 HH:mm"提示条,而不是空态 —— 窗口未知
- * 时也如实显示"窗口未知 / daemon 尚未上报窗口大小",绝不假装有数。
+ * 最后一次已知值),并显示"离线 · 最后更新 HH:mm"提示条,而不是空态 —— 窗口真未知
+ * 时也如实显示"窗口 — / daemon 尚未上报窗口大小",绝不假装有数。
  *
  * 【自动刷新】卡片打开期间由调用方每 3s 触发一次重组(见 ChatScreen 的 LaunchedEffect)。
  */
@@ -224,7 +224,10 @@ fun ContextUsageCard(
                             color = Pa.TextSecondary,
                         )
                     } else {
-                        Text("窗口未知", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.TextSecondary)
+                        // 窗口真未知(schema 无该字段/daemon 未上报):如实显"—"不造数
+                        // (README §11 既定口径,与 [ContextRing] 的 ringPercentLabel 同一形态),
+                        // 不写「未知」字样(AUDIT §3.3 禁令)。
+                        Text("窗口 —", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.TextSecondary)
                         Text("daemon 尚未上报窗口大小", fontSize = 11.sp, color = Pa.TextTertiary)
                     }
                 }

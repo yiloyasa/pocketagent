@@ -292,10 +292,31 @@ func zcodeWorkspace(path string) map[string]string {
 
 var errNoZcodeClient = fmt.Errorf("ZCode 子进程未启动")
 
+// ErrZcodeBusy 表示另一个调用正持有 zcode 生命周期锁(正在初始化/探测)。
+//
+// 【PA-REAL-0003 文案窜用修复】此前这里直接复用包级 ErrBusy(定义在 codex.go,
+// 文案写死"codex 正忙"),zcode 自己忙却被标成"codex 正忙",把排障引向完全无关
+// 的 provider(AUDIT §3.3:错误文案不得误导)。现在文案如实指明是 zcode 在忙;
+// 同时以 Unwrap 挂在 ErrBusy 哨兵之下 —— errors.Is(err, ErrBusy) 仍为真,
+// codex.modelsListErr(T-14,PA-REAL-0002)与 server 层依 ErrBusy 做的
+// "可重试/正忙"分级归类链不回归。
+var ErrZcodeBusy = &busySentinelError{msg: "zcode 正忙(另一个操作正在初始化/探测),请稍后重试"}
+
+// busySentinelError 是"本 provider 正忙"哨兵的载体:Error() 只含自身如实文案
+// (不拼底层哨兵文本,避免把"codex 正忙"又带回来),Unwrap 到包级 ErrBusy
+// 维持既有 errors.Is 分级兼容。
+type busySentinelError struct {
+	msg string
+}
+
+func (e *busySentinelError) Error() string { return e.msg }
+func (e *busySentinelError) Unwrap() error { return ErrBusy }
+
 // withClientCtx 在保证子进程活着的前提下执行 fn;失败自动重启一次。
 //
-// 【TryLock/ErrBusy 模式,与 codex.withClientCtx 同款且三点缺一不可】
-//  1. TryLock 替代 Lock:拿不到锁立即 ErrBusy,一个卡死的操作不拖住全线;
+// 【TryLock/忙哨兵模式,与 codex.withClientCtx 同款且三点缺一不可】
+//  1. TryLock 替代 Lock:拿不到锁立即返回忙哨兵(ErrZcodeBusy,文案如实指明
+//     zcode 自己忙,不窜用 codex 的 ErrBusy 文案),一个卡死的操作不拖住全线;
 //  2. 调用方没给截止时间时套默认上界(zcodeInitBudget),无论如何有界;
 //  3. 全程同步,绝不"超时后 go 继续等" —— 那会留下还持着 lifeMu 的僵尸 goroutine。
 //
@@ -303,7 +324,7 @@ var errNoZcodeClient = fmt.Errorf("ZCode 子进程未启动")
 // 通知自行推进到 ready,请求即可直接发(实证:启动后立刻 runtime/capabilities 正常应答)。
 func (p *ZcodeProvider) withClientCtx(ctx context.Context, budget time.Duration, fn func(context.Context, *zcodeapp.Client) error) error {
 	if !p.lifeMu.TryLock() {
-		return ErrBusy
+		return ErrZcodeBusy
 	}
 	defer p.lifeMu.Unlock()
 
@@ -1124,6 +1145,15 @@ func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx
 	var pr zcodePermissionRequest
 	if json.Unmarshal(params, &pr) != nil {
 		_ = rsp.RespondError(rawID, -32602, "审批参数无法解析")
+		return true
+	}
+	if approve == nil {
+		// 【P1-2】审批通道缺失:不能回 {"decision":"deny","reason":"用户在手机上
+		// 拒绝了该操作"} —— 手机从未被询问,却向 zcode 桌面端假称"用户拒绝",
+		// 虚假归因会写进 agent 对话上下文(红线 1)。回 error 让 zcode 按通道
+		// 故障处理(askViaPhone 同款口径:基础设施问题不伪装成用户意志)。
+		log.Printf("[zcode] 审批通道不可用(approve==nil),回 error")
+		_ = rsp.RespondError(rawID, -32000, "审批通道不可用")
 		return true
 	}
 	waiting.Store(true)

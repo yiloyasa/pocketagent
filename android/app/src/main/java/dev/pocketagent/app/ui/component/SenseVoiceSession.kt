@@ -25,7 +25,7 @@ internal class SenseVoiceSessionRunner(
      * @return true = 已启动;false = 忙(上一会话未结束)或已销毁。
      *   旧实现这种情况静默 return —— 端侧 SenseVoice 停止后还有秒级"模型加载+转写"
      *   空窗,空窗内点击麦克风会零反馈(用户感知"完全没反应"的静默失败点),
-     *   调用方(SenseVoiceRecognizer.start)据此回报 [dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY]。
+     *   调用方(SenseVoiceRecognizer.start)据此回报 [VOICE_ERROR_ENGINE_BUSY]。
      */
     fun start(): Boolean {
         val ticket: Long
@@ -47,7 +47,7 @@ internal class SenseVoiceSessionRunner(
                 // 麦克风不可用(MIUI「录音」开关/被其他应用占用):专用码给人话指引
                 error = VOICE_ERROR_MIC_BLOCKED; ""
             } catch (_: Throwable) {
-                error = VOICE_ERROR_VOSK_ENGINE; ""
+                error = VOICE_ERROR_ENGINE; ""
             }
             // work's finally has already released every resource.
             synchronized(lock) { active = false }

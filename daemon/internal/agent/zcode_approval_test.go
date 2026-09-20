@@ -65,6 +65,12 @@ func (f *fakeZcodeResponder) lastErr(t *testing.T) (int, string) {
 	return f.errCodes[len(f.errCodes)-1], f.errMsgs[len(f.errMsgs)-1]
 }
 
+func (f *fakeZcodeResponder) resultCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.results)
+}
+
 var zcodeApprovalTestParams = json.RawMessage(`{"requestId":"req-1","toolCallId":"tc-1","toolName":"Bash","input":{"command":"ls"}}`)
 
 // TestZcodeApprovalTimeoutAutoDeny 手机不点审批 → 120s(测试注入 50ms)超时后
@@ -153,5 +159,35 @@ func TestZcodeApprovalBadParams(t *testing.T) {
 	}
 	if code, msg := rsp.lastErr(t); code != -32602 || !strings.Contains(msg, "审批参数") {
 		t.Fatalf("应回 -32602,得到 %d %q", code, msg)
+	}
+}
+
+// TestZcodeApprovalNilChannelErrors P1-2 回归钉子:审批通道缺失(approve==nil,
+// 如 TestModel 诊断 RPC 路径)必须回 error 而非 deny 决定 —— 手机从未被询问,
+// 绝不得假托"用户在手机上拒绝了该操作"写进 agent 对话上下文(红线 1)。
+func TestZcodeApprovalNilChannelErrors(t *testing.T) {
+	p := NewZcodeProvider()
+	rsp := &fakeZcodeResponder{}
+	var waiting atomic.Bool
+	ok := p.handleZcodePermission(json.RawMessage(`"server-6"`), zcodeApprovalTestParams,
+		context.Background(), rsp, nil, &waiting, time.Second)
+	if !ok {
+		t.Fatal("通道缺失分支也应消费该请求")
+	}
+	if n := rsp.resultCount(); n != 0 {
+		t.Fatalf("通道缺失绝不应回 deny 决定,记录到 %d 条应答", n)
+	}
+	code, msg := rsp.lastErr(t)
+	if code != -32000 {
+		t.Fatalf("应回 -32000,得到 %d", code)
+	}
+	if !strings.Contains(msg, "审批通道不可用") {
+		t.Fatalf("错误信息应说明通道不可用: %q", msg)
+	}
+	if strings.Contains(msg, "用户") {
+		t.Fatalf("错误信息不得假托用户意志: %q", msg)
+	}
+	if waiting.Load() {
+		t.Fatal("waiting 旗标不应被置位(没有等待任何手机应答)")
 	}
 }

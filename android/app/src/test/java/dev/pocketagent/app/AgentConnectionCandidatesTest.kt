@@ -84,4 +84,41 @@ class AgentConnectionCandidatesTest {
         assertTrue("候选列表不能为空(至少保留 USB)", cands.isNotEmpty())
         assertTrue("空白候选必须被过滤", cands.none { it.isBlank() })
     }
+
+    @Test
+    fun newRegistryMethodAutomaticallyJoinsCandidates() {
+        // 回归(AUDIT §3.3-1,批 2 审核不通过项):候选必须由注册表遍历产出,
+        // 禁止按 id 字面量挑选(firstOrNull { it.id == "lan" } / "manual" / "tailscale"
+        // 那种写法会让新增连接方式被静默丢弃 —— 既非透传也非报错)。
+        // 通过注入「真实注册表 + 一条新 method」的切片,钉死自动接入;
+        // 若实现退回按 id 挑选,relay 的地址会从候选中消失,本用例变红。
+        AgentConnection.setMdnsDiscoveryForTest(null)
+        AgentConnection.lastLanAddr = "10.0.0.5:7246"
+        AgentConnection.lastTailscaleAddr = "100.64.1.2:7246"
+        AgentConnection.manualAddress = "192.168.1.9:7246"
+        val relay = ConnMethod(
+            id = "relay", label = "中继", transport = "中继",
+            addrProvider = { "198.51.100.7:7246" },
+            hintText = { "测试注入的新连接方式" },
+            matcher = { it.startsWith("198.51.") },
+        )
+
+        val cands = AgentConnection.candidatesFromRegistry(
+            usbProbe = null,
+            registry = AgentConnection.methodsForTest() + relay,
+        )
+
+        // 既有 4 个 method 的候选与顺序不变(USB 首位 → 局域网 → 手动 → 新方式
+        // 按「其他」桶排在 Tailscale 之前),新方式自动进候选。
+        assertEquals(
+            listOf(
+                "127.0.0.1:7246",
+                "10.0.0.5:7246",
+                "192.168.1.9:7246",
+                "198.51.100.7:7246",
+                "100.64.1.2:7246",
+            ),
+            cands,
+        )
+    }
 }

@@ -112,6 +112,11 @@ type CodexProvider struct {
 	capCache   statusCache[[]*pb.CodexCapability]
 	mcpCache   statusCache[[]*pb.McpServerStatus]
 	usageCache statusCache[*pb.CodexUsage]
+
+	// modelsBudget 是 ModelsStatusCtx(ListModels 的 codex 拉取,PA-REAL-0002)
+	// 的整段预算;零值回落 statusBudget(10s)。仅测试注入更短值以钉"预算内返回
+	// 可重试错误"的行为,生产恒为零值。
+	modelsBudget time.Duration
 }
 
 // guardianKeep 最多记住多少条审查结论。审查是高频事件(每个被执行的动作一次),
@@ -215,12 +220,36 @@ func (p *CodexProvider) ID() string          { return "codex" }
 func (p *CodexProvider) DisplayName() string { return "OpenAI Codex(桌面 agent)" }
 
 func (p *CodexProvider) Models() []pb.ModelInfo {
-	return p.ModelsCtx(context.Background())
+	ms, _ := p.ModelsStatusCtx(context.Background())
+	return ms
 }
 
-// ModelsCtx 是带 ctx 的模型列表:整段受 ctx 约束(设置页探测与它共用同一个短上界,
-// 不这么做的话"读模型列表"会各自等满默认上界,把探测总时长拖爆)。
+// ModelsCtx 是带 ctx 的模型列表:失败时仍返回含 default 的列表、不向上传错误
+// (设置页账号读取 AccountCtx 等既有调用方靠这个语义工作)。内部改走
+// ModelsStatusCtx 的状态预算通道(PA-REAL-0002:整段有界,不再随调用方截止
+// 时间无限等 initialize —— 那正是"首次 ListModels 吃满 30s 客户端超时"的形态)。
 func (p *CodexProvider) ModelsCtx(ctx context.Context) []pb.ModelInfo {
+	ms, _ := p.ModelsStatusCtx(ctx)
+	return ms
+}
+
+// ErrModelsInitializing 表示"模型列表这一刻取不到:codex 正在初始化/探测,
+// 或本条查询的预算用完了"。它是**可重试态**而不是终态失败 —— 几秒后重试通常
+// 就能拿到完整列表。文案即人话(AUDIT §3.3):手机端对错误文本透传显示,
+// 所以这句话直接面向用户,不再是裸 DeadlineExceeded。
+var ErrModelsInitializing = errors.New("模型列表初始化中,请稍后重试")
+
+// ModelsStatusCtx 是模型列表的"状态预算通道"入口(ListModels 专用,PA-REAL-0002):
+//
+//   - 整段受预算约束:默认 statusBudget(10s);调用方给过更紧的截止时间时取
+//     更早者(探测路径/测试不被拖慢)。预算内拿不到就返回 ErrModelsInitializing。
+//   - 走 withStatusClientBudget:lifeMu 只保护"确保已初始化"那一小段,
+//     model/list 本身与其它只读查询一样在锁外并发执行,不再把别的 codex 调用
+//     挡成 ErrBusy。
+//   - 返回值 (列表, err):err 非空时列表仍含真实的 "default"(跟随桌面)条目
+//     —— 绝不返回空列表冒充成功(空列表会让手机端模型抽屉"看起来正常但选不了"),
+//     也不把失败伪装成"只有 default、一切正常";server 层把 err 透传给手机。
+func (p *CodexProvider) ModelsStatusCtx(ctx context.Context) ([]pb.ModelInfo, error) {
 	out := []pb.ModelInfo{{
 		Id: "default", Provider: "codex", DisplayName: "Codex(跟随桌面配置)",
 		// Codex app-server 的真实窗口只在 thread/tokenUsage/updated 中上报。
@@ -228,7 +257,26 @@ func (p *CodexProvider) ModelsCtx(ctx context.Context) []pb.ModelInfo {
 		// 不能把历史经验值伪装成当前模型窗口。
 		ContextWindow: 0, Available: true,
 	}}
-	if err := p.withClientCtx(ctx, clientInitBudget, func(ctx context.Context, c *codexapp.Client) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return out, modelsListErr(err)
+	}
+	budget := p.modelsBudget
+	if budget <= 0 {
+		budget = statusBudget
+	}
+	// withStatusClientBudget 从 Background 起算自己的超时,这里先把预算压到
+	// 不晚于调用方的截止时间;调用方截止已过 → 立即按超时处理,绝不反向放大。
+	if deadline, ok := ctx.Deadline(); ok {
+		if d := time.Until(deadline); d <= 0 {
+			return out, modelsListErr(context.DeadlineExceeded)
+		} else if d < budget {
+			budget = d
+		}
+	}
+	err := p.withStatusClientBudget(budget, func(ctx context.Context, c *codexapp.Client) error {
 		raw, err := c.CallCtx(ctx, "model/list", map[string]interface{}{})
 		if err != nil {
 			return err
@@ -267,10 +315,25 @@ func (p *CodexProvider) ModelsCtx(ctx context.Context) []pb.ModelInfo {
 			}
 		}
 		return nil
-	}); err != nil {
-		return out // 拉不到列表时至少还有 default
+	})
+	if err != nil {
+		return out, modelsListErr(err)
 	}
-	return out
+	return out, nil
+}
+
+// modelsListErr 把模型列表拉取失败归类成手机端可直接显示的形态(PA-REAL-0002):
+// 初始化/探测占用(ErrBusy)或预算耗尽(DeadlineExceeded/Canceled)→ 可重试态
+// ErrModelsInitializing;两个错误都进错误链(多重 %w)—— 上层用 errors.Is 对
+// ErrBusy/超时做的"可重试"分级不受影响,原始原因也可归因。其余错误**原样透传**
+// —— 那是 codex 的原生原文(如登录/token 问题),按 README §7 如实显示,不加工。
+func modelsListErr(err error) error {
+	if errors.Is(err, ErrBusy) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w(底层原因: %w)", ErrModelsInitializing, err)
+	}
+	return err
 }
 
 // clientInitBudget 是 initialize 握手的默认上界。
@@ -589,6 +652,102 @@ func approvalCommand(raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
+}
+
+// codexApprovalResponder codexapp.Client 的应答面(最小接口,单测可注 fake,
+// 不依赖真子进程;zcode 的 zcodeResponder 同款模式)。
+type codexApprovalResponder interface {
+	Respond(id int64, result interface{}) error
+	RespondError(id int64, code int, message string) error
+}
+
+// handleCodexApproval 处理一个已识别为"问人"的反向请求:构造审批卡 → 问手机 →
+// 把结果翻译成 codex 协议应答。所有路径要么已应答、要么因桌面端已解决而不应答,
+// 调用方拿到返回即可结束。
+// 【P1-1】approve==nil 属审批通道缺失(TestModel 诊断 RPC 等路径传 nil):
+// 回 JSON-RPC error 让 codex 按通道故障处理,绝不替用户伪造 denied 决定
+// (与下方 askErr 分支同口径:基础设施问题不伪装成用户意志)。
+func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id int64, kind codexRequestKind, method string, params json.RawMessage, files []string, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
+	// 【第二条规则】按类别构造真实的审批卡,再问手机。
+	call := buildApprovalCall(kind, method, params, files)
+	if approve == nil {
+		log.Printf("[codex] 审批通道不可用(approve==nil),%s 回 error", method)
+		_ = rsp.RespondError(id, -32000, "审批通道不可用")
+		return
+	}
+	waiting.Store(true)
+	// 【serverRequest/resolved 竞速】我们等手机应答期间,codex 可能通知
+	// "该请求已被解决"(用户在桌面端点了,或被 codex 自动处理)。
+	// 此时不能再等手机、也绝不能再 Respond(重复应答);同时要让手机端
+	// 把挂着的审批卡撤下去 —— 否则就是一张点不动也没意义的"幽灵审批卡"。
+	resolved := p.registerPendingServerRequest(id)
+	type approveOut struct {
+		allow bool
+		note  string
+		err   error
+	}
+	outCh := make(chan approveOut, 1)
+	go func() {
+		a, n, e := approve(ctx, call)
+		outCh <- approveOut{a, n, e}
+	}()
+	allow, note := false, ""
+	askErr := error(nil)
+	select {
+	case out := <-outCh:
+		allow, note, askErr = out.allow, out.note, out.err
+	case <-resolved:
+		// 迟到的手机应答会落进 outCh(带缓冲),由 GC 回收,无泄漏。
+		log.Printf("[codex] 反向请求 %s(id=%d)已在桌面端被解决,不再等待手机审批", method, id)
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
+			Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
+		}}})
+		waiting.Store(false)
+		p.unregisterPendingServerRequest(id)
+		return
+	}
+	waiting.Store(false)
+	p.unregisterPendingServerRequest(id)
+	if askErr != nil {
+		// 手机端断流/超时:这不是"用户拒绝"。回 error,让 codex 按通道故障处理,
+		// 别把基础设施问题伪装成用户意志。
+		log.Printf("[codex] 审批通道失败 %s: %v", method, askErr)
+		_ = rsp.RespondError(id, -32000, "审批通道失败: "+askErr.Error())
+		return
+	}
+
+	// 【第三条规则】应答形状按方法名走,尤其旧版审批用 approved/denied 而不是 accept/decline。
+	switch kind {
+	case reqApprovalCommand, reqApprovalFileChange, reqApprovalPatch:
+		_ = rsp.Respond(id, map[string]string{"decision": approvalDecision(method, allow)})
+
+	case reqApprovalPermissions:
+		if allow {
+			var a permissionsApprovalParams
+			_ = json.Unmarshal(params, &a)
+			var perms interface{}
+			_ = json.Unmarshal(a.Permissions, &perms)
+			// 原样授予申请的那份 profile:不做裁剪,否则"少给一个路径"会让命令
+			// 换一种方式失败,故障更难定位。
+			_ = rsp.Respond(id, map[string]interface{}{"permissions": perms, "scope": "turn"})
+		} else {
+			// 这个应答没有 decision 字段:不同意的表达方式就是"什么都不授予"。
+			_ = rsp.Respond(id, map[string]interface{}{"permissions": map[string]interface{}{}})
+		}
+
+	case reqAskUser:
+		var a askUserParams
+		_ = json.Unmarshal(params, &a)
+		// 手机端的答案放在 ApprovalDecision.note 里(JSON),这里原样转成 answers。
+		_ = rsp.Respond(id, map[string]interface{}{"answers": splitAnswerNote(note, a.Questions)})
+
+	case reqAskMcp:
+		action := "decline"
+		if allow {
+			action = "accept"
+		}
+		_ = rsp.Respond(id, map[string]interface{}{"action": action})
+	}
 }
 
 func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
@@ -983,83 +1142,9 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		files := append([]string(nil), changeFiles...)
 		mu.Unlock()
 
-		// 【第二条规则】按类别构造真实的审批卡,再问手机。
-		call := buildApprovalCall(kind, method, params, files)
-		approvalWaiting.Store(true)
-		allow, note := false, ""
-		askErr := error(nil)
-		if approve != nil {
-			// 【serverRequest/resolved 竞速】我们等手机应答期间,codex 可能通知
-			// "该请求已被解决"(用户在桌面端点了,或被 codex 自动处理)。
-			// 此时不能再等手机、也绝不能再 Respond(重复应答);同时要让手机端
-			// 把挂着的审批卡撤下去 —— 否则就是一张点不动也没意义的"幽灵审批卡"。
-			resolved := p.registerPendingServerRequest(id)
-			type approveOut struct {
-				allow bool
-				note  string
-				err   error
-			}
-			outCh := make(chan approveOut, 1)
-			go func() {
-				a, n, e := approve(ctx, call)
-				outCh <- approveOut{a, n, e}
-			}()
-			select {
-			case out := <-outCh:
-				allow, note, askErr = out.allow, out.note, out.err
-			case <-resolved:
-				// 迟到的手机应答会落进 outCh(带缓冲),由 GC 回收,无泄漏。
-				log.Printf("[codex] 反向请求 %s(id=%d)已在桌面端被解决,不再等待手机审批", method, id)
-				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
-					Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
-				}}})
-				approvalWaiting.Store(false)
-				p.unregisterPendingServerRequest(id)
-				return
-			}
-			p.unregisterPendingServerRequest(id)
-		}
-		approvalWaiting.Store(false)
-		if askErr != nil {
-			// 手机端断流/超时:这不是"用户拒绝"。回 error,让 codex 按通道故障处理,
-			// 别把基础设施问题伪装成用户意志。
-			log.Printf("[codex] 审批通道失败 %s: %v", method, askErr)
-			_ = c.RespondError(id, -32000, "审批通道失败: "+askErr.Error())
-			return
-		}
-
-		// 【第三条规则】应答形状按方法名走,尤其旧版审批用 approved/denied 而不是 accept/decline。
-		switch kind {
-		case reqApprovalCommand, reqApprovalFileChange, reqApprovalPatch:
-			_ = c.Respond(id, map[string]string{"decision": approvalDecision(method, allow)})
-
-		case reqApprovalPermissions:
-			if allow {
-				var a permissionsApprovalParams
-				_ = json.Unmarshal(params, &a)
-				var perms interface{}
-				_ = json.Unmarshal(a.Permissions, &perms)
-				// 原样授予申请的那份 profile:不做裁剪,否则"少给一个路径"会让命令
-				// 换一种方式失败,故障更难定位。
-				_ = c.Respond(id, map[string]interface{}{"permissions": perms, "scope": "turn"})
-			} else {
-				// 这个应答没有 decision 字段:不同意的表达方式就是"什么都不授予"。
-				_ = c.Respond(id, map[string]interface{}{"permissions": map[string]interface{}{}})
-			}
-
-		case reqAskUser:
-			var a askUserParams
-			_ = json.Unmarshal(params, &a)
-			// 手机端的答案放在 ApprovalDecision.note 里(JSON),这里原样转成 answers。
-			_ = c.Respond(id, map[string]interface{}{"answers": splitAnswerNote(note, a.Questions)})
-
-		case reqAskMcp:
-			action := "decline"
-			if allow {
-				action = "accept"
-			}
-			_ = c.Respond(id, map[string]interface{}{"action": action})
-		}
+		// 【第二条规则】按类别构造真实的审批卡,再问手机(抽到 handleCodexApproval,
+		// zcode 的 handleZcodePermission 同款注入式单测模式)。
+		p.handleCodexApproval(c, id, kind, method, params, files, ctx, sink, approve, &approvalWaiting)
 	}
 	c.SetTurnHandlers(notifHandler, reqHandler)
 	defer func() {

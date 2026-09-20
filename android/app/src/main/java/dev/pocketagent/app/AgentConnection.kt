@@ -56,7 +56,9 @@ object AgentConnection {
      * 候选生成器(addrProvider)+ 可执行说明(hintText)+ 展示标签(label/transport)+ 匹配规则(matcher)。
      * 候选队列、连接方式列表、通道标签**全部由它派生**,不再有第二处散落的字符串字面量。
      *
-     * 顺序即优先级:USB(adb reverse 反向隧道)→ 局域网直连 → Tailscale → 用户手填(兜底)。
+     * 注册表顺序 = 候选展开顺序:USB(adb reverse 反向隧道)→ 局域网直连 → Tailscale → 用户手填(兜底);
+     * 候选队列的最终次序由 [candidateAddresses] 按通道分桶稳定排序给出(见其 KDoc),
+     * 通道标签与「连接方式」列表直接按注册表顺序派生。
      */
     private val METHODS: List<ConnMethod> = listOf(
         ConnMethod(
@@ -70,6 +72,7 @@ object AgentConnection {
             addrProvider = { lastLanAddr.ifBlank { null } },
             hintText = { "手机与电脑连同一个 WiFi 时最快,地址由电脑端上报" },
             matcher = { it.startsWith("192.168.") || it.startsWith("10.") },
+            dedupAgainstMdns = true,
         ),
         ConnMethod(
             id = "tailscale", label = "Tailscale", transport = "Tailscale",
@@ -399,8 +402,19 @@ object AgentConnection {
     /** daemon 上报的局域网地址(同一 WiFi 直连最快),持久化。 */
     @Volatile var lastLanAddr: String = ""
 
-    /** 最近一次成功连接的地址,持久化;冷启动时排在候选队列首位。 */
+    /**
+     * 最近一次成功连接的地址,持久化;冷启动时排在候选队列首位 —— 唯一例外是 USB
+     * 反向隧道候选实际可达时让位于 USB(PA-REAL-0006,排序见 [ConnectionCandidateOrder])。
+     */
     @Volatile private var lastGoodAddr: String = ""
+
+    /** 仅 JVM 单测用:读 lastGoodAddr(私有态,回归用例要恢复现场)。 */
+    internal fun lastGoodAddrForTest(): String = lastGoodAddr
+
+    /** 仅 JVM 单测用:写 lastGoodAddr,钉死「USB 可达→USB 胜 / 不可达→lastGoodAddr 胜」的接线。 */
+    internal fun setLastGoodAddrForTest(v: String) {
+        lastGoodAddr = v
+    }
 
     /**
      * 用户手填的兜底地址(设置页「连接」里填的那个)。
@@ -449,54 +463,75 @@ object AgentConnection {
     private const val LIST_RETRY_TIMEOUT_MS = 20_000L
 
     /**
-     * 候选地址顺序(回退原则的落点):
-     *   上次成功地址 → USB(adb reverse 反向隧道) → mDNS 局域网发现(P0-3,同网段优先)
-     *   → 局域网直连(历史上报) → Tailscale → 用户手填地址(兜底)
+     * 候选地址顺序(回退原则的落点,排序规则单一事实源 = [ConnectionCandidateOrder]):
+     *   USB 可达:USB(反向隧道实测可达) → 上次成功地址 → mDNS 发现 → 局域网 → 手动 → Tailscale
+     *   USB 不可达:上次成功地址 → USB(毫秒级快失败,兜底) → mDNS 发现 → 局域网 → 手动 → Tailscale
      *
-     * 【为什么 USB 不再做前置判定】
+     * 【PA-REAL-0006】此前 lastGoodAddr 无条件压过 USB,插着数据线冷启动仍走局域网,
+     * 与 NET-01「USB 优先」相悖。现在 USB 候选在场时先做一次短窗口可达性探测
+     * ([UsbReachabilityProbe]):可达才插到 lastGoodAddr 之前;不可达维持既有语义。
+     *
+     * 【为什么 USB 不做前置判定就进队列】
      * 早先这里有一道 `if (isUsbDebugging())` 门槛,依据是 `UsbManager.deviceList.isNotEmpty()`。
      * 但手机插在电脑上时是 USB 设备角色(UFP):真机 `dumpsys usb` 显示
      * data_role=device / host_connected=false,此时 deviceList 必为空 —— 判定恒为 false,
      * USB 候选从不进队列。(实测:USB 调试已开、`adb reverse tcp:7246` 已注册,
      * App 仍显示「局域网直连」。)
      *
-     * 语义上这道判定也是多余的:回环地址只有在电脑侧**确实存在 adb reverse 隧道**时才连得通,
-     * 而「有反向隧道」本身就等价于「正插着线通过电脑调试」。既然无隧道时回环是毫秒级失败,
-     * 把它放在队首的成本可忽略,比依赖不可靠的角色判定更稳。
-     *
-     * 【P0-3 mDNS 注入】MdnsDiscovery 发现的主机插在 USB 之后、历史 lanAddr 之前
+     * 【P0-3 mDNS 注入】mDNS 发现的主机在 USB/lastGoodAddr 之后、历史 lanAddr 之前
      * (mDNS 是"此刻真实可见"的,比历史记录新鲜);发现的主机下线/5 分钟过期后,
      * hosts flow 更新,这里下次读取自然不再包含 —— "消失自动移出候选"就是实时读 flow 的结果。
      * 历史 lanAddr 与 mDNS 同 IP 时会被去重(保留 mDNS 的,更新鲜)。
+     *
+     * @param usbProbe 可达性探测器;null(默认)= 不探测,维持既有队列(USB 在首位)。
+     *                 生产路径([connectWithFallback])传 [SocketUsbReachabilityProbe],
+     *                 JVM 单测传 mock 钉死两种排序。
      */
-    fun candidateAddresses(): List<String> = buildList {
-        // 上次连成功的排最前:同一网络下冷启动直取熟路,免去逐个试错。
-        add(USB_ADDR)
-        // P0-3:mDNS 实时发现(同网段优先排序在 MdnsDiscovery.publish 里已完成)。
-        mdnsDiscovery?.current()?.forEach { h -> add(h.address()) }
-        // 其余历史候选统一由注册表产出(lan → Tailscale → 手动)。
-        val mdnsHosts = mdnsDiscovery?.current()?.map { it.host } ?: emptyList()
-        METHODS.forEach { m ->
-            if (m.id == "lan") {
-                // 历史局域网地址:mDNS 已覆盖同一台主机(同 IP)时不再重复入队 ——
-                // 判定按 IP 部分(端口理论上可能不同,但同为 PocketAgent daemon 时
-                // 就是同一台,连哪个都一样,保留 mDNS 的实时值即可)。
-                val lan = m.suggest()
-                if (lan != null && mdnsHosts.none { lan.startsWith("$it:") }) {
-                    add(lan)
-                }
-            } else {
-                m.suggest()?.let { add(it) }
+    fun candidateAddresses(usbProbe: UsbReachabilityProbe? = null): List<String> =
+        candidatesFromRegistry(usbProbe, METHODS)
+
+    /** 仅 JVM 单测用:读连接方式注册表,回归用例据此构造「注册表 + 新增 method」切片。 */
+    internal fun methodsForTest(): List<ConnMethod> = METHODS
+
+    /**
+     * [candidateAddresses] 的可测核心:注册表作为参数注入,JVM 回归用例据此钉死
+     * 「注册表新增连接方式自动进候选」(AUDIT §3.3-1:候选禁止按 id 字面量挑选,
+     * 否则新增连接方式会被静默丢弃 —— 既非透传也非报错)。
+     */
+    internal fun candidatesFromRegistry(
+        usbProbe: UsbReachabilityProbe?,
+        registry: List<ConnMethod>,
+    ): List<String> {
+        val mdns = mdnsDiscovery?.current().orEmpty()
+        val mdnsAddrs = mdns.map { it.address() }
+        val mdnsHosts = mdns.map { it.host }
+        // 其余候选一律由注册表遍历产出:新增连接方式 = 注册表加一条,自动进候选。
+        // 历史上报类候选(dedupAgainstMdns)与 mDNS 同主机去重(保留 mDNS 的实时值);
+        // 用户手填等显式意图不参与该去重。
+        // 次序:先按注册表展开,再按通道分桶做稳定排序,恢复既有队列
+        // 「mDNS/局域网 → 手动等其他 → Tailscale」;USB 回环候选在这里与队首的
+        // usbCandidate 重复,由 [ConnectionCandidateOrder] 的 distinct 收敛,
+        // USB 与 lastGoodAddr 的插队定序同样只在 [ConnectionCandidateOrder]。
+        val others = (mdnsAddrs + registry.mapNotNull { m ->
+            m.suggest()?.takeIf { addr ->
+                !m.dedupAgainstMdns || mdnsHosts.none { addr.startsWith("$it:") }
+            }
+        }).sortedBy { cand ->
+            when (transportLabel(cand)) {
+                "USB 通道" -> 0
+                "局域网直连" -> 1
+                "Tailscale" -> 3
+                else -> 2
             }
         }
-            add(lastGoodAddr)
-    }.filter { it.isNotBlank() }.distinct().sortedBy { candidate ->
-        when (transportLabel(candidate)) {
-            "USB 通道" -> 0
-            "局域网直连" -> 1
-            "Tailscale" -> 3
-            else -> 2
-        }
+        // 短窗口快速握手:USB 可达 → USB 胜过 lastGoodAddr;不可达/未探测 → lastGoodAddr 胜。
+        val usbReachable = usbProbe?.isReachable(USB_ADDR, USB_TIMEOUT_MS) ?: true
+        return ConnectionCandidateOrder.order(
+            usbCandidate = USB_ADDR,
+            usbReachable = usbReachable,
+            lastGoodAddr = lastGoodAddr,
+            others = others,
+        )
     }
 
     /**
@@ -525,7 +560,9 @@ object AgentConnection {
             try { return hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance()) }
             catch (_: Exception) { }
         }
-        val cands = candidateAddresses()
+        // PA-REAL-0006:排序前先探测 USB 反向隧道是否真实在场(短窗口 TCP 握手),
+        // 可达则 USB 压过 lastGoodAddr;不可达立即落入原候选队列,回退/竞速架构不变。
+        val cands = candidateAddresses(SocketUsbReachabilityProbe)
         connState.value = "checking"
         // freshChannel=true(连接已判死/用户显式重试):强制丢弃旧通道再回退。
         // OkHttp 半死态:daemon 被反复杀死后通道对象未 shutdown、判活认为健康,
@@ -1089,6 +1126,9 @@ data class ConnEndpoint(
  * @param addrProvider 产出该方式已知的完整 ip:port;拿不到返回 null(该方式不进候选/不进列表)
  * @param hintText     展示给用户的"怎么用 / 连不上怎么办"的可执行说明
  * @param matcher      判断某个已生效地址是否属于本方式(用于通道标签)
+ * @param dedupAgainstMdns true = 该方式产出的候选与 mDNS 已发现主机同 IP 时让位
+ *                         (历史上报不如 mDNS 新鲜,如局域网历史地址);用户手填等
+ *                         显式意图一律 false,不参与该去重。
  */
 class ConnMethod(
     val id: String,
@@ -1097,6 +1137,7 @@ class ConnMethod(
     private val addrProvider: () -> String?,
     private val hintText: () -> String,
     private val matcher: (String) -> Boolean,
+    val dedupAgainstMdns: Boolean = false,
 ) {
     /** 完整的 ip:port;缺端口/空白一律丢弃(宁缺勿假)。 */
     fun suggest(): String? =

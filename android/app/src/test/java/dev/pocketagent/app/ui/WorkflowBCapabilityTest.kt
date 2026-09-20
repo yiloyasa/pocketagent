@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -83,7 +84,22 @@ class WorkflowBCapabilityTest {
         val info = settingStateInfo("needs_model_support")
         assertEquals("needs_model_support", info.text)
         assertEquals("muted", info.level)
-        assertEquals("状态未知", settingStateInfo("").text)
+        // 空 state = daemon 缺席,人话口径"状态暂不可用",不显「未知」(AUDIT §3.3)
+        assertEquals("状态暂不可用", settingStateInfo("").text)
+    }
+
+    @Test
+    fun `全部状态文案都不含未知字样_AUDIT_3_3红线`() {
+        // 已知分支 + 空串 + 未知取值兜底,逐一断言不含「未知」且非空白
+        val states = listOf(
+            "", "applied", "saved_not_applied", "unsupported", "failed",
+            "unreachable", "follow_desktop", "locked", "pending", "needs_model_support",
+        )
+        states.forEach { s ->
+            val text = settingStateInfo(s).text
+            assertFalse("用户可见文案不得含「未知」: '$s' -> $text", text.contains("未知"))
+            assertTrue("文案不得为空白: '$s' -> $text", text.isNotBlank())
+        }
     }
 
     @Test

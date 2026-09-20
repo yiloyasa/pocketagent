@@ -9,13 +9,18 @@
 
 ## 统计
 
-**P0 × 1 / P1 × 8 / P2 × 9**
+**P0 × 1 / P1 × 7 / P2 × 9**
+
+> 统计口径修正（2026-09-20 批 3 · T-10）：原记 P1 × 8，其中 [P1-8] 实为体检 2 的 **PASS 结论占位**（契约同步无发现），不是问题，不应计入问题计数，故 P1 计为 7。
+> **行号以整改后代码为准**：下列条目引用的 `文件:行号` 是体检时的快照，批 2/批 3 整改后行号已漂移，核对时以整改后代码为准。
 
 ---
 
 ## P0（坏用户数据或红线风险）
 
 ### [P0-1] openai_compat 危险工具审批旁路：approve == nil 时 write_file / run_command 直接执行，不经任何审批
+> **状态：已修（批2/批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/agent/openai_compat.go:293`（配合 `daemon/internal/server/model.go:145-149`）
 - **证据**：
   ```go
@@ -40,6 +45,8 @@
 ## P1（功能坏 / 闪黑窗 / 泄漏 / 契约不同步 / 名单新增）
 
 ### [P1-1] codex：approve == nil 时自动应答 `{"decision":"denied"}` —— daemon 伪造审批决定（红线 1 相邻）
+> **状态：已修（批2/批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/agent/codex.go:989-991、1032-1034`
 - **证据**：
   ```go
@@ -55,6 +62,8 @@
 - **建议批次**：批 2。
 
 ### [P1-2] zcode：approve == nil 时回 `{"decision":"deny","reason":"用户在手机上拒绝了该操作"}` —— 伪造决定且**假托用户意志**
+> **状态：已修（批2/批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/agent/zcode.go:1121、1149-1150、1095-1098`
 - **证据**：
   ```go
@@ -69,6 +78,8 @@
 - **建议批次**：批 2。
 
 ### [P1-3] piapp.Version 拉 node 子进程未加 hidewin —— 用户桌面周期性闪黑窗（历史红线同款）
+> **状态：已修（批2/批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/piapp/client.go:101`（调用方 `daemon/internal/server/host.go:110`、`daemon/internal/agent/provider.go:150`）
 - **证据**：
   ```go
@@ -80,6 +91,8 @@
 - **建议批次**：批 2（一行修复，收益极高）。
 
 ### [P1-4] 名单 linter：`agents_sessions.go` 硬编码可导入 agent 名单（pi/zcode），未进附录 A 挂牌
+> **状态：已修（批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/server/agents_sessions.go:54-57、61-62、67`
 - **证据**：
   ```go
@@ -94,6 +107,8 @@
 - **建议批次**：批 2 决策（改透传）或批 3（挂牌）。
 
 ### [P1-5] 名单 linter：`thread.go defaultProvider` 硬编码默认 provider 优先级 `["codex","glm","deepseek"]`
+> **状态：已修（批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/server/thread.go:1052-1057`
 - **证据**：
   ```go
@@ -109,6 +124,9 @@
 - **建议批次**：批 3（涉及旧库兼容语义，需主模型拍板）。
 
 ### [P1-6] 名单 linter（Kotlin 等价物）：HomeScreen / SettingsScreen 三份 agent 名单，未进附录 A
+> **状态：已修（批3 · T-10，2026-09-20）——能力判定一律以 daemon 动态数据为唯一真源；行号以整改后代码为准。**
+> 落法：HomeScreen `resolveAgentAvailability` 去掉按名 when（`baseAvailable || capabilities 前缀匹配`，任意新 agent id 报了 "agent:<id>" 即点亮）；`capabilityDrivenAgents` 静态白名单反转为 `placeholderDisplayAgents` 占位**展示目录**（opencode/claude-code/hermes/dsh，只随接入而减少，不参与能力判定）；SettingsScreen `OTHER_AGENT_OPTIONS` 收敛为 `AGENT_DISPLAY` 纯展示名映射（缺省回退 id 原文）。回归用例见 `AgentAvailabilityTest`（含"daemon 新增第 4 个 agent 无需改 App 即点亮"与"未知 id 显示 id 原文"断言）。
+
 - **文件:行号**：
   - `android/app/src/main/java/dev/pocketagent/app/ui/HomeScreen.kt:100`（`capabilityDrivenAgents = setOf("codex", "pi", "zcode")`）、`HomeScreen.kt:155-165`（`AgentInfo(...)` 网格目录，含 opencode/claude-code/hermes 占位项）
   - `android/app/src/main/java/dev/pocketagent/app/ui/SettingsScreen.kt:106-115`（`OTHER_AGENT_OPTIONS` + `AGENT_DISPLAY`）
@@ -117,6 +135,8 @@
 - **建议批次**：批 3（涉及 UI 重构）。
 
 ### [P1-7] codexapp 子进程从不 `cmd.Wait()` —— 进程/管道句柄泄漏 + 无退出码日志（与 piapp/zcodeapp 不对称）
+> **状态：已修（批2/批3）；行号以整改后代码为准。**
+
 - **文件:行号**：`daemon/internal/codexapp/client.go:361-368`（Close），对照 `piapp/client.go:497-506`、`zcodeapp/client.go:374-383`（均有 reapWithLog）
 - **证据**：
   ```go
@@ -147,14 +167,22 @@
 - **建议**：批 2 顺手更新 README §11。
 
 ### [P2-3] UI 层存量 "未知" 字符串 10 处（AUDIT §3.3 限期整改）
+> **状态：已修（批3 · T-10，2026-09-20）——清单 10 处 + grep 追加同款 4 处（SettingsScreen " · 占用未知"/"占用未知"/"位置未知"、PaDownloader "文件位置未知"），android 侧 T-10 所辖 5 文件用户可见字符串已清零；行号以整改后代码为准。**
+> 落法：新增纯函数 `ui/ErrorCopy.kt humanizeError`（有 message 透传原文 / 空则透传异常类名"错误类型：IOException" / 无异常"出了点问题，请重试"）；占用/大小类改"无法获取"表述；审批通知兜底文案改"新的操作请求"。回归用例 `ErrorCopyTest`（断言各档不含「未知」）。`WorkflowBCapability.kt` 尚有一处"状态未知"用户可见文案，不在 T-10 文件所有权内，待后续批次处理。
+> **批5 · T-20 追记（2026-09-20）**：上述尾项已处理——`WorkflowBCapability` "状态未知"改"状态暂不可用"、`ContextUsageCard` "窗口未知"改"窗口 —"（README §11 既定"显'—'是如实"口径，不造数），用户可见「未知」字样清零；回归断言见 `WorkflowBCapabilityTest`。
+
 - **证据**（均为用户可见字符串，非注释）：`SettingsScreen.kt:644,667,680`（"未知错误"×3）、`SettingsScreen.kt:3006`（下载占用显示"未知"，注释自辩"绝不用 0 冒充"）、`PaNotifications.kt:155`（"未知的操作"）、`PaDownloader.kt:95,130,215,249,490`（"未知错误"×5）、`VoskModelManager.kt:344`（"未知错误"，Vosk 已禁用遗留）。
 - **建议**：异常 message 为空时改给人话（"出了点问题：'<异常类型>'"）或透传 e.toString；"未知"字样按 §3.3 禁令替换。Vosk 一处可随遗留摘除一并处理。批 3。
 
 ### [P2-4] `_ = s.cfg.Store.Update(t)` 系统性吞错（约 15 处）：持久化失败静默，重启即回退
+> **状态：已修（批3 · T-13，2026-09-20）——实测 11 处，非原记"约 15 处"；11 处已全部加日志埋点；行号以整改后代码为准。**
+
 - **证据**：`server.go:121,131,147,175`、`thread_ext.go:71,118,190,482`、`thread.go:807,938,964` 等。内存态已更新、磁盘写失败（saveLocked 的 WriteFile/Rename 失败）只丢不报——标题/goal/状态同步在磁盘异常期间全部静默失效，重启后"改了又变回去"。
 - **建议**：至少 `log.Printf` 记录失败；keychange 点（goal/标题）可带一次性提示。批 3。
 
 ### [P2-5] threads.json 损坏即 Fatal：daemon 拒绝启动，无隔离/备份自愈
+> **状态：已修（批3）；行号以整改后代码为准。**
+
 - **证据**：`store.go:175-177` Unmarshal 失败即返回错误 → `main.go:71-73` `log.Fatalf("初始化存储失败")`。原子写（tmp+rename，store.go:187-197）把概率压得很低，但外部因素（磁盘坏块、用户误编辑）一旦发生，会话真值全库不可用且不自动恢复。
 - **建议**：启动时校验失败 → 把坏文件改名 `threads.json.corrupt-<ts>` 留档后空库启动 + error 级日志。批 3。
 
@@ -167,6 +195,9 @@
 - **说明**：三者均有注释与理由（deny 是安全侧、不拖死整轮），**非伪造"同意"**，不触红线；但"超时=用户拒绝"与"超时=通道故障"两种语义并存，agent 侧行为不同。建议主模型从产品口径裁决是否统一。批 3（决策项，非缺陷修复）。
 
 ### [P2-8] 名单 linter 低危项：按名 when/if 特判（有动态兜底）
+> **状态：部分收敛（批3 · T-10，2026-09-20）；行号以整改后代码为准。**
+> HomeScreen `resolveAgentAvailability` 的 `"pi","zcode" ->` 特判已随 P1-6 动态化移除（改为 `baseAvailable || capabilities 前缀匹配`，对所有 id 一视同仁）；SettingsScreen `AgentDefaultsSection` 的 `"pi","zcode" ->` 特判**保持现状**——else 分支的 `agent_settings:<id>` capability 动态判定本就覆盖任意 agent，特判仅服务旧 daemon 兼容/未注册场景的展示兜底，移除会让旧 daemon 用户丢失 Pi/ZCode 设置区，收益不抵回归风险；`thread.go:1013` 属 daemon 侧，不在 T-10 范围。
+
 - **证据**：`HomeScreen.kt:92`（`"pi","zcode" ->` capabilities 判定，else 回退 baseAvailable）、`SettingsScreen.kt:1995`（`"pi","zcode" ->` AgentDefaultsSection，else 走 `agent_settings:<id>` capability 动态判定）、`thread.go:1013`（agentUnavailableHint 对 "pi" 特判文案，其余 agent 走通用话术）。均不影响新 agent 的基本功能。
 - **建议**：随 P1-6 动态化时一并收敛，或维持现状（有兜底，风险低）。批 3。
 

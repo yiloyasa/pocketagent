@@ -2,8 +2,9 @@
 //
 // PiProvider.Steer 的协议依据(docs/rpc.md 的 steer 命令),P0 主探针 11 项里
 // 没覆盖它,而 P1"聊天输入运行中可用(steer/followUp)"直接依赖 —— 单独实测:
-//   1. 长任务运行中发 steer → 消息进入队列(queue_update)→ 被执行;
-//   2. 空闲时发 steer → success:false(server 层据此转排队兜底)。
+//  1. 长任务运行中发 steer → 消息进入队列(queue_update)→ 被执行;
+//  2. 空闲时发 steer → success:false(server 层据此转排队兜底)。
+//
 // 结论写进 docs/verify/evidence/pi-p0-probe.md 的补充节。
 package main
 

@@ -69,6 +69,14 @@ android {
         // versionName 与 daemon internal/version 同步为 0.2.0。
         versionCode = 5
         versionName = "0.2.2"
+        // OBS-03 体检:sherpa-onnx AAR 自带 4 套 ABI(arm64-v8a/armeabi-v7a/x86/x86_64,
+        // 无 mips/mips64),全量打进 universal APK 白耗体积。收窄为
+        // arm64-v8a(主力/小米13)+ armeabi-v7a(32 位老机)+ x86_64(模拟器),
+        // 剔除 x86(32 位,无真机)。原生库按 useLegacyPackaging 不压缩存储,
+        // APK 预计减少 ≈36 MB(x86: sherpa 35.6MB,见 AAR 清单)。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -127,14 +135,10 @@ dependencies {
     implementation("io.grpc:grpc-stub:1.66.0")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
 
-    // ---- 端侧离线语音识别(Vosk)----
-    // 【为什么需要】小米等无 SpeechRecognizer 识别服务的 ROM(isRecognitionAvailable=false)
-    // 且云端识别依赖 GMS 不可用 —— 用 Vosk 做端侧回落引擎:AudioRecord 16kHz 单声道 PCM
-    // 喂给本地模型直接出文本,零网络零 GMS 依赖。
-    // AAR 约 2MB(含 armeabi-v7a/arm64-v8a/x86_64 的 .so),经 JNA 桥接(vosk-android
-    // 传递依赖 net.java.dev.jna:jna,自动拉取);中文小模型 vosk-model-small-cn-0.22
-    // (~42MB)不进 APK,首次使用时经 VoskModelManager 按需下载到 filesDir/vosk/。
-    implementation("com.alphacephei:vosk-android:0.3.47")
+    // ---- 端侧离线语音识别(SenseVoice)----
+    // 内置 INT8 模型进 assets(构建时下载校验,见上方 verifyBundledSpeechModel),
+    // 引擎走 libs/ 下的 sherpa-onnx AAR(构建时下载+哈希校验,见上方 verifySenseVoiceDependency)。
+    // 旧遗留引擎依赖已于 2026-09-20 整体摘除(git 历史可查),端侧兜底仅剩 SenseVoice。
     implementation(files(sherpaAar))
     testImplementation("junit:junit:4.13.2")
     // android.jar 里的 org.json 是 stub(JVM 单测调用会抛 "not mocked"),

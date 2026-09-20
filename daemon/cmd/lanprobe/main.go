@@ -28,11 +28,15 @@ func main() {
 		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // 探针仅本机诊断用
 	}
 	c, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(creds))
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	h, err := pb.NewHostServiceClient(c).GetHostInfo(ctx, &pb.GetHostInfoRequest{})
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println("lan_ipv4 =", h.LanIpv4, "| tailscale =", h.TailscaleIpv4)
 }

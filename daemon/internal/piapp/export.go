@@ -1,5 +1,8 @@
-// export.go —— pi S 级增量命令的 Client 封装:export_html / compact /
-// get_available_thinking_levels(2026-09-19 覆盖审计 §7-4 点名的 S 项)。
+// export.go —— pi S 级增量命令的 Client 封装:export_html / compact
+// (2026-09-19 覆盖审计 §7-4 点名的 S 项)。
+// 【T-28】get_available_thinking_levels 封装已删:唯一调用方
+// PiProvider.ThinkingLevels 于 T-26 删除;pi 动态档位由 agent/pi_selection.go
+// 直接对子进程发同名 RPC,piapp 不再需要这层包装。
 //
 // 【为什么单独成文件】client.go 正被 P1/P2 修复占用;同包新文件承接新方法,
 // 不碰既有代码。应答形状均经本机 0.85.1 实测,原始报文见
@@ -9,7 +12,6 @@ package piapp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 )
@@ -20,8 +22,6 @@ const (
 	exportBudget = 60 * time.Second
 	// compactBudget compact = 真实跑一次 LLM 摘要请求(几十秒量级)。
 	compactBudget = 180 * time.Second
-	// thinkingLevelsBudget 档位查询是纯内存读,秒级。
-	thinkingLevelsBudget = 10 * time.Second
 )
 
 // ExportHTML 把当前会话导出为离线 HTML 存档,写到 outputPath(建议绝对路径;
@@ -84,24 +84,4 @@ func (c *Client) Compact(ctx context.Context, customInstructions string) (*Compa
 		return nil, fmt.Errorf("compact 应答无法解析: %w", err)
 	}
 	return &out, nil
-}
-
-// AvailableThinkingLevels 拉当前会话模型支持的思考档位。
-//
-// 【0.85.1 实测(glm-5.3)】应答 data={"levels":["low","high","max"]} ——
-// Pi 按模型的 reasoning 能力 + thinkingLevelMap 过滤全集;无模型时回全集
-// off/minimal/low/medium/high/xhigh/max。所以这个列表必须按会话实时取,
-// 不能写死(daemon 侧只留同名全集做无子进程时的兜底)。
-func (c *Client) AvailableThinkingLevels(ctx context.Context) ([]string, error) {
-	raw, err := c.CallCtx(ctx, "get_available_thinking_levels", nil, thinkingLevelsBudget)
-	if err != nil {
-		return nil, err
-	}
-	var d struct {
-		Levels []string `json:"levels"`
-	}
-	if json.Unmarshal(raw, &d) != nil || len(d.Levels) == 0 {
-		return nil, errors.New("get_available_thinking_levels 应答缺少 levels")
-	}
-	return d.Levels, nil
 }

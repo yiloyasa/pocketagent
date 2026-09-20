@@ -77,7 +77,7 @@
 
 机器可扫部分（linter，进 `pa_audit`）：
 
-- 硬编码名单模式报警：agent 字面量数组（如 `[]string{"codex","pi","zcode"}`）、`isLegacy*` 版本二分函数——**新增即报警**；存量 4 处挂牌白名单（`thread.go` CreateThread、`model.go` order、`model.go` defaultModelIDFor、`codex_requests.go` isLegacyApproval），只减不增。
+- 硬编码名单模式报警：agent 字面量数组（如 `[]string{"codex","pi","zcode"}`）、`isLegacy*` 版本二分函数——**新增即报警**；存量挂牌白名单仅剩 1 处（`codex_requests.go` isLegacyApproval，只减不增；CreateThread/order/defaultModelIDFor 三处已于批3整改，见附录 A），豁免登记 3 项见附录 A 尾部。
 - UI 层新增 `"未知"` 字符串 → 报警。
 
 常驻可测用例（回归资产）：mock 未知 method 通知、mock 新模型 ID、mock 未知反向请求（B 开关 ON/OFF 各一遍）、mock 第 4 个 agent 建会话（当前为挂牌技术债，只记录行为、不要求通过）。
@@ -122,13 +122,25 @@
 
 | 位置 | 问题 | 状态 |
 |---|---|---|
-| `internal/server/thread.go` CreateThread（L99） | 未知 agent → 硬错误 | 待改透传/尽力接入 |
-| `internal/server/model.go` order（L73） | agent 顺序写死 | 待改动态 |
-| `internal/server/model.go` defaultModelIDFor | 假设 `agent+"/default"` 存在 | 待改容错 |
+| `internal/server/thread.go` CreateThread（L99） | 未知 agent → 硬错误 | 已整改（2026-09-20, 批3）：在 `s.cfg.Providers` 注册表即接入，报错文案动态列举当前可用 agent |
+| `internal/server/model.go` order（L73） | agent 顺序写死 | 已整改（2026-09-20, 批3）：顺序从 `s.cfg.Providers` 动态派生（桌面桥接 PrefsAware 在前、echo 最后），新 provider 自动入列 |
+| `internal/server/model.go` defaultModelIDFor | 假设 `agent+"/default"` 存在 | 已整改（2026-09-20, 批3）：default 哨兵 → 模型列表首项 → 明确报错，不再伪造 ID |
 | `internal/agent/codex_requests.go` isLegacyApproval | 版本号二分判断 | 待协议演进时整改 |
+| `internal/server/agents_sessions.go` 导入名单 + `internal/server/thread.go` defaultProvider | 写死 `importAgentModels{pi,zcode}` 与 `[]string{"pi","zcode"}` 循环、`[]string{"codex","glm","deepseek"}` 优先级（体检 P1-4 / P1-5，原属未挂牌，登记在案） | 已整改（2026-09-20, 批3）：导入改为能力接口（`AgentSessionImporter`）动态发现、报错文案动态列举；defaultProvider 改为 store 默认模型前缀 → 字典序第一个非 echo → echo 兜底 |
+
+### 豁免登记（非技术债，防 linter 误报；只增不减，每条附裁定）
+
+| 位置 | 内容 | 豁免理由与裁定 |
+|---|---|---|
+| `android/.../ui/ChatScreen.kt` `systemVoiceRetireNeeded` | 系统 SR 错误码弃用名单（含增补 3=AUDIO_ERROR） | Android SpeechRecognizer 公开错误码为封闭 SDK 契约（1..13 随 API 固定），非面向原生演化的开放名单；else 分支安全（未知码不弃用）。批1审核裁定不违规（2026-09-20） |
+| `android/.../ui/HomeScreen.kt` `placeholderDisplayAgents` | opencode/claude-code/hermes/dsh 展示目录 | 仅决定灰显副文案，不参与能力判定（能力判定已全动态）；只随 agent 接入移除、不随新增增长。批3审核裁定合规（2026-09-20） |
+| `android/.../ui/SettingsScreen.kt` AgentDefaultsSection 按名特判 | `"pi","zcode" ->` 旧 daemon 兼容兜底 | else 分支的 `agent_settings:<id>` capability 动态判定已覆盖任意 agent；移除特判会让旧 daemon 用户丢失设置区。T-10 裁定维持现状（2026-09-20） |
 
 ## 附录 B · 框架自审记录
 
 | 日期 | 结论 | 动作 |
 |---|---|---|
 | 2026-09-20 | 规范初版（三轮讨论固化：闸门制 → 持续框架 → 人机分工优化） | 建立本文件 |
+| 2026-09-20 | 批7 死代码清理（T-24/T-26）：dynamicEffortsFor+孤儿接口、PiProvider.ThinkingLevels 及其测试删除 | 回归用例净 -2/-1：被删用例钉的是已删死函数的行为，无独立存在意义；等价性由全绿测试套佐证；同批新增 AST 回归钉子 +1（codexapp client_debug_ast_test）对冲 |
+| 2026-09-20 | UP-TO-DATE 假绿单轮三次被审/执两侧抓住（批2/批3/批5 审核） | 建议 tools/device/_pa_gradle.py test 分支统一补 --rerun 参数（待用户拍板）；当前以 XML 时间戳核对为强制口径 |
+| 2026-09-20 | 批5 Vosk 全摘除（T-22）：VoskModelManager 状态机/安装器/识别循环等 21 个纯 vosk 用例删除（清单见 T-22 交付报告）；SenseVoiceFallbackTest 24 例同数承接引擎回退钉子，全仓用例数 484 持平不减 | 被测对象已随引擎整体摘除，无行为可钉；端侧兜底/文件校验行为面由 SenseVoice 系测试覆盖；删除逐例清单与理由存档于 T-22 交付报告（2026-09-20 夜航档案） |

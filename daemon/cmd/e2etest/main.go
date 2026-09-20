@@ -52,7 +52,7 @@ func main() {
 	must(err)
 	must(stream.Send(&pb.TurnClientMessage{Msg: &pb.TurnClientMessage_Input{Input: &pb.TurnInput{
 		ThreadId: th.Id,
-		Blocks: []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "用一句话介绍你自己,然后说 OK"}}}},
+		Blocks:   []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "用一句话介绍你自己,然后说 OK"}}}},
 	}}}))
 	thinking := ""
 	text := ""

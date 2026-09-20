@@ -1111,26 +1111,6 @@ func (p *PiProvider) SlashCommandsFor(threadID string) []*pb.SlashCommand {
 	return out
 }
 
-// ThinkingLevels 该线程当前模型的动态思考档位(get_available_thinking_levels)。
-//
-// 【作为 ModelEffort 档位来源的接入方式】手机"思考强度"选择器现有的档位是
-// codex 语义(low/medium/high/xhigh);Pi 的档位是模型相关的动态集合(实测
-// glm-5.3 只有 low/high/max,thinkingLevelMap 把 off/minimal/medium/xhigh 映成
-// null 被过滤)。proto(model/thread)本轮被提示词优化占用,无法新增
-// "列档位"字段/RPC —— 本轮只做 provider 侧数据源:有活客户端就实时取,
-// 没有就回全集兜底(不起子进程:为一个档位列表冷启太贵)。UI 接线待 proto
-// 增量后补(需求清单见交付报告)。
-func (p *PiProvider) ThinkingLevels(t *store.Thread) []string {
-	if c := p.aliveClient(t.ID); c != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), piCallBudget)
-		defer cancel()
-		if levels, err := c.AvailableThinkingLevels(ctx); err == nil && len(levels) > 0 {
-			return levels
-		}
-	}
-	return nil
-}
-
 // ---- 标题同步(手机端重命名 → Pi 会话,与 TitleHandler 互为反向)----
 
 // sessionNameSetter 重命名同步对 piapp.Client 的窄接口(单测打桩,不依赖子进程;

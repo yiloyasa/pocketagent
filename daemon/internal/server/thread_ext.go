@@ -13,6 +13,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -68,7 +69,7 @@ func (s *Server) SyncThreadEvent(codexThreadID, method string, params json.RawMe
 		}
 		if name != "" && name != local.Title {
 			local.Title = name
-			_ = s.cfg.Store.Update(local)
+			logStoreUpdateErr("codex-rename-sync", local.ID, s.cfg.Store.Update(local))
 		}
 	case "thread/status/changed":
 		// codex 的 active/idle 与我们的 RUNNING/IDLE 对得上;notLoaded 不动
@@ -115,7 +116,7 @@ func (s *Server) setLocalStatus(t *store.Thread, status pb.ThreadStatus) {
 		return
 	}
 	t.Status = status
-	_ = s.cfg.Store.Update(t)
+	logStoreUpdateErr("status-sync", t.ID, s.cfg.Store.Update(t))
 }
 
 // ---------- 分组(section)----------
@@ -184,30 +185,66 @@ func (s *Server) DeleteThreadSection(ctx context.Context, req *pb.DeleteThreadSe
 		return nil, errInternal(err)
 	}
 	// 本地缓存跟着清:否则这些会话会挂在一个已经不存在的分组下面,再也找不到。
-	for _, t := range s.cfg.Store.List(true) {
-		if t.SectionID == req.SectionId {
-			t.SectionID = ""
-			_ = s.cfg.Store.Update(t)
-		}
+	// 【失败要上报(T-17,原体检 P2-4)】分组已在 codex 侧删掉,这里落库失败意味着
+	// 手机上的会话仍挂在已删除的分组下,清单错乱且重启 daemon 前好不了 —— 这是
+	// 有现成错误通道的 RPC 收尾,不再走"吞错仅日志"的埋点。title-sync /
+	// status-sync 等没有回传通道的点位维持日志口径不变(见 store_observability.go)。
+	if err := s.clearSectionLocalCache(req.SectionId); err != nil {
+		return nil, err
 	}
 	return &pb.Empty{}, nil
 }
 
+// clearSectionLocalCache 把本地库里仍挂在 sectionID 下的会话逐条摘出来
+// (SectionID 置空并落盘)。任一条落盘失败即中止并返回错误;失败那条同时留
+// op=section-clear 埋点日志,排障口径与其它落盘点一致,而上报给手机的是人话文案
+// (底层原因不透给 UI,AUDIT §3.3)。
+func (s *Server) clearSectionLocalCache(sectionID string) error {
+	for _, t := range s.cfg.Store.List(true) {
+		if t.SectionID != sectionID {
+			continue
+		}
+		t.SectionID = ""
+		err := s.cfg.Store.Update(t)
+		logStoreUpdateErr("section-clear", t.ID, err)
+		if err != nil {
+			return errInternal(errors.New("删除分组成功,但会话清单同步失败,请重试或重启 daemon"))
+		}
+	}
+	return nil
+}
+
+// MoveThreadToSection 把会话移进分组;sectionId 为空 = 移出分组。
+//
+// 【覆盖范围:三家 agent 都能分组,但生效路径分两条】分组在 UI 上对全部 agent
+// 的会话开放(长按面板/左滑"分组",ThreadsScreen 的 SECTION_COVERAGE_NOTE 也
+// 明说"三家都可以移入"),但生效路径不同:
+//   - codex:桌面端也有分组概念,先下发 codex(threadSection 是它的事实来源),
+//     成功后落库缓存 —— 不下发就是假开关(归档同款教训)。
+//   - pi / zcode:agent 自己没有分组概念,分组纯本地落库,不要求 codex 在场。
+//     修复前这里一刀切要求 codexProvider 且线程已落地,pi/zcode 会话(永远没有
+//     codex_thread_id)被硬拒,报的还是"先发一条消息"这种牛头不对马嘴的话 ——
+//     与 UI 的覆盖说明自相矛盾(用户实锤待补项,2026-09-20 T-05)。
 func (s *Server) MoveThreadToSection(ctx context.Context, req *pb.MoveThreadToSectionRequest) (*pb.Thread, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
 	if !ok {
 		return nil, errNotFound("会话不存在")
 	}
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	if threadAgentID(t) == "codex" {
+		p := s.codexProvider()
+		if p == nil {
+			return nil, errUnavailable("电脑上没有可用的 codex")
+		}
+		if t.CodexThreadID == "" {
+			return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法分组")
+		}
+		if err := p.MoveThreadToSection(t.CodexThreadID, req.SectionId); err != nil {
+			return nil, errInternal(err)
+		}
 	}
-	if t.CodexThreadID == "" {
-		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法分组")
-	}
-	if err := p.MoveThreadToSection(t.CodexThreadID, req.SectionId); err != nil {
-		return nil, errInternal(err)
-	}
+	// 收尾两条路径共用:codex 下发成功后落库缓存,pi/zcode 本地落库即生效。
+	// codex 侧的列表同步(mergeCodexEntries)只碰 CodexThreadID 非空的线程,
+	// 不会把 pi/zcode 手动分的组冲掉。
 	t.SectionID = req.SectionId
 	if err := s.cfg.Store.Update(t); err != nil {
 		return nil, errInternal(err)
@@ -479,7 +516,7 @@ func (s *Server) mergeCodexEntries(entries []agent.CodexThreadEntry) {
 			changed = true
 		}
 		if changed {
-			_ = s.cfg.Store.Update(t)
+			logStoreUpdateErr("codex-list-sync", t.ID, s.cfg.Store.Update(t))
 		}
 	}
 }

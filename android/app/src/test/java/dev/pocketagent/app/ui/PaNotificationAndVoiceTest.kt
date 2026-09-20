@@ -450,52 +450,52 @@ class PaNotificationAndVoiceTest {
         // 卡在 LISTENING(零回调死区)→ 看门狗抛 DeadZoneTimeout
         var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
         assertEquals(VoiceInputState.LISTENING, ui.state)
-        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstVoskLoad = false))
+        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstColdLoad = false))
         assertEquals(VoiceInputState.IDLE, ui.state)
         assertEquals("语音服务无响应,请重试或检查语音服务", pendingVoiceEffects(ui).toast)
         // 经组合层统一入口(applyVoiceEvent)同样成立:指令当场取出,展示态干净
         val (display, fx) = applyVoiceEvent(
             voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true)).let { voiceEffectsConsumed(it) },
-            VoiceEvent.DeadZoneTimeout(firstVoskLoad = false),
+            VoiceEvent.DeadZoneTimeout(firstColdLoad = false),
         )
         assertEquals(VoiceInputState.IDLE, display.state)
         assertEquals("语音服务无响应,请重试或检查语音服务", fx.toast)
         assertTrue(voiceEffectsPending(fx))
         // 空闲态误收死区事件也只是幂等回 IDLE + 提示,不产生 start/stop/append
-        val (idle, fxIdle) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.DeadZoneTimeout(firstVoskLoad = false))
+        val (idle, fxIdle) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.DeadZoneTimeout(firstColdLoad = false))
         assertEquals(VoiceInputState.IDLE, idle.state)
         assertNull(fxIdle.append)
         assertFalse(fxIdle.start)
         assertFalse(fxIdle.stop)
     }
 
-    // ------------------------------------------------- P2-d:Vosk 首次冷加载的死区分流
+    // ------------------------------------------------- P2-d:端侧首次冷加载的死区分流
 
     @Test
-    fun `语音_P2d_死区文案_Vosk首次冷加载提示加载中_其余按服务无响应`() {
-        // 首次冷加载(Vosk 本识别器尚无一次成功识别):文案说真话,引导稍候再试
-        assertEquals("正在加载语音模型,请稍候再试", voiceDeadZoneToast(firstVoskLoad = true))
+    fun `语音_P2d_死区文案_端侧首次冷加载提示加载中_其余按服务无响应`() {
+        // 首次冷加载(端侧引擎本识别器尚无一次成功识别):文案说真话,引导稍候再试
+        assertEquals("正在加载语音模型,请稍候再试", voiceDeadZoneToast(firstColdLoad = true))
         // 已跑通过一轮(模型已暖)或系统引擎:维持原"服务无响应"提示
-        assertEquals("语音服务无响应,请重试或检查语音服务", voiceDeadZoneToast(firstVoskLoad = false))
+        assertEquals("语音服务无响应,请重试或检查语音服务", voiceDeadZoneToast(firstColdLoad = false))
     }
 
     @Test
-    fun `语音_P2d_死区事件_Vosk首次冷加载_回空闲并提示加载中`() {
+    fun `语音_P2d_死区事件_端侧首次冷加载_回空闲并提示加载中`() {
         // 卡在 LISTENING(冷加载零回调撞满看门狗)→ 回 IDLE 不卡死,文案是"加载中"
         var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
         assertEquals(VoiceInputState.LISTENING, ui.state)
-        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstVoskLoad = true))
+        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstColdLoad = true))
         assertEquals(VoiceInputState.IDLE, ui.state)
         assertEquals("正在加载语音模型,请稍候再试", pendingVoiceEffects(ui).toast)
         // 经组合层统一入口同样成立:指令当场取出,展示态干净
         val (display, fx) = applyVoiceEvent(
             voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true)).let { voiceEffectsConsumed(it) },
-            VoiceEvent.DeadZoneTimeout(firstVoskLoad = true),
+            VoiceEvent.DeadZoneTimeout(firstColdLoad = true),
         )
         assertEquals(VoiceInputState.IDLE, display.state)
         assertEquals("正在加载语音模型,请稍候再试", fx.toast)
         assertTrue(voiceEffectsPending(fx))
         // 默认参数 = 非首次加载(系统引擎/模型已暖):与显式 false 等价,老路径文案不变
-        assertEquals(VoiceEvent.DeadZoneTimeout(firstVoskLoad = false), VoiceEvent.DeadZoneTimeout())
+        assertEquals(VoiceEvent.DeadZoneTimeout(firstColdLoad = false), VoiceEvent.DeadZoneTimeout())
     }
 }

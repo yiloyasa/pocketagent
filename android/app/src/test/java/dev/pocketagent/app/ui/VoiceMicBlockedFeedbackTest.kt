@@ -1,9 +1,8 @@
 package dev.pocketagent.app.ui
 
+import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE
 import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY
 import dev.pocketagent.app.ui.component.VOICE_ERROR_MIC_BLOCKED
-import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_ENGINE
-import dev.pocketagent.app.ui.component.VOICE_ERROR_VOSK_MODEL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -26,9 +25,8 @@ class VoiceMicBlockedFeedbackTest {
     fun `端侧102麦克风被拦映射MIC_BLOCKED_103引擎忙映射BUSY`() {
         assertEquals(VoiceErrorKind.MIC_BLOCKED, voiceErrorKind(VOICE_ERROR_MIC_BLOCKED))
         assertEquals(VoiceErrorKind.BUSY, voiceErrorKind(VOICE_ERROR_ENGINE_BUSY))
-        // 端侧既有 100/101 映射不被新分支影响
-        assertEquals(VoiceErrorKind.ENGINE, voiceErrorKind(VOICE_ERROR_VOSK_ENGINE))
-        assertEquals(VoiceErrorKind.ENGINE, voiceErrorKind(VOICE_ERROR_VOSK_MODEL))
+        // 端侧既有 100 映射不被新分支影响(101 已随旧遗留引擎摘除,不再有映射)
+        assertEquals(VoiceErrorKind.ENGINE, voiceErrorKind(VOICE_ERROR_ENGINE))
     }
 
     @Test
@@ -74,7 +72,7 @@ class VoiceMicBlockedFeedbackTest {
         // 0/负数/未知码:不弃用
         for (code in listOf(0, -1, 10, 99)) assertFalse(systemVoiceRetireNeeded(code))
         // 100+ 端侧自定义码:到达时系统引擎本就未被选中,绝不能误伤
-        for (code in listOf(VOICE_ERROR_VOSK_ENGINE, VOICE_ERROR_VOSK_MODEL, VOICE_ERROR_MIC_BLOCKED, VOICE_ERROR_ENGINE_BUSY)) {
+        for (code in listOf(VOICE_ERROR_ENGINE, VOICE_ERROR_MIC_BLOCKED, VOICE_ERROR_ENGINE_BUSY)) {
             assertFalse(systemVoiceRetireNeeded(code))
         }
     }

@@ -2,7 +2,8 @@
   PocketAgent 桌面端构建脚本 (build.ps1)
   ============================================================
   从仓库源码构建「发布版」daemon 与看护进程,并把它们连同
-  install.bat / uninstall.bat / 使用说明.txt 一起打包成可分发的
+  install.bat / uninstall.bat / 使用说明.txt / version.txt(版本烙印,
+  取自 daemon/internal/version)一起打包成可分发的
   zip —— 即最终交给用户的 "PocketAgent桌面端.zip"。
 
   用法:
@@ -35,6 +36,22 @@ $StageDir  = Join-Path $ScriptDir $Stage                     # 暂存目录
 $ZipName   = "PocketAgent桌面端.zip"
 $ZipPath   = Join-Path $ScriptDir $ZipName                   # 最终产物
 
+# ---- 版本烙印(T-17/T-25/T-27) ----
+# 版本号唯一真源 = daemon/internal/version 包(version.go 的 var Version)。
+# 打包时从这里解析出版本号:(a) 写入 zip 内 version.txt;(b) 用 -ldflags "-X"
+# 烙进 pocketagentd.exe(Go linker -X 只能赋值 var,故 Version 必须为 var),
+# 保证 zip、二进制、仓库三方一致对账。
+$VersionFile = Join-Path $DaemonDir "internal\version\version.go"
+if (-not (Test-Path $VersionFile)) {
+    Write-Error "未找到版本定义文件:$VersionFile"
+}
+$VersionMatch = Select-String -Path $VersionFile -Pattern 'var Version\s*=\s*"([^"]+)"' | Select-Object -First 1
+if (-not $VersionMatch) {
+    Write-Error '无法从 version.go 解析版本号(未匹配到 var Version = "..."),请核对 daemon/internal/version/version.go'
+}
+$AppVersion = $VersionMatch.Matches[0].Groups[1].Value
+Write-Host "==> 版本:$AppVersion (来自 daemon/internal/version)"
+
 # ---- 准备 Go 环境 ----
 $go = Join-Path $GoBin "go.exe"
 if (-not (Test-Path $go)) {
@@ -44,11 +61,13 @@ if (-not (Test-Path $go)) {
 $env:PATH = "$GoBin;" + $env:PATH
 
 # ---- 进入 daemon 目录,构建两个可执行文件 ----
-# -trimpath 去掉绝对路径, -ldflags "-s -w" 去掉符号表与调试信息,体积更小
+# -trimpath 去掉绝对路径, -ldflags "-s -w" 去掉符号表与调试信息,体积更小;
+# pocketagentd 额外用 -X 把 $AppVersion 烙进 internal/version.Version(T-27),
+# 使二进制自证版本(启动日志打印,产物对账不再只靠 pid)。
 Push-Location $DaemonDir
 try {
-    Write-Host "==> 构建 pocketagentd.exe (端口 $Port)"
-    & $go build -trimpath -ldflags "-s -w" `
+    Write-Host "==> 构建 pocketagentd.exe (端口 $Port, 版本 $AppVersion)"
+    & $go build -trimpath -ldflags "-s -w -X github.com/pocketagent/daemon/internal/version.Version=$AppVersion" `
         -o (Join-Path $StageDir "pocketagentd.exe") ./cmd/pocketagentd
     if ($LASTEXITCODE -ne 0) { throw "pocketagentd 构建失败 (exit=$LASTEXITCODE)" }
 
@@ -63,6 +82,10 @@ try {
 # ---- 组装分发目录:把 exe 与脚本 / 说明放进暂存目录,再压成 zip ----
 if (Test-Path $StageDir) { Remove-Item $StageDir -Recurse -Force | Out-Null }
 New-Item -ItemType Directory -Path $StageDir | Out-Null
+
+# 版本留痕:zip 根部放一份 version.txt(纯版本号一行,与仓库 internal/version 对账;
+# 用 Ascii 编码避免 BOM 混入版本号)
+Set-Content -Path (Join-Path $StageDir "version.txt") -Value $AppVersion -Encoding Ascii
 
 # 随包附带的文件(与本脚本同目录)
 $PackageFiles = @("install.bat", "uninstall.bat", "使用说明.txt")
@@ -80,5 +103,5 @@ if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
 Compress-Archive -Path (Join-Path $StageDir "*") -DestinationPath $ZipPath -Force
 
 Write-Host ""
-Write-Host "==> 构建完成:`n    $ZipPath"
-Write-Host "    内含:`n      pocketagentd.exe  (daemon 主程序)`n      paguard.exe       (看护进程)`n      install.bat      (一键安装)`n      uninstall.bat    (卸载)`n      使用说明.txt     (小白教程)"
+Write-Host "==> 构建完成 (版本 $AppVersion):`n    $ZipPath"
+Write-Host "    内含:`n      pocketagentd.exe  (daemon 主程序)`n      paguard.exe       (看护进程)`n      version.txt       (版本号,与仓库 internal/version 对账)`n      install.bat      (一键安装)`n      uninstall.bat    (卸载)`n      使用说明.txt     (小白教程)"

@@ -52,7 +52,7 @@ func (r *runner) runCmdsMode() {
 	}()
 
 	// 就绪等待:node 冷启快慢不定,轮询 get_state 直到成功(上限 60s),
-	 // 失败带 stderr 摘录,便于诊断。
+	// 失败带 stderr 摘录,便于诊断。
 	ready := false
 	var readyErr error
 	for i := 0; i < 20; i++ {

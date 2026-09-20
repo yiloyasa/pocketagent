@@ -24,6 +24,7 @@ import (
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/term"
 	"github.com/pocketagent/daemon/internal/tlscert"
+	"github.com/pocketagent/daemon/internal/version"
 )
 
 func defaultDataDir() string {
@@ -37,7 +38,12 @@ func defaultDataDir() string {
 func main() {
 	addr := flag.String("addr", ":7246", "gRPC 监听地址")
 	dataDir := flag.String("data", defaultDataDir(), "数据目录(线程存储、token)")
-	pairCode := flag.String("pair-code", "", "配对码;为空则不启用鉴权(仅限局域网内自用)")
+	// 【PA-REAL-0001 修复】为空不再等于关闭鉴权:不传=自动生成 8 位随机码并
+	// 持久化到 <data>/pair-code.txt,启动日志会打印,手机首次连接时输入。
+	pairCode := flag.String("pair-code", "", "配对码(鉴权默认开启);不传=自动生成并持久化到 <数据目录>/pair-code.txt")
+	// 【PA-REAL-0001 修复】显式降级旗标:完全跳过鉴权,但仅允许本机回环连接
+	// (127.0.0.1/::1),局域网/远程一律被拒。应急排障用,平时不要开。
+	insecureNoAuth := flag.Bool("insecure-no-auth", false, "应急:关闭配对码鉴权,仅允许本机回环连接;局域网连接会被拒绝")
 	workspace := flag.String("workspace", cwd(), "默认工作区")
 	// 应急回退:P0-1 起默认 TLS(自签证书 + 手机端指纹锁定);
 	// 极端情况(证书文件损坏等)可用 -plaintext 暂时回明文。
@@ -55,6 +61,37 @@ func main() {
 		log.Fatalf("创建数据目录失败: %v", err)
 	}
 
+	// ---- 鉴权模式解析(PA-REAL-0001 修复:默认鉴权开启)----
+	var pairCodeValue string
+	authMode := "配对码模式(鉴权已启用)"
+	switch {
+	case *insecureNoAuth:
+		if *pairCode != "" {
+			log.Fatalf("-pair-code 与 -insecure-no-auth 互斥:要么配对码鉴权,要么显式无鉴权(仅回环),不能同时给")
+		}
+		authMode = "无鉴权(-insecure-no-auth,仅放行本机回环)"
+		log.Printf("============================================================")
+		log.Printf("WARNING: INSECURE MODE - 鉴权已完全关闭(-insecure-no-auth)!")
+		log.Printf("WARNING: 仅本机回环(127.0.0.1/::1)连接放行,局域网/远程连接一律拒绝。")
+		log.Printf("WARNING: 如需手机从局域网连接,请去掉 -insecure-no-auth 重启,")
+		log.Printf("WARNING: daemon 会自动生成配对码(文件: %s),手机首次连接时输入。", pairCodePath(*dataDir))
+		log.Printf("============================================================")
+	default:
+		code, generated, err := loadOrGeneratePairCode(*dataDir, *pairCode)
+		if err != nil {
+			log.Fatalf("配对码初始化失败: %v", err)
+		}
+		pairCodeValue = code
+		switch {
+		case generated:
+			log.Printf("已自动生成配对码: %s(手机首次连接需输入;已持久化到 %s,重启复用不换码)", pairCodeValue, pairCodePath(*dataDir))
+		case *pairCode != "":
+			log.Printf("使用命令行指定配对码: %s(手机首次连接需输入;已同步到 %s)", pairCodeValue, pairCodePath(*dataDir))
+		default:
+			log.Printf("复用既有配对码: %s(手机首次连接需输入;文件: %s)", pairCodeValue, pairCodePath(*dataDir))
+		}
+	}
+
 	// TLS 凭证:首启自动生成自签证书(ECDSA P-256,20 年),之后一直复用。
 	var grpcOpts []grpc.ServerOption
 	if *plaintext {
@@ -70,6 +107,8 @@ func main() {
 
 	st, err := store.NewFileStore(*dataDir)
 	if err != nil {
+		// 【P2-5】threads.json 内容损坏已在 store 内自愈(隔离留档 + 空库启动);
+		// 走到这里只剩 I/O 类系统性故障(权限/磁盘),静默空库反而危险,维持 Fatal。
 		log.Fatalf("初始化存储失败: %v", err)
 	}
 
@@ -83,12 +122,13 @@ func main() {
 	}
 
 	srv := server.New(server.Config{
-		Store:     st,
-		Providers: providers,
-		Terminals: tm,
-		PairCode:  *pairCode,
-		Workspace: *workspace,
-		DataDir:   *dataDir,
+		Store:          st,
+		Providers:      providers,
+		Terminals:      tm,
+		PairCode:       pairCodeValue,
+		InsecureNoAuth: *insecureNoAuth,
+		Workspace:      *workspace,
+		DataDir:        *dataDir,
 	})
 
 	lis, err := net.Listen("tcp", *addr)
@@ -164,8 +204,10 @@ func main() {
 	if cp, ok := providers["codex"].(*agent.CodexProvider); ok {
 		go cp.Warmup()
 	}
-	log.Printf("pocketagentd 已启动: %s | 工作区: %s | 模型: %v | 鉴权: %t",
-		*addr, *workspace, names, *pairCode != "")
+	// 版本锚点(AUDIT §2 L0 产物自证):启动日志打印 -ldflags 烙印的版本,
+	// 确认"跑着的是新的"不再只靠 pid。
+	log.Printf("pocketagentd 已启动: %s | 工作区: %s | 模型: %v | 鉴权: %s | 版本: %s",
+		*addr, *workspace, names, authMode, version.Version)
 	if err := gs.Serve(lis); err != nil {
 		log.Fatalf("gRPC 服务退出: %v", err)
 	}

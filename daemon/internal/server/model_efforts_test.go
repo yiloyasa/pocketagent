@@ -1,34 +1,36 @@
 // model_efforts_test.go —— ListModels 填充 ModelInfo.available_efforts 的回归。
 //
-// 【为什么必须钉死】思考档位的动态透出是 ModelEffortCard 的数据源:pi 填动态
-// 档位、无能力 provider 留空(= 手机端默认档);同时 ListModels 不得再改写
-// provider 返回的缓存切片(双前缀/数据竞争,见 dynamicEffortsFor 与复制注释)。
+// 【为什么必须钉死】思考档位的动态透出是 ModelEffortCard 的数据源:provider
+// Models() 报什么档位就透什么、没报就留空(= 手机端默认档);同时 ListModels
+// 不得再改写 provider 返回的缓存切片(双前缀/数据竞争,见 appendProviderModels
+// 复制注释),也不得为模型元数据去依赖任何活线程。
+// 【T-24 清理】dynamicEffortsFor(T-14 重写 ListModels 后零调用方)已删除;
+// 原本只测它的两个探针用例(TestDynamicEffortsProbePicksNewestPiThread /
+// TestDynamicEffortsProbeWithoutThreads)随之删除 —— 探针选择行为在生产中
+// 已不存在。
+// 【T-26/T-28 清理】server 侧 ThinkingLevels 接口与 agent.PiProvider.ThinkingLevels
+// 也已删除(pi 档位由 provider 在 Models() 里自填 available_efforts,运行期校验
+// 走 agent/pi_selection.go 直发 get_available_thinking_levels RPC);effortsStub
+// 上死掉的 ThinkingLevels 桩方法与只为它存在的 levels/seenThread 字段随之删除
+// ——"ListModels 不得依赖活线程"改由编译期保证:Provider 接口上已无任何
+// 收线程的方法。
 package server
 
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
-	"github.com/pocketagent/daemon/internal/store"
 )
 
-// effortsStub 带 Models + 动态档位的 provider 桩(生产对应 *agent.PiProvider)。
+// effortsStub 带 Models 的 provider 桩(生产对应 *agent.PiProvider)。
 type effortsStub struct {
 	PiProviderStub
-	models     []pb.ModelInfo
-	levels     []string
-	seenThread *store.Thread // 记录 ThinkingLevels 被调时传入的探针线程
+	models []pb.ModelInfo
 }
 
 func (s *effortsStub) Models() []pb.ModelInfo { return s.models }
-
-func (s *effortsStub) ThinkingLevels(t *store.Thread) []string {
-	s.seenThread = t
-	return s.levels
-}
 
 func TestListModelsFillsAvailableEfforts(t *testing.T) {
 	st := mustStore(t)
@@ -38,7 +40,6 @@ func TestListModelsFillsAvailableEfforts(t *testing.T) {
 	}
 	pi := &effortsStub{
 		models: []pb.ModelInfo{{Id: "zai-coding-cn/glm-5.3", Provider: "pi", DisplayName: "GLM-5.3", AvailableEfforts: []string{"low", "high", "max"}}},
-		levels: []string{"low", "high", "max"},
 	}
 	srv := New(Config{Store: st, Providers: map[string]agent.Provider{"pi": pi}})
 	res, err := srv.ListModels(context.Background(), &pb.ListModelsRequest{})
@@ -54,9 +55,6 @@ func TestListModelsFillsAvailableEfforts(t *testing.T) {
 	}
 	if len(m.AvailableEfforts) != 3 || m.AvailableEfforts[0] != "low" || m.AvailableEfforts[2] != "max" {
 		t.Fatalf("应透出 pi 的动态档位,实际 %v", m.AvailableEfforts)
-	}
-	if pi.seenThread != nil {
-		t.Fatal("model metadata must not depend on an unrelated live thread")
 	}
 }
 
@@ -77,57 +75,12 @@ func TestListModelsEmptyEffortsWithoutCapability(t *testing.T) {
 	}
 }
 
-// 探针选"最近更新的该 agent 会话"(有活客户端才拿得到真实动态档位)。
-func TestDynamicEffortsProbePicksNewestPiThread(t *testing.T) {
-	st := mustStore(t)
-	old := piExportThread("th-eff-old")
-	neu := piExportThread("th-eff-new")
-	for _, th := range []*store.Thread{old, neu} {
-		if err := st.Create(th); err != nil {
-			t.Fatalf("建线程失败: %v", err)
-		}
-	}
-	// Get 返回独立快照。跨过旧线程的毫秒时间戳后真实提交，避免依赖
-	// 未提交字段修改或时间戳并列时 map 的遍历顺序。
-	cur, ok := st.Get("th-eff-new")
-	if !ok {
-		t.Fatal("新线程不存在")
-	}
-	time.Sleep(time.Until(time.UnixMilli(old.UpdatedAt + 2)))
-	if err := st.Update(cur); err != nil {
-		t.Fatalf("更新新线程失败: %v", err)
-	}
-	if cur.UpdatedAt <= old.UpdatedAt {
-		t.Fatalf("更新时间未区分: old=%d new=%d", old.UpdatedAt, cur.UpdatedAt)
-	}
-	pi := &effortsStub{levels: []string{"off"}}
-	srv := New(Config{Store: st, Providers: map[string]agent.Provider{"pi": pi}})
-	if got := srv.dynamicEffortsFor(pi); len(got) != 1 || got[0] != "off" {
-		t.Fatalf("应返回注入档位,实际 %v", got)
-	}
-	if pi.seenThread == nil || pi.seenThread.ID != "th-eff-new" {
-		t.Fatalf("探针应是最近更新的 pi 线程,实际 %+v", pi.seenThread)
-	}
-}
-
-// 没有任何该 agent 会话时也要能出兜底档位(探针用匿名线程,不 panic)。
-func TestDynamicEffortsProbeWithoutThreads(t *testing.T) {
-	st := mustStore(t)
-	pi := &effortsStub{levels: []string{"low", "max"}}
-	srv := New(Config{Store: st, Providers: map[string]agent.Provider{"pi": pi}})
-	got := srv.dynamicEffortsFor(pi)
-	if len(got) != 2 {
-		t.Fatalf("应返回注入档位,实际 %v", got)
-	}
-}
-
 // 【关键回归】ListModels 不得改写 provider 返回的缓存切片:
 // 两次调用都不能把 id 叠成 "pi/pi/…",也不得把档位写回 provider 的模型缓存。
 func TestListModelsDoesNotMutateProviderCache(t *testing.T) {
 	st := mustStore(t)
 	pi := &effortsStub{
 		models: []pb.ModelInfo{{Id: "default", Provider: "pi"}},
-		levels: []string{"high"},
 	}
 	srv := New(Config{Store: st, Providers: map[string]agent.Provider{"pi": pi}})
 	for round := 0; round < 2; round++ {

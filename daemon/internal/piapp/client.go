@@ -92,13 +92,21 @@ func LocatePi() (node, cli string, err error) {
 
 // Version 取 pi 版本(--version);失败返回空串。
 // 用于启动握手前的版本漂移检查(调研 §11#11)。
+//
+// 【P1-3】exec 出的 cmd 必须先 hidewin.Apply:node 是控制台程序,daemon 后台
+// 拉起时这条探测每执行一次就闪一个黑窗(GetHostInfo 每 5 分钟后台刷新 + 每次
+// 启动探测)。与 Start 内的构造(下方 hidewin.Apply(cmd) 处)及 codexapp/
+// zcodeapp 的启动路径同款写法;回归钉子见 hidewin_assert_test.go(AST 断言:
+// 构造路径不得出现裸 exec 链式调用)。
 func Version(node, cli string) string {
 	if node == "" || cli == "" {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, node, cli, "--version").Output()
+	cmd := exec.CommandContext(ctx, node, cli, "--version")
+	hidewin.Apply(cmd) // 控制台程序:不隐藏会在用户桌面闪黑窗(与 Start 同款)
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

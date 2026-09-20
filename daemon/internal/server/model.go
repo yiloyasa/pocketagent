@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
@@ -12,41 +13,9 @@ import (
 	"github.com/pocketagent/daemon/internal/store"
 )
 
-// thinkingLevelSource 动态思考档位来源的最小接口(生产由 *agent.PiProvider 实现;
-// server 层类型断言探测,与 zcodeHistorySource 同款模式,单测可注 fake)。
-type thinkingLevelSource interface {
-	ThinkingLevels(t *store.Thread) []string
-}
-
-// dynamicEffortsFor 取一个 provider 的动态思考档位列表;provider 没有该能力时
-// 返回 nil(proto 不填 = 手机端用内置默认档,与 codex/zcode 的语义一致)。
-//
-// 【为什么拿"最近会话"当探针】PiProvider.ThinkingLevels 按线程找活着的子进程
-// 实时取档位(get_available_thinking_levels 随模型变化);而模型列表是全局
-// RPC,没有线程上下文。这里复用最近更新的一个该 agent 会话作探针 —— 该会话
-// 挂载着就拿到真实动态档位,没挂载就由 ThinkingLevels 回全集兜底(它自己
-// 不起子进程,不会拖慢模型列表)。
-func (s *Server) dynamicEffortsFor(p agent.Provider) []string {
-	src, ok := p.(thinkingLevelSource)
-	if !ok {
-		return nil
-	}
-	probe := &store.Thread{AgentID: p.ID()}
-	newest := int64(-1)
-	for _, t := range s.cfg.Store.List(true) {
-		if threadAgentID(t) != p.ID() {
-			continue
-		}
-		if t.UpdatedAt > newest {
-			newest = t.UpdatedAt
-			probe = t
-		}
-	}
-	return src.ThinkingLevels(probe)
-}
-
 func (s *Server) ListModels(ctx context.Context, req *pb.ListModelsRequest) (*pb.ListModelsResponse, error) {
 	out := &pb.ListModelsResponse{}
+	var stateErrs []string
 	if req.GetThreadId() != "" {
 		if thread, ok := s.cfg.Store.Get(req.GetThreadId()); ok {
 			if native, ok := s.cfg.Providers[threadAgentID(thread)].(agent.CurrentSelectionReader); ok {
@@ -54,7 +23,7 @@ func (s *Server) ListModels(ctx context.Context, req *pb.ListModelsRequest) (*pb
 				model, effort, err := native.CurrentSelection(stateCtx, thread)
 				cancel()
 				if err != nil {
-					out.StateError = err.Error()
+					stateErrs = append(stateErrs, err.Error())
 				} else {
 					out.CurrentModelId = model
 					out.CurrentEffort = effort
@@ -63,24 +32,50 @@ func (s *Server) ListModels(ctx context.Context, req *pb.ListModelsRequest) (*pb
 		}
 	}
 
-	// 稳定顺序:桌面 agent(codex/pi/zcode)在前,echo 排最后兜底。
+	// 稳定顺序(2026-09-20 动态化,AUDIT 附录 A 第 2 项):不再写死 agent 名单,
+	// 全部从 s.cfg.Providers 派生 —— 桌面桥接 agent(消费桌面偏好的
+	// agent.PrefsAware,codex/pi/zcode 在 provider.go 编译期钉死实现)在前,
+	// 同组按 ID 字典序;其余 provider 随后按字典序;echo 永远排最后兜底。
+	// 新增 provider 自动进列表,无需改这里。
 	// 【pi 为什么入列】pi 会话的"模型·强度"卡需要列出 pi 的真实模型并渲染
 	// 动态思考档位(available_efforts),不进全局列表手机端就永远选不到。
 	// 【zcode 为什么入列(设置页 Pi/ZCode 分区,2026-09-19)】设置页的 ZCode 分区
 	// 要显示"ZCode 当前有哪些模型",而手机端能拿到的模型数据只有这一个全局列表;
 	// ZCode 分区只做**展示**,Codex 默认模型的候选已被手机端按 provider=="codex"
 	// 收窄,不会把 zcode 的模型误写进 codex 设置。
-	order := []string{"codex", "pi", "zcode"}
-	known := map[string]bool{"codex": true, "pi": true, "zcode": true, "echo": true}
-	var extra []string
-	for id := range s.cfg.Providers {
-		if !known[id] {
-			extra = append(extra, id)
+	var desktop, plain []string
+	for id, p := range s.cfg.Providers {
+		if _, isDesktop := p.(agent.PrefsAware); isDesktop {
+			desktop = append(desktop, id)
+		} else if id != "echo" {
+			plain = append(plain, id)
 		}
 	}
-	sort.Strings(extra)
-	order = append(order, extra...)
-	order = append(order, "echo")
+	sort.Strings(desktop)
+	sort.Strings(plain)
+	order := append(desktop, plain...)
+	if _, ok := s.cfg.Providers["echo"]; ok {
+		order = append(order, "echo")
+	}
+
+	// ---- 并行拉取 + 整段有界(PA-REAL-0002/0003,2026-09-20)----
+	// 以前这里按 order 顺序逐个 p.Models():codex 冷启动初始化期间,排在后面的
+	// pi/zcode 模型条目被一起拖住,整段轻松越过手机端 30s RPC 截止 → 整个
+	// ListModels 对用户表现为裸 DeadlineExceeded(daemon 日志同一窗口里 pi 报
+	// 30s 超时、zcode 报"codex 正忙"字样,即 PA-REAL-0003 的表象)。现在各
+	// provider 的拉取**并行**执行、整段等待有界:一个 agent 冷启动不再决定其它
+	// agent 的模型何时可见。预算内没回来的 provider 绝不静默缺席 —— StateError
+	// 如实说"初始化中,可重试"(既不伪造空表/半表为成功,也不抛裸超时,
+	// AUDIT §3.3);被放弃的拉取在后台自行完成并写入各自 TTL 缓存,手机端稍后
+	// 重试即秒回。各 provider 的生命周期锁都在各自实例上,并行不引入跨 provider
+	// 争用;同 provider 的串行边界(turnMu 轮次 / lifeMu 生命周期)不受影响。
+	type modelFetch struct {
+		done   chan struct{}
+		models []pb.ModelInfo
+		err    error
+	}
+	fetches := make(map[string]*modelFetch, len(order))
+	var wg sync.WaitGroup
 	for _, id := range order {
 		if req.GetAgentId() != "" && req.GetAgentId() != id {
 			continue
@@ -89,40 +84,99 @@ func (s *Server) ListModels(ctx context.Context, req *pb.ListModelsRequest) (*pb
 		if !ok {
 			continue
 		}
-		// 动态思考档位:每个 provider 算一次,填给它的全部模型;
-		// 无动态档位能力的 provider(codex/zcode/glm/…)为 nil,不填。
 		if req.GetRefresh() {
 			if refresh, ok := p.(agent.ModelCatalogRefresher); ok {
 				refresh.InvalidateModels()
 			}
 		}
-		efforts := []string(nil) // Concrete model metadata must not be borrowed from another live session.
-		// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
-		models := p.Models()
-		for i := range models {
-			m := &models[i]
-			// 【必须复制后改】providers 的 Models() 会返回**缓存的共享切片**
-			// (pi 的 modelsCache 就是缓存本体)。以前直接 m.Id 加前缀,写入的是
-			// 缓存:TTL 内第二次列表会叠成 "pi/pi/…" 双前缀,并发请求还会形成
-			// 数据竞争。这里逐字段复制到新消息再改,缓存保持只读。
-			cm := &pb.ModelInfo{
-				Id:               p.ID() + "/" + strings.TrimPrefix(m.Id, p.ID()+"/"), // 全局唯一:"pi/zai-coding-cn/glm-5.3"
-				Provider:         p.ID(),
-				DisplayName:      m.DisplayName,
-				ContextWindow:    m.ContextWindow,
-				SupportsThinking: m.SupportsThinking,
-				SupportsImages:   m.SupportsImages,
-				Available:        m.Available,
+		f := &modelFetch{done: make(chan struct{})}
+		fetches[id] = f
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer close(f.done)
+			// 结果只写进自己的 fetch 槽位,close(done) 提交;主流程只在 done
+			// 关闭后读取 —— 超时放弃后 goroutine 收尾写入也不会与收割竞争。
+			if ss, ok := p.(modelListStatusSource); ok {
+				f.models, f.err = ss.ModelsStatusCtx(ctx)
+				return
 			}
-			cm.AvailableEfforts = append([]string(nil), m.AvailableEfforts...)
-			if m.Id == "default" && len(efforts) > 0 {
-				cm.AvailableEfforts = append([]string(nil), efforts...)
-			}
-			out.Models = append(out.Models, cm)
-		}
+			f.models = p.Models()
+		}()
 	}
 
+	// 等待上界 = min(listModelsWaitBudget, RPC 剩余时间)。全部提前完成就提前
+	// 返回,不干等满预算(测试可用更短的 ctx 截止驱动,不必真等 10s)。
+	wait := listModelsWaitBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		if d := time.Until(deadline); d < wait {
+			wait = d
+		}
+	}
+	allDone := make(chan struct{})
+	go func() { wg.Wait(); close(allDone) }()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-allDone:
+	case <-timer.C:
+	}
+
+	// 按 order 收割:输出顺序与顺序版实现完全一致(稳定、可对拍);未完成的
+	// provider 记一条"初始化中,可重试"的人话,与拉取失败的真实原因一起从
+	// StateError 透传(手机端原样显示,AUDIT §3.3)。
+	for _, id := range order {
+		f, ok := fetches[id]
+		if !ok {
+			continue
+		}
+		select {
+		case <-f.done:
+			if f.err != nil {
+				stateErrs = append(stateErrs, id+": "+f.err.Error())
+			}
+			appendProviderModels(out, s.cfg.Providers[id], f.models)
+		default:
+			stateErrs = append(stateErrs, id+": "+agent.ErrModelsInitializing.Error())
+		}
+	}
+	out.StateError = strings.Join(stateErrs, "; ")
 	return out, nil
+}
+
+// listModelsWaitBudget 是 ListModels 对**全部 provider 并行拉取**的整段等待上界
+// (PA-REAL-0002:冷调用 ≤10s 内返回)。实际取它与 RPC 剩余时间的更早者。
+const listModelsWaitBudget = 10 * time.Second
+
+// modelListStatusSource 是「模型列表拉取能带错误回执」的可选能力(生产由
+// *agent.CodexProvider 实现;server 层类型断言探测,与 zcodeHistorySource 同款)。
+// 带回执的 provider 走状态预算通道(失败原因可透传);其余 provider 仍走无
+// 错误通道的 Models(),失败时由 provider 自己降级(如只回 default 条目)。
+type modelListStatusSource interface {
+	ModelsStatusCtx(ctx context.Context) ([]pb.ModelInfo, error)
+}
+
+// appendProviderModels 把一份 provider 模型表按全局唯一 id 复制进响应。
+// 【必须复制后改】providers 的 Models() 可能返回**缓存的共享切片**(pi 的
+// modelsCache 就是缓存本体)。以前直接 m.Id 加前缀,写入的是缓存:TTL 内第二次
+// 列表会叠成 "pi/pi/…" 双前缀,并发请求还会形成数据竞争。这里逐字段复制到新
+// 消息再改,缓存保持只读(历史回归,model_efforts_test.go 钉死)。
+func appendProviderModels(out *pb.ListModelsResponse, p agent.Provider, models []pb.ModelInfo) {
+	for i := range models {
+		m := &models[i]
+		// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+		cm := &pb.ModelInfo{
+			Id:               p.ID() + "/" + strings.TrimPrefix(m.Id, p.ID()+"/"), // 全局唯一:"pi/zai-coding-cn/glm-5.3"
+			Provider:         p.ID(),
+			DisplayName:      m.DisplayName,
+			ContextWindow:    m.ContextWindow,
+			SupportsThinking: m.SupportsThinking,
+			SupportsImages:   m.SupportsImages,
+			Available:        m.Available,
+		}
+		cm.AvailableEfforts = append([]string(nil), m.AvailableEfforts...)
+		out.Models = append(out.Models, cm)
+	}
 }
 
 func (s *Server) SetDefaultModel(ctx context.Context, req *pb.SetDefaultModelRequest) (*pb.Empty, error) {

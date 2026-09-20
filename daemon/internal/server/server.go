@@ -1,8 +1,10 @@
 // Package server 实现全部 gRPC 服务 + 鉴权拦截器。
 //
 // 【讲解】gRPC 的"拦截器"类似 Web 框架的中间件:每个请求进来先过它。
-// 我们在 metadata(可以理解为 HTTP 的 header)里找 "authorization: Bearer xxx",
-// 没配 pair-code 时全放行(局域网自用),配了则必须匹配。
+// 我们在 metadata(可以理解为 HTTP 的 header)里找 "authorization: Bearer xxx"。
+// 【PA-REAL-0001 修复后】鉴权默认开启:入口(main)在没给 -pair-code 时自动
+// 生成配对码并持久化;显式降级走 -insecure-no-auth,且仅放行本机回环连接;
+// 配对码为空的异常配置一律 fail closed,绝不静默放行。
 package server
 
 import (
@@ -13,6 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/netip"
 	"runtime"
 	"strings"
 	"sync"
@@ -21,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/pocketagent/daemon/internal/agent"
@@ -34,9 +39,15 @@ type Config struct {
 	Store     *store.FileStore
 	Providers map[string]agent.Provider
 	Terminals *term.Manager
-	PairCode  string
-	Workspace string
-	DataDir   string
+	// PairCode 是生效配对码。【PA-REAL-0001 修复后】正常启动路径(main)保证
+	// 非空:未显式给 -pair-code 时自动生成并持久化。为空=异常配置,拦截器
+	// fail closed,不再有"空码即关闭鉴权"的旧语义。
+	PairCode string
+	// InsecureNoAuth 对应入口旗标 -insecure-no-auth:显式关闭鉴权,但仅放行
+	// 本机回环(peer 地址为 127.0.0.1/::1)连接,局域网/远程一律拒绝。
+	InsecureNoAuth bool
+	Workspace      string
+	DataDir        string
 }
 
 type Server struct {
@@ -118,7 +129,7 @@ func New(cfg Config) *Server {
 				r = r[:24]
 			}
 			t.Title = string(r)
-			_ = cfg.Store.Update(t)
+			logStoreUpdateErr("startup-autotitle", t.ID, cfg.Store.Update(t))
 			break
 		}
 	}
@@ -128,7 +139,7 @@ func New(cfg Config) *Server {
 			for _, t := range cfg.Store.List(true) {
 				if t.CodexThreadID == codexTID && t.Title != title {
 					t.Title = title
-					_ = cfg.Store.Update(t)
+					logStoreUpdateErr("codex-title-sync", t.ID, cfg.Store.Update(t))
 				}
 			}
 		}
@@ -144,7 +155,7 @@ func New(cfg Config) *Server {
 					continue
 				}
 				t.Goal = goal
-				_ = cfg.Store.Update(t)
+				logStoreUpdateErr("codex-goal-sync", t.ID, cfg.Store.Update(t))
 				log.Printf("[goal] 同步会话 %s: goal=%.60q status=%s tokens=%d time=%ds",
 					t.ID, goal, status, tokensUsed, timeUsedSeconds)
 			}
@@ -164,17 +175,13 @@ func New(cfg Config) *Server {
 	// 模型、zcode 的默认思考强度、codex 的 turn/start 偏好就都不会再生效 ——
 	// 用户看到的就是"改了又变回去"(codex 当年同款问题的根治,推广到全家)。
 	srv.broadcastPrefs(agent.DesktopPrefsFromStore(cfg.Store))
-	// ZCode 标题同步:session.titleUpdated → TitleHandler(与 codex 同语义,
-	// 手机/桌面双端标题一致)。zcode 回调带的是我们自己的线程 ID(见 zcode.go),
-	// 直接按 t.ID 落库即可,不需要 codex 那样的外部 id 映射。
+	// ZCode 标题同步:session.titleUpdated → 落库(与 codex 同语义,手机/桌面
+	// 双端标题一致)。zcode 回调带的是我们自己的线程 ID(见 zcode.go),直接按
+	// t.ID 落库即可,不需要 codex 那样的外部 id 映射。规则(含"用户手动改名的
+	// 线程不回退",T-05)收在 applyZcodeTitle。
 	if zp, ok := cfg.Providers["zcode"].(*agent.ZcodeProvider); ok {
 		zp.TitleHandler = func(threadID, title string) {
-			for _, t := range cfg.Store.List(true) {
-				if t.ID == threadID && t.Title != title {
-					t.Title = title
-					_ = cfg.Store.Update(t)
-				}
-			}
+			applyZcodeTitle(cfg.Store, threadID, title)
 		}
 	}
 	// Pi 标题同步:session_info_changed → 落库(与 zcode 同语义;实现见 thread.go)。
@@ -200,8 +207,11 @@ func (s *Server) token() string {
 }
 
 func (s *Server) authorized(ctx context.Context) error {
+	// 【PA-REAL-0001】PairCode 为空不再等于"关闭鉴权":正常启动路径(main)
+	// 会自动生成配对码,走到这里还拿着空码只可能是手工构造的异常配置 ——
+	// 一律 fail closed,绝不放行。
 	if s.cfg.PairCode == "" {
-		return nil // 未启用鉴权(仅建议局域网这样跑)
+		return status.Error(codes.Unauthenticated, "服务端未配置配对码,拒绝服务;请重启 daemon(去掉 -insecure-no-auth 即自动生成配对码)")
 	}
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -219,13 +229,57 @@ func (s *Server) authorized(ctx context.Context) error {
 	return status.Error(codes.Unauthenticated, "token 无效,请先配对")
 }
 
+// checkAccess 是两类拦截器(Unary/Stream)的统一闸门。
+//
+// 顺序:先 insecure 回环闸门(对 HostService 一视同仁 —— 无鉴权模式下主机
+// 信息同样不该暴露给局域网),再按方法族放行/验 token:
+//
+//   - InsecureNoAuth:回环放行,非回环拒绝(提示去配对码模式);
+//   - 配对码模式:HostService(GetHostInfo/Authorize/Ping)放行 —— 配对的
+//     前置:手机得先读到 auth_required、再用配对码换 token;其余方法验 token;
+//   - 空 PairCode 且未显式 insecure:authorized() 内 fail closed。
+func (s *Server) checkAccess(ctx context.Context, fullMethod string) error {
+	if s.cfg.InsecureNoAuth {
+		if !peerIsLoopback(ctx) {
+			return status.Error(codes.PermissionDenied, "daemon 以 -insecure-no-auth 运行,仅允许本机回环连接;请设置 -pair-code 后再从局域网连接")
+		}
+		return nil
+	}
+	if strings.Contains(fullMethod, "HostService") {
+		return nil
+	}
+	return s.authorized(ctx)
+}
+
+// peerIsLoopback 判定 gRPC 对端是否来自本机回环地址。
+// 【fail closed】缺 peer 信息(单测直调、异常传输层)一律按非回环处理。
+func peerIsLoopback(ctx context.Context) bool {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p == nil || p.Addr == nil {
+		return false
+	}
+	switch addr := p.Addr.(type) {
+	case *net.TCPAddr:
+		return addr.IP.IsLoopback()
+	case *net.UnixAddr:
+		return true // unix socket 只可能来自本机
+	}
+	// 兜底:字符串解析(覆盖非 TCP 地址族;IPv6 带 zone 由 netip 处理)
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		host = p.Addr.String()
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
 func (s *Server) UnaryAuth() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		// GetHostInfo / Authorize / Ping 放行,其余都要 token
-		if !strings.Contains(info.FullMethod, "HostService") {
-			if err := s.authorized(ctx); err != nil {
-				return nil, err
-			}
+		if err := s.checkAccess(ctx, info.FullMethod); err != nil {
+			return nil, err
 		}
 		return handler(ctx, req)
 	}
@@ -233,10 +287,8 @@ func (s *Server) UnaryAuth() grpc.UnaryServerInterceptor {
 
 func (s *Server) StreamAuth() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if !strings.Contains(info.FullMethod, "HostService") {
-			if err := s.authorized(ss.Context()); err != nil {
-				return err
-			}
+		if err := s.checkAccess(ss.Context(), info.FullMethod); err != nil {
+			return err
 		}
 		return handler(srv, ss)
 	}

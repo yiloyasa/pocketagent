@@ -81,18 +81,18 @@ func main() {
 		must(err)
 		fmt.Printf("✓ 导入成功 thread=%s,历史 %d 条:\n", resp.ThreadId, len(hist.Messages))
 		for _, m := range hist.Messages {
-		 txt := ""
-		 for _, b := range m.Blocks {
-			if t, ok := b.Block.(*pb.ContentBlock_Text); ok {
-				txt = t.Text.Text
-				break
+			txt := ""
+			for _, b := range m.Blocks {
+				if t, ok := b.Block.(*pb.ContentBlock_Text); ok {
+					txt = t.Text.Text
+					break
+				}
 			}
-		 }
-		 r := []rune(txt)
-		 if len(r) > 40 {
-			r = r[:40]
-		 }
-		 fmt.Printf("   [%s] %s\n", m.Role, string(r))
+			r := []rune(txt)
+			if len(r) > 40 {
+				r = r[:40]
+			}
+			fmt.Printf("   [%s] %s\n", m.Role, string(r))
 		}
 	case "title":
 		c := conn()

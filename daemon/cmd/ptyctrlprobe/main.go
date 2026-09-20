@@ -3,28 +3,28 @@
 //
 // 背景与实验结论(2026-09-18,Windows 11 26200 + ConPTY + pwsh 7.6.6):
 //
-//   第一轮:a) 裸 \x03、b) \x1b[27;5;67~(xterm modifyOtherKeys)、
-//   c) \x1b[27;5;67_、d) \x1b[67;5u(kitty)、e) 先 DECSET ?9001h 再 b)、
-//   f/g) 5 参数 win32-input-mode —— 全部无法中断 ping。
+//	第一轮:a) 裸 \x03、b) \x1b[27;5;67~(xterm modifyOtherKeys)、
+//	c) \x1b[27;5;67_、d) \x1b[67;5u(kitty)、e) 先 DECSET ?9001h 再 b)、
+//	f/g) 5 参数 win32-input-mode —— 全部无法中断 ping。
 //
-//   查证 microsoft/terminal 源码:win32-input-mode 真实格式是【6 参数】
-//   CSI Vk;Sc;Uc;Kd;Cs;Rc_(Cs=ControlKeyState,LEFT_CTRL=0x0008),
-//   解析于 InputStateMachineEngine::_GenerateWin32Key,经
-//   InteractDispatch::WriteCtrlKey → conhost HandleGenericKeyEvent
-//   (src/host/input.cpp):
-//     Ctrl+C : CTRL_PRESSED && !ALT && bKeyDown && VK=='C' && IsInProcessedInputMode()
-//     Break  : CTRL_PRESSED && !ALT && bKeyDown && VK==VK_CANCEL(无 processed 检查)
+//	查证 microsoft/terminal 源码:win32-input-mode 真实格式是【6 参数】
+//	CSI Vk;Sc;Uc;Kd;Cs;Rc_(Cs=ControlKeyState,LEFT_CTRL=0x0008),
+//	解析于 InputStateMachineEngine::_GenerateWin32Key,经
+//	InteractDispatch::WriteCtrlKey → conhost HandleGenericKeyEvent
+//	(src/host/input.cpp):
+//	  Ctrl+C : CTRL_PRESSED && !ALT && bKeyDown && VK=='C' && IsInProcessedInputMode()
+//	  Break  : CTRL_PRESSED && !ALT && bKeyDown && VK==VK_CANCEL(无 processed 检查)
 //
-//   第二轮:h/i(VK_C + LEFT/RIGHT/LR CTRL)、p(Uc='C')、u(CtrlDown+裸ETX)、
-//   v(全按键序列)全部失败;m)(VK_CANCEL=3;70;0;1;8;1_)成功触发
-//   CTRL_BREAK_EVENT —— ping 打印统计块 + "Control-Break"(但 ping.exe
-//   对 Break 的特性是显示统计后继续跑,不退出)。
+//	第二轮:h/i(VK_C + LEFT/RIGHT/LR CTRL)、p(Uc='C')、u(CtrlDown+裸ETX)、
+//	v(全按键序列)全部失败;m)(VK_CANCEL=3;70;0;1;8;1_)成功触发
+//	CTRL_BREAK_EVENT —— ping 打印统计块 + "Control-Break"(但 ping.exe
+//	对 Break 的特性是显示统计后继续跑,不退出)。
 //
-//   第四轮:P/Invoke 实测控制台输入模式 CURMODE=503,含 ENABLE_PROCESSED_INPUT
-//   (0x1)——排除 processed 位缺失假设,VK_C+CTRL 依旧无效。
+//	第四轮:P/Invoke 实测控制台输入模式 CURMODE=503,含 ENABLE_PROCESSED_INPUT
+//	(0x1)——排除 processed 位缺失假设,VK_C+CTRL 依旧无效。
 //
-//   第五轮(本版):pwsh 与 cmd.exe 对照,判别是 PSReadLine 的问题还是
-//   ConPTY 全局行为。
+//	第五轮(本版):pwsh 与 cmd.exe 对照,判别是 PSReadLine 的问题还是
+//	ConPTY 全局行为。
 //
 // 判据:发送候选后 3 秒内输出出现 ping 统计行("统计"/"statistics"/"Sent =" 等)
 // 或 shell 提示符,视为中断成功。

@@ -218,9 +218,9 @@ private fun onboardPages(piInstalled: Boolean, zcodeInstalled: Boolean): List<On
                 desc = "识别的文字先进输入框,你确认后再发送,绝不自动发出",
             ),
             OnboardBlock.Bullet(
-                icon = R.drawable.ic_lucide_download,
-                title = "首次使用需下载语音模型(约42MB)",
-                desc = "端侧离线中文识别,一次下载永久可用;「设置 → 语音识别」可查看进度、失败重试、删除释放空间",
+                icon = R.drawable.ic_lucide_package,
+                title = "语音模型已随 App 安装",
+                desc = "首次使用时自动释放所需文件(约239MB);「设置 → 语音识别」可查看状态、重试与释放空间",
             ),
             OnboardBlock.Note("部分安卓 ROM 没有系统识别服务:此时会自动改用端侧模型,无需任何配置。"),
         ),
@@ -265,7 +265,7 @@ private fun onboardPages(piInstalled: Boolean, zcodeInstalled: Boolean): List<On
             OnboardBlock.Bullet(
                 icon = R.drawable.ic_lucide_mic,
                 title = "语音用不了?",
-                desc = "先到「设置 → 语音识别」下载语音模型;Pi / ZCode 灰显则先在电脑上补装",
+                desc = "到「设置 → 语音识别」查看语音模型状态并重试;Pi / ZCode 灰显则先在电脑上补装",
             ),
         ),
     ),

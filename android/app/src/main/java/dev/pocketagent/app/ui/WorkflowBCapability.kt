@@ -92,7 +92,9 @@ fun settingStateInfo(state: String): SettingStateInfo = when (state) {
     // 对应的只读行右侧已显示同一句提示,状态小字级别给 muted 以免重复刷屏。
     "locked" -> SettingStateInfo("muted", "由电脑端管理")
     "pending" -> SettingStateInfo("warn", "待生效")
-    "" -> SettingStateInfo("muted", "状态未知")
+    // 空 state = daemon 没给出取值(缺席,不是崩溃场景):muted 级如实说"暂不可用",
+    // 不显「未知」(AUDIT §3.3 禁令),也不造一个假状态。
+    "" -> SettingStateInfo("muted", "状态暂不可用")
     else -> SettingStateInfo("muted", state)
 }
 

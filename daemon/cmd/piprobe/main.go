@@ -548,7 +548,7 @@ func (r *runner) runAll() {
 				modelStr = fmt.Sprint(m["provider"]) + "/" + fmt.Sprint(m["id"])
 			}
 			r.add(result{n: 2, name: "get_state 握手", status: "通过",
-				note: fmt.Sprintf("sessionId=%s model=%s isStreaming=%v sessionFile=%s", sessionID, modelStr, data["isStreaming"], sessionFile),
+				note:  fmt.Sprintf("sessionId=%s model=%s isStreaming=%v sessionFile=%s", sessionID, modelStr, data["isStreaming"], sessionFile),
 				proof: clipLines(p.dump(), `"command":"get_state"`, 6)})
 		}
 	}
@@ -603,7 +603,7 @@ func (r *runner) runAll() {
 		abortOK := aerr == nil && boolOf(abortResp["success"])
 		if abortOK && settled {
 			r.add(result{n: 5, name: "abort 中断", status: "通过",
-				note: fmt.Sprintf("abort success=true,%s 后收到 agent_settled(命令要跑 30s,提前收尾=中断生效)", time.Since(abortAt).Round(time.Millisecond)),
+				note:  fmt.Sprintf("abort success=true,%s 后收到 agent_settled(命令要跑 30s,提前收尾=中断生效)", time.Since(abortAt).Round(time.Millisecond)),
 				proof: pickLines(p.dump(), []string{`"command":"abort"`, `"type":"agent_end"`, `"type":"agent_settled"`}, 8)})
 		} else {
 			r.add(result{n: 5, name: "abort 中断", status: "失败",
@@ -673,7 +673,7 @@ func (r *runner) runAll() {
 		got, _ := data["sessionFile"].(string)
 		if samePath(got, sessionFile) && len(msgs) > 0 && histHas {
 			r.add(result{n: 7, name: "switch_session 恢复历史", status: "通过",
-				note: fmt.Sprintf("switch 成功;get_state.sessionFile 与预期一致;get_messages 返回 %d 条,含此前轮次的文本", len(msgs)),
+				note:  fmt.Sprintf("switch 成功;get_state.sessionFile 与预期一致;get_messages 返回 %d 条,含此前轮次的文本", len(msgs)),
 				proof: clipLines(pb.dump(), `"command":"switch_session"`, 4)})
 		} else {
 			r.add(result{n: 7, name: "switch_session 恢复历史", status: "失败",
@@ -877,7 +877,7 @@ func (r *runner) testApproval(p *probe) result {
 
 	if reqSeen && allowOut && !denyOut {
 		return result{n: 6, name: "审批 extension_ui_request(注入扩展 confirm)", status: "通过",
-			note: fmt.Sprintf("extension_ui_request(confirm,无 timeout)出现;confirmed:true → 命令实际执行(输出含 ALLOW);cancelled:true → 被扩展 block(未执行 DENY,agent 回复拦截=%v)", denied),
+			note:  fmt.Sprintf("extension_ui_request(confirm,无 timeout)出现;confirmed:true → 命令实际执行(输出含 ALLOW);cancelled:true → 被扩展 block(未执行 DENY,agent 回复拦截=%v)", denied),
 			proof: pickLines(p.dump(), []string{`extension_ui_request`, `extension_ui_response`}, 8)}
 	}
 	return result{n: 6, name: "审批 extension_ui_request(注入扩展 confirm)", status: "失败",

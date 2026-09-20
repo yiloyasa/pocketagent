@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import dev.pocketagent.app.AgentConnection
+import dev.pocketagent.app.ui.humanizeError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -92,7 +93,7 @@ object PaDownloader {
                 targetUri = null // 成功:文件归用户,不再清理
             } catch (e: Exception) {
                 deletePartialFile(ctx, targetUri, sink)
-                TaskCenter.finishDownload(taskId, false, "下载失败:${e.message ?: "未知错误"}")
+                TaskCenter.finishDownload(taskId, false, "下载失败:${humanizeError(e)}")
             } finally {
                 runCatching { sink?.close() }
                 if (running.decrementAndGet() == 0) AgentConnection.stopTurnService()
@@ -127,7 +128,7 @@ object PaDownloader {
                 targetUri = null
             } catch (e: Exception) {
                 deletePartialFile(ctx, targetUri, sink)
-                TaskCenter.finishDownload(taskId, false, "保存失败:${e.message ?: "未知错误"}")
+                TaskCenter.finishDownload(taskId, false, "保存失败:${humanizeError(e)}")
             } finally {
                 runCatching { sink?.close() }
                 if (running.decrementAndGet() == 0) AgentConnection.stopTurnService()
@@ -212,7 +213,7 @@ object PaDownloader {
                 targetUri = null
             } catch (e: Exception) {
                 deletePartialFile(ctx, targetUri, sink)
-                TaskCenter.finishDownload(taskId, false, "下载失败:${e.message ?: "未知错误"}")
+                TaskCenter.finishDownload(taskId, false, "下载失败:${humanizeError(e)}")
             } finally {
                 runCatching { sink?.close() }
                 if (running.decrementAndGet() == 0) AgentConnection.stopTurnService()
@@ -246,7 +247,7 @@ object PaDownloader {
                 targetUri = null
             } catch (e: Exception) {
                 deletePartialFile(ctx, targetUri, sink)
-                TaskCenter.finishDownload(taskId, false, "保存失败:${e.message ?: "未知错误"}")
+                TaskCenter.finishDownload(taskId, false, "保存失败:${humanizeError(e)}")
             } finally {
                 runCatching { sink?.close() }
                 if (running.decrementAndGet() == 0) AgentConnection.stopTurnService()
@@ -324,7 +325,8 @@ object PaDownloader {
         onOpenInBrowser: ((String) -> Unit)? = null,
     ) {
         if (uri.isEmpty()) {
-            toast(ctx, if (detail.isNotEmpty()) detail else "文件位置未知")
+            // AUDIT §3.3:不显「文件位置未知」,给人话
+            toast(ctx, if (detail.isNotEmpty()) detail else "文件位置无法获取")
             return
         }
         // 【悬空条目】用户可能在系统文件管理器/清理软件里把文件删了,
@@ -487,7 +489,7 @@ object PaDownloader {
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             ctx.startActivity(android.content.Intent.createChooser(intent, "分享文件"))
-        }.onFailure { toast(ctx, "分享失败:${it.message ?: "未知错误"}") }
+        }.onFailure { toast(ctx, "分享失败:${humanizeError(it)}") }
     }
 
     private fun toast(ctx: Context, msg: String) {

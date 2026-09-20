@@ -36,7 +36,7 @@
 
 | 层 | 技术 | 关键第三方 |
 |---|---|---|
-| Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66（gRPC 客户端）；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）；`vosk-android`（**遗留已禁用**：引擎选择写死 `voskReady=false`，代码保留但不再用户可见） |
+| Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66（gRPC 客户端）；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）；`vosk-android` **已整体摘除（2026-09-20）**：引擎选择收敛为"系统识别 → 端侧 SenseVoice"两级，共享错误码迁至 `VoiceErrors.kt` |
 | daemon | Go **1.27.1** | `grpc` 1.83.2、`protobuf` 1.36.12、`go-pty`（PTY）、`zeroconf`（mDNS）。**依赖极简，无 ORM/无框架** |
 | 协议 | protobuf / gRPC `pocketagent.v1` | **6 服务 / 64 RPC**：Thread 29、Git 10、Fs 9、Model 8、Host 5、Terminal 3（7 个 proto / 1347 行） |
 | 终端 | xterm.js 6（WebView）+ JS bridge | ↔ daemon `go-pty`，字节流一致画面一致 |
@@ -77,11 +77,11 @@ pocketagent/
 │   │   │   │                       # + 逻辑类（TurnSession 会话状态机、HistoryMessageMapper、
 │   │   │   │                       #   TurnDelivery、SlashCommandsLogic、ThreadOrganize…）
 │   │   │   └── component/         # 组件库（SplitButton/PaBadge/FileKind/PaDownloader/OfflineStore/
-│   │   │                           #   MdnsDiscovery/SenseVoice*/Vosk* 遗留…）
+│   │   │                           #   MdnsDiscovery/SenseVoice*/VoiceErrors…）
 │   │   └── src/main/proto/v1/     # 契约副本（与 proto/v1/ 同步）
 │   ├── src/main/assets/           # sensevoice 模型(229MB，构建时下载)+terminal.html
 │   ├── src/main/libs/             # sherpa-onnx AAR（构建时下载校验）
-│   └── src/test/                  # JVM 单测 62 文件 / 7053 行
+│   └── src/test/                  # JVM 单测 67 文件 / 7514 行
 ├── codex-schema/             # codex app-server 官方 JSON Schema 快照（能力核对，勿手改）
 ├── tools/                    # make_icons 等资源生成 + device/ 真机工具 + ops/ 运维工具
 ├── dist/windows/             # 桌面端分发包（build.ps1 → zip + install/uninstall）
@@ -93,8 +93,8 @@ pocketagent/
 
 | 模块 | 职责 | 实现要点 |
 |---|---|---|
-| `cmd/pocketagentd` | 启动组装 | flag：`-addr`(默认 :7246)、`-data`(默认 `~/.pocketagentd`)、`-pair-code`(**空=不鉴权**，即 P0 缺陷根)、`-workspace`、`-plaintext`(应急)、`-mdns`、`-term-idle`(默认 10m 回收)。keepalive 25s/10s（移动网尽快检出假连接） |
-| `server` | 6 个 gRPC 服务 + 鉴权拦截器 | `server.go` `authorized()`：PairCode 为空返 nil 即放行；token = sha256("pair-code:"+code) 比对 metadata。`thread.go` `StartTurn` 双向流是心脏；`turn_queue.go` 运行中插话（codex 支持 steer，其余入内存队列终局后续跑）；`turn_transport.go` 背压：**同步顺序落盘 eventstore + 单写者 gRPC writer**，慢手机不拖垮原生事件循环；`approval_resume.go` 断线后按 thread_id/request_id 补交审批（过期/重复/跨线程拒收，上限 2 分钟） |
+| `cmd/pocketagentd` | 启动组装 | flag：`-addr`(默认 :7246)、`-data`(默认 `~/.pocketagentd`)、`-pair-code`(**不传=自动生成 8 位随机码**并持久化到 `pair-code.txt`，显式指定则同步写回文件；**鉴权默认开启**，PA-REAL-0001 已修)、`-insecure-no-auth`(显式关闭鉴权，**仅放行本机回环**连接)、`-workspace`、`-plaintext`(应急)、`-mdns`、`-term-idle`(默认 10m 回收)。keepalive 25s/10s（移动网尽快检出假连接） |
+| `server` | 6 个 gRPC 服务 + 鉴权拦截器 | `server.go` `checkAccess()`：默认验 token（每设备 token / legacy token = sha256("pair-code:"+code) 比对 metadata）；PairCode 为空 fail closed（不再有"空码=关鉴权"）；`-insecure-no-auth` 仅放行本机回环 peer。`thread.go` `StartTurn` 双向流是心脏；`turn_queue.go` 运行中插话（codex 支持 steer，其余入内存队列终局后续跑）；`turn_transport.go` 背压：**同步顺序落盘 eventstore + 单写者 gRPC writer**，慢手机不拖垮原生事件循环；`approval_resume.go` 断线后按 thread_id/request_id 补交审批（过期/重复/跨线程拒收，上限 2 分钟） |
 | `agent` | Provider 抽象 | `provider.go` 定义 `Provider/Sinker/PrefsAware`；`DetectProviders()` 启动探测注册。5 实现：**codex**(主力)、**pi**、**zcode**、openai_compat(唯一直连自跑循环)、echo(冒烟)。`codex_requests.go` **按方法名精确匹配**分派 10 个反向请求（审批应答枚举分新旧协议：`approved/denied` vs `accept/decline`，混用判无效；没能力的回 JSON-RPC error，**绝不伪造 decision**） |
 | `codexapp` | codex 子进程 | `codex app-server` stdio JSON-RPC；自带 agent 循环/沙箱/审批/MCP/登录/会话——**我们只做翻译官**（与原作 Mobile Codex 同款架构） |
 | `piapp` | pi 子进程 | `pi --mode rpc`；Thread ↔ 子进程 **1:1**；daemon 重启后按 SessionFile 重挂载（switch_session + get_state 校验握手不能省） |
@@ -109,7 +109,7 @@ pocketagent/
 | `AgentConnection` | 单例连接 | gRPC OkHttp channel；token 走 metadata；**并行竞速候选**（reverse→LAN→Tailscale 同时拨，先通先用）；配对携设备身份（UUID+P-256 公钥）领每设备独立 token；token 失效走**挑战应答续期**（Keystore 签 `device_id:challenge`） |
 | `TokenStore`/`DeviceKey`/`PinTrustManager` | 安全 | token 经 EncryptedSharedPreferences（Keystore AES256-GCM）加密落盘，ROM 异常降级明文 prefs 不断连；证书指纹锁定，变化即阻断 |
 | `TurnSession`/`TurnDelivery` | 会话状态机 | callbackFlow 收流（`.buffer(UNLIMITED)` 治丢帧）；流式已读文字定期落盘（文字+seq 原子保存）；恢复走**事件回放 + 原生历史兜底，绝不重发原 prompt** |
-| `ChatScreen` 系 | 聊天 UI | 模型选择独立整行；语音引擎选择：系统识别优先 → SenseVoice 端侧（模型打进 APK 首次解压校验）→ **Vosk 已禁用**（`voskReady=false`，遗留代码保留） |
+| `ChatScreen` 系 | 聊天 UI | 模型选择独立整行；语音引擎选择两级：系统识别优先 → SenseVoice 端侧兜底（模型打进 APK 首次解压校验；旧 Vosk 引擎已整体摘除，2026-09-20） |
 | `FileKind`/`DocFormatRegistry`/`XlsLegacy` | 文件预览 | 唯一判定源 `FileKind.preview`(IN_APP/SYSTEM/SAVE_ONLY)；自研 .xls OLE2+BIFF8 解析器；PDF 走系统 PdfRenderer |
 
 ---
@@ -143,11 +143,11 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 | 类别 | 位置 | 说明 |
 |---|---|---|
 | daemon 入口 | `daemon/cmd/pocketagentd/main.go` | 见 §3 flag 表；运行参数：`-addr 0.0.0.0:7246 -workspace G:\项目1\pocketagent`，env `CODEX_BIN=G:\Claude Code\codex.cmd` |
-| daemon 数据目录 | `~/.pocketagentd/` | `threads.json`(会话真值)、`events.jsonl`(+轮转)、`devices.json`(配对设备)、`certs/`(自签证书) |
+| daemon 数据目录 | `~/.pocketagentd/` | `threads.json`(会话真值)、`events.jsonl`(+轮转)、`devices.json`(配对设备)、`pair-code.txt`(配对码，0600，重启复用不换码)、`certs/`(自签证书) |
 | App 入口 | `MainActivity.kt` → NavHost | 冷启 Splash → onboarding(未配对)/home |
 | App 构建 | `android/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.2.2/5）；sherpa AAR 由构建脚本下载+哈希校验 |
 | 构建脚本 | `tools/device/_pa_gradle.py`、`android/build-ascii.ps1` | 中文路径 Gradle 处理不了 → robocopy 镜像到 `G:\pa\android` 再 gradlew |
-| 看门狗 | `daemon/cmd/paguard` + `watchdog_hidden.vbs` | 计划任务 PocketAgentDaemonGuard 每分钟 → wscript → WMI 拉起 paguard → 探测 7246 死了才拉 daemon（WMI 派生脱离 job object，实测 4s 内拉起）。**当前 paguard 未运行** |
+| 看门狗 | `daemon/cmd/paguard` + `watchdog_hidden.vbs` | 计划任务 PocketAgentDaemonGuard 每分钟 → wscript → WMI 拉起 paguard → 探测 7246 死了才拉 daemon（WMI 派生脱离 job object，实测 4s 内拉起）。paguard 运行中（2026-09-20 核对：watchdog.log 每分钟有探测记录；旧锚点"未运行"系漂移，T-30 纠正） |
 | 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+install/uninstall → `PocketAgent桌面端.zip` |
 
 ---
@@ -193,9 +193,9 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 | 位置 | 问题 | 影响 |
 |---|---|---|
-| `internal/server/thread.go` CreateThread（L99） | 未知 agent → `errFailedPrecondition` **硬错误** | 新增第 4 个 agent 时 App 直接报错，不能「尽力接入」 |
-| `internal/server/model.go` `order := []string{"codex","pi","zcode"}`（L73） | **agent 顺序写死** | 新 agent 排不进列表 |
-| `internal/server/model.go` `defaultModelIDFor` | 假设 `agent+"/default"` 一定存在 | 原生删掉默认模型后返回一个不存在的 ID |
+| `internal/server/thread.go` CreateThread（L99） | 未知 agent → `errFailedPrecondition` **硬错误** | 新增第 4 个 agent 时 App 直接报错，不能「尽力接入」。**已整改（2026-09-20, 批3）**：agent_id 在 `s.cfg.Providers` 注册表即接入，报错文案动态列举当前可用 agent，不写死名单 |
+| `internal/server/model.go` `order := []string{"codex","pi","zcode"}`（L73） | **agent 顺序写死** | 新 agent 排不进列表。**已整改（2026-09-20, 批3）**：顺序从 `s.cfg.Providers` 动态派生（桌面桥接 PrefsAware 在前、其余按字典序、echo 最后），新 provider 自动入列 |
+| `internal/server/model.go` `defaultModelIDFor` | 假设 `agent+"/default"` 一定存在 | 原生删掉默认模型后返回一个不存在的 ID。**已整改（2026-09-20, 批3）**：default 哨兵 → 模型列表首项 → 明确报错（调用方给人话），不再伪造 ID |
 | `internal/agent/codex_requests.go` `isLegacyApproval` | 按版本号**二分判断** | codex 升级到假设外的版本会踩错分支 |
 
 ### 决策（2026-09-20 拍板）
@@ -213,7 +213,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 - **变更分级**（`git diff` 路径自动定级，取最高、不许降级）：**甲**=契约/架构（proto、新 agent）→ L0+L1+L2 全量；**乙**=功能（daemon agent/server、android ui）→ L1 全量+L2 受影响；**丙**=修复 → L1+单条复验+附回归用例；**丁**=仅文档 → 只查锚点漂移
 - **三层**：L0 闸门（产物自证 apkanalyzer）→ L1 自动化（`--rerun`+XML 时间戳防假绿）→ L2 真机（BLOCKED 必带归因+解封条件）
 - **红线一票否决**：伪造 decision / 假绿 / 契约不同步 / 产物不对；**提示项不阻塞**：锚点漂移、证据缺项限期补录
-- **设计原则合规**：新增硬编码名单即报警（存量 4 处挂牌，只减不增）；UI 禁显「未知/错误」，必须显示原生原文
+- **设计原则合规**：新增硬编码名单即报警（存量挂牌仅剩 1 处 isLegacyApproval，其余三处已整改；豁免 3 项见 AUDIT 附录 A，只减不增）；UI 禁显「未知/错误」，必须显示原生原文
 - **缺陷即测试**：修复不附回归用例 = 没修完；审核资产只增不减
 - 完整标准、checklist、linter 规则、准出 DoD、度量回流 → **`AUDIT.md`**
 
@@ -224,7 +224,9 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 ```bash
 # ── daemon（电脑上）──
 cd daemon
-go run ./cmd/pocketagentd -addr 0.0.0.0:7246 -workspace "你的项目目录"   # echo 模式可联调
+go run ./cmd/pocketagentd -addr 0.0.0.0:7246 -workspace "你的项目目录"
+# 首启自动生成 8 位配对码：打印在启动日志，并持久化到 ~/.pocketagentd/pair-code.txt（重启复用不换码）
+# 手机首次连接时输入该配对码完成配对，之后凭每设备 token 直连，无需再输。
 set CODEX_BIN=G:\Claude Code\codex.cmd                                    # 桥接 codex（推荐）
 
 # ── APK（必须走镜像包装器，中文路径 Gradle 处理不了）──
@@ -236,8 +238,9 @@ cd daemon && PATH="/c/go/bin:$PATH" go build ./... && go test ./internal/...
 # Android 单测必须核验结果 XML 时间戳（Gradle 会 UP-TO-DATE 假绿）
 ```
 
-> ⚠ **当前候选 daemon 以无鉴权模式运行**（无 `-pair-code`，`server.go:203 authorized()` 放行一切）
-> → **P0 缺陷 PA-REAL-0001**，修复前别在不可信局域网暴露 7246。
+> 鉴权默认开启（PA-REAL-0001 已修）：无 `-pair-code` 时自动生成配对码；
+> `-insecure-no-auth` 显式关鉴权但**仅允许本机回环连接**，局域网来源一律拒绝。
+> 已配对存量手机凭旧 token 不受影响；升级重启复用 `pair-code.txt` 不换码。
 
 ---
 
@@ -246,17 +249,18 @@ cd daemon && PATH="/c/go/bin:$PATH" go build ./... && go test ./internal/...
 | 项 | 值 |
 |---|---|
 | Git | 分支 `main`；清理收口提交 `fc3b806`（2026-09-20）｜工作树**干净（0 未提交）** |
-| 版本 | **0.2.2 / versionCode 5** |
+| 版本 | **0.2.2 / versionCode 5**；daemon 启动日志含版本字段、支持 `-ldflags -X` 烙印（产物自证锚点，批7 T-27） |
 | 契约 | 6 服务 / 64 RPC，7 proto / 1347 行 |
-| 代码 | daemon 手写 Go 234 文件 / 48559 行（agent 78 + server 63 为主）；android main 74 `.kt` / 31323 行 |
-| APK | debug **238.13 MB**（SenseVoice INT8 模型 228MB 打包内），`sha256=554c87b1359de446…` |
-| daemon | pid 21440，`0.0.0.0:7246` LISTENING；paguard 未运行 |
+| 代码 | daemon 手写 Go 234 文件 / 48559 行（agent 78 + server 63 为主）；android main 75 `.kt` / 30965 行 |
+| APK | debug **209.01 MB**（SenseVoice INT8 模型打包内；Vosk 已摘除 + ABI 收窄后较 09-19 基准 -29MB），`sha256=f34493a42174bd07885c4a37c0eef640f10898be73f21ecfe58371eb036b84e0` |
+| daemon | pid 21440（旧无鉴权版），`0.0.0.0:7246` LISTENING；paguard 运行中（换血由夜航部署环节执行） |
+| P0 | **PA-REAL-0001 代码已修**（daemon 默认配对码鉴权 + `-insecure-no-auth` 仅回环，回归用例已附）；SEC-03/04/05/11/12 真机重跑待手机插线 |
 | 体积 | `pocketagent/` 642 MB（含 `.git` 28 MB）；工作区 `_archives/` 155 MB |
 
-**测试基线**：Android 62 套件 / 448 用例 / 0 失败；`go test ./...` PASS；`-race`(server/agent/store/codexapp/piapp/zcodeapp) PASS。
+**测试基线**（2026-09-20 更新）：Android 67 套件 / 484 用例 / 0 失败；`go test ./...` PASS；`-race`(server/agent/store/codexapp/piapp/zcodeapp) PASS。
 
 **发布审核：暂缓验收**（证据 `docs/verify/evidence/2026-09-19-device-build/`）：131 用例 = 30 PASS / 2 FAIL / 99 BLOCKED；
-P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Codex 初始化阻塞；P2=按钮 <48dp、引导页"下载 42MB"文案失实、reverse 在场仍走 LAN。
+P0=鉴权未启用（**代码已修，见上表 P0 行**；真机复验待手机插线）；P1=模型列表首调 30s 超时、跨 Agent 探测被 Codex 初始化阻塞（**代码已修**，批4 T-14，待真机复验）；P2=按钮 <48dp（**代码已修**，批5 T-18，待真机 bounds 复验）、引导页"下载 42MB"文案失实（**已修**，批2）、reverse 在场仍走 LAN（**已修**，批2，待真机复验）。
 已证真值：冷启 10/10 avg 700.8ms；三 Agent 零交叉污染；TLS1.3；崩溃/ANR/数据丢失 0。debug 包（debuggable）安全结论不可外推 release。
 
 ---
@@ -266,9 +270,9 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 - daemon `go vet` 有 protobuf 值拷贝警告（存量噪音，非新问题）
 - 同 provider 多会话不并行（原生 turn 锁排队）
 - 上下文窗口多数模型真未知（`ListModels` 仅 `codex/default`/`echo-1` 带窗口；codex 不发该字段）
-- **Vosk 遗留**：依赖与组件仍在（`vosk-android` + `Vosk*` 两文件），但引擎已禁用；后续可整体摘除
+- **Vosk 已摘除**（2026-09-20，批5）：`vosk-android` 依赖 + `Vosk*` 两文件 + 引擎选择分支全部移除；102/103/MicUnavailableException 等共享定义迁至 `VoiceErrors.kt`；行为零变化（摘除前引擎恒不可选）
 - P2 内嵌 Tailscale、P3 GeckoView/自更新/实况通知均未做
-- 审核遗留：86 张 2026-09-16 证据截图已出库（2026-09-20，仅出 git 索引、磁盘保留，嵌套 .gitignore 防再入库）；`dist/windows` zip 版本未核
+- 审核遗留：86 张 2026-09-16 证据截图已出库（2026-09-20，仅出 git 索引、磁盘保留，嵌套 .gitignore 防再入库）；`dist/windows` zip 版本未核（2026-09-20 核对：zip 打包于 2026-09-17，内含 daemon 二进制**无版本标识**——早于 `internal/version` 包引入，代码落后于仓库 0.2.2，随下次发版更新）
 
 ---
 

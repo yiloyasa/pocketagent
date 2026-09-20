@@ -121,13 +121,15 @@ func TestThreadModelEffortOverrideBeatsSnapshot(t *testing.T) {
 // ⑤ hideReasoning 线程化:有快照的会话按快照判定(与全局开关无关);
 // 旧线程(nil)回退全局。
 func TestHideReasoningIsGlobalAcrossSnapshots(t *testing.T) {
-    p := NewCodexProvider()
-    for _, hidden := range []bool{true,false} {
-        p.ApplyPrefs(DesktopPrefs{HideReasoning:hidden})
-        for _, thread := range []*store.Thread{nil, {}, {SettingsSnapshot:&store.TurnSettings{HideReasoning:!hidden}}} {
-            if got:=p.HideReasoningFor(thread); got!=hidden { t.Fatalf("global filter=%v, got %v",hidden,got) }
-        }
-    }
+	p := NewCodexProvider()
+	for _, hidden := range []bool{true, false} {
+		p.ApplyPrefs(DesktopPrefs{HideReasoning: hidden})
+		for _, thread := range []*store.Thread{nil, {}, {SettingsSnapshot: &store.TurnSettings{HideReasoning: !hidden}}} {
+			if got := p.HideReasoningFor(thread); got != hidden {
+				t.Fatalf("global filter=%v, got %v", hidden, got)
+			}
+		}
+	}
 }
 
 // 补充钉子:快照里的空串 = "快照那一刻的跟随桌面",按原值生效 —— 不发参数、
