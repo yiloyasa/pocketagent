@@ -4775,7 +4775,7 @@ internal fun voiceDeadZoneToast(firstColdLoad: Boolean): String =
 internal fun voiceErrorText(kind: VoiceErrorKind): String = when (kind) {
     VoiceErrorKind.NO_MATCH -> "没听到,再试一次"
     VoiceErrorKind.BUSY -> "语音服务正忙,稍后再试"
-    VoiceErrorKind.INSUFFICIENT_PERMISSIONS -> "麦克风权限被拒绝,请在系统设置里开启"
+    VoiceErrorKind.INSUFFICIENT_PERMISSIONS -> "系统语音服务权限受限,已自动切换端侧识别;若仍失败,请在系统设置里开启麦克风权限"
     VoiceErrorKind.CLIENT -> "语音识别不可用"
     VoiceErrorKind.OTHER -> "识别失败,请重试"
     VoiceErrorKind.ENGINE -> "端侧语音引擎异常,请重试"
@@ -4831,13 +4831,16 @@ internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
  *
  * 覆盖的错误码:
  *  1 网络超时 / 2 网络 / 3 录音错误(MIUI「录音」开关关闭时系统识别的典型表现) /
- *  4 服务端 / 5 客户端 / 8 忙(常驻=服务半死) / 11 服务断连 / 12-13 语言不支持 ——
+ *  4 服务端 / 5 客户端 / 8 忙(常驻=服务半死) /
+ *  9 识别服务自身无权限(HyperOS 真机实证:fuxi 上 App 的 RECORD_AUDIO 已授予,
+ *    系统识别服务仍瞬间报 9,每次点击必现且永不可自愈 —— 旧假设"用户授权后可自愈"
+ *    被证伪;若真是 App 权限被拒,弃用后端侧 SenseVoice 会报 102 并给出精确的
+ *    「安全中心→录音」指引,两条路都诚实可行动) / 11 服务断连 / 12-13 语言不支持 ——
  *  在无 GMS 的国产 ROM 上这些几乎都修不好,弃用后识别器重建为端侧引擎。
- * 不覆盖:6/7(没听到)是正常业务结果;9(权限)有专门的"去设置开启"提示且可自愈;
- * 100+(端侧自定义码)到达时系统引擎本就未被选中,不能误伤。
+ * 不覆盖:6/7(没听到)是正常业务结果;100+(端侧自定义码)到达时系统引擎本就未被选中,不能误伤。
  */
 internal fun systemVoiceRetireNeeded(code: Int): Boolean =
-    code in setOf(1, 2, 3, 4, 5, 8, 11, 12, 13)
+    code in setOf(1, 2, 3, 4, 5, 8, 9, 11, 12, 13)
 
 /**
  * 死区超时(8 秒零回调撞满看门狗)是否应弃用系统引擎(纯函数,JVM 单测锁定):

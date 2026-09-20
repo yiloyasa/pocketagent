@@ -293,7 +293,7 @@ class PaNotificationAndVoiceTest {
         assertEquals(VoiceInputState.IDLE, ui.state)
         assertEquals("没听到,再试一次", ui.toast)
         assertEquals("语音服务正忙,稍后再试", voiceErrorText(VoiceErrorKind.BUSY))
-        assertEquals("麦克风权限被拒绝,请在系统设置里开启", voiceErrorText(VoiceErrorKind.INSUFFICIENT_PERMISSIONS))
+        assertEquals("系统语音服务权限受限,已自动切换端侧识别;若仍失败,请在系统设置里开启麦克风权限", voiceErrorText(VoiceErrorKind.INSUFFICIENT_PERMISSIONS))
         assertEquals("语音识别不可用", voiceErrorText(VoiceErrorKind.CLIENT))
         assertEquals("识别失败,请重试", voiceErrorText(VoiceErrorKind.OTHER))
     }

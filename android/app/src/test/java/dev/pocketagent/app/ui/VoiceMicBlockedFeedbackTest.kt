@@ -55,20 +55,21 @@ class VoiceMicBlockedFeedbackTest {
     // ------------------------------------------------------------ 系统引擎弃用判定(错误码名单)
 
     @Test
-    fun `系统识别错误码名单_含3录音错误_命中即弃用系统引擎改选端侧`() {
+    fun `系统识别错误码名单_含3录音错误与9服务权限_命中即弃用系统引擎改选端侧`() {
         // 1 网络超时 / 2 网络 / 3 录音错误(MIUI「录音」开关关的典型表现,旧名单漏了)
-        // / 4 服务端 / 5 客户端 / 8 忙 / 11 断连 / 12-13 语言不支持
-        for (code in listOf(1, 2, 3, 4, 5, 8, 11, 12, 13)) {
+        // / 4 服务端 / 5 客户端 / 8 忙 / 9 识别服务自身无权限(HyperOS fuxi 真机实证:
+        //   App 权限已授仍每点击瞬间报 9,永不可自愈,旧名单漏了) / 11 断连 / 12-13 语言不支持
+        for (code in listOf(1, 2, 3, 4, 5, 8, 9, 11, 12, 13)) {
             assertTrue("code=$code 应触发弃用", systemVoiceRetireNeeded(code))
         }
     }
 
     @Test
-    fun `系统识别弃用名单_正常结果与权限与端侧码一律不弃用`() {
+    fun `系统识别弃用名单_正常结果与端侧码一律不弃用`() {
         // 6 说话超时 / 7 没听到:正常业务结果,弃用会把"没听到"误判成"服务坏了"
         for (code in listOf(6, 7)) assertFalse(systemVoiceRetireNeeded(code))
-        // 9 权限:有专门"去设置开启"提示且用户授权后可自愈,不能弃用
-        assertFalse(systemVoiceRetireNeeded(9))
+        // 9 已移入弃用名单:App 权限被拒的场景由端侧 102 MIC_BLOCKED 接管并给出
+        //   "安全中心→录音"精确指引,两条路都诚实可行动
         // 0/负数/未知码:不弃用
         for (code in listOf(0, -1, 10, 99)) assertFalse(systemVoiceRetireNeeded(code))
         // 100+ 端侧自定义码:到达时系统引擎本就未被选中,绝不能误伤
@@ -97,10 +98,14 @@ class VoiceMicBlockedFeedbackTest {
         assertEquals(VoiceErrorKind.INSUFFICIENT_PERMISSIONS, voiceErrorKind(9))
         assertEquals(VoiceErrorKind.CLIENT, voiceErrorKind(5))
         assertEquals(VoiceErrorKind.OTHER, voiceErrorKind(1))
-        // 文案回归:除新增的 MIC_BLOCKED 外,其余提示一字不改
+        // 文案回归:除新增的 MIC_BLOCKED 与 INSUFFICIENT_PERMISSIONS(9 弃用切换说明)外,其余提示一字不改
         assertEquals("识别失败,请重试", voiceErrorText(VoiceErrorKind.OTHER))
         assertEquals("语音服务正忙,稍后再试", voiceErrorText(VoiceErrorKind.BUSY))
         assertEquals("没听到,再试一次", voiceErrorText(VoiceErrorKind.NO_MATCH))
         assertEquals("端侧语音引擎异常,请重试", voiceErrorText(VoiceErrorKind.ENGINE))
+        assertEquals(
+            "系统语音服务权限受限,已自动切换端侧识别;若仍失败,请在系统设置里开启麦克风权限",
+            voiceErrorText(VoiceErrorKind.INSUFFICIENT_PERMISSIONS),
+        )
     }
 }
