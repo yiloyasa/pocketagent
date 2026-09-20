@@ -268,7 +268,7 @@ P0=鉴权未启用；P1=模型列表首调 30s 超时、跨 Agent 探测被 Code
 - 上下文窗口多数模型真未知（`ListModels` 仅 `codex/default`/`echo-1` 带窗口；codex 不发该字段）
 - **Vosk 遗留**：依赖与组件仍在（`vosk-android` + `Vosk*` 两文件），但引擎已禁用；后续可整体摘除
 - P2 内嵌 Tailscale、P3 GeckoView/自更新/实况通知均未做
-- 审核遗留：86 张 2026-09-16 证据截图仍被 git 跟踪（与"证据不入库"新约定不符）；`dist/windows` zip 版本未核
+- 审核遗留：86 张 2026-09-16 证据截图已出库（2026-09-20，仅出 git 索引、磁盘保留，嵌套 .gitignore 防再入库）；`dist/windows` zip 版本未核
 
 ---
 
