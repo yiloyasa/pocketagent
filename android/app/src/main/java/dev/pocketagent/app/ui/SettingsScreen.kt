@@ -62,7 +62,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.pocketagent.app.AgentConnection
+import dev.pocketagent.app.CredentialMode
 import dev.pocketagent.app.R
+import dev.pocketagent.app.credentialModeFor
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.TaskCenter
@@ -361,6 +363,9 @@ fun SettingsScreen(
     var connectionSaving by remember { mutableStateOf(false) }
     var settingsError by remember { mutableStateOf<String?>(null) }
     var settingsFeedback by remember { mutableStateOf<String?>(null) }
+    // 【T-32】配对失败的 daemon 原文。独立状态承载:connError 会被后台自动重连循环
+    // 反复覆盖,不能用来展示"配对码错误"这类必须稳定可见的配对结果。
+    var pairError by remember { mutableStateOf<String?>(null) }
     // 【应用范围】七项调整默认只对**新建**会话生效(daemon 侧快照语义:已有会话
     // 保持创建那一刻的设置)。用户质疑"改了是否真生效"的根源就是这条默认规则
     // 与"改了立刻全生效"的预期冲突 —— 这里提供一个显式开关:开启后每次保存
@@ -637,9 +642,25 @@ fun SettingsScreen(
     fun saveAndTestConnection() {
         connectionSaving = true
         settingsError = null
+        pairError = null
         scope.launch {
+            var pairFailure: String? = null
             val connected = try {
                 withContext(Dispatchers.IO) {
+                    // 【T-32 配对码形态 → 先注册后连接】输入框是 8 位纯数字(daemon 配对码
+                    // 形态)时,先走 Authorize/RegisterByPairCode 领真 token(内部已入敏感库
+                    // 并持久化),再连接;其余输入维持原路径(非空 token 直连 / 留空直连)。
+                    if (credentialModeFor(token) == CredentialMode.PAIR_CODE) {
+                        val paired = AgentConnection.authorizeWithPairCodeDetailed(token)
+                        if (!paired.ok) {
+                            pairFailure = paired.error
+                            return@withContext null
+                        }
+                        // 配对成功:AgentConnection 已持真 token,把输入框状态同步成真 token
+                        // —— 否则下面的 setCredentials(addr, token) 会把 8 位配对码
+                        // 覆盖回 token 位,真 token 立刻被冲掉。
+                        token = AgentConnection.token
+                    }
                     AgentConnection.setCredentials(addr, token)
                     AgentConnection.connectWithFallback()
                 }
@@ -648,14 +669,22 @@ fun SettingsScreen(
                 null
             }
             connectionSaving = false
-            if (connected != null) {
-                Toast.makeText(
-                    ctx,
-                    "连接成功 · ${AgentConnection.connTransport.value}",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            } else {
-                settingsError = AgentConnection.connError.value?.message ?: "连接失败"
+            when {
+                connected != null -> {
+                    Toast.makeText(
+                        ctx,
+                        "连接成功 · ${AgentConnection.connTransport.value}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                pairFailure != null -> {
+                    // daemon 原文如实透传(AUDIT §3.3:如"配对码错误"),不加工不改写。
+                    pairError = pairFailure
+                    Toast.makeText(ctx, "配对失败", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    settingsError = AgentConnection.connError.value?.message ?: "连接失败"
+                }
             }
         }
     }
@@ -722,6 +751,7 @@ fun SettingsScreen(
             connectionSaving = connectionSaving,
             errorMessage = connectionError?.message,
             errorAddress = connectionError?.address.orEmpty(),
+            pairError = pairError,
             onSaveAndTest = { saveAndTestConnection() },
             onSaveOnly = { saveCredentialsOnly() },
             onRescan = { rescanCandidates() },
@@ -2538,6 +2568,8 @@ private fun UserDataPage(
     connectionSaving: Boolean,
     errorMessage: String?,
     errorAddress: String,
+    /** 【T-32】配对失败的 daemon 原文(如实透传);null = 无配对错误。 */
+    pairError: String?,
     onSaveAndTest: () -> Unit,
     onSaveOnly: () -> Unit,
     onRescan: () -> Unit,
@@ -2743,6 +2775,20 @@ private fun UserDataPage(
                 }
             }
 
+            // 【T-32】配对失败原文:必须紧挨输入框展示(connError 被重连循环覆盖,
+            // 不能承载;settingsError 横幅只在一级页渲染,二级页看不见)。
+            if (pairError != null) {
+                Text(
+                    "配对失败：$pairError",
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                        .padding(11.dp),
+                    fontSize = 11.sp,
+                    color = Pa.Red,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
             if (errorMessage != null) {
                 Text(
                     errorMessage + (if (errorAddress.isNotEmpty()) "\n地址:" + errorAddress else ""),
@@ -2766,7 +2812,7 @@ private fun UserDataPage(
             SettingsTextField(
                 value = token,
                 onValueChange = onToken,
-                label = "配对 token(未配对留空)",
+                label = "配对码 / token(首次连接填电脑上的 8 位配对码)",
                 password = true,
             )
             Spacer(Modifier.height(12.dp))

@@ -298,14 +298,28 @@ object AgentConnection {
      * Keystore 不可用/签名失败/daemon 是旧版 → 自动降级旧 pair_code 流程
      * (不带公钥,daemon 发 legacy 单 token)。返回是否拿到了 token。
      */
-    fun authorizeWithPairCode(pairCode: String): Boolean {
+    fun authorizeWithPairCode(pairCode: String): Boolean = authorizeWithPairCodeDetailed(pairCode).ok
+
+    /**
+     * [authorizeWithPairCode] 的带错误透传版本(设置页保存流程的唯一入口):
+     * ok=true 时 token 已经 [saveToken] 写入敏感库并持久化;失败时 [PairCodeResult.error]
+     * 为 daemon/传输层**原文**(AUDIT §3.3:如实透传,禁显"未知/错误"裸字样 —— 例如
+     * 配对码错就透传 daemon 的"配对码错误",用户才知道该去看电脑上的新码)。
+     *
+     * 【T-32】此前本函数在整个 UI 层零调用,App 卡死 UNAUTHENTICATED 且无任何配对入口;
+     * 现在设置页保存流程按输入形态(见 [credentialModeFor])自动走这里。
+     */
+    fun authorizeWithPairCodeDetailed(pairCode: String): PairCodeResult {
         val code = pairCode.trim()
-        if (code.isEmpty()) return false
+        if (code.isEmpty()) {
+            return PairCodeResult(false, "配对码为空,请填电脑上显示的 8 位配对码")
+        }
         val pub = try {
             if (keystoreSigner.available()) keystoreSigner.publicKeyBase64() else null
         } catch (_: Exception) {
             null
         }
+        var firstError: String? = null
         if (!pub.isNullOrBlank()) {
             val req = AuthorizeRequest.newBuilder()
                 .setPairCode(code)
@@ -318,9 +332,11 @@ object AgentConnection {
                 if (resp.token.isNotBlank()) {
                     saveToken(resp.token)
                     android.util.Log.i(TAG, "设备配对成功(每设备独立 token)")
-                    return true
+                    return PairCodeResult(true)
                 }
+                firstError = "daemon 接受了配对但没有返回 token"
             } catch (e: Exception) {
+                firstError = e.passThroughMessage()
                 android.util.Log.w(TAG, "设备配对失败,降级旧流程: ${e.message}")
             }
         }
@@ -334,15 +350,19 @@ object AgentConnection {
             if (resp.token.isNotBlank()) {
                 saveToken(resp.token)
                 android.util.Log.i(TAG, "已用旧配对流程获取 token(legacy)")
-                true
+                PairCodeResult(true)
             } else {
-                false
+                PairCodeResult(false, firstError ?: "daemon 接受了配对但没有返回 token")
             }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "旧配对流程也失败: ${e.message}")
-            false
+            PairCodeResult(false, e.passThroughMessage())
         }
     }
+
+    /** 异常 → 可透传原文:有 message 用 message;空白退回类名(可核查的真实信息,非"未知错误")。 */
+    private fun Throwable.passThroughMessage(): String =
+        message?.takeIf { it.isNotBlank() } ?: this::class.java.simpleName
 
     /**
      * token 失效(AUTH 错误)时的挑战应答续期:
@@ -1230,3 +1250,36 @@ object CandidateProbe {
         return CandidateOutcome(winnerRef.get(), firstFailure.get())
     }
 }
+
+// ================= T-32:设置页"配对码 / token"输入的形态决策(纯函数,单一事实源) =================
+
+/**
+ * 设置页连接区"配对码 / token"输入框值的语义,由 [credentialModeFor] 唯一判定。
+ * 保存流程据此决定:先配对注册领真 token(PAIR_CODE)/ 按 token 直连(TOKEN)/ 留空直连(EMPTY)。
+ */
+enum class CredentialMode {
+    /** 8 位纯数字 = 配对码形态:先走 [AgentConnection.authorizeWithPairCodeDetailed] 注册领真 token,再连接。 */
+    PAIR_CODE,
+
+    /** 其余非空值 = daemon 已发的 token:按原 token 直连(现状行为)。 */
+    TOKEN,
+
+    /** 留空:不带 token 直连(免鉴权 / 旧 daemon 场景,现状行为)。 */
+    EMPTY,
+}
+
+/** 配对码形态判定:trim 后恰为 8 位 ASCII 纯数字(daemon 配对码的固定形态)。 */
+fun isPairCodeForm(v: String): Boolean {
+    val t = v.trim()
+    return t.length == 8 && t.all { it in '0'..'9' }
+}
+
+/** 输入框值 → 语义:空白=留空 / 8 位纯数字=配对码 / 其余=token(JVM 回归钉死三路分支)。 */
+fun credentialModeFor(v: String): CredentialMode = when {
+    v.isBlank() -> CredentialMode.EMPTY
+    isPairCodeForm(v) -> CredentialMode.PAIR_CODE
+    else -> CredentialMode.TOKEN
+}
+
+/** 配对结果:ok=是否拿到 token(已入敏感库并持久化);error=失败原文(供 UI 如实透传)。 */
+data class PairCodeResult(val ok: Boolean, val error: String? = null)
