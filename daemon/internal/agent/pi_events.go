@@ -363,12 +363,35 @@ func MapStatusEvent(evType string, raw json.RawMessage) (*pb.CodexEvent, bool) {
 
 // ---- extension_ui_request → 审批卡 ----
 
+// uiAskOption 反问卡上的一个选项。label 既是按钮文案也是答案回传值
+// (各 agent 侧都按 label=value 收集);description/preview 是 zcode
+// requestUserInput 的原生扩展信息,pi/codex 场景留空(omitempty,不改变
+// 既有卡的形状;新 App 可选渲染,旧 App 忽略未知字段不受影响)。
+type uiAskOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Preview     string `json:"preview,omitempty"`
+}
+
 // uiAskQuestion 反问卡上的一条问题(ID 是答案回传的稳定 key,固定 q0..qN)。
 // Options 存选项原文:label 即值,用户点了哪项就把哪项回给扩展。
+// MultiSelect 仅 zcode requestUserInput 会置真(zod schema 的 multiSelect?),
+// 置真时卡 JSON 里标注 "multiSelect": true,供手机渲染多选态。
 type uiAskQuestion struct {
-	ID       string
-	Question string
-	Options  []string
+	ID          string
+	Question    string
+	Options     []uiAskOption
+	MultiSelect bool
+}
+
+// plainOptions 把裸 label 列表包成选项(pi select / zcode elicitation enum:
+// 只有值,没有描述性元数据)。
+func plainOptions(labels []string) []uiAskOption {
+	opts := make([]uiAskOption, 0, len(labels))
+	for _, l := range labels {
+		opts = append(opts, uiAskOption{Label: l})
+	}
+	return opts
 }
 
 // buildAskUserCall 把反问请求包装成 Android 端"反问表单"形状的审批卡。
@@ -381,11 +404,18 @@ type uiAskQuestion struct {
 func buildAskUserCall(reqID, message string, questions []uiAskQuestion) pb.ToolCallBlock {
 	qs := make([]map[string]any, 0, len(questions))
 	for _, q := range questions {
-		opts := make([]map[string]string, 0, len(q.Options))
-		for _, o := range q.Options {
-			opts = append(opts, map[string]string{"label": o})
+		// 选项结构化透出(label/description/preview):description/preview 为空时
+		// 序列化结果与旧形状 {"label":...} 完全一致,pi/codex 卡不受影响。
+		// nil 归一成空数组:options 必须恒为 [],不能退化成 null。
+		opts := q.Options
+		if opts == nil {
+			opts = []uiAskOption{}
 		}
-		qs = append(qs, map[string]any{"id": q.ID, "question": q.Question, "options": opts})
+		qm := map[string]any{"id": q.ID, "question": q.Question, "options": opts}
+		if q.MultiSelect {
+			qm["multiSelect"] = true // 只在真值时标注,老卡形状零变化
+		}
+		qs = append(qs, qm)
 	}
 	return pb.ToolCallBlock{
 		Id:   reqID,
@@ -401,8 +431,10 @@ func buildAskUserCall(reqID, message string, questions []uiAskQuestion) pb.ToolC
 // "问题 id → 答案"。
 //
 // 【Android 提交形状】{"<问题id>": {"answers": ["……"]}}(ChatScreen.submit);
-// 兼容裸字符串值。解析失败时退化为"整段文本回答第一个问题(q0)" —— 让 agent
-// 至少拿到用户的意思,而不是拿到空回答后开始猜(与 codex splitAnswerNote 同款兜底)。
+// 兼容裸字符串值与多选数组值 {"<问题id>": ["A","B"]};整条 note 是裸 JSON
+// 数组时视为单问题卡的多选答案(q0)。解析失败时退化为"整段文本回答第一个
+// 问题(q0)" —— 让 agent 至少拿到用户的意思,而不是拿到空回答后开始猜
+// (与 codex splitAnswerNote 同款兜底)。
 func answerNoteMap(note string) map[string]string {
 	out := map[string]string{}
 	trimmed := strings.TrimSpace(note)
@@ -411,6 +443,16 @@ func answerNoteMap(note string) map[string]string {
 	}
 	var parsed map[string]any
 	if json.Unmarshal([]byte(trimmed), &parsed) != nil || len(parsed) == 0 {
+		// 不是映射:可能是裸数组(多选直接提交数组),再不行才走整段文本兜底。
+		var arr []any
+		if json.Unmarshal([]byte(trimmed), &arr) == nil && len(arr) > 0 {
+			if s := joinNoteAnswers(arr); s != "" {
+				out["q0"] = s
+			} else {
+				out["q0"] = trimmed
+			}
+			return out
+		}
 		out["q0"] = trimmed
 		return out
 	}
@@ -422,21 +464,31 @@ func answerNoteMap(note string) map[string]string {
 	return out
 }
 
-// noteAnswerOf 提取单个问题条目的答案文本:{"answers":["…"]} / "…" 两兼容,
-// 取第一条非空;数组 Join 语义交给调用方(多选 P1 不支持,单选取首选)。
+// joinNoteAnswers 把答案数组拼成单值文本(多选场景:值以 ", " 连接回传 ——
+// 各 agent 的收集端目前都收单值;数组逐项保真交给 Android 侧形状,daemon
+// 不丢项也不去重)。
+func joinNoteAnswers(arr []any) string {
+	parts := make([]string, 0, len(arr))
+	for _, a := range arr {
+		if s, ok := a.(string); ok && strings.TrimSpace(s) != "" {
+			parts = append(parts, strings.TrimSpace(s))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// noteAnswerOf 提取单个问题条目的答案文本,四形状兼容:
+// {"answers":["…"]} / ["…"](多选数组) / "…"(裸字符串) / {"answer":"…"},
+// 数组以 ", " 连接取全部(多选不再只取首选)。
 func noteAnswerOf(v any) string {
 	switch t := v.(type) {
 	case string:
 		return strings.TrimSpace(t)
+	case []any:
+		return joinNoteAnswers(t)
 	case map[string]any:
 		if arr, ok := t["answers"].([]any); ok {
-			parts := make([]string, 0, len(arr))
-			for _, a := range arr {
-				if s, ok := a.(string); ok && strings.TrimSpace(s) != "" {
-					parts = append(parts, strings.TrimSpace(s))
-				}
-			}
-			return strings.Join(parts, ", ")
+			return joinNoteAnswers(arr)
 		}
 		if s, ok := t["answer"].(string); ok {
 			return strings.TrimSpace(s)
@@ -478,7 +530,7 @@ func ApprovalCallFromUI(reqID string, method, title, message string, options []s
 	subtitle := firstNonEmpty(message, title)
 	q := uiAskQuestion{ID: "q0", Question: firstNonEmpty(title, message)}
 	if method == "select" {
-		q.Options = options
+		q.Options = plainOptions(options)
 	}
 	// input/editor:不给选项,手机端渲染为纯输入框。
 	// buildAskUserCall 保持值返回(它的结果还会进别的元组),这里取址适配指针签名。

@@ -160,6 +160,81 @@ func TestSplitAnswerNote(t *testing.T) {
 	}
 }
 
+// 【保真度】问题级 isSecret/isOther(schema ToolRequestUserInputQuestion 原生
+// 字段)必须解析并透出到卡 JSON:isSecret → 手机渲染密码态输入,isOther →
+// 允许"其他"自由作答。以前 struct 没这两字段,信息在 daemon 被丢。
+func TestBuildApprovalCallCarriesSecretAndOtherFlags(t *testing.T) {
+	ask := buildApprovalCall(reqAskUser, "item/tool/requestUserInput",
+		json.RawMessage(`{"itemId":"i9","questions":[
+			{"id":"q1","header":"口令","question":"访问口令?","isSecret":true,
+			 "options":[{"label":"内置","description":"用内置口令"}]},
+			{"id":"q2","header":"名字","question":"叫什么?","isOther":true,"options":[{"label":"默认"}]}]}`), nil)
+	var args struct {
+		Questions []struct {
+			ID       string `json:"id"`
+			IsSecret bool   `json:"isSecret"`
+			IsOther  bool   `json:"isOther"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(ask.JsonArgs), &args); err != nil {
+		t.Fatal(err)
+	}
+	if len(args.Questions) != 2 {
+		t.Fatalf("应恰好两条问题: %+v", args.Questions)
+	}
+	if !args.Questions[0].IsSecret || args.Questions[0].IsOther {
+		t.Fatalf("q1 应 isSecret=true/isOther=false: %+v", args.Questions[0])
+	}
+	if args.Questions[1].IsSecret || !args.Questions[1].IsOther {
+		t.Fatalf("q2 应 isSecret=false/isOther=true: %+v", args.Questions[1])
+	}
+}
+
+// 【保真度·多选答案】Android 多选直接提交数组形状 note:必须归一成应答 schema
+// (ToolRequestUserInputAnswer:每题的值是 {"answers":[...]}) ;旧形状与裸字符串
+// 兼容,自由文本兜底不变。
+func TestSplitAnswerNoteArrayShape(t *testing.T) {
+	qs := []askUserQuestion{{Id: "q1"}}
+	// 断言经 JSON 序列化往返(应答最终要 marshal 给 codex,形状以序列化结果为准)
+	answersOf := func(v interface{}) []string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("答案序列化失败: %v", err)
+		}
+		var m struct {
+			Answers []string `json:"answers"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("答案形状不是 {answers:[...]}: %s", raw)
+		}
+		return m.Answers
+	}
+
+	// 新数组形状:{"q1":["A","B"]} → {"answers":["A","B"]}
+	got := splitAnswerNote(`{"q1":["A","B"]}`, qs)
+	if arr := answersOf(got["q1"]); len(arr) != 2 || arr[0] != "A" || arr[1] != "B" {
+		t.Fatalf("数组形状归一错误: %v", got)
+	}
+
+	// 旧形状不回归:{"q1":{"answers":["A"]}} 原样保留
+	got = splitAnswerNote(`{"q1":{"answers":["A"]}}`, qs)
+	if arr := answersOf(got["q1"]); len(arr) != 1 || arr[0] != "A" {
+		t.Fatalf("旧形状被改写: %v", got)
+	}
+
+	// 裸字符串值:归一成 {"answers":["A"]}(schema 要求对象形状)
+	got = splitAnswerNote(`{"q1":"A"}`, qs)
+	if arr := answersOf(got["q1"]); len(arr) != 1 || arr[0] != "A" {
+		t.Fatalf("裸字符串归一错误: %v", got)
+	}
+
+	// 自由文本兜底不变:整段文本答第一题,且是 schema 认可的形状
+	got = splitAnswerNote("就用 A 方案", qs)
+	if arr := answersOf(got["q1"]); len(arr) != 1 || arr[0] != "就用 A 方案" {
+		t.Fatalf("自由文本兜底内容错误: %v", got)
+	}
+}
+
 func TestMergePathsDedupesAndKeepsOrder(t *testing.T) {
 	got := mergePaths([]string{"a.go"}, []string{"a.go", "", "b.go", "c.go", "b.go"})
 	want := []string{"a.go", "b.go", "c.go"}

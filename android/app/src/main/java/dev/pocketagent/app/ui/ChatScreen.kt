@@ -107,6 +107,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -892,6 +894,24 @@ internal const val INPUT_TOUCH_TARGET_DP = 48
  * 导航栏中较高的那个"而不是两者相加。自己手写等价逻辑反而更脆(要处理 insets
  * 消费语义),所以直接用官方 union。
  */
+/**
+ * 【F-D 历史按轮加载】打开会话路径的 GetThreadHistory 请求:带 rounds 让 daemon
+ * 只回最近 N 轮(一轮 = 一条 user 起始;0 = 全量,本函数不会产出 0)。
+ *
+ * 【分工纪律】只有"打开会话/加载更早"走这里。导出(ChatScreen 导出面板)、
+ * 断流恢复与 resync 回填(TurnSession)各自原地构建 limit=0 的全量请求,
+ * 恢复判定依赖消息数增量,绝不能被档位截断。
+ *
+ * 【F-C 接入点】rounds 字段(proto #3,daemon 先按 limit 尾截再按 rounds 收窄)
+ * 已就绪;若后续构建报 setRounds 未解析(字段被回退),过渡方案是改为
+ * `.setLimit(rounds * 3)`(daemon 的 limit 按"消息条数"截断,一轮≈3 条)。
+ */
+private fun openThreadHistoryRequest(threadId: String, rounds: Int): GetThreadHistoryRequest =
+    GetThreadHistoryRequest.newBuilder()
+        .setThreadId(threadId)
+        .setRounds(rounds)
+        .build()
+
 @OptIn(
     androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
     ExperimentalMaterial3Api::class,
@@ -1179,6 +1199,16 @@ fun ChatScreen(
     var hostName by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
+    // 【F-D 历史按轮加载】当前已拉取的累计轮数:打开会话=设置档位起步,
+    // 「加载更早」按档位累加;重连/下拉刷新沿用累计值(视图不缩水)。
+    // 只作用于打开会话路径 —— 导出/恢复/resync 保持全量,不读这个值。
+    var historyRoundsLoaded by remember(threadId) {
+        mutableStateOf(HistoryRoundsLogic.clampRounds(AgentConnection.historyRounds))
+    }
+    // daemon 返回的是不是"被截断的尾部"(决定时间线顶部「加载更早」的显隐)
+    var historyTruncated by remember(threadId) { mutableStateOf(false) }
+    // 「加载更早」在飞(防重复点击;按钮同时换成小圈)
+    var loadingEarlier by remember(threadId) { mutableStateOf(false) }
 
     // 提示词优化:输入/开关/离线态任一变化都重算按钮可见性(单一事实来源是输入,
     // 状态机只记"请求在飞";纯逻辑见 PromptOptimizeLogic.kt,JVM 单测钉行为)。
@@ -1588,14 +1618,26 @@ fun ChatScreen(
             if (!st.running && !st.recovering &&
                 (st.items.isEmpty() || connectionEpoch > 0 || reloadToken > 0)
             ) {
+                // 【F-D 历史按轮加载】只拉最近 historyRoundsLoaded 轮(设置档位起步,
+                // 「加载更早」累加);重连/刷新沿用累计轮数,视图不缩水。导出、
+                // 恢复/resync(TurnSession)与导出面板仍走全量,与这里互不影响。
                 val resp = withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().getThreadHistory(GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build())
+                    AgentConnection.threadService().getThreadHistory(
+                        openThreadHistoryRequest(threadId, historyRoundsLoaded),
+                    )
                 }
                 if (resp.messagesList.isNotEmpty()) {
                     st.items.clear()
                     st.items.addAll(historyToChatItems(resp.messagesList))
                     listState.scrollToItem(st.items.size - 1)
                 }
+                // 【F-D】是否被截断决定时间线顶部「加载更早」的显隐(纯函数在
+                // HistoryRoundsLogic,JVM 单测钉住;空响应=还没有历史,不显示)
+                historyTruncated = HistoryRoundsLogic.canLoadEarlier(
+                    firstRole = resp.messagesList.firstOrNull()?.role,
+                    roundCount = resp.messagesList.count { it.role == "user" },
+                    requestedRounds = historyRoundsLoaded,
+                )
                 // 【离线快照】成功后落一份本地只读副本(只留 role+text:
                 // 图片/工具结果离线圈不了,宁可少显示也不能错显示)。
                 dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(
@@ -1624,6 +1666,48 @@ fun ChatScreen(
                 loadError = "无法加载会话历史：${e.message ?: "连接失败"}"
                 offlineSnapshot = false
                 offlineSnapshotAt = 0
+            }
+        }
+    }
+
+    /**
+     * 【F-D 加载更早】时间线顶部入口:累计轮数再加一个设置档位重拉
+     * (daemon 幂等返回尾部,整体替换 items,不是增量拼接)。
+     *
+     * 滚动锚点:替换前记 LazyListState 的 firstVisibleItem(下标+偏移),
+     * 替换后只在头部追加,旧条目整体下移 delta = 新旧条目差,锚点下标 + delta
+     * 就是原来那条消息,页面不跳动;锚点在 0(「加载更早」按钮自己)说明用户
+     * 已翻到顶,直接回列表顶部。
+     */
+    fun loadEarlier() {
+        if (loadingEarlier || offlineSnapshot || st.running || st.recovering) return
+        loadingEarlier = true
+        val anchorIndex = listState.firstVisibleItemIndex
+        val anchorOffset = listState.firstVisibleItemScrollOffset
+        scope.launch {
+            try {
+                val next = HistoryRoundsLogic.nextRounds(historyRoundsLoaded, AgentConnection.historyRounds)
+                val resp = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().getThreadHistory(openThreadHistoryRequest(threadId, next))
+                }
+                if (resp.messagesList.isNotEmpty()) {
+                    val oldSize = st.items.size
+                    st.items.clear()
+                    st.items.addAll(historyToChatItems(resp.messagesList))
+                    historyRoundsLoaded = next
+                    val delta = (st.items.size - oldSize).coerceAtLeast(0)
+                    val target = if (anchorIndex <= 0) 0 else (anchorIndex + delta).coerceAtMost(st.items.size - 1)
+                    listState.scrollToItem(target, if (anchorIndex <= 0) 0 else anchorOffset)
+                }
+                historyTruncated = HistoryRoundsLogic.canLoadEarlier(
+                    firstRole = resp.messagesList.firstOrNull()?.role,
+                    roundCount = resp.messagesList.count { it.role == "user" },
+                    requestedRounds = next,
+                )
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "加载更早失败：${e.message ?: "连接失败"}", Toast.LENGTH_SHORT).show()
+            } finally {
+                loadingEarlier = false
             }
         }
     }
@@ -1993,6 +2077,24 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             contentPadding = PaddingValues(vertical = 12.dp),
         ) {
+            // 【F-D 加载更早】历史被截断时在时间线顶部给出的增量入口;离线快照
+            // (只读旧数据)不显示。点击后重拉更大的轮数并保持滚动锚点,见 loadEarlier。
+            if (historyTruncated && !offlineSnapshot) {
+                item(key = "load-earlier") {
+                    Box(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (loadingEarlier) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            TextButton(onClick = { loadEarlier() }) {
+                                Text("加载更早", fontSize = 12.5.sp, color = Pa.Accent)
+                            }
+                        }
+                    }
+                }
+            }
             items(st.items) { item ->
                 when (item.role) {
                     "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -3438,8 +3540,108 @@ fun ModelEffortCard(
     }
 }
 
-/** 一条待用户回答的问题(来自 codex 的 item/tool/requestUserInput / MCP elicitation)。 */
-private data class AskQuestion(val id: String, val text: String, val options: List<String>)
+/** 一个可选项:label 主文案必填;description 副文案 / preview 代码块是 daemon 透传的原生字段,存在才渲染。 */
+internal data class AskOption(
+    val label: String,
+    val description: String = "",
+    val preview: String = "",
+)
+
+/**
+ * 一条待用户回答的问题(来自 codex 的 item/tool/requestUserInput / MCP elicitation)。
+ * 契约(F-A 终版):zcode/pi 卡 description/preview 空时键省略(omitempty)、multiSelect
+ * 仅 true 时出现(缺省=单选);codex 卡 header/isSecret/isOther 恒出现(false 也透出)。
+ * 这些都是 daemon 透传的问题级字段,存在才生效(旧形状全缺省,行为不变)。
+ */
+internal data class AskQuestion(
+    val id: String,
+    val text: String,
+    val options: List<AskOption>,
+    val multiSelect: Boolean = false,
+    val isSecret: Boolean = false,
+    val isOther: Boolean = false,
+    val header: String = "", // codex 卡的问题分组小标题,存在才渲染
+)
+
+/** 问题 id 缺失时给个稳定的兜底 key,否则答案会挂不上(与旧行为一致)。 */
+internal fun askQid(q: AskQuestion, idx: Int): String = q.id.ifBlank { "q$idx" }
+
+/**
+ * 解析审批卡 json_args 里的 questions(纯函数,JVM 可测)。
+ * 【能透传就透传】选项取 label 主文案,description/preview 原样保留(渲染时如实展示、不改写);
+ * 问题级 multiSelect/isSecret/isOther 存在才生效。不认识的字段/选项形状一律忽略不炸——
+ * 旧 daemon(选项只有 label 的旧形状)解析结果与旧版逐字段等价,不回归。
+ */
+internal fun parseAskQuestions(args: JSONObject?): List<AskQuestion> {
+    val arr = args?.optJSONArray("questions") ?: return emptyList()
+    return buildList {
+        for (i in 0 until arr.length()) {
+            val q = arr.optJSONObject(i) ?: continue // 认不出的条目跳过,不炸
+            val opts = q.optJSONArray("options")?.let { oa ->
+                (0 until oa.length()).mapNotNull { k ->
+                    when (val o = oa.opt(k)) {
+                        is JSONObject -> AskOption(
+                            label = o.optString("label"),
+                            description = o.optString("description"),
+                            preview = o.optString("preview"),
+                        )
+                        is String -> AskOption(label = o) // 宽容:裸字符串选项当 label
+                        else -> null // 未知形状不硬造;选项全丢的题自然降级为自由输入兜底
+                    }
+                }
+            } ?: emptyList()
+            add(
+                AskQuestion(
+                    id = q.optString("id"),
+                    text = q.optString("question"),
+                    options = opts,
+                    multiSelect = q.optBoolean("multiSelect", false),
+                    isSecret = q.optBoolean("isSecret", false),
+                    isOther = q.optBoolean("isOther", false),
+                    header = q.optString("header"),
+                ),
+            )
+        }
+    }
+}
+
+/** 是否至少收集到一条答案(纯函数,JVM 可测):无问题列表的纯文字反问卡恒可提交(旧行为)。 */
+internal fun askHasAnswers(
+    questions: List<AskQuestion>,
+    picks: Map<String, Set<String>>,
+    texts: Map<String, String>,
+): Boolean =
+    questions.isEmpty() ||
+        picks.values.any { it.isNotEmpty() } ||
+        texts.values.any { it.isNotBlank() }
+
+/**
+ * 打包答案成 daemon/codex 期望的 {"<问题id>":{"answers":[...]}} 形状(纯函数,JVM 可测)。
+ * 多选=勾选的 label 按选项渲染顺序依次入数组;自由输入(开放题/"其他"/密码题)非空则追加;
+ * 单选/纯输入维持旧形状(单元素数组)。daemon 解析器同时容忍单值与数组,数组形状对多选天然成立。
+ * 一题一条答案都没收集到就不放该键——不伪造已答。
+ */
+internal fun packAskAnswers(
+    questions: List<AskQuestion>,
+    picks: Map<String, Set<String>>,
+    texts: Map<String, String>,
+): JSONObject {
+    val obj = JSONObject()
+    questions.forEachIndexed { idx, q ->
+        val key = askQid(q, idx)
+        val chosen = picks[key].orEmpty()
+        val vals: List<String> = buildList {
+            q.options.forEach { o -> if (o.label in chosen && o.label !in this) add(o.label) }
+            texts[key].orEmpty().trim().takeIf { it.isNotEmpty() && it !in this }?.let { add(it) }
+        }
+        if (vals.isNotEmpty()) {
+            val arr = JSONArray()
+            vals.forEach { arr.put(it) }
+            obj.put(key, JSONObject().put("answers", arr))
+        }
+    }
+    return obj
+}
 
 /** 需要"回答"而不是"批准"的动作类型。 */
 private val ApprovalAskNames = setOf("request_user_input", "mcp_elicitation")
@@ -3539,35 +3741,17 @@ private fun ApprovalSheet(
     }
 
     // 反问类:每个问题一行(有选项就渲染成可选按钮),答案按 codex 期望的
-    // {"<问题id>":{"answers":["..."]}} 形状回给 daemon。
-    val questions = remember(action.action.jsonArgs) {
-        val arr = args?.optJSONArray("questions")
-        buildList {
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val q = arr.optJSONObject(i) ?: continue
-                    val opts = q.optJSONArray("options")?.let { oa ->
-                        (0 until oa.length()).mapNotNull { oa.optJSONObject(it)?.optString("label") }
-                    } ?: emptyList()
-                    add(AskQuestion(q.optString("id"), q.optString("question"), opts))
-                }
-            }
-        }
-    }
+    // {"<问题id>":{"answers":[...]}} 形状回给 daemon。解析走纯函数 parseAskQuestions:
+    // description/preview/multiSelect/isSecret/isOther 都是 daemon 透传字段,存在才生效;
+    // 旧形状(选项只有 label)行为不变。
+    val questions = remember(action.action.jsonArgs) { parseAskQuestions(args) }
     // 问题 id 缺失时给个稳定的兜底 key,否则答案会挂不上。
-    fun qid(q: AskQuestion, idx: Int) = q.id.ifBlank { "q$idx" }
-    var answers by remember(action.requestId) { mutableStateOf(emptyMap<String, String>()) }
-    val canSubmit = isAsk && (questions.isEmpty() || answers.values.any { it.isNotBlank() })
+    var picks by remember(action.requestId) { mutableStateOf(emptyMap<String, Set<String>>()) } // 每题勾中的选项 label
+    var texts by remember(action.requestId) { mutableStateOf(emptyMap<String, String>()) } // 每题自由输入
+    val canSubmit = isAsk && askHasAnswers(questions, picks, texts)
 
     fun submit() {
-        val obj = JSONObject()
-        questions.forEachIndexed { idx, q ->
-            val a = answers[qid(q, idx)].orEmpty().trim()
-            if (a.isNotBlank()) {
-                obj.put(qid(q, idx), JSONObject().put("answers", JSONArray().put(a)))
-            }
-        }
-        onDecision(true, obj.toString())
+        onDecision(true, packAskAnswers(questions, picks, texts).toString())
     }
 
     ModalBottomSheet(
@@ -3651,22 +3835,44 @@ private fun ApprovalSheet(
                     )
                 }
                 questions.forEachIndexed { idx, q ->
-                    val key = qid(q, idx)
-                    val cur = answers[key].orEmpty()
+                    val key = askQid(q, idx)
+                    val cur = texts[key].orEmpty()
+                    val sel = picks[key] ?: emptySet()
+                    val groupTop = if (idx == 0) 0.dp else 14.dp
+                    // header:codex 卡的问题分组小标题,存在才渲染(cadence 与问题文本一体)
+                    if (q.header.isNotBlank()) {
+                        Text(
+                            q.header,
+                            Modifier.padding(top = groupTop, bottom = 2.dp),
+                            fontSize = 11.sp,
+                            color = Pa.TextTertiary,
+                        )
+                    }
                     Text(
                         q.text.ifBlank { "请回答" },
-                        Modifier.padding(top = if (idx == 0) 0.dp else 14.dp, bottom = 8.dp),
+                        Modifier.padding(top = if (q.header.isNotBlank()) 0.dp else groupTop, bottom = 8.dp),
                         fontSize = 13.5.sp, color = Pa.TextPrimary, lineHeight = 19.sp,
                     )
                     if (q.options.isNotEmpty()) {
                         Column {
                             q.options.forEach { opt ->
-                                val active = cur == opt
+                                val active = opt.label in sel
                                 Box(
                                     Modifier
                                         .fillMaxWidth()
                                         .padding(bottom = 6.dp)
-                                        .pressable { answers = answers + (key to opt) }
+                                        .pressable {
+                                            if (q.multiSelect) {
+                                                // 多选:切换勾选态,已勾的自由输入保留(作"其他"补充)
+                                                val next = sel.toMutableSet()
+                                                if (active) next.remove(opt.label) else next.add(opt.label)
+                                                picks = picks + (key to next)
+                                            } else {
+                                                // 单选:点了就定,同时清自由输入(与旧"选择/输入互斥"语义一致)
+                                                picks = picks + (key to setOf(opt.label))
+                                                if (texts[key].orEmpty().isNotEmpty()) texts = texts - key
+                                            }
+                                        }
                                         .background(
                                             if (active) Pa.AccentDim else Pa.Card,
                                             RoundedCornerShape(12.dp),
@@ -3678,11 +3884,67 @@ private fun ApprovalSheet(
                                         )
                                         .padding(horizontal = 14.dp, vertical = 11.dp),
                                 ) {
-                                    Text(
-                                        opt,
-                                        fontSize = 13.sp,
-                                        color = if (active) Pa.Accent else Pa.TextSecondary,
-                                    )
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        if (q.multiSelect) {
+                                            // 勾选态:选中=品牌蓝实底+白勾,未选中=空心方框
+                                            Box(
+                                                Modifier
+                                                    .size(16.dp)
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(if (active) Pa.Accent else Color.Transparent)
+                                                    .border(
+                                                        0.5.dp,
+                                                        if (active) Pa.Accent else Pa.TextTertiary,
+                                                        RoundedCornerShape(4.dp),
+                                                    ),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                if (active) {
+                                                    Icon(
+                                                        painterResource(AppR.drawable.ic_lucide_check),
+                                                        null,
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(12.dp),
+                                                    )
+                                                }
+                                            }
+                                            Spacer(Modifier.width(10.dp))
+                                        }
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                opt.label,
+                                                fontSize = 13.sp,
+                                                color = if (active) Pa.Accent else Pa.TextSecondary,
+                                            )
+                                            // 副文案:daemon 透传的 description,存在才显示
+                                            if (opt.description.isNotBlank()) {
+                                                Text(
+                                                    opt.description,
+                                                    Modifier.padding(top = 3.dp),
+                                                    fontSize = 11.5.sp,
+                                                    color = Pa.TextTertiary,
+                                                    lineHeight = 16.sp,
+                                                )
+                                            }
+                                            // preview 如实展示:等宽字体+原样换行,不美化不改写
+                                            if (opt.preview.isNotBlank()) {
+                                                Text(
+                                                    opt.preview,
+                                                    Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(top = 8.dp)
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(Pa.Bg)
+                                                        .border(0.5.dp, Pa.Separator, RoundedCornerShape(8.dp))
+                                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    fontSize = 11.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = Pa.TextPrimary,
+                                                    lineHeight = 16.sp,
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3696,15 +3958,31 @@ private fun ApprovalSheet(
                     ) {
                         BasicTextField(
                             value = cur,
-                            onValueChange = { answers = answers + (key to it) },
+                            onValueChange = { s ->
+                                texts = texts + (key to s)
+                                // 单选题一打字即清勾选(与旧"输入覆盖选择"一致);多选保留勾选,输入作补充
+                                if (q.options.isNotEmpty() && !q.multiSelect && sel.isNotEmpty()) {
+                                    picks = picks - key
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),
                             textStyle = TextStyle(fontSize = 13.sp, color = Pa.TextPrimary),
                             cursorBrush = SolidColor(Pa.Accent),
+                            // 密码题:输入以密码态展示,不回显明文
+                            visualTransformation = if (q.isSecret) {
+                                PasswordVisualTransformation()
+                            } else {
+                                VisualTransformation.None
+                            },
                             decorationBox = { inner ->
                                 Box {
                                     if (cur.isEmpty()) {
                                         Text(
-                                            if (q.options.isEmpty()) "输入你的回答…" else "或直接输入你的回答…",
+                                            when {
+                                                q.options.isEmpty() -> "输入你的回答…" // 无选项=自由输入兜底(含未知形状降级)
+                                                q.isOther -> "或填写其他…"
+                                                else -> "或直接输入你的回答…"
+                                            },
                                             fontSize = 13.sp, color = Pa.TextTertiary,
                                         )
                                     }

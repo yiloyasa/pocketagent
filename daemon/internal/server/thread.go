@@ -563,6 +563,9 @@ func (s *Server) GetThreadHistory(ctx context.Context, req *pb.GetThreadHistoryR
 	if req.Limit > 0 && int(req.Limit) < len(msgs) {
 		msgs = msgs[len(msgs)-int(req.Limit):]
 	}
+	// 按轮截断在 limit 之后叠加:limit 先按条数尾截(既有语义、优先级不变),
+	// rounds 再在 limit 的结果上收窄 —— 两条约束同时满足才返回。
+	msgs = tailByRounds(msgs, int(req.Rounds))
 	out := &pb.GetThreadHistoryResponse{}
 	for _, m := range msgs {
 		blocks := make([]*pb.ContentBlock, 0, len(m.Blocks))
@@ -634,6 +637,38 @@ func goalDetailFrom(g *agent.CodexGoalState, localGoal string) *pb.CodexGoalDeta
 		out.Objective = localGoal
 	}
 	return out
+}
+
+// tailByRounds 按轮尾部截取历史消息(纯函数,可单测)。
+//
+// 【一轮的定义】一条 role=="user" 起始,到下一条 user 之前的所有消息。
+// 失败轮可能只有 user 无 assistant —— 该 user 自己就算一轮;导入/fork 的
+// 种子首条不保证是 user,它属于"任何一轮之前"的悬前部分,不参与轮次计数。
+// 【截断方式】从尾向前数 user 轮起点,数满 rounds 轮即从那轮的 user 起切到
+// 尾部:最后一条 user 之后的全部 assistant 都属于最后一轮(悬挂容忍)。
+// 【兼容铁律】rounds<=0 一律原样返回全部 —— 存量 APK 不传 rounds(=0),
+// 导出全量与断流恢复(P1-5 ResyncRequired 后的全量回填)都依赖"全部"语义;
+// rounds 大于总轮数(可数轮起点不足 N 个)时同样全量返回。
+// 【与 limit 的叠加顺序】调用方先做 limit 条数尾截(既有语义、优先级保持
+// 现状),本函数再在 limit 的结果上按轮收窄:两条约束同时满足才返回。
+func tailByRounds(msgs []store.StoredMessage, rounds int) []store.StoredMessage {
+	if rounds <= 0 || len(msgs) == 0 {
+		return msgs
+	}
+	seen, start := 0, 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			seen++
+			if seen == rounds {
+				start = i
+				break
+			}
+		}
+	}
+	if seen < rounds {
+		return msgs // 轮数不足:全量
+	}
+	return msgs[start:]
 }
 
 // zcodeHistorySource 是 ZcodeProvider 历史拉取能力的最小接口(生产由

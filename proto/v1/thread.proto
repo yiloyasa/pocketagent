@@ -242,6 +242,12 @@ message ImportAgentThreadResponse { string thread_id = 1; }
 message GetThreadHistoryRequest {
   string thread_id = 1;
   int32 limit = 2;   // 0 = 全部
+  // 按轮截断:0 = 不限(兼容旧客户端:存量 APK 不传本字段,必须仍返回全量,
+  // 导出全量与断流恢复回填都依赖这个语义)。一轮 = 一条 user 起始,到下一条
+  // user 之前(失败轮可能只有 user 无 assistant;导入/fork 种子首条不保证
+  // user)。与 limit 并存时先按 limit 尾截,再按 rounds 叠加收窄;默认值
+  // (最近 20 轮)由 android 端显式传,服务端不内置默认。
+  int32 rounds = 3;
 }
 
 message GetThreadHistoryResponse {

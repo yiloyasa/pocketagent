@@ -3359,6 +3359,31 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer:
                     },
                 ),
             )
+            Spacer(Modifier.height(8.dp))
+
+            // 【F-D 历史按轮加载】打开会话只拉最近 N 轮,更早的靠时间线顶部
+            // 「加载更早」补齐(样式照抄"界面文字大小"的主=循环切换+下拉三/四选一)。
+            val roundsOptions = HistoryRoundsLogic.STEP_OPTIONS
+            val roundsIdx = roundsOptions.indexOf(AgentConnection.historyRounds).coerceAtLeast(0)
+            SplitButton(
+                label = "历史消息加载轮数",
+                caption = "打开会话时只加载最近 N 轮,更早的内容在会话顶部点「加载更早」继续查看",
+                mainLabel = HistoryRoundsLogic.labelFor(roundsOptions[roundsIdx]),
+                onMainClick = {
+                    val next = roundsOptions[(roundsIdx + 1) % roundsOptions.size]
+                    AgentConnection.historyRounds = next
+                    onFeedback("历史加载已保存:${HistoryRoundsLogic.labelFor(next)}")
+                },
+                options = roundsOptions.map { r ->
+                    SplitOption(
+                        HistoryRoundsLogic.labelFor(r),
+                        selected = r == AgentConnection.historyRounds,
+                    ) {
+                        AgentConnection.historyRounds = r
+                        onFeedback("历史加载已保存:${HistoryRoundsLogic.labelFor(r)}")
+                    }
+                },
+            )
             Spacer(Modifier.height(6.dp))
         }
 

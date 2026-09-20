@@ -212,6 +212,10 @@ object AgentConnection {
             defaultEffort = selectedEffort
             uiTextScale = it.getFloat("uiTextScale", 1.0f)
             thinkTextScale = it.getFloat("thinkTextScale", 1.0f)
+            // 【F-D 历史按轮加载】打开会话拉最近 N 轮;脏值收敛到合法档位(直写
+            // 背包变量,不走 setter,避免 init 期间反向写盘)。
+            historyRoundsState = dev.pocketagent.app.ui.HistoryRoundsLogic
+                .clampRounds(it.getInt("historyRounds", dev.pocketagent.app.ui.HistoryRoundsLogic.DEFAULT_ROUNDS))
             toolDetailsExpanded = it.getBoolean("toolDetailsExpanded", false)
             themeMode = it.getString("themeMode", "system") ?: "system"
             multiAgent = it.getBoolean("multiAgent", false)
@@ -819,6 +823,21 @@ object AgentConnection {
     var uiTextScale by mutableStateOf(1.0f)
     /** 思考显示文字缩放;1.0 标准 */
     var thinkTextScale by mutableStateOf(1.0f)
+    /**
+     * 【F-D 历史按轮加载】打开会话时拉取的历史轮数(档位 10/20/30/50,默认 20),
+     * 落在 GetThreadHistoryRequest 的 rounds 参数上;0 = 全量 —— 手机端只在
+     * 导出/恢复/resync 路径保持全量,不走这个档位。档位合法性由
+     * [dev.pocketagent.app.ui.HistoryRoundsLogic.clampRounds] 收敛。
+     */
+    private var historyRoundsState by mutableStateOf(dev.pocketagent.app.ui.HistoryRoundsLogic.DEFAULT_ROUNDS)
+    var historyRounds: Int
+        get() = historyRoundsState
+        set(v) {
+            val rounded = dev.pocketagent.app.ui.HistoryRoundsLogic.clampRounds(v)
+            if (rounded == historyRoundsState) return
+            historyRoundsState = rounded
+            prefs?.edit()?.putInt("historyRounds", rounded)?.apply()
+        }
     /** 普通会话工具详情是否默认展开；审批弹窗使用自己的折叠状态。 */
     private var toolDetailsExpandedState by mutableStateOf(false)
     var toolDetailsExpanded: Boolean

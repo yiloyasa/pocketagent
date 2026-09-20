@@ -267,6 +267,41 @@ func TestApprovalCallFromUIInputNoOptions(t *testing.T) {
 	}
 }
 
+// 【保真度·多选答案】手机多选直接提交数组形状 note,解析器必须接受:
+// map 内数组值 / 裸顶层数组都归一;旧形状({"answers":[...]}、裸字符串)不回归;
+// 非法 JSON 仍兜底"整段文本答第一题"。
+func TestAnswerNoteMapArrayShape(t *testing.T) {
+	// map 内数组值(多选)
+	got := answerNoteMap(`{"q0":["方案A","方案B"]}`)
+	if got["q0"] != "方案A, 方案B" {
+		t.Fatalf("数组形状答案未解析: %v", got)
+	}
+	// 顶层数组(单问题卡多选直接提交数组)
+	got = answerNoteMap(`["方案A","方案B"]`)
+	if got["q0"] != "方案A, 方案B" {
+		t.Fatalf("顶层数组未落到 q0: %v", got)
+	}
+	// 旧形状 1:{"q0":{"answers":["方案A"]}}
+	got = answerNoteMap(`{"q0":{"answers":["方案A"]}}`)
+	if got["q0"] != "方案A" {
+		t.Fatalf("旧 answers 形状回归: %v", got)
+	}
+	// 旧形状 2:裸字符串值
+	got = answerNoteMap(`{"q0":"方案A"}`)
+	if got["q0"] != "方案A" {
+		t.Fatalf("裸字符串值回归: %v", got)
+	}
+	// 非法 JSON:整段文本兜底答 q0(语义不变)
+	got = answerNoteMap("就用方案A")
+	if got["q0"] != "就用方案A" {
+		t.Fatalf("自由文本兜底回归: %v", got)
+	}
+	// firstAnswerFromNote 便捷版同样接受数组形状
+	if v := firstAnswerFromNote(`{"q0":["方案A","方案B"]}`); v != "方案A, 方案B" {
+		t.Fatalf("firstAnswerFromNote 数组形状未解析: %q", v)
+	}
+}
+
 // agent_end 里的 usage 提取(完整消息才有真实用量 —— 探针 §11#1)。
 func TestUsageFromAgentEnd(t *testing.T) {
 	line := `{"type":"agent_end","messages":[

@@ -136,11 +136,16 @@ type askUserOption struct {
 	Description string `json:"description"`
 }
 
-// askUserQuestion 一条待用户回答的问题。
+// askUserQuestion 一条待用户回答的问题。isSecret/isOther 是 schema
+// (ToolRequestUserInputQuestion)的原生字段:isSecret 表示该问题应作密码态
+// 输入渲染,isOther 表示允许"其他"自由作答 —— 原样透出到卡 JSON,渲染策略
+// 归手机(App 忽略未知字段不受影响)。
 type askUserQuestion struct {
 	Header   string          `json:"header"`
 	Id       string          `json:"id"`
 	Question string          `json:"question"`
+	IsSecret bool            `json:"isSecret"`
+	IsOther  bool            `json:"isOther"`
 	Options  []askUserOption `json:"options"`
 }
 
@@ -248,7 +253,11 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 				opts = append(opts, map[string]string{"label": o.Label, "description": o.Description})
 			}
 			questions = append(questions, map[string]interface{}{
-				"id": q.Id, "header": q.Header, "question": q.Question, "options": opts,
+				"id": q.Id, "header": q.Header, "question": q.Question,
+				// 密码态/自由作答标注:恒透出,键位稳定供手机按布尔渲染
+				// (isSecret → 密码态输入框,isOther → 允许"其他"输入)。
+				"isSecret": q.IsSecret, "isOther": q.IsOther,
+				"options": opts,
 			})
 		}
 		id := a.ItemId
@@ -325,9 +334,11 @@ func mergePaths(dst []string, add []string) []string {
 // splitAnswerNote 把手机端提交的自由文本拆成 requestUserInput 期望的 answers 映射。
 //
 // Android 端约定:应答放在 ApprovalDecision.note 里,内容是
-// `{"<questionId>": ["答案", ...]}`。这样不必为"反问"再动一次 proto 契约。
+// `{"<questionId>": {"answers": ["答案", ...]}}`;兼容多选直接提交的数组形状
+// `{"<questionId>": ["A","B"]}` 与裸字符串 `{"<questionId>": "A"}`(统一归一成
+// 应答 schema ToolRequestUserInputAnswer 要求的 {"answers":[...]} 形状)。
 // 解析失败时退化为"用整段文本回答第一个问题" —— 让 agent 至少拿到用户的意思,
-// 而不是收到一个空回答后开始猜。
+// 而不是收到一个空回答后开始猜。已是对象的值原样透传(不猜未知形状)。
 func splitAnswerNote(note string, questions []askUserQuestion) map[string]interface{} {
 	answers := map[string]interface{}{}
 	trimmed := strings.TrimSpace(note)
@@ -336,7 +347,10 @@ func splitAnswerNote(note string, questions []askUserQuestion) map[string]interf
 	}
 	var parsed map[string]interface{}
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil && len(parsed) > 0 {
-		return parsed
+		for id, v := range parsed {
+			answers[id] = normalizeCodexAnswer(v)
+		}
+		return answers
 	}
 	if len(questions) > 0 {
 		answers[questions[0].Id] = map[string]interface{}{"answers": []string{trimmed}}
@@ -344,4 +358,20 @@ func splitAnswerNote(note string, questions []askUserQuestion) map[string]interf
 		answers["answer"] = map[string]interface{}{"answers": []string{trimmed}}
 	}
 	return answers
+}
+
+// normalizeCodexAnswer 把单条答案归一成应答 schema 认可的形状:
+// 数组/字符串 → {"answers":[...]}(codex 要求每题的值必须是带 answers 数组的
+// 对象);已是对象的(含旧形状 {"answers":[...]})原样透传;其余标量同理包一层。
+func normalizeCodexAnswer(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		return t
+	case []interface{}:
+		return map[string]interface{}{"answers": t}
+	case string:
+		return map[string]interface{}{"answers": []string{t}}
+	default:
+		return map[string]interface{}{"answers": []interface{}{v}}
+	}
 }

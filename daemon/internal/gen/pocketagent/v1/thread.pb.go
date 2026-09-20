@@ -1758,9 +1758,15 @@ func (x *ImportAgentThreadResponse) GetThreadId() string {
 }
 
 type GetThreadHistoryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ThreadId      string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
-	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"` // 0 = 全部
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	Limit    int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"` // 0 = 全部
+	// 按轮截断:0 = 不限(兼容旧客户端:存量 APK 不传本字段,必须仍返回全量,
+	// 导出全量与断流恢复回填都依赖这个语义)。一轮 = 一条 user 起始,到下一条
+	// user 之前(失败轮可能只有 user 无 assistant;导入/fork 种子首条不保证
+	// user)。与 limit 并存时先按 limit 尾截,再按 rounds 叠加收窄;默认值
+	// (最近 20 轮)由 android 端显式传,服务端不内置默认。
+	Rounds        int32 `protobuf:"varint,3,opt,name=rounds,proto3" json:"rounds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1805,6 +1811,13 @@ func (x *GetThreadHistoryRequest) GetThreadId() string {
 func (x *GetThreadHistoryRequest) GetLimit() int32 {
 	if x != nil {
 		return x.Limit
+	}
+	return 0
+}
+
+func (x *GetThreadHistoryRequest) GetRounds() int32 {
+	if x != nil {
+		return x.Rounds
 	}
 	return 0
 }
@@ -4581,10 +4594,11 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12\x14\n" +
 	"\x05title\x18\x05 \x01(\tR\x05title\"8\n" +
 	"\x19ImportAgentThreadResponse\x12\x1b\n" +
-	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"L\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\"d\n" +
 	"\x17GetThreadHistoryRequest\x12\x1b\n" +
 	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\x97\x01\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06rounds\x18\x03 \x01(\x05R\x06rounds\"\x97\x01\n" +
 	"\x18GetThreadHistoryResponse\x129\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1d.pocketagent.v1.ThreadMessageR\bmessages\x12@\n" +
 	"\vgoal_detail\x18\x02 \x01(\v2\x1f.pocketagent.v1.CodexGoalDetailR\n" +

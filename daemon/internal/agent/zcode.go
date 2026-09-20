@@ -1246,14 +1246,18 @@ type zcodeUserInputRequest struct {
 func buildZcodeUserInputCall(req zcodeUserInputRequest, cardID string) (pb.ToolCallBlock, bool) {
 	qs := make([]uiAskQuestion, 0, len(req.Questions))
 	for i, q := range req.Questions {
-		opts := make([]string, 0, len(q.Options))
+		// 选项三字段全透出:description/preview 是 zcode 原生 schema(AJt)的一部分,
+		// 以前只上屏 label 等于丢信息;label 仍是答案回传值(服务器按 label=value
+		// 收集,jCs:value:t.label),value 不上屏。
+		opts := make([]uiAskOption, 0, len(q.Options))
 		for _, o := range q.Options {
-			opts = append(opts, o.Label) // label 上屏;服务器侧按 label=value 收集(jCs:value:t.label)
+			opts = append(opts, uiAskOption{Label: o.Label, Description: o.Description, Preview: o.Preview})
 		}
 		qs = append(qs, uiAskQuestion{
-			ID:       fmt.Sprintf("q%d", i),
-			Question: firstNonEmpty(q.Question, q.Header),
-			Options:  opts,
+			ID:          fmt.Sprintf("q%d", i),
+			Question:    firstNonEmpty(q.Question, q.Header),
+			Options:     opts,
+			MultiSelect: q.MultiSelect, // 多选题在卡 JSON 标注 multiSelect:true,手机渲染多选态
 		})
 	}
 	message := req.Prompt
@@ -1331,7 +1335,7 @@ func buildZcodeElicitationCall(req zcodeElicitationRequest, cardID string) (pb.T
 		qs = append(qs, uiAskQuestion{
 			ID:       fmt.Sprintf("q%d", i),
 			Question: firstNonEmpty(prop.Title, n),
-			Options:  prop.Enum,
+			Options:  plainOptions(prop.Enum),
 		})
 	}
 	message := firstNonEmpty(req.Message, "MCP 服务需要你填写内容")

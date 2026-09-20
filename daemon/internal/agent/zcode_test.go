@@ -298,6 +298,77 @@ func TestBuildZcodeUserInputCallPromptOnly(t *testing.T) {
 	}
 }
 
+// 【保真度】选项的 description/preview 与 multiSelect 标注必须进卡 JSON
+// (schema AJt 原生字段,以前只上屏 label 等于丢信息;手机可忽略未知字段,
+// 但 daemon 不许先丢)。
+func TestBuildZcodeUserInputCallCarriesOptionMetadata(t *testing.T) {
+	var req zcodeUserInputRequest
+	if err := json.Unmarshal([]byte(`{
+		"requestId":"ask_meta","prompt":"部署",
+		"questions":[{"question":"部署方式","header":"How","multiSelect":true,
+		  "options":[{"value":"a","label":"方案A","description":"灰度发布","preview":"kubectl apply ..."},
+		             {"value":"b","label":"方案B"}]}]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	call, ok := buildZcodeUserInputCall(req, "ask_meta")
+	if !ok {
+		t.Fatal("带问题的反问应可呈现")
+	}
+	var args struct {
+		Questions []struct {
+			ID          string `json:"id"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+				Preview     string `json:"preview"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(call.JsonArgs), &args); err != nil {
+		t.Fatal(err)
+	}
+	if len(args.Questions) != 1 {
+		t.Fatalf("应恰好一条问题: %+v", args.Questions)
+	}
+	if !args.Questions[0].MultiSelect {
+		t.Fatalf("multiSelect=true 应标注进卡 JSON: %s", call.JsonArgs)
+	}
+	opts := args.Questions[0].Options
+	if len(opts) != 2 || opts[0].Label != "方案A" ||
+		opts[0].Description != "灰度发布" || opts[0].Preview != "kubectl apply ..." {
+		t.Fatalf("选项 description/preview 未透出: %+v", opts)
+	}
+	// 无元数据的选项仍只带 label(omitempty,形状与旧卡一致)
+	if opts[1].Label != "方案B" || opts[1].Description != "" || opts[1].Preview != "" {
+		t.Fatalf("无元数据选项应保持裸 label 形状: %+v", opts[1])
+	}
+}
+
+// 【保真度·多选答案】Android 多选直接提交数组形状 note:daemon 必须接受,
+// 且旧形状({"answers":[...]})不回归;解析失败仍兜底"整段文本答第一题"。
+func TestZcodeUserInputAnswerArrayShape(t *testing.T) {
+	var req zcodeUserInputRequest
+	if err := json.Unmarshal([]byte(`{
+		"requestId":"ask_mul","prompt":"p",
+		"questions":[{"question":"部署方式","header":"How","multiSelect":true,
+		  "options":[{"value":"a","label":"方案A"},{"value":"b","label":"方案B"}]}]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	// 新数组形状:{"q0":["方案A","方案B"]}
+	ans := zcodeUserInputAnswer(true, `{"q0":["方案A","方案B"]}`, req)
+	content, _ := ans["content"].(map[string]interface{})
+	if content["部署方式"] != "方案A, 方案B" {
+		t.Fatalf("数组形状答案未解析: %+v", content)
+	}
+	// 旧形状不回归:{"q0":{"answers":["方案A"]}}
+	ans = zcodeUserInputAnswer(true, `{"q0":{"answers":["方案A"]}}`, req)
+	content, _ = ans["content"].(map[string]interface{})
+	if content["部署方式"] != "方案A" {
+		t.Fatalf("旧形状答案回归: %+v", content)
+	}
+}
+
 func TestZcodeUserInputAnswerShape(t *testing.T) {
 	var req zcodeUserInputRequest
 	if err := json.Unmarshal([]byte(`{
