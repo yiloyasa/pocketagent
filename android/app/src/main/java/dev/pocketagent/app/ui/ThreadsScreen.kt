@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
@@ -1271,26 +1272,37 @@ fun ThreadsScreen(
             onDismiss = { showNewThread = false },
             onCreate = { ws ->
                 showNewThread = false
-                scope.launch {
-                    try {
-                        val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
-                        if (AgentConnection.selectedModel.isNotEmpty()) {
-                            builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                // 停用偏好放行闸(T-MW2,与主页/ChatScreen 同款):已停用 agent 不再创建
+                // 新会话,给恢复路径提示(文案与主页同口径,不静默改路由);未停用/空
+                // 偏好零行为。判定复用 newThreadAgentAllowed 纯函数,建会话入口口径一致。
+                if (newThreadAgentAllowed(AgentConnection.selectedAgent, AgentConnection.disabledAgents)) {
+                    scope.launch {
+                        try {
+                            val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
+                            if (AgentConnection.selectedModel.isNotEmpty()) {
+                                builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                            }
+                            if (ws.isNotBlank()) {
+                                builder.setWorkspace(ws)
+                            }
+                            val t = withContext(Dispatchers.IO) {
+                                AgentConnection.threadService().createThread(builder.build())
+                            }
+                            onOpenThread(t.id)
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                ctx,
+                                "创建失败：${e.message ?: "连接失败"}",
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         }
-                        if (ws.isNotBlank()) {
-                            builder.setWorkspace(ws)
-                        }
-                        val t = withContext(Dispatchers.IO) {
-                            AgentConnection.threadService().createThread(builder.build())
-                        }
-                        onOpenThread(t.id)
-                    } catch (e: Exception) {
-                        Toast.makeText(
-                            ctx,
-                            "创建失败：${e.message ?: "连接失败"}",
-                            Toast.LENGTH_SHORT,
-                        ).show()
                     }
+                } else {
+                    Toast.makeText(
+                        ctx,
+                        "「${selectedAgentLabel(AgentConnection.selectedAgent)}」已停用,请在主页 agent 卡片右上「管理」恢复后再新建",
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
             },
         )
@@ -1305,7 +1317,14 @@ fun ThreadsScreen(
             containerColor = Pa.CardHigh,
             shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
         ) {
-            Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
+            // 整列可滚:自建分组(sections)无上限,多时"新建分组并移入…/分叉会话"
+            // 会被推出视口不可点(同 SLA-21a:被滚动裁掉的节点不进无障碍树,README §12 坑 6)。
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 26.dp),
+            ) {
                 Text(
                     t.title.ifBlank { "未命名会话" },
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -1761,7 +1780,16 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
             fontSize = 12.sp, color = Pa.TextSecondary,
         )
         Spacer(Modifier.height(10.dp))
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        // 整列可滚:recents 多时"浏览电脑文件夹…/取消/创建"不再被推出视口(SLA-21a:
+        // 6 条 recents 即在矮视口下把操作区整体裁掉,被裁节点不进无障碍树也不可点)。
+        // 选整体 verticalScroll 而非"recents 定高+按钮固定底部":定高上限自适应不了
+        // 任意视口高度(横屏 ≈390dp 高时定高方案照样溢出),整体滚动视口无关。
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+        ) {
             recents.map { it to it }.forEach { (ws, label) ->
                 Row(
                     Modifier

@@ -229,6 +229,9 @@ object AgentConnection {
             optimizeAgent = it.getString("optimizeAgent", "zcode") ?: "zcode"
             optimizeModel = it.getString("optimizeModel", "") ?: ""
             drawerCollapsedState = it.getBoolean("drawerCollapsed", true)
+            // per-agent 停用偏好(管理 agent 抽屉):StringSet 批量读,启动即恢复;
+            // toSet() 防御性拷贝(不持有 prefs 内部集合,防跨读篡改)。
+            disabledAgents = it.getStringSet("disabledAgents", emptySet())?.toSet().orEmpty()
             // P0-2:恢复本机设备 ID(UUID);没有就立刻生成一份持久化,
             // 它是 daemon 侧设备注册表里"这台手机"的主键。
             deviceId = it.getString("deviceId", "") ?: ""
@@ -803,6 +806,37 @@ object AgentConnection {
         defaultModel = selectedModel
         defaultEffort = selectedEffort
         prefs?.edit()?.putString("agent", id)?.apply()
+    }
+
+    // ============ per-agent 停用偏好(管理 agent 抽屉;本地用户偏好层) ============
+    /**
+     * 已停用的 agent id 集合。**本地用户偏好层**:只表达"不想看到的 agent 不显示",
+     * 覆盖但**不破坏** daemon 能力判定(HomeScreen.resolveAgentAvailability 照旧)——
+     * 恢复后能力判定原样生效;停用不影响 daemon 侧任何状态,正在运行的任务也不受影响。
+     * 【必须可观察】抽屉开关拨动后,主页网格/协同行/最近任务/新建入口要立即重算。
+     */
+    var disabledAgents by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** 停用/恢复一个 agent(写偏好,立即生效)。幂等:同向重复写不再落盘。 */
+    fun setAgentDisabled(agentId: String, disabled: Boolean) {
+        val id = agentId.trim()
+        if (id.isEmpty()) return
+        val next = if (disabled) disabledAgents + id else disabledAgents - id
+        if (next == disabledAgents) return
+        disabledAgents = next
+        prefs?.edit()?.putStringSet("disabledAgents", next)?.apply()
+    }
+
+    /** 该 agent 是否已被用户停用(空白 id 恒 false)。 */
+    fun isAgentDisabled(agentId: String): Boolean {
+        val id = agentId.trim()
+        return id.isNotEmpty() && id in disabledAgents
+    }
+
+    /** 仅 JVM 单测用:直写停用集合(用例前后恢复现场)。 */
+    internal fun setDisabledAgentsForTest(v: Set<String>) {
+        disabledAgents = v
     }
 
     fun setTextScale(ui: Float, think: Float) {

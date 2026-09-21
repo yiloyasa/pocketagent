@@ -13,6 +13,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/dshapp"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/store"
 )
@@ -82,11 +83,12 @@ type PrefsAware interface {
 	ApplyPrefs(DesktopPrefs)
 }
 
-// 编译期钉死:三个桌面 agent provider 都必须消费桌面偏好。
+// 编译期钉死:四个桌面 agent provider 都必须消费桌面偏好。
 var (
 	_ PrefsAware = (*CodexProvider)(nil)
 	_ PrefsAware = (*PiProvider)(nil)
 	_ PrefsAware = (*ZcodeProvider)(nil)
+	_ PrefsAware = (*DshProvider)(nil)
 )
 
 // DesktopPrefsFromStore 从持久化存储组装一份完整偏好快照。
@@ -158,6 +160,20 @@ func DetectProviders() map[string]Provider {
 	// zcode(桌面 agent 桥接):装了 node + ZCode 的 zcode.cjs 才注册,
 	// 与 codex/pi 并列(ZCode Protocol app-server --stdio)。
 	RegisterZcode(m)
+
+	// dsh(桌面 agent 桥接):node + @deepseek-ai/dsh 入口都定位得到才注册。
+	// 探测只做"文件存在 + --version"(5min 缓存),绝不在启动时做 ACP initialize
+	// 握手(PA-REAL-0002/0003 教训:一个 agent 的冷启动不许拖住别人)。
+	// 注册与否不依赖 DEEPSEEK_API_KEY:key 缺失时线程照建,首条 prompt 才以
+	// MISSING_CREDENTIAL 如实报错(P0 探针第 7 项实证)。
+	if node, bin, err := dshapp.LocateDsh(); err == nil {
+		if v := dshapp.Version(node, bin); v != "" {
+			log.Printf("[providers] dsh 探测成功: version=%s bin=%s", v, bin)
+			m["dsh"] = NewDshProvider()
+		} else {
+			log.Printf("[providers] dsh 存在但 --version 失败(bin=%s),不注册", bin)
+		}
+	}
 
 	// echo 永远在场:没有任何 key 时也能把整条链路(手机→协议→daemon)跑通。
 	m["echo"] = NewEcho()

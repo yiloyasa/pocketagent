@@ -48,6 +48,7 @@ const (
 	ThreadService_OptimizePrompt_FullMethodName              = "/pocketagent.v1.ThreadService/OptimizePrompt"
 	ThreadService_ListSlashCommands_FullMethodName           = "/pocketagent.v1.ThreadService/ListSlashCommands"
 	ThreadService_StartReview_FullMethodName                 = "/pocketagent.v1.ThreadService/StartReview"
+	ThreadService_DelegateSubTask_FullMethodName             = "/pocketagent.v1.ThreadService/DelegateSubTask"
 )
 
 // ThreadServiceClient is the client API for ThreadService service.
@@ -127,6 +128,23 @@ type ThreadServiceClient interface {
 	// 现有的事件时间线直接可见)。仅 codex 会话支持;其他 agent / 未落地会话
 	// 回 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
 	StartReview(ctx context.Context, in *StartReviewRequest, opts ...grpc.CallOption) (*StartReviewResponse, error)
+	// ---- 跨 agent 委派:T-L2fix 单写者重构(只增)----
+	// -collab-mcp 子模式(本机 MCP 代理进程,经 pi-mcp-adapter 等拉起)的薄代理
+	// 落点:代理进程收到 agent_delegate 工具调用后,经本机回环 gRPC
+	// (127.0.0.1:7246,TLS + Bearer token)调本 RPC,把委派汇入主 daemon 的
+	// 单一委派引擎实例(collab_delegate.go)。
+	// 【为什么收归主 daemon 单实例】子模式不再自持 FileStore/providers/引擎:
+	//   1. 消灭写冲突 —— 子代理进程不再触碰 threads.json/events.jsonl,主
+	//      daemon 是唯一写者(子线程、事件 seq 不再被双进程互相抹掉/污染);
+	//   2. 深度锁跨进程成立 —— 所有代理进程的委派汇入同一引擎,childThreads
+	//      登记簿与在飞深度计数成为全局真值,"子不生子"不再被跨进程击穿
+	//      (子 pi 再拉起的代理进程同样汇入)。
+	// 鉴权:走既有鉴权拦截器(UnaryAuth → authorized),已配对设备的
+	// Bearer token(含 legacy 单 token)才可委派。
+	// 错误语义:业务失败(agent 不存在/深度拒绝/轮次失败等)走应答的 error
+	// 字段 + 人话,gRPC status 不承载业务失败(与既有风格对齐);gRPC status
+	// 仅留给鉴权/传输层错误。
+	DelegateSubTask(ctx context.Context, in *DelegateSubTaskRequest, opts ...grpc.CallOption) (*DelegateSubTaskResponse, error)
 }
 
 type threadServiceClient struct {
@@ -439,6 +457,16 @@ func (c *threadServiceClient) StartReview(ctx context.Context, in *StartReviewRe
 	return out, nil
 }
 
+func (c *threadServiceClient) DelegateSubTask(ctx context.Context, in *DelegateSubTaskRequest, opts ...grpc.CallOption) (*DelegateSubTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DelegateSubTaskResponse)
+	err := c.cc.Invoke(ctx, ThreadService_DelegateSubTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ThreadServiceServer is the server API for ThreadService service.
 // All implementations must embed UnimplementedThreadServiceServer
 // for forward compatibility.
@@ -516,6 +544,23 @@ type ThreadServiceServer interface {
 	// 现有的事件时间线直接可见)。仅 codex 会话支持;其他 agent / 未落地会话
 	// 回 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
 	StartReview(context.Context, *StartReviewRequest) (*StartReviewResponse, error)
+	// ---- 跨 agent 委派:T-L2fix 单写者重构(只增)----
+	// -collab-mcp 子模式(本机 MCP 代理进程,经 pi-mcp-adapter 等拉起)的薄代理
+	// 落点:代理进程收到 agent_delegate 工具调用后,经本机回环 gRPC
+	// (127.0.0.1:7246,TLS + Bearer token)调本 RPC,把委派汇入主 daemon 的
+	// 单一委派引擎实例(collab_delegate.go)。
+	// 【为什么收归主 daemon 单实例】子模式不再自持 FileStore/providers/引擎:
+	//   1. 消灭写冲突 —— 子代理进程不再触碰 threads.json/events.jsonl,主
+	//      daemon 是唯一写者(子线程、事件 seq 不再被双进程互相抹掉/污染);
+	//   2. 深度锁跨进程成立 —— 所有代理进程的委派汇入同一引擎,childThreads
+	//      登记簿与在飞深度计数成为全局真值,"子不生子"不再被跨进程击穿
+	//      (子 pi 再拉起的代理进程同样汇入)。
+	// 鉴权:走既有鉴权拦截器(UnaryAuth → authorized),已配对设备的
+	// Bearer token(含 legacy 单 token)才可委派。
+	// 错误语义:业务失败(agent 不存在/深度拒绝/轮次失败等)走应答的 error
+	// 字段 + 人话,gRPC status 不承载业务失败(与既有风格对齐);gRPC status
+	// 仅留给鉴权/传输层错误。
+	DelegateSubTask(context.Context, *DelegateSubTaskRequest) (*DelegateSubTaskResponse, error)
 	mustEmbedUnimplementedThreadServiceServer()
 }
 
@@ -612,6 +657,9 @@ func (UnimplementedThreadServiceServer) ListSlashCommands(context.Context, *List
 }
 func (UnimplementedThreadServiceServer) StartReview(context.Context, *StartReviewRequest) (*StartReviewResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartReview not implemented")
+}
+func (UnimplementedThreadServiceServer) DelegateSubTask(context.Context, *DelegateSubTaskRequest) (*DelegateSubTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DelegateSubTask not implemented")
 }
 func (UnimplementedThreadServiceServer) mustEmbedUnimplementedThreadServiceServer() {}
 func (UnimplementedThreadServiceServer) testEmbeddedByValue()                       {}
@@ -1138,6 +1186,24 @@ func _ThreadService_StartReview_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ThreadService_DelegateSubTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DelegateSubTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).DelegateSubTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_DelegateSubTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).DelegateSubTask(ctx, req.(*DelegateSubTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ThreadService_ServiceDesc is the grpc.ServiceDesc for ThreadService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1252,6 +1318,10 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StartReview",
 			Handler:    _ThreadService_StartReview_Handler,
+		},
+		{
+			MethodName: "DelegateSubTask",
+			Handler:    _ThreadService_DelegateSubTask_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

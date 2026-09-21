@@ -93,3 +93,11 @@
 1. OBS-01 明文流量：networkSecurityConfig 无法表达 CIDR 白名单，"局域网任意 IP 明文预览"与"全域禁明文"需产品取舍
 2. 输入区同排存量小触控区（Git 32dp/优化 32dp/审批 chip ~25dp 等）是否另开任务统一提到 48dp
 3. T-15 建议：_pa_gradle.py test 分支统一补 --rerun 参数（一处改动根治 UP-TO-DATE 假绿反复出现）
+
+### 2026-09-21 追加：新功能批次（选择卡保真 + 历史按轮加载）
+
+- **提交**：`ceebeb4`（19 文件：F-A daemon 选择卡保真 / F-B android 选择卡渲染 / F-C proto rounds=3+daemon 按轮切 / F-D android 四档设置+加载更早）
+- **审核**：双审核员并行全 PASS——选择卡契约逐字段对照 contract_aligned=true；历史轮数甲级 L0 契约三方核验（MD5+descriptor 核算+wire 探针）+兼容铁律四条全过；终态 JVM 70 套件/517 用例 0 失败（--rerun-tasks 强制）
+- **装机**：终态 APK 已 dex 校验含全部新功能（G:\项目1\pocketagentuildpp-debug.apk），手机离线待插线 `adb install -r`（install -r 保数据，无需重新配对）
+- **真机验证待办**：①设置→Daemon 桥接与输入→全局对话显示→"历史消息加载轮数"改 30 →重进会话看条数与"加载更早"；②选择卡需 agent 实际触发 request_user_input 后截图目视
+- **已知问题（新）**：_pa_gradle.py apk 的拷回环节两次静默失效（装了旧包）——装机后必须 zipfile 解 dex 字符串检验；建议 wrapper 修复时与 --rerun 一并处理

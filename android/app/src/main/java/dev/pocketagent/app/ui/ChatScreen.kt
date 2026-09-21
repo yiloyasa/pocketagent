@@ -3006,7 +3006,11 @@ fun ChatScreen(
                     onValueChange = { goalDraft = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 72.dp)
+                        // min 72 给短目标留形,max 200 封顶:目标再长输入框也不再增高,
+                        // "保存目标"按钮始终在视口内(否则长目标把按钮推出 sheet 不可点,
+                        // 同 SLA-21a / README §12 坑 6)。高度有界后 CoreTextField 内容
+                        // 内部滚动并跟随光标,交互破坏最小(整列滚动会把按钮滚走)。
+                        .heightIn(min = 72.dp, max = 200.dp)
                         .background(Pa.Card, RoundedCornerShape(12.dp))
                         .padding(12.dp),
                     textStyle = TextStyle(fontSize = 14.sp, color = Pa.TextPrimary),
@@ -3080,7 +3084,15 @@ fun ChatScreen(
             containerColor = Pa.CardHigh,
             shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
         ) {
-            Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
+            // 整列可滚:选项随回合数增长(每条用户消息=一个回合),长会话时
+            // "取消/确认回滚"会被推出视口不可点(同 SLA-21a:被滚动裁掉的节点
+            // 不进无障碍树也不可点,README §12 坑 6)。
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 26.dp),
+            ) {
                 Text(
                     "回滚会话",
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -3191,30 +3203,41 @@ fun ChatScreen(
             onDismiss = { showNewThread = false },
             onCreate = { ws ->
                 showNewThread = false
-                scope.launch {
-                    try {
-                        val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
-                        if (AgentConnection.selectedModel.isNotEmpty()) {
-                            builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                // 停用偏好放行闸(T-MW2,与主页"新建任务"同款):已停用 agent 不再创建
+                // 新会话,给恢复路径提示(文案与主页同口径,不静默改路由);未停用/空
+                // 偏好零行为。判定复用 newThreadAgentAllowed 纯函数,两入口口径一致。
+                if (newThreadAgentAllowed(AgentConnection.selectedAgent, AgentConnection.disabledAgents)) {
+                    scope.launch {
+                        try {
+                            val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
+                            if (AgentConnection.selectedModel.isNotEmpty()) {
+                                builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                            }
+                            // P1 修复:带上当前选中的 agent(设置页/主页切换到 Pi 后,新建会话
+                            // 才真正走 pi 而不是仍默认 codex)。codex 或空保持不传 = 旧语义,
+                            // 由 server 端默认路由;daemon 侧 agent 不可用仍允许建会话,
+                            // 首条消息会得到 server 的人话错误。
+                            val agentId = createThreadAgentId(AgentConnection.selectedAgent)
+                            if (agentId.isNotEmpty()) {
+                                builder.setAgentId(agentId)
+                            }
+                            if (ws.isNotBlank()) {
+                                builder.setWorkspace(ws)
+                            }
+                            val t = withContext(Dispatchers.IO) {
+                                AgentConnection.threadService().createThread(builder.build())
+                            }
+                            onOpenThread(t.id)
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
                         }
-                        // P1 修复:带上当前选中的 agent(设置页/主页切换到 Pi 后,新建会话
-                        // 才真正走 pi 而不是仍默认 codex)。codex 或空保持不传 = 旧语义,
-                        // 由 server 端默认路由;daemon 侧 agent 不可用仍允许建会话,
-                        // 首条消息会得到 server 的人话错误。
-                        val agentId = createThreadAgentId(AgentConnection.selectedAgent)
-                        if (agentId.isNotEmpty()) {
-                            builder.setAgentId(agentId)
-                        }
-                        if (ws.isNotBlank()) {
-                            builder.setWorkspace(ws)
-                        }
-                        val t = withContext(Dispatchers.IO) {
-                            AgentConnection.threadService().createThread(builder.build())
-                        }
-                        onOpenThread(t.id)
-                    } catch (e: Exception) {
-                        Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
                     }
+                } else {
+                    Toast.makeText(
+                        ctx,
+                        "「${selectedAgentLabel(AgentConnection.selectedAgent)}」已停用,请在主页 agent 卡片右上「管理」恢复后再新建",
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }
             },
         )

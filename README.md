@@ -38,7 +38,7 @@
 |---|---|---|
 | Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66（gRPC 客户端）；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）；`vosk-android` **已整体摘除（2026-09-20）**：引擎选择收敛为"系统识别 → 端侧 SenseVoice"两级，共享错误码迁至 `VoiceErrors.kt` |
 | daemon | Go **1.27.1** | `grpc` 1.83.2、`protobuf` 1.36.12、`go-pty`（PTY）、`zeroconf`（mDNS）。**依赖极简，无 ORM/无框架** |
-| 协议 | protobuf / gRPC `pocketagent.v1` | **6 服务 / 64 RPC**：Thread 29、Git 10、Fs 9、Model 8、Host 5、Terminal 3（7 个 proto / 1353 行） |
+| 协议 | protobuf / gRPC `pocketagent.v1` | **6 服务 / 64 RPC**：Thread 29、Git 10、Fs 9、Model 8、Host 5、Terminal 3（7 个 proto / 1401 行） |
 | 终端 | xterm.js 6（WebView）+ JS bridge | ↔ daemon `go-pty`，字节流一致画面一致 |
 
 > 图标全用 lucide 矢量（`ic_lucide_*`）+ 品牌 PNG，**故意不引** `material-icons-extended`（曾占 DEX 一半）。
@@ -250,8 +250,8 @@ cd daemon && PATH="/c/go/bin:$PATH" go build ./... && go test ./internal/...
 |---|---|
 | Git | 分支 `main`｜夜航批次提交链至 `b021fe6`（2026-09-21 晨）｜新功能批次（选择卡保真/历史按轮加载）审核后收口 |
 | 版本 | **0.2.2 / versionCode 5**；daemon 启动日志含版本字段、支持 `-ldflags -X` 烙印（产物自证锚点，批7 T-27） |
-| 契约 | 6 服务 / 64 RPC，7 proto / 1353 行 |
-| 代码 | daemon 手写 Go 234 文件 / 48559 行（agent 78 + server 63 为主）；android main 75 `.kt` / 30965 行 |
+| 契约 | 6 服务 / **65 RPC**（+DelegateSubTask 委派，甲级），7 proto / 1401 行 |
+| 代码 | daemon 手写 Go（含 dshapp/collabmcp/dsh/子代理等新模块）；android main 76 `.kt` / 31634 行 |
 | APK | debug **209.01 MB**（SenseVoice INT8 模型打包内；Vosk 已摘除 + ABI 收窄后较 09-19 基准 -29MB），`sha256=f34493a42174bd07885c4a37c0eef640f10898be73f21ecfe58371eb036b84e0` |
 | daemon | pid 21440（旧无鉴权版），`0.0.0.0:7246` LISTENING；paguard 运行中（换血由夜航部署环节执行） |
 | P0 | **PA-REAL-0001 代码已修**（daemon 默认配对码鉴权 + `-insecure-no-auth` 仅回环，回归用例已附）；SEC-03/04/05/11/12 真机重跑待手机插线 |

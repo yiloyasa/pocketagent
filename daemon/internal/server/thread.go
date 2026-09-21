@@ -908,99 +908,18 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 
 	inputBlocks := userBlocks
 	for {
-		// 每轮独立的取消函数:CancelTurn RPC / 重入打断拿到的是"当前这一轮"的;
-		// streamRunCtx(手机取消帧)被取消时会连带取消这里的子 ctx。
-		// 【先取 Err 再 cancel】cancel 之后再查 runCtx.Err() 永远非 nil,
-		// 会把"正常完成"误判成"用户要停"。
-		runCtx, cancel := context.WithCancel(streamRunCtx)
-		blocks, usagePtr, runErr := provider.Run(runCtx, agent.TurnRequest{
-			Thread: t, InputBlocks: inputBlocks, Workspace: t.Workspace,
-		}, sink, approve)
-		userStopped := runCtx.Err() != nil
-		cancel()
-		// 【项4】取走本轮累积的思考文本,前置为 ThinkingBlock 一起落库;
-		// take 已清空缓冲,排队续跑的下一轮从空缓冲开始(思考不串轮次)。
-		persistBlocks := prependThinkingBlock(blocks, thinkBuf.take())
-
-		// 4) 落库 + 收尾帧(排队续跑的每一轮走完全相同的收尾)
-		now := time.Now().UnixMilli()
-		// 自动标题:仍是默认"新会话…"时,用第一条用户消息起名(codex 自动命名会再覆盖)
-		current, _ := s.cfg.Store.Get(t.ID)
-		if strings.HasPrefix(t.Title, "新会话") && current != nil && current.Title == t.Title {
-			for _, m := range t.Messages {
-				if m.Role != "user" {
-					continue
-				}
-				first := ""
-				// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
-				for i := range m.Blocks {
-					b := &m.Blocks[i]
-					if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
-						first = strings.TrimSpace(tb.Text.Text)
-						break
-					}
-				}
-				if first == "" {
-					continue
-				}
-				r := []rune(first)
-				if len(r) > 24 {
-					r = r[:24]
-				}
-				t.Title = string(r)
-				break
+		// 轮次主体已抽成 runTurnOnce(2026-09-20,T-L2wire):provider.Run →
+		// 思考落库 → 自动标题 → 落库/收尾帧 → 主机事件,逐行保真搬运,
+		// StartTurn 与跨 agent 委派引擎(collab_delegate.go)同调 —— daemon
+		// 不当"第五个大脑"。这里只保留"这条流"特有的簿记:排队续跑(P1-4)。
+		_, userStopped, err := s.runTurnOnce(streamRunCtx, provider, turnID, t, inputBlocks, sink, thinkBuf, approve)
+		if err != nil {
+			if _, isRunErr := err.(*turnRunError); !isRunErr {
+				// 落库失败:与抽取前同点终止(收尾帧已发、主机事件未发)。
+				return err
 			}
-		}
-		t.LastTurnError = ""
-		if runErr != nil {
-			t.LastTurnError = runErr.Error()
-			partial := ""
-			// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
-			for i := range blocks {
-				b := &blocks[i]
-				if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
-					partial += tb.Text.Text
-				}
-			}
-			// 手机断连/超时/出错也要留住已产出的内容:app 端断流恢复靠轮询
-			// 历史判断"电脑跑完了没有",这里不落库它就永远等不到
-			if partial != "" {
-				t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
-			}
-			t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
-			failedError := &pb.Error{Code: "AGENT_ERROR", Message: runErr.Error()}
-			if carrier, ok := runErr.(agent.ErrorInfoCarrier); ok {
-				if info := carrier.ErrorInfo(); info != nil {
-					failedError = info
-				}
-			}
-			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Failed{Failed: &pb.TurnFailed{
-				TurnId: turnID, Error: failedError, PartialText: partial,
-			}}})
-		} else {
-			t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
-			t.Usage.InputTokens += usagePtr.GetInputTokens()
-			t.Usage.OutputTokens += usagePtr.GetOutputTokens()
-			t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
-			// final_blocks 同步带思考块:手机端终局帧只提取文本(finalText),
-			// 不会被重复渲染;离线快照/事件回放路径拿到的与落库一致。
-			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Completed{Completed: &pb.TurnCompleted{
-				TurnId: turnID, FinalBlocks: refBlocks(persistBlocks), Usage: usagePtr,
-			}}})
-		}
-		if err := s.cfg.Store.Update(t); err != nil {
-			return errInternal(err)
-		}
-		// 【P1-5】轮次终局发一条主机事件(带 seq 落盘 + WatchEvents 广播):
-		// 手机不在 StartTurn 流上(后台推送场景)也能感知"跑完了"。
-		if runErr != nil {
-			s.emitTurnFinished(t.ID, truncateTitle("任务失败:"+runErr.Error(), 80))
-		} else {
-			summary := "任务完成"
-			if txt := firstUserText(blocks); txt != "" {
-				summary = truncateTitle(txt, 80)
-			}
-			s.emitTurnFinished(t.ID, summary)
+			// 轮次失败:Failed 帧与主机事件已在 runTurnOnce 内发出;与抽取前
+			// 一致,单轮失败不拦排队续跑,继续走下面的队列逻辑。
 		}
 		// 用户主动停(取消帧 / CancelTurn RPC / 重入打断):清空队列并结束。
 		// "终止任务"的按钮语义就是停 —— 绝不能停完又自动把排队的跑起来。
@@ -1041,6 +960,153 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		}}})
 		inputBlocks = next.blocks
 	}
+}
+
+// ---------- 单轮主体(StartTurn 与委派引擎共用的心脏)----------
+
+// turnRunError 区分 runTurnOnce 的两种终态错误:provider 轮次失败(本类型
+// 包装)与落库失败(直接 errInternal)。StartTurn 对前者继续排队续跑
+// (P1-4 语义)、对后者立即终止;委派引擎对前者解包后如实回传 coordinator
+// (准则 6:失败如实回传,不代拟成功)。
+type turnRunError struct{ err error }
+
+func (e *turnRunError) Error() string { return e.err.Error() }
+func (e *turnRunError) Unwrap() error { return e.err }
+
+// concatTextBlocks 取全部文本块的文本顺序拼接(原 StartTurn 错误分支里
+// partial 的内联循环抽出):轮次失败时的 PartialText 与委派终稿摘要共用
+// 同一实现,行为与抽取前逐字节一致。
+func concatTextBlocks(blocks []pb.ContentBlock) string {
+	var sb strings.Builder
+	// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+	for i := range blocks {
+		b := &blocks[i]
+		if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
+			sb.WriteString(tb.Text.Text)
+		}
+	}
+	return sb.String()
+}
+
+// runTurnOnce 跑"一轮"的完整主体:provider.Run → 思考前置落库 → 自动标题
+// → 落库 + 收尾帧(Failed/Completed)→ 主机事件。从 StartTurn 的轮次循环体
+// 原样抽出(2026-09-20,T-L2wire),StartTurn 与跨 agent 委派引擎
+// (collab_delegate.go)同调 —— 委派子线程与手机轮次走完全相同的落库/收尾
+// 路径,daemon 绝不重写轮次循环。
+//
+// 参数与返回值:
+//   - ctx:本轮的父上下文(StartTurn 传 streamRunCtx,引擎传委派请求的
+//     ctx)。函数内部为 provider 派生独立的 runCtx 并在 Run 返回后取消;
+//   - provider:调用方选好的人(StartTurn 经 providerForThread,失败在
+//     轮次开始前就有 Failed 帧;引擎同纪律)—— 选择留在调用方是为了保住
+//     "选择失败发生在落 user 消息之前"的既有时序;
+//   - sink/thinkBuf:调用方经 thinkingRecorder 包好的事件汇与思考缓冲
+//     (思考随 assistant 消息落库的语义两边一致);
+//   - approve:审批钩子(手机轮次=审批中继;引擎=无用户在环一律拒绝);
+//   - finalText:assistant 终稿全部文本块拼接(委派摘要的原料;失败为空);
+//   - userStopped:Run 返回那一刻父 ctx 已被取消(手机取消帧/CancelTurn/
+//     coordinator 撤回)。必须在 cancel() 之前判定 —— cancel 之后再查
+//     Err() 永远非 nil,会把"正常完成"误判成"用户要停"(原注释保留);
+//   - err:落库失败 → errInternal(调用方立即终止,与抽取前
+//     "return errInternal(err)" 同点同值);provider 失败 → *turnRunError
+//    (StartTurn 忽略它继续排队续跑,引擎解包如实回传)。
+//
+// 【等价性】除"排队续跑簿记(rt/队列/QueueFlushed/换轮次/排队输入落库)"
+// 留在外层循环外,本函数逐行保真搬运原循环体;partial 的内联拼接循环换用
+// 共享的 concatTextBlocks(同一拼接语义)。StartTurn 行为零变化由全量
+// server 测试套佐证。
+func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnID string, t *store.Thread, inputBlocks []pb.ContentBlock, sink agent.Sink, thinkBuf *turnThinkingBuf, approve agent.ApprovalHook) (finalText string, userStopped bool, err error) {
+	// 每轮独立的取消函数:CancelTurn RPC / 重入打断拿到的是"当前这一轮"的;
+	// 父 ctx(手机取消帧)被取消时会连带取消这里的子 ctx。
+	// 【先取 Err 再 cancel】cancel 之后再查 runCtx.Err() 永远非 nil,
+	// 会把"正常完成"误判成"用户要停"。
+	runCtx, cancel := context.WithCancel(ctx)
+	blocks, usagePtr, runErr := provider.Run(runCtx, agent.TurnRequest{
+		Thread: t, InputBlocks: inputBlocks, Workspace: t.Workspace,
+	}, sink, approve)
+	userStopped = runCtx.Err() != nil
+	cancel()
+	// 【项4】取走本轮累积的思考文本,前置为 ThinkingBlock 一起落库;
+	// take 已清空缓冲,排队续跑的下一轮从空缓冲开始(思考不串轮次)。
+	persistBlocks := prependThinkingBlock(blocks, thinkBuf.take())
+
+	// 4) 落库 + 收尾帧(排队续跑的每一轮走完全相同的收尾)
+	now := time.Now().UnixMilli()
+	// 自动标题:仍是默认"新会话…"时,用第一条用户消息起名(codex 自动命名会再覆盖)
+	current, _ := s.cfg.Store.Get(t.ID)
+	if strings.HasPrefix(t.Title, "新会话") && current != nil && current.Title == t.Title {
+		for _, m := range t.Messages {
+			if m.Role != "user" {
+				continue
+			}
+			first := ""
+			// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+			for i := range m.Blocks {
+				b := &m.Blocks[i]
+				if tb, ok := b.Block.(*pb.ContentBlock_Text); ok {
+					first = strings.TrimSpace(tb.Text.Text)
+					break
+				}
+			}
+			if first == "" {
+				continue
+			}
+			r := []rune(first)
+			if len(r) > 24 {
+				r = r[:24]
+			}
+			t.Title = string(r)
+			break
+		}
+	}
+	t.LastTurnError = ""
+	if runErr != nil {
+		t.LastTurnError = runErr.Error()
+		partial := concatTextBlocks(blocks)
+		// 手机断连/超时/出错也要留住已产出的内容:app 端断流恢复靠轮询
+		// 历史判断"电脑跑完了没有",这里不落库它就永远等不到
+		if partial != "" {
+			t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
+		}
+		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
+		failedError := &pb.Error{Code: "AGENT_ERROR", Message: runErr.Error()}
+		if carrier, ok := runErr.(agent.ErrorInfoCarrier); ok {
+			if info := carrier.ErrorInfo(); info != nil {
+				failedError = info
+			}
+		}
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Failed{Failed: &pb.TurnFailed{
+			TurnId: turnID, Error: failedError, PartialText: partial,
+		}}})
+	} else {
+		t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
+		t.Usage.InputTokens += usagePtr.GetInputTokens()
+		t.Usage.OutputTokens += usagePtr.GetOutputTokens()
+		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
+		// final_blocks 同步带思考块:手机端终局帧只提取文本(finalText),
+		// 不会被重复渲染;离线快照/事件回放路径拿到的与落库一致。
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Completed{Completed: &pb.TurnCompleted{
+			TurnId: turnID, FinalBlocks: refBlocks(persistBlocks), Usage: usagePtr,
+		}}})
+	}
+	if uerr := s.cfg.Store.Update(t); uerr != nil {
+		return "", userStopped, errInternal(uerr)
+	}
+	// 【P1-5】轮次终局发一条主机事件(带 seq 落盘 + WatchEvents 广播):
+	// 手机不在 StartTurn 流上(后台推送场景)也能感知"跑完了"。
+	if runErr != nil {
+		s.emitTurnFinished(t.ID, truncateTitle("任务失败:"+runErr.Error(), 80))
+	} else {
+		summary := "任务完成"
+		if txt := firstUserText(blocks); txt != "" {
+			summary = truncateTitle(txt, 80)
+		}
+		s.emitTurnFinished(t.ID, summary)
+	}
+	if runErr != nil {
+		return "", userStopped, &turnRunError{err: runErr}
+	}
+	return concatTextBlocks(blocks), userStopped, nil
 }
 
 // ---------- provider 选择 ----------

@@ -307,6 +307,12 @@ func Start(opts StartOptions) (*Client, error) {
 		cmd.Dir = opts.Cwd
 	}
 	cmd.Env = os.Environ()
+	// 协作 MCP 接线(T-L2pi-prod):总开关开启且 daemon 自有 agent 目录就绪时
+	// 追加 PI_CODING_AGENT_DIR;其余情况返回空串,行为与现状零差异。
+	// 门控细节见 mcpsetup.go 的 CollabEnvInjection。
+	if e := CollabEnvInjection(); e != "" {
+		cmd.Env = append(cmd.Env, e)
+	}
 	hidewin.Apply(cmd) // 控制台程序:不隐藏会在用户桌面闪黑窗(与 codexapp 同款)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

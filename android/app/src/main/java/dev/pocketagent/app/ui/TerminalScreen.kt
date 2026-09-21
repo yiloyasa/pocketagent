@@ -8,6 +8,8 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -317,7 +319,15 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
                     fontSize = 12.sp, color = Pa.Red,
                 )
             }
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+            // 整列可滚:recents 无上限,多时"浏览电脑文件夹…"等操作行会被推出视口
+            // (同 SLA-21a:被滚动裁掉的 Compose 节点不进无障碍树也不可点,README §12 坑 6)。
+            // 选整体 verticalScroll 而非"recents 定高":定高上限自适应不了任意视口(横屏矮视口照样溢出)。
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 (listOf("") + availableRecents).distinct().forEach { dir ->
                     Row(
                         Modifier

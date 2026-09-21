@@ -3,23 +3,29 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/pocketagent/daemon/internal/agent"
+	"github.com/pocketagent/daemon/internal/collabmcp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/mdns"
+	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/server"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/term"
@@ -55,7 +61,29 @@ func main() {
 	// 自动杀 shell 并回收,防 pwsh+conhost 随开关终端页线性泄漏;
 	// 0 = 禁用回收(旧版行为)。有 reader 在场的会话绝不回收。
 	termIdle := flag.Duration("term-idle", 10*time.Minute, "终端会话无 reader 空闲回收时长(如 10m、0.02m);0=禁用")
+	// T-L2wire 跨 agent 委派桥(T-L2fix 单写者重构):
+	// -collab-mcp 子模式:本进程作为 "pocketagent-collab" 本地 MCP 服务器
+	// 经 stdio 运行(pi 经 pi-mcp-adapter 拉起、codex/dsh 各自接入),提供
+	// agent_delegate / agent_status 两个工具。【薄代理】子模式不再自持
+	// FileStore/providers/引擎,agent_delegate 经回环 gRPC 调主 daemon 的
+	// DelegateSubTask RPC,委派收归主 daemon 单一引擎实例 —— 子代理进程
+	// 不触碰 threads.json/events.jsonl(写冲突 P1 关闭),深度锁对全部代理
+	// 进程全局成立(子生子 P1 关闭)。对端关闭或收到信号即退出,不起
+	// gRPC 监听/mDNS。
+	collabMCP := flag.Bool("collab-mcp", false, "子模式:作为 pocketagent-collab 本地 MCP 服务器运行(stdio 薄代理,委派经回环 gRPC 汇入主 daemon);对端关闭即退出")
+	// -pi-collab:pi 协作开关。置位时初始化 daemon 自有 pi agent 目录
+	// (幂等安装 pi-mcp-adapter),并把本 daemon 的 -collab-mcp 子模式写进
+	// 该目录的 mcp.json;全部容错,失败不阻塞 daemon 主功能,下次启动重试。
+	// env PA_PI_COLLAB 仅供手工调试:flag 不传时不调用 SetCollabEnabled,
+	// env 继续生效;flag 显式置位则以 flag 为准。
+	piCollab := flag.Bool("pi-collab", false, "启用 pi 协作 MCP:初始化 daemon 自有 pi agent 目录并把本 daemon(-collab-mcp 子模式)注册为其 pocketagent-collab MCP 服务器")
 	flag.Parse()
+
+	// -collab-mcp 子模式:命中即走 MCP 服务器路径,ServeStdio 返回后退出。
+	if *collabMCP {
+		runCollabMCP(*dataDir, *workspace)
+		return
+	}
 
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
 		log.Fatalf("创建数据目录失败: %v", err)
@@ -89,6 +117,43 @@ func main() {
 			log.Printf("使用命令行指定配对码: %s(手机首次连接需输入;已同步到 %s)", pairCodeValue, pairCodePath(*dataDir))
 		default:
 			log.Printf("复用既有配对码: %s(手机首次连接需输入;文件: %s)", pairCodeValue, pairCodePath(*dataDir))
+		}
+	}
+
+	// ---- pi 协作 MCP 接线(-pi-collab,T-L2wire;仅正常启动路径)----
+	// 三个调用全部容错:协作功能初始化失败绝不阻塞 daemon 主功能。
+	// 写入的命令是 os.Executable()(当前进程可执行文件),参数指向上面的
+	// -collab-mcp 子模式 —— pi 拉起的就是本 daemon 自己。
+	// 【T-L2fix】须在鉴权模式解析之后(pairCodeValue 在手):
+	//   - args 带 "-data":代理进程与主 daemon 共享数据目录 —— 薄代理模式
+	//     下它是 TLS 证书与配对码回退的取数前提(见 runCollabMCP);
+	//   - env 注入 POCKETAGENT_TOKEN = server.LegacyTokenFor(配对码)(只读
+	//     helper,值与 authorized → devices.Validate 的 legacy 回退链所认的
+	//     完全一致),代理进程拿它作 Bearer 回环委派;-insecure-no-auth 下
+	//     无配对码可导出 → 不注入 env(回环连接该模式下本就放行)。
+	//     【已知边界】internal/agent 的 ensureCollabMcp(pi 会话路径,T-FU)
+	//     会以裸参数重写同一条目把 env 覆盖掉 —— 子模式侧另有 pair-code.txt
+	//     回退链兜住(见 collabProxyToken),两条链取的是同一个 legacy token。
+	if *piCollab {
+		piapp.SetCollabEnabled(true)
+		if err := piapp.SetupCollabAgentDir(piapp.ResolveCollabAgentDir()); err != nil {
+			log.Printf("WARNING: pi 协作目录初始化失败(pi 主功能不受影响,下次启动重试): %v", err)
+		}
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			log.Printf("WARNING: 无法定位当前可执行文件,跳过 pi 协作 MCP 配置写入: %v", exeErr)
+		} else {
+			env := map[string]string{}
+			if tok := server.LegacyTokenFor(pairCodeValue); tok != "" {
+				env["POCKETAGENT_TOKEN"] = tok
+			}
+			args := []string{"-collab-mcp", "-data", *dataDir}
+			if err := piapp.WriteCollabMcpConfigWithEnv(piapp.ResolveCollabAgentDir(), exe, args, env); err != nil {
+				log.Printf("WARNING: 写入 pi 协作 MCP 配置失败(pi 主功能不受影响): %v", err)
+			} else {
+				log.Printf("pi 协作 MCP 已启用: agent 目录 %s | 服务器 %s %v | env 注入 %d 项",
+					piapp.ResolveCollabAgentDir(), exe, args, len(env))
+			}
 		}
 	}
 
@@ -219,3 +284,121 @@ func cwd() string {
 	d, _ := os.Getwd()
 	return d
 }
+
+// collabDaemonAddrDefault 子模式回环拨号的主 daemon 默认地址(T-L2fix:委派
+// 收归主 daemon 单引擎;固定本机回环,委派面不暴露给网络)。
+const collabDaemonAddrDefault = "127.0.0.1:7246"
+
+// collabDaemonAddr 解析主 daemon 地址:默认 127.0.0.1:7246;env
+// POCKETAGENT_DAEMON_ADDR 可覆盖 —— 供同机多 daemon/集成测试环境把代理指向
+// 另一个回环端口(生产单 daemon 场景无需设置,行为与固定值完全一致)。
+func collabDaemonAddr() string {
+	if a := strings.TrimSpace(os.Getenv("POCKETAGENT_DAEMON_ADDR")); a != "" {
+		return a
+	}
+	return collabDaemonAddrDefault
+}
+
+// runCollabMCP 以 pocketagent-collab 本地 MCP 服务器模式运行(-collab-mcp
+// 子模式):coordinator agent(pi 经 pi-mcp-adapter、codex/dsh 各自接入)
+// 把本进程当一条 stdio 本地 MCP 子进程挂载,经 agent_delegate / agent_status
+// 工具做跨 agent 委派。
+//
+// 【T-L2fix 单写者重构:薄代理】与旧实现的本质差异 —— 本进程不再自持
+// FileStore/providers/委派引擎(那是两个 P1 的根源:子进程与主 daemon 双写
+// threads.json/events.jsonl 互相抹掉对方;子 pi 再拉起的全新进程各自 depth=0
+// 击穿深度锁)。工具面(collabmcp 包)原样保留,引擎换成
+// collabmcp.GRPCDelegationEngine:agent_delegate 经回环 gRPC
+// (collabDaemonAddr,TLS + Bearer token)调主 daemon 的 DelegateSubTask RPC,
+// 委派汇入主 daemon 的单一引擎实例。子进程唯一触碰的文件是主 daemon 的
+// 证书与 pair-code.txt(只读),线程与事件数据一律不碰。
+//
+// 进程模型不变:不起 gRPC 监听、不起 mDNS、不预热 codex;阻塞到对端关闭
+// stdin 或收到退出信号,然后进程退出。
+func runCollabMCP(dataDir, workspace string) {
+	token, tokenSrc := collabProxyToken(dataDir)
+	conn, err := collabDaemonConn(dataDir)
+	if err != nil {
+		log.Fatalf("连接主 daemon 失败: %v", err)
+	}
+	defer conn.Close()
+	authDesc := "无 token(配对码模式下委派会被主 daemon 拒绝;-insecure-no-auth 回环放行)"
+	switch tokenSrc {
+	case tokenSourceEnv:
+		authDesc = "POCKETAGENT_TOKEN(env)已注入"
+	case tokenSourcePairCodeFile:
+		authDesc = "legacy token(pair-code.txt 回退)已就绪"
+	}
+	log.Printf("pocketagent-collab MCP 服务器已就绪(stdio 薄代理): 主daemon=%s | 数据目录: %s | 鉴权: %s | 版本: %s",
+		collabDaemonAddr(), dataDir, authDesc, version.Version)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := collabmcp.New(collabmcp.NewGRPCEngine(pb.NewThreadServiceClient(conn), token, workspace), version.Version).ServeStdio(ctx); err != nil {
+		log.Fatalf("collab MCP 服务器退出: %v", err)
+	}
+}
+
+// collabDaemonConn 建立到主 daemon 的回环 gRPC 连接(TLS 优先):
+// 主 daemon 首启生成自签证书(<数据目录>/certs/server-cert.pem,SAN 含
+// 127.0.0.1),子模式与主 daemon 共享数据目录,拿同一张证书做 RootCA 精确
+// 校验 —— 与手机端指纹锁定同源的信任锚,不引入"跳过校验"的弱配置。
+// 证书文件不存在 → 视为主 daemon 以 -plaintext 应急运行,回明文(同样仅
+// 本机回环,不经网络)。grpc.NewClient 惰性连接:主 daemon 未起时本子进程
+// 仍能就绪,首次委派时才报连接错误(如实透传给 coordinator)。
+func collabDaemonConn(dataDir string) (*grpc.ClientConn, error) {
+	addr := collabDaemonAddr()
+	host, _, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		host = addr
+	}
+	certPath, _ := tlscert.Paths(dataDir)
+	var creds credentials.TransportCredentials
+	if raw, err := os.ReadFile(certPath); err == nil {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(raw) {
+			return nil, fmt.Errorf("主 daemon TLS 证书无法解析: %s", certPath)
+		}
+		creds = credentials.NewTLS(&tls.Config{
+			RootCAs:    pool,
+			ServerName: host, // 回环自签证书 SAN 覆盖 127.0.0.1/::1/localhost
+			MinVersion: tls.VersionTLS12,
+		})
+	} else {
+		log.Printf("WARNING: 未找到主 daemon TLS 证书(%s),按明文回环连接(主 daemon 需以 -plaintext 运行)", certPath)
+		creds = insecure.NewCredentials()
+	}
+	return grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
+}
+
+// collabProxyToken 子模式回环鉴权的 Bearer token(T-L2fix)。两条链取的是
+// 同一个值 —— server.LegacyTokenFor(配对码)= sha256("pair-code:"+码) 的
+// hex,即主 daemon devices.Validate 的 legacy 回退所认的单 token:
+//  1. 优先 mcp.json env 注入的 POCKETAGENT_TOKEN(-pi-collab 写入,T-06
+//     legacy 回退链认它);
+//  2. 回退:从共享数据目录的 pair-code.txt 现算同一 token —— 兜住
+//     internal/agent 的 ensureCollabMcp(T-FU)以裸参数重写 mcp.json、
+//     env 被覆盖的场景(代理进程与主 daemon 同机同用户,读自己数据目录的
+//     配对码做本地回环鉴权,不越权)。
+//
+// 都拿不到返回空串:配对码模式下委派会被主 daemon 如实拒绝
+// (Unauthenticated),错误原样透传给 coordinator —— 不伪造鉴权、不静默降级。
+func collabProxyToken(dataDir string) (token string, src int) {
+	if tok := strings.TrimSpace(os.Getenv("POCKETAGENT_TOKEN")); tok != "" {
+		return tok, tokenSourceEnv
+	}
+	raw, err := os.ReadFile(pairCodePath(dataDir))
+	if err != nil {
+		return "", tokenSourceNone
+	}
+	if tok := server.LegacyTokenFor(strings.TrimSpace(string(raw))); tok != "" {
+		return tok, tokenSourcePairCodeFile
+	}
+	return "", tokenSourceNone
+}
+
+// token 来源标记(仅用于启动日志如实说明,不参与鉴权逻辑)。
+const (
+	tokenSourceNone         = iota
+	tokenSourceEnv          // mcp.json env 注入的 POCKETAGENT_TOKEN
+	tokenSourcePairCodeFile // pair-code.txt 现算的 legacy token
+)

@@ -46,7 +46,18 @@ VOICE_LISTENING_HINT = '语音输入'            # 语音按钮 desc(ChatScreen 
 VOICE_ERR_MIC_BLOCKED = '安全中心'           # T-01: 错误码 102 映射后的可行动指引(ChatScreen L4804)
 VOICE_ERR_NO_PERM = '没有麦克风权限'         # 撤权路径 toast(ChatScreen L4680)
 VOICE_DEAD_ZONE_LOG = '死区超时兜底触发'     # 8s 看门狗(ChatScreen VOICE_DEAD_ZONE_TIMEOUT_MS=8_000)
+VOICE_TOAST_AUTO_ONDEVICE = '已自动切换端侧识别'   # T-33: 系统 SR code=9 后人话 toast 的稳定片段(ChatScreen L5056)
 SLASH_PANEL_TITLE_SUFFIX = '个命令 · 上下滑动查看'   # 斜杠卡标题(ChatScreen L2298)
+# T-L2R 定位修正(证据: evidence/2026-09-20-night/slash/SLA-21a-*-sheet-dump.txt):
+#   NewThreadSheet 无 agent 选择器 —— 右上'ZCode'只是 selectedAgent 的展示标签(ThreadsScreen
+#   L1753, 纯 Text 不可点); agent 由主页磁贴点选写全局(HomeScreen switchAgent)。确认键二态
+#   '先选工作区'(禁用)/'创建'(L1830), 须先点 recents 选工作区; recents 多时确认键被裁出屏。
+AGENT_LABELS = {'codex': 'Codex', 'pi': 'Pi', 'zcode': 'ZCode'}   # selectedAgentLabel(HomeScreen L843) 逐字
+SHEET_TITLE = '新建会话'                     # NewThreadSheet 标题(ThreadsScreen L1741; T-31 dump 实测在场)
+SHEET_CONFIRM = '创建'                       # 确认键选中态文案(ThreadsScreen L1830)
+SHEET_CANCEL = '取消'                        # 取消键(ThreadsScreen L1821), 误开 sheet 时关回
+SHEET_SCRIM_DESC = '关闭工作表'              # sheet 遮罩 desc(T-31 dump 实测), 取消键找不到时的兜底
+SHEET_AGENT_Y_MAX = 300                      # sheet 顶行 agent 展示标签与标题同排(dump 实测 y=133..193)
 ONBOARDING_BAD_COPY = '42MB'                 # T-07: 引导页禁再出现(现为"约239MB", Onboarding.kt L223)
 
 SEND_DESCS = ('发送', '插入运行中任务')      # 发送键 desc 二态(ChatScreen L2746)
@@ -374,11 +385,28 @@ def _enter_chat(ctx, suite, cid, title):
     return True
 
 
+def _tap_mic_until_listening(max_clicks=2):
+    """点麦克风直至进识别态, 返回命中的自动切换 toast(无则 '')。
+    T-33 后首点可能走: 系统 SR onError code=9 -> toast'已自动切换端侧识别' -> 回 IDLE,
+    端侧接管需再点一次(状态机 MicClicked: 非 listening 且有权限 -> LISTENING)。"""
+    auto = ''
+    for i in range(max_clicks):
+        drv.tap('语音输入', verify=False)
+        time.sleep(2.5)
+        if drv.find('语音输入中', exact=False):
+            break
+        if i + 1 < max_clicks:
+            auto = find_toast_text([VOICE_TOAST_AUTO_ONDEVICE], rounds=1, interval=0.2)
+            if not auto:
+                break               # 无自动切换 toast: 再点只是重复失败, 保留现场交上层断言
+    return auto
+
+
 def _tap_mic_and_stop(ctx, suite, cid, capture_name):
-    """点语音输入开始识别, 随后点停止收尾。返回 (logcat 文本, listening_ui, evidence 列表)。"""
+    """点语音输入开始识别, 随后点停止收尾。
+    返回 (logcat 文本, listening_ui, evidence 列表, 自动切换 toast)。"""
     lc = LogcatCapture(os.path.join(ctx.suite_dir(suite), capture_name)).start()
-    drv.tap('语音输入', verify=False)
-    time.sleep(2.5)
+    auto = _tap_mic_until_listening()
     ev1 = dump_xml(ctx, suite, cid + '-listening-dump.txt')
     ev2 = shot(ctx, suite, cid + '-listening')
     listening_ui = bool(drv.find('语音输入中', exact=False))
@@ -389,17 +417,20 @@ def _tap_mic_and_stop(ctx, suite, cid, capture_name):
     time.sleep(1.5)
     log = lc.stop()
     ev3 = os.path.relpath(lc.path, EVID_ROOT)
-    return log, listening_ui, [ev1, ev2, ev3]
+    return log, listening_ui, [ev1, ev2, ev3], auto
 
 
 def voice_mic_chain(ctx):
-    """① 进会话页点麦克风: logcat PaVoice 链 MicClicked -> 创建识别器 -> 指令消费 + 波形 UI。"""
+    """① 进会话页点麦克风: logcat PaVoice 链 MicClicked -> 创建识别器 -> 指令消费 + 波形 UI。
+    T-33 预期链路: 首点 code=9 -> toast'已自动切换端侧识别' -> 再点端侧接管进识别态。"""
     cid, title, suite = 'VOI-21a', '①点麦克风: PaVoice 链路与波形 UI', 'voice'
     if not _enter_chat(ctx, suite, cid, title):
         return
-    log, listening_ui, ev = _tap_mic_and_stop(ctx, suite, cid, cid + '-logcat-pavoice.txt')
-    c = LogcatCapture.count(log, 'MicClicked', '创建识别器开始', '创建识别器结果', '指令消费')
-    ev.append(save_json(ctx, suite, cid + '-chain.json', {'counts': c}))
+    log, listening_ui, ev, auto = _tap_mic_and_stop(ctx, suite, cid, cid + '-logcat-pavoice.txt')
+    c = LogcatCapture.count(log, 'MicClicked', '创建识别器开始', '创建识别器结果', '指令消费',
+                            'onError code=9')
+    ev.append(save_json(ctx, suite, cid + '-chain.json',
+                        {'counts': c, 'auto_switch_toast': auto}))
     if 'MicClicked' not in log:
         ctx.add(suite, cid, title, 'FAIL', '', '',
                 'logcat 无 MicClicked: 点击未进语音链路', ev)
@@ -413,16 +444,19 @@ def voice_mic_chain(ctx):
         ctx.add(suite, cid, title, 'FAIL', '', '',
                 '有 MicClicked 但没有创建识别器(链路断在第2环)', ev)
         return
-    if '创建识别器结果 可用=false' in log:
+    if '创建识别器结果 可用=false' in log and '创建识别器结果 可用=true' not in log:
+        # T-33 两段式下首建(系统 SR)可失败, 只要后续端侧建成功(可用=true 出现)即算通
         ctx.add(suite, cid, title, 'FAIL', '', '',
-                '识别器创建失败(可用=false), 看 logcat 尾部原因', ev)
+                '识别器创建失败(可用=false 且无一次可用=true), 看 logcat 尾部原因', ev)
         return
     if not listening_ui:
         ctx.add(suite, cid, title, 'FAIL', '', '',
                 '链路通但 UI 未进识别态; 波形动画目视项见 CHECKLIST.md', ev)
         return
-    ctx.add(suite, cid, title, 'PASS', '', '',
-            '链路三环全通+识别态 UI 在; 波形动画目视项见 CHECKLIST.md', ev)
+    note = '链路三环全通+识别态 UI 在; 波形动画目视项见 CHECKLIST.md'
+    if auto:
+        note += '; T-33 链路命中: 首点 code=9 -> toast %r -> 再点端侧接管' % auto
+    ctx.add(suite, cid, title, 'PASS', '', '', note, ev)
 
 
 def voice_speak_stop(ctx):
@@ -432,8 +466,8 @@ def voice_speak_stop(ctx):
         return
     print('  >> 开始识别, 请在接下来 20 秒内对着手机说一句话(如"看看日志告诉我哪里错了")…')
     lc = LogcatCapture(os.path.join(ctx.suite_dir(suite), cid + '-logcat-pavoice.txt')).start()
-    drv.tap('语音输入', verify=False)
-    time.sleep(20)                      # 真人发声窗口
+    _tap_mic_until_listening()          # T-33: 首点可能 code=9 -> 自动切端侧 toast -> 再点接管
+    time.sleep(14)                      # 真人发声窗口(连同点麦克风 ~6s 共约 20s)
     ns = drv.nodes()
     ev = [dump_xml(ctx, suite, cid + '-after-speak-dump.txt', ns),
           shot(ctx, suite, cid + '-speak')]
@@ -536,7 +570,7 @@ def voice_dead_zone(ctx):
     elapsed = int(m.group(1)) if m else -1
     switched = ('firstColdLoad=false' in log) or ('bundled=true' in log) \
         or ('sys=false' in log and '创建识别器' in log)
-    toast = find_toast_text(['端侧', '语音服务', '切换'])
+    toast = find_toast_text([VOICE_TOAST_AUTO_ONDEVICE, '端侧', '语音服务', '切换'])
     ev.append(save_json(ctx, suite, cid + '-result.json',
                         {'logcat': found, 'elapsed_ms': elapsed,
                          'auto_switch_ondevice': bool(switched), 'toast': toast}))
@@ -624,31 +658,81 @@ def new_thread_sheet_open(ctx, suite, cid):
     return False
 
 
+def switch_selected_agent(agent, ctx, suite, cid):
+    """主页 agent 磁贴点选写全局 selectedAgent(NewThreadSheet 只读它, sheet 内无选择器)。
+    磁贴无 desc, 按展示名文本定位; 取 y 最小者 = agent 板块磁贴(避开下方'新建任务'行
+    右侧同名标签 —— 点它会误开 sheet, 误开则关掉换下一个候选)。"""
+    label = AGENT_LABELS[agent]
+    cold_start(wait=3.0)
+    cands = sorted((n for n in drv.nodes() if n['text'] == label and n.get('center')),
+                   key=lambda n: (n['center'][1], n['center'][0]))
+    if not cands:
+        dump_xml(ctx, suite, cid + '-home-no-tile.txt')
+        print('  [ensure] 主页无 agent 磁贴 %r' % label)
+        return False
+    drv.tap_xy(*cands[0]['center'])
+    time.sleep(1.5)
+    if drv.find(SHEET_TITLE, exact=True):        # 误开 sheet: 关掉再试下一个候选
+        c = drv.find(SHEET_CANCEL, exact=True) or drv.find(SHEET_SCRIM_DESC, exact=True)
+        if c and c.get('center'):
+            drv.tap_xy(*c['center'])
+            time.sleep(1.0)
+        if len(cands) > 1:
+            drv.tap_xy(*cands[1]['center'])
+            time.sleep(1.5)
+    return True
+
+
 def ensure_thread_for(agent, ctx, cid):
-    """新建一个指定 agent 的会话并留在聊天页。失败已留 dump, 返回 False。"""
+    """新建一个指定 agent 的会话并留在聊天页。失败已留 dump, 返回 False。
+
+    T-L2R 定位修正(证据: slash/SLA-21a-*-sheet-dump.txt + ThreadsScreen NewThreadSheet):
+      1. 旧版把 sheet 右上 agent 展示标签当选择器点(纯 Text, 点了没用)且 codex/pi 无同名词
+         -> 改为主页磁贴预切 selectedAgent, 并在 sheet 顶行(dump y<300)核验展示名;
+      2. 旧版确认键候选('创建','开始','确定')在未选工作区时不存在(二态'先选工作区'禁用)
+         -> 改为先点 recents 选工作区(优先 pocketagent 目录), 确认键只认'创建';
+      3. recents 多条时'创建'被裁出屏(README坑6: dump 无被裁节点) -> 上滑自愈一次再找。
+    """
     suite = 'slash'
+    if not switch_selected_agent(agent, ctx, suite, cid):
+        return False
     if not new_thread_sheet_open(ctx, suite, cid):
         return False
     ns = drv.nodes()
     dump_xml(ctx, suite, cid + '-sheet-dump.txt', ns)
-    picked = False
-    for n in ns:
-        t = n['text'] or ''
-        if t and agent.lower() in t.lower() and n.get('center'):
-            drv.tap_xy(*n['center'])
-            picked = True
-            time.sleep(1.0)
-            break
-    if not picked:
+    want = AGENT_LABELS[agent]
+    if not any(n['text'] == want and n.get('center') and n['center'][1] < SHEET_AGENT_Y_MAX
+               for n in ns):
+        dump_xml(ctx, suite, cid + '-agent-mismatch.txt')
+        print('  [ensure] sheet 顶行 agent 标签 != %r (selectedAgent 未切到位)' % want)
         return False
-    for cand in ('创建', '开始', '确定'):     # NewThreadSheet 确认键(候选词, dump 已留证)
-        n = drv.find(cand, exact=True)
-        if n and n.get('center'):
-            drv.tap_xy(*n['center'])
-            time.sleep(2.5)
-            return True
-    dump_xml(ctx, suite, cid + '-confirm-fail.txt')
-    return False
+    folder = next((n for n in ns if 'pocketagent' in (n['text'] or '').lower()
+                   and n.get('center')), None)
+    if folder is None:      # 兜底: 任一 recents 路径行(G:/C: 开头)
+        folder = next((n for n in ns if (n['text'] or '').startswith(('G:', 'C:'))
+                       and n.get('center')), None)
+    if folder is None:
+        dump_xml(ctx, suite, cid + '-no-folder.txt')
+        print('  [ensure] sheet 无 recents 工作区可选')
+        return False
+    drv.tap_xy(*folder['center'])
+    time.sleep(1.2)
+    ns = drv.nodes()
+    dump_xml(ctx, suite, cid + '-picked-dump.txt', ns)
+    btn = drv.find(SHEET_CONFIRM, exact=True)
+    if not btn or not btn.get('center'):         # 上滑自愈: 尝试把裁出屏的确认键带回来
+        drv.sh(['shell', 'input', 'swipe', '1200', '900', '1200', '260', '400'])
+        time.sleep(1.0)
+        ns = drv.nodes()
+        dump_xml(ctx, suite, cid + '-confirm-scroll-dump.txt', ns)
+        btn = drv.find(SHEET_CONFIRM, exact=True)
+    if not btn or not btn.get('center'):
+        dump_xml(ctx, suite, cid + '-confirm-fail.txt')
+        print('  [ensure] 确认键 %r 不在 dump(recents 过多被裁出屏且 sheet 内容不可滚)' % SHEET_CONFIRM)
+        return False
+    drv.tap_xy(*btn['center'])
+    time.sleep(2.5)
+    return True
 
 
 def slash_panel_for(agent, ctx):
@@ -658,7 +742,9 @@ def slash_panel_for(agent, ctx):
     cid = 'SLA-21a-' + agent
     if not ensure_thread_for(agent, ctx, cid):
         ev.append(dump_xml(ctx, suite, cid + '-final-state.txt'))
-        return 'BLOCKED', 'sheet 未按预期出现', '按 evidence 的 sheet dump 修正 agent 选择/确认键定位词后重跑', ev, -1
+        return ('BLOCKED', '新建会话链路未走通(磁贴->agent核验->选工作区->确认键, 见 cid-* dump 序列)',
+                '若 confirm-fail 系确认键被裁出屏(recents 多且 sheet 不可滚)属应用侧: '
+                'NewThreadSheet 内容加滚动或精简 recents; 其余按 dump 序列修定位词重跑', ev, -1)
     if not tap_input_box():
         ev.append(dump_xml(ctx, suite, cid + '-noinput.txt'))
         return 'BLOCKED', '无输入框', '按 dump 修正输入框定位后重跑', ev, -1

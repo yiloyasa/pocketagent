@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -267,6 +268,12 @@ fun HomeScreen(
     // agent 网格:可用性按 HostInfo.capabilities 动态判定(daemon 侧报 "agent:<id>"
     // 才点亮;检测不到维持灰显,daemon 部署后自然点亮)。host 变化时重建。
     val agents = remember(host) { buildAgents(host?.capabilitiesList.orEmpty()) }
+    // 停用偏好生效链(AgentConnection.disabledAgents 可观察,拨开关立即重算):
+    // 已停用 agent 从网格/协同行/最近任务隐藏 —— 管理抽屉副标题「停用后不再显示」的兑现;
+    // 恢复入口恒在管理抽屉(它收全量 agents 清单)。偏好层只隐藏,不改写 available,
+    // 与 T-10 的 capabilities 能力判定互不覆盖(恢复后判定照旧)。
+    val disabledAgents = AgentConnection.disabledAgents
+    val visibleAgents = remember(agents, disabledAgents) { filterAgents(agents, disabledAgents) }
 
     // 左边缘右滑也能唤出侧边栏(问题 7),与左上角图标点按是同一个入口的两种手势
     Column(
@@ -321,9 +328,20 @@ fun HomeScreen(
                         .background(Pa.Card, RoundedCornerShape(22.dp))
                         .padding(14.dp),
                 ) {
-                    // 磁贴:真实图标 + 灰阶对比(不可用),尺寸收小
+                    // 管理 agent 抽屉入口(停用/恢复都在抽屉里):网格只负责"停用后
+                    // 不再显示",恢复入口必须永远可达(抽屉收全量清单),否则停用的
+                    // agent 会连恢复的门一起消失。
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Text(
+                            "管理",
+                            Modifier.pressable { showManage = true }.padding(horizontal = 6.dp, vertical = 2.dp),
+                            fontSize = 12.sp, color = Pa.Accent,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    // 磁贴:真实图标 + 灰阶对比(不可用),尺寸收小;已停用不在列
                     androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        agents.chunked(4).forEach { rowAgents ->
+                        visibleAgents.chunked(4).forEach { rowAgents ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                                 rowAgents.forEach { a ->
                                     AgentTile(a) {
@@ -388,7 +406,7 @@ fun HomeScreen(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        val shown = if (multiAgent) agents else agents.filter { it.id == AgentConnection.selectedAgent }
+                        val shown = if (multiAgent) visibleAgents else visibleAgents.filter { it.id == AgentConnection.selectedAgent }
                         shown.forEach { a ->
                             AgentTile(a) {
                                 if (a.available) {
@@ -496,7 +514,8 @@ fun HomeScreen(
                     }
                 }
             } else {
-                items(recent.filter { it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
+                // 最近任务同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
+                items(recent.filter { threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -550,31 +569,41 @@ fun HomeScreen(
                     onDismiss = { showNewThread = false },
                     onCreate = { ws ->
                         showNewThread = false
-                        scope.launch {
-                            try {
-                                val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
-                                if (AgentConnection.selectedModel.isNotEmpty()) {
-                                    builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                        // 停用偏好同步排除:已停用 agent 不再创建新会话(给出恢复路径,
+                        // 不静默改路由到别的 agent);恢复后照旧放行。
+                        if (newThreadAgentAllowed(AgentConnection.selectedAgent, disabledAgents)) {
+                            scope.launch {
+                                try {
+                                    val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
+                                    if (AgentConnection.selectedModel.isNotEmpty()) {
+                                        builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
+                                    }
+                                    // P1 修复:带上当前选中的 agent(设置页/主页切换后新建才真正生效)。
+                                    // codex 或空保持不传 = 旧语义,由 server 端默认路由到 codex。
+                                    val agentId = createThreadAgentId(AgentConnection.selectedAgent)
+                                    if (agentId.isNotEmpty()) {
+                                        builder.setAgentId(agentId)
+                                    }
+                                    if (ws.isNotBlank()) {
+                                        builder.setWorkspace(ws)
+                                    }
+                                    val t = withContext(Dispatchers.IO) {
+                                        AgentConnection.threadService().createThread(builder.build())
+                                    }
+                                    onOpenThread(t.id)
+                                } catch (e: Exception) {
+                                    Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
                                 }
-                                // P1 修复:带上当前选中的 agent(设置页/主页切换后新建才真正生效)。
-                                // codex 或空保持不传 = 旧语义,由 server 端默认路由到 codex。
-                                val agentId = createThreadAgentId(AgentConnection.selectedAgent)
-                                if (agentId.isNotEmpty()) {
-                                    builder.setAgentId(agentId)
-                                }
-                                if (ws.isNotBlank()) {
-                                    builder.setWorkspace(ws)
-                                }
-                        val t = withContext(Dispatchers.IO) {
-                            AgentConnection.threadService().createThread(builder.build())
+                            }
+                        } else {
+                            Toast.makeText(
+                                ctx,
+                                "「${selectedAgentLabel(AgentConnection.selectedAgent)}」已停用,请在主页 agent 卡片右上「管理」恢复后再新建",
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         }
-                        onOpenThread(t.id)
-                    } catch (e: Exception) {
-                        Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            },
-        )
+                    },
+                )
     }
 
     // 左上角图标 → 侧边栏(主导航)
@@ -779,7 +808,18 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
             IconActionButton(R.drawable.ic_lucide_x, "关闭", onDismiss, bg = Color.Transparent, size = 38.dp, iconSize = 18.dp)
         }
         Spacer(Modifier.height(12.dp))
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 整列可滚:agents 列表随接入数增长无上限(pa_audit sheet_overflow 规则首例命中,T-MS),
+        // 条目一多,底部 agent 行的开关会被推出视口且不可点 —— 被滚动裁掉的 Compose 节点
+        // 不进无障碍树也不可点(README §12 坑 6 的产品化形态)。同 T-NS/T-SS 最小修法:
+        // 列表列整体 verticalScroll,标题行/关闭按钮固定不动,交互破坏最小;
+        // 不选"列表定高+底部固定"(定高上限自适应不了任意视口,横屏矮视口照样溢出)。
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             agents.forEach { a ->
                 Row(
                     Modifier
@@ -798,13 +838,24 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text(a.name, fontSize = 15.sp, color = Pa.TextPrimary)
                         Text(a.method + " · " + a.subtitle, fontSize = 11.sp, color = Pa.TextSecondary)
+                        // T-MW2:不可用(daemon 未报)与已停用(本地偏好)两态目视可分
+                        if (AgentConnection.isAgentDisabled(a.id)) {
+                            Text("已停用", fontSize = 10.sp, color = Pa.TextTertiary)
+                        }
                     }
                     Switch(
-                        checked = a.available,
-                        onCheckedChange = {
-                            if (!a.available) Toast.makeText(ctx, "「${a.name}」${unavailableLabel(a.id)}", Toast.LENGTH_SHORT).show()
+                        // 开=显示且可用;关=已停用(本地偏好层)。不可用(daemon 未报)agent
+                        // 恒为关,不伪造「已停用」。
+                        checked = a.available && !AgentConnection.isAgentDisabled(a.id),
+                        onCheckedChange = { requestOn ->
+                            // T-MW 把开关接成真的:可用 agent 点按=停用/恢复(写偏好,立即生效);
+                            // 不可用 agent 点按=状态原地不动 + 真实原因提示(不伪造)。
+                            val (nextDisabled, toast) = agentManageToggleResult(
+                                requestOn, a.available, AgentConnection.isAgentDisabled(a.id), a.id, a.name,
+                            )
+                            AgentConnection.setAgentDisabled(a.id, nextDisabled)
+                            toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
                         },
-                        enabled = a.available,
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = Pa.Accent,
                             checkedThumbColor = Color(0xFF0A2A4A),
@@ -815,8 +866,9 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                     )
                 }
             }
+            // 尾部留白随列滚动:列表占满视口时底部也有呼吸空间,滚到底不贴导航条
+            Spacer(Modifier.height(30.dp))
         }
-        Spacer(Modifier.height(30.dp))
     }
 }
 
@@ -862,3 +914,51 @@ internal const val MULTI_AGENT_HINT_DEV = "开发中:多 agent 协同尚未开�
  */
 internal fun multiAgentToggleResult(requestOn: Boolean): Pair<Boolean, String?> =
     if (requestOn) false to MULTI_AGENT_HINT_DEV else false to null
+
+// ---- agent 停用偏好生效链(管理 agent 抽屉 → 展示/创建入口;纯函数,单测覆盖 AgentDisablePreferenceTest)----
+
+/**
+ * agent 是否应出现在展示面(主页网格/协同行/最近任务,纯函数):
+ * 已停用(本地用户偏好层)一律不显示 —— 抽屉副标题「停用后不再显示该 agent」的判定落点。
+ * 空白 id 视为未停用(无 id 可停,零行为)。
+ */
+internal fun shouldShowAgent(agentId: String, disabledAgents: Set<String>): Boolean =
+    agentId.trim() !in disabledAgents
+
+/**
+ * 展示清单过滤:已停用 agent 从网格/协同行隐藏。
+ * 【与能力判定的边界】只做减法,不改写 [AgentInfo.available] —— 可用性仍由
+ * [resolveAgentAvailability] 按 daemon capabilities 判定,恢复(从停用集合移除)后
+ * 磁贴原样回来,能力判定不受偏好层污染。
+ */
+internal fun filterAgents(agents: List<AgentInfo>, disabledAgents: Set<String>): List<AgentInfo> =
+    agents.filter { shouldShowAgent(it.id, disabledAgents) }
+
+/**
+ * 管理 agent 抽屉开关的点按结果(纯函数):
+ *  - 可用 agent:开关=真实停用/恢复(写 [AgentConnection.setAgentDisabled] 偏好,立即生效);
+ *  - 不可用(daemon 未报)agent:不伪造「已停用」—— 停用态原地不动,只给真实原因提示
+ *    (「接入中」/「电脑端未安装」),开关回弹到原状态。
+ * @param requestOn 用户想要的目标:开=显示(恢复) / 关=停用
+ * @param disabled  当前停用态(不可用 agent 原样返回,防"误恢复"用户先前的停用)
+ * @return (目标停用态, 待弹提示;null=不打扰)
+ */
+internal fun agentManageToggleResult(
+    requestOn: Boolean,
+    available: Boolean,
+    disabled: Boolean,
+    agentId: String,
+    name: String,
+): Pair<Boolean, String?> = when {
+    !available -> disabled to "「$name」${unavailableLabel(agentId)}"
+    !requestOn -> true to "已停用「$name」,可在此恢复"
+    else -> false to "已恢复「$name」"
+}
+
+/**
+ * 新建任务放行判定(纯函数):已停用 agent 不再创建新会话(入口同步排除)。
+ * 恢复后照旧放行。口径:入参 trim 后按 [threadAgentIdOf] 归属判定
+ * (空串按 codex;写侧 [AgentConnection.setAgentDisabled] 也 trim,两侧一致)。
+ */
+internal fun newThreadAgentAllowed(selectedAgent: String, disabledAgents: Set<String>): Boolean =
+    threadAgentIdOf(selectedAgent.trim()) !in disabledAgents

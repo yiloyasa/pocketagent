@@ -116,6 +116,39 @@ func NewPiProvider() *PiProvider {
 func (p *PiProvider) ID() string          { return "pi" }
 func (p *PiProvider) DisplayName() string { return "Pi(桌面 agent)" }
 
+// ensureCollabMcp 会话创建前的协作 MCP 接线(pi 侧半步,T-FU)。
+//
+// 总开关开启时:确保 daemon 自有 pi agent 目录就绪(SetupCollabAgentDir,幂等,
+// 未装 adapter 才真跑 pi install),再把本 daemon 自身注册为其 pocketagent-collab
+// MCP 服务器 —— 命令 = os.Executable()(daemon 自己),参数 ["-collab-mcp"] 指向
+// cmd/pocketagentd 的 -collab-mcp 子模式(pi 拉起的就是本 daemon)。
+//
+// 【与 cmd 侧的分工】cmd/pocketagentd 的 -pi-collab flag → SetCollabEnabled 归
+// T-L2wire(cmd/ 本任务不可改);这里只认 piapp.CollabEnabled() 的最终状态,补上
+// "env PA_PI_COLLAB 等价路径(不经 flag)"与"pi 会话子进程拉起前就绪"两个缺口。
+// 【容错纪律】失败仅日志,绝不阻塞 pi 主功能 —— SetupCollabAgentDir/WriteCollabMcpConfig
+// 的 error 一律不向上传播;下次会话创建时自然重试(均幂等)。
+func (p *PiProvider) ensureCollabMcp() {
+	if !piapp.CollabEnabled() {
+		return
+	}
+	dir := piapp.ResolveCollabAgentDir()
+	if err := piapp.SetupCollabAgentDir(dir); err != nil {
+		log.Printf("[pi-collab] WARNING: 协作目录初始化失败(pi 主功能不受影响,下次重试): %v", err)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("[pi-collab] WARNING: 无法定位当前可执行文件,跳过协作 MCP 配置写入: %v", err)
+		return
+	}
+	if err := piapp.WriteCollabMcpConfig(dir, exe, []string{"-collab-mcp"}); err != nil {
+		log.Printf("[pi-collab] WARNING: 写入协作 MCP 配置失败(pi 主功能不受影响): %v", err)
+		return
+	}
+	log.Printf("[pi-collab] 协作 MCP 已就绪: agent 目录 %s | 服务器 %s -collab-mcp", dir, exe)
+}
+
 // ---- 模型列表 ----
 
 // Models 手机端"模型·强度"胶囊的列表。
@@ -230,6 +263,12 @@ func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client
 		opts.GuardExtension = ""
 		opts.ExtraArgs = []string{"--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates"}
 	}
+	// 协作 MCP 接线(pi 侧半步,T-FU):开关关闭(默认)时零行为变化。必须排在
+	// Start 之前 —— Start 内的 PI_CODING_AGENT_DIR 注入(piapp.CollabEnvInjection)
+	// 以"目录已初始化"为硬前提,先就绪目录与 mcp.json,首个子进程才能带上。
+	// 首次开启时的 pi install 可能分钟级且 clientFor 持锁串行:一次性成本,
+	// 之后幂等跳过(stat 级)。
+	p.ensureCollabMcp()
 	nc, err := piapp.Start(opts)
 	if err != nil {
 		return nil, err

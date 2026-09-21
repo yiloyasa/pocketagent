@@ -79,6 +79,8 @@
 
 - 硬编码名单模式报警：agent 字面量数组（如 `[]string{"codex","pi","zcode"}`）、`isLegacy*` 版本二分函数——**新增即报警**；存量挂牌白名单仅剩 1 处（`codex_requests.go` isLegacyApproval，只减不增；CreateThread/order/defaultModelIDFor 三处已于批3整改，见附录 A），豁免登记 3 项见附录 A 尾部。
 - UI 层新增 `"未知"` 字符串 → 报警。
+- sheet 溢出巡检（批10 T-PA 固化）：android 全仓 `ModalBottomSheet` 调用点逐站列出处置（溢出风险/有滚动/Lazy 容器/heightIn 上限/静态内容），内容块含 forEach/items 列表渲染而同块无 `verticalScroll`/`LazyColumn`/`heightIn(max)` 上限 → 报警；T-NS/T-SS 已修处回归即现形。
+- 假绿哨兵（批10 T-PA 固化）：解析 `testDebugUnitTest` 结果 XML 的 tests/failures 计数，failures/errors>0 → 红线；最新结果 XML mtime 距今 >10 分钟 → 提示疑似 Gradle UP-TO-DATE，需 `--rerun`（§2 L1 时间戳口径的规则化）。
 
 常驻可测用例（回归资产）：mock 未知 method 通知、mock 新模型 ID、mock 未知反向请求（B 开关 ON/OFF 各一遍）、mock 第 4 个 agent 建会话（当前为挂牌技术债，只记录行为、不要求通过）。
 
@@ -112,7 +114,7 @@
 
 ## 7. 执行入口与度量回流
 
-- **入口脚本 `tools/audit/pa_audit.py`**（待建）：定级 → L1 → 产物自证 → 契约同步 → 名单 linter → 输出审核报告（过/红线/提示三栏）。人拿到报告只做：真机用例 + 红线裁决。
+- **入口脚本 `tools/audit/pa_audit.py`**（v1 已建，批10 T-PA，2026-09-21）：六条规则独立开关（`--only`/`--skip`，`--json` 机器可读）——名单 linter（对照附录 A，未登记命中即红线）、UI「未知」扫描（注释豁免）、sheet 溢出巡检（逐站处置清单）、假绿哨兵（XML 计数 + mtime）、daemon `go build`+`go vet` 基线、proto 两副本逐文件 MD5 核验；输出过/红线/提示三栏报告。定级、L1 全量、产物自证仍按 §1/§2 人工/既有脚本执行。人拿到报告只做：真机用例 + 红线裁决。
 - **度量四数**（每轮记录）：BLOCKED 积压数、缺陷逃逸率（自动化未拦住、真机/用户才发现的）、每轮审核耗时、回归用例累积数。
 - **框架自审**（每里程碑一次）：从没抓到过问题的检查降级；反复出现的问题加固化（变脚本/变用例）。自审结论追加到本文件附录。
 
@@ -135,6 +137,9 @@
 | `android/.../ui/ChatScreen.kt` `systemVoiceRetireNeeded` | 系统 SR 错误码弃用名单（含增补 3=AUDIO_ERROR、9=INSUFFICIENT_PERMISSIONS，后者系 HyperOS fuxi 真机实证：App 权限已授时系统识别服务仍瞬间报 9 且永不可自愈） | Android SpeechRecognizer 公开错误码为封闭 SDK 契约（1..13 随 API 固定），非面向原生演化的开放名单；else 分支安全（未知码不弃用）。批1审核裁定不违规（2026-09-20）；9 的增补见 T-33（真机 L2 实证） |
 | `android/.../ui/HomeScreen.kt` `placeholderDisplayAgents` | opencode/claude-code/hermes/dsh 展示目录 | 仅决定灰显副文案，不参与能力判定（能力判定已全动态）；只随 agent 接入移除、不随新增增长。批3审核裁定合规（2026-09-20） |
 | `android/.../ui/SettingsScreen.kt` AgentDefaultsSection 按名特判 | `"pi","zcode" ->` 旧 daemon 兼容兜底 | else 分支的 `agent_settings:<id>` capability 动态判定已覆盖任意 agent；移除特判会让旧 daemon 用户丢失设置区。T-10 裁定维持现状（2026-09-20） |
+| `android/.../ui/HomeScreen.kt` `buildAgents` 基线目录（7 项 AgentInfo） | 展示名/图标/连接方式基线表（pa_audit roster 首轮命中） | available 字段仅为基线缺省，能力判定走 `resolveAgentAvailability`（capabilities 动态+extra 追加，新 agent 零改动进网格）；与豁免 #2 同精神。pa_audit 首轮裁定登记（2026-09-21） |
+| `android/.../ui/SettingsScreen.kt` optimizerAgents 回退 `setOf("codex","pi","zcode")` | 旧 daemon 无 text_generation capability 时的优化 agent 兜底 | 主路径 `"text_generation:$it" in capabilities` 动态判定在前，setOf 仅在 capabilities 全空时兜底（与豁免 #3 同款新旧兼容形态）。pa_audit 首轮裁定登记（2026-09-21） |
+| `daemon/internal/agent/codex.go` `isOpaqueItemType` 排除五类 | item/started/completed 已专案处理类型（contextCompaction/commandExecution/agentMessage/subAgentActivity/collabAgentToolCall）的排除清单 | 黑名单形态：默认值=主线 A 透传，新类型自动进透传，漏向安全；专案分支由 T-L1 建。批 9 审核裁定不构成名单债（2026-09-21） |
 
 ## 附录 B · 框架自审记录
 

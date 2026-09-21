@@ -591,6 +591,31 @@ type itemNotif struct {
 	} `json:"item"`
 }
 
+// isOpaqueItemType 判断是否"没有专案处理分支"的 item 类型(item/started 与
+// item/completed 共用):已知五类各有专门翻译/提取分支,其余(userMessage/
+// reasoning 等 schema 可能新增的类型)按不透明数据走主线 A 透传。
+func isOpaqueItemType(t string) bool {
+	switch t {
+	case "contextCompaction", "commandExecution", "agentMessage", "subAgentActivity", "collabAgentToolCall":
+		return false
+	}
+	return true
+}
+
+// maybeRecordOpaqueItem 把 item/started|item/completed 内的未知 item 类型接进
+// 主线 A 的 notices.record"原样包装"透传(native_notifications.go:限频与脱敏
+// 自动生效),命中并透传后返回 true。仅透传原始 params,不伪造、不改写;
+// 已知类型(各有专案分支)、异线程、坏 JSON 一律返回 false,保持既有行为。
+// 限频键 = 方法 + item 类型,不同类型互不挤占。
+func maybeRecordOpaqueItem(method string, params json.RawMessage, codexTID string, notices *nativeNoticeRecorder, sink Sink) bool {
+	var n itemNotif
+	if json.Unmarshal(params, &n) != nil || n.ThreadId != codexTID || !isOpaqueItemType(n.Item.Type) {
+		return false
+	}
+	notices.record("codex", method+":"+n.Item.Type, params, sink)
+	return true
+}
+
 // agentMessageTextFromItem 从 Codex v2 ThreadItem 提取最终正文。
 // agentMessage 的稳定字段是 type/id/text；保留 content 兼容旧版响应。
 func agentMessageTextFromItem(raw json.RawMessage) string {
@@ -872,6 +897,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	notifStop := make(chan struct{})
 	notifDone := make(chan struct{})
 	var notices nativeNoticeRecorder
+	var subagentSeen subagentNoticeGate // 子代理 item 事件限频(语义同 nativeNoticeRecorder)
 	handleNotif := func(method string, params json.RawMessage) {
 		switch {
 		case method == "turn/started":
@@ -1003,6 +1029,19 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 						JsonArgs: mustJSON(map[string]interface{}{"command": strings.Join(n.Item.Command, " ")}),
 					},
 				}}})
+			} else if ev, key := subagentEvent(params, codexTID); ev != nil {
+				// 子代理活动/协作工具调用(codex_subagents.go):透传 + 限频防刷屏。
+				// 注意:其余 item 类型既不进这里、也不会走外层 default —— 本 case
+				// 已命中,方法不会再落到 default(旧注释"走外层兜底"失实,已修正);
+				// 它们由下方 else 分支接主线 A 透传,不再是静默丢弃。
+				if subagentSeen.allow(key) {
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: ev}})
+				}
+			} else {
+				// 其余 item 类型(userMessage/reasoning 等):此前是静默丢弃,现接进
+				// 主线 A notices.record 原样包装透传(限频+脱敏自动生效)。仅透传,
+				// 不伪造;已知类型与异线程在 maybeRecordOpaqueItem 内被排除。
+				maybeRecordOpaqueItem(method, params, codexTID, &notices, sink)
 			}
 		case method == "item/completed":
 			var n itemNotif
@@ -1037,6 +1076,17 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 						Output: clip(n.Item.AggregatedOutput, 4000),
 					},
 				}}})
+			case "subAgentActivity", "collabAgentToolCall":
+				// 子代理活动/协作工具调用(codex_subagents.go):与 item/started
+				// 同一套翻译与限频 —— item 自身的 kind/status 已区分阶段。
+				if ev, key := subagentEvent(params, codexTID); ev != nil && subagentSeen.allow(key) {
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: ev}})
+				}
+			default:
+				// 其余 item 类型(userMessage/reasoning 等):此前静默丢弃,接主线 A
+				// notices.record 原样包装透传(限频+脱敏自动生效)。已知类型各有
+				// case 不会进这里;仅透传,不伪造。
+				maybeRecordOpaqueItem(method, params, codexTID, &notices, sink)
 			}
 		case method == "thread/name/updated":
 			var n struct {

@@ -107,6 +107,17 @@ func legacyTokenHash(pairCode string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// LegacyTokenFor 返回配对码对应的 legacy 单 token 明文值(只读 helper,
+// T-L2fix):= sha256("pair-code:"+配对码) 的 hex,与 deviceRegistry.Validate
+// 的 legacy 回退路径所认的值完全一致。供 cmd/pocketagentd 的 -pi-collab 接线
+// 取值 —— 写进 mcp.json 的 env(键 POCKETAGENT_TOKEN),让本机 -collab-mcp
+// 代理进程拿它作为 Bearer token 回环调用主 daemon(Validate 的 legacy 回退
+// 认此值,见 authorized → Validate)。
+// 配对码为空返回空串(调用方按"无 token 可给"处理,不注入 env)。
+func LegacyTokenFor(pairCode string) string {
+	return legacyTokenHash(pairCode)
+}
+
 // saveLocked 整体写回 devices.json,沿用 store 的 .tmp+rename 原子写法。
 func (r *deviceRegistry) saveLocked() error {
 	if r.path == "" {

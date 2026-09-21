@@ -97,6 +97,24 @@ service ThreadService {
   // 现有的事件时间线直接可见)。仅 codex 会话支持;其他 agent / 未落地会话
   // 回 gRPC 错误(人话),手机端 Toast 降级,不炸 UI。
   rpc StartReview(StartReviewRequest) returns (StartReviewResponse);
+
+  // ---- 跨 agent 委派:T-L2fix 单写者重构(只增)----
+  // -collab-mcp 子模式(本机 MCP 代理进程,经 pi-mcp-adapter 等拉起)的薄代理
+  // 落点:代理进程收到 agent_delegate 工具调用后,经本机回环 gRPC
+  // (127.0.0.1:7246,TLS + Bearer token)调本 RPC,把委派汇入主 daemon 的
+  // 单一委派引擎实例(collab_delegate.go)。
+  // 【为什么收归主 daemon 单实例】子模式不再自持 FileStore/providers/引擎:
+  //   1. 消灭写冲突 —— 子代理进程不再触碰 threads.json/events.jsonl,主
+  //      daemon 是唯一写者(子线程、事件 seq 不再被双进程互相抹掉/污染);
+  //   2. 深度锁跨进程成立 —— 所有代理进程的委派汇入同一引擎,childThreads
+  //      登记簿与在飞深度计数成为全局真值,"子不生子"不再被跨进程击穿
+  //      (子 pi 再拉起的代理进程同样汇入)。
+  // 鉴权:走既有鉴权拦截器(UnaryAuth → authorized),已配对设备的
+  // Bearer token(含 legacy 单 token)才可委派。
+  // 错误语义:业务失败(agent 不存在/深度拒绝/轮次失败等)走应答的 error
+  // 字段 + 人话,gRPC status 不承载业务失败(与既有风格对齐);gRPC status
+  // 仅留给鉴权/传输层错误。
+  rpc DelegateSubTask(DelegateSubTaskRequest) returns (DelegateSubTaskResponse);
 }
 
 // ---- /计划:发起计划审查(只增,字段号从 1 起,不碰旧消息)----
@@ -114,6 +132,36 @@ message StartReviewResponse {
   string review_id = 1;
   // 发起成功(失败走 gRPC 错误,不会出现 false;字段留给未来异步语义)。
   bool started = 2;
+}
+
+// ---- 跨 agent 委派:T-L2fix 单写者重构(只增,字段号从 1 起,不碰旧消息)----
+
+message DelegateSubTaskRequest {
+  // 目标 agent 的 id(如 "echo"/"pi";空或未知 → error 字段人话报错,
+  // daemon 不猜、不路由)。
+  string agent_id = 1;
+  // 要委派的有界子任务描述(必填)。
+  string task = 2;
+  // 工作区覆盖;空 = daemon 默认工作区。
+  string workspace = 3;
+  // 模型覆盖(形如 "agent/model-id");空 = 该 agent 当前默认。
+  string model = 4;
+  // 思考强度覆盖;空 = 该 agent 当前默认。
+  string effort = 5;
+}
+
+message DelegateSubTaskResponse {
+  // 委派子线程 id(委派被引擎入口拒绝时为空;子线程已建但轮次失败时仍回填,
+  // 便于调用方事后 agent_status 查询)。
+  string child_thread_id = 1;
+  // 子任务终稿摘要(失败时为空,不伪造)。
+  string summary = 2;
+  // 子线程在委派返回时点的状态(engine 口径:idle/failed/running/queued/…;
+  // 无法判定时留空)。子线程后续状态变化不在本 RPC 的跟踪范围内。
+  string state = 3;
+  // 业务失败的人话说明(agent 不存在 / 深度锁拒绝 / 子轮次失败等);
+  // 空 = 成功。不靠 gRPC status 承载业务失败(与既有风格对齐)。
+  string error = 4;
 }
 
 // ---- zcode 会话的斜杠命令面板(只增,字段号从 1 起,不碰旧消息)----
