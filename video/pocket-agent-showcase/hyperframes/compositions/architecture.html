@@ -1,0 +1,146 @@
+<template id="architecture-template">
+  <div
+    data-composition-id="architecture"
+    data-width="1080"
+    data-height="1920"
+  >
+    <style>
+      @font-face {
+        font-family: "Barlow Condensed";
+        src: local("Arial Narrow"), local("Bahnschrift Condensed"), local("Segoe UI");
+        font-weight: 800 900;
+      }
+      @font-face {
+        font-family: "IBM Plex Mono";
+        src: local("Cascadia Mono"), local("Consolas"), local("Segoe UI Mono");
+        font-weight: 400 600;
+      }
+      [data-composition-id="architecture"] {
+        width: 100%;
+        height: 100%;
+        background: #000000;
+        color: #f2f2f4;
+        font-family: "IBM Plex Mono", monospace;
+        overflow: hidden;
+      }
+      [data-composition-id="architecture"] .scene-content {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        padding: 112px 82px;
+        gap: 40px;
+        box-sizing: border-box;
+      }
+      [data-composition-id="architecture"] .eyebrow {
+        color: #4a9dff;
+        font-size: 20px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      [data-composition-id="architecture"] h2 {
+        max-width: 860px;
+        margin: 0;
+        font-family: "Barlow Condensed", sans-serif;
+        font-size: 112px;
+        line-height: 0.92;
+        letter-spacing: -0.04em;
+      }
+      [data-composition-id="architecture"] .loop {
+        display: grid;
+        grid-template-columns: 1fr 0.36fr 1fr;
+        align-items: center;
+        gap: 24px;
+        margin-top: 28px;
+      }
+      [data-composition-id="architecture"] .node {
+        min-height: 232px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 30px;
+        border: 1px solid #303036;
+        border-radius: 30px;
+        background: #151517;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+      }
+      [data-composition-id="architecture"] .node-mark {
+        width: 54px;
+        height: 54px;
+        border-radius: 16px;
+        background: #1f1f22;
+        border: 1px solid #4a9dff;
+        box-shadow: 0 0 32px rgba(74, 157, 255, 0.25);
+      }
+      [data-composition-id="architecture"] .node strong {
+        font-size: 30px;
+        letter-spacing: -0.04em;
+      }
+      [data-composition-id="architecture"] .node span {
+        color: #98989f;
+        font-size: 18px;
+        line-height: 1.4;
+      }
+      [data-composition-id="architecture"] .connector {
+        position: relative;
+        height: 3px;
+        background: #303036;
+        overflow: hidden;
+      }
+      [data-composition-id="architecture"] .connector::after {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 35%;
+        background: #4a9dff;
+        box-shadow: 0 0 20px #4a9dff;
+      }
+      [data-composition-id="architecture"] .caption {
+        max-width: 760px;
+        color: #98989f;
+        font-size: 21px;
+        line-height: 1.5;
+      }
+    </style>
+    <div class="scene-content">
+      <div id="architecture-eyebrow" class="eyebrow">CONTROL LOOP / LOCAL FIRST</div>
+      <h2 id="architecture-title">手机负责控制，Agent 在电脑上工作。</h2>
+      <div id="architecture-loop" class="loop">
+        <div id="architecture-phone" class="node">
+          <div class="node-mark"></div>
+          <strong>Phone</strong>
+          <span>输入、审批、查看结果</span>
+        </div>
+        <div id="architecture-connector-a" class="connector"></div>
+        <div id="architecture-daemon" class="node">
+          <div class="node-mark"></div>
+          <strong>Daemon</strong>
+          <span>事件流、连接、会话桥</span>
+        </div>
+        <div id="architecture-connector-b" class="connector"></div>
+        <div id="architecture-agent" class="node">
+          <div class="node-mark"></div>
+          <strong>Native Agent</strong>
+          <span>读文件、跑命令、改代码</span>
+        </div>
+      </div>
+      <div id="architecture-caption" class="caption">stream · approval · result · resume</div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({paused: true});
+      tl.from("#architecture-eyebrow", {opacity: 0, x: -46, duration: 0.45, ease: "power4.out"}, 0.15);
+      tl.from("#architecture-title", {opacity: 0, y: 80, duration: 0.72, ease: "expo.out"}, 0.28);
+      tl.from("#architecture-phone", {opacity: 0, x: -70, rotation: -3, duration: 0.62, ease: "back.out(1.4)"}, 0.72);
+      tl.from("#architecture-daemon", {opacity: 0, y: 56, scale: 0.88, duration: 0.58, ease: "power3.out"}, 0.84);
+      tl.from("#architecture-agent", {opacity: 0, x: 70, rotation: 3, duration: 0.62, ease: "sine.out"}, 0.92);
+      tl.from("#architecture-connector-a", {scaleX: 0, transformOrigin: "left center", duration: 0.32, ease: "expo.out"}, 1.2);
+      tl.from("#architecture-connector-b", {scaleX: 0, transformOrigin: "left center", duration: 0.32, ease: "expo.out"}, 1.28);
+      tl.from("#architecture-caption", {opacity: 0, x: -24, duration: 0.62, ease: "sine.out"}, 1.56);
+      tl.to(".node-mark", {scale: 1.08, opacity: 0.72, duration: 1.5, ease: "sine.inOut", repeat: 3, yoyo: true}, 1.8);
+      window.__timelines["architecture"] = tl;
+    </script>
+  </div>
+</template>
