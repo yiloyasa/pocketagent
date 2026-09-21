@@ -1,0 +1,11 @@
+{
+  "name": "pocket-agent-showcase",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:storyboard": "node scripts/validate-storyboard.mjs",
+    "check:capture": "node scripts/verify-capture.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run check:storyboard && npm test"
+  }
+}
