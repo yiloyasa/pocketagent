@@ -58,4 +58,23 @@ npm run still:ending
 npx remotion render PocketAgentShowcase .\renders\pocket-agent-showcase.mp4 --codec=h264 --crf=18
 ```
 
+最终成片：
+
+```text
+.\renders\pocket-agent-showcase.mp4
+```
+
+渲染元数据：
+
+```text
+1080×1920 · 30/1 · H.264 · 1350 frames · 45.056s
+```
+
+手机镜头状态：
+
+- 真机录制脚本：`.\scripts\capture-phone-demo.ps1`
+- 录制说明：`.\captures\capture-notes.md`
+- 本次 `adb devices -l` 没有在线设备，因此没有伪造实时交互结果。
+- 成片使用仓库内已验证的 PocketAgent 截图 fallback，并在画面中标注 `UI SHOWCASE · VERIFIED SCREEN`。
+
 所有终端命令使用 PowerShell 7。现有 PocketAgent Android、daemon 和协议代码不属于本视频工程的修改范围。
