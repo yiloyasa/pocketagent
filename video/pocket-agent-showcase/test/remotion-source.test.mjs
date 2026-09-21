@@ -63,3 +63,31 @@ test("ending phone composition stays inside the vertical safe area", () => {
   assert.match(source, /right:\s*22/);
   assert.match(source, /0\.58\s*\+\s*resolveIn/);
 });
+
+test("fallback copy does not claim a live phone turn", () => {
+  const remotionSource = fs.readFileSync(
+    path.join(root, "src", "PocketAgentShowcase.tsx"),
+    "utf8",
+  );
+  const hyperframesSource = fs.readFileSync(
+    path.join(process.cwd(), "hyperframes", "compositions", "phone-demo.html"),
+    "utf8",
+  );
+  assert.match(remotionSource, /VERIFIED UI SHOWCASE/);
+  assert.doesNotMatch(remotionSource, /LIVE CONTROL SURFACE|真实产品界面进入镜头焦点/);
+  assert.match(hyperframesSource, /VERIFIED UI \/ PRODUCT SHOWCASE/);
+  assert.doesNotMatch(hyperframesSource, /REAL DEVICE \/ STREAMING TURN|user confirmed/);
+});
+
+test("resilience scene includes multi-agent switching", () => {
+  const remotionSource = fs.readFileSync(
+    path.join(root, "src", "PocketAgentShowcase.tsx"),
+    "utf8",
+  );
+  const hyperframesSource = fs.readFileSync(
+    path.join(process.cwd(), "hyperframes", "compositions", "resilient.html"),
+    "utf8",
+  );
+  assert.match(remotionSource, /multi-agent switching/);
+  assert.match(hyperframesSource, /Multi-agent switching/);
+});

@@ -297,13 +297,13 @@ export const PocketAgentShowcase: React.FC<PocketAgentShowcaseProps> = ({
       >
         <div style={{position: "absolute", left: 78, top: 132}}>
           <Label color={COLORS.green} size={18}>
-            LIVE CONTROL SURFACE
+            VERIFIED UI SHOWCASE
           </Label>
           <Title size={72} style={{marginTop: 32, maxWidth: 720}}>
-            从手机，看到执行。
+            从界面，看到能力。
           </Title>
           <Label size={20} style={{marginTop: 22, maxWidth: 510}}>
-            真实产品界面进入镜头焦点，事件流在后景保持连续。
+            已验证的 PocketAgent 界面，配合架构动效展示。
           </Label>
         </div>
         <div
@@ -328,7 +328,7 @@ export const PocketAgentShowcase: React.FC<PocketAgentShowcaseProps> = ({
           <EventTrace compact accent={COLORS.green} />
         </div>
         <Label color={COLORS.green} style={{position: "absolute", right: 86, bottom: 190}}>
-          FOCUS PULL / UI → EVENT
+          UI / ARCHITECTURE BRIDGE
         </Label>
       </SceneSurface>
 
@@ -388,6 +388,7 @@ export const PocketAgentShowcase: React.FC<PocketAgentShowcaseProps> = ({
             ["LAN discovery", "fallback route", COLORS.green],
             ["event replay", "resume context", COLORS.purple],
             ["approval recovery", "continue safely", COLORS.yellow],
+            ["multi-agent switching", "switch agents", COLORS.blue],
           ].map(([title, caption, color], index) => {
             const itemProgress = clamp(frame, [resilient.start + 26 + index * 14, resilient.start + 52 + index * 14]);
             return (
