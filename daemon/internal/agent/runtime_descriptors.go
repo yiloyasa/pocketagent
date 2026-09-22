@@ -270,7 +270,35 @@ func openSharedRuntime(p runtime.Participant, th *store.Thread) (*runtime.AgentR
 var (
 	sharedBackendOnce sync.Once
 	sharedBackend     *runtime.Backend
+	runtimeDataDirMu  sync.Mutex
+	runtimeDataDir    string
 )
+
+// SetRuntimeDataDir 指定运行时状态的持久化根目录（W6）。
+//
+// 【为什么是注入而不是让 agent 包自己读配置】agent 包不该知道 daemon 的数据目录
+// 是怎么定出来的（那是 cmd/server 层的事）；它只需要被告知「往哪落盘」。
+// 未设置 = 内存后端，与既有测试和内存模式行为零分叉。
+//
+// 必须在首次交付运行时之前调用 —— daemon 启动路径在 provider 注册之前调用它。
+func SetRuntimeDataDir(dir string) {
+	runtimeDataDirMu.Lock()
+	defer runtimeDataDirMu.Unlock()
+	runtimeDataDir = dir
+}
+
+// backendForDataDir 按数据目录选择后端。
+//
+// 【为什么单独成函数】包级单例（sync.Once）一旦初始化就无法在测试里重来，
+// 把它拆出来之后「有目录 → 文件后端、无目录 → 内存后端」这条选择本身就能被
+// 直接测到，不必依赖进程级的初始化顺序。
+func backendForDataDir(dir string) *runtime.Backend {
+	if dir != "" {
+		// 规格 §8.2：权威状态必须能落盘（重启后仍可恢复），不是只在内存里活着。
+		return runtime.NewFileBackend(dir)
+	}
+	return runtime.NewBackend()
+}
 
 // sharedRuntimeBackend 返回进程共享的默认后端（惰性初始化，并发安全）。
 //
@@ -278,6 +306,11 @@ var (
 // 看到全部 agent 的资源与缓存占用（规格 §12 的 AgentResourceCard）；分成多份
 // 就得先知道有哪几家才能问全 —— 又变回名单驱动的设计。
 func sharedRuntimeBackend() *runtime.Backend {
-	sharedBackendOnce.Do(func() { sharedBackend = runtime.NewBackend() })
+	sharedBackendOnce.Do(func() {
+		runtimeDataDirMu.Lock()
+		dir := runtimeDataDir
+		runtimeDataDirMu.Unlock()
+		sharedBackend = backendForDataDir(dir)
+	})
 	return sharedBackend
 }

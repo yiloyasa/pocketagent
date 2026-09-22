@@ -227,6 +227,9 @@ func main() {
 		log.Fatalf("初始化存储失败: %v", err)
 	}
 
+	// W6：运行时状态（checkpoint）要落到磁盘，而不是只在内存里活着（规格 §8.2）。
+	// 必须在 provider 注册之前指定 —— 共享后端是惰性单例，首次交付运行时即定型。
+	agent.SetRuntimeDataDir(*dataDir)
 	providers := agent.DetectProviders()
 	tm := term.NewManager()
 	// 空闲回收器:随进程存活,daemon 退出时随进程消亡,无需单独停

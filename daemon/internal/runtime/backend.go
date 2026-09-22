@@ -29,6 +29,26 @@ type Backend struct {
 	mu sync.Mutex
 	// now 可注入时钟（契约测试用）；nil = time.Now。
 	now func() time.Time
+	// dataDir 是文件版 checkpoint 的落盘根目录（实际写在 <dataDir>/checkpoints/）。
+	//
+	// 【为什么设成字段而不是给每个入口都加参数】更换 checkpoint 的持久化方式不该
+	// 改变四个入口的签名 —— 那会让每个调用点都要选一次实现。空字符串 = 内存实现，
+	// 即 NewBackend 的历史语义（进程内有效、零落盘），它保证了既有调用方与
+	// 大量共享单后端实例的测试行为零分叉。需要跨重启时用 NewFileBackend。
+	dataDir string
+	// ckptMu 串行化文件 checkpoint 的读写（目录为空时无用）。
+	//
+	// 【为什么读也要参与互斥】实测证据：Windows 上 os.Rename 走
+	// MoveFileEx(REPLACE_EXISTING)，而 Go 的 syscall.Open 只授
+	// FILE_SHARE_READ|FILE_SHARE_WRITE（无 FILE_SHARE_DELETE）。于是**并发读者
+	// 持有的句柄**会让写者替换目标时拿到 ERROR_ACCESS_DENIED —— 这是"读者阻塞
+	// 写者"，不是写者互撞（把写者串成互斥后仍然复现，见测试）。用读写锁让写者
+	// 等到没有读者在打开文件时再替换，读者之间仍可并行。POSIX 无此限制，但共用
+	// 同一把锁不损失正确性。
+	//
+	// 【为什么单独一把锁，不是复用 mu】写 checkpoint 会 fsync（毫秒级），挂到 mu 上
+	// 会让记忆/缓存/记账这些与磁盘无关的操作在 fsync 期间一起阻塞。
+	ckptMu sync.RWMutex
 
 	// ---- 语义记忆（RAM，重启即失；靠 Checkpoint 落盘）----
 	seq     map[string]int64         // memory key -> sequence 高水位
@@ -64,9 +84,25 @@ type StoredCacheEntry struct {
 	LastUsed time.Time `json:"last_used"`
 }
 
-// NewBackend 建一个空的默认后端。
+// NewBackend 建一个空的默认后端（checkpoint 为内存实现，进程内有效）。
 func NewBackend() *Backend {
 	b := &Backend{}
+	b.reset()
+	return b
+}
+
+// NewFileBackend 建一个把 checkpoint 落到 dataDir 下的后端（规格 §8.2 的写入纪律）。
+//
+// 【为什么另起一个构造函数，而不是改 NewBackend 的签名】checkpoint 的持久化方式
+// 是**部署形态**的选择，不是每个调用点都该操心的事：改了 NewBackend 签名会让
+// 全部既有调用方被迫提供一个数据目录（它们中的多数是测试，共享一个进程内后端，
+// 落盘反而会让用例互相污染）。这里沿用 identity.go 的约定 —— dataDir 为空退化为
+// 内存实现，非空才落盘 —— 让"要不要持久化"变成一处显式决定。
+//
+// 【它只改 checkpoint】memory/cache/资源记账仍走内存实现：本包的 memory 目前靠
+// Backend 内部的落盘态（ExportDurable/ImportDurable）表达，不在此次范围内。
+func NewFileBackend(dataDir string) *Backend {
+	b := &Backend{dataDir: dataDir}
 	b.reset()
 	return b
 }
@@ -110,8 +146,17 @@ func (b *Backend) Cache() CacheManager { return &memCache{b: b} }
 // Resources 返回默认资源记账入口。
 func (b *Backend) Resources() ResourceLedger { return &memLedger{b: b} }
 
-// Checkpoints 返回默认 checkpoint 入口。
-func (b *Backend) Checkpoints() CheckpointManager { return &memCheckpoints{b: b} }
+// Checkpoints 返回 checkpoint 入口。
+//
+// dataDir 为空时是内存实现（进程内有效）；非空时是文件实现（跨重启有效，
+// 写入顺序见规格 §8.2 与 checkpoint.go）。两者的**语义与返回形状必须逐条一致**
+// —— 换实现不该让调用方观察到行为差异，只该观察到"重启后还在不在"。
+func (b *Backend) Checkpoints() CheckpointManager {
+	if b.dataDir != "" {
+		return &fileCheckpoints{dir: checkpointsDir(b.dataDir), mu: &b.ckptMu}
+	}
+	return &memCheckpoints{b: b}
+}
 
 // DaemonSession 返回"daemon 侧持有会话事实"的默认会话适配器（Source=DAEMON）。
 // 无原生会话能力的 agent（Echo / OpenAI 兼容）用它即可满足契约。
