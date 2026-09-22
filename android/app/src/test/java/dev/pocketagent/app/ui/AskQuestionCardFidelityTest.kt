@@ -302,4 +302,23 @@ class AskQuestionCardFidelityTest {
         )
         assertEquals("", qs[0].header)
     }
+
+    // ---- 反问卡与 agent 无关(任务一 · 通用性契约) ----
+    // 反问卡只认 action.name,不看 agent 身份。本测试把它锁死:这两类动作名恒走
+    // "取消/提交"反问卡;其余(批准/权限类)一律不走反问卡。能力由 daemon 运行时上报
+    // APPROVAL_REQUEST 来宣告 —— UI 不写死任何 agent 名单,因此推广到 codex/pi/dsh
+    // 不需要改这里,各自 daemon 上报同类请求即自动复用同一张卡(无假入口)。
+
+    @Test
+    fun askAction_gates_only_request_user_input_and_mcp_elicitation() {
+        assertTrue(askIsAskAction("request_user_input"))
+        assertTrue(askIsAskAction("mcp_elicitation"))
+    }
+
+    @Test
+    fun askAction_is_false_for_every_non_ask_action_name() {
+        // 批准/权限/文件类动作都不该被误渲染成反问卡
+        listOf("shell", "file_change", "apply_patch", "permissions", "write_file", "", "unknown")
+            .forEach { assertFalse("动作 '$it' 不应走反问卡", askIsAskAction(it)) }
+    }
 }

@@ -35,6 +35,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.pocketagent.app.ui.BrowserScreen
 import dev.pocketagent.app.ui.ChatScreen
+import dev.pocketagent.app.ui.CollabRoleEditorScreen
+import dev.pocketagent.app.ui.CollabRolesScreen
 import dev.pocketagent.app.ui.FilesScreen
 import dev.pocketagent.app.ui.GitScreen
 import dev.pocketagent.app.ui.HomeScreen
@@ -185,6 +187,7 @@ private fun RootNav() {
                         onOpenSettings = { nav.navigate("settings") },
                         onOpenTaskCenter = openTaskCenter,
                         onOpenBrowser = { nav.navigate("browser") },
+                        onOpenCollabRoles = { nav.navigate("collabRoles") },
                         onGoTab = { tab = it },
                         onBackToHome = backToHome,
                         onOpenOnboarding = { nav.navigate("onboarding") },
@@ -280,6 +283,23 @@ private fun RootNav() {
                 onOpenBrowser = { url ->
                     nav.navigate("browser?url=" + android.net.Uri.encode(url))
                 },
+            )
+        }
+        // ---- 协同角色配置:列表页 ----
+        composable("collabRoles") {
+            CollabRolesScreen(
+                onBack = { nav.popBackStack() },
+                onOpenEditor = { roleId -> nav.navigate("collabRoleEditor/$roleId") },
+            )
+        }
+        // ---- 协同角色编辑页(roleId 为空 = 新建) ----
+        composable(
+            route = "collabRoleEditor/{roleId}",
+            arguments = listOf(navArgument("roleId") { type = NavType.StringType; defaultValue = "" }),
+        ) { entry ->
+            CollabRoleEditorScreen(
+                roleId = entry.arguments?.getString("roleId").orEmpty(),
+                onBack = { nav.popBackStack() },
             )
         }
     }

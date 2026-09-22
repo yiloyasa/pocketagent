@@ -86,6 +86,34 @@ class ThreadSnapshotTest {
         assertNull(ThreadSnapshot.loadMessages("a"))
     }
 
+    /**
+     * 删除会话要从快照里抹掉那条:否则断网兜底渲染时它会"复活"(用户实测删完又出现)。
+     * 只删目标 id,其余行原样保留、顺序不变。
+     */
+    @Test
+    fun deletePrunesSnapshotSoItWontResurrectOffline() {
+        val rows = listOf(
+            ThreadSnapshot.Row("a", "甲", 1_700_000_000_000, "G:/ws", "ct-1", false),
+            ThreadSnapshot.Row("b", "乙", 1_700_000_000_001, "G:/ws", "", false),
+            ThreadSnapshot.Row("c", "丙", 1_700_000_000_002, "G:/ws", "", true),
+        )
+        ThreadSnapshot.saveThreadsSnapshot(rows)
+
+        ThreadSnapshot.removeThreadFromSnapshot("b")
+
+        val left = ThreadSnapshot.readThreadsSnapshot().map { it.id }
+        assertEquals(listOf("a", "c"), left) // b 消失了,其余不动
+    }
+
+    @Test
+    fun removeThreadFromSnapshotIsNoOpForMissingId() {
+        ThreadSnapshot.saveThreadsSnapshot(
+            listOf(ThreadSnapshot.Row("a", "甲", 1L, "G:/ws", "", false)),
+        )
+        ThreadSnapshot.removeThreadFromSnapshot("zzz-not-exist")
+        assertEquals(listOf("a"), ThreadSnapshot.readThreadsSnapshot().map { it.id })
+    }
+
     @Test
     fun evictsOldestThreadSnapshots() {
         // P1-8 口径:构造 55 个线程,验证条数上限 50(最旧的被淘汰)。

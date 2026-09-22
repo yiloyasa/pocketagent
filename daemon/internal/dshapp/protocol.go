@@ -1,15 +1,16 @@
 // protocol.go —— dsh ACP 方面方法的类型化封装 + 探针实测形状的纯函数。
 //
 // 本文件的形状以 P0 探针证据(docs/verify/evidence/dsh-p0-probe.md)为准:
-//   ① set_config_option 的 model value 是双层 JSON 字符串(外层 JSON 串,内容又是
-//     JSON 数组 [route, model])—— EncodeModelTuple/DecodeModelTuple/合法校验纯函数,
-//     切换模型只允许原样回传目录里的编码串,禁止拼裸模型名;
-//   ② session/resume 应答带 configOptions(与 session/new 同形状),重挂载后据此
-//     刷新模型缓存;
-//   ③ 缺 key 错误 = JSON-RPC error code=-32603、无 data、message 含 "no API key";
-//   ④ session/list 条目只有 sessionId + cwd(无 title),重挂载校验按二者比对;
-//   ⑤ 未知 session/update 变体:本层只透传 RawMessage,变体识别在 agent 层,
-//     不猜形状。
+//
+//	① set_config_option 的 model value 是双层 JSON 字符串(外层 JSON 串,内容又是
+//	  JSON 数组 [route, model])—— EncodeModelTuple/DecodeModelTuple/合法校验纯函数,
+//	  切换模型只允许原样回传目录里的编码串,禁止拼裸模型名;
+//	② session/resume 应答带 configOptions(与 session/new 同形状),重挂载后据此
+//	  刷新模型缓存;
+//	③ 缺 key 错误 = JSON-RPC error code=-32603、无 data、message 含 "no API key";
+//	④ session/list 条目只有 sessionId + cwd(无 title),重挂载校验按二者比对;
+//	⑤ 未知 session/update 变体:本层只透传 RawMessage,变体识别在 agent 层,
+//	  不猜形状。
 package dshapp
 
 import (
@@ -18,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -79,9 +81,15 @@ type InitializeResult struct {
 
 // CanList/CanResume/CanClose 按能力在场性放行(§5.2:一切扩展方法的使用以
 // initialize 应答为准,不写死协议假设)。
-func (r *InitializeResult) CanList() bool   { return len(r.AgentCapabilities.SessionCapabilities.List) > 0 }
-func (r *InitializeResult) CanResume() bool { return len(r.AgentCapabilities.SessionCapabilities.Resume) > 0 }
-func (r *InitializeResult) CanClose() bool  { return len(r.AgentCapabilities.SessionCapabilities.Close) > 0 }
+func (r *InitializeResult) CanList() bool {
+	return len(r.AgentCapabilities.SessionCapabilities.List) > 0
+}
+func (r *InitializeResult) CanResume() bool {
+	return len(r.AgentCapabilities.SessionCapabilities.Resume) > 0
+}
+func (r *InitializeResult) CanClose() bool {
+	return len(r.AgentCapabilities.SessionCapabilities.Close) > 0
+}
 
 // SupportsImageInput 报告 promptCapabilities.image(当前路由实测 false;打开后
 // 图片输入自动放行,能力协商驱动,无版本二分判断)。
@@ -106,12 +114,69 @@ type ConfigOption struct {
 	Options      json.RawMessage `json:"options,omitempty"` // 分组叶子结构,原样保留
 }
 
-// session/new:新建持久会话。mcpServers 恒传空数组(探针概念命令原样)。
+// sessionMCPServers 是 session/new 时要挂载的 MCP 服务器定义。
+//
+// 【与 pi 的分工同款】dsh 的 ACP 面允许**按会话**传 MCP 服务器(session/new 的
+// mcpServers 参数),但会话是 provider 在 agent 层建的,而"本 daemon 的可执行文件
+// 路径 + 数据目录 + 回环 token"这些接线事实只有 cmd 层知道 —— 所以由 cmd 层
+// 经 SetSessionMCPServers 注入最终状态,本包只负责如实带进请求(与
+// piapp.SetCollabEnabled 的分工一模一样)。
+// 默认 nil = 不挂任何 MCP,与改造前的 "mcpServers": [] 行为零差异。
+var (
+	sessionMCPServersMu sync.RWMutex
+	sessionMCPServers   []map[string]interface{}
+)
+
+// SetSessionMCPServers 由 cmd 层接线:设置 session/new 挂载的 MCP 服务器。
+// 传 nil 或无参调用即恢复"不挂载"。
+func SetSessionMCPServers(servers []map[string]interface{}) {
+	sessionMCPServersMu.Lock()
+	defer sessionMCPServersMu.Unlock()
+	sessionMCPServers = servers
+}
+
+// SessionMCPServers 返回当前待挂载的 MCP 服务器**快照**(深拷贝)。
+// 【为什么深拷贝】接线值是全局状态、被每个新会话读取;若把内部 map 直接交出去,
+// 任一调用方就地改写就会静默污染后续所有会话。拷贝成本 = 几条小 map,每会话
+// 一次,可忽略。
+func SessionMCPServers() []map[string]interface{} {
+	sessionMCPServersMu.RLock()
+	defer sessionMCPServersMu.RUnlock()
+	if sessionMCPServers == nil {
+		return nil
+	}
+	out := make([]map[string]interface{}, len(sessionMCPServers))
+	for i, m := range sessionMCPServers {
+		cp := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+// sessionNewParams 构造 session/new 的参数(纯函数,便于单测断言"接线是否
+// 真的带进了请求")。mcpServers 恒为数组:无接线时空数组 —— 与改造前一致。
+func sessionNewParams(cwd string) map[string]interface{} {
+	servers := SessionMCPServers()
+	if servers == nil {
+		servers = []map[string]interface{}{}
+	}
+	return map[string]interface{}{"cwd": cwd, "mcpServers": servers}
+}
+
+// session/new:新建持久会话。mcpServers 恒为空数组(默认 nil → 空数组,与改造前
+// 零差异)。【为什么不再挂 pocketagent-collab】dsh 的 session/new 的 mcpServers
+// 在 dsh 侧"空值接受、非空拒绝"(dsh-acp 文档 + 官方 handbook 一致),且 MCP 实例
+// 是**部署级 Cordis 插件**、ACP Session 创建于该固定 Host 组合之后 —— 会话级
+// 传非空要么被拒(整条 session 建不起)、要么被静默忽略(挂上不生效),两种结果
+// 都不是"真接上"。dsh 的 collab MCP 改走部署级 profile 补丁层
+// (collabpatch.go 的 WriteCollabMcpPatch),由 dsh 的固定 Host 组合加载,才是
+// 可靠路径。SetSessionMCPServers / SessionMCPServers 仍保留(含单测)作能力面与
+// 回归钉子,但 cmd 层已不再调用它们挂 collab。
 func (c *Client) SessionNew(ctx context.Context, cwd string) (*SessionState, error) {
-	raw, err := c.CallCtx(ctx, "session/new", map[string]interface{}{
-		"cwd":        cwd,
-		"mcpServers": []interface{}{},
-	})
+	raw, err := c.CallCtx(ctx, "session/new", sessionNewParams(cwd))
 	if err != nil {
 		return nil, fmt.Errorf("session/new: %w", err)
 	}
@@ -345,11 +410,11 @@ func parseEffortValues(raw json.RawMessage) []string {
 // RequestPermissionParams 是反向请求参数(受缺 key 阻塞,形状按 ACP v1 规范 +
 // 蓝本 §4.3;真机待验,字段读取全部容错,解析失败走显式报错路径)。
 type RequestPermissionParams struct {
-	SessionID string                `json:"sessionId"`
-	ToolCall  *PermissionToolCall   `json:"toolCall,omitempty"`
-	Options   []PermissionOption    `json:"options"`
-	Kind      string                `json:"kind,omitempty"`
-	Raw       json.RawMessage       `json:"-"`
+	SessionID string              `json:"sessionId"`
+	ToolCall  *PermissionToolCall `json:"toolCall,omitempty"`
+	Options   []PermissionOption  `json:"options"`
+	Kind      string              `json:"kind,omitempty"`
+	Raw       json.RawMessage     `json:"-"`
 }
 
 // PermissionToolCall 是请求里的可选工具上下文(ACP v1:toolCall 可缺席)。

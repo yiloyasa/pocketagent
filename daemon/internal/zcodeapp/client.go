@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
 // Client 是一条 app-server 子进程连接。并发安全:请求用 pending map 关联应答,
@@ -353,14 +354,12 @@ func Start(opts StartOptions) (*Client, error) {
 // 死因定位靠它:zcode.cjs 启动崩溃的错误原文(如 provider 配置缺失)只出现在
 // 这里,退出码(reapWithLog)只有症状,stderr 才是死因。
 func (c *Client) readStderr(r io.Reader) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		log.Printf("[zcode-stderr] %s", sc.Text())
-	}
-	if err := sc.Err(); err != nil {
-		log.Printf("[zcode-stderr] 读取异常: %v", err)
-	}
+	// 【收口到 stderrdrain】裸扫 + 直传换成统一收口:补上**凭据脱敏**(zcode 的
+	// stderr 可能带账户 key / provider 凭据)与**总量限流**(刷屏不撑爆 daemon.log),
+	// 并与 codex / pi / dsh 口径一致。前缀与"stderr 只落日志、不混协议"不变。
+	stderrdrain.Drain(r, stderrdrain.Options{}, func(l string) {
+		log.Printf("[zcode-stderr] %s", l)
+	})
 }
 
 // PID 返回子进程 PID(日志定位用);未知返回 0。

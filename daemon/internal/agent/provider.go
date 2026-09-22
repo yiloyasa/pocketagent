@@ -12,8 +12,8 @@ import (
 	"os"
 
 	"github.com/pocketagent/daemon/internal/codexapp"
-	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/dshapp"
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/store"
 )
@@ -46,6 +46,19 @@ type TurnRequest struct {
 }
 
 // Provider 大模型提供商。
+// CollabAware 由"已把本地 collab MCP 挂到自己会话里"的 provider 实现 —— 也就是
+// 它那一侧的模型**看得见 agent_delegate**,因而能派发/接收子智能体。
+//
+// 【为什么是接口而不是 agent 名单】谁接入协同取决于"接线事实"(pi 写了 mcp.json、
+// dsh 注入了会话级 mcpServers),而不是它是谁。与 PrefsAware / TextGenerator /
+// AgentSessionImporter 同款分工:新增一家只要提供同款事实就自动入列,daemon 侧
+// 零改动(README §7「静态名单是债」)。
+type CollabAware interface {
+	// CollabReady 报告本 provider 当前是否已具备跨 agent 委派能力。
+	// 判据必须是**可核验的接线事实**,不是配置开关的意愿。
+	CollabReady() bool
+}
+
 type Provider interface {
 	ID() string          // "glm" / "anthropic" / "echo"
 	DisplayName() string // "智谱 GLM" ...

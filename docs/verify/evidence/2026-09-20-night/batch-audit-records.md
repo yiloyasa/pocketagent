@@ -24,3 +24,23 @@
 2. daemon 鉴权换血：待 T-30R 完成后按 T-30 脚本执行，随后 SEC-03/04/05/11/12 重跑。
 3. 批 3 注释笔误"说了答"（agents_sessions.go）：下次文档顺带。
 4. `model_efforts_test.go` L65 旧措辞、`_pa_l2_night.py` 定位词首轮微调：L2 现场处理。
+
+## 2026-09-21 追加：批 9/10 审核结论入库（§5 补录）
+
+| 批/任务 | 审核结论 | L1 要点 | 备注 |
+|---|---|---|---|
+| 批9 T-L1 codex子代理卡+S0探针 | PASS（负结果真值：审批审查子代理走 item/autoApprovalReview/* 通知族，daemon guardian 链路已覆盖；subAgentActivity/collabAgentToolCall 属 collab 模式，0 条如实上报） | 12 测试全绿；4 轮递进对照实验 | daemon 审核员复核 PASS（defense-in-depth）：S0 方法论成立（对照组/监听窗口/原始帧全落盘）；decisionSource 新字段未记录已自曝 |
+| 批9 T-L2pi-prod piapp生产接线 | PASS（四门控逐条推演为真；PA_PI_E2E=1 真实端到端 PASS 14.02s：真实 pi install 6.5s+session 文件落注入目录） | mcpsetup 16 例（交付口径 14，只增不减）+ 存量全绿 | 拷贝凭据接口维持"留而不用"（凭据去向须用户显式确认） |
+| 批9 T-NS+T-SS sheet滚动修复 | PASS（嵌套滚动风险面关闭；heightIn(72..200) 光标跟随为 Compose 既有行为；结构钉口径有效，盲区已自我声明挂 L2） | JVM 强制 rerun 523/0 | 首轮 UP-TO-DATE 拦截+7 |
+| 批9 T-MW 管理开关接线 | PASS（红线零违反；偏好层与能力判定层正交，恢复后原样回归用例钉住；死 UI 双印证：SMK-21a 批前截图无管理入口+全工程无置 true 路径） | 强制 rerun 534/0 | UP-TO-DATE 拦截+8 |
+| 批10 T-MW2 停用闸门一致性 | PASS（两入口闸在 scope.launch 前=拦截不发 RPC；Toast 文案与主页逐字一致；全仓仅 3 个 createThread 入口无漏网） | 合并终态 JVM 强制 rerun 563/0 | 同批 ChatScreen 并行写入事故已按"合并后终态重跑"收口 |
+| 批10 T-FU/T-L2R 补审 | PASS（defense-in-depth；7 处定位修正逐一对上 T-31 dump） | 合并终态 daemon 全绿+race | — |
+| 批10 T-PA pa_audit v1 | PASS（31 单测+首轮实跑；roster BASELINE 落后 2 条=限期已修，误报 2 处已消解） | 规则来源追溯全部成立 | 详见 T-PA 补审报告（BASELINE 补 2 条+附录A#4/#5 登记） |
+
+## 度量（AUDIT §7 四数）
+
+- BLOCKED 积压：L2 真机余量（语音 2 项留人工/threads 3 项/SLA/TCH 重跑/TCH bounds）——设备离线归因，插线解封
+- 缺陷逃逸：语音 code=9 形态（T-01 假设被 HyperOS 真机证伪）——T-33 真机修复闭环；NewThreadSheet 裁切（T-31 自动化考古发现）——T-NS 修复
+- 每轮审核耗时：合并批审核 ~13-50 分钟/轮（含 L1 独立真跑）
+- 回归用例累积：484 → 563（+79，含并行批）
+- UP-TO-DATE 假绿拦截累计：**8 次**（--rerun 已固化进 wrapper test 分支，批10 T-D3）

@@ -93,26 +93,6 @@ func (p *approveProbeProvider) verdict() (bool, string, error) {
 	return p.allowed, p.note, p.err
 }
 
-// nestedDelegateProvider 在子轮次内部再调引擎 Delegate —— 模拟"委派子线程
-// 里的模型又调 agent_delegate"打回同一引擎(深度锁 1 第二道闸的攻击面)。
-type nestedDelegateProvider struct {
-	eng       collabmcp.DelegationEngine
-	innerErr  error
-	innerDone chan struct{}
-}
-
-func (p *nestedDelegateProvider) ID() string          { return "nest" }
-func (p *nestedDelegateProvider) DisplayName() string { return "嵌套委派(测试替身)" }
-func (p *nestedDelegateProvider) Models() []pb.ModelInfo {
-	return []pb.ModelInfo{{Id: "default", Provider: "nest", Available: true}}
-}
-func (p *nestedDelegateProvider) Run(ctx context.Context, _ agent.TurnRequest, _ agent.Sink, _ agent.ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
-	_, _, err := p.eng.Delegate(ctx, "nest", "子线程里的再委派", collabmcp.DelegateOptions{})
-	p.innerErr = err
-	close(p.innerDone)
-	return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "外层完成"}}}}, &pb.Usage{}, nil
-}
-
 // ---- 测试服务器的构造 ----
 
 func newCollabTestEngine(t *testing.T, providers map[string]agent.Provider) (*Server, collabmcp.DelegationEngine) {
@@ -205,13 +185,13 @@ func TestDelegateEchoChildThreadPersistedAndSummaryReturned(t *testing.T) {
 	ce := eng.(*collabEngine)
 	ce.mu.Lock()
 	marked := ce.childThreads[childID]
-	depth := ce.depth
+	infl := ce.inflight
 	ce.mu.Unlock()
 	if !marked {
 		t.Fatalf("子线程 %s 没有打来源标记", childID)
 	}
-	if depth != 0 {
-		t.Fatalf("委派返回后在飞深度应归零,实际 %d", depth)
+	if infl != 0 {
+		t.Fatalf("委派返回后在飞并发数应归零,实际 %d", infl)
 	}
 }
 
@@ -312,32 +292,30 @@ func TestStatusOfRunningQueuedFailed(t *testing.T) {
 	})
 }
 
-// TestDelegateChildThreadCannotReDelegate 深度锁 1 第二道闸:委派子轮次在飞
-// 期间(模拟子线程模型把 agent_delegate 再打回同一引擎),嵌套委派被如实
-// 拒绝("子不生子"),外层委派正常完成;工具可见性保留 —— 拒绝发生在引擎
-// 执行层,不是把工具藏起来。
+// TestDelegateChildThreadCannotReDelegate 深度锁 1 第二道闸(引擎兜底):当某次
+// 委派的发起方线程(opts.ParentThreadID)本身就是一个委派子线程(已登记进
+// childThreads)时,引擎判定"子在生子" → 以"不能再委派"如实拒绝,不建子线程。
+// 主闸是结构性闸(子线程不挂 collab MCP,看不见 agent_delegate);本判定是漏挂
+// 结构性闸时的兜底。
+//
+// 【与旧版的区别】旧版用"在飞数 > 0"单飞闸一并挡住嵌套委派;本次修复把它拆成
+// "有界并发 + 精准深度锁",因此直接以空 ParentThreadID 打引擎不再被拒(那道单飞
+// 闸已废)—— 只有"父链指向一个已登记的委派子线程"才触发本判定,这正是修复要的
+// 语义(既支持并行派多子、又拦死子在生子)。
 func TestDelegateChildThreadCannotReDelegate(t *testing.T) {
-	nest := &nestedDelegateProvider{innerDone: make(chan struct{})}
-	srv, eng := newCollabTestEngine(t, map[string]agent.Provider{"nest": nest})
-	nest.eng = eng
-
-	childID, summary, err := eng.Delegate(context.Background(), "nest", "外层委派", collabmcp.DelegateOptions{})
+	srv, eng := newCollabTestEngine(t, map[string]agent.Provider{"echo": agent.NewEcho()})
+	// 先发一次普通委派,其创建的子线程 id 会登记进 childThreads。
+	childID, _, err := eng.Delegate(context.Background(), "echo", "外层委派", collabmcp.DelegateOptions{})
 	if err != nil {
-		t.Fatalf("外层委派应正常完成: %v", err)
+		t.Fatalf("外层委派应成功: %v", err)
 	}
-	if !strings.Contains(summary, "外层完成") {
-		t.Fatalf("外层摘要不符: %q", summary)
-	}
-	select {
-	case <-nest.innerDone:
-	default:
-		t.Fatal("嵌套委派探针未执行")
-	}
-	if nest.innerErr == nil {
+	// 用该子线程 id 当 ParentThreadID 再委派 → 子在生子 → 深度锁拒绝。
+	_, _, err2 := eng.Delegate(context.Background(), "echo", "嵌套委派", collabmcp.DelegateOptions{ParentThreadID: childID})
+	if err2 == nil {
 		t.Fatal("嵌套委派必须被拒绝(深度锁 1:子不生子)")
 	}
-	if !strings.Contains(nest.innerErr.Error(), "不能再委派") {
-		t.Fatalf("拒绝文案应如实说明深度锁: %v", nest.innerErr)
+	if !strings.Contains(err2.Error(), "不能再委派") {
+		t.Fatalf("拒绝文案应如实说明深度锁: %v", err2)
 	}
 	// 拒绝发生在建子线程之前:登记簿里不应出现嵌套调用的新子线程。
 	if threads := srv.cfg.Store.List(true); len(threads) != 1 || threads[0].ID != childID {

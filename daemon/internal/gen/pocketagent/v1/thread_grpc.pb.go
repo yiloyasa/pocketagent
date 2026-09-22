@@ -49,6 +49,10 @@ const (
 	ThreadService_ListSlashCommands_FullMethodName           = "/pocketagent.v1.ThreadService/ListSlashCommands"
 	ThreadService_StartReview_FullMethodName                 = "/pocketagent.v1.ThreadService/StartReview"
 	ThreadService_DelegateSubTask_FullMethodName             = "/pocketagent.v1.ThreadService/DelegateSubTask"
+	ThreadService_ListCollabRoles_FullMethodName             = "/pocketagent.v1.ThreadService/ListCollabRoles"
+	ThreadService_SetCollabRole_FullMethodName               = "/pocketagent.v1.ThreadService/SetCollabRole"
+	ThreadService_DeleteCollabRole_FullMethodName            = "/pocketagent.v1.ThreadService/DeleteCollabRole"
+	ThreadService_DispatchCollab_FullMethodName              = "/pocketagent.v1.ThreadService/DispatchCollab"
 )
 
 // ThreadServiceClient is the client API for ThreadService service.
@@ -145,6 +149,26 @@ type ThreadServiceClient interface {
 	// 字段 + 人话,gRPC status 不承载业务失败(与既有风格对齐);gRPC status
 	// 仅留给鉴权/传输层错误。
 	DelegateSubTask(ctx context.Context, in *DelegateSubTaskRequest, opts ...grpc.CallOption) (*DelegateSubTaskResponse, error)
+	// ---- 协同角色(分工编排):可复用的"子代理岗位"(只增)----
+	// 为什么需要这一层:
+	// 委派原本只能在**每次调用**时传 model/effort/task —— 父模型要让某个子代理
+	// 反复扮演同一角色(例如"审查者":只找安全问题、不要改代码、用便宜模型),
+	// 就得把整段人设在每个 task 里复述一遍,改口径更是要改 N 处。角色表把这部分
+	// 抽出来:一次配置,后续所有委派按 id 引用即生效。
+	// 边界(刻意不做):daemon **不自动编排分工** —— 谁在什么时候派给谁,由父
+	// 模型(经 MCP 工具入参)或手机端决定。让 daemon 替用户猜分工,既不可预测
+	// 也不可控,那是假智能。
+	ListCollabRoles(ctx context.Context, in *ListCollabRolesRequest, opts ...grpc.CallOption) (*ListCollabRolesResponse, error)
+	// 按 role.id 幂等 upsert;id 为空 = 新建(daemon 生成),同名/同 id 覆盖。
+	SetCollabRole(ctx context.Context, in *SetCollabRoleRequest, opts ...grpc.CallOption) (*SetCollabRoleResponse, error)
+	DeleteCollabRole(ctx context.Context, in *DeleteCollabRoleRequest, opts ...grpc.CallOption) (*DeleteCollabRoleResponse, error)
+	// ---- 协同扇出:一条指令交给**多个 agent 并行执行**(只增)----
+	// 语义与委派(DelegateSubTask)根本不同:委派是**父子**(父 agent 自己决定
+	// 派活给谁);本 RPC 是**并行协作** —— 用户在协同页选好若干 agent、发一条
+	// 指令,daemon 给每个 agent 各开一个子线程同时跑,它们之间对等、无父子。
+	// 【为什么不开"谁先谁后 / 谁汇总"的编排】那是让 daemon 替用户猜分工,既不
+	// 可预测也不可控;协同页的选人 + 角色配置已经把决策权交回用户手里。
+	DispatchCollab(ctx context.Context, in *DispatchCollabRequest, opts ...grpc.CallOption) (*DispatchCollabResponse, error)
 }
 
 type threadServiceClient struct {
@@ -467,6 +491,46 @@ func (c *threadServiceClient) DelegateSubTask(ctx context.Context, in *DelegateS
 	return out, nil
 }
 
+func (c *threadServiceClient) ListCollabRoles(ctx context.Context, in *ListCollabRolesRequest, opts ...grpc.CallOption) (*ListCollabRolesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCollabRolesResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ListCollabRoles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) SetCollabRole(ctx context.Context, in *SetCollabRoleRequest, opts ...grpc.CallOption) (*SetCollabRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetCollabRoleResponse)
+	err := c.cc.Invoke(ctx, ThreadService_SetCollabRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) DeleteCollabRole(ctx context.Context, in *DeleteCollabRoleRequest, opts ...grpc.CallOption) (*DeleteCollabRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteCollabRoleResponse)
+	err := c.cc.Invoke(ctx, ThreadService_DeleteCollabRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) DispatchCollab(ctx context.Context, in *DispatchCollabRequest, opts ...grpc.CallOption) (*DispatchCollabResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DispatchCollabResponse)
+	err := c.cc.Invoke(ctx, ThreadService_DispatchCollab_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ThreadServiceServer is the server API for ThreadService service.
 // All implementations must embed UnimplementedThreadServiceServer
 // for forward compatibility.
@@ -561,6 +625,26 @@ type ThreadServiceServer interface {
 	// 字段 + 人话,gRPC status 不承载业务失败(与既有风格对齐);gRPC status
 	// 仅留给鉴权/传输层错误。
 	DelegateSubTask(context.Context, *DelegateSubTaskRequest) (*DelegateSubTaskResponse, error)
+	// ---- 协同角色(分工编排):可复用的"子代理岗位"(只增)----
+	// 为什么需要这一层:
+	// 委派原本只能在**每次调用**时传 model/effort/task —— 父模型要让某个子代理
+	// 反复扮演同一角色(例如"审查者":只找安全问题、不要改代码、用便宜模型),
+	// 就得把整段人设在每个 task 里复述一遍,改口径更是要改 N 处。角色表把这部分
+	// 抽出来:一次配置,后续所有委派按 id 引用即生效。
+	// 边界(刻意不做):daemon **不自动编排分工** —— 谁在什么时候派给谁,由父
+	// 模型(经 MCP 工具入参)或手机端决定。让 daemon 替用户猜分工,既不可预测
+	// 也不可控,那是假智能。
+	ListCollabRoles(context.Context, *ListCollabRolesRequest) (*ListCollabRolesResponse, error)
+	// 按 role.id 幂等 upsert;id 为空 = 新建(daemon 生成),同名/同 id 覆盖。
+	SetCollabRole(context.Context, *SetCollabRoleRequest) (*SetCollabRoleResponse, error)
+	DeleteCollabRole(context.Context, *DeleteCollabRoleRequest) (*DeleteCollabRoleResponse, error)
+	// ---- 协同扇出:一条指令交给**多个 agent 并行执行**(只增)----
+	// 语义与委派(DelegateSubTask)根本不同:委派是**父子**(父 agent 自己决定
+	// 派活给谁);本 RPC 是**并行协作** —— 用户在协同页选好若干 agent、发一条
+	// 指令,daemon 给每个 agent 各开一个子线程同时跑,它们之间对等、无父子。
+	// 【为什么不开"谁先谁后 / 谁汇总"的编排】那是让 daemon 替用户猜分工,既不
+	// 可预测也不可控;协同页的选人 + 角色配置已经把决策权交回用户手里。
+	DispatchCollab(context.Context, *DispatchCollabRequest) (*DispatchCollabResponse, error)
 	mustEmbedUnimplementedThreadServiceServer()
 }
 
@@ -660,6 +744,18 @@ func (UnimplementedThreadServiceServer) StartReview(context.Context, *StartRevie
 }
 func (UnimplementedThreadServiceServer) DelegateSubTask(context.Context, *DelegateSubTaskRequest) (*DelegateSubTaskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DelegateSubTask not implemented")
+}
+func (UnimplementedThreadServiceServer) ListCollabRoles(context.Context, *ListCollabRolesRequest) (*ListCollabRolesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCollabRoles not implemented")
+}
+func (UnimplementedThreadServiceServer) SetCollabRole(context.Context, *SetCollabRoleRequest) (*SetCollabRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetCollabRole not implemented")
+}
+func (UnimplementedThreadServiceServer) DeleteCollabRole(context.Context, *DeleteCollabRoleRequest) (*DeleteCollabRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteCollabRole not implemented")
+}
+func (UnimplementedThreadServiceServer) DispatchCollab(context.Context, *DispatchCollabRequest) (*DispatchCollabResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DispatchCollab not implemented")
 }
 func (UnimplementedThreadServiceServer) mustEmbedUnimplementedThreadServiceServer() {}
 func (UnimplementedThreadServiceServer) testEmbeddedByValue()                       {}
@@ -1204,6 +1300,78 @@ func _ThreadService_DelegateSubTask_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ThreadService_ListCollabRoles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCollabRolesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ListCollabRoles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ListCollabRoles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ListCollabRoles(ctx, req.(*ListCollabRolesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_SetCollabRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetCollabRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).SetCollabRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_SetCollabRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).SetCollabRole(ctx, req.(*SetCollabRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_DeleteCollabRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteCollabRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).DeleteCollabRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_DeleteCollabRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).DeleteCollabRole(ctx, req.(*DeleteCollabRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_DispatchCollab_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DispatchCollabRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).DispatchCollab(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_DispatchCollab_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).DispatchCollab(ctx, req.(*DispatchCollabRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ThreadService_ServiceDesc is the grpc.ServiceDesc for ThreadService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1322,6 +1490,22 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DelegateSubTask",
 			Handler:    _ThreadService_DelegateSubTask_Handler,
+		},
+		{
+			MethodName: "ListCollabRoles",
+			Handler:    _ThreadService_ListCollabRoles_Handler,
+		},
+		{
+			MethodName: "SetCollabRole",
+			Handler:    _ThreadService_SetCollabRole_Handler,
+		},
+		{
+			MethodName: "DeleteCollabRole",
+			Handler:    _ThreadService_DeleteCollabRole_Handler,
+		},
+		{
+			MethodName: "DispatchCollab",
+			Handler:    _ThreadService_DispatchCollab_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -115,6 +115,28 @@ service ThreadService {
   // 字段 + 人话,gRPC status 不承载业务失败(与既有风格对齐);gRPC status
   // 仅留给鉴权/传输层错误。
   rpc DelegateSubTask(DelegateSubTaskRequest) returns (DelegateSubTaskResponse);
+
+  // ---- 协同角色(分工编排):可复用的"子代理岗位"(只增)----
+  // 为什么需要这一层:
+  // 委派原本只能在**每次调用**时传 model/effort/task —— 父模型要让某个子代理
+  // 反复扮演同一角色(例如"审查者":只找安全问题、不要改代码、用便宜模型),
+  // 就得把整段人设在每个 task 里复述一遍,改口径更是要改 N 处。角色表把这部分
+  // 抽出来:一次配置,后续所有委派按 id 引用即生效。
+  // 边界(刻意不做):daemon **不自动编排分工** —— 谁在什么时候派给谁,由父
+  // 模型(经 MCP 工具入参)或手机端决定。让 daemon 替用户猜分工,既不可预测
+  // 也不可控,那是假智能。
+  rpc ListCollabRoles(ListCollabRolesRequest) returns (ListCollabRolesResponse);
+  // 按 role.id 幂等 upsert;id 为空 = 新建(daemon 生成),同名/同 id 覆盖。
+  rpc SetCollabRole(SetCollabRoleRequest) returns (SetCollabRoleResponse);
+  rpc DeleteCollabRole(DeleteCollabRoleRequest) returns (DeleteCollabRoleResponse);
+
+  // ---- 协同扇出:一条指令交给**多个 agent 并行执行**(只增)----
+  // 语义与委派(DelegateSubTask)根本不同:委派是**父子**(父 agent 自己决定
+  // 派活给谁);本 RPC 是**并行协作** —— 用户在协同页选好若干 agent、发一条
+  // 指令,daemon 给每个 agent 各开一个子线程同时跑,它们之间对等、无父子。
+  // 【为什么不开"谁先谁后 / 谁汇总"的编排】那是让 daemon 替用户猜分工,既不
+  // 可预测也不可控;协同页的选人 + 角色配置已经把决策权交回用户手里。
+  rpc DispatchCollab(DispatchCollabRequest) returns (DispatchCollabResponse);
 }
 
 // ---- /计划:发起计划审查(只增,字段号从 1 起,不碰旧消息)----
@@ -148,6 +170,22 @@ message DelegateSubTaskRequest {
   string model = 4;
   // 思考强度覆盖;空 = 该 agent 当前默认。
   string effort = 5;
+  // 发起方(父)线程的 daemon 本地 id(T-S1Pa,只增,可选):非空 = 委派建的
+  // 子线程落库 parent_thread_id = 该值,手机端据此点亮子代理内联卡;空 =
+  // 子线程父链为空(诚实变暗,卡不亮不误报),与旧行为一致。
+  // 【v1 限制】pi 侧经 pi-mcp-adapter 的委派暂填不出该值(mcp.json 是静态
+  // 共享文件、MCP 服务器进程懒启动跨会话共享,无会话上下文注入机制);
+  // 未来 piapp 具备会话感知注入时,由薄代理把当前线程 id 填进请求本字段,
+  // 链路即一行接通。
+  string parent_thread_id = 6;
+  // 引用的协同角色 id(可选):非空 = daemon 取出该角色,把它的人设注入子任务
+  // prompt、并用它的 model/effort/workspace 兜底本请求的空字段
+  // (**本请求显式给的值优先级更高**,角色只填空)。
+  // 【为什么只传一个 id 而不是整段人设】父模型应当在委派时说明"这次具体做什么";
+  // "这次具体做什么";角色回答"我是谁、长期怎么干"。两者职责不同,都传才完整。
+  // 未知 id → error 字段人话报错(**不猜、不回落到默认**,否则父模型永远发现
+  // 不了自己写错了角色名)。
+  string role_id = 7;
 }
 
 message DelegateSubTaskResponse {
@@ -162,6 +200,86 @@ message DelegateSubTaskResponse {
   // 业务失败的人话说明(agent 不存在 / 深度锁拒绝 / 子轮次失败等);
   // 空 = 成功。不靠 gRPC status 承载业务失败(与既有风格对齐)。
   string error = 4;
+}
+
+// ---- 协同角色:一个"岗位"(审查者 / 测试员 / 重构手 …)的可复用配置 ----
+
+message CollabRole {
+  // 稳定 id(自定义 slug,如 "reviewer";同一 daemon 内唯一)。set 时用幂等键。
+  string id = 1;
+  // 显示名(手机端展示用,如 "安全审查者")。
+  string name = 2;
+  // 落到哪个原生 agent(pi / codex / dsh / zcode ...),与委派的 agent_id 同域。
+  string agent_id = 3;
+  // 这个岗位是干什么的(职责边界)。会前置注入到**每次**委派的子任务 prompt。
+  string description = 4;
+  // 长期生效的追加要求(输出格式 / 只做不改 / 必须列证据 …),同样前置注入。
+  string instructions = 5;
+  // 模型覆盖(形如 "agent/model-id");空 = 用该 agent 当前默认。
+  string model = 6;
+  // 思考强度覆盖;空 = 用该 agent 当前默认。
+  string effort = 7;
+  // 工作区覆盖;空 = daemon 默认工作区。
+  string workspace = 8;
+}
+
+message ListCollabRolesRequest {}
+
+message ListCollabRolesResponse {
+  repeated CollabRole roles = 1;
+}
+
+message SetCollabRoleRequest {
+  CollabRole role = 1;
+}
+
+message SetCollabRoleResponse {
+  // 回显落库后的角色(id 可能被 daemon 补生成),便于手机端立刻刷新成真值。
+  CollabRole role = 1;
+}
+
+message DeleteCollabRoleRequest {
+  string id = 1;
+}
+
+message DeleteCollabRoleResponse {}
+
+// ---- 协同扇出 ----
+
+// 参与本次协同的一员:落到哪个 agent、扮演哪个角色(角色可空)。
+message CollabMember {
+  // 目标 agent id;为空时取 role_id 对应角色里配的 agent(两者都空 = 人话报错)。
+  string agent_id = 1;
+  // 协同角色 id(可空):非空则取该角色的人设与 model/effort/workspace 兜底。
+  string role_id = 2;
+}
+
+message DispatchCollabRequest {
+  // 用户发出的指令原文(必填)。所有成员收到的是**同一条**指令 —— 这正是
+  // "共同完成一个任务"与"逐个委派不同子任务"的区别。
+  string instruction = 1;
+  // 参与成员(至少一个)。
+  repeated CollabMember members = 2;
+  // 工作区覆盖;空 = 各成员用角色值或 daemon 默认。
+  string workspace = 3;
+}
+
+// 单个成员的受理结果:一个成员失败不影响其它成员(并行扇出的应有语义)。
+message DispatchCollabItem {
+  string agent_id = 1;
+  // 为该成员建的子线程 id;受理失败时为空。
+  string thread_id = 2;
+  // 是否受理(子线程已建、轮次已起飞)。受理 ≠ 执行成功:结果看子线程状态。
+  bool ack = 3;
+  // 受理失败的人话原因(agent 不存在 / 角色未定义等);成功时为空。
+  string error = 4;
+}
+
+message DispatchCollabResponse {
+  // 本次协同的会话 id(便于前端归组与事后回溯;等于各成员子线程的父链)。
+  string session_id = 1;
+  // 与请求 members **一一对应、顺序一致**(前端按位置回填每个 agent 的相位)。
+  repeated DispatchCollabItem items = 2;
 }
 
 // ---- zcode 会话的斜杠命令面板(只增,字段号从 1 起,不碰旧消息)----
@@ -348,6 +466,13 @@ message Thread {
   string effort = 19;
   string last_turn_error = 20;
   repeated ApprovalRequest pending_approvals = 21;
+  // ---- 子代理线程归属(只增:22)----
+  // 非空 = 该线程是某线程的子代理线程,值为**父线程的 daemon 本地线程 id**
+  // (手机端按它与当前打开会话的 id 匹配,点亮子代理内联卡/来源行;空 =
+  // 普通顶层会话,门控关闭不误报)。两条填充路:collab 委派子线程在建线程时
+  // 落库;codex 原生子线程在 thread/started 通知(带 parentThreadId)到达时以
+  // 轻量存根登记落库。
+  string parent_thread_id = 22;
 }
 
 // CodexGoalDetail codex 线程目标态(thread/goal/get 应答的归一)。

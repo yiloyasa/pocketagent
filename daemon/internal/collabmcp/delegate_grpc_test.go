@@ -83,6 +83,32 @@ func TestGRPCProxyDelegateSuccess(t *testing.T) {
 	}
 }
 
+// TestGRPCProxyParentThreadIDPassthrough T-S1Pa:可选父链的链路透传钉子。
+// 工具入参 parent_thread_id → DelegateOptions → DelegateSubTask 请求(proto
+// 字段 6);缺省空 = 请求字段为空(不补默认、不伪造)—— 主 daemon 侧据此
+// 维持"父链为空,卡不亮不误报"。pi 侧 v1 恒走空路径(见 engine.go 注释)。
+func TestGRPCProxyParentThreadIDPassthrough(t *testing.T) {
+	fc := &fakeThreadClient{resp: &pb.DelegateSubTaskResponse{ChildThreadId: "th-c", State: "idle"}}
+	s, fc := newGRPCServer(t, fc, "tok", "")
+
+	if _, isErr := s.runDelegate(context.Background(), delegateArgs{
+		AgentID: "echo", Task: "带父链", ParentThreadID: "th-parent-9",
+	}, nil); isErr {
+		t.Fatal("带父链委派不应失败")
+	}
+	if got := fc.lastReq.GetParentThreadId(); got != "th-parent-9" {
+		t.Fatalf("parent_thread_id 未透传到请求字段 6: %q", got)
+	}
+
+	// 缺省空:不补默认。
+	if _, isErr := s.runDelegate(context.Background(), delegateArgs{AgentID: "echo", Task: "无父链"}, nil); isErr {
+		t.Fatal("无父链委派不应失败")
+	}
+	if got := fc.lastReq.GetParentThreadId(); got != "" {
+		t.Fatalf("缺省时请求父链应为空: %q", got)
+	}
+}
+
 // TestGRPCProxyDelegateDefaultWorkspace 工具调用未给 workspace → 填引擎的
 // defaultWorkspace(对齐旧子模式 Config.Workspace 语义);显式给 → 原样透传。
 func TestGRPCProxyDelegateDefaultWorkspace(t *testing.T) {

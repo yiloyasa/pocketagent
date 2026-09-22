@@ -80,11 +80,15 @@ type fakeDshClient struct {
 
 	notifFn func(string, json.RawMessage)
 	reqFn   func(int64, string, json.RawMessage)
+
+	// initCalls 记录 Initialize 调用次数(T-DSH 预热/懒启动握手次数断言)。
+	initCalls int
 }
 
 func (f *fakeDshClient) Initialize(context.Context) (*dshapp.InitializeResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.initCalls++
 	return f.caps, f.initErr
 }
 func (f *fakeDshClient) SessionNew(_ context.Context, cwd string) (*dshapp.SessionState, error) {
@@ -479,11 +483,39 @@ func TestDshMissingCredentialMapped(t *testing.T) {
 	if re.ErrorInfo() == nil || re.ErrorInfo().Code != "MISSING_CREDENTIAL" {
 		t.Fatalf("缺 key 应归一 MISSING_CREDENTIAL: %+v", re.ErrorInfo())
 	}
-	if re.ErrorInfo().Message != probeMsg {
-		t.Fatalf("dsh 原生 message 应保真: %q", re.ErrorInfo().Message)
+	if !strings.Contains(re.ErrorInfo().Message, "dsh-credentials.env") {
+		t.Fatalf("缺 key 应给出人话指引(指向 dsh-credentials.env): %q", re.ErrorInfo().Message)
 	}
-	if !strings.Contains(re.ErrorInfo().Details, "DEEPSEEK_API_KEY") {
-		t.Fatalf("诊断应指路: %q", re.ErrorInfo().Details)
+	if !strings.Contains(re.ErrorInfo().Message, "DEEPSEEK_API_KEY") {
+		t.Fatalf("人话指引应点名 DEEPSEEK_API_KEY: %q", re.ErrorInfo().Message)
+	}
+	if re.ErrorInfo().Details != probeMsg {
+		t.Fatalf("dsh 原生 message 应保真进 Details(不丢弃): %q", re.ErrorInfo().Details)
+	}
+}
+
+// TestDshRunErrorPassthrough 非缺 key 错误原样透传:不加工成 MISSING_CREDENTIAL,
+// message 直接是 dsh 原生报错(铁律:不认识的输入原样透传,不替换成"未知/错误")。
+func TestDshRunErrorPassthrough(t *testing.T) {
+	probeMsg := `Internal error: turn failed: boom unrelated`
+	fake := &fakeDshClient{
+		newState: &dshapp.SessionState{SessionID: "s-p"},
+		promptFn: func(context.Context, string, []map[string]interface{}, func(string, json.RawMessage)) (json.RawMessage, error) {
+			return nil, &dshapp.RPCError{Method: "session/prompt", Code: -32603, Message: probeMsg}
+		},
+	}
+	p := newTestDshProvider(t, fake)
+	th := &store.Thread{ID: "th-p", AgentID: "dsh"}
+	_, _, err := p.Run(context.Background(), TurnRequest{Thread: th, Workspace: `G:\ws`, InputBlocks: []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "hi"}}}}}, func(*pb.TurnServerMessage) {}, nil)
+	var re *dshRunError
+	if !errors.As(err, &re) {
+		t.Fatalf("应返回 *dshRunError: %v (%T)", err, err)
+	}
+	if re.ErrorInfo().Code == "MISSING_CREDENTIAL" {
+		t.Fatalf("非缺 key 错误不应归一 MISSING_CREDENTIAL: %+v", re.ErrorInfo())
+	}
+	if re.ErrorInfo().Message != probeMsg {
+		t.Fatalf("非缺 key 错误应原样透传 message: %q", re.ErrorInfo().Message)
 	}
 }
 
@@ -782,5 +814,143 @@ func TestDshCloseSession(t *testing.T) {
 	}
 	if got := fake.snapshot().closeHits; len(got) != 1 || got[0] != "s-del" {
 		t.Fatalf("应恰好 close 一次: %v", got)
+	}
+}
+
+// ---- T-DSH 问题 B 回归:生命周期锁竞争与启动预热 ----
+//
+// 真机实证(2026-09-21 daemon.log):dsh 首跑握手 16:19:36→16:38:22(十位数分钟),
+// 期间 ListModels/轮次就绪撞锁 busy-reject("dsh 正忙")。本组用例钉死修复语义:
+// 有界排队替代立即拒绝;预热完成一次握手后用户路径零重复握手。
+
+// holdLifeFor 用一个真实 withClientCtx 占住 lifeMu 一段时间(经 chan 通知已持锁)。
+func holdLifeFor(p *DshProvider, hold time.Duration, acquired chan<- struct{}) {
+	_ = p.withClientCtx(context.Background(), 0, func(context.Context, dshClient) error {
+		acquired <- struct{}{} // 已持锁
+		time.Sleep(hold)
+		return nil
+	})
+}
+
+// TestDshLockContentionQueuesInsteadOfBusyRejecting 核心回归:锁被短暂占用时,
+// 后续调用应"排队等锁成功",而不是像旧实现那样立即 busy-reject —— 真机上
+// "模型取样/轮次就绪与慢握手人挤人"就是靠这条从"正忙报错"变成"先后等待"。
+func TestDshLockContentionQueuesInsteadOfBusyRejecting(t *testing.T) {
+	fake := &fakeDshClient{}
+	p := newTestDshProvider(t, fake)
+	p.client = fake // 预置客户端,两个调用都不走 startClient
+
+	acquired := make(chan struct{}, 1)
+	go holdLifeFor(p, 150*time.Millisecond, acquired)
+	<-acquired // 持锁方已就位
+
+	// 排队方:持有方只占 150ms,排队窗口(生产 15s)内必然等到锁 → 必须成功。
+	if err := p.withClientCtx(context.Background(), 0, func(context.Context, dshClient) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("锁被短暂占用时后续调用应排队成功(旧实现此处 busy-reject): %v", err)
+	}
+}
+
+// TestDshLockContentionBusyAfterWindowExpires 底线回归:持有方真卡死时,排队
+// 窗口耗尽后仍必须回 dshBusy —— "一个卡死的操作不拖住全线"的 TryLock 纪律
+// 弱化为"有界拖"后依然成立(窗口用包级变量注入短值,不拖慢测试)。
+func TestDshLockContentionBusyAfterWindowExpires(t *testing.T) {
+	fake := &fakeDshClient{}
+	p := newTestDshProvider(t, fake)
+	p.client = fake
+
+	oldWait := dshLockWait
+	dshLockWait = 30 * time.Millisecond
+	t.Cleanup(func() { dshLockWait = oldWait })
+
+	acquired := make(chan struct{}, 1)
+	go holdLifeFor(p, 300*time.Millisecond, acquired)
+	<-acquired
+
+	err := p.withClientCtx(context.Background(), 0, func(context.Context, dshClient) error {
+		return nil
+	})
+	if !errors.Is(err, dshBusy) {
+		t.Fatalf("排队窗口耗尽后应回 dshBusy: %v", err)
+	}
+}
+
+// TestDshLockWaitNeverExceedsCallerDeadline ctx 传导回归:调用方自带截止时间时,
+// 排队窗口必须收窄到剩余时长之内(等待 + 执行的总延迟不越过调用方预算)。
+func TestDshLockWaitNeverExceedsCallerDeadline(t *testing.T) {
+	fake := &fakeDshClient{}
+	p := newTestDshProvider(t, fake)
+	p.client = fake
+
+	acquired := make(chan struct{}, 1)
+	go holdLifeFor(p, 250*time.Millisecond, acquired)
+	<-acquired
+
+	// 只给 50ms 截止:等锁就该耗掉它,锁后执行必超时 → 应得到 DeadlineExceeded,
+	// 而不是越过自己的预算强行再等 15s 生产窗口。
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := p.withClientCtx(ctx, 0, func(context.Context, dshClient) error {
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, dshBusy) {
+		t.Fatalf("短截止时间调用应受自身预算约束(DeadlineExceeded 或 busy),不该越过: %v", err)
+	}
+	// 等持有方退出,避免污染下个用例(锁释放后尾随睡眠一次)。
+	time.Sleep(250 * time.Millisecond)
+}
+
+// TestDshWarmupCompletesHandshakeOnce 预热回归:Warmup 完成一次握手后 inited
+// 缓存生效,再次预热/用户路径不再重复 initialize(用户路径零握手开销的根据)。
+func TestDshWarmupCompletesHandshakeOnce(t *testing.T) {
+	fake := &fakeDshClient{}
+	p := newTestDshProvider(t, fake)
+
+	p.Warmup()
+	p.Warmup() // 第二次应为缓存命中,不再握手
+	fake.mu.Lock()
+	n := fake.initCalls
+	fake.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("预热两次应只握手一次(旧懒启动路径每次调用都会重握手): %d", n)
+	}
+}
+
+// TestDshWarmupRetriesUntilHandshakeSucceeds 预热回归:首跑握手失败(真实世界
+// dsh 首跑可拖十位数分钟)时按注入的短周期重试,凭据/启动就绪后自动成功 ——
+// 对应真机"16:19:36 拉起 → 16:38:22 握手完成"窗口内预热持续推进的事实。
+func TestDshWarmupRetriesUntilHandshakeSucceeds(t *testing.T) {
+	fake := &fakeDshClient{}
+	p := newTestDshProvider(t, fake)
+
+	oldRetry, oldTries := dshWarmupRetry, dshWarmupRetries
+	dshWarmupRetry, dshWarmupRetries = time.Millisecond, 3
+	t.Cleanup(func() { dshWarmupRetry, dshWarmupRetries = oldRetry, oldTries })
+
+	// 前三次握手都以"到点超时"失败(DeadlineExceeded 分支:不重启子进程,
+	// 与真机"子进程继续首跑、调用方如超返回"一致)。
+	fake.mu.Lock()
+	fake.initErr = context.DeadlineExceeded
+	fake.mu.Unlock()
+	p.Warmup()
+
+	fake.mu.Lock()
+	n, stillErr := fake.initCalls, fake.initErr
+	fake.mu.Unlock()
+	if stillErr == nil || n != 3 {
+		t.Fatalf("预热应按窗口重试 3 次后如实放弃: initCalls=%d err=%v", n, stillErr)
+	}
+
+	// 第 4 个周期握手就绪:Warmup 成功并缓存。
+	fake.mu.Lock()
+	fake.initErr = nil
+	fake.mu.Unlock()
+	p.Warmup()
+	fake.mu.Lock()
+	n = fake.initCalls
+	fake.mu.Unlock()
+	if n != 4 {
+		t.Fatalf("恢复后再次预热应成功: initCalls=%d", n)
 	}
 }

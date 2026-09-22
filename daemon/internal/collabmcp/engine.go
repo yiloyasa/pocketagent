@@ -9,7 +9,7 @@ import "context"
 // 可注入 fake 完成包内测试），精确接线点见包汇报 / 下方注释：
 //   - Delegate：CreateThread（internal/server/thread.go:86，agentID 在
 //     s.cfg.Providers 注册表即接入，无静态名单）→ 跑既有 StartTurn 轮次机制
-//    （thread.go:748；providerForThread thread.go:1108 按 AgentID 显式选
+//     （thread.go:748；providerForThread thread.go:1108 按 AgentID 显式选
 //     provider，选不出硬错误不回退）→ 阻塞等轮次终局，assistant 终稿文本
 //     作为 finalSummary。【绝不重写轮次循环】—— daemon 不当"第五个大脑"。
 //   - StatusOf：读 activeTurns / turnQueue / 线程落库状态，映射成 ThreadStatus。
@@ -37,6 +37,27 @@ type DelegateOptions struct {
 	Model string
 	// Effort 思考强度覆盖；空 = agent 当前默认。
 	Effort string
+	// RoleID 引用的协同角色 id；可选。非空 = 主 daemon 取出该角色，把它的人设
+	// 前置注入子任务 prompt，并用它的 agent/model/effort/workspace 兜底本请求
+	// 未显式给出的字段（**显式值优先**）。未知 id 由主 daemon 人话报错。
+	// 【为什么这里不做解析】本服务是**薄代理**：它就是个协议转换器，不持有
+	// store、也不知道有哪些角色。解析放在持有真值的主 daemon 侧。
+	RoleID string
+
+	// ParentThreadID 发起方（父）线程的 daemon 本地 id；可选（T-S1Pa，只增）。
+	// 非空 = 引擎为委派建的子线程落库 ParentThreadID = 该值，手机端据此把
+	// 子线程归入父会话的子代理组、点亮内联卡；空（缺省）= 子线程父链为空
+	//（诚实变暗：卡不亮、不误报），与 T-S1Pa 之前的行为一致。
+	//
+	// 【v1 限制（主模型裁决：pi 委派子线程父链为空）】pi 侧经 pi-mcp-adapter
+	// 的委派当前填不出该值：mcp.json 是静态共享文件（探针证实，不能按会话
+	// 差异化）、MCP 服务器进程懒启动且跨会话共享，env 注入同样静态 —— pi
+	// 官方无"会话上下文注入"机制。本字段即预留的接入口：未来 piapp 具备
+	// 会话感知能力（pi 官方支持上下文注入 / 改用按会话动态写配置）时，
+	// 由 piapp 侧桥接层把当前线程 id 填进 delegate 工具入参
+	// parent_thread_id（经 DelegateOptions 透传），链路其余环节已全部就绪，
+	// 无需再动 proto/引擎。
+	ParentThreadID string
 
 	// Progress 引擎侧在关键节点回调的过程事件；可为 nil，实现方必须容忍。
 	//

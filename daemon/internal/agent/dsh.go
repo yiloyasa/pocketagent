@@ -49,6 +49,24 @@ const (
 	dshInitBudget = 8 * time.Second
 )
 
+// ---- 生命周期锁的有界排队与启动预热(T-DSH 问题 B)----
+//
+// 真机实证(2026-09-21 daemon.log):dsh 首跑(DSH_HOME 为空)的 initialize 握手
+// 实际耗时可达十位数分钟(16:19:36 拉起子进程 → 16:38:22 握手完成),远超探针
+// 实测的 1.4s。期间所有用户路径调用(ListModels 模型取样/轮次就绪)与慢握手
+// 撞锁,TryLock 立即 busy-reject → 手机端反复收到"dsh 正忙"。两步收敛:
+//  1. 有界排队:TryLock 失败不再立即拒绝,先在 dshLockWait 窗口内等待锁
+//     (pi/zcode 排队语义;窗口受调用方自身截止时间收窄),窗口耗尽仍拿不到
+//     才回 dshBusy —— 保留"一个卡死的操作不拖住全线"的底线;
+//  2. 启动预热:daemon 启动后台完成一次握手(Warmup),把首跑慢启动的开销
+//     吸收到启动期,用户路径不再与慢握手竞争。
+var (
+	dshLockWait      = 15 * time.Second // TryLock 失败后的排队窗口(包级变量仅为测试注入短值)
+	dshWarmupBudget  = 2 * time.Minute  // 单次预热握手预算(吸收分钟级首跑启动)
+	dshWarmupRetry   = 30 * time.Second // 预热失败后的重试间隔
+	dshWarmupRetries = 12               // 预热重试次数上限(2min+30s × 12 ≈ 29 分钟覆盖)
+)
+
 // dshApprovalTimeout 审批等待上限:超时走拒绝路径,绝不伪造"同意"(红线 1)。
 // 包级变量仅为测试注入短值;生产语义 = 2 分钟,请勿改动。
 var dshApprovalTimeout = 2 * time.Minute
@@ -91,7 +109,7 @@ var (
 //	审批弹卡         session/request_permission(反向请求)→ ApprovalHook
 //	一轮终局         session/prompt 应答 stopReason end_turn/cancelled
 type DshProvider struct {
-	// turnMu 串行化轮次;lifeMu 保护子进程生命周期(TryLock→dshBusy,查模型不阻塞轮次)
+	// turnMu 串行化轮次;lifeMu 保护子进程生命周期(有界排队获取→dshBusy,查模型不阻塞轮次)
 	turnMu     sync.Mutex
 	lifeMu     sync.Mutex
 	turnActive atomic.Bool
@@ -119,6 +137,12 @@ type DshProvider struct {
 
 	// newClient 是测试注入点:非空时 withClientCtx 用它造 fake(生产恒 nil)。
 	newClient func() (dshClient, error)
+
+	// dataDir daemon 数据目录(凭据文件 dsh-credentials.env 的所在地)。生产上
+	// 由启动接线传入真实值;当前约束下不触碰 main/server,故默认空 → 回落
+	// dshapp 默认值 ~/.pocketagentd(见 resolvedDataDir)。字段只为"尊重显式
+	// 数据目录"留口,不直接读全局 flag,保持本包自洽。
+	dataDir string
 }
 
 func NewDshProvider() *DshProvider {
@@ -127,6 +151,11 @@ func NewDshProvider() *DshProvider {
 		modelVals: map[string]string{},
 	}
 }
+
+// CollabReady 见 CollabAware。dsh 的协同走 ACP 的**会话级** mcpServers
+// (session/new 参数),所以判据是"cmd 层是否已把 collab 服务器注入进来" ——
+// 由 dshapp.SessionMCPServers 报告,空即未接线。
+func (p *DshProvider) CollabReady() bool { return len(dshapp.SessionMCPServers()) > 0 }
 
 func (p *DshProvider) ID() string          { return "dsh" }
 func (p *DshProvider) DisplayName() string { return "DeepSeek Harness(桌面 agent)" }
@@ -142,16 +171,51 @@ func (p *DshProvider) withClient(fn func(context.Context, dshClient) error) erro
 	return p.withClientCtx(context.Background(), dshInitBudget, fn)
 }
 
+// lockLife 有界排队获取生命周期锁:先 TryLock(无争用零开销),失败后在 wait
+// 窗口内短间隔重试 —— 排队而非立即拒绝(pi/zcode 排队语义,不 busy-reject),
+// 把"模型取样/握手刚好人挤人"的瞬时争用吸收成先后等待;窗口耗尽仍拿不到
+// (持有方真卡死)才返回 false → dshBusy,保留 TryLock 模式"一个卡死的操作
+// 不拖住全线"的底线(codex/zcode 同款三点纪律的第 1 点由此弱化为"有界拖")。
+func (p *DshProvider) lockLife(wait time.Duration) bool {
+	if p.lifeMu.TryLock() {
+		return true
+	}
+	if wait <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		time.Sleep(25 * time.Millisecond)
+		if p.lifeMu.TryLock() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+	}
+}
+
 // withClientCtx 在保证子进程活着且已完成 initialize 的前提下执行 fn;
 // 失败自动重启一次。ctx 无截止时间时套默认上界(8s,探针实测冷启动 1.4s)。
+//
+// 【T-DSH 问题 B】锁获取从"TryLock 立即 busy-reject"改为"有界排队":
+// 排队窗口 = min(dshLockWait, 调用方自身剩余截止时间),绝不超过调用方
+// 本来就愿意等待的时长 —— ctx 传导不受影响(dshapp.callTimeout 逐请求
+// select ctx.Done,超时即返回并 forget pending,无僵尸持锁,已核)。
 func (p *DshProvider) withClientCtx(ctx context.Context, budget time.Duration, fn func(context.Context, dshClient) error) error {
-	if !p.lifeMu.TryLock() {
-		return dshBusy
-	}
-	defer p.lifeMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	wait := dshLockWait
+	if d, hasDeadline := ctx.Deadline(); hasDeadline {
+		if rem := time.Until(d); rem < wait {
+			wait = rem
+		}
+	}
+	if !p.lockLife(wait) {
+		return dshBusy
+	}
+	defer p.lifeMu.Unlock()
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		if budget <= 0 {
 			budget = dshInitBudget
@@ -213,7 +277,11 @@ func (p *DshProvider) startClientLocked() (dshClient, error) {
 	if p.newClient != nil {
 		c, err = p.newClient()
 	} else {
-		c, err = dshapp.Start(dshapp.StartOptions{})
+		// 凭据注入:优先用进程 env(daemon 启动时已 export 的),缺失时以
+		// dsh-credentials.env 文件补充(绝不强压进程 env,文件只作 fallback)。
+		// 文件只在 daemon 数据目录内(默认 ~/.pocketagentd),不碰用户 ~/.dsh。
+		extra := dshapp.LoadCredentialEnv(p.dataDir)
+		c, err = dshapp.Start(dshapp.StartOptions{ExtraEnv: extra, DataDir: p.dataDir})
 	}
 	if err != nil {
 		return nil, err
@@ -223,12 +291,55 @@ func (p *DshProvider) startClientLocked() (dshClient, error) {
 	return c, nil
 }
 
+// resolvedDataDir 返回用于凭据文件定位的数据目录:provider 持有显式目录时优先,
+// 否则回落 dshapp 默认值(与 StartOptions.DataDir 同源,见 dshapp.DefaultDataDir)。
+func (p *DshProvider) resolvedDataDir() string {
+	if p.dataDir != "" {
+		return p.dataDir
+	}
+	return dshapp.DefaultDataDir()
+}
+
 // dropClientLocked 关闭并清空当前子进程(调用方须持 lifeMu)。
 func (p *DshProvider) dropClientLocked() {
 	if p.client != nil {
 		p.client.Close()
 	}
 	p.client, p.inited, p.caps = nil, false, nil
+}
+
+// Warmup daemon 启动后台预热:拉起子进程并完成 initialize 握手(对标
+// codex.Warmup 在 cmd/pocketagentd/main.go 的启动接线)。
+//
+// 【为什么 dsh 的预热不能像 codex 一样一次性】codex 首包 ~1s;dsh 首跑
+// (DSH_HOME 为空)实测握手可拖到十位数分钟(2026-09-21 真机:16:19:36 拉起
+// → 16:38:22 完成),期间用户路径与慢握手撞锁就是"dsh 正忙"的根因。预热
+// 把这次慢启动吸收到启动期:握手成功一次后 inited 恒真,用户路径就绪检查
+// 变成瞬时通过。单次预算 dshWarmupBudget(2min,持有 lifeMu 期间用户调用
+// 走 lockLife 有界排队);失败按 dshWarmupRetry 间隔重试至多
+// dshWarmupRetries 次,窗口耗尽如实落日志并退出 —— 不阻塞启动、不影响
+// 之后的懒启动路径(用户随时可抢先完成握手,两条路殊途同归)。
+// dshWarmup* 为包级变量仅为测试注入短值,生产语义见上方注释。
+func (p *DshProvider) Warmup() {
+	for i := 0; i < dshWarmupRetries; i++ {
+		err := p.withClientCtx(context.Background(), dshWarmupBudget, func(context.Context, dshClient) error {
+			return nil
+		})
+		switch {
+		case err == nil:
+			if i > 0 {
+				log.Printf("[dsh] 预热握手完成(第 %d 次尝试)", i+1)
+			}
+			return
+		case errors.Is(err, dshBusy):
+			// 已有别的调用在持锁(大概率在做同一件事):不空转,等下个周期再看。
+			log.Printf("[dsh] 预热遇忙(其他调用持锁),%v 后复查", dshWarmupRetry)
+		default:
+			log.Printf("[dsh] 预热第 %d/%d 次未完成握手: %v", i+1, dshWarmupRetries, err)
+		}
+		time.Sleep(dshWarmupRetry)
+	}
+	log.Printf("[dsh] 预热窗口耗尽仍未完成握手(不阻塞启动;后续请求仍可懒启动)")
 }
 
 // ---- Provider 接口 ----
@@ -502,7 +613,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 			}
 			return nil, nil, ctx.Err()
 		}
-		return nil, nil, dshRunErrorFrom(res.err)
+		return nil, nil, p.dshRunErrorFrom(res.err)
 	}
 	drainEvents(&enqueued, &processed) // 排空栅栏:update 帧先于终局被消费,不丢尾部事件
 	// 终局 stopReason 映射(蓝本 §4.3:end_turn → 轮次完成;cancelled → TurnFailed)
@@ -1030,14 +1141,21 @@ func (e *dshRunError) ErrorInfo() *pb.Error {
 	return e.info
 }
 
-// dshRunErrorFrom 传输层错误 → 结构化错误(探针修正③:缺 key 归一化为
-// MISSING_CREDENTIAL,dsh 原生 message 原样给人话诊断,不加工)。
-func dshRunErrorFrom(err error) *dshRunError {
+// dshRunErrorFrom 传输层错误 → 结构化错误(探针修正③ + 本次增强):缺 key 归一为
+// MISSING_CREDENTIAL,且"人话在前、上游原文在后"——直接告诉用户该干什么,同时
+// 不丢弃 dsh 原生报错(铁律:不认识的输入要原样透传,不能替换成"未知/错误")。
+func (p *DshProvider) dshRunErrorFrom(err error) *dshRunError {
 	info := &pb.Error{Retryable: false}
 	if dshapp.IsMissingCredential(err) {
 		info.Code = "MISSING_CREDENTIAL"
-		info.Message, _ = dshapp.RPCErrorMessage(err)
-		info.Details = "daemon 未配置 DEEPSEEK_API_KEY:请在启动 daemon 的环境中导出该变量(dsh 凭据链:进程 env → DSH_HOME/.credentials.yaml)"
+		// 人话在前:指向用户可操作的修复(创建 dsh-credentials.env 或给 daemon 设 env)。
+		info.Message = "dsh 缺少 DeepSeek 凭据：无法调用模型。请在电脑上创建 " +
+			filepath.Join(p.resolvedDataDir(), "dsh-credentials.env") +
+			" 并写入 DEEPSEEK_API_KEY=你的密钥，或给 daemon 进程设置同名环境变量；改完重启 daemon 即可。"
+		// 上游原文原样保留进 Details(保真,不加工):用户可据此向 dsh 社区贴原报错。
+		if msg, ok := dshapp.RPCErrorMessage(err); ok {
+			info.Details = msg
+		}
 	} else {
 		info.Code = "DSH_ERROR"
 		if msg, ok := dshapp.RPCErrorMessage(err); ok {

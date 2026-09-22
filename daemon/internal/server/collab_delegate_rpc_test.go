@@ -1,8 +1,9 @@
 // collab_delegate_rpc_test.go —— DelegateSubTask RPC 的端到端测试(T-L2fix
 // 单写者重构)。经 bufconn 起真实 gRPC 服务端(挂既有 UnaryAuth 拦截器),
-// 钉四条链路:echo agent 委派全链路(RPC → 单例引擎 → CreateThread →
-// runTurnOnce → 落库)、未知 agent 人话报错走 error 字段、深度拒绝(同设备
-// 在飞 ≥1 拒绝 + 跨设备共享 depth 闸)、未鉴权拒绝(拦截器 Unauthenticated)。
+// 钉几条链路:echo agent 委派全链路(RPC → 单例引擎 → CreateThread →
+// runTurnOnce → 落库)、未知 agent 人话报错走 error 字段、有界并发(同设备
+// 并发 sibling 默认上限内放行,取代旧版单飞)、深度锁(子在生子经 childThreads
+// 精准拒绝)、未鉴权拒绝(拦截器 Unauthenticated)。
 //
 // 【为什么必须过真拦截器】薄代理子模式的生产调用链就是"回环 gRPC + Bearer
 // token → UnaryAuth → handler",直接调方法会绕过鉴权闸 —— 鉴权拒绝这条
@@ -13,6 +14,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,100 +149,103 @@ func TestDelegateSubTaskUnknownAgent(t *testing.T) {
 	}
 }
 
-// TestDelegateSubTaskDepthRejectedSameDevice 深度锁跨进程语义:同一发起方
-// (同一 token/device)在飞委派 ≥1 → 第二次委派被拒("子不生子"),拒绝不建
-// 子线程;第一个委派放行后正常完成、计数归零,后续委派恢复可用。
-func TestDelegateSubTaskDepthRejectedSameDevice(t *testing.T) {
-	gate := &gateProvider{entered: make(chan struct{}), release: make(chan struct{})}
+// TestDelegateSubTaskParallelAllowedSameDevice 有界并发取代旧版单飞:同一设备
+// 的并发 sibling 委派(空 parent_thread_id)不再被"在飞≥1"单飞闸拒绝,默认上限
+// 内全部放行 —— 这正是本修复要支持的"同时派发多个子智能体"。首个委派完成后
+// 在飞计数归零(white-box)。深度锁(子不生子)走另一条精准判定,不在此闸上。
+func TestDelegateSubTaskParallelAllowedSameDevice(t *testing.T) {
+	// entered 缓冲 8:本测试要让两个委派都进入 provider.Run,故发送不阻塞。
+	gate := &gateProvider{entered: make(chan struct{}, 8), release: make(chan struct{})}
 	client, srv, cleanup := newCollabRPCServer(t, map[string]agent.Provider{"gate": gate})
 	defer cleanup()
 	tok := LegacyTokenFor(collabRPCPairCode)
 
-	done := make(chan struct{})
-	var firstResp *pb.DelegateSubTaskResponse
+	// 两个委派并发跑:旧版单飞闸会拒第二个,新为有界并发放行。两者都进入
+	// provider.Run 后在 release 上阻塞,故需先在 goroutine 里发起,等两个都
+	// 真正在飞后再统一放行,避免"关闭 release 依赖第二个调用先返回"的互锁。
+	var firstResp, secondResp *pb.DelegateSubTaskResponse
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		defer close(done)
+		defer wg.Done()
 		firstResp, _ = client.DelegateSubTask(clientCtxWithBearer(tok),
 			&pb.DelegateSubTaskRequest{AgentId: "gate", Task: "外层在飞"})
 	}()
-	select {
-	case <-gate.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("第一个委派未进入 provider.Run")
+	go func() {
+		defer wg.Done()
+		secondResp, _ = client.DelegateSubTask(clientCtxWithBearer(tok),
+			&pb.DelegateSubTaskRequest{AgentId: "gate", Task: "第二个并发子任务"})
+	}()
+	// 等到两个都进入 Run(各占一个并发名额)→ 证明是并行而非旧版单飞。
+	for i := 0; i < 2; i++ {
+		select {
+		case <-gate.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("超时:只有 %d 个委派进入运行,未能并行", i)
+		}
 	}
-
-	// 在飞期间同一设备再来一次:拒绝(在飞 ≥1),且未建任何新子线程。
-	rej, err := client.DelegateSubTask(clientCtxWithBearer(tok),
-		&pb.DelegateSubTaskRequest{AgentId: "gate", Task: "嵌套委派"})
-	if err != nil {
-		t.Fatalf("深度拒绝应走 error 字段而非 gRPC status: %v", err)
-	}
-	if !strings.Contains(rej.GetError(), "不能再委派") {
-		t.Fatalf("拒绝文案应如实说明深度锁: %q", rej.GetError())
-	}
-	if rej.GetChildThreadId() != "" {
-		t.Fatalf("被拒委派不得有子线程: %q", rej.GetChildThreadId())
-	}
-
 	close(gate.release)
-	<-done
+	wg.Wait()
+
 	if firstResp.GetError() != "" {
 		t.Fatalf("外层委派应正常完成: %q", firstResp.GetError())
 	}
-	if n := len(srv.cfg.Store.List(true)); n != 1 {
-		t.Fatalf("全程只应有外层 1 条子线程,实际 %d 条", n)
+	if secondResp.GetError() != "" {
+		t.Fatalf("并发 sibling 不应被拒(单飞已废除): %q", secondResp.GetError())
+	}
+	if secondResp.GetChildThreadId() == "" {
+		t.Fatalf("放行的委派应建出子线程")
+	}
+	if n := len(srv.cfg.Store.List(true)); n != 2 {
+		t.Fatalf("应有 2 条子线程(在飞并发),实际 %d 条", n)
 	}
 	// 归零即清键:登记簿不积累(white-box)。
 	ce := srv.collabEngineFor()
 	ce.mu.Lock()
-	inflight := len(ce.inflightByDevice)
-	depth := ce.depth
+	devices := len(ce.inflightByDevice)
+	infl := ce.inflight
 	ce.mu.Unlock()
-	if inflight != 0 || depth != 0 {
-		t.Fatalf("委派完成后在飞计数应归零: devices=%d depth=%d", inflight, depth)
+	if devices != 0 || infl != 0 {
+		t.Fatalf("委派完成后在飞计数应归零: devices=%d inflight=%d", devices, infl)
 	}
 }
 
-// TestDelegateSubTaskDepthRejectedAcrossDevice 共享 depth 闸:设备 A 的委派
-// 在飞期间,设备 B(已配对、token 合法)的委派同样被拒 —— 所有代理进程汇入
-// 单引擎后,全局深度对任意连接可见(保守面如实说明,由 coordinator 择机重试)。
-func TestDelegateSubTaskDepthRejectedAcrossDevice(t *testing.T) {
-	gate := &gateProvider{entered: make(chan struct{}), release: make(chan struct{})}
-	client, srv, cleanup := newCollabRPCServer(t, map[string]agent.Provider{"gate": gate})
+// TestDelegateSubTaskDepthLockRejectsChildSpawning 深度锁 1(子不生子)RPC 级:
+// 先发的委派所建子线程会登记进 childThreads;若某次委派的 parent_thread_id
+// 指向这样一个"委派子线程",引擎判定"子在生子" → 以"不能再委派"如实拒绝,
+// 不建子线程。这是取代旧版 depth>0 单飞闸后,深度锁的精准落点(结构性闸之外
+// 的引擎兜底)。
+func TestDelegateSubTaskDepthLockRejectsChildSpawning(t *testing.T) {
+	client, _, cleanup := newCollabRPCServer(t, map[string]agent.Provider{"echo": agent.NewEcho()})
 	defer cleanup()
+	tok := LegacyTokenFor(collabRPCPairCode)
 
-	pub, _ := testKey(t)
-	auth, err := srv.Authorize(context.Background(), &pb.AuthorizeRequest{
-		Method:       &pb.AuthorizeRequest_PairCode{PairCode: collabRPCPairCode},
-		DeviceId:     "dev-proxy-b",
-		DevicePubKey: pub,
-	})
+	// 先建一个委派子线程(登记进 childThreads)。
+	resp, err := client.DelegateSubTask(clientCtxWithBearer(tok),
+		&pb.DelegateSubTaskRequest{AgentId: "echo", Task: "父委派"})
 	if err != nil {
-		t.Fatalf("注册第二设备失败: %v", err)
+		t.Fatalf("首委派 RPC 失败: %v", err)
+	}
+	if resp.GetError() != "" {
+		t.Fatalf("首委派应成功: %q", resp.GetError())
+	}
+	childID := resp.GetChildThreadId()
+	if childID == "" {
+		t.Fatal("首委派未建子线程")
 	}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = client.DelegateSubTask(clientCtxWithBearer(LegacyTokenFor(collabRPCPairCode)),
-			&pb.DelegateSubTaskRequest{AgentId: "gate", Task: "设备A在飞"})
-	}()
-	select {
-	case <-gate.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("设备A委派未进入 provider.Run")
-	}
-
-	rej, err := client.DelegateSubTask(clientCtxWithBearer(auth.Token),
-		&pb.DelegateSubTaskRequest{AgentId: "gate", Task: "设备B趁飞而入"})
+	// 用该子线程 id 当 parent_thread_id 再委派 → 子在生子 → 深度锁拒绝。
+	rej, err := client.DelegateSubTask(clientCtxWithBearer(tok),
+		&pb.DelegateSubTaskRequest{AgentId: "echo", Task: "嵌套", ParentThreadId: childID})
 	if err != nil {
-		t.Fatalf("深度拒绝应走 error 字段: %v", err)
+		t.Fatalf("深度拒绝应走 error 字段而非 gRPC status: %v", err)
 	}
 	if !strings.Contains(rej.GetError(), "不能再委派") {
-		t.Fatalf("跨设备深度拒绝文案不符: %q", rej.GetError())
+		t.Fatalf("深度锁拒绝文案应如实说明子不生子: %q", rej.GetError())
 	}
-	close(gate.release)
-	<-done
+	if rej.GetChildThreadId() != "" {
+		t.Fatalf("被拒委派不得建子线程: %q", rej.GetChildThreadId())
+	}
 }
 
 // TestDelegateSubTaskUnauthenticated 鉴权红线:无 token / 伪造 token 一律

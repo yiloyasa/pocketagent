@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
 // ---- 定位(不能依赖 PATH:daemon 由计划任务经 WMI 派生,环境变量不保证齐全)----
@@ -187,6 +188,14 @@ func InvalidateVersionCache() {
 type StartOptions struct {
 	// Cwd 子进程工作目录(session/new 的默认 cwd 锚点);空 = 继承 daemon。
 	Cwd string
+	// ExtraEnv 额外注入子进程的环境变量(KEY=VALUE 形式),放在自算的 DSH_HOME
+	// 之后追加(语义为可覆盖)。当前用途:daemon 主动补充的 dsh 凭据
+	// (dsh-credentials.env 解析结果),详见 dshapp.LoadCredentialEnv。
+	// 注意凭据键已按"进程 env 优先"在解析处剔除重复,这里不会用文件值压过进程 env。
+	ExtraEnv []string
+	// DataDir daemon 数据目录;空时 dshapp 按默认 ~/.pocketagentd 解析
+	// (尊重显式数据目录,但本包不读全局 flag,保持自洽;见 DefaultDataDir 注释)。
+	DataDir string
 }
 
 // Client 管理一个 dsh --profile acp 子进程(一进程多会话,与 codexapp 同构)。
@@ -284,6 +293,11 @@ func startProcess(exe string, args []string, opts StartOptions) (*Client, error)
 	if os.Getenv("DSH_HOME") == "" {
 		env = append(env, "DSH_HOME="+defaultDshHome())
 	}
+	// ExtraEnv 在 DSH_HOME 之后追加:允许上层用显式值覆盖前面已设项(如补 dsh 凭据);
+	// 凭据键的"进程 env 优先"已在 LoadCredentialEnv 解析时保证,这里不重复判。
+	if len(opts.ExtraEnv) > 0 {
+		env = append(env, opts.ExtraEnv...)
+	}
 	cmd.Env = env
 	hidewin.Apply(cmd) // 控制台程序:不隐藏会在用户桌面闪黑窗(与 codexapp 同款)
 	stdin, err := cmd.StdinPipe()
@@ -324,14 +338,11 @@ func startProcess(exe string, args []string, opts StartOptions) (*Client, error)
 // daemon.log,测试注入 bytes.Buffer 收集器)。核心抽成自由函数以便单测
 // (codexapp 同款,缺陷即测试)。
 func drainStderr(r io.Reader, line func(string)) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 单行上限 1MB(stderr 是诊断文本,不是协议帧)
-	for sc.Scan() {
-		line(sc.Text())
-	}
-	if err := sc.Err(); err != nil {
-		line("读取异常: " + err.Error())
-	}
+	// 【收口到 stderrdrain】与 codexapp 同款改造:原实现裸扫 + 直传,凭据会原样
+	// 落进 daemon.log,且没有总量上限。dsh 尤其敏感 —— 它的 stderr 可能吐出
+	// 上游凭据链相关文本(provider route / credentials service),不脱敏等于把
+	// 凭据写进磁盘日志。签名不变,调用方与单测零改动。
+	stderrdrain.Drain(r, stderrdrain.Options{}, line)
 }
 
 type wireMsg struct {

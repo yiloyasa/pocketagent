@@ -23,6 +23,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/agent"
 	"github.com/pocketagent/daemon/internal/collabmcp"
+	"github.com/pocketagent/daemon/internal/dshapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/mdns"
 	"github.com/pocketagent/daemon/internal/piapp"
@@ -71,13 +72,28 @@ func main() {
 	// 进程全局成立(子生子 P1 关闭)。对端关闭或收到信号即退出,不起
 	// gRPC 监听/mDNS。
 	collabMCP := flag.Bool("collab-mcp", false, "子模式:作为 pocketagent-collab 本地 MCP 服务器运行(stdio 薄代理,委派经回环 gRPC 汇入主 daemon);对端关闭即退出")
+	// -collab-max-parallel:并行委派(同时派出的子智能体)全局 / 单设备上限。
+	// 有界并发、不排队(排队会让父轮次同步阻塞死锁);超限如实报错由 coordinator
+	// 择机重试。0 或不传 = 默认 3(server.SetCollabMaxParallel 把 <=0 归一为 3)。
+	collabMaxParallel := flag.Int("collab-max-parallel", 0, "并行委派(子智能体)上限;0=默认3;超出如实报错不排队")
 	// -pi-collab:pi 协作开关。置位时初始化 daemon 自有 pi agent 目录
 	// (幂等安装 pi-mcp-adapter),并把本 daemon 的 -collab-mcp 子模式写进
 	// 该目录的 mcp.json;全部容错,失败不阻塞 daemon 主功能,下次启动重试。
 	// env PA_PI_COLLAB 仅供手工调试:flag 不传时不调用 SetCollabEnabled,
 	// env 继续生效;flag 显式置位则以 flag 为准。
-	piCollab := flag.Bool("pi-collab", false, "启用 pi 协作 MCP:初始化 daemon 自有 pi agent 目录并把本 daemon(-collab-mcp 子模式)注册为其 pocketagent-collab MCP 服务器")
+	// 【默认开启(2026-09-21)】以前默认关,直接后果是"手机端根本派不出子智能体"
+	// —— 用户实测报障「派发子智能体的操作会直接失败」,根因正是模型看不见
+	// agent_delegate 工具(那条会话的消息数为 0,请求压根没发出去)。多 agent
+	// 协同是产品主张,不该要求用户先找到一个隐藏 flag 才能用,故默认置位。
+	// 容错面不变:初始化目录 / 写 mcp.json 失败一律只记日志、不阻塞主功能;
+	// env 注入另有四道门控(piapp.CollabEnvInjection),目录不存在就不注入,
+	// 不会把 pi 的凭据与扩展弄丢。要关掉仍可显式传 -pi-collab=false。
+	piCollab := flag.Bool("pi-collab", true, "启用 pi 协作 MCP(默认开):把本 daemon 注册为 pi 的 pocketagent-collab MCP 服务器;-pi-collab=false 可关闭")
 	flag.Parse()
+
+	// 并行委派上限(有界并发,不排队):把 -collab-max-parallel 传导进引擎。
+	// SetCollabMaxParallel 统一归一化(<=0 → 默认 3),整进程只此一处写入。
+	server.SetCollabMaxParallel(*collabMaxParallel)
 
 	// -collab-mcp 子模式:命中即走 MCP 服务器路径,ServeStdio 返回后退出。
 	if *collabMCP {
@@ -153,6 +169,27 @@ func main() {
 			} else {
 				log.Printf("pi 协作 MCP 已启用: agent 目录 %s | 服务器 %s %v | env 注入 %d 项",
 					piapp.ResolveCollabAgentDir(), exe, args, len(env))
+			}
+			// ---- dsh 协作 MCP 接线(仅部署级)----
+			// 【会话级注入已弃用,不再调用 SetSessionMCPServers】dsh 的 session/new
+			// 的 mcpServers 在 dsh 侧"空值接受、非空拒绝"(dsh-acp 文档 + 官方
+			// handbook 一致),且 MCP 实例是**部署级 Cordis 插件**、ACP Session 创建
+			// 于该固定 Host 组合之后 —— 经 session/new 传非空的 pocketagent-collab
+			// 要么被拒(整条 session 建不起)、要么被静默忽略(挂上不生效),两种结果
+			// 都不是"真接上"。所以这里**只**走部署级:把插件注册进隔离 HOME 的
+			// profile 补丁层(WriteCollabMcpPatch → profiles/acp/cordis.patch.yml),
+			// 由 dsh 固定 Host 组合加载。命令/参数/ token 与 pi 同款,都指向本
+			// daemon 的 -collab-mcp 子模式。会话级路径退化为恒空数组(与改造前零差异)。
+			mcpEnvCopy := map[string]string{}
+			if tok := server.LegacyTokenFor(pairCodeValue); tok != "" {
+				mcpEnvCopy["POCKETAGENT_TOKEN"] = tok
+			}
+			if ok, perr := dshapp.WriteCollabMcpPatch("", exe, args, mcpEnvCopy); perr != nil {
+				log.Printf("WARNING: 写入 dsh 协作 MCP 补丁失败(dsh 主功能不受影响): %v", perr)
+			} else if ok {
+				log.Printf("dsh 协作 MCP 已接线(部署级 profile 补丁): %s", dshapp.CollabPatchPath(""))
+			} else {
+				log.Printf("dsh 协作 MCP 未接线:profile 补丁层已有其他内容,请手动合并 %s", dshapp.CollabPatchPath(""))
 			}
 		}
 	}
@@ -268,6 +305,12 @@ func main() {
 	// 预热 codex:后台拉起 app-server 并 initialize,MCP/模型列表/首条消息零等待
 	if cp, ok := providers["codex"].(*agent.CodexProvider); ok {
 		go cp.Warmup()
+	}
+	// 预热 dsh(T-DSH 问题 B):dsh 首跑的 initialize 握手实测可拖到十位数分钟,
+	// 懒启动把这笔开销留给首个用户请求,还让所有并发调用 busy-reject("dsh 正忙")。
+	// 启动后台预热一次(内部带重试窗口),握手成功后用户路径就绪检查瞬时通过。
+	if dp, ok := providers["dsh"].(*agent.DshProvider); ok {
+		go dp.Warmup()
 	}
 	// 版本锚点(AUDIT §2 L0 产物自证):启动日志打印 -ldflags 烙印的版本,
 	// 确认"跑着的是新的"不再只靠 pid。

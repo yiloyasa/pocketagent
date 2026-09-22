@@ -37,6 +37,12 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		if _, ok := provider.(agent.TextGenerator); ok {
 			caps = append(caps, "text_generation:"+id)
 		}
+		// collab 能力:该 provider 是否已把本地 collab MCP 挂进自己的会话(即它那
+		// 一侧的模型看得见 agent_delegate)。手机端据此点亮"多 agent 协同"入口,
+		// 而不是再摆一个恒假的"开发中"开关。判定走接口,不枚举 agent 名字。
+		if ca, ok := provider.(agent.CollabAware); ok && ca.CollabReady() {
+			caps = append(caps, "collab:"+id)
+		}
 	}
 	sort.Strings(caps) // 稳定输出,便于测试与客户端缓存
 	caps = append(caps, "terminal", "fs", "git", "agent", "event_sequence")

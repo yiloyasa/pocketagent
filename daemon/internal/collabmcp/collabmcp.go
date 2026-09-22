@@ -15,23 +15,23 @@
 //     查询子任务线程状态（排队/运行/等待审批/终态）。
 //
 // 七准则（调研 §3）在本包的落实位置：
-//   1. 委派对模型是一个工具：agent_delegate 单一入口，后端多 agent
+//  1. 委派对模型是一个工具：agent_delegate 单一入口，后端多 agent
 //     （dsh 接缝哲学）—— 见 registerTools。
-//   2. 子代理活动以工具卡呈现：不在本包发明新帧；工具结果与 progress
-//      通知就是卡片素材，走既有 ToolCallBlock 通道。
-//   3. 父持决策权、子返回有界摘要：truncateRunes，≤8192 字符截断并标注。
-//   4. 委派必须被授权：授权卡（首次确认）属后续任务 L2b；本包把引擎
-//      Delegate 定为唯一闸门，授权检查加在引擎实现里即可，工具层不重复做。
-//   5. 深度锁 1（子不生子）：本 MCP 服务器只挂到"用户主动接入"的
-//      coordinator agent；daemon 为委派创建的子线程走内部线程机制，
-//      【接线硬性要求】不得给子线程挂载本服务器 —— 子线程因此看不见
-//      agent_delegate，天然"子不生子"。
-//   6. 失败如实回传：引擎错误原样进工具结果（IsError + 错误文本），
-//      daemon 绝不代拟"成功"，重试与否由 coordinator（模型/用户）决定
-//      —— 见 runDelegate。
-//   7. 同 agent 串行是事实约束：per-agent 信号量（同 agent=同 provider
-//      串行，跨 agent 并行），真排队才发"排队中"progress，不伪造并行
-//      —— 见 agentLimiter / runDelegate。
+//  2. 子代理活动以工具卡呈现：不在本包发明新帧；工具结果与 progress
+//     通知就是卡片素材，走既有 ToolCallBlock 通道。
+//  3. 父持决策权、子返回有界摘要：truncateRunes，≤8192 字符截断并标注。
+//  4. 委派必须被授权：授权卡（首次确认）属后续任务 L2b；本包把引擎
+//     Delegate 定为唯一闸门，授权检查加在引擎实现里即可，工具层不重复做。
+//  5. 深度锁 1（子不生子）：本 MCP 服务器只挂到"用户主动接入"的
+//     coordinator agent；daemon 为委派创建的子线程走内部线程机制，
+//     【接线硬性要求】不得给子线程挂载本服务器 —— 子线程因此看不见
+//     agent_delegate，天然"子不生子"。
+//  6. 失败如实回传：引擎错误原样进工具结果（IsError + 错误文本），
+//     daemon 绝不代拟"成功"，重试与否由 coordinator（模型/用户）决定
+//     —— 见 runDelegate。
+//  7. 同 agent 串行是事实约束：per-agent 信号量（同 agent=同 provider
+//     串行，跨 agent 并行），真排队才发"排队中"progress，不伪造并行
+//     —— 见 agentLimiter / runDelegate。
 //
 // 不做的（首版）：agent_spawn 异步、子代理再委派（准则 5）、模型自选
 // agent 的智能路由（agent_id 由调用方显式给）。
@@ -130,6 +130,16 @@ type delegateArgs struct {
 	Workspace string `json:"workspace,omitempty" jsonschema:"可选：工作区目录覆盖，留空用 daemon 默认工作区"`
 	Model     string `json:"model,omitempty" jsonschema:"可选：模型覆盖（形如 agent/model-id），留空用该 agent 当前默认模型"`
 	Effort    string `json:"effort,omitempty" jsonschema:"可选：思考强度覆盖，留空用该 agent 当前默认"`
+	// RoleID 引用的协同角色（分工编排的关键入口）：一个角色 = “落到哪个 agent +
+	// 用什么模型与思考强度 + 这个岗位的职责和长期要求”的一条配置，改一处即
+	// 影响后续所有引用它的委派。与一次性传参的区别：配置一次，长期生效。
+	// agent_id 因此可以省略（由角色提供）；两者都给时以显式值为准。
+	RoleID string `json:"role_id,omitempty" jsonschema:"可选：引用的协同角色 id（如 reviewer）；它会提供目标 agent、模型、思考强度，并把该岗位的职责与长期要求注入本次子任务。省略 agent_id 时由它指定目标 agent"`
+	// ParentThreadID 发起方（父）线程 id（T-S1Pa，可选）：非空时子线程落库
+	// 父链归属、手机端点亮内联卡；空 = 父链为空（卡不亮不误报）。v1 语义：
+	// 该值属宿主/链路基建，coordinator 模型一般无需填写（未来 piapp 会话
+	// 感知注入后由宿主自动填充），留空即诚实变暗。
+	ParentThreadID string `json:"parent_thread_id,omitempty" jsonschema:"可选：发起方线程 id，用于子代理线程归属登记；通常由宿主自动注入，调用方无需填写，留空则子线程不挂父链"`
 }
 
 // statusArgs agent_status 入参：thread_id 可选。

@@ -104,6 +104,19 @@ type CodexProvider struct {
 	steerMu     sync.Mutex
 	activeSteer map[string]steerTarget
 
+	// ---- 反问卡能力宣告(只读发现,绝不注入) ----
+	// 旧版这里曾把实验特性 default_mode_request_user_input 注入 thread/start、
+	// thread/resume 的 config 覆盖来"解锁"Default 模式的 request_user_input 工具。
+	// 但该特性在 codex 0.155.1 仍是 underDevelopment,注入即触发 codex 的
+	// "Under-development features enabled"警告(真机实测每次会话都弹),而官方抑制
+	// 途径只有改写用户 ~/.codex/config.toml —— 本项目红线永久封死。
+	// 因此现已**不再注入**:能力是否存在改为运行时宣告(askUserInputSupported),
+	// 由手机端据其决定是否显示反问入口。这组字段只缓存"codex 是否宣告该特性"
+	// 的运行时判定结果(按 gen),不参与任何写入。
+	askFeatMu  sync.Mutex
+	askFeatGen int
+	askFeatVal bool
+
 	// ---- 第 28 轮:三类只读查询的 TTL 缓存(见 capabilities_cache.go)----
 	// capabilities(skills/hooks/plugins,30 分钟)/ mcpServers(5 分钟)/
 	// usage(60 秒)。命中零 codex 调用;重拉失败回退旧值;InvalidateAll() 全清。
@@ -548,12 +561,24 @@ func (p *CodexProvider) ThreadEventHandlerAsync(h func(codexThreadID, method str
 }
 
 // codexThreadIDOf 从通知参数里取 threadId(取不到就返回空,由 server 层忽略)。
+// 【T-S1P】绝大多数通知的 threadId 在顶层;唯一例外是 thread/started —— 它带
+// 完整 ThreadInfo 对象,线程 id 在 thread.id(S0 实测帧,
+// docs/verify/evidence/codex-subagent-s0.md)。顶层缺 threadId 时回退读
+// thread.id,否则"会话级事实同步"管线对 thread/started 永远拿到空 id 而整帧
+// 丢弃,子代理线程的存根登记(server 层)也就无从谈起。只做回退:顶层有
+// threadId 的既有通知行为一字不变。
 func codexThreadIDOf(params json.RawMessage) string {
 	var n struct {
 		ThreadId string `json:"threadId"`
+		Thread   struct {
+			Id string `json:"id"`
+		} `json:"thread"`
 	}
 	_ = json.Unmarshal(params, &n)
-	return n.ThreadId
+	if n.ThreadId != "" {
+		return n.ThreadId
+	}
+	return n.Thread.Id
 }
 
 var errNoClient = fmt.Errorf("codex 子进程未启动")
@@ -807,18 +832,25 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	// 既有会话和新会话都生效(只在新建线程时带,会让老会话永远拿旧偏好)。
 	// 【线程化】有设置快照的会话按快照生成(新建对话语义:之后改设置不影响它),
 	// 旧线程(快照 nil)回退全局。
+	// 【反问卡:已主动停用实验特性注入 —— 见下方 AskUserInputSupported 注释】
+	// 这里只算"回答详略/思考摘要"的覆盖,绝不再并上
+	// features.default_mode_request_user_input。开启该 under-development 特性
+	// 必然触发 codex 的"Under-development features enabled"警告(真机实测每次都弹),
+	// 而抑制它的唯一官方途径是改写用户 ~/.codex/config.toml,本项目红线永久封死。
+	// 因此 daemon 不再注入该特性;反问能力是否存在改为由 askUserInputSupported()
+	// 运行时宣告,交给手机端决定是否显示反问入口(见 codex_requests.go / android)。
 	cfgOverride := p.ConfigOverrideFor(req.Thread)
 	if ref, hit := p.codexThreadRef(req.Thread.ID); hit && ref.gen == gen {
 		codexTID = ref.id // 当前子进程仍加载着该线程
 	} else if req.Thread.CodexThreadID != "" {
-		// daemon/子进程重启后内存缓存作废:先把旧线程 resume 进当前子进程
-		resumeParams := map[string]interface{}{"threadId": req.Thread.CodexThreadID}
-		if len(cfgOverride) > 0 {
-			resumeParams["config"] = cfgOverride
-		}
+		// daemon/子进程重启后内存缓存作废:先把旧线程 resume 进当前子进程。
 		// 同上:resume 也带 config,保证"改了立刻生效"对老会话成立,且可核验。
+		// 【降级护栏同款】复用 callThreadResume 的"带 features 覆盖失败 → 摘除
+		// features 重试"逻辑,与下方 thread/start 分支同源(见 L873 注释)。否则某版
+		// codex 宣告了特性却不认 config.features 键时,resume 直接失败 → 走下面的
+		// CodexThreadID="" 改开新线程 → 用户老会话历史全丢,且只表现为"AI 失忆"。
 		log.Printf("[codex] thread/resume %s config=%v", req.Thread.CodexThreadID, cfgOverride)
-		if _, err := p.client.Call("thread/resume", resumeParams); err != nil {
+		if err := p.callThreadResume(req.Thread.CodexThreadID, cfgOverride, p.client.Call); err != nil {
 			log.Printf("[codex] thread/resume %s 失败: %v(改开新线程)", req.Thread.CodexThreadID, err)
 			req.Thread.CodexThreadID = ""
 		} else {
@@ -838,6 +870,9 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		// 与 turn/start 一样打日志:让"回答详略/思考摘要真的带上了"可被外部核验。
 		log.Printf("[codex] thread/start cwd=%s config=%v", req.Workspace, cfgOverride)
 		raw, err := p.client.Call("thread/start", startParams)
+		// 【反问卡】注意:此处不再做"带 features 覆盖失败→摘除重试"的护栏。
+		// 该护栏是为"注入 under-development 特性"特设的逃生舱,现在已不再注入
+		// (见 askUserInputSupported 注释),无 features 键可摘,删干净以免留下死分支。
 		if err != nil {
 			return nil, nil, fmt.Errorf("thread/start: %w", err)
 		}
@@ -1560,6 +1595,106 @@ func (p *CodexProvider) ConfigOverride() map[string]interface{} {
 		out["model_reasoning_summary"] = p.modelReasoningSummary
 	}
 	return out
+}
+
+// ---- 反问卡能力宣告(只发现、不启用) ----
+//
+// 【背景】codex 在 Default 协作模式下按模式门控 request_user_input 工具。早期
+// 为了"解锁"它,daemon 曾在 thread/start、thread/resume 的 config 覆盖里注入
+// features.default_mode_request_user_input=true。该特性在 codex 0.155.1 仍是
+// underDevelopment(默认关),注入即触发 codex 的"Under-development features
+// enabled"警告 —— 真机实测每次 codex 会话都弹,体验极差,正是本次报障的根因。
+//
+// 【为什么不再注入 · 红线】该警告的官方抑制途径只有改写用户桌面
+// ~/.codex/config.toml(把 suppress_unstable_features_warning 设为 true)。
+// 改写用户文件是本项目永久封死的副作用,绝不可为。而 schema 的 Config 对象
+// (codex_app_server_protocol.v2.schemas.json → ConfigReadResponse.Config)并
+// 未把 suppress_unstable_features_warning 列为可在运行时 config 覆盖里使用的
+// 合法键(只有 additionalProperties:true 的宽松约束,且 codex.exe 的警告文案明确
+// 指向"写进 config 文件"),即在"config 覆盖"通道内没有无副作用的抑制手段。
+// 因此勾选该实验特性必然弹警告、且无法在协议内抑制 —— 必须选择"诚实地不提供",
+// 而不是"提供了但每次弹警告"(后者被本项目红线明确禁止)。
+//
+// 【代价与配合】停用后,Default 模式下反问卡(request_user_input)不再可用,手机端
+// 若仍摆着反问入口、用户一点就踩回最初那个"unavailable in default mode"的拒绝。
+// 所以能力是否可用改为**运行时宣告**:AskUserInputSupported() 仅据
+// experimentalFeature/list 探测 codex 是否宣告该特性(按 gen 缓存、绝不写死版本),
+// 手机端/android 据此决定显不显示反问入口 —— 宣告为可用(未来 codex 把它从
+// underDevelopment 毕业、或换非实验路径)时再恢复入口,现状则干脆不显示。
+const codexAskUserFeature = "default_mode_request_user_input"
+
+// AskUserInputSupported 只做一件事:报告"当前 codex 子进程是否在 experimentalFeature/list
+// 里宣告了反问卡特性"。它是**纯能力发现**,绝不写入任何 config、绝不启用特性。
+// 返回值供手机端决定是否显示反问入口(见 android 侧与 codex_requests.go)。
+//
+// 判定按 experimentalFeature/list 的运行时宣告、并按子进程代号(gen)缓存:旧版本
+// codex 没有这个方法、或注册表不再宣告该特性时返回 false。这里只做动态发现,
+// 不做版本号二分 —— 与项目"按运行时宣告判定、不写死版本"的约定一致。
+func (p *CodexProvider) AskUserInputSupported() bool {
+	gen := int(p.gen.Load())
+	p.askFeatMu.Lock()
+	defer p.askFeatMu.Unlock()
+	if p.askFeatGen == gen {
+		return p.askFeatVal
+	}
+	val := false
+	if p.client != nil {
+		raw, err := p.client.Call("experimentalFeature/list", map[string]interface{}{})
+		if err == nil {
+			val = askUserFeatureAdvertised(raw)
+			log.Printf("[codex] experimentalFeature/list: %s 宣告=%v(仅用于能力宣告,不注入)", codexAskUserFeature, val)
+		} else {
+			// 旧版 codex 无此方法:如实记录,按"未宣告"处理。
+			log.Printf("[codex] experimentalFeature/list 失败(%v),反问卡按不可用处理", err)
+		}
+	}
+	p.askFeatGen = gen
+	p.askFeatVal = val
+	return val
+}
+
+// askUserFeatureAdvertised 解析 experimentalFeature/list 应答,判定 codex 是否
+// 仍在注册表里宣告反问卡特性。已移除(removed)/弃用(deprecated)的阶段不算
+// 宣告 —— 注册表会保留已移除特性的条目(实测 unavailable_dummy_tools 即为
+// stage=removed 的墓碑),照注入就是对着墓碑开开关。
+func askUserFeatureAdvertised(raw json.RawMessage) bool {
+	var resp struct {
+		Data []struct {
+			Name  string `json:"name"`
+			Stage string `json:"stage"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &resp) != nil {
+		return false
+	}
+	for _, f := range resp.Data {
+		if f.Name == codexAskUserFeature {
+			return f.Stage != "removed" && f.Stage != "deprecated"
+		}
+	}
+	return false
+}
+
+// callThreadResume 封装 thread/resume 调用。
+//
+// 【历史】这里曾内含"反问卡特性覆盖"降级护栏(带 features 覆盖失败 → 摘掉 features
+// 重试),那是专为"注入 under-development 特性"设的逃生舱。现已不再注入任何特性
+// (见 AskUserInputSupported 注释),无 features 键可摘,故该护栏整段删除,只保留
+// 单纯的 resume + config 透传。
+//
+// 【为什么仍单独成函数】Run 的 resume 路径与退化到 thread/start 共用同一段"带 config
+// 的 resume"逻辑,抽出来避免两处各写一遍、形状漂移。cfgOverride 全程只读。
+//
+// call 形同 p.client.Call(method, params),用函数参数注入便于单测(无需真实子进程)。
+func (p *CodexProvider) callThreadResume(threadID string, cfgOverride map[string]interface{}, call func(method string, params interface{}) (json.RawMessage, error)) error {
+	resumeParams := map[string]interface{}{"threadId": threadID}
+	if len(cfgOverride) > 0 {
+		resumeParams["config"] = cfgOverride
+	}
+	if _, err := call("thread/resume", resumeParams); err != nil {
+		return err
+	}
+	return nil
 }
 
 // TurnSummary 返回每轮 turn/start 要带的 summary。

@@ -72,5 +72,4 @@ desktop.ini
 
 # ---------- Python 字节码缓存 ----------
 __pycache__/
-__pycache__/
 daemon/*.exe.bak-*

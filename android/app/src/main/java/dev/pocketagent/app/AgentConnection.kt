@@ -52,6 +52,24 @@ object AgentConnection {
     val connError = kotlinx.coroutines.flow.MutableStateFlow<ConnectionDiagnostic?>(null)
 
     /**
+     * 最近一次 GetHostInfo 成功返回的 capabilities 快照 —— **agent 可用性的唯一
+     * 数据源(T-DSH 问题 A:统一数据源)**。
+     *
+     * 【为什么必须有它】此前主页网格、引导弹窗、设置页「切换 Agent」各持一份
+     * 独立的 GetHostInfo 局部快照:任一条链的请求失败/未就绪,那条链就按
+     * 空 capabilities 渲染 —— 同一时刻出现"网格点亮而另一处灰显(电脑端未安装)"
+     * 的两套口径(真机实锤)。现在所有成功路径都写入这里,渲染链一律读它:
+     * 任何一条链刷新,全部页面同步点亮;探活循环(8s)持续兜底自愈。
+     * StateFlow 同值去重,重复写入不触发多余重组。
+     */
+    val hostCapabilities = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
+
+    /** GetHostInfo 成功后由各调用方写入共享快照(见 [hostCapabilities])。 */
+    fun updateHostCapabilities(caps: List<String>) {
+        hostCapabilities.value = caps
+    }
+
+    /**
      * 连接方式注册表 —— **唯一扩展点**。新增一种连接方式只需在这里加一条:
      * 候选生成器(addrProvider)+ 可执行说明(hintText)+ 展示标签(label/transport)+ 匹配规则(matcher)。
      * 候选队列、连接方式列表、通道标签**全部由它派生**,不再有第二处散落的字符串字面量。
@@ -613,6 +631,7 @@ object AgentConnection {
             }
             rememberTailscaleIp(info.tailscaleIpv4)
             rememberLanIp(info.lanIpv4)
+            updateHostCapabilities(info.capabilitiesList)
             markConnected(cand)
             return info
         }
@@ -1135,11 +1154,14 @@ object AgentConnection {
                     val info = hostService()
                         .withDeadlineAfter(6000, java.util.concurrent.TimeUnit.MILLISECONDS)
                         .getHostInfo(GetHostInfoRequest.getDefaultInstance())
-                    // 探活成功时也刷新局域网/Tailscale 地址:换网络(家里 WiFi → 公司 WiFi)后
-                    // IP 会变,这里保证候选队列与「连接方式」列表跟着更新。
-                    rememberTailscaleIp(info.tailscaleIpv4)
-                    rememberLanIp(info.lanIpv4)
-                    true
+                // 探活成功时也刷新局域网/Tailscale 地址:换网络(家里 WiFi → 公司 WiFi)后
+                // IP 会变,这里保证候选队列与「连接方式」列表跟着更新。
+                rememberTailscaleIp(info.tailscaleIpv4)
+                rememberLanIp(info.lanIpv4)
+                // capabilities 共享快照随探活持续刷新:任何渲染链的独立请求失败后,
+                // 最多一个探活周期(~8s)自动回到 daemon 真值(T-DSH 问题 A 自愈兜底)。
+                updateHostCapabilities(info.capabilitiesList)
+                true
                 } catch (e: Exception) {
                     connError.value = failureFor(e, address)
                     false

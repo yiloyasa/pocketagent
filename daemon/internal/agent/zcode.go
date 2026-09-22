@@ -65,6 +65,14 @@ const (
 	zcodeUIBudget = 120 * time.Second
 	// zcodeToolClip 工具输出单帧限长(rune)。
 	zcodeToolClip = 4000
+	// zcodeSubagentToolClip 子代理委派工具结果的限长(rune)。
+	// 【为什么比 zcodeToolClip 宽】情况 B:ZCode 不暴露子代理内部对话,一次
+	// "Agent"/"Task" 工具调用就是用户能看到的"子代理"全部载体 —— 它的结果
+	// 同时是子代理的"产出"(返回的文本/写出的文件路径)。普通工具(如 Write
+	// 回"文件已创建")结果短,4000 够用;子代理结果可能带回整段方案正文,
+	// 沿用 4000 会截断用户最想看的"产出"。放宽到 16000 仍是有界(绝不无限),
+	// gRPC 单消息体量无压力。识别依据见 zcodeapp.ToolInputIsSubagent(纯结构)。
+	zcodeSubagentToolClip = 16000
 )
 
 // ZcodeProvider 桥接 ZCode 桌面端 agent。
@@ -312,6 +320,43 @@ type busySentinelError struct {
 func (e *busySentinelError) Error() string { return e.msg }
 func (e *busySentinelError) Unwrap() error { return ErrBusy }
 
+// zcodeLockWait TryLock 失败后的**有界排队**窗口。
+//
+// 【为什么要排队而不是立即忙】zcode 以前是 TryLock 失败即回"正忙",而用户路径
+// (打开会话拉历史 / 拉斜杠命令 / 切模型)与"初始化·探测"撞锁的概率并不低 ——
+// 实测 daemon.log 就有「拉取导入历史失败(降级为已有内容): zcode 正忙」,用户
+// 看到的是**会话历史一片空白**(即"原生会话加载不出来")。dsh 早已用有界排队
+// 解决同类问题(internal/agent/dsh.go 的 lockLife),这里把同一模式搬到 zcode:
+// 先在窗口内等一等,拿到就正常做完;只有持有方真卡死(窗口耗尽)才如实回忙哨兵。
+// 包级变量仅为测试注入短值;生产语义 = 15 秒,请勿改动。
+var zcodeLockWait = 15 * time.Second
+
+// lockLife 有界排队获取生命周期锁:先 TryLock(无争用零开销),失败后在 wait
+// 窗口内短间隔重试 —— 排队而非立即拒绝,把"低频用户路径刚好撞上初始化"的瞬时
+// 争用吸收成先后等待;窗口耗尽(持有方真卡死)才返回 false → 调用方回忙哨兵,
+// 保留 TryLock 模式"一个卡死的操作不拖住全线"的底线。
+//
+// wait <= 0 时退化为纯 TryLock 语义 —— 既有单测靠它保住"立即忙"的断言,
+// 不必为了一个生产优化去改测试的语义。
+func (p *ZcodeProvider) lockLife(wait time.Duration) bool {
+	if p.lifeMu.TryLock() {
+		return true
+	}
+	if wait <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		time.Sleep(25 * time.Millisecond)
+		if p.lifeMu.TryLock() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+	}
+}
+
 // withClientCtx 在保证子进程活着的前提下执行 fn;失败自动重启一次。
 //
 // 【TryLock/忙哨兵模式,与 codex.withClientCtx 同款且三点缺一不可】
@@ -323,14 +368,22 @@ func (e *busySentinelError) Unwrap() error { return ErrBusy }
 // zcode 没有 codex 那样的 initialize 握手:进程起来、存储初始化以 startup/storageState
 // 通知自行推进到 ready,请求即可直接发(实证:启动后立刻 runtime/capabilities 正常应答)。
 func (p *ZcodeProvider) withClientCtx(ctx context.Context, budget time.Duration, fn func(context.Context, *zcodeapp.Client) error) error {
-	if !p.lifeMu.TryLock() {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 排队窗口 = min(zcodeLockWait, 调用方自己的剩余截止时间):绝不超过调用方
+	// 本来就愿意等待的时长,ctx 传导语义不受影响。
+	wait := zcodeLockWait
+	if d, hasDeadline := ctx.Deadline(); hasDeadline {
+		if rem := time.Until(d); rem < wait {
+			wait = rem
+		}
+	}
+	if !p.lockLife(wait) {
 		return ErrZcodeBusy
 	}
 	defer p.lifeMu.Unlock()
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		if budget <= 0 {
 			budget = zcodeInitBudget
@@ -924,6 +977,15 @@ func mapZcodeStreamDelta(payload json.RawMessage) (string, string, bool) {
 	return "", "", false
 }
 
+// subagentResultClip 子代理委派工具结果用更宽的限长(zcodeSubagentToolClip),
+// 普通工具沿用 zcodeToolClip。ids 是本轮已识别的子代理工具调用集合(情况 B)。
+func subagentResultClip(ids map[string]bool, toolCallID string) int {
+	if ids[toolCallID] {
+		return zcodeSubagentToolClip
+	}
+	return zcodeToolClip
+}
+
 // mapZcodeToolCall 从 tool.updated(payload.kind="tool_call")提取工具调用开始。
 func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 	var pl struct {
@@ -946,7 +1008,15 @@ func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 }
 
 // mapZcodeToolResult 从 tool.updated(payload.kind="result")提取工具结果。
+// 默认限长 zcodeToolClip;子代理委派结果要完整透出"产出",用
+// mapZcodeToolResultClipped 传 zcodeSubagentToolClip。
 func mapZcodeToolResult(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
+	return mapZcodeToolResultClipped(payload, zcodeToolClip)
+}
+
+// mapZcodeToolResultClipped 同 mapZcodeToolResult,限长可由调用方指定
+// (子代理委派放宽到 zcodeSubagentToolClip,普通工具沿用 zcodeToolClip)。
+func mapZcodeToolResultClipped(payload json.RawMessage, clipN int) (pb.ToolCallUpdate, bool) {
 	var pl struct {
 		Kind       string `json:"kind"`
 		ToolCallID string `json:"toolCallId"`
@@ -969,7 +1039,7 @@ func mapZcodeToolResult(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 		Result: &pb.ToolResultBlock{
 			CallId: pl.ToolCallID,
 			Ok:     pl.Result.Success,
-			Output: clip(pl.Result.Content, zcodeToolClip),
+			Output: clip(pl.Result.Content, clipN),
 		},
 	}, true
 }
@@ -1638,6 +1708,10 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		lastErr         string
 		lastNotif       atomic.Int64 // 最近一次收到通知的时间(看门狗用)
 		approvalWaiting atomic.Bool  // 正在等手机审批:合法静默,看门狗跳过
+		// subagentCalls 本轮识别出的子代理委派工具调用 id 集合(Run 的 notifCh
+		// 单消费者 goroutine 内访问,无并发;情况 B:据此把结果限长放宽,让用户
+		// 看到子代理产出)。识别依据 zcodeapp.ToolInputIsSubagent(纯结构、不写死名)。
+		subagentCalls = map[string]bool{}
 	)
 	done := make(chan struct{})
 	var doneOnce sync.Once
@@ -1722,11 +1796,25 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 						p.emitThinkingFor(req.Thread, delta, sink)
 					}
 				case "tool.updated":
+					// 子代理委派识别(情况 B):ZCode 不暴露子代理内部对话,只透出
+					// tool.updated 的入参/结果。tool_call 阶段先记下 id,result 阶段
+					// 据此放宽限长,让手机端能看到子代理"承担了什么/产出了什么"
+					// (详见 zcodeapp.ToolInputIsSubagent 的识别依据,纯结构不写死名)。
+					var toolProbe struct {
+						Kind       string          `json:"kind"`
+						ToolCallID string          `json:"toolCallId"`
+						Input      json.RawMessage `json:"input"`
+					}
+					if json.Unmarshal(ev.Payload, &toolProbe) == nil {
+						if toolProbe.Kind == "tool_call" && zcodeapp.ToolInputIsSubagent(toolProbe.Input) {
+							subagentCalls[toolProbe.ToolCallID] = true
+						}
+					}
 					if upd, ok := mapZcodeToolCall(ev.Payload); ok {
 						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
 						continue
 					}
-					if upd, ok := mapZcodeToolResult(ev.Payload); ok {
+					if upd, ok := mapZcodeToolResultClipped(ev.Payload, subagentResultClip(subagentCalls, toolProbe.ToolCallID)); ok {
 						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
 						continue
 					}

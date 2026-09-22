@@ -373,6 +373,10 @@ class RosterRule:
          "kind": "豁免", "note": "附录A#3：T-10 裁定，旧 daemon 兼容兜底，capability 动态判定已覆盖"},
         {"file": "ChatScreen.kt", "anchor": "systemVoiceRetireNeeded",
          "kind": "豁免", "note": "附录A#1：批1裁定，封闭 SDK 错误码名单（当前模式通常不命中，登记防误报)"},
+        {"file": "HomeScreen.kt", "anchor": "fun buildAgents(capabilities: List<String>): List<AgentInfo> = listOf(",
+         "kind": "豁免", "note": "附录A#4：pa_audit 首轮裁定，展示基线目录（available 为基线缺省，能力判定走 resolveAgentAvailability 动态+extra 追加）"},
+        {"file": "SettingsScreen.kt", "anchor": '"text_generation:$it" in capabilities || (capabilities.none { c -> c.startsWith("text_generation:") } && it in setOf("codex","pi","zcode"))',
+         "kind": "豁免", "note": "附录A#5：pa_audit 首轮裁定，旧 daemon 无 text_generation capability 时的优化 agent 兜底（主路径动态判定在前）"},
     ]
 
     _GO_ARRAY = re.compile(r"\[\]string\s*\{")

@@ -113,6 +113,11 @@ func NewPiProvider() *PiProvider {
 	return p
 }
 
+// CollabReady 见 CollabAware。判据用 CollabEnvInjection 而非裸开关:它已含
+// "自建 pi agent 目录存在"这道硬前提 —— 目录不存在时 env 不会注入,pi 子进程
+// 仍走用户自己的目录、看不到 collab MCP,此时不该对外宣称具备协同能力。
+func (p *PiProvider) CollabReady() bool { return piapp.CollabEnvInjection() != "" }
+
 func (p *PiProvider) ID() string          { return "pi" }
 func (p *PiProvider) DisplayName() string { return "Pi(桌面 agent)" }
 

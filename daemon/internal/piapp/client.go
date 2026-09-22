@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
 // ---- 定位(不能依赖 PATH:daemon 由计划任务经 WMI 派生,环境变量不保证齐全)----
@@ -353,14 +354,13 @@ func Start(opts StartOptions) (*Client, error) {
 // 的死因日志全丢("pi 子进程已退出: EOF" 无从诊断)。daemon 的标准 log 已被
 // paguard 重定向进 daemon.log,这里一律走 log 包,pi 的 stderr 永远落文件。
 func (c *Client) readStderr(r io.Reader) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		log.Printf("[pi-stderr] %s", sc.Text())
-	}
-	if err := sc.Err(); err != nil {
-		log.Printf("[pi-stderr] 读取异常: %v", err)
-	}
+	// 【收口到 stderrdrain】裸扫 + 直传换成统一收口:补上**凭据脱敏**(api_key /
+	// token / JWT / Bearer 不落盘)与**总量限流**(刷屏不撑爆 daemon.log),并与
+	// codex / zcode / dsh 三家口径一致。前缀与"stderr 只落日志、不混协议"的
+	// 纪律不变。
+	stderrdrain.Drain(r, stderrdrain.Options{}, func(l string) {
+		log.Printf("[pi-stderr] %s", l)
+	})
 }
 
 func debug() bool { return os.Getenv("PA_PI_DEBUG") != "" }

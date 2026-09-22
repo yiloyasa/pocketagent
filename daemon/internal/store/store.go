@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,12 @@ type Thread struct {
 	// 双端同源,不置位,电脑端发起的改名照常同步回手机。
 	// 【兼容】旧库 JSON 无此字段 → false,行为与升级前一致(只增不破坏)。
 	TitlePinned bool `json:"title_pinned,omitempty"`
+	// 父线程的 daemon 本地线程 id;非空 = 本会话是某线程的子代理线程(T-S1P,
+	// 只增)。collab 委派子线程建线程时落库;codex 原生子线程在 thread/started
+	// 通知到达时以轻量存根登记(server 层)。手机端按它过滤出子代理组,点亮
+	// 内联卡 —— 空串 = 普通顶层会话,与旧行为一致。
+	// 【兼容】旧库 JSON 无此字段 → 空串,升级零感知。
+	ParentThreadID string `json:"parent_thread_id,omitempty"`
 	// ---- 设置快照("设置页更改只对新建对话生效"的事实来源)----
 	// 新建会话那一刻生效的桌面设置(会路由进 turn 的七项)。之后用户在设置页
 	// 改审批策略/沙箱/模型/思考强度/回答详略/思考摘要/隐藏推理,只影响**新建**
@@ -169,6 +176,24 @@ type persistedData struct {
 	Codex          CodexPrefs              `json:"codex"`
 	AgentDefaults  map[string]TurnSettings `json:"agent_defaults,omitempty"`
 	HiddenSessions map[string]bool         `json:"hidden_sessions,omitempty"`
+	// 协同角色表(分工编排):key = CollabRole.ID。
+	// 【为什么并入 threads.json 而不是单独一个 collab-roles.json】它是
+	// **引用性配置**:委派发生时要读它,才知道某个 role_id 对应什么人设/模型。
+	// 单独开文件就要再维护一套"两文件的写入顺序 / 谁先落盘 / 一个写了一个没写"
+	// 的一致性问题,断电时还可能一半更新一半没更新。它体量极小(几十条量级),
+	// 复用既有 saveLocked 的"临时文件 + 改名"原子写,是最不容易出错的选择。
+	CollabRoles map[string]CollabRole `json:"collab_roles,omitempty"`
+	// 墓碑:记住"被用户主动删过的会话"标识(本地线程 id 与原生会话 id 都会记)。
+	// 【为什么需要】删除会话后,几条自动登记链会在用户没操作时把它重新建回来:
+	//   - registerPiSubagentStubs:每次列举会话都扫磁盘 artifacts 重新登记 pi 子代理存根;
+	//   - maybeRegisterCodexSubagentStub:codex 原生子线程的 thread/started 到达时登记存根。
+	// 这两条链按"磁盘/原生会话里有没有"判定是否要建,完全不知道"用户刚删过"。
+	// 于是用户删了 pi 子代理存根,下一次打开会话列表它又冒出来。解决不是加延迟/
+	// 重试,而是记住"这个会话被删过"(墓碑):同步链遇到墓碑就跳过。
+	// 【存在哪】并入 threads.json(复用既有"临时文件+改名"原子写),不另开文件 ——
+	// 否则会出现"库里删了、墓碑文件没删"的两处真值不一致。值为删除时刻时间戳
+	// (毫秒),供清理策略淘汰最旧条目,防止无限增长(见 maxTombstones)。
+	Tombstones map[string]int64 `json:"tombstones,omitempty"`
 }
 
 type FileStore struct {
@@ -335,8 +360,8 @@ func cloneThread(t *Thread) *Thread {
 		ID:            t.ID, Title: t.Title, Workspace: t.Workspace, Goal: t.Goal,
 		ModelID: t.ModelID, CodexThreadID: t.CodexThreadID, AgentID: t.AgentID,
 		ExternalSession: t.ExternalSession, Effort: t.Effort, SectionID: t.SectionID,
-		TitlePinned: t.TitlePinned,
-		Status:      t.Status, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		TitlePinned: t.TitlePinned, ParentThreadID: t.ParentThreadID,
+		Status: t.Status, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
 		generation: t.generation,
 	}
 	if t.SettingsSnapshot != nil {
@@ -406,6 +431,7 @@ func mergeThread(current, base, value *Thread) (*Thread, error) {
 	mergeValue(&out.Effort, base.Effort, value.Effort)
 	mergeValue(&out.SectionID, base.SectionID, value.SectionID)
 	mergeValue(&out.TitlePinned, base.TitlePinned, value.TitlePinned)
+	mergeValue(&out.ParentThreadID, base.ParentThreadID, value.ParentThreadID)
 	mergeValue(&out.Status, base.Status, value.Status)
 	mergeValue(&out.CreatedAt, base.CreatedAt, value.CreatedAt)
 	if !reflect.DeepEqual(base.SettingsSnapshot, value.SettingsSnapshot) {
@@ -574,4 +600,187 @@ func (s *FileStore) SetSessionHidden(agentID, sessionID string, hidden bool) err
 		delete(s.data.HiddenSessions, agentID+":"+sessionID)
 	}
 	return s.saveLocked()
+}
+
+// ============ 协同角色表(分工编排)============
+//
+// 一个"岗位"(审查者 / 测试员 / 重构手 …)的可复用配置:落到哪个 agent、
+// 用什么模型与思考强度、以及这个岗位的职责与长期要求。父 agent 委派时只需
+// 引用 id,不必每次把人设复述一遍;改一处配置,后续所有委派即生效。
+//
+// 【边界:这里只存配置,不做编排】谁在什么时候派给谁,由父模型(经 MCP 工具
+// 入参)或手机端决定。让 daemon 替用户猜分工既不可预测也不可控,那不是智能。
+
+// CollabRole 一个协同角色的落库形态(与 pb.CollabRole 一一对映)。
+type CollabRole struct {
+	// ID 稳定引用键(slug,如 "reviewer")。
+	// 【为什么必须是调用方显式给的 daemon 不代生成】它是**引用键**:父模型在
+	// MCP 工具入参里、手机端在选择器里都靠它引用。让 daemon 猜一个,结果就是
+	// "用户配好了却引用不到",比直接报错难排查得多。所以空 id 一律人话报错。
+	ID string `json:"id"`
+	// Name 展示名(为空时由展示侧回落 ID,不伪造人名式默认值)。
+	Name string `json:"name"`
+	// AgentID 落到哪个原生 agent(pi / codex / dsh / zcode …),与委派入参同域。
+	// 【为什么落库时不校验它是否存在】agent 注册表随安装状态变化,这里校验会
+	//把"今天装了明天卸载"变成存不进去。存在性裁决统一留在**委派那一刻**
+	// (CreateThread 动态列举当前可用 agent 并人话报错),单一裁决点不重复。
+	AgentID string `json:"agent_id"`
+	// Description 这个岗位是干什么的(职责边界),前置注入每次委派的子任务。
+	Description string `json:"description"`
+	// Instructions 长期生效的追加要求(输出格式 / 只做不改 / 必须列证据 …)。
+	Instructions string `json:"instructions"`
+	// Model 模型覆盖(形如 "agent/model-id");空 = 用该 agent 当前默认。
+	Model string `json:"model"`
+	// Effort 思考强度覆盖;空 = 用该 agent 当前默认。
+	Effort string `json:"effort"`
+	// Workspace 工作区覆盖;空 = daemon 默认工作区。
+	Workspace string `json:"workspace"`
+}
+
+// ListCollabRoles 返回全部角色(**按 ID 升序**)。
+//
+// 【为什么要排序】底层是 map,Go 的 map 遍历顺序随机;不排序的话每次列出来
+// 顺序都不同 —— 手机端列表会抖动,单测也没法断言。
+func (s *FileStore) ListCollabRoles() []CollabRole {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]CollabRole, 0, len(s.data.CollabRoles))
+	for _, r := range s.data.CollabRoles {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// GetCollabRole 按 id 取角色;不存在返回 false(**不猜、不回落**)。
+func (s *FileStore) GetCollabRole(id string) (CollabRole, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.data.CollabRoles[id]
+	return r, ok
+}
+
+// SetCollabRole 按 r.ID 幂等 upsert。
+func (s *FileStore) SetCollabRole(r CollabRole) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.CollabRoles == nil {
+		s.data.CollabRoles = map[string]CollabRole{}
+	}
+	s.data.CollabRoles[r.ID] = r
+	return s.saveLocked()
+}
+
+// DeleteCollabRole 删除角色。id 不存在**不报错**。
+//
+// 【为什么幂等成功而不是"找不到就报错"】删除的目标是"达到不存在这一状态",
+// 目标已达成再删一次结果完全一致 —— 这是真幂等,不是把失败伪装成成功
+// (伪造的是"实际没删却说删了")。让调用方为无害重试付错误处理成本不划算。
+func (s *FileStore) DeleteCollabRole(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.data.CollabRoles[id]; !ok {
+		return nil
+	}
+	delete(s.data.CollabRoles, id)
+	return s.saveLocked()
+}
+
+// ============ 墓碑:记住"被用户删过的会话" ============
+//
+// 【键的设计】一个会话会被不同同步链用作登记键的 id 都要记:本地线程 id(子代理
+// 存根即用它当 id)、codex 原生线程 id(= 存根的 CodexThreadID)、pi/zcode 外部
+// 会话 id 与文件。这样无论哪条链想把它建回来,都用"已墓碑"的键,从而被跳过。
+
+// maxTombstones 墓碑条数上限:删除是低频操作,正常远不到这个数;设上限是为了防止
+// 极端情况下 threads.json 无限膨胀(每条被删会话记一条)。超出后按删除时间淘汰最旧的,
+// 保留最近删除的一批 —— 旧墓碑对应的原生文件多半也不在了,淘汰无害。
+const maxTombstones = 1024
+
+// AddTombstones 把一批"被删会话"的标识记入墓碑(一次落盘)。空串自动忽略。
+func (s *FileStore) AddTombstones(keys ...string) error {
+	now := time.Now().UnixMilli()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Tombstones == nil {
+		s.data.Tombstones = map[string]int64{}
+	}
+	added := 0
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if _, exists := s.data.Tombstones[k]; !exists {
+			s.data.Tombstones[k] = now
+			added++
+		}
+	}
+	if added == 0 {
+		return nil
+	}
+	if len(s.data.Tombstones) > maxTombstones {
+		evictOldestTombstones(s.data.Tombstones, maxTombstones)
+	}
+	return s.saveLocked()
+}
+
+// AddTombstone 单键便捷写法(一次落盘)。
+func (s *FileStore) AddTombstone(key string) error {
+	return s.AddTombstones(key)
+}
+
+// IsTombstoned 该标识是否已被用户删除过(同步链据此跳过重新登记)。
+func (s *FileStore) IsTombstoned(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.data.Tombstones[key]
+	return ok
+}
+
+// RemoveTombstone 撤销一条墓碑(重新导入 / 误删恢复时用)。
+func (s *FileStore) RemoveTombstone(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Tombstones == nil {
+		return nil
+	}
+	if _, ok := s.data.Tombstones[key]; !ok {
+		return nil
+	}
+	delete(s.data.Tombstones, key)
+	return s.saveLocked()
+}
+
+// evictOldestTombstones 就地淘汰最旧的 (len-keep) 条,使剩余恰好 keep 条。
+// 按时间戳升序排序后删前若干;时间戳相同再按 key 升序做稳定取舍。
+func evictOldestTombstones(m map[string]int64, keep int) {
+	if keep <= 0 || len(m) <= keep {
+		return
+	}
+	type kv struct {
+		k string
+		v int64
+	}
+	all := make([]kv, 0, len(m))
+	for k, v := range m {
+		all = append(all, kv{k, v})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].v != all[j].v {
+			return all[i].v < all[j].v
+		}
+		return all[i].k < all[j].k
+	})
+	for i := 0; i < len(all)-keep; i++ {
+		delete(m, all[i].k)
+	}
 }

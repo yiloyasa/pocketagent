@@ -73,10 +73,23 @@ func classifyCodexRequest(method string) codexRequestKind {
 	return reqUnknown
 }
 
-// isLegacyApproval 旧版审批应答用 approved/denied/abort,新版用 accept/decline/cancel。
-// 两者的枚举不通用,发错值 codex 会判为无效应答。
+// isLegacyApproval 判定一个审批请求该用**旧版应答枚举**(approved/denied)还是
+// 新版(accept/decline)。
+//
+// 【为什么不再枚举方法名】以前这里写死两个旧方法名(`execCommandApproval` /
+// `applyPatchApproval`)。codex 未来若再引入第三种旧式审批方法,新方法会掉进
+// "按新版应答"的分支、发出对方不认的 accept/decline —— 用户看到的现象是
+// **"点了允许却没反应"**,而且很难归因(AUDIT §3.3 点名的"静态名单是债")。
+//
+// 改成按**协议形态**判定:新版审批一律挂在 `item/` 命名空间下
+// (item/commandExecution|fileChange|permissions/requestApproval),
+// 旧版是顶层 camelCase 方法名。任一侧将来新增方法都自动落进正确分支,
+// 这里不需要再改(也正因如此,它不再是一份"需要维护的名单")。
+//
+// 注:非审批类方法(如 mcpServer/elicitation/request)不走本函数 ——
+// approvalDecision 只对审批类调用。
 func isLegacyApproval(method string) bool {
-	return method == "execCommandApproval" || method == "applyPatchApproval"
+	return !strings.HasPrefix(method, "item/")
 }
 
 // approvalDecision 统一的"允许/拒绝" → 该协议版本规定的枚举值。

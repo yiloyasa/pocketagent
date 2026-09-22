@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/stderrdrain"
 	"io"
 	"log"
 	"os"
@@ -169,14 +170,12 @@ func Start() (*Client, error) {
 // 不 panic、不重试 —— 空行原样透传、无换行的截断行(进程死于半行输出)照收,
 // 死因诊断一行都不能丢。
 func drainStderr(r io.Reader, line func(string)) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 单行上限 1MB(stderr 是诊断文本,不是协议帧,给足余量)
-	for sc.Scan() {
-		line(sc.Text())
-	}
-	if err := sc.Err(); err != nil {
-		line("读取异常: " + err.Error())
-	}
+	// 【收口到 stderrdrain】原实现是裸扫 + 直传,缺两样:①不看内容,**凭据
+	// (api_key / token / JWT / Bearer)会原样落进 daemon.log**;②没有总量上限,
+	// 子进程疯狂刷屏时能把日志撑爆、把真正的死因淹掉。stderrdrain 补齐这两点,
+	// 并把 pi / zcode / dsh 三家的同款逻辑收成一份(此前各抄一遍,口径已漂移)。
+	// 签名与"逐行回调"语义保持不变,既有调用方与单测零改动。
+	stderrdrain.Drain(r, stderrdrain.Options{}, line)
 }
 
 type wireMsg struct {

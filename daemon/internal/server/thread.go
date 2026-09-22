@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +38,9 @@ func (s *Server) threadToPB(t *store.Thread) *pb.Thread {
 		// 同一个会话合并为一条(否则会显示两份)。
 		CodexThreadId: t.CodexThreadID,
 		SectionId:     t.SectionID,
+		// 子代理线程归属(T-S1P):非空 = 本会话是某线程的子代理线程,手机端
+		// 据此过滤出子代理组点亮内联卡;空 = 普通顶层会话(旧行为)。
+		ParentThreadId: t.ParentThreadID,
 		// 多 agent 接入:会话归属与外部会话引用(手机端渲染 agent 徽标/筛选)。
 		AgentId: threadAgentID(t),
 		ExternalSession: func() *pb.ExternalSessionRef {
@@ -205,6 +210,12 @@ func (s *Server) ListThreads(ctx context.Context, req *pb.ListThreadsRequest) (*
 		s.syncThreadsFromCodex(req.SearchTerm, req.IncludeArchived)
 	}
 
+	// 【T-SUBA-PI】pi 子代理运行的存根登记:pi 把每次子代理运行留在磁盘上(父会话
+	// 文件同目录的 subagent-artifacts/),此前 daemon 对 pi 子代理零处理 → 手机端
+	// 看不到子智能体。这里在列举前补登记(幂等、只读盘、失败只留痕),让子代理以
+	// 子线程形态出现在父会话下,内联卡的呈现能力早已就绪。
+	s.registerPiSubagentStubs()
+
 	threads := s.cfg.Store.List(req.IncludeArchived)
 	// 分组过滤
 	if req.SectionId != "" {
@@ -265,10 +276,57 @@ func (s *Server) GetThread(ctx context.Context, req *pb.GetThreadRequest) (*pb.T
 		return nil, errNotFound("会话不存在")
 	}
 	t = s.recoverNativeResult(ctx, t)
+	// 【症状②③】会话存在,但它所依托的原生事实来源(电脑上的记录/文件)已经找不到了:
+	// 不能静默返回空内容假装"进得去",要如实报错说清是"内容读不出"。
+	if reason := s.checkAndMarkStale(t); reason != "" {
+		return nil, errNotFound(reason)
+	}
 	out := s.threadToPB(t)
 	// codex 目标态回读:打开会话时以电脑端为准刷新(手机端有则显示"目标:xxx")。
 	out.GoalDetail = s.goalDetailFor(ctx, t)
 	return out, nil
+}
+
+// nativeSessionMissing 判断一个本地线程的"原生事实来源"是否已经找不到了:
+// codex 的 rollout 文件被删、pi 的会话文件被移走。只在"原生 id 已绑定且本地还没有
+// 任何消息"时查 —— 这样既精准命中"刚删/文件没了"的悬空会话,又避免对每一个健康
+// 会话都做一次昂贵磁盘扫描(本地已有消息的会话直接展示本地副本,内容不算丢失)。
+// 返回 (是否悬空, 人话原因);原因不含"未知/错误"等词,直接说清是文件找不到。
+func (s *Server) nativeSessionMissing(t *store.Thread) (bool, string) {
+	if t == nil {
+		return false, ""
+	}
+	if t.CodexThreadID != "" && len(t.Messages) == 0 {
+		if _, err := agent.FindCodexSession(t.CodexThreadID); err != nil {
+			if errors.Is(err, agent.ErrCodexSessionNotFound) {
+				return true, "这个会话在电脑上的记录已经找不到了（可能已被删除或移动），无法打开历史；可以删除它，或重新导入对应的电脑会话"
+			}
+			// 其它读取故障按"还在"处理,交给后续轮次/导入去如实报错,不在这里猜。
+		}
+	}
+	if t.ExternalSession.SessionFile != "" && len(t.Messages) == 0 && threadAgentID(t) == "pi" {
+		if _, statErr := os.Stat(t.ExternalSession.SessionFile); statErr != nil && os.IsNotExist(statErr) {
+			return true, "这个 Pi 会话在电脑上的文件已经找不到了（可能已被删除或移动），无法打开；可以删除它，或重新导入对应的电脑会话"
+		}
+	}
+	return false, ""
+}
+
+// checkAndMarkStale 若会话原生事实来源已找不到,返回人话原因(调用方据以如实报错);
+// 同时把原因落到会话上,让会话列表也能如实反映(症状③:失效会话不再伪装成正常的)。
+// 健康会话返回空串。落库只在"确实悬空"时发生且值幂等,不会污染健康会话。
+func (s *Server) checkAndMarkStale(t *store.Thread) string {
+	missing, reason := s.nativeSessionMissing(t)
+	if !missing {
+		return ""
+	}
+	if cur, ok := s.cfg.Store.Get(t.ID); ok {
+		cur.LastTurnError = reason
+		if err := s.cfg.Store.Update(cur); err != nil {
+			logStoreUpdateErr("stale-session-mark", t.ID, err)
+		}
+	}
+	return reason
 }
 
 func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) (*pb.Empty, error) {
@@ -276,26 +334,46 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 	if !ok {
 		return &pb.Empty{}, nil
 	}
-	if s.activeTurns.Has(t.ID) || t.Status == pb.ThreadStatus_THREAD_STATUS_RUNNING {
+	// 【为什么只信租约】以前这里还看 t.Status == RUNNING,而 Status 是**落盘
+	// 状态**:轮次异常收尾(原生子进程退出码 1、手机断线、daemon 被杀)时来不及
+	// 复位,就会留下一个"僵尸 RUNNING"。它让这条会话**永远删不掉**,直到下次
+	// daemon 重启(启动期的 ResolveLegacyRunning 才会复位)——用户实测"任何会话
+	// 都删不掉"就有它一份。真正能证明"正在跑"的只有内存里的在飞租约
+	// activeTurns:它随进程消失,不可能变成僵尸。
+	if s.activeTurns.Has(t.ID) {
 		return nil, errFailedPrecondition("会话正在运行，请先停止任务再删除或移除")
 	}
+	if t.Status == pb.ThreadStatus_THREAD_STATUS_RUNNING {
+		// 无租约却标 RUNNING:确认是僵尸,复位后继续删除(不拦用户)。
+		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
+		log.Printf("[thread] 删除会话 %s:发现僵尸 RUNNING(无在飞租约),已复位为 IDLE", t.ID)
+	}
 	id := threadAgentID(t)
+	// 【原生侧删除:尽力而为,失败不阻塞本地删除】
+	// 以前任何一步原生删除失败都直接 return error,于是"电脑上的文件动不了"
+	// 被放大成"用户永远删不掉这个会话"。用户点删除的本意是"让它从手机上消失",
+	// 而电脑侧残留可以在"未导入的电脑会话"列表里重新露面、再由用户处置 ——
+	// 比"点了没反应"诚实且可用。因此这里一律:失败只记日志(含原因与残留提示),
+	// 继续往下删本地。唯一会真正阻塞的条件是"会话正在运行"(见上方租约判定)。
 	if !req.LocalOnly {
 		switch id {
 		case "codex":
 			if t.CodexThreadID != "" {
 				if err := agent.DeleteCodexSession(t.CodexThreadID); err != nil {
-					return nil, errInternal(err)
+					log.Printf("[thread] 删除会话 %s:电脑上的 codex 会话未清掉(codex=%s),仅删本地: %v",
+						t.ID, t.CodexThreadID, err)
 				}
 			}
 		case "zcode":
 			if t.ExternalSession.SessionID != "" {
-				p, ok := s.cfg.Providers[id].(zcodeSessionCloser)
-				if !ok {
-					return nil, errUnavailable("ZCode 暂不可用，未删除会话")
-				}
-				if err := p.CloseSession(t.ExternalSession.SessionID); err != nil {
-					return nil, errInternal(err)
+				if p, ok := s.cfg.Providers[id].(zcodeSessionCloser); ok {
+					if err := p.CloseSession(t.ExternalSession.SessionID); err != nil {
+						log.Printf("[thread] 删除会话 %s:电脑上的 zcode 会话未关闭(session=%s),仅删本地: %v",
+							t.ID, t.ExternalSession.SessionID, err)
+					}
+				} else {
+					// ZCode 当前不可用(未装/子进程起不来):同样不该拦用户删本地。
+					log.Printf("[thread] 删除会话 %s:ZCode 当前不可用,跳过原生关闭,仅删本地", t.ID)
 				}
 			}
 		case "pi":
@@ -303,7 +381,8 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 				p.DropThread(t.ID)
 			}
 			if err := agent.DeletePiSession(t.ExternalSession.SessionFile, t.ExternalSession.SessionID); err != nil {
-				return nil, errInternal(err)
+				log.Printf("[thread] 删除会话 %s:电脑上的 pi 会话未清掉(session=%s),仅删本地: %v",
+					t.ID, t.ExternalSession.SessionID, err)
 			}
 		}
 	} else {
@@ -320,10 +399,74 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 			p.DropThread(t.ID)
 		}
 	}
+	// 【墓碑】记住"这个会话被用户删过",让原生会话同步链不再把它重新建回来:
+	// registerPiSubagentStubs 每次列举会话都扫磁盘重登记 pi 子代理存根,
+	// maybeRegisterCodexSubagentStub 在 codex 子线程 thread/started 时登记存根,
+	// 它们按"磁盘/原生会话里有没有"判定,不知道用户刚删过 —— 不记墓碑就会
+	// "删了又冒出来"。键覆盖各同步链的登记键(本地 id / codex 原生 id / 外部
+	// 会话 id·文件),连带子代理存根也在 deleteChildStubs 内一并记。
+	// 必须在 Store.Delete 之前记,且失败只留痕(墓碑记不上也不能阻塞删除)。
+	s.tombstoneThread(t)
+
+	// 【连带清理子代理存根】删主会话时,它派出的子代理存根(pi-sub-* / codex 存根)
+	// 会变成**孤儿** —— 列表里已无父会话可归属,条目却还赖着。用户视角就是
+	// "删了会话,子代理还在"。这里一并删掉。
+	// 【凭什么认"子代理"】只认 ParentThreadID 这一个**结构性事实**(指向本会话),
+	// 不按 id 前缀猜 —— 否则将来换命名就会漏或误伤用户自己建的会话。
+	s.deleteChildStubs(t.ID)
+
 	if err := s.cfg.Store.Delete(t.ID); err != nil {
 		return nil, errInternal(err)
 	}
 	return &pb.Empty{}, nil
+}
+
+// tombstoneThread 把"这个会话被用户删过"记入墓碑。键覆盖各同步链的登记键:
+// 本地线程 id(子代理存根用它当 id)、codex 原生线程 id(= 存根的 CodexThreadID)、
+// pi/zcode 外部会话 id 与文件。同步链(maybeRegisterCodexSubagentStub /
+// registerPiSubagentStubs)遇到墓碑就跳过,不再把刚删的会话建回来。
+func (s *Server) tombstoneThread(t *store.Thread) {
+	if t == nil {
+		return
+	}
+	if err := s.cfg.Store.AddTombstones(
+		t.ID, t.CodexThreadID, t.ExternalSession.SessionID, t.ExternalSession.SessionFile,
+	); err != nil {
+		log.Printf("[tombstone] 记录删除墓碑失败(不影响本次删除) id=%s: %v", t.ID, err)
+	}
+}
+
+// deleteChildStubs 删除所有以 parentID 为父的子代理存根(幂等、失败只留痕)。
+// 【为什么"失败不阻塞"】主会话的删除是用户的本意;某个存根删不掉(存储异常)
+// 不该把整次删除回滚 —— 留日志即可,下次再删还能命中。
+func (s *Server) deleteChildStubs(parentID string) {
+	if parentID == "" {
+		return
+	}
+	// 先批量记墓碑(一次落盘),再逐个删除:子代理存根被用户顺手删了,同步链
+	// 也不要再建回来 —— 否则会出现"删了子代理、列表一刷新又冒出来"。
+	var tombKeys []string
+	var toDelete []string
+	for _, child := range s.cfg.Store.List(true) {
+		if child == nil || child.ID == parentID || child.ParentThreadID != parentID {
+			continue
+		}
+		tombKeys = append(tombKeys, child.ID, child.CodexThreadID)
+		toDelete = append(toDelete, child.ID)
+	}
+	if len(tombKeys) > 0 {
+		if err := s.cfg.Store.AddTombstones(tombKeys...); err != nil {
+			log.Printf("[thread] 记录子代理存根墓碑失败(留痕不阻塞): %v", err)
+		}
+	}
+	for _, id := range toDelete {
+		if err := s.cfg.Store.Delete(id); err != nil {
+			log.Printf("[thread] 连带清理子代理存根 %s(parent=%s)失败(留痕不阻塞): %v",
+				id, parentID, err)
+			continue
+		}
+		log.Printf("[thread] 已连带清理子代理存根 %s(parent=%s)", id, parentID)
+	}
 }
 
 // ArchiveThread 归档 / 取消归档。
@@ -552,9 +695,24 @@ func (s *Server) GetThreadHistory(ctx context.Context, req *pb.GetThreadHistoryR
 		return nil, errNotFound("会话不存在")
 	}
 	t = s.recoverNativeResult(ctx, t)
+	// 【症状②③】原生事实来源已找不到(文件被删/被移)时,不静默返回空历史假装成功,
+	// 如实报错说明"内容读不出";同时把原因落到会话上,让列表也能如实反映(症状③)。
+	if reason := s.checkAndMarkStale(t); reason != "" {
+		return nil, errNotFound(reason)
+	}
 	if threadAgentID(t) == "zcode" && t.ExternalSession.SessionID != "" {
 		s.maybePullZcodeImportedHistory(ctx, t)
 		// Get returns an owned snapshot, not a live store pointer.
+		if current, found := s.cfg.Store.Get(t.ID); found {
+			t = current
+		}
+	}
+	// 【T-SUBVIS 接线点 1】codex 子代理存根(父链非空、本地无消息)首次打开子
+	// 对话页时懒拉 thread/read 全量,与上面 zcode 导入线程同款"拉到即缓存"
+	// (细节见 codex_subagent_history.go 文件头)。返回 true 表示确实回填过,
+	// 重新取一次快照把落库的消息带上;false 时 t 原样——非子代理存根在此处
+	// 零开销返回,既有路径不受影响。
+	if s.maybePullCodexSubagentHistory(ctx, t) {
 		if current, found := s.cfg.Store.Get(t.ID); found {
 			t = current
 		}
@@ -1009,7 +1167,7 @@ func concatTextBlocks(blocks []pb.ContentBlock) string {
 //     Err() 永远非 nil,会把"正常完成"误判成"用户要停"(原注释保留);
 //   - err:落库失败 → errInternal(调用方立即终止,与抽取前
 //     "return errInternal(err)" 同点同值);provider 失败 → *turnRunError
-//    (StartTurn 忽略它继续排队续跑,引擎解包如实回传)。
+//     (StartTurn 忽略它继续排队续跑,引擎解包如实回传)。
 //
 // 【等价性】除"排队续跑簿记(rt/队列/QueueFlushed/换轮次/排队输入落库)"
 // 留在外层循环外,本函数逐行保真搬运原循环体;partial 的内联拼接循环换用
@@ -1369,6 +1527,20 @@ func (a *activeTurns) acquire(ctx context.Context, threadID string, cancel conte
 	}
 }
 
+// IDs 返回当前活跃轮次的线程 id 快照。委派父链推断用它（T-S1Pb）：
+// agent_delegate 由父轮次发起、父轮次此刻必然持租约，因此活跃集合里排除
+// 已知委派子线程后剩下的就是候选父线程。加锁复制，调用方拿到的是快照，
+// 不持有锁、不与轮次推进竞争。
+func (a *activeTurns) IDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.m))
+	for id := range a.m {
+		out = append(out, id)
+	}
+	return out
+}
+
 func (a *activeTurns) Clear(threadID string, lease *activeTurn) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1428,6 +1600,11 @@ func (s *Server) ExportThreadHtml(ctx context.Context, req *pb.ExportThreadHtmlR
 }
 
 func (a *activeTurns) Has(id string) bool {
+	// nil receiver 语义即"没有任何在飞轮次"(部分构造的 Server,如单测里只填
+	// 它关心的字段的那类):查询方一律按"无在飞"处理,不必让它自己判空。
+	if a == nil {
+		return false
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, ok := a.m[id]

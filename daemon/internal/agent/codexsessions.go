@@ -7,6 +7,7 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,13 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrCodexSessionNotFound 电脑上找不到这条 codex 会话的 rollout 文件。
+//
+// 【为什么要做成哨兵错误】调用方需要把"文件本来就不在了"与"真故障(权限/IO)"
+// 区分开:前者是**幂等成功**(用户想要的终态已达成,只是不在了),后者才该报错。
+// 用裸 fmt.Errorf 的话调用方只能靠字符串匹配猜,一改文案就失效。
+var ErrCodexSessionNotFound = errors.New("codex 会话的 rollout 文件不存在")
 
 type CodexSessionInfo struct {
 	ID        string    // codex 线程 id(rollout 文件名末段的 uuid)
@@ -136,10 +144,16 @@ func DeleteCodexSession(id string) error {
 	if err != nil {
 		return err
 	}
-	return os.Remove(path)
+	// 【幂等】文件在"找到"与"删除"之间被别的进程删掉是可能的(用户在桌面端
+	// 同时清理),此时目标状态已达成,不该报错。
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
-// FindCodexSession 按 id 定位 rollout 文件。
+// FindCodexSession 按 id 定位 rollout 文件。找不到返回 ErrCodexSessionNotFound
+// 的包装(调用方用 errors.Is 判定,把它当"已经没有了"而不是故障)。
 func FindCodexSession(id string) (string, error) {
 	var hit string
 	filepath.WalkDir(CodexSessionsDir(), func(path string, d os.DirEntry, err error) error {
@@ -152,7 +166,7 @@ func FindCodexSession(id string) (string, error) {
 		return nil
 	})
 	if hit == "" {
-		return "", fmt.Errorf("找不到 codex 会话 %s 的 rollout", id)
+		return "", fmt.Errorf("%w: %s", ErrCodexSessionNotFound, id)
 	}
 	return hit, nil
 }

@@ -32,9 +32,24 @@ class AgentBadgeAndFilterTest {
         assertEquals(R.drawable.agent_zcode, agentBadgeRes("zcode"))
     }
 
+    /**
+     * 回归:dsh 等"when 没列出来"的 agent 以前被 else 兜底成 codex 的脸。
+     * 现在统一收口到 AGENT_BRAND_ICON,映射表里有的都走自己的图。
+     */
     @Test
-    fun `未知agent徽标兜底codex`() {
-        assertEquals(R.drawable.agent_codex, agentBadgeRes("hermes"))
+    fun `已知brand直接走映射表_dsh不再兜底成codex`() {
+        assertEquals(R.drawable.agent_dsh, agentBadgeRes("dsh"))
+        assertEquals(R.drawable.agent_hermes, agentBadgeRes("hermes"))
+        assertEquals(R.drawable.agent_opencode, agentBadgeRes("opencode"))
+    }
+
+    /**
+     * 映射表里没有的 id(daemon 将来动态上报的新 harness)用中性 cpu 图标兜底,
+     * 而不是偷偷显示成 codex 的脸。
+     */
+    @Test
+    fun `未知agent徽标中性兜底不冒充他人`() {
+        assertEquals(R.drawable.ic_lucide_cpu, agentBadgeRes("some-future-agent"))
     }
 
     // ---- matchesAgentFilter(筛选判定)----

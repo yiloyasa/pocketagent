@@ -36,6 +36,12 @@ import (
 // 凭空裁剪只会让手机上的历史比电脑上更不可信;重新拉取历史才是正解,
 // 这件事由手机端下拉刷新完成。
 func (s *Server) SyncThreadEvent(codexThreadID, method string, params json.RawMessage) {
+	// codex 原生子代理线程(T-S1P):thread/started 带父 id 时以轻量存根登记
+	// (codex_subagent_sync.go),使 thread/list 能带出。普通线程 parentThreadId
+	// 为空,钩子内部直接返回,后续行为与从前完全一致。
+	if method == "thread/started" {
+		s.maybeRegisterCodexSubagentStub(codexThreadID, params)
+	}
 	if codexThreadID == "" {
 		return
 	}
@@ -90,6 +96,14 @@ func (s *Server) SyncThreadEvent(codexThreadID, method string, params json.RawMe
 			s.setLocalStatus(local, pb.ThreadStatus_THREAD_STATUS_RUNNING)
 		case "idle":
 			s.setLocalStatus(local, pb.ThreadStatus_THREAD_STATUS_IDLE)
+			// 【T-SUBVIS 接线点 3】codex 子代理线程由 active 转 idle = 这一轮跑完,
+			// 全量已成定局:异步重拉一次 thread/read 把对话内容补进存根(函数内自带
+			// "非子代理存根/在飞/已有拉取"守卫,细节见 codex_subagent_history.go)。
+			// 这里的 ParentThreadID 前置判断只为不给普通线程白起一个 goroutine;
+			// 用 go 是因为重拉可能等满 20s 预算,不能拖住这条同步管线。
+			if local.ParentThreadID != "" {
+				go s.RefreshCodexSubagentHistory(codexThreadID)
+			}
 		}
 	}
 }

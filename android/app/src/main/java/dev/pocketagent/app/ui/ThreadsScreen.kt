@@ -77,6 +77,7 @@ import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.ThreadPins
+import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.component.shortWorkspace
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
@@ -136,6 +137,9 @@ fun ThreadsScreen(
     // 【agent 筛选维度】与分组/归档正交:按会话归属 agent 过滤(agent_id 缺省 = codex)。
     // 与上面的单值互斥不是一回事 —— 这里是叠加的交集(见 matchesAgentFilter)。
     var agentFilter by remember(AgentConnection.selectedAgent) { mutableStateOf(AgentConnection.selectedAgent) }
+    // 筛选维度的数据源:与主页同源(AgentConnection.hostCapabilities 共享快照),
+    // 不再硬编码 agent 名单 —— 见 agentFilterOptions。
+    val sharedCaps = AgentConnection.hostCapabilities.collectAsState().value
     // codex 侧的分组(事实来源在电脑上:在电脑上分的组,手机上立刻能看到)。
     var sections by remember { mutableStateOf(listOf<PSection>()) }
     // 分组管理面板:新建 / 重命名 / 删除
@@ -146,6 +150,9 @@ fun ThreadsScreen(
     var organizeTarget by remember { mutableStateOf<PThread?>(null) }
     // 筛选 chip 行的滚动位置。分组数量不确定,行内横向滚动;新建完要把它滚出来。
     val chipScroll = rememberScrollState()
+    // agent 筛选条同样横向滚动:agent 数量随 daemon 上报动态变化,不能让它换行。
+    // 与分组筛选条共用同一套"内部 Row 加 weight + horizontalScroll"的收口方式。
+    val agentChipScroll = rememberScrollState()
     var scrollChipsToEnd by remember { mutableStateOf(false) }
     // 电脑上**尚未导入**的 codex 会话:导入过的会以本地会话身份出现,不会在这里重复一条。
     var pcThreads by remember { mutableStateOf(listOf<CodexThreadInfo>()) }
@@ -450,6 +457,8 @@ fun ThreadsScreen(
         if (index < 0) return
         openKey.value = null
         threads = threads.toMutableList().also { it.removeAt(index) }
+        // 内存删了,快照也得同步删:否则断网兜底时这条会"复活"(删完又出现)。
+        ThreadSnapshot.removeThreadFromSnapshot(t.id)
         undo.show(
             message = "已删除「${t.title.ifEmpty { "未命名" }}」",
             onUndo = {
@@ -851,15 +860,28 @@ fun ThreadsScreen(
             // 两个维度正交;塞进同一条横向滚动会让人以为它们互斥。
             // 只有 daemon 报了对应 agent 才可能有色卡,但 chip 恒显示:
             // 灰 chip 点了也是空列表,不如让人知道"有这个维度"。
+            // 【与分组筛选条同款】agent 数量随 daemon 上报动态变化,用内部 Row 加
+            // weight(1f) + horizontalScroll 让这一排横向滚,不换行。外面那层 Row
+            // 留作将来右侧固定入口(如有)的对齐锚点。
             Row(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                FilterChip2("全部 agent", agentFilter == AGENT_FILTER_ALL) { agentFilter = AGENT_FILTER_ALL }
-                FilterChip2("Codex", agentFilter == AGENT_FILTER_CODEX) { agentFilter = AGENT_FILTER_CODEX }
-                FilterChip2("Pi", agentFilter == AGENT_FILTER_PI) { agentFilter = AGENT_FILTER_PI }
-                FilterChip2("ZCode", agentFilter == AGENT_FILTER_ZCODE) { agentFilter = AGENT_FILTER_ZCODE }
+                Row(
+                    Modifier.weight(1f).horizontalScroll(agentChipScroll),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 【动态生成,不写死名单】以前这里硬编码 Codex / Pi / ZCode 三家 ——
+                    // 于是新增 DSH 时**它根本不出现在筛选条里**(用户实测)。改为从 daemon
+                    // 报的 capabilities(`agent:<id>`)动态派生:装好哪家就有哪个维度,
+                    // 新增第 5 家零改动。echo 是冒烟用的,不给用户当筛选维度。
+                    FilterChip2("全部 agent", agentFilter == AGENT_FILTER_ALL) { agentFilter = AGENT_FILTER_ALL }
+                    Spacer(Modifier.width(8.dp))
+                    agentFilterOptions(sharedCaps).forEach { (id, label) ->
+                        FilterChip2(label, agentFilter == id) { agentFilter = id }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                }
             }
 
             // 当前筛选的说明(分组名可能被横向滚出屏幕,这里给一句"你在看什么")
@@ -902,6 +924,13 @@ fun ThreadsScreen(
                             filter = filter,
                         )
                     }
+                    // 【子智能体会话不进主列表】带父链的会话 = 某个主会话派出的子代理
+                    // （codex 存根 / pi-sub-* 等）。它们与主会话平铺在同一个流里时，
+                    // "我到底有几个主会话"完全看不清 —— 用户实测反馈"太杂乱"。
+                    // 统一规则：**主列表只呈现 parentThreadId 为空的主会话**；子代理
+                    // 一律从**父会话的子代理卡**进入（那条路已具备完整能力：子对话 /
+                    // 续聊 / 兄弟切换 / 产出回填），不再作为独立条目污染主对话。
+                    .filter { it.parentThreadId.isBlank() }
                     // 【agent 筛选】叠加交集:分组/归档决定"哪一批会话",
                     // agent 决定"这批里看谁干的"(agent_id 缺省按 codex 归属)。
                     .filter { matchesAgentFilter(it.agentId, agentFilter) }
@@ -1912,12 +1941,16 @@ internal const val SECTION_COVERAGE_NOTE =
  */
 internal fun threadAgentIdOf(agentId: String): String = agentId.ifEmpty { AGENT_FILTER_CODEX }
 
-/** agent 徽标选图:空 = codex;pi/zcode 各用官方图;未知 agent 兜底 codex。 */
-internal fun agentBadgeRes(agentId: String): Int = when (threadAgentIdOf(agentId)) {
-    AGENT_FILTER_PI -> R.drawable.agent_pi
-    AGENT_FILTER_ZCODE -> R.drawable.agent_zcode
-    else -> R.drawable.agent_codex
-}
+/**
+ * agent 徽标选图:统一收口到 AgentBrand.kt 的 AGENT_BRAND_ICON 唯一映射。
+ * 以前这里用 when 手写 codex/pi/zcode 三个分支,新增的 agent(如 dsh)全被 else
+ * 兜底成 codex 的脸 —— 用户实测 dsh 显示成 Codex,根因即此。现改为查映射表,
+ * 新增第 N 家零改动;映射表里没有的 id(daemon 将来动态上报的新 harness)用中性
+ * lucide cpu 图标兜底(沿用 SubAgentCard 约定),不再悄悄变成任何一家的脸。
+ * 空 id 仍按 daemon 兼容规则解析成 codex(映射表里有 codex 这一项)。
+ */
+internal fun agentBadgeRes(agentId: String): Int =
+    agentBrandIcon(threadAgentIdOf(agentId)) ?: R.drawable.ic_lucide_cpu
 
 /** agent 筛选判定(纯函数):全部放行;否则按归属(缺省 codex)精确匹配。 */
 internal fun matchesAgentFilter(agentId: String, filter: String): Boolean =
@@ -2121,3 +2154,21 @@ private fun SectionManagerSheet(
         }
     }
 }
+
+/**
+ * 会话列表的 agent 筛选维度(纯函数,动态派生)。
+ *
+ * 【为什么动态】以前筛选条硬编码 Codex / Pi / ZCode 三家,新增 DSH 时它**根本不
+ * 出现在筛选条**(用户实测)。现在从 daemon 报的 capabilities 派生:装了哪家就有
+ * 哪个维度,新增第 5 家零改动(README §7「静态名单是债」)。
+ * echo 是冒烟用的假 agent,不给用户当筛选维度。
+ */
+internal fun agentFilterOptions(capabilities: List<String>): List<Pair<String, String>> =
+    capabilities
+        .filter { it.startsWith("agent:", ignoreCase = true) }
+        // "agent:pi:v0.85.1" 这种带版本段的形式也要能取到 id(与 HomeScreen 同口径)
+        .map { it.substringAfter(':').substringBefore(':').trim().lowercase() }
+        .filter { it.isNotEmpty() && it != "echo" }
+        .distinct()
+        .sorted()
+        .map { id -> id to selectedAgentLabel(id) }

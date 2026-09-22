@@ -128,7 +128,10 @@ func (s *Server) runDelegate(ctx context.Context, in delegateArgs, notify Progre
 		Workspace: strings.TrimSpace(in.Workspace),
 		Model:     strings.TrimSpace(in.Model),
 		Effort:    strings.TrimSpace(in.Effort),
-		Progress:  notify,
+		// T-S1Pa：可选父链透传，空 = 子线程父链为空（诚实变暗），引擎不补
+		// 默认值（避免第二份默认名单）。
+		ParentThreadID: strings.TrimSpace(in.ParentThreadID),
+		Progress:       notify,
 	}
 	childID, summary, err := s.engine.Delegate(ctx, agentID, task, opts)
 	if err != nil {
@@ -210,6 +213,11 @@ func (g *GRPCDelegationEngine) Delegate(ctx context.Context, agentID, task strin
 		Workspace: ws,
 		Model:     strings.TrimSpace(opts.Model),
 		Effort:    strings.TrimSpace(opts.Effort),
+		// T-S1Pa：可选父链原样透传给主 daemon（空 = 不挂父链，主 daemon 侧
+		// 维持现状）。pi 侧 v1 恒为空（见 DelegateOptions.ParentThreadID 注释）。
+		ParentThreadId: strings.TrimSpace(opts.ParentThreadID),
+		// 协同角色：原样透传给主 daemon 解析（薄代理不知道有哪些角色）。
+		RoleId: strings.TrimSpace(opts.RoleID),
 	})
 	if err != nil {
 		return "", "", err

@@ -629,10 +629,43 @@ private fun PlanDraftText(draft: String) {
  * 工具调用卡:一次调用一张卡(同一 call id 原地更新),
  * 展开可见调用的参数与输出,并显示耗时与成功/失败状态。
  */
+/**
+ * 判断一条工具调用的入参是否像 ZCode 子代理委派("Agent"/"Task" 工具)。
+ *
+ * 【为什么需要】ZCode 的子代理是普通工具调用,app-server 协议不发射任何子代理
+ * 专用事件(见 daemon/internal/agent/zcode.go 的 Run 分发 switch),子代理内部
+ * 对话完全不透出;手机端唯一能看到的就是这次 tool.updated 的入参(prompt/description)
+ * 与结果。为了不让用户只看到一个"完成"的空卡,子代理工具卡默认展开,直接露出
+ * "任务"(入参)与"产出"(结果)。这是项目铁律"识别不了≠出错、不伪造"的边界:
+ * 此处只展示原生工具调用参数/结果,绝不编造子代理对话。
+ *
+ * 【识别依据,纯结构、不写死工具名】与 daemon 的 zcodeapp.ToolInputIsSubagent
+ * 同源:ZCode Agent 工具入参稳定含 prompt(必填) + 一个子代理特征键
+ * {description, agentType, subagent_type, outputFile, parentToolCallId}。用子串
+ * 判定(入参是 daemon 已校验的合法 JSON),不引入 JSON 解析依赖;识别失败只返回
+ * false(当普通工具,不自动展开),不报错、不降级。工具名(Agent/Task/subagent)
+ * 怎么改都不影响识别,也不会把 Bash(command)/Write(file_path)误判。
+ */
+internal fun looksLikeSubagentDelegation(args: String): Boolean {
+    if (args.isBlank()) return false
+    if (!args.contains("\"prompt\"")) return false
+    return args.contains("\"description\"") ||
+        args.contains("\"agentType\"") ||
+        args.contains("\"subagent_type\"") ||
+        args.contains("\"outputFile\"") ||
+        args.contains("\"parentToolCallId\"")
+}
+
 @Composable
 private fun ToolCallCard(item: ChatItem, scale: Float) {
-    // 运行中默认展开(看得到正在干什么),结束后默认收起
-    var expanded by remember(item.toolId, AgentConnection.toolDetailsExpanded) { mutableStateOf(AgentConnection.toolDetailsExpanded) }
+    // 运行中默认展开(看得到正在干什么),结束后默认收起。
+    // 子代理委派(情况 B:ZCode 不透出内部对话)额外默认展开 —— 否则用户只看到
+    // 一个"完成"空卡,看不到它承担了什么任务、产出了什么;展开后即完整露出
+    // 入参与结果(识别依据见 looksLikeSubagentDelegation,不写死工具名)。
+    val isSubagent = looksLikeSubagentDelegation(item.toolArgs)
+    var expanded by remember(item.toolId, AgentConnection.toolDetailsExpanded) {
+        mutableStateOf(AgentConnection.toolDetailsExpanded || isSubagent)
+    }
     val statusColor = when (item.toolStatus) {
         "failure" -> Pa.Red
         "success" -> Pa.Green
@@ -882,6 +915,8 @@ private const val ATTACH_CHIP_NAME_MAX = 80
  * 两条边都必须 ≥ 132px(复核清单见缺陷单回归结果)。
  * 视觉图标保持 18–20dp 不变,只放大不可见的触控/命中区域;布局上这四个
  * 控件都在 Column 的独立行里,箱子放大不挤压输入框。
+ * 【T-D2 收尾(2026-09-20)】口径扩到输入区全部可点控件:Git 按钮、优化按钮、
+ * 上下文环(展示型,环视觉 28dp 不变)、展开编辑、审批策略 chip、附件 chip 移除叉。
  * JVM 断言见 ChatInputTouchTargetTest(Compose 布局 JVM 测不了,常量是能钉的部分)。
  */
 internal const val INPUT_TOUCH_TARGET_DP = 48
@@ -1133,6 +1168,9 @@ fun ChatScreen(
     var showNewThread by remember { mutableStateOf(false) }
     var showGitPanel by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    // 子代理卡长按快览(T-SUB):非 null 时弹快览层(渲染在文件中部 sheet 区),
+    // 收起不影响任何状态 —— 蓝本 §4.3"不打断主对话浏览的偷看"。
+    var peekSub by remember(threadId) { mutableStateOf<SubAgentThreadMeta?>(null) }
     // 「更多」面板:分叉 / 回滚。这两件事都是**偶尔做一次**的会话级动作,
     // 单独给顶栏加两个常驻按钮会让它变挤,收进一个入口更稳。
     var showMore by remember { mutableStateOf(false) }
@@ -1335,6 +1373,18 @@ fun ChatScreen(
             // 拉不到就显示空态,不影响当前会话
         }
         recentLoading = false
+    }
+
+    // ---- 子代理线程组(T-SUB):打开会话时顺带查一次 thread/list,本会话轮次结束后刷新 ----
+    // 子组 = thread/list 按 parentThreadId 过滤(S1 修正案:子代理=真线程);
+    // 拉取失败静默沿用上次快照 —— 子代理卡是"有则显示",不能打扰主对话。
+    LaunchedEffect(threadId, connectionEpoch, reloadToken) {
+        SubAgentsState.refresh()
+    }
+    // 轮次结束沿(false 沿)刷新:初始组合不再多发一次请求
+    val subPrevRunning = remember(threadId) { AtomicBoolean(false) }
+    LaunchedEffect(st.running) {
+        if (subPrevRunning.getAndSet(st.running) && !st.running) SubAgentsState.refresh()
     }
 
     // 【会话级模型】进入会话时恢复该会话上次选定的模型;该会话没选过则用全局默认。
@@ -1882,6 +1932,22 @@ fun ChatScreen(
         ) {
             IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
             Spacer(Modifier.width(14.dp))
+            // 【会话页顶部:所用 agent 的图标 + 名称】此前顶栏只有标题,用户看不出
+            // "这轮在跟哪个 agent 说话"——尤其四个 agent 能力差异明显(能否派发子
+            // 智能体、能否看子代理对话),归属必须一眼可见。图标走 AgentBrand 唯一
+            // 映射;未知 agent 不画图标只留名字(不塞通用图标冒充身份)。
+            agentBrandIcon(threadAgentId)?.let { res ->
+                Icon(
+                    painterResource(res), null,
+                    tint = Pa.Accent, modifier = Modifier.size(15.dp),
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                selectedAgentLabel(threadAgentId),
+                fontSize = 11.5.sp, color = Pa.TextSecondary, maxLines = 1,
+            )
+            Spacer(Modifier.width(8.dp))
             // 【必须显式 Ellipsis】Modifier.weight(1f) 已把宽度约束死,默认
         // TextOverflow.Clip 会"干净地"切掉尾巴且不画省略号,看起来像文字坏了。
         Text(
@@ -1951,6 +2017,71 @@ fun ChatScreen(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+
+        // ---- 子对话来源行(T-SUB,蓝本 §5.1):当前线程是某主线程的子代理线程时, ----
+        // 标题下补一行"来自主对话 · 父标题" + 兄弟 ◀ n/N ▶ 切换钮(降级钮方案,
+        // 取舍见 SubAgentCard.kt 文件头)。切兄弟 = 导航 chat/{siblingId} 打开
+        // 上一条/下一条子线程,转场走 NavHost 全局动效(与主对话↔子对话同款)。
+        // ---- 子代理接入口(规范 §18.1/§18.2):固定在会话页顶部,不随消息滚动 ----
+        // 以前它是消息列表里的一个 item:滚两下就找不到,语义上还像"一条消息"。
+        // 现在上移到主对话区域**之上**的固定区;顺带落实 §18.2 —— 子代理消息不再
+        // 混进主对话流(主对话只呈现自己的消息),子代理只能从这里的入口下钻。
+        val subChildren = remember(SubAgentsState.threads, threadId) {
+            SubAgentsLogic.childrenOf(SubAgentsState.threads, threadId)
+        }
+        val subRunIds = remember(st.running, SubAgentsState.lastRefreshedAt) {
+            TurnSession.runningThreadIds() // TurnSession 无锁快照,不进 Compose 状态
+        }
+        if (subChildren.isNotEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp)) {
+                if (subChildren.size == 1) {
+                    val only = subChildren[0]
+                    SubAgentCard(
+                        meta = only,
+                        state = SubAgentsLogic.runStateOf(only, subRunIds),
+                        onOpen = { onOpenThread(only.threadId) },
+                        onPeek = { peekSub = only },
+                    )
+                } else {
+                    SubAgentGroupCard(
+                        children = subChildren,
+                        liveRunIds = subRunIds,
+                        onOpen = { meta -> onOpenThread(meta.threadId) },
+                        onPeek = { meta -> peekSub = meta },
+                    )
+                }
+            }
+        }
+
+        // 【门控】父 id 明确已知才显示;关系未知(契约缺口)时不占位、不猜。
+        val subChildGroup = remember(threadId, SubAgentsState.threads) {
+            SubAgentsState.childGroupOf(threadId)
+        }
+        if (subChildGroup != null) {
+            val (subPos, subTotal) = SubAgentsLogic.siblingPos(subChildGroup.siblings, threadId)
+            // 父会话是否仍可达(在本库快照里):决定"返回主对话"是可用还是置灰。
+            val parentReachable = SubAgentsState.threads.any {
+                it.threadId == subChildGroup.parentThreadId
+            }
+            SubAgentSourceLine(
+                parentTitle = subChildGroup.parentTitle,
+                pos = subPos,
+                total = subTotal,
+                onPrev = {
+                    SubAgentsLogic.siblingNav(subChildGroup.siblings, threadId, -1)?.let(onOpenThread)
+                },
+                onNext = {
+                    SubAgentsLogic.siblingNav(subChildGroup.siblings, threadId, +1)?.let(onOpenThread)
+                },
+                // 规范 §18.3:父会话仍在本库里才给入口;不可达(已删除/未同步)时传 null
+                // → 控件置灰,不给点了没反应的假入口。
+                onBackToParent = if (parentReachable) {
+                    { onOpenThread(subChildGroup.parentThreadId) }
+                } else {
+                    null
+                },
+            )
         }
 
         // ---- 连接 / 加载 / 恢复提示条 ----
@@ -2297,7 +2428,11 @@ fun ChatScreen(
                                     onLongPress = { copyMessage(ctx, at.name) },
                                 )
                                 .background(Pa.CardHigh, RoundedCornerShape(10.dp))
-                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                                // PA-REAL-0004 收尾:chip 命中高度抬到 ≥48dp(原 ≈29dp)。
+                                // 垂直 padding 7→0,由"移除叉"的 48dp 触控箱顶起;胶囊圆角/
+                                // 配色/内容排布不变,仅整体增高到最小触控标准。
+                                .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
+                                .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
@@ -2321,13 +2456,21 @@ fun ChatScreen(
                                 maxLines = 3, softWrap = true, overflow = TextOverflow.Ellipsis,
                             )
                             Spacer(Modifier.width(6.dp))
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_x), null,
-                                tint = Pa.TextTertiary,
-                                modifier = Modifier
-                                    .size(13.dp)
+                            // PA-REAL-0004 收尾:移除叉命中区 13→48dp(原叉仅 13dp,chip 本体
+                            // 点击是"预览"不能替代移除,故必须独立放大);叉视觉 13dp 居中不变。
+                            // 前置 6dp Spacer 保留,触控箱自带居中留白即视觉间距。
+                            Box(
+                                Modifier
+                                    .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                                     .pressable { attachments = attachments - at },
-                            )
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painterResource(AppR.drawable.ic_lucide_x), null,
+                                    tint = Pa.TextTertiary,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -2503,37 +2646,45 @@ fun ChatScreen(
                         Modifier
                             .align(Alignment.TopEnd)
                             .padding(end = 10.dp, top = 6.dp)
-                            .size(22.dp)
+                            // PA-REAL-0004 收尾:命中区 22→48dp;视觉图标(15dp)用内层
+                            // padding 钉回原 22dp 盒中心(距盒右上角 11dp),位置零漂移。
+                            .size(INPUT_TOUCH_TARGET_DP.dp)
                             .pressable { expandedInputOpen = true },
-                        contentAlignment = Alignment.Center,
+                        contentAlignment = Alignment.TopEnd,
                     ) {
                         Icon(
                             painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
                             tint = if (input.length > EXPAND_HINT_THRESHOLD) Pa.Accent else Pa.TextTertiary,
-                            modifier = Modifier.size(15.dp),
+                            modifier = Modifier
+                                .padding(end = 3.5.dp, top = 3.5.dp)
+                                .size(15.dp),
                         )
                     }
                 }
                 // [模型名全宽行] 当前生效的模型名**恒显且完整**:不截断、不限行数。
                 // 【为什么改恒显】上一版只在名字超过 14 字符时才补这一行,于是"长度没超、
                 // 但已被工具行省略号挤断"的名字依然读不全(用户反馈"模型名仍未完整显示")。
-                // 现在无条件显示全文;工具行里的模型 chip 仍作点击入口。
+                // 现在无条件显示全文;整行同时内联"运行中模型确认",把原本独立的一行合并进来
+                // (设计取向:能一行放下的不要分行),少一层堆叠且不丢信息。整行作模型/强度
+                // 点击入口;所有控件触控箱仍走 INPUT_TOUCH_TARGET_DP(PA-REAL-0004)。
                 Row(Modifier.fillMaxWidth().pressable { showModelCard = true }
                     .semantics { contentDescription = "切换模型与思考强度" }
                     // PA-REAL-0004:整行高度 ≥48dp(实测 37.8dp)。heightIn 在 padding 外层,
                     // 内容(verticalAlignment=CenterVertically)在 48dp 内居中,只是上下多留白。
                     .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
                     .padding(horizontal=16.dp, vertical=8.dp), verticalAlignment=Alignment.CenterVertically) {
-                    Text(modelName + if(effortLabel != "默认") " · $effortLabel" else "",
+                    // 运行中模型与强度确认:原是独立一行 tertiary 文案,合并进本行内联,
+                    // 既保留"最近跑的是什么"的信息又不额外占一层堆叠。
+                    val runningHint = if (st.runningEffort != null && st.runningModel.isNotBlank()) {
+                        val actualName = sessionModels.find { it.id == st.runningModel }?.displayName
+                            ?: modelBareName(st.runningModel)
+                        " · 最近运行：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}"
+                    } else ""
+                    val base = modelName + if (effortLabel != "默认") " · $effortLabel" else ""
+                    Text(base + runningHint,
                         modifier=Modifier.weight(1f), fontSize=12.sp, color=Pa.TextSecondary,
                         maxLines=2, overflow=TextOverflow.Ellipsis)
                     Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "选择模型", tint=Pa.TextSecondary,modifier=Modifier.requiredSize(18.dp))
-                }
-                if (st.runningEffort != null && st.runningModel.isNotBlank()) {
-                    val actualName = sessionModels.find { it.id == st.runningModel }?.displayName ?: modelBareName(st.runningModel)
-                    Text("最近运行确认：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}",
-                        fontSize=10.sp, color=Pa.TextTertiary,
-                        modifier=Modifier.padding(start=18.dp,end=12.dp,bottom=4.dp))
                 }
                 // 第二行:工具行
                 Row(
@@ -2561,7 +2712,8 @@ fun ChatScreen(
                     // [Git] 会话项目的版本管理侧栏
                     Box(
                         Modifier
-                            .size(32.dp)
+                            // PA-REAL-0004 收尾:命中区 32→48dp;图标仍 18dp 居中,视觉不变。
+                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                             .pressable { showGitPanel = true },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -2577,7 +2729,9 @@ fun ChatScreen(
                     if (promptOptState.buttonVisible || promptOptState.inFlight) {
                         Box(
                             Modifier
-                                .size(32.dp)
+                                // PA-REAL-0004 收尾:命中区 32→48dp;转圈/星形图标绘制
+                                // 尺寸不变,只放大不可见命中区。
+                                .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                                 .pressable { optimizeCurrentInput() },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -2600,6 +2754,10 @@ fun ChatScreen(
                         Row(
                             Modifier
                                 .pressable { approvalMenu = true }
+                                // PA-REAL-0004 收尾:整 chip 命中高度抬到 ≥48dp(原 ≈25dp)。
+                                // heightIn 在 padding 外层(同"切换模型"整行口径),内容在
+                                // 48dp 内垂直居中,视觉排布不变。
+                                .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
                                 .padding(horizontal = 4.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -2671,7 +2829,9 @@ fun ChatScreen(
                         if (ctxRingKnown) usageTotalTokens(ctxUsage).toFloat() / contextWindow.toFloat() else 0f
                     Box(
                         Modifier
-                            .size(34.dp)
+                            // PA-REAL-0004 收尾:展示型控件的命中区 34→48dp;环视觉仍
+                            // 28dp 居中不变(见下方 ContextRing 的 size),只放大命中区。
+                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
                             .semantics {
                                 contentDescription = "上下文窗口 " +
                                     (if (ctxCompacted) "已压缩" else ringPercentLabel(ctxRatio, ctxRingKnown)) +
@@ -3182,6 +3342,24 @@ fun ChatScreen(
         )
     }
 
+    // 子代理快览(T-SUB,蓝本 §4.3):长按内联卡/组卡行弹出的"偷看"层,
+    // 最近消息 + 「打开完整对话」;收起不影响任何状态。
+    val peekMeta = peekSub
+    if (peekMeta != null) {
+        val peekRunIds = remember(peekMeta.threadId, SubAgentsState.lastRefreshedAt) {
+            TurnSession.runningThreadIds()
+        }
+        SubAgentPeekSheet(
+            meta = peekMeta,
+            state = SubAgentsLogic.runStateOf(peekMeta, peekRunIds),
+            onOpenFull = {
+                peekSub = null
+                onOpenThread(peekMeta.threadId)
+            },
+            onDismiss = { peekSub = null },
+        )
+    }
+
     // 长文本大窗编辑(需求:输入过长时可增大输入框窗口)
     if (expandedInputOpen) {
         ExpandedInputSheet(
@@ -3670,6 +3848,13 @@ internal fun packAskAnswers(
 private val ApprovalAskNames = setOf("request_user_input", "mcp_elicitation")
 
 /**
+ * 是否"反问类"动作(纯函数,JVM 可测):反问卡只认这两类 action.name,与具体 agent 无关。
+ * 抽成函数是为了把"不对某个 agent 开小灶"这道契约锁进单测 —— 任何 agent 只要 daemon 上报
+ * 这两类请求就走同一张卡;其他动作名一律走"拒绝/允许",不会误渲染成反问卡。
+ */
+internal fun askIsAskAction(name: String): Boolean = name in ApprovalAskNames
+
+/**
  * 审批抽屉:按动作类型渲染 + 拒绝/允许(反问类则是"取消/提交")。
  *
  * 【为什么按类型分派】daemon 现在会送出多种动作类型(shell / file_change / apply_patch /
@@ -3677,6 +3862,15 @@ private val ApprovalAskNames = setOf("request_user_input", "mcp_elicitation")
  * 于是"允许写入文件""允许放开网络访问"在手机上长得和"允许跑 rm -rf"一模一样 ——
  * 用户点"允许"时并不知道自己在允许什么,审批卡就失去了意义。
  * 这里按 name 给出各自的标题、正文与按钮文案,让每一次授权都能被看懂。
+ *
+ * 【反问卡与 agent 无关 · 运行时能力宣告】本抽屉是所有 agent 共用的同一张卡,不是 zcode 专属。
+ * 渲染的唯一触发是 daemon 经 gRPC 送来的 `APPROVAL_REQUEST` 事件(TurnSession.kt:637 / 快照
+ * 回填 :926 直接 `st.pendingApproval = ...`,全程没有任何 agent 身份判断),再看 action.name 是否
+ * 落在反问类集合([askIsAskAction])决定画成"取消/提交"还是"拒绝/允许"。也就是说:
+ * 哪个 agent 支持反问,完全由 daemon 在运行时上报请求来宣告,UI 不写死任何 agent 名单。
+ * 这正是硬红线"无能力不显示假入口"的实现 —— 某 agent 的反问特性被关掉(比如 codex 的反问
+ * 依赖一个会弹警告的实验特性)→ daemon 不再发 `request_user_input` → 抽屉根本不出现,绝不会
+ * 渲染一张点了没反应的卡。推广反问体验到 codex/pi/dsh 不需要改 UI,只需各自 daemon 上报同类请求。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -3691,7 +3885,7 @@ private fun ApprovalSheet(
     )
     var expanded by remember(action.requestId) { mutableStateOf(false) }
     val name = action.action.name
-    val isAsk = name in ApprovalAskNames
+    val isAsk = askIsAskAction(name)
     // 参数是 JSON 字符串,解析失败时退回原样展示(不能让卡片变成空白)。
     val args = remember(action.action.jsonArgs) {
         runCatching { JSONObject(action.action.jsonArgs) }.getOrNull()

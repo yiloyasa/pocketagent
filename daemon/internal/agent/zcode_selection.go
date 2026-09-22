@@ -16,7 +16,14 @@ import (
 // withControlClient never retries a control operation or replaces a shared
 // worker on a native error. Replacing it could interrupt another session.
 func (p *ZcodeProvider) withControlClient(ctx context.Context, fn func(context.Context, *zcodeapp.Client) error) error {
-	if !p.lifeMu.TryLock() {
+	// 与 withClientCtx 同款**有界排队**:控制类操作(命令发现/切模型/模式)同样是
+	// 低频用户路径,撞上初始化就立即报忙,手机端只会表现为"面板空着"。窗口受该
+	// 操作自身的预算(zcodeStatusBudget)约束 —— 不超过它本来就愿意等的时间。
+	wait := zcodeLockWait
+	if zcodeStatusBudget < wait {
+		wait = zcodeStatusBudget
+	}
+	if !p.lockLife(wait) {
 		// 与 withClientCtx 同款忙哨兵(PA-REAL-0003/T-25):这里同样是 zcode 自己
 		// 在忙,不得窜用 codex 的 ErrBusy 文案;ErrZcodeBusy 经 Unwrap 挂在
 		// ErrBusy 之下,server 层 errors.Is(_, ErrBusy) 的"可重试/正忙"分级不回归。

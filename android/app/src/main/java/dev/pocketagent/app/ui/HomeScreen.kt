@@ -216,6 +216,8 @@ fun HomeScreen(
     /** 重看新手教程(透传给侧边栏「更多」入口)。 */
     onOpenOnboarding: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
+    /** 协同角色配置入口:仅在设备确实支持协同时由本页调用(无能力不显示假入口)。 */
+    onOpenCollabRoles: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -234,10 +236,6 @@ fun HomeScreen(
     LaunchedEffect(openDrawerSignal) {
         if (openDrawerSignal > 0) drawerCtrl.open()
     }
-    // 【多agent协同 = 开发中】(用户实锤:开关可拨但功能未实现 = 假可用)。
-    // AgentConnection.multiAgent 不再读也不再写:功能没实现,持久化"已开启"
-    // 只会维持一个假开关。展示恒为关,点按只给"开发中"提示(见下方 Switch)。
-    var multiAgent by remember { mutableStateOf(false) }
     var reloadKey by remember { mutableStateOf(0) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showNewThread by remember { mutableStateOf(false) }
@@ -248,8 +246,12 @@ fun HomeScreen(
         try {
             withContext(Dispatchers.IO) {
                 // 多候选回退:当前地址 → USB 反向 → Tailscale
-                host = AgentConnection.connectWithFallback()
+                val info = AgentConnection.connectWithFallback()
                     ?: AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
+                host = info
+                // T-DSH 问题 A:成功快照写入共享缓存,三条渲染链(主页网格/引导弹窗/
+                // 设置页切换 Agent)读同一份,不再各自为政。
+                AgentConnection.updateHostCapabilities(info.capabilitiesList)
                 recent = AgentConnection.threadService()
                     .listThreads(ListThreadsRequest.newBuilder().build())
                     .threadsList
@@ -266,8 +268,24 @@ fun HomeScreen(
     }
 
     // agent 网格:可用性按 HostInfo.capabilities 动态判定(daemon 侧报 "agent:<id>"
-    // 才点亮;检测不到维持灰显,daemon 部署后自然点亮)。host 变化时重建。
-    val agents = remember(host) { buildAgents(host?.capabilitiesList.orEmpty()) }
+    // 才点亮;检测不到维持灰显,daemon 部署后自然点亮)。
+    // 【T-DSH 问题 A:统一数据源】capabilities 一律读共享快照(hostCapabilities,
+    // 探活循环/回退连接/设置页加载都会写入)—— 本页自己的请求失败或未就绪时,
+    // 网格仍然反映最近一次 daemon 真值,不再渲染"只剩 codex 可选"的假灰显。
+    val sharedCaps = AgentConnection.hostCapabilities.collectAsState().value
+    val agents = remember(sharedCaps) { buildAgents(sharedCaps) }
+    // 【多agent协同 = 真实状态】是否"已接入协同"不再是用户可拨的开关,而是
+    // daemon 接线事实的回显(capabilities 里的 collab:<id>) —— 旧实现做成可拨
+    // 开关,结果开关能拨、功能没有 = 假可用(用户实锤)。
+    // 这一层同时驱动两处:① 协同卡片的状态点与文案;② 协同行"只显示在用 agent
+    // 还是显示全部已加入协同的 agents"。
+    val collabIds = remember(sharedCaps) { resolveCollabAgentIds(sharedCaps) }
+    val multiAgent = collabIds.isNotEmpty()
+    // 支持协同时,顺带把协同角色列表拉一次,供首页这行的数量展示;
+    // 失败/无数据都不影响首页(宁缺勿假,数量留空即不显示数字)。
+    LaunchedEffect(collabIds) {
+        if (collabIds.isNotEmpty()) CollabRolesState.load()
+    }
     // 停用偏好生效链(AgentConnection.disabledAgents 可观察,拨开关立即重算):
     // 已停用 agent 从网格/协同行/最近任务隐藏 —— 管理抽屉副标题「停用后不再显示」的兑现;
     // 恢复入口恒在管理抽屉(它收全量 agents 清单)。偏好层只隐藏,不改写 available,
@@ -366,7 +384,11 @@ fun HomeScreen(
                 }
             }
 
-            // ---- 多agent协同:开发中。开关恒为关,点按只提示;行内仍显示唯一选中 agent ----
+            // ---- 多agent协同:真实状态(不再是"开发中"假开关) ----
+            // 状态完全由 daemon 的接线事实驱动:capabilities 里的 collab:<id>。
+            // 这里刻意**不做成可拨的开关** —— 它不是用户偏好,而是"电脑上接线完成
+            // 与否"的事实回显;可拨 = 假可用(旧实现正是栽在这)。所以只读展示 +
+            // 常显状态点,让"已接入几家、谁"一眼可见。
             item(span = { GridItemSpan(4) }) {
                 Column(
                     Modifier
@@ -375,30 +397,48 @@ fun HomeScreen(
                         .padding(14.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (collabIds.isEmpty()) Pa.TextTertiary else Pa.Green,
+                                    CircleShape,
+                                ),
+                        )
+                        Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
                             Text("多agent协同", fontSize = 15.sp, color = Pa.TextPrimary)
                             Text(
-                                if (multiAgent) "已开启:多个 agent 一起接任务" else MULTI_AGENT_HINT_DEV,
-                                fontSize = 11.sp, color = Pa.TextTertiary,
+                                collabSubtitle(collabIds),
+                                fontSize = 11.sp,
+                                color = if (collabIds.isEmpty()) Pa.TextTertiary else Pa.AccentText,
                             )
                         }
-                        Switch(
-                            checked = multiAgent,
-                            onCheckedChange = { request ->
-                                // 【开发中闸门】打开请求一律不生效:状态回弹保持关 + 人话提示,
-                                // 绝不写 AgentConnection.multiAgent 假装可用(纯函数可单测)。
-                                val (next, hint) = multiAgentToggleResult(request)
-                                multiAgent = next
-                                hint?.let {
-                                    Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = Pa.Accent,
-                                uncheckedTrackColor = Pa.Hover,
-                                uncheckedBorderColor = Color.Transparent,
-                            ),
-                        )
+                    }
+                    // 协同角色入口:只有设备确实支持协同时才显示(无能力不显示假入口)。
+                    // 列出已配置数量,点进去是角色列表页(真正完成"分工编排")。
+                    if (multiAgent) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable { onOpenCollabRoles() }
+                                .background(Pa.Bg, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("协同角色", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                                val roleCount = if (CollabRolesState.loadState == CollabRolesLoadState.READY) CollabRolesState.roles.size else null
+                                Text(
+                                    if (roleCount == null) "点按管理岗位配置" else "已配置 $roleCount 个岗位",
+                                    fontSize = 11.sp, color = Pa.TextTertiary,
+                                )
+                            }
+                            Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
+                        }
                     }
                     Spacer(Modifier.height(10.dp))
                     // 协同行
@@ -558,7 +598,8 @@ fun HomeScreen(
     guideAgent?.let { agent ->
         AgentGuideSheet(
             agent = agent,
-            capabilities = host?.capabilitiesList.orEmpty(),
+            // T-DSH 问题 A:与网格同源(共享快照),弹窗口径不再单独依赖本页 host 快照
+            capabilities = sharedCaps,
             onDismiss = { guideAgent = null },
         )
     }
@@ -902,18 +943,32 @@ internal fun selectedAgentLabel(agentId: String): String = when (agentId) {
     else -> agentId
 }
 
-// ---- 多agent协同开关:开发中闸门(纯函数,单测覆盖 MultiAgentToggleTest)----
-
-/** "开发中"提示文案(主页开关副标题与点按 Toast 共用同一句,避免两处口径漂移)。 */
-internal const val MULTI_AGENT_HINT_DEV = "开发中:多 agent 协同尚未开放"
+/**
+ * 从 capabilities 提取"已接入跨 agent 委派协同"的 agent id（纯函数）。
+ *
+ * daemon 报 `collab:<agentId>` —— 语义是"该 agent 已把本地 collab MCP 挂进自己的
+ * 会话"，也就是它那一侧的模型**看得见 agent_delegate**、能派发/接收子智能体。
+ * 判定完全由 daemon 的接线事实驱动（新增一家自动出现），手机端**不写名单**；
+ * 能力缺失 = 该家尚未接线，如实不显示，不做假入口。
+ */
+internal fun resolveCollabAgentIds(capabilities: List<String>): List<String> =
+    capabilities
+        .filter { it.startsWith("collab:", ignoreCase = true) }
+        .map { it.substringAfter(':').trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .sorted()
 
 /**
- * 多agent协同开关的点按结果(纯函数):功能未实现,任何"打开"请求都不生效。
- * @return (下一状态, 待弹提示) —— 下一状态恒为关;"打开"请求附带"开发中"提示,
- *         "关闭"请求静默(本来就关着,无需打扰)。
+ * 协同行副标题（纯函数）：把已接入的 agent 说成人话。
+ * 空列表 = 尚未有任何 agent 接入，给出"为什么没有"的下一句，而不是"开发中"。
  */
-internal fun multiAgentToggleResult(requestOn: Boolean): Pair<Boolean, String?> =
-    if (requestOn) false to MULTI_AGENT_HINT_DEV else false to null
+internal fun collabSubtitle(agentIds: List<String>): String =
+    if (agentIds.isEmpty()) {
+        "尚未接入：电脑端启用协作后自动出现"
+    } else {
+        "已接入 " + agentIds.joinToString("、") + "（可派发子智能体）"
+    }
 
 // ---- agent 停用偏好生效链(管理 agent 抽屉 → 展示/创建入口;纯函数,单测覆盖 AgentDisablePreferenceTest)----
 

@@ -22,9 +22,22 @@ import (
 	"github.com/pocketagent/daemon/internal/zcodeapp"
 )
 
+// disableZcodeLockWait 把 zcode 的排队窗口临时置 0(等价纯 TryLock 语义)。
+//
+// 【为什么需要它】本文件钉的是"忙文案归属"与"分级链",不是排队行为。排队窗口
+// 生产默认 15 秒,会让持锁用例白等满一个窗口(实测把 -run 'Zcode|Busy' 从 ~10s
+// 拖到 35s)。排队本身另有专门用例覆盖,这里只把语义恢复成改动前的纯 TryLock。
+func disableZcodeLockWait(t *testing.T) {
+	t.Helper()
+	old := zcodeLockWait
+	zcodeLockWait = 0
+	t.Cleanup(func() { zcodeLockWait = old })
+}
+
 // TestZcodeBusyMessageAttributesToZcode ①:zcode 自己的生命周期锁被占,
 // 文案必须如实指明"zcode 正忙",不得窜用 codex 的忙文案。
 func TestZcodeBusyMessageAttributesToZcode(t *testing.T) {
+	disableZcodeLockWait(t)
 	p := &ZcodeProvider{}
 	p.lifeMu.Lock() // 模拟另一个操作正持有 zcode 生命周期锁
 	defer p.lifeMu.Unlock()
@@ -82,6 +95,7 @@ func TestCodexBusyMessageUnchanged(t *testing.T) {
 // withClientCtx 同款——此前直接返回 ErrBusy,zcode 自己忙被标成"codex 正忙"
 // (与 T-23 修的窜用同款)。钉法照抄 ①③:文案归属 zcode + errors.Is 分级为真。
 func TestZcodeControlClientBusyMessageAttributesToZcode(t *testing.T) {
+	disableZcodeLockWait(t)
 	p := &ZcodeProvider{}
 	p.lifeMu.Lock() // 模拟另一个操作正持有 zcode 生命周期锁
 	defer p.lifeMu.Unlock()
