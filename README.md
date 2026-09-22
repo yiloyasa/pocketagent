@@ -30,18 +30,18 @@
 - 代码：android main **86** `.kt` / test **81** `.kt`；daemon 手写 Go（非 gen）**320** 文件
 - 版本：**0.2.2 / versionCode 5**
 
-### 0.3 当前状态（真值锚点 · 2026-09-22）
+### 0.3 当前状态（真值锚点 · 2026-09-23）
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，HEAD `da9a24a`（2026-09-22 收编）；**工作树干净**（仅 3 个 `daemon/pi_probe*_tmp.js` 未跟踪，待处置） |
+| Git | 分支 `main`，HEAD `8988967`（2026-09-23：W3 收口 `2f84282` + W4 发布边界 `68ac23c`/`8988967`）；**工作树仅 3 个 `daemon/pi_probe*_tmp.js` 未跟踪**（旧调查探针，待处置） |
 | daemon | 运行中 pid **104724**，`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
 | 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./internal/...` —— **`internal/server` 有 2 例 flaky**（`TestDispatchCollabFansOutPerMember` / `TestDispatchCollabPartialFailureIsIndependent`，Windows `t.TempDir()` 清理竞态，见 §15），其余包 PASS |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
-1. ~~170 项成果未落 git~~ → **已收编**（2026-09-22，提交 `da9a24a`），工作树干净。遗留：3 个 `daemon/pi_probe*_tmp.js` 未跟踪（疑似临时探针，待处置）。
+1. ~~170 项成果未落 git~~ → **已收编**（2026-09-22，提交 `da9a24a`），工作树干净。遗留：3 个 `daemon/pi_probe*_tmp.js` 未跟踪（实测为 2026-09-22 16:19–16:22 的 pi 调查探针，内容为硬编码开发机路径的 node/pi 拉起脚本，待处置）。
 2. **发布审核未通过**：131 用例 = 30 PASS / 2 FAIL / 99 BLOCKED；P0 / P1 / P2 代码已修，但**真机复验待手机插线**（§13）。
 3. **真机时断时续**：多轮验证依赖手机在线（Tailscale `100.92.193.109:7246`）；离线时只能跑 JVM / go 单测，UI 交互与 gRPC 联调无法实测。
 4. **codex 实验特性警告**：为支持 Default 模式反问卡，daemon 强注 `default_mode_request_user_input`，而 codex 自报其 `stage=underDevelopment` → **开启即弹警告**；抑制需写用户 `~/.codex/config.toml`（**红线封死**）→ 只能诚实降级（不支持就不显示入口）。
@@ -193,13 +193,13 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 | 类别 | 位置 | 说明 |
 |---|---|---|
-| daemon 入口 | `daemon/cmd/pocketagentd/main.go` | 见 §3 flag 表；运行参数：`-addr 0.0.0.0:7246 -workspace G:\项目1\pocketagent`，env `CODEX_BIN=G:\Claude Code\codex.cmd` |
+| daemon 入口 | `daemon/cmd/pocketagentd/main.go` | 见 §3 flag 表；运行参数：`-addr 0.0.0.0:7246 -workspace G:\项目1\pocketagent`，env `CODEX_BIN=G:\Claude Code\codex.cmd`。⚠ **pi/dsh 的默认定位已改为按用户环境派生**（2026-09-23，`internal/hostenv`）：node 走 随包目录 → `%LOCALAPPDATA%`/`%ProgramFiles%` → PATH；pi/dsh 入口走 npm 全局根（`%APPDATA%\npm\node_modules`）→ PATH。装在非标准位置的须显式设 `PI_NODE`/`PI_CLI`（pi）或 `DSH_NODE`/`DSH_BIN`（dsh） |
 | daemon 数据目录 | `~/.pocketagentd/` | `threads.json`(会话真值)、`events.jsonl`(+轮转)、`devices.json`(配对设备)、`pair-code.txt`(配对码，0600，重启复用不换码)、`certs/`(自签证书)、`dsh-home/`(dsh 隔离 HOME) |
 | App 入口 | `MainActivity.kt` → NavHost | 冷启 Splash → onboarding(未配对)/home |
 | App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.2.2/5）；sherpa AAR 由构建脚本下载+哈希校验 |
 | 构建脚本 | `tools/device/_pa_gradle.py`、`android/build-ascii.ps1` | 中文路径 Gradle 处理不了 → robocopy 镜像到 `G:\pa\android` 再 gradlew |
-| 看门狗 | `daemon/cmd/paguard` + `watchdog_hidden.vbs` | 计划任务 PocketAgentDaemonGuard 每分钟 → wscript → WMI 拉起 paguard → 探测 7246 死了才拉 daemon（WMI 派生脱离 job object，4s 内拉起）。⚠ daemon 启动参数由 paguard **硬编码**（`cmd/paguard/*.go:107`）→ 加 flag 必须重编译 paguard.exe |
-| 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+install/uninstall → `PocketAgent桌面端.zip` |
+| 看门狗 | `daemon/cmd/paguard` + `watchdog_hidden.vbs` | 计划任务 PocketAgentDaemonGuard 每分钟 → wscript → WMI 拉起 paguard → 探测 7246 死了才拉 daemon（WMI 派生脱离 job object，4s 内拉起）。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
+| 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+version.txt+install/uninstall/使用说明 → `PocketAgent桌面端.zip`。2026-09-23 修：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe/paguard.exe（提交 `42813da` 引入的回归）；现顺序为 清理 → 创建 → 构建 → 痕迹扫描 → 压缩，扫描命中开发机痕迹即中止不出包 |
 
 ---
 
@@ -462,6 +462,9 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 ---
 
 ## 15. 已知边界与技术债
+
+- **pi/dsh 默认定位已移除**（2026-09-23）：`internal/{piapp,dshapp}` 不再硬编码开发机的 node / pi / dsh 绝对路径 —— 那些路径作为字符串常量经 `go build -trimpath` 后仍留在二进制字符串表里，会随 pocketagentd.exe 进发布包（规格 §2 禁止）。改由 `internal/hostenv` 按用户环境派生；编译期回归钉子见 `{piapp,dshapp}/devpath_assert_test.go`（AST 只扫字符串字面量，**注释不算** —— 注释被编译器丢弃、不进二进制，用文本匹配会把解释性注释误判成泄漏）。**副作用**：开发机上 pi/dsh 若装在非 npm 全局位置，须显式设 `PI_NODE`/`PI_CLI`（pi）或 `DSH_NODE`/`DSH_BIN`（dsh）。
+- **build.ps1 打包顺序缺陷已修**（2026-09-23）：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe 与 paguard.exe（`42813da` 引入的回归；仓库 09-17 那份 zip 解包含两个 exe 可证）。现已把清理上移到构建之前，并在压缩前加入开发机痕迹字节扫描（命中即中止不出包）。**未运行构建验证** —— 跑一遍会重写被 git 跟踪的 `dist/windows/PocketAgent桌面端.zip`（覆盖入库产物）。
 
 - daemon `go vet` 有 protobuf 值拷贝警告（存量噪音，非新问题）。
 - **daemon `internal/server` 有 2 例 flaky 测试**（`TestDispatchCollabFansOutPerMember` / `TestDispatchCollabPartialFailureIsIndependent`）：协同扇出的轮次跑在**脱离取消链**的 goroutine 里（设计如此，避免 RPC 返回即被杀），而测试只断言 RPC 响应、不等轮次落定 —— 于是 Windows 上 `t.TempDir()` 的 `RemoveAll` 清理会撞上仍在写文件的 goroutine，报 `The directory is not empty` 而**间歇 FAIL**（实测 4 次：FAIL/ok/ok/FAIL）。**断言本身未失败，无功能缺陷**。修法二选一：① 测试侧结束前轮询子线程离开 `RUNNING`；② 给 `Server` 加在飞协同计数（`sync.WaitGroup`/atomic）供测试 drain。
