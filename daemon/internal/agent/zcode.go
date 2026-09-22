@@ -1759,12 +1759,12 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					if raw := zcodeStateUpdateSnapshot(nm.params, sid); len(raw) > 0 {
 						p.InvalidateModels()
 						emitRuntimeSelection(p.confirmedZcodeSelection(raw), sink)
-						notices.record("zcode", nm.method, nm.params, sink)
+						notices.recordAs(zcodeNoticeKind(nm.method), "zcode", nm.method, nm.params, sink)
 					}
 					continue
 				}
 				if nm.method != "session/event" {
-					notices.record("zcode", nm.method, nm.params, sink)
+					notices.recordAs(zcodeNoticeKind(nm.method), "zcode", nm.method, nm.params, sink)
 					continue
 				}
 				var ev zcodeEventEnvelope
@@ -1776,7 +1776,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					p.recordProjection(req.Thread.ID, ev.Payload)
 					p.InvalidateModels()
 					emitRuntimeSelection(p.confirmedZcodeSelection(ev.Payload), sink)
-					notices.record("zcode", ev.Type, ev.Payload, sink)
+					notices.recordAs(zcodeNoticeKind(ev.Type), "zcode", ev.Type, ev.Payload, sink)
 				case "turn.started":
 					log.Printf("[zcode] zcode 已接收任务 session=%s turn=%s", sid, ev.TurnID)
 				case "model.streaming":
@@ -1860,7 +1860,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					}
 					finish()
 				default:
-					notices.record("zcode", ev.Type, ev.Payload, sink)
+					notices.recordAs(zcodeNoticeKind(ev.Type), "zcode", ev.Type, ev.Payload, sink)
 				}
 			case <-notifStop:
 				return

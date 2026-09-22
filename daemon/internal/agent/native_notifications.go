@@ -122,6 +122,70 @@ func codexItemNoticeKind(itemType string) string {
 	return runtime.KindUnknownNotification
 }
 
+// codexMethodNoticeKind 给 codex 的**会话级 method** 分档。
+// (与按 item 类型分的 [codexItemNoticeKind] 是两条独立路径,别混。)
+//
+// 【为什么"已知 method 的空转"不等于未知】turn/diff/updated 在 diff 为空时、
+// model/verification 在校验列表为空时,codexNotificationEvent 会返回 nil,于是落到
+// 兜底记录。这是**已知 method 这次没东西可投影**,不是"上游发来没见过的 method"。
+// 记成 UNKNOWN 的话,诊断页天天被它占着,真正的新 method 反而显不出来。
+func codexMethodNoticeKind(method string) string {
+	switch method {
+	case "turn/diff/updated", "model/verification":
+		return runtime.KindKnownPassthrough
+	}
+	return runtime.KindUnknownNotification
+}
+
+// dshNoticeKind 给 dsh 通知的 method 分档。
+//
+// 【判定依据是"daemon 对这个**类别**做了什么",不是名字眼熟不眼熟】:
+//   - context_usage / tool_call 系列**正常情形已被投影**成 Usage / ToolCall 帧;
+//     走到留痕说明是已知路径上的意外(认不出的 token 字段 / unmarshal 失败 / 状态
+//     字段不认识)—— 标 PROJECTED,让诊断页把它与"真未知"分开;
+//   - plan / available_commands_update 只透传进诊断视图,没有正式事件 → PASSTHROUGH;
+//   - 其余(未知变体、非 session/update 的方法) → UNKNOWN_NOTIFICATION。
+//
+// 【为什么未知变体不硬套 PASSTHROUGH】session/update 的变体是开放的:上游加一个新
+// kind 就会落到 default。硬说"我们认识它"会让诊断页失去存在的意义 —— 那正是本轮要修的病。
+func dshNoticeKind(method string) string {
+	switch {
+	case strings.HasPrefix(method, "session/update:context_usage"),
+		strings.HasPrefix(method, "session/update:tool_call"):
+		return runtime.KindKnownProjected
+	case strings.HasPrefix(method, "session/update:plan"),
+		strings.HasPrefix(method, "session/update:available_commands_update"):
+		return runtime.KindKnownPassthrough
+	}
+	return runtime.KindUnknownNotification
+}
+
+// piNoticeKind 给 pi 的事件类型分档。
+//
+// 【agent_start 为什么算"已知"】pi 协议里有它(piapp/client.go 的 Event 注释列了),
+// 探针证据也抓到过真实帧(docs/verify/evidence/pi-p0-probe.md);daemon 只是选择不把它
+// 投影成 TurnServerMessage —— 这是**我们的取舍**,不是"没见过这个东西"。
+// 【为什么不归 UNKNOWN】诊断页的意义是把"上游发来怪东西"从已知噪音里挑出来;
+// 把已知事件记成未知会让它重新淹进噪音 —— 正是本轮要修的病。
+func piNoticeKind(eventType string) string {
+	switch eventType {
+	case "agent_start":
+		return runtime.KindKnownPassthrough
+	}
+	return runtime.KindUnknownNotification
+}
+
+// zcodeNoticeKind 给 zcode 的通知分档。
+// state.updated / session.updated / settings.updated / session.modelUpdated 在记录前
+// 都已 emitRuntimeSelection —— 即**已经被投影**成协议内的 Started 帧。
+func zcodeNoticeKind(method string) string {
+	switch method {
+	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated":
+		return runtime.KindKnownProjected
+	}
+	return runtime.KindUnknownNotification
+}
+
 // record 是"未分类"入口:不关心分档的调用方(pi / zcode / dsh 等)继续用它,
 // 内部回落 UNKNOWN_NOTIFICATION —— 分类先从 codex item 路径落地,不让其余
 // runtime 的调用点为此被迫改动。

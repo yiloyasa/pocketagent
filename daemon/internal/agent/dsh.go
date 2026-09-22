@@ -539,7 +539,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 					continue
 				}
 				// 非 session/update 的通知:识别不了≠出错,原样包装进诊断视图(主线 A)
-				notices.record("dsh", nm.method, nm.params, sink)
+				notices.recordAs(dshNoticeKind(nm.method), "dsh", nm.method, nm.params, sink)
 				processed.Add(1)
 			case <-notifStop:
 				return
@@ -889,14 +889,14 @@ func (p *DshProvider) handleSessionUpdate(raw json.RawMessage, sink Sink, st *ds
 			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{Usage: u}})
 			return
 		}
-		notices.record("dsh", "session/update:context_usage", raw, sink)
+		notices.recordAs(dshNoticeKind("session/update:context_usage"), "dsh", "session/update:context_usage", raw, sink)
 	case "plan", "available_commands_update":
 		// 透传进诊断视图(蓝本 §4.3:plan / available_commands 透传/忽略分支)
-		notices.record("dsh", "session/update:"+kind, raw, sink)
+		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
 	default:
 		// 探针修正⑤:未知变体原样透传进诊断视图,不猜(README §7 主线 A:
 		// 识别不了≠出错;原文+变体名进诊断视图,App 显示"原生发来了一个新事件")
-		notices.record("dsh", "session/update:"+kind, raw, sink)
+		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
 	}
 }
 
@@ -969,13 +969,13 @@ func dshToolPhase(status string) (pb.ToolCallUpdate_Phase, bool) {
 func (p *DshProvider) handleDshToolUpdate(kind string, raw json.RawMessage, sink Sink, st *dshTurnState, notices *nativeNoticeRecorder) {
 	var u dshToolCallUpdate
 	if json.Unmarshal(raw, &u) != nil {
-		notices.record("dsh", "session/update:"+kind, raw, sink)
+		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
 		return
 	}
 	phase, known := dshToolPhase(u.Status)
 	if !known {
 		// 未知状态:如实进诊断,不猜阶段(与未知变体同口径)
-		notices.record("dsh", "session/update:"+kind+":"+u.Status, raw, sink)
+		notices.recordAs(dshNoticeKind("session/update:"+kind+":"+u.Status), "dsh", "session/update:"+kind+":"+u.Status, raw, sink)
 		return
 	}
 	tu := &pb.ToolCallUpdate{Phase: phase}

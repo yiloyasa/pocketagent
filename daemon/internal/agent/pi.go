@@ -732,7 +732,7 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
 			} else {
-				notices.record("pi", ev.Type, ev.Raw, sink)
+				notices.recordAs(piNoticeKind(ev.Type), "pi", ev.Type, ev.Raw, sink)
 			}
 		}
 	}

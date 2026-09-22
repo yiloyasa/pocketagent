@@ -1186,7 +1186,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: event},
 				})
 			} else {
-				notices.record("codex", method, params, sink)
+				notices.recordAs(codexMethodNoticeKind(method), "codex", method, params, sink)
 			}
 		}
 	}
