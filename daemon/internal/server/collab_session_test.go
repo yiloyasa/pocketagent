@@ -23,11 +23,43 @@ func newCollabSessionServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("建测试存储失败: %v", err)
 	}
-	return New(Config{
+	s := New(Config{
 		Store:     fs,
 		Providers: map[string]agent.Provider{"echo": agent.NewEcho()},
 		Workspace: t.TempDir(),
 	})
+	// 扇出按设计异步执行：RPC 只受理，轮次跑在**脱离取消链**的 goroutine 里
+	// （否则 RPC 一返回、ctx 被取消，刚起飞的轮次整个被杀 —— 现场表现为
+	// "永远显示收到但什么都没跑"）。而下面这些用例断言的只是响应，于是那些
+	// goroutine 会在测试函数返回**之后**才写 store 与 workspace，撞上 t.TempDir()
+	// 的清理，在 Windows 上报 "directory is not empty" 而间歇失败
+	// （修复前实测连跑 8 次：3 次挂 FansOutPerMember、4 次挂 PartialFailure）。
+	//
+	// 把「等在飞轮次落定」放进构造器，比要求每个用例各自记得更可靠 ——
+	// 将来新增的用例自动获得同一保证。t.Cleanup 是 LIFO：这里注册的等待先执行，
+	// 之后才轮到 t.TempDir() 的清理。
+	t.Cleanup(func() { waitActiveTurnsDrained(t, s) })
+	return s
+}
+
+// waitActiveTurnsDrained 等所有在飞轮次落定。
+//
+// 【为什么末尾还有沉降窗口】租约释放与「落库 + 收尾」的最后一步之间仍有极短间隔；
+// 只盯租约可能在落库尾巴上放手，于是目录清理依旧会撞上它。
+func waitActiveTurnsDrained(t *testing.T, s *Server) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		ids := s.activeTurns.IDs()
+		if len(ids) == 0 {
+			time.Sleep(20 * time.Millisecond)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("在飞轮次 15s 内未清空（扇出 goroutine 可能卡住）: %v", ids)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // ① 空指令 / 空成员:调用级参数错误,直接拒(不进入扇出)。
