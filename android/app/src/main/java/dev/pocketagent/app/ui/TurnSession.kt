@@ -813,6 +813,51 @@ object TurnSession {
         else -> ResumePlan.FULL_ONLY
     }
 
+    /**
+     * 恢复轮询的总尝试次数。3 秒封顶 × 300 次 ≈ 15 分钟,与旧实现(5 秒 × 180 次
+     * ≈ 15 分钟)的最长覆盖一致 —— 把节奏改快不该顺手缩短覆盖时长。
+     */
+    private const val RECOVERY_ATTEMPTS = 300
+
+    /**
+     * 恢复轮询第 [attempt] 次之后该等多久(毫秒)。
+     *
+     * 【为什么退避而不是固定 5 秒】断流恢复此前是"首等 800ms、其后固定 5 秒"的轮询。
+     * 网络回来的那一刻平均要等 2.5 秒、最坏 5 秒才开始补帧 —— 用户体感就是
+     * "网回来了,手机还不动"。而断流绝大多数是**瞬时抖动**:先快试几次,大部分情况
+     * 几百毫秒内就把缺口补上了;真跑很久的任务再拉长到 3 秒封顶,不必一直高频打扰。
+     *
+     * 【为什么封顶 3 秒而不是 5 秒】同样的最长覆盖时长下,封顶越低补帧越及时;
+     * 3 秒是"够省"与"够快"之间的折中(旧实现 5 秒 × 180 次 ≈ 15 分钟,新实现
+     * 3 秒 × 300 次 ≈ 15 分钟,覆盖不变)。
+     */
+    internal fun recoveryBackoffMs(attempt: Int): Long = when {
+        attempt <= 0 -> 150L
+        attempt == 1 -> 300L
+        attempt == 2 -> 600L
+        attempt == 3 -> 1_200L
+        attempt == 4 -> 2_000L
+        else -> 3_000L
+    }
+
+    /**
+     * 这一周期要不要退回**全量**历史回填。
+     *
+     * 【为什么不能默认全量】原实现每个周期都跑一次 GetThreadHistory(整屏重拉),
+     * 而方案 §9.3 要求"只有事件丢窗时才调用全量历史"。增量路径**本身就能检测终局**
+     * ([ReplayOutcome.TERMINAL] = 补到了终局帧),所以全量只在两种情况下才必要:
+     *   - 收到 ResyncRequired:事件已轮转丢弃,断点作废,增量无从谈起;
+     *   - 本来就没有断点([hasResumePoint] = false):增量没有起点。
+     *
+     * 【为什么"连不上"不算】连不上是**暂时**状态(网络刚回来/daemon 正忙),下一周期
+     * 接着增量即可。此刻整屏重拉既浪费流量,又会让时间线整体重画一遍。
+     */
+    internal fun needFullHistoryFallback(outcome: ReplayOutcome?, hasResumePoint: Boolean): Boolean = when {
+        outcome == ReplayOutcome.RESYNC -> true
+        outcome == null && !hasResumePoint -> true
+        else -> false
+    }
+
     /** 一段增量回放流的结果。 */
     internal enum class ReplayOutcome {
         /** daemon 要求全量回退(after 已超保留窗口):断点已作废。 */
@@ -928,24 +973,25 @@ object TurnSession {
                 }
             } catch (_: Exception) { -1 }
             var recovered = false
-            for (i in 0 until 180) { // 最长约 30 分钟(10s × 180),覆盖长任务
+            for (i in 0 until RECOVERY_ATTEMPTS) {
                 if (recovered) break
                 if (st.generation != generation) return@launch
-                delay(if (i == 0) 800 else 5000)
+                delay(recoveryBackoffMs(i))
                 if (st.generation != generation) return@launch
                 // ---- 优先:事件增量续传(P1-5) ----
-                when (tryIncrementalRecovery(threadId, st)) {
-                    ReplayOutcome.TERMINAL -> {
-                        // 补到终局帧:时间线已与电脑端一致,无缝恢复完成。
-                        // ok 以 FAILED 帧设置的 errorMessage 为准(FAILED 分支已落)。
-                        finishRecovery(threadId, st, ok = st.errorMessage == null)
-                        recovered = true
-                        break
-                    }
-                    ReplayOutcome.CAUGHT_UP -> Unit // 缺口已补但轮次未终局:下周期继续增量
-                    ReplayOutcome.RESYNC, null -> Unit // 降级:本周期走全量回填
+                val outcome = tryIncrementalRecovery(threadId, st)
+                if (outcome == ReplayOutcome.TERMINAL) {
+                    // 补到终局帧:时间线已与电脑端一致,无缝恢复完成。
+                    // ok 以 FAILED 帧设置的 errorMessage 为准(FAILED 分支已落)。
+                    finishRecovery(threadId, st, ok = st.errorMessage == null)
+                    recovered = true
+                    break
                 }
-                // ---- 兜底:历史全量回填(原有逻辑原样保留) ----
+                // ---- 兜底:全量回填——**只在丢窗或没有断点时才走** ----
+                // 原实现每个周期都整屏重拉,而增量已经把缺口补上(CAUGHT_UP)时那一趟纯属
+                // 白跑,还会让时间线整体重画一遍。方案 §9.3 明确要求"只有事件丢窗时才调用
+                // 全量历史";增量路径本身已能检测终局(TERMINAL),所以这里判断足够。
+                if (!needFullHistoryFallback(outcome, hasResumePoint = st.lastSequence > 0)) continue
                 val snapshot = try {
                     withContext(Dispatchers.IO) {
                         if (AgentConnection.connectWithFallback() == null) null else {
