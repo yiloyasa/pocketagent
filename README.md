@@ -34,10 +34,11 @@
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，HEAD `46d04c9`（2026-09-23：**W4 用户运行边界完成** + 打包链实跑 + 数据目录派生 + 扇出 flaky 修复）；**工作树干净** |
+| Git | 分支 `main`，HEAD `a7bef2f`（2026-09-23：**W4 完成 / W5 完成 / W6 部分**）；**工作树干净** |
 | daemon | 运行中 pid **104724**（**仍是改动前的旧二进制，未热部署**）；`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
+| 运行时控制面进度 | **W4 ✅**（用户运行边界：定位链派生 + 打包链修复 + 数据目录）· **W5 ✅**（`installation_id`/`host_id` 落盘 + 设备表 fail-closed；**端点表待决策指纹归属**）· **W6 🔶**（checkpoint 文件后端 + 启动路径接线已落；turnQueue 落盘与恢复三分支待做）· **W7–W11 ⬜**（资源管理 / 事件信封 / 能力注册+proto / 统一协同 / Android Runtime UI） |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
-| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./internal/...` —— **全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
+| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./...` —— **17 包全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
