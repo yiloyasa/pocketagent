@@ -57,6 +57,8 @@ type deviceRegistry struct {
 	challenges  map[string]*pendingChallenge
 	nowFunc     func() time.Time // 可注入时钟(单测用过期路径)
 	randomFunc  func([]byte) (int, error)
+	degraded    bool  // 【规格 §8.2】设备表损坏(JSON 非法/条目残缺)→ 降级态:暂停远程认证
+	degradedErr error // 触发降级的原因,供日志与诊断
 }
 
 func newDeviceRegistry(dataDir, pairCode string) *deviceRegistry {
@@ -77,24 +79,101 @@ func newDeviceRegistry(dataDir, pairCode string) *deviceRegistry {
 	}
 	raw, err := os.ReadFile(r.path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[devices] 读取设备表失败(按空表继续): %v", err)
+		if os.IsNotExist(err) {
+			return r // 首次启动:还没有设备表,正常空表,不是损坏
 		}
+		// 设备表存在却读不出来(权限/IO):同样不能信任认证,进入降级态。
+		r.markDegraded(fmt.Errorf("读取设备表失败: %w", err))
 		return r
 	}
 	var list []*deviceRecord
 	if err := json.Unmarshal(raw, &list); err != nil {
-		// 损坏的设备表不能让 daemon 起不来:按空表继续,下次写回时覆盖。
-		log.Printf("[devices] 设备表损坏,已忽略(将按空表重建): %v", err)
+		// 【规格 §8.2】设备表损坏时绝不静默按空表启动 —— 那会让用户误以为
+		// 所有设备都消失了(远程认证全部失败却看不出原因)。改为进入降级态:
+		// 暂停远程认证,原文件原样保留,日志给出备份/重新配对的人工恢复路径。
+		r.markDegraded(fmt.Errorf("设备表 JSON 解析失败: %w", err))
 		return r
 	}
 	for _, d := range list {
 		if d == nil || d.DeviceID == "" {
+			// 存在无法识别的条目 = 表被截断或改写,同样按损坏处理:否则会
+			// 悄悄少掉设备,正是规格要防的"设备凭空消失"。
+			r.markDegraded(fmt.Errorf("设备表含无法解析的设备条目(缺 device_id)"))
 			continue
 		}
 		r.devices[d.DeviceID] = d
 	}
+	if r.degraded {
+		return r
+	}
+	// 【启动备份】每次成功加载,把刚读到的好版本留一份为 devices.json.bak
+	// (与 store 的 threads.json.bak 同款做法),供日后损坏时人工恢复。
+	// 刻意不自动恢复:把旧数据盖回新数据是产品决策,这里只留证据与路径。
+	r.writeBackupAtomic(r.bakPath(), raw)
 	return r
+}
+
+// degradedAuthMsg 是降级态下返回给客户端的提示:人话,且指明主机侧的恢复路径。
+const degradedAuthMsg = "daemon 设备表损坏,已暂停所有设备认证(防止误报'设备全部消失');请在主机上查看日志,用 devices.json.bak 恢复或让手机重新配对"
+
+// markDegraded 把注册表置入降级态:设备表加载失败,暂停远程认证。
+// 用醒目 ERROR 日志讲清发生了什么与怎么恢复 —— 绝不静默。
+func (r *deviceRegistry) markDegraded(err error) {
+	r.degraded = true
+	r.degradedErr = err
+	log.Printf("[devices] ERROR: %s", r.degradedMessage())
+}
+
+// bakPath 返回设备表备份路径(devices.json.bak);仅内存模式为空。
+func (r *deviceRegistry) bakPath() string {
+	if r.path == "" {
+		return ""
+	}
+	return r.path + ".bak"
+}
+
+// degradedMessage 用人话讲清:出了什么事、为什么远程认证被暂停、用户怎么恢复。
+func (r *deviceRegistry) degradedMessage() string {
+	recovery := "请人工检查原文件"
+	if r.path != "" {
+		if st, statErr := os.Stat(r.bakPath()); statErr == nil && !st.IsDir() {
+			recovery = fmt.Sprintf("可用备份手动恢复:把 %s 复制回 %s;或让手机用配对码重新配对", r.bakPath(), r.path)
+		} else {
+			recovery = fmt.Sprintf("没有可用备份,请检查原文件 %s;或让手机用配对码重新配对", r.path)
+		}
+	}
+	return fmt.Sprintf("设备表损坏,已暂停所有远程设备认证(fail-closed,防止把\"设备全部消失\"误报给用户)| 原因: %v | 设备表: %s | 恢复: %s",
+		r.degradedErr, r.path, recovery)
+}
+
+// writeBackupAtomic 把 data 原子地写为 bak(tmp+rename),避免半截备份反过来
+// 毒害恢复。备份失败只告警不阻塞 —— 它是恢复的辅助证据,绝不能变成新的
+// "写入即死"点。
+func (r *deviceRegistry) writeBackupAtomic(bak string, data []byte) {
+	if bak == "" {
+		return
+	}
+	tmp := bak + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("[devices] WARNING: 设备表备份写入失败(不影响运行,仅影响损坏后的恢复): %v", err)
+		return
+	}
+	if err := os.Rename(tmp, bak); err != nil {
+		log.Printf("[devices] WARNING: 设备表备份落位失败(不影响运行,仅影响损坏后的恢复): %v", err)
+	}
+}
+
+// backupCurrentLocked 把当前磁盘上的 devices.json(即将被覆盖的上一版)
+// 留一份为 .bak,供日后损坏时恢复。文件不存在(首次写入)或读不出来则跳过。
+func (r *deviceRegistry) backupCurrentLocked() {
+	if r.path == "" {
+		return
+	}
+	cur, err := os.ReadFile(r.path)
+	if err != nil {
+		return
+	}
+	r.writeBackupAtomic(r.bakPath(), cur)
 }
 
 // legacyTokenHash 与旧 server.token() 完全一致:sha256("pair-code:"+配对码)。
@@ -131,11 +210,23 @@ func (r *deviceRegistry) saveLocked() error {
 	if err != nil {
 		return err
 	}
+	// 【写入前备份】覆盖主文件前,把上一版留为 devices.json.bak。但降级态
+	// (degraded)下磁盘上的主文件本身就是坏的,绝不能拿它覆盖可能还有价值
+	// 的旧 .bak —— 那正是恢复的最后一条路。
+	if !r.degraded {
+		r.backupCurrentLocked()
+	}
 	tmp := r.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, r.path)
+	if err := os.Rename(tmp, r.path); err != nil {
+		return err
+	}
+	// 成功写回即代表设备表已重建/可信,解除降级(例如重新配对恢复路径)。
+	r.degraded = false
+	r.degradedErr = nil
+	return nil
 }
 
 // newToken 生成 64 位十六进制随机 token(32 字节熵)。
@@ -194,6 +285,10 @@ func (r *deviceRegistry) RegisterByPairCode(pairCode, deviceID, name, pubKey str
 func (r *deviceRegistry) IssueChallenge(deviceID string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.degraded {
+		// fail-closed:设备表不可信时不签发任何挑战(认证链的第一步就挡住)。
+		return "", errUnavailable(degradedAuthMsg)
+	}
 	if r.devices[deviceID] == nil {
 		return "", errNotFound("设备未注册,请先用配对码配对")
 	}
@@ -215,6 +310,10 @@ func (r *deviceRegistry) VerifyChallenge(deviceID, challenge, sigB64 string) (st
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.degraded {
+		// fail-closed:设备表不可信时不接受任何挑战应答(与 IssueChallenge 对应)。
+		return "", errUnavailable(degradedAuthMsg)
+	}
 	rec := r.devices[deviceID]
 	if rec == nil {
 		return "", errNotFound("设备未注册,请先用配对码配对")
@@ -277,6 +376,12 @@ func (r *deviceRegistry) Validate(token string) (deviceID string, legacy, ok boo
 	hash := hashToken(token)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.degraded {
+		// fail-closed(规格 §8.2):设备表不可信时,任何 token(含 legacy 回退)
+		// 都不能通过 —— 宁可拒绝并要求重新配对,也不让用户以为"所有设备都
+		// 消失了"。恢复后(重新配对写回)自动解除降级。
+		return "", false, false
+	}
 	for id, d := range r.devices {
 		if subtle.ConstantTimeCompare([]byte(hash), []byte(d.TokenHash)) == 1 {
 			// last_seen 节流刷新(1 分钟内不重复落盘):Validate 挂在每个请求的
