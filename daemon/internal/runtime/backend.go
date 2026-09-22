@@ -68,6 +68,11 @@ type Backend struct {
 
 	// ---- 资源记账 ----
 	leases map[string]*ResourceLease
+
+	// ---- 未知事件诊断台账(规格 §9)----
+	// 惰性创建:它要读 dataDir,而内存后端的构造路径(测试)不该为此多一次文件探测。
+	unknownOnce sync.Once
+	unknown     *UnknownEventLog
 }
 
 // StoredCacheEntry 是缓存条目的存储形态（导出以便将来的文件实现与外部测试复用）。
@@ -145,6 +150,16 @@ func (b *Backend) Cache() CacheManager { return &memCache{b: b} }
 
 // Resources 返回默认资源记账入口。
 func (b *Backend) Resources() ResourceLedger { return &memLedger{b: b} }
+
+// UnknownEvents 返回未知事件的诊断台账(规格 §9:可保存、可查询、可展示)。
+//
+// 【为什么挂在共享后端上】它是**进程级**索引:codex 发来的未知通知、dsh 拒绝的
+// 未知请求记进同一本账,诊断页才能一次看全。各家各记一本的话,"有哪几家"又变成
+// 需要枚举的知识 —— 而枚举名单正是本项目一直在消掉的东西。
+func (b *Backend) UnknownEvents() *UnknownEventLog {
+	b.unknownOnce.Do(func() { b.unknown = NewUnknownEventLog(b.dataDir) })
+	return b.unknown
+}
 
 // Checkpoints 返回 checkpoint 入口。
 //

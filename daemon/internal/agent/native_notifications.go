@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 )
 
 // RuntimeSelection is a partial update. Missing is not the same as explicitly
@@ -83,9 +84,25 @@ func emitRuntimeSelection(selection RuntimeSelection, sink Sink) {
 type nativeNoticeRecorder struct {
 	mu    sync.Mutex
 	count map[string]int
+	// threadID 是**我们自己的**会话 id(不是原生 agent 的 thread id),供诊断台账
+	// 关联到具体会话。为空 = 这条通知产生在没有会话归属的路径上 —— 如实留空,
+	// 不拿原生 id 冒充。
+	threadID string
 }
 
 func (r *nativeNoticeRecorder) record(agentID, method string, raw json.RawMessage, sink Sink) {
+	// 【顺序有意为之】先登记诊断台账,再过下面的推送限频。
+	// 推送限频(每方法 2 条)是为了不让手机端被同一条未知通知刷屏;而台账是**索引**,
+	// 必须反映真实频次 —— 否则用户点开诊断页只看到两条,分不清"偶尔来一次"还是
+	// "每轮都在来",那正是这个功能要回答的问题。
+	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+		ThreadID:       r.threadID,
+		SourceAgent:    agentID,
+		SourceMethod:   method,
+		NormalizedKind: runtime.KindUnknownNotification,
+		RawPayload:     redactNativePayload(raw),
+	})
+
 	r.mu.Lock()
 	if r.count == nil {
 		r.count = map[string]int{}

@@ -25,6 +25,13 @@ service RuntimeService {
   rpc SetRuntimePolicy(SetRuntimePolicyRequest) returns (RuntimePolicyResponse);
   // 查某作用域下的资源用量与限额(每个租约的 soft/hard 与压力档)。
   rpc GetResourceUsage(GetResourceUsageRequest) returns (ResourceUsageResponse);
+  // 未知事件的诊断索引(规格 §9:未知事件要"可保存、可查询、可展示")。
+  // 【为什么这三条必须存在】原生 agent 升级后会发来我们没见过的通知与反向请求;
+  // 只把它们写进 daemon 日志,用户与手机端就永远看不到"最近到底来了什么" ——
+  // 而那正是判断"要不要等上游支持/要不要关掉某个实验特性"的唯一依据。
+  rpc ListUnknownEvents(ListUnknownEventsRequest) returns (ListUnknownEventsResponse);
+  rpc GetUnknownEvent(GetUnknownEventRequest) returns (UnknownEventResponse);
+  rpc AcknowledgeUnknownEvent(AcknowledgeUnknownEventRequest) returns (AcknowledgeUnknownEventResponse);
 }
 
 message GetRuntimePolicyRequest {}
@@ -102,4 +109,63 @@ message ResourceMetric {
   string state = 8;        // normal / soft / hard
   string spill_policy = 9; // compact / spill / reject
   bool optional = 10;      // true = 触硬上限时会被拒(可选资源)
+}
+
+// ---- 未知事件诊断(规格 §9)--------------------------------------------------
+
+message ListUnknownEventsRequest {
+  // normalized_kind:UNKNOWN_NOTIFICATION / UNKNOWN_REQUEST / UNKNOWN_RESPONSE;空 = 全部。
+  string kind = 1;
+  string agent_id = 2;        // 来源 agent;空 = 全部
+  string thread_id = 3;       // 关联会话;空 = 全部
+  string processing_status = 4; // NEW / INSPECTED / ...;空 = 全部
+  int32 limit = 5;            // 最多返回条数;<=0 = 台账默认上限
+}
+
+// UnknownEventSummary 是列表项。原始载荷只在 GetUnknownEvent 才给 —— 列表页不需要
+// 背着一堆可能很大的 payload。
+message UnknownEventSummary {
+  string event_id = 1;
+  int64 sequence = 2;
+  int64 received_at_unix_ms = 3;
+  string source_agent = 4;
+  string source_method = 5;   // 原生方法名原文(不翻译、不改写)
+  string thread_id = 6;
+  string normalized_kind = 7;
+  string safety_class = 8;    // 目前恒为 UNKNOWN:分类规则未定,如实标注而非猜一个
+  string processing_status = 9;
+  uint64 revision = 10;       // 每次确认 +1
+}
+
+message ListUnknownEventsResponse {
+  repeated UnknownEventSummary items = 1;
+  // 台账累计登记条数与因超上限丢弃的条数。
+  // 【为什么必须给】只回最近 N 条而不说,用户会以为"就这么几条";这两个数让
+  // "这里只留了最近 N 条、更早的已经丢了"变成明面上的事实。
+  int64 total = 2;
+  int64 dropped = 3;
+}
+
+message GetUnknownEventRequest {
+  string event_id = 1;
+}
+
+message UnknownEventResponse {
+  UnknownEventSummary summary = 1;
+  string raw_json = 2;           // 脱敏后的原始载荷(密钥类字段已打码)
+  string decoded_fields_json = 3; // 我们能解出来的部分;解不出来为空
+  string note = 4;               // 确认时写下的一句话
+}
+
+message AcknowledgeUnknownEventRequest {
+  string event_id = 1;
+  // NEW / INSPECTED / IGNORED / RETRY_LATER / ESCALATED / NEEDS_NATIVE_SUPPORT。
+  // 非法取值回 InvalidArgument 并列出可用值 —— 静默写入客户端不认识的状态,
+  // 表现是"点了确认但没变化"。
+  string action = 2;
+  string note = 3;
+}
+
+message AcknowledgeUnknownEventResponse {
+  UnknownEventSummary item = 1;
 }

@@ -580,6 +580,483 @@ func (x *ResourceMetric) GetOptional() bool {
 	return false
 }
 
+type ListUnknownEventsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// normalized_kind:UNKNOWN_NOTIFICATION / UNKNOWN_REQUEST / UNKNOWN_RESPONSE;空 = 全部。
+	Kind             string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	AgentId          string `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`                            // 来源 agent;空 = 全部
+	ThreadId         string `protobuf:"bytes,3,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`                         // 关联会话;空 = 全部
+	ProcessingStatus string `protobuf:"bytes,4,opt,name=processing_status,json=processingStatus,proto3" json:"processing_status,omitempty"` // NEW / INSPECTED / ...;空 = 全部
+	Limit            int32  `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`                                              // 最多返回条数;<=0 = 台账默认上限
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ListUnknownEventsRequest) Reset() {
+	*x = ListUnknownEventsRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUnknownEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUnknownEventsRequest) ProtoMessage() {}
+
+func (x *ListUnknownEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUnknownEventsRequest.ProtoReflect.Descriptor instead.
+func (*ListUnknownEventsRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListUnknownEventsRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ListUnknownEventsRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ListUnknownEventsRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *ListUnknownEventsRequest) GetProcessingStatus() string {
+	if x != nil {
+		return x.ProcessingStatus
+	}
+	return ""
+}
+
+func (x *ListUnknownEventsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+// UnknownEventSummary 是列表项。原始载荷只在 GetUnknownEvent 才给 —— 列表页不需要
+// 背着一堆可能很大的 payload。
+type UnknownEventSummary struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	EventId          string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	Sequence         int64                  `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	ReceivedAtUnixMs int64                  `protobuf:"varint,3,opt,name=received_at_unix_ms,json=receivedAtUnixMs,proto3" json:"received_at_unix_ms,omitempty"`
+	SourceAgent      string                 `protobuf:"bytes,4,opt,name=source_agent,json=sourceAgent,proto3" json:"source_agent,omitempty"`
+	SourceMethod     string                 `protobuf:"bytes,5,opt,name=source_method,json=sourceMethod,proto3" json:"source_method,omitempty"` // 原生方法名原文(不翻译、不改写)
+	ThreadId         string                 `protobuf:"bytes,6,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	NormalizedKind   string                 `protobuf:"bytes,7,opt,name=normalized_kind,json=normalizedKind,proto3" json:"normalized_kind,omitempty"`
+	SafetyClass      string                 `protobuf:"bytes,8,opt,name=safety_class,json=safetyClass,proto3" json:"safety_class,omitempty"` // 目前恒为 UNKNOWN:分类规则未定,如实标注而非猜一个
+	ProcessingStatus string                 `protobuf:"bytes,9,opt,name=processing_status,json=processingStatus,proto3" json:"processing_status,omitempty"`
+	Revision         uint64                 `protobuf:"varint,10,opt,name=revision,proto3" json:"revision,omitempty"` // 每次确认 +1
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *UnknownEventSummary) Reset() {
+	*x = UnknownEventSummary{}
+	mi := &file_v1_runtime_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnknownEventSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnknownEventSummary) ProtoMessage() {}
+
+func (x *UnknownEventSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnknownEventSummary.ProtoReflect.Descriptor instead.
+func (*UnknownEventSummary) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *UnknownEventSummary) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetSequence() int64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *UnknownEventSummary) GetReceivedAtUnixMs() int64 {
+	if x != nil {
+		return x.ReceivedAtUnixMs
+	}
+	return 0
+}
+
+func (x *UnknownEventSummary) GetSourceAgent() string {
+	if x != nil {
+		return x.SourceAgent
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetSourceMethod() string {
+	if x != nil {
+		return x.SourceMethod
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetNormalizedKind() string {
+	if x != nil {
+		return x.NormalizedKind
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetSafetyClass() string {
+	if x != nil {
+		return x.SafetyClass
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetProcessingStatus() string {
+	if x != nil {
+		return x.ProcessingStatus
+	}
+	return ""
+}
+
+func (x *UnknownEventSummary) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+type ListUnknownEventsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Items []*UnknownEventSummary `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	// 台账累计登记条数与因超上限丢弃的条数。
+	// 【为什么必须给】只回最近 N 条而不说,用户会以为"就这么几条";这两个数让
+	// "这里只留了最近 N 条、更早的已经丢了"变成明面上的事实。
+	Total         int64 `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	Dropped       int64 `protobuf:"varint,3,opt,name=dropped,proto3" json:"dropped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUnknownEventsResponse) Reset() {
+	*x = ListUnknownEventsResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUnknownEventsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUnknownEventsResponse) ProtoMessage() {}
+
+func (x *ListUnknownEventsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUnknownEventsResponse.ProtoReflect.Descriptor instead.
+func (*ListUnknownEventsResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListUnknownEventsResponse) GetItems() []*UnknownEventSummary {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *ListUnknownEventsResponse) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *ListUnknownEventsResponse) GetDropped() int64 {
+	if x != nil {
+		return x.Dropped
+	}
+	return 0
+}
+
+type GetUnknownEventRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUnknownEventRequest) Reset() {
+	*x = GetUnknownEventRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUnknownEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUnknownEventRequest) ProtoMessage() {}
+
+func (x *GetUnknownEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUnknownEventRequest.ProtoReflect.Descriptor instead.
+func (*GetUnknownEventRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetUnknownEventRequest) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+type UnknownEventResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Summary           *UnknownEventSummary   `protobuf:"bytes,1,opt,name=summary,proto3" json:"summary,omitempty"`
+	RawJson           string                 `protobuf:"bytes,2,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`                                 // 脱敏后的原始载荷(密钥类字段已打码)
+	DecodedFieldsJson string                 `protobuf:"bytes,3,opt,name=decoded_fields_json,json=decodedFieldsJson,proto3" json:"decoded_fields_json,omitempty"` // 我们能解出来的部分;解不出来为空
+	Note              string                 `protobuf:"bytes,4,opt,name=note,proto3" json:"note,omitempty"`                                                      // 确认时写下的一句话
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *UnknownEventResponse) Reset() {
+	*x = UnknownEventResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnknownEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnknownEventResponse) ProtoMessage() {}
+
+func (x *UnknownEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnknownEventResponse.ProtoReflect.Descriptor instead.
+func (*UnknownEventResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *UnknownEventResponse) GetSummary() *UnknownEventSummary {
+	if x != nil {
+		return x.Summary
+	}
+	return nil
+}
+
+func (x *UnknownEventResponse) GetRawJson() string {
+	if x != nil {
+		return x.RawJson
+	}
+	return ""
+}
+
+func (x *UnknownEventResponse) GetDecodedFieldsJson() string {
+	if x != nil {
+		return x.DecodedFieldsJson
+	}
+	return ""
+}
+
+func (x *UnknownEventResponse) GetNote() string {
+	if x != nil {
+		return x.Note
+	}
+	return ""
+}
+
+type AcknowledgeUnknownEventRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	EventId string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// NEW / INSPECTED / IGNORED / RETRY_LATER / ESCALATED / NEEDS_NATIVE_SUPPORT。
+	// 非法取值回 InvalidArgument 并列出可用值 —— 静默写入客户端不认识的状态,
+	// 表现是"点了确认但没变化"。
+	Action        string `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
+	Note          string `protobuf:"bytes,3,opt,name=note,proto3" json:"note,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcknowledgeUnknownEventRequest) Reset() {
+	*x = AcknowledgeUnknownEventRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcknowledgeUnknownEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcknowledgeUnknownEventRequest) ProtoMessage() {}
+
+func (x *AcknowledgeUnknownEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcknowledgeUnknownEventRequest.ProtoReflect.Descriptor instead.
+func (*AcknowledgeUnknownEventRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *AcknowledgeUnknownEventRequest) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *AcknowledgeUnknownEventRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *AcknowledgeUnknownEventRequest) GetNote() string {
+	if x != nil {
+		return x.Note
+	}
+	return ""
+}
+
+type AcknowledgeUnknownEventResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Item          *UnknownEventSummary   `protobuf:"bytes,1,opt,name=item,proto3" json:"item,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcknowledgeUnknownEventResponse) Reset() {
+	*x = AcknowledgeUnknownEventResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcknowledgeUnknownEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcknowledgeUnknownEventResponse) ProtoMessage() {}
+
+func (x *AcknowledgeUnknownEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcknowledgeUnknownEventResponse.ProtoReflect.Descriptor instead.
+func (*AcknowledgeUnknownEventResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AcknowledgeUnknownEventResponse) GetItem() *UnknownEventSummary {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
 var File_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_v1_runtime_proto_rawDesc = "" +
@@ -647,11 +1124,49 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x05state\x18\b \x01(\tR\x05state\x12!\n" +
 	"\fspill_policy\x18\t \x01(\tR\vspillPolicy\x12\x1a\n" +
 	"\boptional\x18\n" +
-	" \x01(\bR\boptional2\xbc\x02\n" +
+	" \x01(\bR\boptional\"\xa9\x01\n" +
+	"\x18ListUnknownEventsRequest\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x19\n" +
+	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
+	"\tthread_id\x18\x03 \x01(\tR\bthreadId\x12+\n" +
+	"\x11processing_status\x18\x04 \x01(\tR\x10processingStatus\x12\x14\n" +
+	"\x05limit\x18\x05 \x01(\x05R\x05limit\"\xf5\x02\n" +
+	"\x13UnknownEventSummary\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1a\n" +
+	"\bsequence\x18\x02 \x01(\x03R\bsequence\x12-\n" +
+	"\x13received_at_unix_ms\x18\x03 \x01(\x03R\x10receivedAtUnixMs\x12!\n" +
+	"\fsource_agent\x18\x04 \x01(\tR\vsourceAgent\x12#\n" +
+	"\rsource_method\x18\x05 \x01(\tR\fsourceMethod\x12\x1b\n" +
+	"\tthread_id\x18\x06 \x01(\tR\bthreadId\x12'\n" +
+	"\x0fnormalized_kind\x18\a \x01(\tR\x0enormalizedKind\x12!\n" +
+	"\fsafety_class\x18\b \x01(\tR\vsafetyClass\x12+\n" +
+	"\x11processing_status\x18\t \x01(\tR\x10processingStatus\x12\x1a\n" +
+	"\brevision\x18\n" +
+	" \x01(\x04R\brevision\"\x86\x01\n" +
+	"\x19ListUnknownEventsResponse\x129\n" +
+	"\x05items\x18\x01 \x03(\v2#.pocketagent.v1.UnknownEventSummaryR\x05items\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\x12\x18\n" +
+	"\adropped\x18\x03 \x01(\x03R\adropped\"3\n" +
+	"\x16GetUnknownEventRequest\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\"\xb4\x01\n" +
+	"\x14UnknownEventResponse\x12=\n" +
+	"\asummary\x18\x01 \x01(\v2#.pocketagent.v1.UnknownEventSummaryR\asummary\x12\x19\n" +
+	"\braw_json\x18\x02 \x01(\tR\arawJson\x12.\n" +
+	"\x13decoded_fields_json\x18\x03 \x01(\tR\x11decodedFieldsJson\x12\x12\n" +
+	"\x04note\x18\x04 \x01(\tR\x04note\"g\n" +
+	"\x1eAcknowledgeUnknownEventRequest\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\x12\x12\n" +
+	"\x04note\x18\x03 \x01(\tR\x04note\"Z\n" +
+	"\x1fAcknowledgeUnknownEventResponse\x127\n" +
+	"\x04item\x18\x01 \x01(\v2#.pocketagent.v1.UnknownEventSummaryR\x04item2\x83\x05\n" +
 	"\x0eRuntimeService\x12b\n" +
 	"\x10GetRuntimePolicy\x12'.pocketagent.v1.GetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10SetRuntimePolicy\x12'.pocketagent.v1.SetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
-	"\x10GetResourceUsage\x12'.pocketagent.v1.GetResourceUsageRequest\x1a%.pocketagent.v1.ResourceUsageResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x10GetResourceUsage\x12'.pocketagent.v1.GetResourceUsageRequest\x1a%.pocketagent.v1.ResourceUsageResponse\x12h\n" +
+	"\x11ListUnknownEvents\x12(.pocketagent.v1.ListUnknownEventsRequest\x1a).pocketagent.v1.ListUnknownEventsResponse\x12_\n" +
+	"\x0fGetUnknownEvent\x12&.pocketagent.v1.GetUnknownEventRequest\x1a$.pocketagent.v1.UnknownEventResponse\x12z\n" +
+	"\x17AcknowledgeUnknownEvent\x12..pocketagent.v1.AcknowledgeUnknownEventRequest\x1a/.pocketagent.v1.AcknowledgeUnknownEventResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_runtime_proto_rawDescOnce sync.Once
@@ -665,46 +1180,62 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_v1_runtime_proto_goTypes = []any{
-	(*GetRuntimePolicyRequest)(nil), // 0: pocketagent.v1.GetRuntimePolicyRequest
-	(*SetRuntimePolicyRequest)(nil), // 1: pocketagent.v1.SetRuntimePolicyRequest
-	(*RuntimePolicyResponse)(nil),   // 2: pocketagent.v1.RuntimePolicyResponse
-	(*RuntimeLimits)(nil),           // 3: pocketagent.v1.RuntimeLimits
-	(*RuntimePolicy)(nil),           // 4: pocketagent.v1.RuntimePolicy
-	(*GetResourceUsageRequest)(nil), // 5: pocketagent.v1.GetResourceUsageRequest
-	(*ResourceUsageResponse)(nil),   // 6: pocketagent.v1.ResourceUsageResponse
-	(*ResourceMetric)(nil),          // 7: pocketagent.v1.ResourceMetric
-	nil,                             // 8: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                             // 9: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                             // 10: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                             // 11: pocketagent.v1.RuntimePolicy.CollabsEntry
+	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
+	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
+	(*RuntimePolicyResponse)(nil),           // 2: pocketagent.v1.RuntimePolicyResponse
+	(*RuntimeLimits)(nil),                   // 3: pocketagent.v1.RuntimeLimits
+	(*RuntimePolicy)(nil),                   // 4: pocketagent.v1.RuntimePolicy
+	(*GetResourceUsageRequest)(nil),         // 5: pocketagent.v1.GetResourceUsageRequest
+	(*ResourceUsageResponse)(nil),           // 6: pocketagent.v1.ResourceUsageResponse
+	(*ResourceMetric)(nil),                  // 7: pocketagent.v1.ResourceMetric
+	(*ListUnknownEventsRequest)(nil),        // 8: pocketagent.v1.ListUnknownEventsRequest
+	(*UnknownEventSummary)(nil),             // 9: pocketagent.v1.UnknownEventSummary
+	(*ListUnknownEventsResponse)(nil),       // 10: pocketagent.v1.ListUnknownEventsResponse
+	(*GetUnknownEventRequest)(nil),          // 11: pocketagent.v1.GetUnknownEventRequest
+	(*UnknownEventResponse)(nil),            // 12: pocketagent.v1.UnknownEventResponse
+	(*AcknowledgeUnknownEventRequest)(nil),  // 13: pocketagent.v1.AcknowledgeUnknownEventRequest
+	(*AcknowledgeUnknownEventResponse)(nil), // 14: pocketagent.v1.AcknowledgeUnknownEventResponse
+	nil,                                     // 15: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 16: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 17: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 18: pocketagent.v1.RuntimePolicy.CollabsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	8,  // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	9,  // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	10, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	11, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	15, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	16, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	17, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	18, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
-	3,  // 9: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 10: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 11: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 12: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 13: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 14: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 15: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	2,  // 16: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 17: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 18: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	16, // [16:19] is the sub-list for method output_type
-	13, // [13:16] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
+	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
+	9,  // 11: pocketagent.v1.AcknowledgeUnknownEventResponse.item:type_name -> pocketagent.v1.UnknownEventSummary
+	3,  // 12: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 13: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 14: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 15: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 16: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 17: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 18: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 19: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	11, // 20: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	13, // 21: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	2,  // 22: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 23: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 24: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	10, // 25: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	12, // 26: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	14, // 27: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	22, // [22:28] is the sub-list for method output_type
+	16, // [16:22] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -719,7 +1250,7 @@ func file_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

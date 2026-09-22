@@ -25,7 +25,7 @@
 
 - 手机：Kotlin + Jetpack Compose（minSdk 26 / compileSdk 35）
 - daemon：Go **1.27.1**（无 ORM / 无框架，依赖极简）
-- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 72 RPC**，8 proto / 1684 行
+- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 75 RPC**，8 proto / 1750 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**）
 - 代码：android main **86** `.kt` / test **81** `.kt`；daemon 手写 Go（非 gen）**320** 文件
 - 版本：**0.2.2 / versionCode 5**
@@ -36,8 +36,8 @@
 |---|---|
 | Git | 分支 `main`，HEAD `76e752d`（2026-09-23：**W4 / W5 / W6 完成，W7 部分**）；**工作树干净** |
 | daemon | 运行中 pid **104724**（**仍是改动前的旧二进制，未热部署**）；`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
-| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端（含启动接线）+ 排队台账（丢失可见）+ 启动恢复报告（机器可读 status）· **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机（真实二进制 + gRPC 客户端实测，不再只是 daemon 日志）· **W7 ✅** 预算逐级覆盖与溯源 + **策略可在控制面自改**（`RuntimeService.SetRuntimePolicy` → 原子落盘 `runtime-policy.json` → 立即生效，含 revision/CAS）+ **强制点接线**（轮次租约的 soft/hard 取自 `Effective`，每帧事件字节计费；真实二进制重启实测）· **W8–W11 ⬜** 事件信封 / 能力注册+proto / 统一协同 / Android Runtime UI |
-| **下一刀（2026-09-23 用户裁定）★** | ① ~~**W6b 补齐**：台账丢失可见经 RPC 送到手机~~ → **已完成**（`GetHostInfo.recovery`：状态 + 摘要 + 逐条丢失明细「会话/预览/入队时刻」，真实二进制 + gRPC 客户端实测）。② ~~**W7 补齐两件**~~ → **已完成**：预算策略可在控制面自改（`RuntimeService.SetRuntimePolicy`：校验 → revision/CAS → 原子落盘 → **立即生效**；`GetRuntimePolicy` 同时回「用户配置」与「实际生效值」，后者打底内置基线 —— 只回前者会让客户端把未设置项显示成 0/封禁）；强制点接线（轮次租约的 soft/hard 取自 `Effective`，事件字节计费，`GetResourceUsage` 可见明细与压力档）。③ **接下来按 W8 → W11 顺序推进**：事件信封 + 未知事件透析 → 能力注册消费 + `runtime.proto` 补齐 → 协同策略 daemon 权威化 → Android Runtime UI。**验收判据（本轮确立）**：凡"可见/可改"类改动，验收必须落到**手机端能看到或能操作**，仅写日志不算通过。 |
+| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端（含启动接线）+ 排队台账（丢失可见）+ 启动恢复报告（机器可读 status）· **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖与溯源 + 策略可在控制面自改（`SetRuntimePolicy` → 原子落盘 → 立即生效，含 revision/CAS）+ 强制点接线（轮次租约 soft/hard 取自 `Effective`）· **W8 🔶** 未知事件诊断索引（`ListUnknownEvents`/`GetUnknownEvent`/`AcknowledgeUnknownEvent`：可保存、可查询、可确认；未知通知与未知反向请求已自动登记）—— 全 provider 事件信封化未做 · **W9–W11 ⬜** 能力注册消费 + proto 补齐 / 统一协同 / Android Runtime UI |
+| **下一刀（2026-09-23 用户裁定）★** | ① ~~**W6b 补齐**~~ → **已完成**（`GetHostInfo.recovery`：状态 + 摘要 + 逐条丢失明细）。② ~~**W7 补齐两件**~~ → **已完成**（`SetRuntimePolicy` 校验/CAS/原子落盘/立即生效 + `GetRuntimePolicy` 同回「用户配置」与「实际生效值」；强制点：轮次租约 soft/hard 取自 `Effective`）。③ ~~**W8**~~ → **部分完成**：未知事件诊断索引已闭环（`ListUnknownEvents`/`GetUnknownEvent`/`AcknowledgeUnknownEvent`，落盘 `unknown-events.json`，有界 200 条 + 丢弃留痕；未知通知与 codex/dsh 的未知反向请求已自动登记）—— **剩余**：全 provider 事件信封化（EventEnvelope 覆盖所有事件路径）、未知 response 路径（现状无落点，见下）。④ **接下来**：**W9**（能力注册消费 + `runtime.proto` 补齐：启动期跑 `VerifyDeclaration`、补齐 `GetRuntimeState`/`GetAgentRuntime`/`RecoverTask` 等）→ **W10**（协同策略 daemon 权威化：规格 §11 七字段，`CollabPrefs` 是死代码可直接退役，`-collab-max-parallel` 目前只管委派、协同扇出无限闸）→ **W11**（Android Runtime UI）。**验收判据（本轮确立）**：凡"可见/可改"类改动，验收必须落到**手机端能看到或能操作**，仅写日志不算通过。 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
 | 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./...` —— **17 包全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
 
@@ -83,7 +83,7 @@
 |---|---|---|
 | Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）。**vosk-android 已整体摘除（2026-09-20）**：引擎选择收敛为「系统识别 → 端侧 SenseVoice」两级，共享错误码迁至 `VoiceErrors.kt` |
 | daemon | Go **1.27.1** | `grpc` 1.83.2、`protobuf` 1.36.12、`go-pty`、`zeroconf`。**依赖极简，无 ORM / 无框架** |
-| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 72 RPC**：Thread 34、Git 10、Fs 9、Model 8、Host 5、Terminal 3、Runtime 3（8 proto / 1684 行） |
+| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 75 RPC**：Thread 34、Git 10、Fs 9、Model 8、Runtime 6、Host 5、Terminal 3（8 proto / 1750 行） |
 | 终端 | xterm.js 6（WebView）+ JS bridge | ↔ daemon `go-pty`，字节流一致画面一致 |
 
 > 图标全用 lucide 矢量（`ic_lucide_*`）+ 品牌 PNG，**故意不引** `material-icons-extended`（曾占 DEX 一半）。

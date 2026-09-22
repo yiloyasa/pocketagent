@@ -20,6 +20,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/version"
 )
@@ -931,7 +932,9 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	notifCh := make(chan notifMsg, 4096)
 	notifStop := make(chan struct{})
 	notifDone := make(chan struct{})
-	var notices nativeNoticeRecorder
+	// 绑定会话 id:未知通知/请求登记进诊断台账时要能关联到具体会话(见下方 defer 里
+	// 的 clearSteerTarget(req.Thread.ID),同一个 req 就在本作用域内)。
+	notices := nativeNoticeRecorder{threadID: req.Thread.ID}
 	var subagentSeen subagentNoticeGate // 子代理 item 事件限频(语义同 nativeNoticeRecorder)
 	handleNotif := func(method string, params json.RawMessage) {
 		switch {
@@ -1219,6 +1222,20 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				msg = "PocketAgent 未实现该反向请求: " + method
 			}
 			log.Printf("[codex] %s → 回 error(%s)", method, msg)
+			// 登记进诊断台账:回 error 只让对端知道"这次没做成",而"我们收到过一个
+			// 不认识的请求"需要能事后查(规格 §9:未知 request 保留原始 payload、
+			// 关联会话)。只登记**真正未知**的 reqUnknown —— reqUnsupported 是我们
+			// 明确不承担的类别(如 token 刷新),它的"没做"是已知的设计选择,不是未知。
+			if kind == reqUnknown {
+				sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+					ThreadID:       req.Thread.ID,
+					SourceAgent:    "codex",
+					SourceMethod:   method,
+					NormalizedKind: runtime.KindUnknownRequest,
+					RawPayload:     redactNativePayload(params),
+					Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
+				})
+			}
 			_ = c.RespondError(id, -32601, msg)
 			return
 		}

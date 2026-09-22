@@ -19,9 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RuntimeService_GetRuntimePolicy_FullMethodName = "/pocketagent.v1.RuntimeService/GetRuntimePolicy"
-	RuntimeService_SetRuntimePolicy_FullMethodName = "/pocketagent.v1.RuntimeService/SetRuntimePolicy"
-	RuntimeService_GetResourceUsage_FullMethodName = "/pocketagent.v1.RuntimeService/GetResourceUsage"
+	RuntimeService_GetRuntimePolicy_FullMethodName        = "/pocketagent.v1.RuntimeService/GetRuntimePolicy"
+	RuntimeService_SetRuntimePolicy_FullMethodName        = "/pocketagent.v1.RuntimeService/SetRuntimePolicy"
+	RuntimeService_GetResourceUsage_FullMethodName        = "/pocketagent.v1.RuntimeService/GetResourceUsage"
+	RuntimeService_ListUnknownEvents_FullMethodName       = "/pocketagent.v1.RuntimeService/ListUnknownEvents"
+	RuntimeService_GetUnknownEvent_FullMethodName         = "/pocketagent.v1.RuntimeService/GetUnknownEvent"
+	RuntimeService_AcknowledgeUnknownEvent_FullMethodName = "/pocketagent.v1.RuntimeService/AcknowledgeUnknownEvent"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -47,6 +50,13 @@ type RuntimeServiceClient interface {
 	SetRuntimePolicy(ctx context.Context, in *SetRuntimePolicyRequest, opts ...grpc.CallOption) (*RuntimePolicyResponse, error)
 	// 查某作用域下的资源用量与限额(每个租约的 soft/hard 与压力档)。
 	GetResourceUsage(ctx context.Context, in *GetResourceUsageRequest, opts ...grpc.CallOption) (*ResourceUsageResponse, error)
+	// 未知事件的诊断索引(规格 §9:未知事件要"可保存、可查询、可展示")。
+	// 【为什么这三条必须存在】原生 agent 升级后会发来我们没见过的通知与反向请求;
+	// 只把它们写进 daemon 日志,用户与手机端就永远看不到"最近到底来了什么" ——
+	// 而那正是判断"要不要等上游支持/要不要关掉某个实验特性"的唯一依据。
+	ListUnknownEvents(ctx context.Context, in *ListUnknownEventsRequest, opts ...grpc.CallOption) (*ListUnknownEventsResponse, error)
+	GetUnknownEvent(ctx context.Context, in *GetUnknownEventRequest, opts ...grpc.CallOption) (*UnknownEventResponse, error)
+	AcknowledgeUnknownEvent(ctx context.Context, in *AcknowledgeUnknownEventRequest, opts ...grpc.CallOption) (*AcknowledgeUnknownEventResponse, error)
 }
 
 type runtimeServiceClient struct {
@@ -87,6 +97,36 @@ func (c *runtimeServiceClient) GetResourceUsage(ctx context.Context, in *GetReso
 	return out, nil
 }
 
+func (c *runtimeServiceClient) ListUnknownEvents(ctx context.Context, in *ListUnknownEventsRequest, opts ...grpc.CallOption) (*ListUnknownEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUnknownEventsResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ListUnknownEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) GetUnknownEvent(ctx context.Context, in *GetUnknownEventRequest, opts ...grpc.CallOption) (*UnknownEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnknownEventResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_GetUnknownEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) AcknowledgeUnknownEvent(ctx context.Context, in *AcknowledgeUnknownEventRequest, opts ...grpc.CallOption) (*AcknowledgeUnknownEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcknowledgeUnknownEventResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_AcknowledgeUnknownEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -110,6 +150,13 @@ type RuntimeServiceServer interface {
 	SetRuntimePolicy(context.Context, *SetRuntimePolicyRequest) (*RuntimePolicyResponse, error)
 	// 查某作用域下的资源用量与限额(每个租约的 soft/hard 与压力档)。
 	GetResourceUsage(context.Context, *GetResourceUsageRequest) (*ResourceUsageResponse, error)
+	// 未知事件的诊断索引(规格 §9:未知事件要"可保存、可查询、可展示")。
+	// 【为什么这三条必须存在】原生 agent 升级后会发来我们没见过的通知与反向请求;
+	// 只把它们写进 daemon 日志,用户与手机端就永远看不到"最近到底来了什么" ——
+	// 而那正是判断"要不要等上游支持/要不要关掉某个实验特性"的唯一依据。
+	ListUnknownEvents(context.Context, *ListUnknownEventsRequest) (*ListUnknownEventsResponse, error)
+	GetUnknownEvent(context.Context, *GetUnknownEventRequest) (*UnknownEventResponse, error)
+	AcknowledgeUnknownEvent(context.Context, *AcknowledgeUnknownEventRequest) (*AcknowledgeUnknownEventResponse, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -128,6 +175,15 @@ func (UnimplementedRuntimeServiceServer) SetRuntimePolicy(context.Context, *SetR
 }
 func (UnimplementedRuntimeServiceServer) GetResourceUsage(context.Context, *GetResourceUsageRequest) (*ResourceUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetResourceUsage not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ListUnknownEvents(context.Context, *ListUnknownEventsRequest) (*ListUnknownEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUnknownEvents not implemented")
+}
+func (UnimplementedRuntimeServiceServer) GetUnknownEvent(context.Context, *GetUnknownEventRequest) (*UnknownEventResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUnknownEvent not implemented")
+}
+func (UnimplementedRuntimeServiceServer) AcknowledgeUnknownEvent(context.Context, *AcknowledgeUnknownEventRequest) (*AcknowledgeUnknownEventResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcknowledgeUnknownEvent not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -204,6 +260,60 @@ func _RuntimeService_GetResourceUsage_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_ListUnknownEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUnknownEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ListUnknownEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ListUnknownEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ListUnknownEvents(ctx, req.(*ListUnknownEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_GetUnknownEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUnknownEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).GetUnknownEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_GetUnknownEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).GetUnknownEvent(ctx, req.(*GetUnknownEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_AcknowledgeUnknownEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcknowledgeUnknownEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).AcknowledgeUnknownEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_AcknowledgeUnknownEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).AcknowledgeUnknownEvent(ctx, req.(*AcknowledgeUnknownEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -222,6 +332,18 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetResourceUsage",
 			Handler:    _RuntimeService_GetResourceUsage_Handler,
+		},
+		{
+			MethodName: "ListUnknownEvents",
+			Handler:    _RuntimeService_ListUnknownEvents_Handler,
+		},
+		{
+			MethodName: "GetUnknownEvent",
+			Handler:    _RuntimeService_GetUnknownEvent_Handler,
+		},
+		{
+			MethodName: "AcknowledgeUnknownEvent",
+			Handler:    _RuntimeService_AcknowledgeUnknownEvent_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -34,6 +34,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/dshapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
@@ -1041,6 +1042,16 @@ func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, p
 	if method != "session/request_permission" {
 		// 精确匹配分派:未登记的一律诚实回 error(codex 第一条规则)
 		log.Printf("[dsh] %s → 回 error(未实现,不伪造 decision)", method)
+		// 登记进诊断台账(规格 §9):回 error 只让对端知道"这次没做成",而"收到过一个
+		// 不认识的请求"需要能事后查。thread_id 留空 —— 本函数签名里没有会话上下文,
+		// 且它的调用点之一是握手路径(那里确实没有会话),拿别的 id 冒充会更糟。
+		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+			SourceAgent:    "dsh",
+			SourceMethod:   method,
+			NormalizedKind: runtime.KindUnknownRequest,
+			RawPayload:     redactNativePayload(params),
+			Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
+		})
 		_ = rsp.RespondError(id, -32601, "PocketAgent 未实现该反向请求: "+method)
 		return
 	}
