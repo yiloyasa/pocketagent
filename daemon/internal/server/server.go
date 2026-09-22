@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -71,8 +72,12 @@ type Server struct {
 	hostID string
 	// 每线程正在执行的 turn(重入打断用)
 	activeTurns *activeTurns
-	// P1-4:运行中继续发消息的内存队列(上限 10 条/线程;重启即丢,见 turn_queue.go)
+	// P1-4:运行中继续发消息的内存队列(上限 10 条/线程;队列本身重启即丢,见
+	// turn_queue.go)。丢的是什么由下面的 turnJournal 留痕,不再静默。
 	turnQueue *turnInputQueue
+	// P1-4 增强:排队输入的持久化台账(规格 §8.3)——让重启造成的"静默丢失"
+	// 可见。空 DataDir 退化为内存,行为零分叉(与 eventstore/identity 同款约定)。
+	turnJournal *turnJournal
 	// P1-5:事件持久化(~/.pocketagentd/events.jsonl)。发给手机的每一帧与
 	// 主机事件都带全局单调 seq 落盘,断线重连后凭 after_sequence 增量补帧。
 	// DataDir 为空(测试)时是纯内存计数器,行为零分叉。
@@ -93,15 +98,23 @@ func New(cfg Config) *Server {
 		log.Printf("[eventseq] 事件存储初始化失败,退回内存模式: %v", err)
 		events, _ = eventstore.Open("")
 	}
+	// P1-4 增强:排队输入的持久化台账(规格 §8.3)。与内存队列共享同一实例:
+	// 入队记一条、出队划掉、启动报告未划掉的。
+	turnJournal := newTurnJournal(cfg.DataDir)
 	srv := &Server{
 		cfg:         cfg,
 		devices:     newDeviceRegistry(cfg.DataDir, cfg.PairCode),
 		hostID:      hostIDFromInstallation(cfg.DataDir),
 		activeTurns: newActiveTurns(),
-		turnQueue:   newTurnInputQueue(),
+		turnQueue:   newTurnInputQueue(turnJournal),
+		turnJournal: turnJournal,
 		events:      events,
 		hostWatch:   newHostWatchers(),
 	}
+	// 启动报告:上次退出时还没轮到执行的排队输入 —— 醒目汇总 + 逐条明细,然后
+	// 清空台账。刻意不自动重发(重放原始 prompt 会重复执行副作用,规格 §8.3),
+	// 只把"丢了几条、丢在哪些会话、丢的是哪句"讲清楚,要不要重发由用户决定。
+	srv.reportPendingQueueInputs()
 	// 存量修复:旧版本一直没实现自动标题,启动时把仍是"新会话…"默认名的
 	// 线程改成各自首条用户消息(已有真实标题的不动)
 	for _, t := range cfg.Store.List(true) {
@@ -194,6 +207,31 @@ func New(cfg Config) *Server {
 		}
 	}
 	return srv
+}
+
+// reportPendingQueueInputs 启动时报告"上次退出时还没轮到执行的排队输入",
+// 报告完即清空台账。
+//
+// 【为什么不自动重发】规格 §8.3:不能自动重新发送原始 prompt —— 那些输入可能
+// 在别处已产生过副作用,重放等于执行两遍。这里只把它们"讲清楚"让用户知情,
+// 要不要重发由用户在手机上自己决定,绝不替用户做这个决定。
+// 【为什么报告后清空】不保留成僵尸条目:每条都在启动时报告过一次,留着会在
+// 每次重启反复报同一批,反而稀释了信号。
+func (s *Server) reportPendingQueueInputs() {
+	pending := s.turnJournal.TakePending()
+	if len(pending) == 0 {
+		return
+	}
+	byThread := map[string]int{}
+	for _, e := range pending {
+		byThread[e.ThreadID]++
+	}
+	log.Printf("[turnjournal] WARNING: 上次退出时有 %d 条排队输入还没轮到执行,已随重启丢失(涉及 %d 个会话);这些输入不会自动重发,如仍需要请在手机上重新发送",
+		len(pending), len(byThread))
+	for _, e := range pending {
+		log.Printf("[turnjournal]   丢失 %s:%.120q(入队 %s)",
+			e.ThreadID, e.Preview, time.UnixMilli(e.CreatedAt).Format("2006-01-02 15:04:05"))
+	}
 }
 
 // ---- 鉴权 ----
