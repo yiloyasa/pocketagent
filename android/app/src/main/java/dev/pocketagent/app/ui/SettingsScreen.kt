@@ -67,6 +67,7 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.credentialModeFor
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaPaths
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.SenseVoiceModelManager
 import dev.pocketagent.app.ui.component.fileKindOf
@@ -455,6 +456,9 @@ fun SettingsScreen(
                     host = withContext(Dispatchers.IO) {
                         AgentConnection.hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance())
                     }
+                    // T-DSH 问题 A:成功快照写入共享缓存(与主页网格同一数据源),
+                    // 「切换 Agent」的点亮判定不再吃本页独立快照的失败/未就绪窗口。
+                    host?.let { AgentConnection.updateHostCapabilities(it.capabilitiesList) }
                     hostError = null
                 } catch (e: Exception) {
                     hostError = e.message ?: "连接失败"
@@ -1485,7 +1489,11 @@ private fun AgentPage(
         TextButton(onClick=onRetrySettings) { Text("刷新 Agent 状态和模型",color=Pa.Accent) }
         SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "切换 Agent") {
             Spacer(Modifier.height(10.dp))
-            val agentChoices = buildAgents(host?.capabilitiesList.orEmpty()).map { it.id to it.name }
+            // T-DSH 问题 A:可用性一律读共享 capabilities 快照(AgentConnection
+            // .hostCapabilities,主页网格同源)—— 本页 host 独立快照加载失败/未就绪
+            // 时,这里不再退化成"只有 Codex 可选"的假灰显;探活循环持续兜底刷新。
+            val capsShared = AgentConnection.hostCapabilities.collectAsState().value
+            val agentChoices = buildAgents(capsShared).map { it.id to it.name }
             agentChoices.forEachIndexed { i, (id, name) ->
                 SettingRow(
                     title = name,
@@ -1497,7 +1505,7 @@ private fun AgentPage(
                     chevron = true,
                     divider = i != agentChoices.lastIndex,
                     onClick = {
-                        val installed=buildAgents(host?.capabilitiesList.orEmpty()).any { it.id==id && it.available }
+                        val installed = buildAgents(capsShared).any { it.id == id && it.available }
                         if (!installed) onFeedback("该 Agent 尚未安装或尚未接入")
                         else if (runningAgent != id) {
                             AgentConnection.switchAgent(id)
@@ -3014,6 +3022,7 @@ private fun CacheSection(
     var urlSnapBytes by remember { mutableLongStateOf(0L) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     var confirmClearTasks by remember { mutableStateOf(false) }
+    var confirmClearSnap by remember { mutableStateOf(false) }
 
     /** 统计走 IO 线程:遍历目录不能在 UI 线程做。 */
     fun reload() = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -3021,8 +3030,9 @@ private fun CacheSection(
         val sn = dev.pocketagent.app.ui.component.ThreadSnapshot.usage()
         val tp = dev.pocketagent.app.ui.component.PaCache.tempUsage(ctx)
         val br = webDataUsage(ctx)
-        // 网页快照缓存占用(独立口径,不与 PreviewCache/ThreadSnapshot/PaCache 重叠)
-        val us = dev.pocketagent.app.ui.component.OfflineStore.usage()
+        // 网页快照缓存占用:走单分区统计(复用 OfflineStore 的 CacheEntry/bytesUsed 纯函数),
+        // 与淘汰/清理口径一致,而不是一把梭量整个 pa_offline。
+        val us = dev.pocketagent.app.ui.component.OfflineStore.partitionUsage("url")
         // 真实目录大小 —— 这两个数字就是系统存储页看到的口径
         val cd = dev.pocketagent.app.ui.component.PaCache.cacheUsage(ctx)
         val fd = dev.pocketagent.app.ui.component.PaCache.filesUsage(ctx)
@@ -3054,6 +3064,43 @@ private fun CacheSection(
             StatCell2("下载", if (downloadUnknown) "无法获取" else sizeText(downloadBytes), Modifier.weight(1f))
         }
 
+        // ---- 缓存项明细:每一项是什么、占多大(需求③) ----
+        // 数据来源优先复用 OfflineStore 的纯统计(网页快照走 partitionUsage);
+        // 风险档由 [CacheCleanupLogic] 给出,高风险项(会话快照)打「清理需确认」标记,
+        // 对应下方清理动作里的二次确认弹窗。
+        val managedRows = listOf(
+            CacheCleanupLogic.Item("会话快照", CacheCleanupLogic.Kind.SNAPSHOT, snapshotBytes),
+            CacheCleanupLogic.Item("网页快照", CacheCleanupLogic.Kind.URL_SNAPSHOT, urlSnapBytes),
+            CacheCleanupLogic.Item("预览缓存", CacheCleanupLogic.Kind.PREVIEW, previewBytes),
+            CacheCleanupLogic.Item("临时文件", CacheCleanupLogic.Kind.TEMP, tempBytes),
+            CacheCleanupLogic.Item("浏览器数据", CacheCleanupLogic.Kind.BROWSER, browserBytes),
+        )
+        val managedTotal = managedRows.sumOf { it.bytes }
+        Column(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 4.dp)) {
+            managedRows.forEach { row ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(row.key, fontSize = 13.sp, color = Pa.TextSecondary)
+                    if (CacheCleanupLogic.riskOf(row.kind) == CacheCleanupLogic.Risk.RISKY) {
+                        Text(" · 清理需确认", fontSize = 11.sp, color = Pa.Red)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(sizeText(row.bytes), fontSize = 13.sp, color = Pa.TextPrimary)
+                }
+            }
+            // 小计:只汇总本 App 管理的可清理项,不含下载文件本体(那属于用户内容)
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("本机可清理缓存合计", fontSize = 13.sp, color = Pa.TextPrimary)
+                Spacer(Modifier.weight(1f))
+                Text(sizeText(managedTotal), fontSize = 13.5.sp, color = Pa.TextPrimary)
+            }
+        }
+
         // ---- 清理动作:一行标题 + 一行短后果(≤16 字),完整说明收进下方「详情」 ----
         CacheActionRow(
             title = "清理临时与失效缓存",
@@ -3075,20 +3122,31 @@ private fun CacheSection(
             }
         }
 
-        // ---- 清理预览与快照缓存(离线能力会一起清空,所以说明清楚) ----
-        if (previewBytes + snapshotBytes > 0) {
+        // ---- 清理预览缓存(低风险:纯临时,清了随时可再生,可直接清) ----
+        if (previewBytes > 0) {
             CacheActionRow(
-                title = "清空预览与会话快照",
-                desc = "断网预览将失效",
+                title = "清空预览缓存",
+                desc = "临时预览,可随时清",
             ) {
                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     val a = dev.pocketagent.app.ui.component.PreviewCache.clear()
-                    val b = dev.pocketagent.app.ui.component.ThreadSnapshot.clear()
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         reload()
-                        toastMsg = "已释放 ${sizeText(a + b)}"
+                        toastMsg = "已释放 ${sizeText(a)}"
                     }
                 }
+            }
+        }
+
+        // ---- 清理会话快照(高风险:清了要重新从电脑拉,离线看不到) → 必须二次确认 ----
+        // 交给 [confirmClearSnap] 弹窗,文案写清后果;不会在没有快照时显示假入口。
+        if (snapshotBytes > 0) {
+            CacheActionRow(
+                title = "清空会话快照",
+                desc = "清后需联网重拉",
+                danger = true,
+            ) {
+                confirmClearSnap = true
             }
         }
 
@@ -3161,8 +3219,14 @@ private fun CacheSection(
                 fontSize = 10.5.sp, color = Pa.TextTertiary,
             )
             Text(
-                "清空预览与会话快照:释放 ${sizeText(previewBytes + snapshotBytes)};" +
-                    "后果:断网时「刚看过的文件」和最近对话打不开,联网后自动重建;不影响登录与电脑端。",
+                "清空预览缓存:释放 ${sizeText(previewBytes)};纯临时内容,清了随时可再生,不影响离线历史。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "清空会话快照(需二次确认):释放 ${sizeText(snapshotBytes)};" +
+                    "后果:快照是「最近 N 轮」的本地副本,清掉后离线时看不到这段历史,需联网从电脑重拉;" +
+                    "不影响登录与电脑端。",
                 Modifier.padding(bottom = 4.dp),
                 fontSize = 10.5.sp, color = Pa.TextTertiary,
             )
@@ -3199,6 +3263,39 @@ private fun CacheSection(
             },
             dismissButton = {
                 TextButton(onClick = { confirmClearTasks = false }) {
+                    Text("取消", color = Pa.TextSecondary)
+                }
+            },
+            containerColor = Pa.CardHigh,
+        )
+    }
+
+    // ---- 会话快照二次确认(需求④:有风险项必须让用户看清后果再清) ----
+    if (confirmClearSnap) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClearSnap = false },
+            title = { Text("清空会话快照?", color = Pa.TextPrimary) },
+            text = {
+                Text(
+                    "会话快照是「最近 N 轮」的本地副本,断网时用来回看历史。清空后需要重新从电脑拉取," +
+                        "离线时将看不到这段历史;联网后会自动重建,不影响电脑端记录与登录。此操作不可撤销。",
+                    color = Pa.TextSecondary, fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val freed = dev.pocketagent.app.ui.component.ThreadSnapshot.clearAll()
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            confirmClearSnap = false
+                            reload()
+                            toastMsg = "已释放 ${sizeText(freed)}"
+                        }
+                    }
+                }) { Text("清空", color = Pa.Red) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearSnap = false }) {
                     Text("取消", color = Pa.TextSecondary)
                 }
             },
@@ -3276,7 +3373,7 @@ private fun sizeText(bytes: Long): String = when {
 
 /** WebView 数据占用(app_webview 目录),粗算即可 —— 只用于给用户看个量级。 */
 private fun webDataUsage(ctx: android.content.Context): Long {
-    val dir = java.io.File(ctx.applicationInfo.dataDir, "app_webview")
+    val dir = PaPaths.webviewDir(ctx)
     return runCatching {
         fun size(f: java.io.File): Long =
             if (f.isDirectory) (f.listFiles()?.sumOf { size(it) } ?: 0L) else f.length()

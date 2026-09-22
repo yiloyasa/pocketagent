@@ -80,8 +80,6 @@ object OfflineStore {
 
     // -------------------------------------------------------------- 目录与读写
 
-    private const val ROOT_DIR = "pa_offline"
-
     private var cacheRoot: File? = null
 
     /**
@@ -91,7 +89,7 @@ object OfflineStore {
     private var registry: List<Partition> = partitions
 
     fun init(ctx: Context) {
-        val root = File(ctx.cacheDir, ROOT_DIR)
+        val root = PaPaths.offlineRoot(ctx)
         runCatching { root.mkdirs() }
         cacheRoot = root
         registry = partitions
@@ -118,6 +116,18 @@ object OfflineStore {
 
     /** pa_offline 的总占用(字节)。 */
     fun usage(): Long = cacheRoot?.let { dirSize(it) } ?: 0L
+
+    /**
+     * 某分区的当前占用(字节);未知 id 返回 0。
+     * 【复用纯函数】用 [CacheEntry] + [bytesUsed] 统计,不另写一套目录扫描 ——
+     * 缓存管理页列"每一项占多大"时直接调它,保证统计口径与淘汰/清理完全一致
+     * (不会遇到"列表说 10KB、清理却没东西删"的口径错位)。
+     */
+    fun partitionUsage(id: String): Long {
+        val d = dirFor(id) ?: return 0L
+        val files = d.listFiles() ?: return 0L
+        return bytesUsed(files.map { CacheEntry(it.name, it.length(), it.lastModified()) })
+    }
 
     /**
      * 清空某个**可清理**分区,返回释放字节数。

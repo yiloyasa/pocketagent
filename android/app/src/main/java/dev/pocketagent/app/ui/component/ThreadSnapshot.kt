@@ -73,7 +73,7 @@ object ThreadSnapshot {
     private var dir: File? = null
 
     fun init(ctx: Context) {
-        val d = File(ctx.filesDir, "pa_snap")
+        val d = PaPaths.snapshotDir(ctx)
         runCatching { d.mkdirs() }
         dir = d
     }
@@ -151,12 +151,37 @@ object ThreadSnapshot {
     fun threadsSnapshotAt(): Long =
         dir?.let { File(it, THREADS_FILE).takeIf { f -> f.isFile }?.lastModified() } ?: 0L
 
+    /**
+     * 删除会话后,立刻把该 id 从列表快照里抹掉(原子重写 threads.json)。
+     * 【为什么】乐观删除只改了内存里的 threads;离线快照 threads.json 仍留着这条,
+     * 一旦之后断网走快照兜底,被删的会话又"复活"了 —— 用户实测"删完又出现"的
+     * 表现层诱因之一就是它。这里让快照与内存一致;daemon 删除若最终失败,下次
+     * 成功刷新会用真数据整体覆写,不会永久丢真会话(删成功则会随刷新一起消失)。
+     */
+    fun removeThreadFromSnapshot(id: String) {
+        val d = dir ?: return
+        if (id.isEmpty()) return
+        runCatching {
+            val rows = readThreadsSnapshot().filter { it.id != id }
+            saveThreadsSnapshot(rows)
+        }
+    }
+
     // ------------------------------------------------------------ 会话消息(单线程)
 
     /**
-     * 落一份单线程消息快照。按三层限额裁剪:从最新往回取,条数/体积超限时丢的是
-     * 最旧的 —— 离线时"最近的对话"永远比"完整的旧对话"有用。
-     * 写完立即做两级淘汰(条数 + 总量),保证占用恒有上界。
+     * 落一份单线程消息快照。
+     *
+     * 【与"历史加载轮数"的关系】调用方传入的 [msgs] 已经是请求端按用户设置
+     * [dev.pocketagent.app.ui.HistoryRoundsLogic] 的 rounds 收窄后、从 daemon 拉回的
+     * "最近 N 轮" —— 所以这份快照 = 最近 N 轮的本地副本,**不是全量**。
+     *
+     * 【覆盖而非合并】写入按 threadId 做原子替换(见 [writeAtomic]):同一会话新一次拉取会
+     * **整体覆盖**旧快照,不会把两轮结果拼在一起。这保证快照永远等于"最近一次成功拉取的
+     * 最近 N 轮",避免离线态出现重复或过期消息。
+     *
+     * 按三层限额裁剪:从最新往回取,条数/体积超限时丢的是最旧的 —— 离线时"最近的对话"
+     * 永远比"完整的旧对话"有用。写完立即做两级淘汰(条数 + 总量),保证占用恒有上界。
      */
     @Synchronized
     fun saveMessages(threadId: String, msgs: List<Msg>) {
