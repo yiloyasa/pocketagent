@@ -1209,6 +1209,48 @@ func outputStateOf(blocks []*pb.ContentBlock) pb.OutputState {
 	return pb.OutputState_OUTPUT_STATE_EMPTY
 }
 
+// recoverEmptyTurnOutput 在一轮「最终正文为空」时,问一次原生历史里到底有没有正文。
+//
+// 【为什么值得多这一次 IO】用户报的"任务完成却什么都没有"里,有一部分是**正文确实
+// 存在、只是没经增量到达**(上下文压缩边界、事件漏帧)。只看到空块就报"没有正文",
+// 而用户看着电脑上明明有 —— 那正是方案 §4.4 的图二。
+//
+// 【为什么放在 server 层而不是 provider 里】provider.Run 内部还持着流式状态锁,
+// 在那里面等原生 IO 会把同一轮的事件处理一起堵住。NativeTurnReader 本来就是 provider
+// 的可选扩展接口(僵尸 RUNNING 恢复用的就是它),这里复用同一条通路、不另造一套。
+//
+// 返回 (recoveredText, state):
+//   - 读到正文      → (正文, RECOVERED_FROM_NATIVE_HISTORY)
+//   - 原生记录里也没有正文(turn 正常结束、就是没话说)→ ("", EMPTY)
+//   - provider 不支持 / 读取失败/超时 → ("", ADAPTER_LOST_OUTPUT)
+//     **不能确认**是"真没有"还是"我们弄丢了" —— 如实标出后者,让用户知道该重试,
+//     而不是假装任务正常完成。这正是这一档存在的意义。
+func (s *Server) recoverEmptyTurnOutput(ctx context.Context, provider agent.Provider, t *store.Thread) (string, pb.OutputState) {
+	reader, ok := provider.(agent.NativeTurnReader)
+	if !ok {
+		// 该 provider 没有原生历史可查 —— 我们没有理由怀疑它丢了正文。
+		return "", pb.OutputState_OUTPUT_STATE_EMPTY
+	}
+	rctx, cancel := context.WithTimeout(ctx, nativeOutputRecoveryBudget)
+	defer cancel()
+	res, err := reader.ReadNativeTurn(rctx, t)
+	if err != nil {
+		return "", pb.OutputState_OUTPUT_STATE_ADAPTER_LOST_OUTPUT
+	}
+	if res == nil {
+		return "", pb.OutputState_OUTPUT_STATE_EMPTY
+	}
+	if text := strings.TrimSpace(res.Text); text != "" {
+		return text, pb.OutputState_OUTPUT_STATE_RECOVERED_FROM_NATIVE_HISTORY
+	}
+	return "", pb.OutputState_OUTPUT_STATE_EMPTY
+}
+
+// nativeOutputRecoveryBudget 空正文补偿读原生历史的等待预算。
+// 【为什么给这么小】它在轮次收尾路径上,用户正等着一轮的结束帧;读的是一个本地
+// JSONL 文件,2 秒已经远超正常耗时。超时按 ADAPTER_LOST_OUTPUT 处理(见上)。
+const nativeOutputRecoveryBudget = 2 * time.Second
+
 // runTurnOnce 跑"一轮"的完整主体:provider.Run → 思考前置落库 → 自动标题
 // → 落库 + 收尾帧(Failed/Completed)→ 主机事件。从 StartTurn 的轮次循环体
 // 原样抽出(2026-09-20,T-L2wire),StartTurn 与跨 agent 委派引擎
@@ -1300,20 +1342,39 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 			TurnId: turnID, Error: failedError, PartialText: partial,
 		}}})
 	} else {
+		// 【空正文补偿】先把这一轮的状态判出来;只有在"确实什么都没拿到"时才去问
+		// 原生历史 —— 有正文时不查(多一次原生 IO 是纯开销),有产物时也不查
+		// (那是 ARTIFACT_ONLY,不是丢正文)。详见 recoverEmptyTurnOutput。
+		finalBlocks := refBlocks(persistBlocks)
+		state := outputStateOf(finalBlocks)
+		source := ""
+		if state == pb.OutputState_OUTPUT_STATE_EMPTY {
+			recovered, recState := s.recoverEmptyTurnOutput(ctx, provider, t)
+			state = recState
+			if recovered != "" {
+				// 【落库与下发用同一份内容】只补 final_blocks 会让离线快照/事件回放
+				// 拿到空白 —— 那是同一轮在不同路径上给出两个事实。
+				persistBlocks = append(persistBlocks, pb.ContentBlock{
+					Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: recovered}},
+				})
+				finalBlocks = refBlocks(persistBlocks)
+				source = "native_history"
+			}
+		}
 		t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
 		t.Usage.InputTokens += usagePtr.GetInputTokens()
 		t.Usage.OutputTokens += usagePtr.GetOutputTokens()
 		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
 		// final_blocks 同步带思考块:手机端终局帧只提取文本(finalText),
 		// 不会被重复渲染;离线快照/事件回放路径拿到的与落库一致。
-		finalBlocks := refBlocks(persistBlocks)
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Completed{Completed: &pb.TurnCompleted{
 			TurnId: turnID, FinalBlocks: finalBlocks, Usage: usagePtr,
 			// 【为什么必须带上它】空正文此前被适配器伪装成一条普通 assistant
 			// 文本("(完成,无文本输出)"),手机端只能显示"任务完成 + 一句占位",
 			// 用户无从判断该不该重试。OutputState 把"真的没话说""只有产物"
-			// "失败"如实分开,手机端据此决定提示什么。
-			OutputState: outputStateOf(finalBlocks),
+			// "丢了正文"如实分开,手机端据此决定提示什么、要不要重试。
+			OutputState:  state,
+			OutputSource: source,
 		}}})
 	}
 	if uerr := s.cfg.Store.Update(t); uerr != nil {
