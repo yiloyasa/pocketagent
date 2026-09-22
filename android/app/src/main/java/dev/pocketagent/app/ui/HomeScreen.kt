@@ -218,6 +218,8 @@ fun HomeScreen(
     onOpenBrowser: () -> Unit = {},
     /** 协同角色配置入口:仅在设备确实支持协同时由本页调用(无能力不显示假入口)。 */
     onOpenCollabRoles: () -> Unit = {},
+    /** 协同扇出主页入口:一条指令派给多个对等 agent(同样只在下述 multiAgent 分支里露出)。 */
+    onOpenCollab: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -418,6 +420,29 @@ fun HomeScreen(
                     // 协同角色入口:只有设备确实支持协同时才显示(无能力不显示假入口)。
                     // 列出已配置数量,点进去是角色列表页(真正完成"分工编排")。
                     if (multiAgent) {
+                        Spacer(Modifier.height(8.dp))
+                        // 【开始协同:主入口,排在"协同角色"之前】两者刻意分两行:
+                        // 这行是"现在就派活",下一行是"改岗位配置"。混成一行会让用户
+                        // 以为协同必须先配角色才能用。
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable { onOpenCollab() }
+                                .background(Pa.Bg, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("开始协同", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                                Text(
+                                    if (collabIds.isEmpty()) "当前没有可协同的 agent" else "一条指令派给多个 agent 并行",
+                                    fontSize = 11.sp, color = Pa.TextTertiary,
+                                )
+                            }
+                            Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
+                        }
                         Spacer(Modifier.height(8.dp))
                         Row(
                             Modifier

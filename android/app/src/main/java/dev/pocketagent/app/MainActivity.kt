@@ -37,6 +37,7 @@ import dev.pocketagent.app.ui.BrowserScreen
 import dev.pocketagent.app.ui.ChatScreen
 import dev.pocketagent.app.ui.CollabRoleEditorScreen
 import dev.pocketagent.app.ui.CollabRolesScreen
+import dev.pocketagent.app.ui.CollabScreen
 import dev.pocketagent.app.ui.FilesScreen
 import dev.pocketagent.app.ui.GitScreen
 import dev.pocketagent.app.ui.HomeScreen
@@ -188,6 +189,7 @@ private fun RootNav() {
                         onOpenTaskCenter = openTaskCenter,
                         onOpenBrowser = { nav.navigate("browser") },
                         onOpenCollabRoles = { nav.navigate("collabRoles") },
+                        onOpenCollab = { nav.navigate("collab") },
                         onGoTab = { tab = it },
                         onBackToHome = backToHome,
                         onOpenOnboarding = { nav.navigate("onboarding") },
@@ -283,6 +285,18 @@ private fun RootNav() {
                 onOpenBrowser = { url ->
                     nav.navigate("browser?url=" + android.net.Uri.encode(url))
                 },
+            )
+        }
+        // ---- 协同扇出主页:一条指令派给多个对等 agent ----
+        // 【为什么必须补这条路由】CollabScreen.kt 早已实现(437 行完整编排台:
+        // agent 多选、相位卡、角色弹层、共享指令输入),但全 android/app/src 内
+        // **零调用方** —— 用户从任何入口都进不去,能力等于不存在。方案 §4.8 说的
+        // "主导航缺少完整 route" 就是这里。
+        composable("collab") {
+            CollabScreen(
+                onBack = { nav.popBackStack() },
+                // 编排台里的"管理岗位"再进角色列表页,与主页入口同一条路由。
+                onOpenCollabRoles = { nav.navigate("collabRoles") },
             )
         }
         // ---- 协同角色配置:列表页 ----
