@@ -23,6 +23,7 @@ import pocketagent.v1.FileSystemServiceGrpc
 import pocketagent.v1.GitServiceGrpc
 import pocketagent.v1.ModelServiceGrpc
 import pocketagent.v1.ThreadServiceGrpc
+import pocketagent.v1.RuntimeServiceGrpc
 import java.util.concurrent.TimeUnit
 
 /**
@@ -1084,6 +1085,16 @@ object AgentConnection {
     /** MCP 等慢调用:codex 冷启动可能 30s+,给足 90 秒 */
     fun modelServiceSlow(): ModelServiceGrpc.ModelServiceBlockingStub =
         ModelServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(90, java.util.concurrent.TimeUnit.SECONDS)
+
+    /**
+     * 运行时控制面(W11):预算/协同策略/未知事件/运行时形态。
+     *
+     * 【为什么超时给 8 秒,与 hostService 同档】这些 RPC 都是"读一份内存态/写一份小
+     * JSON",没有子进程冷启动(不像 modelService 要等 codex)。旧 daemon 上整条链返回
+     * UNIMPLEMENTED,是立刻返回而不是挂满超时 —— 8 秒只用于兜住网络半死态。
+     */
+    fun runtimeService(): RuntimeServiceGrpc.RuntimeServiceBlockingStub =
+        RuntimeServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(8, TimeUnit.SECONDS)
 
     fun shutdown() {
         synchronized(this) {
