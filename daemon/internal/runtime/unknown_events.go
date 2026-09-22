@@ -25,7 +25,7 @@ const unknownEventsFileName = "unknown-events.json"
 // 只留最近 N 条但不说,会让"为什么只有这几条"变成没人能回答的问题。
 const unknownEventsLimit = 200
 
-// 三类未知事件的 normalized_kind(规格 §9 的分类词表)。
+// 未知事件的 normalized_kind(规格 §9 的分类词表)。
 const (
 	// KindUnknownNotification 未知通知:保留 payload、分配序号、写诊断、不影响主流。
 	KindUnknownNotification = "UNKNOWN_NOTIFICATION"
@@ -33,7 +33,29 @@ const (
 	KindUnknownRequest = "UNKNOWN_REQUEST"
 	// KindUnknownResponse 未知响应:保留 request_id 与 payload,不让连接崩。
 	KindUnknownResponse = "UNKNOWN_RESPONSE"
+
+	// KindKnownProjected 已知事件,且 daemon 已把它**投影**成协议内的正式事件
+	// (例如 codex 的 reasoning 通知 → ThinkingDelta)。它进台账只为留痕。
+	//
+	// 【为什么"已知"也要单独分一档】如果把它一并记成 UNKNOWN_NOTIFICATION,诊断页
+	// 就会被已知噪音填满 —— 上游升级后真发来怪东西时,它淹在一堆"其实我们认识"的
+	// 条目里看不见。分类的作用是让"这些我们认识""这些真的没见过"一眼可分。
+	KindKnownProjected = "KNOWN_PROJECTED"
+	// KindKnownPassthrough 已知事件,但没有正式投影,只原样透传/留痕
+	// (例如 codex 的 userMessage 回显、summary 摘要)。
+	KindKnownPassthrough = "KNOWN_PASSTHROUGH"
 )
+
+// KnownKinds 列出全部可用的 normalized_kind。
+//
+// 【为什么导出】RPC 的报错文案要列全取值,客户端筛选器也要 —— 两处各写一份
+// 字符串切片,漏掉一个就是"筛选项里有、校验说非法"这种自相矛盾。
+func KnownKinds() []string {
+	return []string{
+		KindUnknownNotification, KindUnknownRequest, KindUnknownResponse,
+		KindKnownProjected, KindKnownPassthrough,
+	}
+}
 
 // processing_status 词表(与 AcknowledgeUnknownEvent 的 action 同一套取值)。
 const (
@@ -89,7 +111,12 @@ type EventEnvelope struct {
 	SourceMethod    string `json:"source_method,omitempty"`
 	ProtocolVersion string `json:"protocol_version,omitempty"`
 
-	// NormalizedKind 取 KindUnknownNotification / KindUnknownRequest / KindUnknownResponse。
+	// NormalizedKind 取 KnownKinds() 里的任一值:两档"已知"(KNOWN_PROJECTED /
+	// KNOWN_PASSTHROUGH —— 用来把已知噪音与真未知分开)+ 三档"未知"。
+	//
+	// 【UNKNOWN_RESPONSE 目前没有生产者】它是词表里的预留档:daemon 还没有需要
+	// "保留一条未知响应"的路径。留着是给将来用,**不是有代码正在产生它** ——
+	// 在诊断页看到这个类别时,别以为真有这类流量,那说明词表被人手工填过。
 	NormalizedKind string `json:"normalized_kind"`
 	// SafetyClass 见 SafetyClassUnknown 的说明。
 	SafetyClass string `json:"safety_class"`

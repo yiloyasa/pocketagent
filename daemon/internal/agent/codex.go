@@ -633,12 +633,14 @@ func isOpaqueItemType(t string) bool {
 // 自动生效),命中并透传后返回 true。仅透传原始 params,不伪造、不改写;
 // 已知类型(各有专案分支)、异线程、坏 JSON 一律返回 false,保持既有行为。
 // 限频键 = 方法 + item 类型,不同类型互不挤占。
+// 分类结果经 codexItemNoticeKind 落进台账的 normalized_kind —— reasoning /
+// userMessage / summary 是已知类型,不得冒充 UNKNOWN_NOTIFICATION(方案 §9.4)。
 func maybeRecordOpaqueItem(method string, params json.RawMessage, codexTID string, notices *nativeNoticeRecorder, sink Sink) bool {
 	var n itemNotif
 	if json.Unmarshal(params, &n) != nil || n.ThreadId != codexTID || !isOpaqueItemType(n.Item.Type) {
 		return false
 	}
-	notices.record("codex", method+":"+n.Item.Type, params, sink)
+	notices.recordAs(codexItemNoticeKind(n.Item.Type), "codex", method+":"+n.Item.Type, params, sink)
 	return true
 }
 

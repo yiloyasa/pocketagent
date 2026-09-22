@@ -26,10 +26,13 @@ func (s *Server) unknownLog() *runtime.UnknownEventLog {
 }
 
 // validUnknownKind 校验 normalized_kind 取值。
+// 【取值表统一从 runtime.KnownKinds() 取】两处各写一份字符串列表迟早对不上,
+// 那种"筛选项里有、校验却说非法"的自相矛盾最难查。
 func validUnknownKind(k string) bool {
-	switch k {
-	case runtime.KindUnknownNotification, runtime.KindUnknownRequest, runtime.KindUnknownResponse:
-		return true
+	for _, known := range runtime.KnownKinds() {
+		if k == known {
+			return true
+		}
 	}
 	return false
 }
@@ -43,9 +46,7 @@ func (s *Server) ListUnknownEvents(_ context.Context, req *pb.ListUnknownEventsR
 		return &pb.ListUnknownEventsResponse{}, nil
 	}
 	if k := req.GetKind(); k != "" && !validUnknownKind(k) {
-		return nil, errInvalidArg("未知的事件类别 " + k + "(可用: " + strings.Join([]string{
-			runtime.KindUnknownNotification, runtime.KindUnknownRequest, runtime.KindUnknownResponse,
-		}, " / ") + ")")
+		return nil, errInvalidArg("未知的事件类别 " + k + "(可用: " + strings.Join(runtime.KnownKinds(), " / ") + ")")
 	}
 	if st := req.GetProcessingStatus(); st != "" && !runtime.ValidProcessingStatus(st) {
 		return nil, errInvalidArg("未知的处置状态 " + st + "(可用: " + strings.Join(runtime.KnownProcessingStatuses(), " / ") + ")")

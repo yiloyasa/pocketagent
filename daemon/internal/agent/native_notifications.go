@@ -90,7 +90,52 @@ type nativeNoticeRecorder struct {
 	threadID string
 }
 
+// codexItemNoticeKind 给"落到主线 A 透传的 codex item 类型"分档(规格 §4.6 的
+// normalized_kind 词表)。
+//
+// 【为什么必须有它】record 曾把每条 notice 一律记成 UNKNOWN_NOTIFICATION,可
+// codex 每轮都会产生 reasoning / userMessage / summary —— 它们也走这条路,于是
+// 被算作"未知"。诊断页就此被已知噪音填满:上游升级后真发来怪东西时,它淹在一堆
+// "其实我们认识"的条目里看不见,分类也就失去了意义(方案 §9.4 验收第 1 条)。
+//
+// 【判定依据是"我们做了什么",不是"类型名眼熟不眼熟"】
+//   - reasoning:daemon 已把它投影成协议内的 ThinkingDelta(Run() 的
+//     reasoning/delta 分支)→ KNOWN_PROJECTED;
+//   - userMessage / summary:没有正式投影,只原样透传/留痕 → KNOWN_PASSTHROUGH;
+//   - 其余(含空串、从未见过的类型名)→ UNKNOWN_NOTIFICATION,这才是"真没见过"。
+//     空串归未知而非已知:拿不到类型名时最该做的是让人看见它,而不是替它编一个
+//     "已知"身份把问题盖住。
+//
+// 【为什么白名单五类也落到 UNKNOWN_NOTIFICATION】contextCompaction /
+// commandExecution / agentMessage / subAgentActivity / collabAgentToolCall 各有
+// 专案翻译分支,isOpaqueItemType 已先把它们挡在本函数之前 —— 真走到这里说明调用
+// 路径与我们的预期对不上。词表里只有 PROJECTED / PASSTHROUGH 两档"已知",它们
+// 既不投影也不纯透传,硬套哪一档都是错误的描述;而把这种"不该发生"如实标成未知,
+// 至少让它在诊断页上可见,比用一个错误的"已知"标签把异常藏起来好。
+func codexItemNoticeKind(itemType string) string {
+	switch itemType {
+	case "reasoning":
+		return runtime.KindKnownProjected
+	case "userMessage", "summary":
+		return runtime.KindKnownPassthrough
+	}
+	return runtime.KindUnknownNotification
+}
+
+// record 是"未分类"入口:不关心分档的调用方(pi / zcode / dsh 等)继续用它,
+// 内部回落 UNKNOWN_NOTIFICATION —— 分类先从 codex item 路径落地,不让其余
+// runtime 的调用点为此被迫改动。
 func (r *nativeNoticeRecorder) record(agentID, method string, raw json.RawMessage, sink Sink) {
+	r.recordAs("", agentID, method, raw, sink)
+}
+
+// recordAs 与 record 同一件事,额外接受分类结果 kind(规格 §9 的 normalized_kind)。
+// kind 为空回落 UNKNOWN_NOTIFICATION:调用方没分类 = 我们确实不知道它是什么,
+// 如实记未知,不冒充已知。
+func (r *nativeNoticeRecorder) recordAs(kind, agentID, method string, raw json.RawMessage, sink Sink) {
+	if kind == "" {
+		kind = runtime.KindUnknownNotification
+	}
 	// 【顺序有意为之】先登记诊断台账,再过下面的推送限频。
 	// 推送限频(每方法 2 条)是为了不让手机端被同一条未知通知刷屏;而台账是**索引**,
 	// 必须反映真实频次 —— 否则用户点开诊断页只看到两条,分不清"偶尔来一次"还是
@@ -99,7 +144,7 @@ func (r *nativeNoticeRecorder) record(agentID, method string, raw json.RawMessag
 		ThreadID:       r.threadID,
 		SourceAgent:    agentID,
 		SourceMethod:   method,
-		NormalizedKind: runtime.KindUnknownNotification,
+		NormalizedKind: kind,
 		RawPayload:     redactNativePayload(raw),
 	})
 
