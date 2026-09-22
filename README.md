@@ -37,6 +37,7 @@
 | Git | 分支 `main`，HEAD `76e752d`（2026-09-23：**W4 / W5 / W6 完成，W7 部分**）；**工作树干净** |
 | daemon | 运行中 pid **104724**（**仍是改动前的旧二进制，未热部署**）；`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
 | 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端（含启动接线）+ 排队台账（丢失可见）+ 启动恢复报告（机器可读 status）· **W7 🔶** 预算逐级覆盖与溯源已落、**强制点未接**（Effective 尚未传给 ResourceLedger 租约）· **W8–W11 ⬜** 事件信封 / 能力注册+proto / 统一协同 / Android Runtime UI |
+| **下一刀（2026-09-23 用户裁定）★** | ① **W6b 补齐**：台账的「丢失可见」目前只落在 daemon 日志，**手机端看不到 = 判为未达成**（用户原话「这是非常致命的」）→ 必须经 RPC 送到手机（建议先接 `GetHostInfo` 的诊断字段，比新增 RPC 快）。② **W7 补齐两件**：预算策略要能**在 daemon 控制面自己改**（规格 §14 的 `SetRuntimePolicy` RPC + 持久化到 `runtime-policy.json` + 立即生效，不要让用户去手编 JSON）；以及强制点接线（`Effective` → 租约 soft/hard）。③ 其余按 W8→W11 顺序推进。**验收判据（本轮确立）**：凡"可见/可改"类改动，验收必须落到**手机端能看到或能操作**，仅写日志不算通过。 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
 | 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./...` —— **17 包全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
 
