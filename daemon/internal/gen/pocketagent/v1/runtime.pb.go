@@ -1741,8 +1741,14 @@ type AgentRuntimeResponse struct {
 	// 该 agent 作用域下当前活跃的资源租约(复用 GetResourceUsage 的同一个 message)。
 	Resources       []*ResourceMetric `protobuf:"bytes,2,rep,name=resources,proto3" json:"resources,omitempty"`
 	SampledAtUnixMs int64             `protobuf:"varint,3,opt,name=sampled_at_unix_ms,json=sampledAtUnixMs,proto3" json:"sampled_at_unix_ms,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// 规格 §9.5「每家都能显示 memory/cache/resource/checkpoint/recovery 状态」的
+	// 后四项。resource 见上面的 resources。
+	Memory        *AgentMemoryUsage     `protobuf:"bytes,4,opt,name=memory,proto3" json:"memory,omitempty"`
+	Cache         *AgentCacheUsage      `protobuf:"bytes,5,opt,name=cache,proto3" json:"cache,omitempty"`
+	Checkpoint    *AgentCheckpointUsage `protobuf:"bytes,6,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
+	Recovery      *AgentRecoveryState   `protobuf:"bytes,7,opt,name=recovery,proto3" json:"recovery,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentRuntimeResponse) Reset() {
@@ -1794,6 +1800,331 @@ func (x *AgentRuntimeResponse) GetSampledAtUnixMs() int64 {
 		return x.SampledAtUnixMs
 	}
 	return 0
+}
+
+func (x *AgentRuntimeResponse) GetMemory() *AgentMemoryUsage {
+	if x != nil {
+		return x.Memory
+	}
+	return nil
+}
+
+func (x *AgentRuntimeResponse) GetCache() *AgentCacheUsage {
+	if x != nil {
+		return x.Cache
+	}
+	return nil
+}
+
+func (x *AgentRuntimeResponse) GetCheckpoint() *AgentCheckpointUsage {
+	if x != nil {
+		return x.Checkpoint
+	}
+	return nil
+}
+
+func (x *AgentRuntimeResponse) GetRecovery() *AgentRecoveryState {
+	if x != nil {
+		return x.Recovery
+	}
+	return nil
+}
+
+// AgentMemoryUsage 是一个 agent 名下的语义记忆(按 agent 隔离聚合)。
+type AgentMemoryUsage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Threads       int32                  `protobuf:"varint,1,opt,name=threads,proto3" json:"threads,omitempty"`                                                                       // 涉及多少个 thread
+	Items         int32                  `protobuf:"varint,2,opt,name=items,proto3" json:"items,omitempty"`                                                                           // 条目总数
+	Bytes         int64                  `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`                                                                           // 载荷字节数
+	Kinds         map[string]int32       `protobuf:"bytes,4,rep,name=kinds,proto3" json:"kinds,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // 分层计数:working / conversation / summary / artifact
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentMemoryUsage) Reset() {
+	*x = AgentMemoryUsage{}
+	mi := &file_v1_runtime_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentMemoryUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentMemoryUsage) ProtoMessage() {}
+
+func (x *AgentMemoryUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentMemoryUsage.ProtoReflect.Descriptor instead.
+func (*AgentMemoryUsage) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *AgentMemoryUsage) GetThreads() int32 {
+	if x != nil {
+		return x.Threads
+	}
+	return 0
+}
+
+func (x *AgentMemoryUsage) GetItems() int32 {
+	if x != nil {
+		return x.Items
+	}
+	return 0
+}
+
+func (x *AgentMemoryUsage) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *AgentMemoryUsage) GetKinds() map[string]int32 {
+	if x != nil {
+		return x.Kinds
+	}
+	return nil
+}
+
+// AgentCacheUsage 是一个 agent 名下的可再生缓存(按命名空间前缀聚合)。
+type AgentCacheUsage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespaces    int32                  `protobuf:"varint,1,opt,name=namespaces,proto3" json:"namespaces,omitempty"`
+	Entries       int32                  `protobuf:"varint,2,opt,name=entries,proto3" json:"entries,omitempty"`
+	Bytes         int64                  `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	Hits          int64                  `protobuf:"varint,4,opt,name=hits,proto3" json:"hits,omitempty"`
+	Misses        int64                  `protobuf:"varint,5,opt,name=misses,proto3" json:"misses,omitempty"`
+	Evictions     int64                  `protobuf:"varint,6,opt,name=evictions,proto3" json:"evictions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentCacheUsage) Reset() {
+	*x = AgentCacheUsage{}
+	mi := &file_v1_runtime_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentCacheUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentCacheUsage) ProtoMessage() {}
+
+func (x *AgentCacheUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentCacheUsage.ProtoReflect.Descriptor instead.
+func (*AgentCacheUsage) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *AgentCacheUsage) GetNamespaces() int32 {
+	if x != nil {
+		return x.Namespaces
+	}
+	return 0
+}
+
+func (x *AgentCacheUsage) GetEntries() int32 {
+	if x != nil {
+		return x.Entries
+	}
+	return 0
+}
+
+func (x *AgentCacheUsage) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *AgentCacheUsage) GetHits() int64 {
+	if x != nil {
+		return x.Hits
+	}
+	return 0
+}
+
+func (x *AgentCacheUsage) GetMisses() int64 {
+	if x != nil {
+		return x.Misses
+	}
+	return 0
+}
+
+func (x *AgentCacheUsage) GetEvictions() int64 {
+	if x != nil {
+		return x.Evictions
+	}
+	return 0
+}
+
+// AgentCheckpointUsage 是一个 agent 名下的 checkpoint。
+type AgentCheckpointUsage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Count         int32                  `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	Bytes         int64                  `protobuf:"varint,2,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentCheckpointUsage) Reset() {
+	*x = AgentCheckpointUsage{}
+	mi := &file_v1_runtime_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentCheckpointUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentCheckpointUsage) ProtoMessage() {}
+
+func (x *AgentCheckpointUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentCheckpointUsage.ProtoReflect.Descriptor instead.
+func (*AgentCheckpointUsage) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *AgentCheckpointUsage) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *AgentCheckpointUsage) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+// AgentRecoveryState 是最近一次恢复尝试的结果。
+//
+// 【reported 为什么必须存在】目前 daemon 侧**还没有产出方**:恢复是跨重启的事件,
+// 而 RecoveryState 挂在 per-thread 的临时 AgentRuntime 上,没人能填它。所以这里
+// 恒为 reported=false —— 客户端据此显示"该 agent 未上报恢复状态",而不是把
+// "没这一项"当成"恢复失败"。等产出方接上之后这个字段自然转 true。
+type AgentRecoveryState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reported      bool                   `protobuf:"varint,1,opt,name=reported,proto3" json:"reported,omitempty"`
+	Attempted     bool                   `protobuf:"varint,2,opt,name=attempted,proto3" json:"attempted,omitempty"`
+	Succeeded     bool                   `protobuf:"varint,3,opt,name=succeeded,proto3" json:"succeeded,omitempty"`
+	From          string                 `protobuf:"bytes,4,opt,name=from,proto3" json:"from,omitempty"` // checkpoint / native / corrupted / none
+	Reason        string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	At            string                 `protobuf:"bytes,6,opt,name=at,proto3" json:"at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentRecoveryState) Reset() {
+	*x = AgentRecoveryState{}
+	mi := &file_v1_runtime_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentRecoveryState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentRecoveryState) ProtoMessage() {}
+
+func (x *AgentRecoveryState) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentRecoveryState.ProtoReflect.Descriptor instead.
+func (*AgentRecoveryState) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *AgentRecoveryState) GetReported() bool {
+	if x != nil {
+		return x.Reported
+	}
+	return false
+}
+
+func (x *AgentRecoveryState) GetAttempted() bool {
+	if x != nil {
+		return x.Attempted
+	}
+	return false
+}
+
+func (x *AgentRecoveryState) GetSucceeded() bool {
+	if x != nil {
+		return x.Succeeded
+	}
+	return false
+}
+
+func (x *AgentRecoveryState) GetFrom() string {
+	if x != nil {
+		return x.From
+	}
+	return ""
+}
+
+func (x *AgentRecoveryState) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AgentRecoveryState) GetAt() string {
+	if x != nil {
+		return x.At
+	}
+	return ""
 }
 
 var File_v1_runtime_proto protoreflect.FileDescriptor
@@ -1954,11 +2285,45 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"capability\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"3\n" +
 	"\x16GetAgentRuntimeRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xc4\x01\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xbb\x03\n" +
 	"\x14AgentRuntimeResponse\x12A\n" +
 	"\bcontract\x18\x01 \x01(\v2%.pocketagent.v1.RuntimeContractReportR\bcontract\x12<\n" +
 	"\tresources\x18\x02 \x03(\v2\x1e.pocketagent.v1.ResourceMetricR\tresources\x12+\n" +
-	"\x12sampled_at_unix_ms\x18\x03 \x01(\x03R\x0fsampledAtUnixMs2\x87\b\n" +
+	"\x12sampled_at_unix_ms\x18\x03 \x01(\x03R\x0fsampledAtUnixMs\x128\n" +
+	"\x06memory\x18\x04 \x01(\v2 .pocketagent.v1.AgentMemoryUsageR\x06memory\x125\n" +
+	"\x05cache\x18\x05 \x01(\v2\x1f.pocketagent.v1.AgentCacheUsageR\x05cache\x12D\n" +
+	"\n" +
+	"checkpoint\x18\x06 \x01(\v2$.pocketagent.v1.AgentCheckpointUsageR\n" +
+	"checkpoint\x12>\n" +
+	"\brecovery\x18\a \x01(\v2\".pocketagent.v1.AgentRecoveryStateR\brecovery\"\xd5\x01\n" +
+	"\x10AgentMemoryUsage\x12\x18\n" +
+	"\athreads\x18\x01 \x01(\x05R\athreads\x12\x14\n" +
+	"\x05items\x18\x02 \x01(\x05R\x05items\x12\x14\n" +
+	"\x05bytes\x18\x03 \x01(\x03R\x05bytes\x12A\n" +
+	"\x05kinds\x18\x04 \x03(\v2+.pocketagent.v1.AgentMemoryUsage.KindsEntryR\x05kinds\x1a8\n" +
+	"\n" +
+	"KindsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xab\x01\n" +
+	"\x0fAgentCacheUsage\x12\x1e\n" +
+	"\n" +
+	"namespaces\x18\x01 \x01(\x05R\n" +
+	"namespaces\x12\x18\n" +
+	"\aentries\x18\x02 \x01(\x05R\aentries\x12\x14\n" +
+	"\x05bytes\x18\x03 \x01(\x03R\x05bytes\x12\x12\n" +
+	"\x04hits\x18\x04 \x01(\x03R\x04hits\x12\x16\n" +
+	"\x06misses\x18\x05 \x01(\x03R\x06misses\x12\x1c\n" +
+	"\tevictions\x18\x06 \x01(\x03R\tevictions\"B\n" +
+	"\x14AgentCheckpointUsage\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x05R\x05count\x12\x14\n" +
+	"\x05bytes\x18\x02 \x01(\x03R\x05bytes\"\xa8\x01\n" +
+	"\x12AgentRecoveryState\x12\x1a\n" +
+	"\breported\x18\x01 \x01(\bR\breported\x12\x1c\n" +
+	"\tattempted\x18\x02 \x01(\bR\tattempted\x12\x1c\n" +
+	"\tsucceeded\x18\x03 \x01(\bR\tsucceeded\x12\x12\n" +
+	"\x04from\x18\x04 \x01(\tR\x04from\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\x12\x0e\n" +
+	"\x02at\x18\x06 \x01(\tR\x02at2\x87\b\n" +
 	"\x0eRuntimeService\x12b\n" +
 	"\x10GetRuntimePolicy\x12'.pocketagent.v1.GetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10SetRuntimePolicy\x12'.pocketagent.v1.SetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
@@ -1983,7 +2348,7 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_v1_runtime_proto_goTypes = []any{
 	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
 	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
@@ -2011,20 +2376,25 @@ var file_v1_runtime_proto_goTypes = []any{
 	(*RuntimeLimitation)(nil),               // 23: pocketagent.v1.RuntimeLimitation
 	(*GetAgentRuntimeRequest)(nil),          // 24: pocketagent.v1.GetAgentRuntimeRequest
 	(*AgentRuntimeResponse)(nil),            // 25: pocketagent.v1.AgentRuntimeResponse
-	nil,                                     // 26: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                                     // 27: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                                     // 28: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                                     // 29: pocketagent.v1.RuntimePolicy.CollabsEntry
+	(*AgentMemoryUsage)(nil),                // 26: pocketagent.v1.AgentMemoryUsage
+	(*AgentCacheUsage)(nil),                 // 27: pocketagent.v1.AgentCacheUsage
+	(*AgentCheckpointUsage)(nil),            // 28: pocketagent.v1.AgentCheckpointUsage
+	(*AgentRecoveryState)(nil),              // 29: pocketagent.v1.AgentRecoveryState
+	nil,                                     // 30: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 31: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 32: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 33: pocketagent.v1.RuntimePolicy.CollabsEntry
+	nil,                                     // 34: pocketagent.v1.AgentMemoryUsage.KindsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	26, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	27, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	28, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	29, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	30, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	31, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	32, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	33, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
 	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
@@ -2037,35 +2407,40 @@ var file_v1_runtime_proto_depIdxs = []int32{
 	23, // 17: pocketagent.v1.RuntimeContractReport.limitations:type_name -> pocketagent.v1.RuntimeLimitation
 	21, // 18: pocketagent.v1.AgentRuntimeResponse.contract:type_name -> pocketagent.v1.RuntimeContractReport
 	7,  // 19: pocketagent.v1.AgentRuntimeResponse.resources:type_name -> pocketagent.v1.ResourceMetric
-	3,  // 20: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 21: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 22: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 23: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 24: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 25: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 26: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	8,  // 27: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
-	11, // 28: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
-	13, // 29: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
-	16, // 30: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
-	17, // 31: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
-	19, // 32: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
-	24, // 33: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
-	2,  // 34: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 35: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 36: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	10, // 37: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
-	12, // 38: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
-	14, // 39: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
-	18, // 40: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	18, // 41: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	20, // 42: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
-	25, // 43: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
-	34, // [34:44] is the sub-list for method output_type
-	24, // [24:34] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	26, // 20: pocketagent.v1.AgentRuntimeResponse.memory:type_name -> pocketagent.v1.AgentMemoryUsage
+	27, // 21: pocketagent.v1.AgentRuntimeResponse.cache:type_name -> pocketagent.v1.AgentCacheUsage
+	28, // 22: pocketagent.v1.AgentRuntimeResponse.checkpoint:type_name -> pocketagent.v1.AgentCheckpointUsage
+	29, // 23: pocketagent.v1.AgentRuntimeResponse.recovery:type_name -> pocketagent.v1.AgentRecoveryState
+	34, // 24: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
+	3,  // 25: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 26: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 27: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 28: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 29: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 30: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 31: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 32: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	11, // 33: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	13, // 34: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	16, // 35: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
+	17, // 36: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
+	19, // 37: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
+	24, // 38: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
+	2,  // 39: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 40: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 41: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	10, // 42: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	12, // 43: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	14, // 44: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	18, // 45: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	18, // 46: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	20, // 47: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
+	25, // 48: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
+	39, // [39:49] is the sub-list for method output_type
+	29, // [29:39] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -2081,7 +2456,7 @@ func file_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

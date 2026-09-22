@@ -277,4 +277,49 @@ message AgentRuntimeResponse {
   // 该 agent 作用域下当前活跃的资源租约(复用 GetResourceUsage 的同一个 message)。
   repeated ResourceMetric resources = 2;
   int64 sampled_at_unix_ms = 3;
+  // 规格 §9.5「每家都能显示 memory/cache/resource/checkpoint/recovery 状态」的
+  // 后四项。resource 见上面的 resources。
+  AgentMemoryUsage memory = 4;
+  AgentCacheUsage cache = 5;
+  AgentCheckpointUsage checkpoint = 6;
+  AgentRecoveryState recovery = 7;
+}
+
+// AgentMemoryUsage 是一个 agent 名下的语义记忆(按 agent 隔离聚合)。
+message AgentMemoryUsage {
+  int32 threads = 1;              // 涉及多少个 thread
+  int32 items = 2;                // 条目总数
+  int64 bytes = 3;                // 载荷字节数
+  map<string, int32> kinds = 4;   // 分层计数:working / conversation / summary / artifact
+}
+
+// AgentCacheUsage 是一个 agent 名下的可再生缓存(按命名空间前缀聚合)。
+message AgentCacheUsage {
+  int32 namespaces = 1;
+  int32 entries = 2;
+  int64 bytes = 3;
+  int64 hits = 4;
+  int64 misses = 5;
+  int64 evictions = 6;
+}
+
+// AgentCheckpointUsage 是一个 agent 名下的 checkpoint。
+message AgentCheckpointUsage {
+  int32 count = 1;
+  int64 bytes = 2;
+}
+
+// AgentRecoveryState 是最近一次恢复尝试的结果。
+//
+// 【reported 为什么必须存在】目前 daemon 侧**还没有产出方**:恢复是跨重启的事件,
+// 而 RecoveryState 挂在 per-thread 的临时 AgentRuntime 上,没人能填它。所以这里
+// 恒为 reported=false —— 客户端据此显示"该 agent 未上报恢复状态",而不是把
+// "没这一项"当成"恢复失败"。等产出方接上之后这个字段自然转 true。
+message AgentRecoveryState {
+  bool reported = 1;
+  bool attempted = 2;
+  bool succeeded = 3;
+  string from = 4;    // checkpoint / native / corrupted / none
+  string reason = 5;
+  string at = 6;
 }

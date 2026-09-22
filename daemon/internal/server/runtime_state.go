@@ -112,8 +112,65 @@ func (s *Server) GetAgentRuntime(_ context.Context, req *pb.GetAgentRuntimeReque
 		for _, it := range rep.Items {
 			resp.Resources = append(resp.Resources, resourceMetricToProto(it))
 		}
+		// 规格 §9.5 的后四项：memory / cache / checkpoint / recovery。
+		// 【为什么必须一起给】诊断页问的是"这家 agent 到底用上了统一 Runtime 没有"；
+		// 只给 resource 的话，一家 memory/cache/checkpoint 全空的 agent 与一家真在用
+		// 的 agent 在界面上没有任何区别。
+		obs := s.runtimeBackend.Observe(agentID)
+		resp.Memory = memoryUsageToProto(obs.Memory)
+		resp.Cache = cacheUsageToProto(obs.Cache)
+		resp.Checkpoint = checkpointUsageToProto(obs.Checkpoint)
+		resp.Recovery = recoveryStateToProto(obs.Recovery)
 	}
 	return resp, nil
+}
+
+// ---- 观测 → 契约映射 ---------------------------------------------------------
+
+func memoryUsageToProto(m runtime.MemoryObservation) *pb.AgentMemoryUsage {
+	out := &pb.AgentMemoryUsage{
+		Threads: int32(m.Threads),
+		Items:   int32(m.Items),
+		Bytes:   m.Bytes,
+	}
+	if len(m.Kinds) > 0 {
+		out.Kinds = make(map[string]int32, len(m.Kinds))
+		for k, v := range m.Kinds {
+			out.Kinds[string(k)] = int32(v)
+		}
+	}
+	return out
+}
+
+func cacheUsageToProto(c runtime.CacheObservation) *pb.AgentCacheUsage {
+	return &pb.AgentCacheUsage{
+		Namespaces: int32(c.Namespaces),
+		Entries:    int32(c.Entries),
+		Bytes:      c.Bytes,
+		Hits:       c.Hits,
+		Misses:     c.Misses,
+		Evictions:  c.Evictions,
+	}
+}
+
+func checkpointUsageToProto(c runtime.CheckpointObservation) *pb.AgentCheckpointUsage {
+	return &pb.AgentCheckpointUsage{Count: int32(c.Count), Bytes: c.Bytes}
+}
+
+// recoveryStateToProto 把恢复状态翻成契约形态。
+//
+// 【reported 的判据】RecoveryState.Attempted 为 false 即"没有产出方上报过" ——
+// 目前 daemon 侧恒为此值（见 proto 里 AgentRecoveryState 的注释）。把它显式标出来，
+// 客户端才不会把"没这一项"读成"恢复失败"。
+func recoveryStateToProto(r runtime.RecoveryState) *pb.AgentRecoveryState {
+	return &pb.AgentRecoveryState{
+		Reported:  r.Attempted || r.Succeeded || r.From != "" && r.From != runtime.RecoveredNone,
+		Attempted: r.Attempted,
+		Succeeded: r.Succeeded,
+		From:      string(r.From),
+		Reason:    r.Reason,
+		At:        r.At,
+	}
 }
 
 // contractReportToProto 把核验报告翻成契约形态(唯一转换点)。
