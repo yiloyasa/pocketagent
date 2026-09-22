@@ -25,6 +25,7 @@ import (
 	"github.com/pocketagent/daemon/internal/collabmcp"
 	"github.com/pocketagent/daemon/internal/dshapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/mdns"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/server"
@@ -34,12 +35,24 @@ import (
 	"github.com/pocketagent/daemon/internal/version"
 )
 
+// defaultDataDir 返回 daemon 的默认数据目录。
+//
+// 决策交给 hostenv：新位置（%LOCALAPPDATA%\PocketAgent\data）已存在 → 用它；
+// 否则历史位置（~/.pocketagentd）存在 → 沿用它；两者都无 → 新位置（全新安装）。
+//
+// 【为什么不自动搬移老数据】目录里有配对的设备 token、自签证书与配对码
+// （本机实测 99MB，其中 85MB 是 pi-agent）。自动搬移会同时引入三件危险事：
+// daemon 运行中搬、搬一半失败、两边都有数据时以谁为准。「绝不自动删用户数据」
+// 这条既有红线在这里延伸为「绝不自动搬用户数据」—— 搬迁由用户显式决定。
+//
+// 这里只负责在沿用历史位置时把事实打印出来：数据在哪，用户就该知道。
 func defaultDataDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".pocketagentd"
+	dir, legacy := hostenv.DaemonDataDir()
+	if legacy {
+		log.Printf("[data] 沿用历史数据目录 %s（新位置 %s 尚未使用；如需搬迁：停 daemon 后移动目录，或用 -data 指定）",
+			dir, hostenv.UserDataDir())
 	}
-	return filepath.Join(home, ".pocketagentd")
+	return dir
 }
 
 func main() {
