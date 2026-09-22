@@ -16,6 +16,7 @@ r"""
 用法：python tools/ops/cleanup_project.py [--dry-run]
 """
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -60,6 +61,38 @@ P1_TARGETS = [
     ("pocketagent/build/pocketagentd-0.2.2.exe", "0.2.2 daemon 副本"),
     ("apk-analysis/tools/jadx.zip", "jadx 压缩包（同目录 jadx/ 已解压）"),
     ("apk-analysis/tools/hs_err_pid35704.log", "JVM 崩溃转储"),
+]
+
+# ---------------- P2：可再生 / 垃圾清理（2026-09-22 扩展） ----------------
+# 准入门槛：每一项都必须「可再生」（有源可重跑 / 官方可重下）或「零引用孤儿」。
+# 凡结论已固化到文档、或属不可再生的唯一副本，一律不放这里（如 _backup-unique/）。
+P2_TARGETS = [
+    ("apk-analysis/apktool-out", "Mobile Codex APK 反编译产物；源 APK G:\\Mobile Codex.apk.1 可重跑再生；结论已固化 apk-analysis/*.md"),
+    ("apk-analysis/jadx-out", "jadx 反编译产物（同上，可再生）"),
+    ("apk-analysis/tools/jadx", "jadx 工具本体（官方可重下）"),
+    ("apk-analysis/tools/apktool.jar", "apktool 工具本体（官方可重下）"),
+    ("pocketagent/build/device_base.apk", "设备基线包：全仓 grep 零引用的孤儿文件"),
+    ("pocketagent/build/deploy-night-20260920-121020", "夜间部署快照（旧 daemon/paguard 副本，正本在 daemon/）"),
+    ("pocketagent/build/deploy-night-20260921-125701", "夜间部署快照（同上）"),
+    ("pocketagent/build/deploy-night-20260921-155815", "夜间部署快照（同上）"),
+    ("pocketagent/android/.gradle", "Gradle 构建缓存（可再生）"),
+    ("pocketagent/android/.kotlin", "Kotlin 构建缓存（可再生）"),
+]
+
+# glob 模式（工作区相对，正斜杠）：匹配到的文件/目录各自成项
+P2_GLOBS = [
+    "pocketagent/daemon/pocketagentd.exe.bak-*",   # 历史二进制备份（.gitignore 已忽略）
+    "pocketagent/daemon/*probe.exe",               # 探针产物（源码 daemon/cmd/* 保留，可重建）
+    "pocketagent/daemon/*check.exe",               # 检查工具产物（同上）
+    "pocketagent/build/*.png",                     # 一次性验证截图
+    "pocketagent/build/*.xml",                     # 一次性 UI dump
+]
+
+# 归档裁剪：删除目录下除 keep 集合外的所有顶层项（keep 里的属不可再生唯一副本）
+P2_ARCHIVE_PRUNE = [
+    ("_archives/_trashbackup_20260919", {"_backup-unique"}),
+    ("_archives/_trashbackup_20260915", set()),
+    ("_archives/_trashbackup_20260918", set()),
 ]
 
 ROLLBACK_DIRS = ["pocketagent/build/rollback", "pocketagent/build/rollback-0.2.2"]
@@ -152,6 +185,30 @@ def collect():
     cands.sort(key=lambda x: x[0], reverse=True)
     for mt, fp, n in cands[DAEMON_KEEP_COUNT:]:
         plan.append(("file", fp, "daemon 历史二进制（保留最新 1 个）"))
+
+    # --- P2：可再生 / 垃圾 ---
+    for rel, desc in P2_TARGETS:
+        p = os.path.join(WORKSPACE, rel.replace("/", os.sep))
+        if os.path.isfile(p):
+            plan.append(("file", p, "[P2] " + desc))
+        elif os.path.isdir(p):
+            plan.append(("dir", p, "[P2] " + desc))
+
+    for pat in P2_GLOBS:
+        for p in sorted(glob.glob(os.path.join(WORKSPACE, pat.replace("/", os.sep)))):
+            kind = "dir" if os.path.isdir(p) else "file"
+            plan.append((kind, p, "[P2] glob " + pat))
+
+    for rel, keep in P2_ARCHIVE_PRUNE:
+        d = os.path.join(WORKSPACE, rel.replace("/", os.sep))
+        if not os.path.isdir(d):
+            continue
+        for n in sorted(os.listdir(d)):
+            if n in keep:
+                continue
+            p = os.path.join(d, n)
+            kind = "dir" if os.path.isdir(p) else "file"
+            plan.append((kind, p, "[P2] 归档裁剪 %s（保留 %s）" % (rel, sorted(keep))))
 
     return plan, cands[:DAEMON_KEEP_COUNT]
 

@@ -1,0 +1,3582 @@
+{
+  "generated_at": "2026-09-22 18:23:55",
+  "plan": "全清，保留 1 个回滚点",
+  "deleted": [
+    {
+      "path": "apk-analysis/apktool-out",
+      "size": 697260995,
+      "files": 46692,
+      "desc": "[P2] Mobile Codex APK 反编译产物；源 APK G:\\Mobile Codex.apk.1 可重跑再生；结论已固化 apk-analysis/*.md"
+    },
+    {
+      "path": "apk-analysis/jadx-out",
+      "size": 616716018,
+      "files": 26902,
+      "desc": "[P2] jadx 反编译产物（同上，可再生）"
+    },
+    {
+      "path": "apk-analysis/tools/jadx",
+      "size": 78273694,
+      "files": 7,
+      "desc": "[P2] jadx 工具本体（官方可重下）"
+    },
+    {
+      "path": "apk-analysis/tools/apktool.jar",
+      "size": 15478013,
+      "files": 1,
+      "desc": "[P2] apktool 工具本体（官方可重下）"
+    },
+    {
+      "path": "pocketagent/build/device_base.apk",
+      "size": 219246396,
+      "files": 1,
+      "desc": "[P2] 设备基线包：全仓 grep 零引用的孤儿文件"
+    },
+    {
+      "path": "pocketagent/build/deploy-night-20260920-121020",
+      "size": 19286016,
+      "files": 2,
+      "desc": "[P2] 夜间部署快照（旧 daemon/paguard 副本，正本在 daemon/）"
+    },
+    {
+      "path": "pocketagent/build/deploy-night-20260921-125701",
+      "size": 21689344,
+      "files": 2,
+      "desc": "[P2] 夜间部署快照（同上）"
+    },
+    {
+      "path": "pocketagent/build/deploy-night-20260921-155815",
+      "size": 21699072,
+      "files": 2,
+      "desc": "[P2] 夜间部署快照（同上）"
+    },
+    {
+      "path": "pocketagent/android/.gradle",
+      "size": 7291389,
+      "files": 17,
+      "desc": "[P2] Gradle 构建缓存（可再生）"
+    },
+    {
+      "path": "pocketagent/android/.kotlin",
+      "size": 0,
+      "files": 0,
+      "desc": "[P2] Kotlin 构建缓存（可再生）"
+    },
+    {
+      "path": "pocketagent/daemon/pocketagentd.exe.bak-20260920-164955",
+      "size": 24051200,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/pocketagentd.exe.bak-*"
+    },
+    {
+      "path": "pocketagent/daemon/pocketagentd.exe.bak-20260921-125757",
+      "size": 16718336,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/pocketagentd.exe.bak-*"
+    },
+    {
+      "path": "pocketagent/daemon/pocketagentd.exe.bak-20260921-155819",
+      "size": 19121664,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/pocketagentd.exe.bak-*"
+    },
+    {
+      "path": "pocketagent/daemon/codexaskprobe.exe",
+      "size": 4595200,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/*probe.exe"
+    },
+    {
+      "path": "pocketagent/daemon/codexspawnprobe.exe",
+      "size": 4592128,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/*probe.exe"
+    },
+    {
+      "path": "pocketagent/daemon/codexsubagentprobe.exe",
+      "size": 4566016,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/*probe.exe"
+    },
+    {
+      "path": "pocketagent/daemon/pisubagentprobe.exe",
+      "size": 4585984,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/*probe.exe"
+    },
+    {
+      "path": "pocketagent/daemon/dshmcpcheck.exe",
+      "size": 5002752,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/*check.exe"
+    },
+    {
+      "path": "pocketagent/daemon/listthreadscheck.exe",
+      "size": 23116800,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/daemon/*check.exe"
+    },
+    {
+      "path": "pocketagent/build/_t32_crop_button.png",
+      "size": 11310,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_crop_chevron.png",
+      "size": 51786,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step10_home.png",
+      "size": 197495,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step1_launch.png",
+      "size": 207735,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step2_settings.png",
+      "size": 187527,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step3_userdata.png",
+      "size": 194019,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step4_input.png",
+      "size": 224378,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step4b_input_check.png",
+      "size": 224660,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step4c_input_check.png",
+      "size": 197199,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step5_save.png",
+      "size": 197222,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step5b_save.png",
+      "size": 197106,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step6_chevron.png",
+      "size": 212765,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step7_t1.png",
+      "size": 230631,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step7_t1_crop.png",
+      "size": 65539,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step7_t5.png",
+      "size": 198561,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step7_t5_crop.png",
+      "size": 51672,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step8_t1.png",
+      "size": 229783,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step8_t1_crop.png",
+      "size": 107077,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step8_t9.png",
+      "size": 198618,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step8_t9_crop.png",
+      "size": 78018,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/_t32_step9_settings.png",
+      "size": 164776,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_after2.png",
+      "size": 208136,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_after_token.png",
+      "size": 208136,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_chat.png",
+      "size": 414341,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_final1.png",
+      "size": 173780,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_final2.png",
+      "size": 190794,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_final3.png",
+      "size": 190968,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_final_home.png",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_hi_chat.png",
+      "size": 264523,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_home_test.png",
+      "size": 1912191,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_ob.png",
+      "size": 133157,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_pong_top.png",
+      "size": 460302,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_rounds_chat.png",
+      "size": 138196,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_s3_home.png",
+      "size": 178208,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_screen1.png",
+      "size": 133618,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_screen2.png",
+      "size": 134606,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_v3_home.png",
+      "size": 201486,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/pa_v3_tasks.png",
+      "size": 208586,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/phone-current.png",
+      "size": 225248,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen1.png",
+      "size": 421838,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen2.png",
+      "size": 180692,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen3.png",
+      "size": 191703,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen4.png",
+      "size": 99925,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen5.png",
+      "size": 195160,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen6.png",
+      "size": 200203,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen7.png",
+      "size": 159633,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen8.png",
+      "size": 158170,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/t_dsh_screen9.png",
+      "size": 189239,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.png"
+    },
+    {
+      "path": "pocketagent/build/agent_conn_backup.xml",
+      "size": 723,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/agent_conn_new.xml",
+      "size": 823,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_c.xml",
+      "size": 19378,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_d.xml",
+      "size": 16715,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_final.xml",
+      "size": 13866,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_h.xml",
+      "size": 21462,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_p.xml",
+      "size": 15894,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_r.xml",
+      "size": 15894,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_s.xml",
+      "size": 13866,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_t.xml",
+      "size": 17969,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_v.xml",
+      "size": 15907,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_z.xml",
+      "size": 13866,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "pocketagent/build/pa_z2.xml",
+      "size": 21129,
+      "files": 1,
+      "desc": "[P2] glob pocketagent/build/*.xml"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_a.txt",
+      "size": 2249,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_a.xml",
+      "size": 13381,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag0.xml",
+      "size": 26363,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag0_texts.txt",
+      "size": 3178,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag1.xml",
+      "size": 17638,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag1_texts.txt",
+      "size": 3532,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag2.xml",
+      "size": 11361,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag2_status.txt",
+      "size": 51,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag2_texts.txt",
+      "size": 2430,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag3.xml",
+      "size": 21459,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag3_texts.txt",
+      "size": 4695,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag4_status.txt",
+      "size": 30,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag5.xml",
+      "size": 13574,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ag5_texts.txt",
+      "size": 3128,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_apkcopy.txt",
+      "size": 47,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_bk.xml",
+      "size": 11139,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_bk_texts.txt",
+      "size": 1821,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_br.xml",
+      "size": 21458,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_br_texts.txt",
+      "size": 4689,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_c.xml",
+      "size": 16082,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_c_texts.txt",
+      "size": 3638,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ch.xml",
+      "size": 20719,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ch_texts.txt",
+      "size": 3579,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_chk.png",
+      "size": 190852,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_chk2.png",
+      "size": 191349,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_clean_log.py",
+      "size": 614,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_clean_log_out.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_cleanup-run-log.txt",
+      "size": 41652,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_consistency.txt",
+      "size": 1404,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_crop_bottom.png",
+      "size": 556631,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ctxnew.kt",
+      "size": 16819,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd.xml",
+      "size": 2604,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd2.txt",
+      "size": 248,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd2.xml",
+      "size": 11230,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd2_texts.txt",
+      "size": 2469,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd3.xml",
+      "size": 5893,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd3_texts.txt",
+      "size": 1097,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd4.xml",
+      "size": 21458,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd4_texts.txt",
+      "size": 4689,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dd_texts.txt",
+      "size": 125,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_del.py",
+      "size": 699,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_delout.txt",
+      "size": 357,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dr.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dr_click.txt",
+      "size": 1352,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dr_texts.txt",
+      "size": 2782,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv.xml",
+      "size": 27772,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv3.xml",
+      "size": 26363,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv4.xml",
+      "size": 26363,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv5.xml",
+      "size": 25982,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv6.xml",
+      "size": 26363,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv7.xml",
+      "size": 28153,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv8.xml",
+      "size": 26979,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv_all.txt",
+      "size": 19823,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv_scroll.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dv_texts.txt",
+      "size": 3524,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dvtexts8.txt",
+      "size": 3437,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dw.xml",
+      "size": 9559,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_dw_texts.txt",
+      "size": 1273,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_fix3.py",
+      "size": 1811,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_fix4.py",
+      "size": 2030,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g1.xml",
+      "size": 26979,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g2.xml",
+      "size": 27606,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g3.xml",
+      "size": 32977,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g4.xml",
+      "size": 30216,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g5.xml",
+      "size": 32460,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g6.xml",
+      "size": 8288,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g7.xml",
+      "size": 26569,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g8.xml",
+      "size": 26363,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g9.xml",
+      "size": 25982,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_g_all.txt",
+      "size": 29179,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_git_block.kt",
+      "size": 10148,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_git_bounds.txt",
+      "size": 10,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_goloc.txt",
+      "size": 153,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt1.txt",
+      "size": 3437,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt2.txt",
+      "size": 3441,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt3.txt",
+      "size": 3909,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt4.txt",
+      "size": 3945,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt5.txt",
+      "size": 3665,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt6.txt",
+      "size": 823,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt7.txt",
+      "size": 3377,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt8.txt",
+      "size": 3178,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_gt9.txt",
+      "size": 3178,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h1.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h1_texts.txt",
+      "size": 2782,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h2.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h2_click.txt",
+      "size": 1352,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h2_texts.txt",
+      "size": 2782,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h2_tree.txt",
+      "size": 4175,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h3.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_h3_status.txt",
+      "size": 37,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_hm.xml",
+      "size": 40525,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_hm_click.txt",
+      "size": 3945,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_hm_focus.txt",
+      "size": 247,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_hm_texts.txt",
+      "size": 7930,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_hm_tree.txt",
+      "size": 16043,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_home_click.txt",
+      "size": 327,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_home_texts.txt",
+      "size": 1501,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_imgfind.txt",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_installed.apk",
+      "size": 13234267,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_item3_stdout.txt",
+      "size": 520,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_item3_v2.txt",
+      "size": 4303,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_k.xml",
+      "size": 18297,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_k_texts.txt",
+      "size": 3401,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_killed.txt",
+      "size": 330,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_logcat.txt",
+      "size": 2563254,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ls1.txt",
+      "size": 1357,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ls2.txt",
+      "size": 811,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_ls3.txt",
+      "size": 194,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_m2.txt",
+      "size": 2782,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_m2.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_mon.txt",
+      "size": 375803,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_mon2.txt",
+      "size": 252,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_nav.py",
+      "size": 6090,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_now.xml",
+      "size": 6732,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_now2.xml",
+      "size": 6732,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_now2_click.txt",
+      "size": 213,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_now2_texts.txt",
+      "size": 1266,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_now_texts.txt",
+      "size": 1355,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_outlist.txt",
+      "size": 428,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p0build.txt",
+      "size": 1768,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p0build2.txt",
+      "size": 1970,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p0full.txt",
+      "size": 3730,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p0stop.txt",
+      "size": 386,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p0verify.txt",
+      "size": 598,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p1build.txt",
+      "size": 38173,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p1build2.txt",
+      "size": 3332,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p1build3.txt",
+      "size": 311580,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p1build4.txt",
+      "size": 3570,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p1build5.txt",
+      "size": 3188,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p1build6.txt",
+      "size": 58817,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2build1.txt",
+      "size": 7541,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2build2.txt",
+      "size": 3470,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2build3.txt",
+      "size": 75351,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2build4.txt",
+      "size": 32,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2build5.txt",
+      "size": 3362,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify.ps1",
+      "size": 1146,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_a.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_arch.ps1",
+      "size": 1018,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_b_outer.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_c_outer.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_d_outer.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_drawer.ps1",
+      "size": 947,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_f_outer.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_list.txt",
+      "size": 82,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_tc.ps1",
+      "size": 1110,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p2verify_threads.ps1",
+      "size": 1166,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p3_out.txt",
+      "size": 777,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p3b.txt",
+      "size": 1161,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_p3c.txt",
+      "size": 827,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_agt.log",
+      "size": 3140,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_all.log",
+      "size": 4476,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_apk",
+      "size": 34346311,
+      "files": 2,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_apk.log",
+      "size": 3335,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_apktime.txt",
+      "size": 21,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_b1.log",
+      "size": 3629,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_b1b.log",
+      "size": 86058,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_b2.log",
+      "size": 3582,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_b3.log",
+      "size": 4587,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_b4.log",
+      "size": 4066,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_b5.log",
+      "size": 3928,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_before.apk",
+      "size": 20013962,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build.log",
+      "size": 3897,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build10.log",
+      "size": 3472,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build11.log",
+      "size": 221922,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build12.log",
+      "size": 3471,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build2.log",
+      "size": 3347,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build23.py",
+      "size": 1689,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build24.py",
+      "size": 1671,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build3.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_build9.log",
+      "size": 3916,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_chat2.log",
+      "size": 2698,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_chat3.log",
+      "size": 3238,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_chat_walk.log",
+      "size": 2989,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_classes4.dex",
+      "size": 1862004,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_clean.log",
+      "size": 3971,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_commit_msg.txt",
+      "size": 5170,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_compile.log",
+      "size": 2136,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_crop22.png",
+      "size": 47409,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_crop31.png",
+      "size": 50334,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_d.xml",
+      "size": 13769,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_dex4.txt",
+      "size": 25286048,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_diag_dl.py",
+      "size": 772,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_disp_drop.xml",
+      "size": 16865,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_explore.py",
+      "size": 1554,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_fix.log",
+      "size": 3383,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_fix_office.py",
+      "size": 1296,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_fix_office2.py",
+      "size": 522,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_fix_xls.py",
+      "size": 2010,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gate3b-unit-test-rerun.log",
+      "size": 2801,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gate_gate1-go-test-all.log",
+      "size": 3424,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gate_gate2-go-test-race.log",
+      "size": 582,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gate_gate3-android-unit-test.log",
+      "size": 3063,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gate_gate4-assemble-debug.log",
+      "size": 3529,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gen23.py",
+      "size": 12761,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_go22.log",
+      "size": 11,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gradle_apk.log",
+      "size": 3346,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gradle_cleanapk.log",
+      "size": 4146,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gradle_compile.log",
+      "size": 2136,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_gradle_test.log",
+      "size": 2790,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_install.log",
+      "size": 38,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_install.txt",
+      "size": 38,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_install_copy.txt",
+      "size": 38,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_item3_roundtrip.py",
+      "size": 7311,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_live2.log",
+      "size": 4651,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_live3.log",
+      "size": 3967,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_make_office.py",
+      "size": 4867,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_mem.py",
+      "size": 2812,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_mem2.py",
+      "size": 6981,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_mem3.py",
+      "size": 6250,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_memo20.py",
+      "size": 3236,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_memo21.py",
+      "size": 2309,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_newtask.log",
+      "size": 2500,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_batch2.py",
+      "size": 4141,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_browser.py",
+      "size": 5587,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_chiprow.py",
+      "size": 5640,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_export_swipe.py",
+      "size": 15080,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_filedl.py",
+      "size": 8046,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_fix3.py",
+      "size": 3133,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_follow.py",
+      "size": 9861,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_forkhist.py",
+      "size": 6788,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_fs.py",
+      "size": 2904,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_icons.py",
+      "size": 2623,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_org.py",
+      "size": 13209,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_orgfix.py",
+      "size": 2684,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_settings.py",
+      "size": 9768,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_threads.py",
+      "size": 1389,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_patch_threads2.py",
+      "size": 1221,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_perf.log",
+      "size": 1744,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_preview.html",
+      "size": 23349,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_preview2.html",
+      "size": 23349,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_probe_dl.py",
+      "size": 2787,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_procs.txt",
+      "size": 19612,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r19.log",
+      "size": 7549,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r19b.log",
+      "size": 3845,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r19c.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20a.log",
+      "size": 8210,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20b.log",
+      "size": 5539,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20c.log",
+      "size": 5000,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20d.log",
+      "size": 4018,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20e.log",
+      "size": 105191,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20f.log",
+      "size": 3358,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r20g.log",
+      "size": 3521,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r21a.log",
+      "size": 3344,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r21b.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r21c.log",
+      "size": 5034,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r21d.log",
+      "size": 4431,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r21e.log",
+      "size": 3344,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r21f.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r22a.log",
+      "size": 4381,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r22b.log",
+      "size": 3901,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r22c.log",
+      "size": 3960,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r22d.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r22e.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r22f.log",
+      "size": 3366,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r23_results.json",
+      "size": 567,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r23a.log",
+      "size": 3335,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_r24a.log",
+      "size": 3335,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_rc.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_row_zoom.png",
+      "size": 8184,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_scan_drawer.py",
+      "size": 455,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_set1.py",
+      "size": 6599,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_set2.py",
+      "size": 16088,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_settings_verify.log",
+      "size": 11869,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_shots",
+      "size": 7953204,
+      "files": 41,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_slash.log",
+      "size": 2512,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_smoke2.py",
+      "size": 3762,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_smoke3.py",
+      "size": 2081,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_smoke4.py",
+      "size": 3183,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_smoke5.py",
+      "size": 3460,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_smoke6.py",
+      "size": 3840,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_smoke_u.xml",
+      "size": 16196,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_t16_apk_stdout.log",
+      "size": 1342,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_t16_install_stdout.log",
+      "size": 126,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_t16_test_stdout.log",
+      "size": 246,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_tc.xml",
+      "size": 541,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_tc2.xml",
+      "size": 541,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_tc3.xml",
+      "size": 538,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_tc4.xml",
+      "size": 538,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_tc_old.xml",
+      "size": 481,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_tc_old2.xml",
+      "size": 481,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_test.log",
+      "size": 2978,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_ui.xml",
+      "size": 19222,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_ui2.xml",
+      "size": 21054,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_ui_walk.log",
+      "size": 10838,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_verify_round2_out",
+      "size": 594348,
+      "files": 25,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_verifyext.exe",
+      "size": 17174528,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk22.py",
+      "size": 2209,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk22b.py",
+      "size": 1503,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk22c.py",
+      "size": 2523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk22d.py",
+      "size": 2454,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk22e.py",
+      "size": 2598,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk22f.py",
+      "size": 3493,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23a.py",
+      "size": 2129,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23b.py",
+      "size": 2365,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23c.py",
+      "size": 2645,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23d.py",
+      "size": 2449,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23e.py",
+      "size": 2585,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23f.py",
+      "size": 2404,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23g.py",
+      "size": 2641,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_walk23h.py",
+      "size": 2691,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_wire_all.py",
+      "size": 3352,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_wire_follow.py",
+      "size": 4725,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pa_zoom.png",
+      "size": 191333,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_pcinfo.txt",
+      "size": 176,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_probe_fix.py",
+      "size": 445,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_probe_out.txt",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_procs.txt",
+      "size": 22,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_clickables.py",
+      "size": 990,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_clk.txt",
+      "size": 279,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_comp.txt",
+      "size": 16,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_comp2.txt",
+      "size": 141,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_daemon.txt",
+      "size": 382,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_devopt.txt",
+      "size": 28525,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_findnode.py",
+      "size": 829,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_go.txt",
+      "size": 365,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_input.txt",
+      "size": 2322,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_inst_tap.txt",
+      "size": 79,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_install.txt",
+      "size": 364,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_install2.txt",
+      "size": 297,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_install3.txt",
+      "size": 134,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_install_tap.py",
+      "size": 2674,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_installer.py",
+      "size": 2814,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item1.txt",
+      "size": 649,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item3.txt",
+      "size": 612,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item3_probe.py",
+      "size": 1639,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item3b.txt",
+      "size": 612,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item3c.txt",
+      "size": 9,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item3d.txt",
+      "size": 5297,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_item7.txt",
+      "size": 2055,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_kill.txt",
+      "size": 203,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_launch.txt",
+      "size": 829,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_main.txt",
+      "size": 3147,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_mtime.txt",
+      "size": 97,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_p3.py",
+      "size": 1439,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_p3b.py",
+      "size": 2023,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_p3c.py",
+      "size": 2017,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_pkg.txt",
+      "size": 583,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe.py",
+      "size": 1154,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe.txt",
+      "size": 1123,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe10.py",
+      "size": 1424,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe10_out.txt",
+      "size": 950,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe10_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe11.py",
+      "size": 2765,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe11_out.txt",
+      "size": 1182,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe11_stdout.txt",
+      "size": 332,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe12.py",
+      "size": 2984,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe12_out.txt",
+      "size": 1960,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe12_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe13.py",
+      "size": 1965,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe13_out.txt",
+      "size": 979,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe13_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe14.py",
+      "size": 1132,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe14_out.txt",
+      "size": 733,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe14_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe15.py",
+      "size": 1674,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe15_out.txt",
+      "size": 344,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe15_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe16.py",
+      "size": 1780,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe16_out.txt",
+      "size": 249,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe16_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe17.py",
+      "size": 2606,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe17_out.txt",
+      "size": 14,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe17_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe2.py",
+      "size": 1282,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe2_out.txt",
+      "size": 1121,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe2_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe3.py",
+      "size": 741,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe3_out.txt",
+      "size": 3971,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe3_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe4.py",
+      "size": 1113,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe4_out.txt",
+      "size": 2471,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe4_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe5.py",
+      "size": 1094,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe5_out.txt",
+      "size": 4579,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe5_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe6.py",
+      "size": 1418,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe6_out.txt",
+      "size": 7742,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe6_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe7.py",
+      "size": 1528,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe7_out.txt",
+      "size": 906,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe7_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe8.py",
+      "size": 805,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe8_out.txt",
+      "size": 895,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe8_stdout.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe9.py",
+      "size": 2249,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe9_out.txt",
+      "size": 534,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe9_stdout.txt",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe_out.txt",
+      "size": 2113,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_probe_stdout.txt",
+      "size": 2446,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_procs.txt",
+      "size": 420,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_pyerr.txt",
+      "size": 39,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_run1.txt",
+      "size": 47,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_screen.txt",
+      "size": 423,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_screen2.txt",
+      "size": 89,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_screen3.txt",
+      "size": 3556,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_set.txt",
+      "size": 175,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_set2.txt",
+      "size": 853,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_skip.txt",
+      "size": 114,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_skipnode.txt",
+      "size": 296,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_state.txt",
+      "size": 17851,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_sw.txt",
+      "size": 452,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_syn.txt",
+      "size": 11,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_syn2.txt",
+      "size": 11,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_tree.py",
+      "size": 1116,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_wb.txt",
+      "size": 189,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_wb2.txt",
+      "size": 1135,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_wb3.txt",
+      "size": 130,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_wb4.txt",
+      "size": 1146,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_qa_xmltexts.py",
+      "size": 862,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_r.xml",
+      "size": 11230,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_r_texts.txt",
+      "size": 2469,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_refactor1.py",
+      "size": 6024,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_reinstall.txt",
+      "size": 73,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_s2.xml",
+      "size": 9792,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_s2_texts.txt",
+      "size": 1436,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_s3.xml",
+      "size": 9792,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_s3_texts.txt",
+      "size": 1436,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_s_wb.txt",
+      "size": 1152,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sc.xml",
+      "size": 6732,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sc2.xml",
+      "size": 6732,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sc2_texts.txt",
+      "size": 1266,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sc3.xml",
+      "size": 6732,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sc3_texts.txt",
+      "size": 1266,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sc_texts.txt",
+      "size": 1266,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_se1.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_se2.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_se4.xml",
+      "size": 13589,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_se4_texts.txt",
+      "size": 1945,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_set.xml",
+      "size": 14523,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_set2_status.txt",
+      "size": 210,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_set_click.txt",
+      "size": 1352,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_set_texts.txt",
+      "size": 2782,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sk1.xml",
+      "size": 7487,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sk2.xml",
+      "size": 7414,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sk3.xml",
+      "size": 7408,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_sk_status.txt",
+      "size": 113,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_splice.py",
+      "size": 899,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_splice.txt",
+      "size": 22,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_splice_err.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_st1.xml",
+      "size": 13589,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_st2.xml",
+      "size": 13589,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_st3.xml",
+      "size": 13589,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_st3_click.txt",
+      "size": 1558,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_st3_texts.txt",
+      "size": 1945,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_start_status.txt",
+      "size": 122,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_stg.xml",
+      "size": 11248,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_stg_texts.txt",
+      "size": 2460,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_task_center.xml",
+      "size": 342,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_theme3.py",
+      "size": 674,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_toast.png",
+      "size": 239484,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_turn_refactor.py",
+      "size": 6739,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uidump_log.txt",
+      "size": 122,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext.py",
+      "size": 522,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext.txt",
+      "size": 418,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext2.py",
+      "size": 460,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext2.txt",
+      "size": 1694,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext2_out.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext3.py",
+      "size": 465,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext3.txt",
+      "size": 387,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext3_out.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext4.py",
+      "size": 494,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext4.txt",
+      "size": 478,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext4_out.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext5.py",
+      "size": 466,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext5.txt",
+      "size": 898,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext5_out.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_uitext_out.txt",
+      "size": 6,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_v.xml",
+      "size": 19916,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_v2.xml",
+      "size": 5906,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_v2_texts.txt",
+      "size": 1106,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_v_log.txt",
+      "size": 389,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_v_log2.txt",
+      "size": 207,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_v_texts.txt",
+      "size": 4174,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_w.txt",
+      "size": 3178,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_w.xml",
+      "size": 26363,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/_wbcfg.txt",
+      "size": 1403,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/backup-removal-manifest.json",
+      "size": 12448,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-audit.log",
+      "size": 1787,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-final.log",
+      "size": 2337,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-live.log",
+      "size": 3987,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-p3.log",
+      "size": 137,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-p4.log",
+      "size": 137,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-t.log",
+      "size": 139,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-t2.log",
+      "size": 139,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-t3.log",
+      "size": 139,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-v.log",
+      "size": 139,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-v2.log",
+      "size": 139,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-v3.log",
+      "size": 750,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/da-v4.log",
+      "size": 1300,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260919/manifest.json",
+      "size": 109128,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260919（保留 ['_backup-unique']）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/1789327760718_Screenshot_2026-09-14-02-35-41-772_dev.pocketagent.app.jpg",
+      "size": 151543,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkbuild.txt",
+      "size": 3624,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkbuild2.txt",
+      "size": 222966,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkbuild3.txt",
+      "size": 19595,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkbuild4.txt",
+      "size": 2300,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkerrs.txt",
+      "size": 303,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkfail2.txt",
+      "size": 2597,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkfail3.txt",
+      "size": 4798,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkres2.txt",
+      "size": 86,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkres3.txt",
+      "size": 84,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apkres4.txt",
+      "size": 1309,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_apktail.txt",
+      "size": 3132,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_cleanup-run-log-2.txt",
+      "size": 1157,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_cleanup-run-log.txt",
+      "size": 4421,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_gobuild.txt",
+      "size": 8,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_post-cleanup-health.txt",
+      "size": 2221,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_probe.txt",
+      "size": 73,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/_recycle-verify.txt",
+      "size": 94,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/daemon.err.log",
+      "size": 132,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/daemon.out.log",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/dt-b.log",
+      "size": 70,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/null",
+      "size": 44,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/openai.svg",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260915/zai.svg",
+      "size": 0,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260915（保留 []）"
+    },
+    {
+      "path": "_archives/_trashbackup_20260918/_cleanup-run-log.txt",
+      "size": 2999,
+      "files": 1,
+      "desc": "[P2] 归档裁剪 _archives/_trashbackup_20260918（保留 []）"
+    }
+  ],
+  "skipped": [],
+  "summary": {
+    "deleted_items": 595,
+    "deleted_bytes": 1942593135,
+    "skipped_items": 0
+  }
+}
