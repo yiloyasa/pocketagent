@@ -60,6 +60,14 @@ if (-not (Test-Path $go)) {
 # 把 Go 加进 PATH(仅本次会话)
 $env:PATH = "$GoBin;" + $env:PATH
 
+# ---- 准备暂存目录:先清旧、再建空,然后才构建 ----
+# 顺序是硬约束:清理必须发生在 go build 之前。否则 -Recurse -Force 会把刚写进
+# $StageDir 的 pocketagentd.exe / paguard.exe 一并删除,最终 zip 里只剩几个脚本、
+# 没有可执行文件(2026-09-20 提交 42813da 引入的阻断级缺陷)。
+# 先清空同样保证入包内容只来自本次构建,不会混入上一次的残留产物。
+if (Test-Path $StageDir) { Remove-Item $StageDir -Recurse -Force | Out-Null }
+New-Item -ItemType Directory -Path $StageDir | Out-Null
+
 # ---- 进入 daemon 目录,构建两个可执行文件 ----
 # -trimpath 去掉绝对路径, -ldflags "-s -w" 去掉符号表与调试信息,体积更小;
 # pocketagentd 额外用 -X 把 $AppVersion 烙进 internal/version.Version(T-27),
@@ -79,9 +87,8 @@ try {
     Pop-Location
 }
 
-# ---- 组装分发目录:把 exe 与脚本 / 说明放进暂存目录,再压成 zip ----
-if (Test-Path $StageDir) { Remove-Item $StageDir -Recurse -Force | Out-Null }
-New-Item -ItemType Directory -Path $StageDir | Out-Null
+# ---- 组装分发目录:exe 已在前一步构建进 $StageDir,这里补脚本 / 说明,最后压成 zip ----
+# 注意:目录的「清理 + 创建」已挪到 go build 之前完成,此处不再重复,以免删掉刚构建的 exe。
 
 # 版本留痕:zip 根部放一份 version.txt(纯版本号一行,与仓库 internal/version 对账;
 # 用 Ascii 编码避免 BOM 混入版本号)
@@ -97,6 +104,37 @@ foreach ($f in $PackageFiles) {
         Write-Warning "缺少待打包文件:$src(已跳过,请确认它存在于 dist/windows)"
     }
 }
+
+# ---- 开发机痕迹扫描(打包前最后一道闸) ----
+# 为什么必须在 go build 之后、Compress-Archive 之前做:
+#   Go 的 -trimpath 只剥离「源码路径」,不剥离「字符串常量」——随包发布的
+#   pocketagentd.exe / paguard.exe 里仍带有 C:\Users\yanzi\... 与 G:\Claude Code\...
+#   这类硬编码常量,只存在于编译产物中,所以只能在编译完成后、入包之前拦截。
+# 另:仓库另有并行工作正在把 internal/piapp、internal/dshapp、cmd/paguard 的
+#   默认路径常量改成「环境派生」;本扫描器同时承担防回归职责——一旦有人再把
+#   开发机路径写死回去,打包会在这里直接失败,而不是把痕迹发给用户。
+# 做法:遍历 $StageDir 下每个文件,读全部字节,分别用 Latin1(编码 28591)与 UTF8
+#   解码成字符串再查敏感串——Latin1 覆盖任意单字节序列,UTF8 覆盖中文路径字面量。
+#   命中任一即报错中止,(在 $ErrorActionPreference = "Stop" 下)绝不产出 zip。
+$TraceNeedles = @('G:\项目1', 'yanzi', 'Claude Code', '100.92.193.109')
+$Latin1       = [System.Text.Encoding]::GetEncoding(28591)
+$Utf8         = [System.Text.Encoding]::UTF8
+$StageFiles   = @(Get-ChildItem -Path $StageDir -File -Recurse)
+foreach ($f in $StageFiles) {
+    $bytes    = [System.IO.File]::ReadAllBytes($f.FullName)
+    $asLatin1 = $Latin1.GetString($bytes)
+    # .NET 默认 UTF8 实例对非法字节做 U+FFFD 替换而非抛错,故解码本身不会中断扫描
+    $asUtf8   = $Utf8.GetString($bytes)
+    foreach ($needle in $TraceNeedles) {
+        if ($asLatin1.Contains($needle) -or $asUtf8.Contains($needle)) {
+            # Write-Error 在 Stop 下已会抛终止异常;再显式 throw 作双保险,
+            # 确保绝不会继续执行到下面的 Compress-Archive。
+            Write-Error "发布产物含开发机痕迹:文件 $($f.Name) 命中 '$needle'。已中止打包,未产出 zip。请清除该硬编码常量后重试。"
+            throw "开发机痕迹扫描未通过:$($f.Name) 命中 '$needle'"
+        }
+    }
+}
+Write-Host "==> 痕迹扫描通过:$($StageFiles.Count) 个文件均未发现开发机路径 / 用户名常量"
 
 # 压缩(已存在则覆盖)
 if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
