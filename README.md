@@ -34,14 +34,14 @@
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，HEAD `a44ca5e`；**工作树 170 项未提交**（50 改 / 64 新增 / 56 删） |
+| Git | 分支 `main`，HEAD `da9a24a`（2026-09-22 收编）；**工作树干净**（仅 3 个 `daemon/pi_probe*_tmp.js` 未跟踪，待处置） |
 | daemon | 运行中 pid **104724**，`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
-| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**；daemon `go test ./...` **14 包** PASS；`pa_audit` 红线 0（据 2026-09-22 工作记录；改动后必须重跑，勿引用为实时结论） |
+| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./internal/...` —— **`internal/server` 有 2 例 flaky**（`TestDispatchCollabFansOutPerMember` / `TestDispatchCollabPartialFailureIsIndependent`，Windows `t.TempDir()` 清理竞态，见 §15），其余包 PASS |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
-1. **170 项成果未落 git**：09-22 的真机 8 项修复、协同扇出 / 协同角色、缓存管理、子代理可见性等全部悬在工作树。**下会话第一件事先盘它**（动工前先 `go build ./...` 建基线，见 §12 坑 0）。
+1. ~~170 项成果未落 git~~ → **已收编**（2026-09-22，提交 `da9a24a`），工作树干净。遗留：3 个 `daemon/pi_probe*_tmp.js` 未跟踪（疑似临时探针，待处置）。
 2. **发布审核未通过**：131 用例 = 30 PASS / 2 FAIL / 99 BLOCKED；P0 / P1 / P2 代码已修，但**真机复验待手机插线**（§13）。
 3. **真机时断时续**：多轮验证依赖手机在线（Tailscale `100.92.193.109:7246`）；离线时只能跑 JVM / go 单测，UI 交互与 gRPC 联调无法实测。
 4. **codex 实验特性警告**：为支持 Default 模式反问卡，daemon 强注 `default_mode_request_user_input`，而 codex 自报其 `stage=underDevelopment` → **开启即弹警告**；抑制需写用户 `~/.codex/config.toml`（**红线封死**）→ 只能诚实降级（不支持就不显示入口）。
@@ -464,6 +464,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 ## 15. 已知边界与技术债
 
 - daemon `go vet` 有 protobuf 值拷贝警告（存量噪音，非新问题）。
+- **daemon `internal/server` 有 2 例 flaky 测试**（`TestDispatchCollabFansOutPerMember` / `TestDispatchCollabPartialFailureIsIndependent`）：协同扇出的轮次跑在**脱离取消链**的 goroutine 里（设计如此，避免 RPC 返回即被杀），而测试只断言 RPC 响应、不等轮次落定 —— 于是 Windows 上 `t.TempDir()` 的 `RemoveAll` 清理会撞上仍在写文件的 goroutine，报 `The directory is not empty` 而**间歇 FAIL**（实测 4 次：FAIL/ok/ok/FAIL）。**断言本身未失败，无功能缺陷**。修法二选一：① 测试侧结束前轮询子线程离开 `RUNNING`；② 给 `Server` 加在飞协同计数（`sync.WaitGroup`/atomic）供测试 drain。
 - 同 provider 多会话不并行（原生 turn 锁排队）。
 - 上下文窗口多数模型真未知（`ListModels` 仅 `codex/default`/`echo-1` 带窗口；codex 不发该字段）。
 - **Vosk 已摘除**（2026-09-20）：依赖 + `Vosk*` 两文件 + 引擎选择分支全部移除；共享错误码迁至 `VoiceErrors.kt`；行为零变化（摘除前引擎恒不可选）。
