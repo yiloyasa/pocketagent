@@ -171,8 +171,9 @@ func TestDispatchCollabUnknownRole(t *testing.T) {
 
 // firstTextOf 取一条落库消息里的第一段文本。
 func firstTextOf(m store.StoredMessage) string {
-	for _, b := range m.Blocks {
-		if tb := b.GetText(); tb != nil {
+	// 【vet】按下标取址遍历,避免 range 复制 pb 消息（内嵌 MessageState 含锁）。
+	for i := range m.Blocks {
+		if tb := m.Blocks[i].GetText(); tb != nil {
 			return tb.GetText()
 		}
 	}
