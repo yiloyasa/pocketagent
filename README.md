@@ -357,14 +357,23 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 ### 9.2 App 侧（手机）
 
-| 位置 | 内容 | 性质 | 处置 |
-|---|---|---|---|
-| `filesDir/pa_snap`、`cacheDir/pa_offline/…` | 会话快照（RISKY，清了要重新从电脑拉）、离线缓存（`OfflineStore` 自带 **LRU 淘汰**） | **缓存** | 可随时清；系统低存储时也会回收 |
-| WebView 缓存（cacheDir 其它部分） | xterm.js / 内置浏览器 | **缓存** | 同上，`OfflineStore` **不碰**它们 |
-| EncryptedSharedPreferences | 每设备 token（Keystore 加密） | **用户数据（安全凭据）** | 别删（删了要重新配对） |
-| 按会话隔离的草稿 | 未发送的输入 | 用户数据 | 随会话删除一并清 |
-| `SubAgentsState` 预览缓存 / `ThreadUsageStore` | 子代理预览、用量（**纯内存**） | 内存态 | 进程结束即释放；切页不串 |
+> **路径唯一真源 = `ui/component/PaPaths.kt`** —— 目录名与临时文件前缀集中于此，各模块统一引用；改名只改这里，且**必须配迁移**（否则旧目录变孤儿）。
 
+| 位置（`PaPaths` 常量） | 内容 | 性质 | 处置 |
+|---|---|---|---|
+| `filesDir/pa_snap`（`DIR_SNAPSHOT`） | 会话离线快照（最近 N 轮，三层限额 + LRU） | **缓存（RISKY）** | 清了只能从电脑重拉、离线看不到；须二次确认 |
+| `filesDir/turn-checkpoints`（`DIR_TURN_CHECKPOINTS`） | 轮次检查点 | 用户数据 | 随会话生命周期 |
+| `filesDir/sensevoice-int8`（`DIR_SENSEVOICE`） | 端侧 SenseVoice 模型（首次解压校验） | 可再生成 | 删了下次用到会重解压 |
+| `cacheDir/pa_offline/pa_url`（`DIR_OFFLINE`） | 网页快照（断网回看；30 天 TTL + 80MB LRU） | **缓存** | 可随时清 |
+| `cacheDir/pa_preview`（`DIR_PREVIEW`） | 预览内容缓存（二次预览免传输，200MB 上限） | **缓存** | 可随时清 |
+| `cacheDir/pa_pdf_*` / `pa_ziplist*`（`TMP_*_PREFIX`） | PDF 渲染 / zip 列表临时文件 | **临时** | 启动清扫（`PaCache.sweepTemp`） |
+| 外部 `files/DOWNLOADS`（`downloadsDir`） | 用户显式下载内容 | **用户数据** | **清理不得删除** |
+| `dataDir/app_webview`（`DIR_APP_WEBVIEW`） | 内置浏览器 WebView 数据（系统托管） | 缓存 | 用户主动清理（`PaCache.clearBrowserData`） |
+| `EncryptedSharedPreferences` | 每设备 token（Keystore 加密） | **用户数据（安全凭据）** | 别删（删了要重新配对） |
+| SP：`pa_onboarding` / `pa_thread_pins` / `pa_thread_usage` / `pa_usage_card_cache` | 引导态、置顶、用量、用量卡缓存 | 用户数据 | 随会话删除联动 |
+| `SubAgentsState` / `ThreadUsageStore`（内存） | 子代理预览、用量 | 内存态 | 进程结束即释放；切页不串 |
+
+> `cacheDir` 是共享目录（WebView、系统组件都在用）：`OfflineStore` 只动 `pa_offline/…`，`PaCache` 只动自己前缀 —— **不碰**别人的内容。
 > App 缓存管理界面（2026-09-22）：快照标 RISKY、其它 SAFE，**凭据永不入清理目标**，带风险分级 + 二次确认。
 
 ### 9.3 「彻底删除」的现状与差距
@@ -444,7 +453,8 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 - **日志 5 类**：A 运行(`daemon.log`/`watchdog.log`，轮转只留错误行)｜B 验收证据(`docs/verify/evidence/**`，磁盘**神圣不可清理**、**截图不入库**)｜C 构建一次性｜D 归档冷数据(`_archives/`，90 天)｜E 错误汇总(长期)
 - **铁律**：成功日志不长期留盘；`*.log` 禁止入库；**归档只搬不删**；运行中的日志禁止直接删。
-- **工具**（`tools/ops/`）：`archive_logs.py` / `rotate_runtime_logs.py`(SHA256 校验后才截断) / `clean_junk.py` / `cleanup_project.py`(精确保护清单；**2026-09-22 扩展 P2「可再生/垃圾」层**：apk-analysis 反编译产物与工具、build 孤儿/快照、daemon 历史二进制与探针 exe、构建缓存、`_archives` 归档裁剪，白名单式 + 保护清单 + manifest) / `cleanup_cdrive.py`。⚠ `rotate_runtime_logs.py` 归档路径仍指向 `docs/ops/logs-archive/`（该目录由 cleanup 工具按需重建，属历史遗留落点，待统一）。
+- **定期维护**：`python tools/ops/maintenance.py --apply`（建议每周一次；串联「日志轮转 → 垃圾清扫 → 冗余清理」三步，默认预演不改动）。计划任务注册示例见脚本头 docstring（**沙箱禁 `schtasks`**，注册需在能跑 schtasks 的外层 shell）。
+- **工具**（`tools/ops/`）：`maintenance.py`（定期维护总入口） / `archive_logs.py` / `rotate_runtime_logs.py`(SHA256 校验后才截断) / `clean_junk.py` / `cleanup_project.py`(精确保护清单；**2026-09-22 扩展 P2「可再生/垃圾」层**：apk-analysis 反编译产物与工具、build 孤儿/快照、daemon 历史二进制与探针 exe、构建缓存、`_archives` 归档裁剪，白名单式 + 保护清单 + manifest) / `cleanup_cdrive.py`。⚠ `rotate_runtime_logs.py` 归档路径仍指向 `docs/ops/logs-archive/`（该目录由 cleanup 工具按需重建，属历史遗留落点，待统一）。
 - **勿动**：运行中的 `pocketagentd.exe` + `watchdog.log`；两处 `.pocketagent-uploads/`（daemon 活数据）。
 - **删除台账**：`_archives/_docs-discarded_20260920-manifest.json`(109 文档)、`_residual-cleanup_20260920-manifest.json`(97MB 残留)、`_cleanup_20260922-manifest.json`(过程文档 10 + 日志轮转 + 真删)、**`docs/ops/logs-archive/2026-09-22/project-cleanup-manifest.json`(595 项 / 1.81GB，工作区 2510→659MB)**。
 - **可删再生**：`G:\pa\android`+`C:\pa\android` 镜像、`pocketagent/build/`、`android/.gradle`。
