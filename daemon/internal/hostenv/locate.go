@@ -65,11 +65,19 @@ func NodeCandidates() []string {
 
 // NpmGlobalRoots 返回 npm 全局安装根（其下按 <scope>\<package> 组织）。
 //
-// npm 在 Windows 上的默认全局前缀就是 %APPDATA%\npm；部分安装方式落在
-// %LOCALAPPDATA%\npm 或 node 自带的 node_modules。三种都探，因为"用户是怎么装的"
-// 我们无从预知 —— 但每一种都是该用户机器上的真实位置，而非某台开发机的目录。
+// 【为什么第一顺位不是默认位置】npm 的全局 prefix 是可配置的：用户在 .npmrc 里写
+// `prefix=`，或用 NPM_CONFIG_PREFIX 环境变量。开发机上它就被配到了 G:\Claude Code
+// —— pi / dsh 全在那个 prefix 下的 node_modules 里，只探 %APPDATA%\npm 会变成
+// "找不到明明装着的东西"。这与硬编码开发机路径是同一类错误：假设位置，而不是读事实。
+// 所以顺序是：用户配置的事实 → npm 默认位置。
 func NpmGlobalRoots() []string {
 	var out []string
+	// 1. 用户实际配置的 prefix（最高优先）。
+	for _, p := range npmConfiguredPrefixes() {
+		out = append(out, filepath.Join(p, "node_modules"))
+	}
+	// 2. npm 默认位置：Windows 上默认全局前缀是 %APPDATA%\npm；部分安装方式落在
+	// %LOCALAPPDATA%\npm 或 node 自带的 node_modules。
 	if ap := strings.TrimSpace(os.Getenv("APPDATA")); ap != "" {
 		out = append(out, filepath.Join(ap, "npm", "node_modules"))
 	}
@@ -80,6 +88,48 @@ func NpmGlobalRoots() []string {
 		out = append(out, filepath.Join(pf, "nodejs", "node_modules"))
 	}
 	return dedupe(out)
+}
+
+// npmConfiguredPrefixes 返回 npm 全局 prefix 的**配置值**（不是默认位置）。
+// 取值顺序与 npm 自身一致：环境变量先于用户 .npmrc。
+func npmConfiguredPrefixes() []string {
+	var out []string
+	if p := strings.TrimSpace(os.Getenv("NPM_CONFIG_PREFIX")); p != "" {
+		out = append(out, p)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		out = append(out, parseNpmrcPrefix(filepath.Join(home, ".npmrc"))...)
+	}
+	return out
+}
+
+// parseNpmrcPrefix 从 npmrc 文本里取出 prefix 配置值。
+//
+// 【为什么自己解析而不调 `npm config get prefix`】daemon 由计划任务经 WMI 派生，
+// 环境变量与 PATH 都不保证齐全（paguard 的既有教训），再拉一个 npm 子进程既慢、
+// 又多一个失败点；而 .npmrc 只是个几行的文本文件，读它与读配置本身等价。
+// 缺文件、无该键都安静返回空 —— 没有 .npmrc 是绝大多数机器的正常状态。
+func parseNpmrcPrefix(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		// 跳过空行/注释/段头：段内的同名键不属于全局配置。
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "[") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "prefix") {
+			continue
+		}
+		if val = strings.Trim(strings.TrimSpace(val), `"'`); val != "" {
+			out = append(out, val)
+		}
+	}
+	return out
 }
 
 // NpmGlobalPackage 把 npm 全局包内的相对路径展开成候选位置。
