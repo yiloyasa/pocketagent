@@ -215,6 +215,26 @@ object TaskCenter {
         persist()
     }
 
+    /**
+     * 删掉某个会话关联的任务条目(删除会话时用)。
+     *
+     * 【为什么删会话要管任务中心】消息类任务的 id 就是 `msg:$threadId`(见 [Task] 注释),
+     * 会话删了它还在 —— 用户会在任务中心看到一条永远点不开的记录,而那个会话已经不存在。
+     * 下载类也可能带 threadId([trackDownload] 的第三参),同理一起清。
+     *
+     * 【它不取消任何东西】本函数只删条目。若该会话的轮次仍在电脑上跑,删掉条目会丢掉
+     * "它还在跑"的可见性 —— 所以调用方(删除流程)只在 **daemon 确认删除成功之后** 调它;
+     * 那时轮次要么已结束,要么 daemon 根本不会同意删(它会回"会话正在运行")。
+     *
+     * 幂等:没有该会话的条目时是 no-op(连落盘都跳过)。
+     */
+    fun removeByThread(threadId: String) {
+        if (threadId.isEmpty()) return
+        val before = _tasks.value.size
+        _tasks.value = _tasks.value.filterNot { it.threadId == threadId }
+        if (_tasks.value.size != before) persist()
+    }
+
     fun clearFinished() {
         _tasks.value = _tasks.value.filter { it.status == Status.RUNNING }
         persist()

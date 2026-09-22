@@ -288,6 +288,18 @@ object SubAgentsState {
     fun cachedPreview(threadId: String): String? = previews[threadId]
 
     /**
+     * 忘掉某个会话的子代理预览缓存(删除会话时用)。
+     *
+     * 【为什么这也要清】previews 按 threadId 缓存**子代理对话的预览文本**。会话删了
+     * 它还在,不只是白占一点内存:同一 id 的会话再建出来(重新导入、换机恢复)时会命中
+     * 旧预览,让用户看到"上一世"的子代理内容 —— 而那属于已经删掉的那条会话。
+     */
+    fun forget(threadId: String) {
+        if (threadId.isEmpty()) return
+        previews.remove(threadId)
+    }
+
+    /**
      * 卡片可见时按需拉"最后一条消息"作预览(thread/list 不带正文预览,
      * 每个子线程一次 getThreadHistory 尾部小分页,结果缓存)。
      * 成功非空落缓存;空白=该线程确无文本预览(占位保留防反复空拉);

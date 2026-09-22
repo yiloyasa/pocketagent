@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import dev.pocketagent.app.AgentConnection
+import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.ThreadPins
 import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.component.ThreadUsageStore
@@ -62,6 +63,24 @@ object ThreadDeletionCoordinator {
     }
 
     /**
+     * 清掉本次删除在**内存态**里留下的痕迹(任务中心条目 / 子代理预览缓存)。
+     *
+     * 【为什么这两处也要一起删(用户明确要求)】它们不是"这条会话还在不在"的权威副本,
+     * 但都**按 threadId 索引**:
+     *   - 任务中心的"消息类"条目 id 就是 `msg:$threadId`,会话删了它还在,用户会看到
+     *     一条永远点不开的记录;
+     *   - 子代理预览按 threadId 缓存,**同一 id 的会话再建出来时会命中旧预览**,显示
+     *     上一世的内容。
+     * 都只在 **daemon 确认删除成功之后**才清(见 [purge] 的调用点):那时没有仍在跑的
+     * 轮次,清掉条目不会丢掉"它还在跑"的可见性。
+     */
+    fun purgeInMemory(threadId: String) {
+        if (threadId.isBlank()) return
+        TaskCenter.removeByThread(threadId)
+        SubAgentsState.forget(threadId)
+    }
+
+    /**
      * 全清。**daemon 确认删除成功后**调用一次。
      *
      * 【为什么必须在成功之后】daemon 可能拒绝删除(例如"会话正在运行,请先停止")。
@@ -71,5 +90,6 @@ object ThreadDeletionCoordinator {
     fun purge(threadId: String, pinKey: String? = null) {
         purgeDisk(threadId)
         purgePreferences(threadId, pinKey)
+        purgeInMemory(threadId)
     }
 }
