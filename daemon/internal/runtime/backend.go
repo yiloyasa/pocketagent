@@ -777,6 +777,7 @@ func (l *memLedger) Usage(_ context.Context, scope string) UsageReport {
 		}
 		rep.Leases++
 		rep.ByKind[lease.Kind] += lease.UsedBytes
+		rep.Items = append(rep.Items, *leaseCopy(lease))
 		switch lease.Pressure() {
 		case PressureHard:
 			rep.OverHard = append(rep.OverHard, lease.LeaseID)
@@ -784,6 +785,9 @@ func (l *memLedger) Usage(_ context.Context, scope string) UsageReport {
 			rep.OverSoft = append(rep.OverSoft, lease.LeaseID)
 		}
 	}
+	// 租约存在 map 里，遍历顺序随机 —— 不排序会让"同一状态两次查询"给出不同次序，
+	// 手机端做前后对比时就会看到假的抖动。
+	sort.Slice(rep.Items, func(i, j int) bool { return rep.Items[i].LeaseID < rep.Items[j].LeaseID })
 	sort.Strings(rep.OverHard)
 	sort.Strings(rep.OverSoft)
 	return rep

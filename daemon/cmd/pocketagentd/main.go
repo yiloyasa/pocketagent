@@ -265,6 +265,11 @@ func main() {
 		InsecureNoAuth: *insecureNoAuth,
 		Workspace:      *workspace,
 		DataDir:        *dataDir,
+		// W7:把启动时装载的预算策略交给 server —— 它此后是策略的持有者,
+		// RuntimeService 可就地修改并立即生效(不必重启 daemon)。
+		BudgetPolicy: budgetPolicy,
+		// W7:轮次强制点要用与各 provider 同一份资源账(见 agent.SharedRuntimeBackend)。
+		RuntimeBackend: agent.SharedRuntimeBackend(),
 	})
 
 	lis, err := net.Listen("tcp", *addr)
@@ -289,6 +294,9 @@ func main() {
 	pb.RegisterFileSystemServiceServer(gs, srv)
 	pb.RegisterGitServiceServer(gs, srv)
 	pb.RegisterModelServiceServer(gs, srv)
+	// W7:本机运行时控制面(读/改预算策略、看资源用量)。只增 —— 旧 APK 不调用它,
+	// 新 APK 先查 HostInfo.capabilities 里的 runtime.v1 才显示入口(规格 §21.3)。
+	pb.RegisterRuntimeServiceServer(gs, srv)
 
 	names := make([]string, 0, len(providers))
 	for id := range providers {

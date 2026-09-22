@@ -32,6 +32,8 @@ import (
 	"github.com/pocketagent/daemon/internal/agent"
 	"github.com/pocketagent/daemon/internal/eventstore"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	// 本包同时用到标准库 runtime(见上方 import),故内部运行时包取别名。
+	rtruntime "github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/term"
 )
@@ -49,6 +51,12 @@ type Config struct {
 	InsecureNoAuth bool
 	Workspace      string
 	DataDir        string
+	// BudgetPolicy 是启动时装载的资源预算策略(W7,规格 §6.5)。零值 = 全部走内置基线
+	// (LoadBudgetPolicy 在缺文件时也回这份基线)。运行中可经 RuntimeService 热替换。
+	BudgetPolicy rtruntime.BudgetPolicy
+	// RuntimeBackend 是进程共享的运行时后端(记忆/缓存/checkpoint/资源记账,W6 起由
+	// agent 包持有同一实例)。为 nil 时不记账 —— 测试与极简构造路径照常跑,强制点跳过。
+	RuntimeBackend *rtruntime.Backend
 }
 
 type Server struct {
@@ -58,6 +66,7 @@ type Server struct {
 	pb.UnimplementedFileSystemServiceServer
 	pb.UnimplementedGitServiceServer
 	pb.UnimplementedModelServiceServer
+	pb.UnimplementedRuntimeServiceServer
 
 	cfg              Config
 	prefsMu          sync.Mutex
@@ -92,6 +101,14 @@ type Server struct {
 	// 在 New 里一次性生成,之后只读;由导出的 RecoveryReport() 提供,供将来的
 	// GetHostInfo / 诊断 RPC 消费 —— 让"这次启动干净不干净"不必再靠翻日志。
 	recoveryReport RecoveryReport
+	// W7:资源预算策略(规格 §6.5)。启动时装载,运行中可经 RuntimeService 热替换;
+	// 所有读取都从这份内存态取,所以"改完立即生效"不需要重启 daemon。
+	budgetMu     sync.RWMutex
+	budgetPolicy rtruntime.BudgetPolicy
+	// runtimeBackend 是进程共享的运行时后端(与各 provider 用的是同一个实例)。
+	// 轮次强制点向它的 ResourceLedger 申请租约 —— 只有共用同一个后端,记的账才是
+	// 同一份账;各持一份会让"用量"这件事出现多个互相矛盾的版本。
+	runtimeBackend *rtruntime.Backend
 }
 
 func New(cfg Config) *Server {
@@ -106,14 +123,16 @@ func New(cfg Config) *Server {
 	// 入队记一条、出队划掉、启动报告未划掉的。
 	turnJournal := newTurnJournal(cfg.DataDir)
 	srv := &Server{
-		cfg:         cfg,
-		devices:     newDeviceRegistry(cfg.DataDir, cfg.PairCode),
-		hostID:      hostIDFromInstallation(cfg.DataDir),
-		activeTurns: newActiveTurns(),
-		turnQueue:   newTurnInputQueue(turnJournal),
-		turnJournal: turnJournal,
-		events:      events,
-		hostWatch:   newHostWatchers(),
+		cfg:            cfg,
+		devices:        newDeviceRegistry(cfg.DataDir, cfg.PairCode),
+		hostID:         hostIDFromInstallation(cfg.DataDir),
+		activeTurns:    newActiveTurns(),
+		turnQueue:      newTurnInputQueue(turnJournal),
+		turnJournal:    turnJournal,
+		events:         events,
+		hostWatch:      newHostWatchers(),
+		budgetPolicy:   cfg.BudgetPolicy,
+		runtimeBackend: cfg.RuntimeBackend,
 	}
 	// 启动报告:上次退出时还没轮到执行的排队输入 —— 醒目汇总 + 逐条明细,然后
 	// 清空台账。刻意不自动重发(重放原始 prompt 会重复执行副作用,规格 §8.3),

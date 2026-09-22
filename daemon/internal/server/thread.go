@@ -949,6 +949,14 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 
 	turnID := randomID("turn")
 
+	// W7:本轮的资源租约(规格 §6.5 的强制点)——把当前预算策略里这一 thread 的
+	// 事件缓冲额度交给记账层,随后每帧事件的字节数都记在它上面。额度是**每次现取**的,
+	// 所以改过策略后,下一轮申请的租约立刻按新额度记账(不需要重启 daemon)。
+	// 【为什么不是闸门】事件承载用户数据(回复文本/工具输出/审批请求),到顶也不丢;
+	// 触顶只让压力在 GetResourceUsage 里可见 —— 需要腾地方是压缩/落盘的事。
+	turnLease := s.openTurnLease(streamRunCtx, t, turnID)
+	defer s.closeTurnLease(turnLease)
+
 	// 【死连接防线】手机掉了(TCP 半死)时,stream.Send 会在流控窗口满后**无限阻塞**;
 	// 而 sink 的调用方是 codex 事件分发的唯一消费者 —— 它一堵,codex 的 readLoop
 	// 跟着堵,手机上看到的就是"输出一小段后长时间停顿"(2026-09-18 用户反馈实锤)。
@@ -960,6 +968,9 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	wireTurnID.Store(turnID)
 	transport := newTurnTransport(stream.Context(), func(ev *pb.TurnServerMessage) {
 		ev.Sequence = s.recordTurnFrame(t.ID, wireTurnID.Load().(string), ev)
+		// W7:每帧事件的字节数记到本轮租约上。proto.Size 是纯计算(不编码、不分配),
+		// 而这一帧本来就会在下游被序列化一次 —— 再算一次真实编码长度等于白跑一遍编码器。
+		s.chargeTurnLease(turnLease, int64(proto.Size(ev)))
 	}, stream.Send)
 	defer transport.finish()
 	sink := agent.Sink(transport.emit)

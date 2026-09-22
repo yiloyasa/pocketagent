@@ -34,6 +34,14 @@ type Limits struct {
 // 层级词汇表复用 resource.go 的 Scope* 构造函数 —— 各处自己拼字符串必然拼出
 // "agent/echo" 与 "agent:echo" 两种写法，然后被当成两个 scope 各记一份账。
 type BudgetPolicy struct {
+	// Revision 是策略的写入代数（每次成功落盘 +1）。
+	//
+	// 【为什么放进配置文件而不是只记在内存】手机端提交策略时要做 CAS（见
+	// SetRuntimePolicy 的 expected_revision），而"当前是哪一代"必须跨重启成立：
+	// 只记在内存里，daemon 一重启就回 0，手机手里那个更大的 revision 反被判成
+	// "未来值"，CAS 从此永久失败——用户表现为"怎么改都提示冲突"。
+	Revision uint64 `json:"revision,omitempty"`
+
 	Global     Limits            `json:"global"`
 	Agents     map[string]Limits `json:"agents,omitempty"`
 	Workspaces map[string]Limits `json:"workspaces,omitempty"`
@@ -171,4 +179,83 @@ func BudgetPolicyPath(dataDir string) string {
 		return budgetFileName + "（当前为内存模式，无数据目录）"
 	}
 	return filepath.Join(dataDir, budgetFileName)
+}
+
+// Validate 校验策略可用：额度不得为负。
+//
+// 【为什么负值必须拒】-1 不是"更小"的意思——它在下游会被当成"未设置"（比较时
+// 永远不触发）或直接参与算数，表现为"设了但没生效"。这种输入没有合理解释，
+// 发现即拒，不替用户猜他想表达什么。
+func (p BudgetPolicy) Validate() error {
+	check := func(scope string, l Limits) error {
+		fields := map[string]*int64{
+			"ram_working_bytes":       l.RAMWorkingBytes,
+			"ram_event_buffer_bytes":  l.RAMEventBufferBytes,
+			"ram_session_index_bytes": l.RAMSessionIndexBytes,
+			"disk_conversation_bytes": l.DiskConversationBytes,
+			"disk_cache_bytes":        l.DiskCacheBytes,
+			"disk_artifact_bytes":     l.DiskArtifactBytes,
+		}
+		for name, v := range fields {
+			if v != nil && *v < 0 {
+				return fmt.Errorf("runtime: %s 的 %s 不能为负（%d）", scope, name, *v)
+			}
+		}
+		if l.MaxParallelTurns != nil && *l.MaxParallelTurns < 0 {
+			return fmt.Errorf("runtime: %s 的 max_parallel_turns 不能为负（%d）", scope, *l.MaxParallelTurns)
+		}
+		return nil
+	}
+	if err := check(ScopeGlobal(), p.Global); err != nil {
+		return err
+	}
+	for _, group := range []struct {
+		what string
+		m    map[string]Limits
+	}{
+		{"agent", p.Agents},
+		{"workspace", p.Workspaces},
+		{"thread", p.Threads},
+		{"collab", p.Collabs},
+	} {
+		for key, l := range group.m {
+			if err := check(group.what+":"+key, l); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// SaveBudgetPolicy 原子落盘策略（临时文件 → rename，沿用 store / devices 的写法）。
+//
+// 【为什么失败要回报而不是只记日志】这是用户在控制面上显式提交的一次修改：
+// 写不进去却回"成功"，用户会以为策略生效了——下一轮跑出来的还是旧额度。
+// 与台账/事件那类"尽力而为"的诊断写入不同，这里的失败必须让调用方如实上报。
+//
+// 【为什么不复用 LoadBudgetPolicy 的失败策略】读失败可以回退内置基线（缺文件是
+// 绝大多数机器的正常状态）；写失败没有可回退的东西，只能报错。
+func SaveBudgetPolicy(dataDir string, p BudgetPolicy) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if dataDir == "" {
+		return fmt.Errorf("runtime: 未配置数据目录，预算策略无法落盘（当前是内存模式）")
+	}
+	raw, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return fmt.Errorf("runtime: 序列化预算策略失败: %w", err)
+	}
+	final := filepath.Join(dataDir, budgetFileName)
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return fmt.Errorf("runtime: 写临时预算文件失败(%s): %w", tmp, err)
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		// rename 在同一文件系统内是原子的；跨卷等情况会失败，此时清掉临时文件，
+		// 免得残留的 .tmp 让人以为"写过一半"。
+		_ = os.Remove(tmp)
+		return fmt.Errorf("runtime: 原子替换预算文件失败(%s): %w", final, err)
+	}
+	return nil
 }

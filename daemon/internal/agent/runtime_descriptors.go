@@ -314,3 +314,10 @@ func sharedRuntimeBackend() *runtime.Backend {
 	})
 	return sharedBackend
 }
+
+// SharedRuntimeBackend 导出进程共享的运行时后端（W7：server 的轮次强制点复用同一实例）。
+//
+// 【为什么必须共用同一实例】资源记账的全部意义在于"账只有一份"：server 若自建一个
+// 后端，各 provider 的运行时记在 A 上、轮次强制点记在 B 上，诊断页看到的用量就永远
+// 只是其中一半 —— 而且是无法从任何单侧看出缺了哪一半的那种。
+func SharedRuntimeBackend() *runtime.Backend { return sharedRuntimeBackend() }

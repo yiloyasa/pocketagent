@@ -145,6 +145,12 @@ type UsageReport struct {
 	ByKind   map[ResourceKind]int64 `json:"by_kind"`
 	OverHard []string               `json:"over_hard,omitempty"`
 	OverSoft []string               `json:"over_soft,omitempty"`
+	// Items 是明细：每条活跃租约的额度与用量。
+	//
+	// 【为什么汇总之外还要明细】"某作用域用了 512 KB"回答不了"是谁占的、上限是多少"，
+	// 而手机端要展示的恰恰是后者（规格 §12 的资源卡）。明细与汇总在同一处算出来，
+	// 不会出现"总数与明细对不上"这种只能靠猜的现象。
+	Items []ResourceLease `json:"items,omitempty"`
 }
 
 // ResourceLedger 是统一资源记账入口（规格 §6.5）。

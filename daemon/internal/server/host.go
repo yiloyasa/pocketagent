@@ -46,6 +46,10 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 	}
 	sort.Strings(caps) // 稳定输出,便于测试与客户端缓存
 	caps = append(caps, "terminal", "fs", "git", "agent", "event_sequence")
+	// W7:本机运行时控制面已就位(读/改预算策略、看资源用量)。手机端据此点亮
+	// "运行时"入口 —— 旧 daemon 不带这一项,新 APK 直接隐藏该入口,不摆假开关
+	// (规格 §21.3:能力走 capability,不得用 daemon 版本号硬编码判断)。
+	caps = append(caps, "runtime.v1")
 	return &pb.HostInfo{
 		HostId:        s.hostID,
 		DisplayName:   hostDisplayName(),

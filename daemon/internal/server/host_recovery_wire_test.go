@@ -91,4 +91,9 @@ func TestGetHostInfoCarriesCleanRecovery(t *testing.T) {
 	if rec.GetTurnJournal().GetPendingCount() != 0 || len(rec.GetTurnJournal().GetLostInputs()) != 0 {
 		t.Fatalf("干净启动不应报丢失条目,得到 %+v", rec.GetTurnJournal())
 	}
+	// 运行时控制面能力必须声明(手机端据此点亮入口;缺了就只能靠版本号猜,
+	// 而版本号二分正是 AUDIT 点名要消掉的形态)。
+	if joined := strings.Join(info.GetCapabilities(), ","); !strings.Contains(joined, "runtime.v1") {
+		t.Fatalf("GetHostInfo 应声明 runtime.v1 能力,得到 %q", joined)
+	}
 }
