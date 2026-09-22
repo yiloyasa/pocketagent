@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"strings"
-	"sync"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -29,22 +28,6 @@ var errEchoNilThread = errors.New("echo: thread 为空，无法交付运行时")
 //
 // 【默认实现而非空壳】四个入口全部由 runtime.Backend 提供真实语义（不是返回
 // nil 的占位）。日后 Echo 若想用原生实现，只换 AgentRuntime 里对应字段。
-
-// echoRuntimeBackend 是整个进程共享的默认后端。
-//
-// 【为什么包级共享而不是每个 provider 一份】Backend 就是"运行时状态容器"，
-// 与 provider 实例一一对应没有意义；共享它还让诊断页能一次看到全部 agent 的
-// 资源与缓存占用（规格 §12 的 AgentResourceCard 正需要这个）。
-var (
-	echoBackendOnce sync.Once
-	echoBackend     *runtime.Backend
-)
-
-// echoRuntime 返回进程共享的默认后端（惰性初始化，并发安全）。
-func echoRuntime() *runtime.Backend {
-	echoBackendOnce.Do(func() { echoBackend = runtime.NewBackend() })
-	return echoBackend
-}
 
 // echoRuntimeDescriptor 是 Echo 对自己运行时形态的**如实申报**。
 //
@@ -107,13 +90,13 @@ func (e *EchoProvider) OpenRuntime(_ context.Context, thread *store.Thread) (*ru
 	if thread == nil {
 		return nil, errEchoNilThread
 	}
-	return echoRuntime().FullRuntime(echoRuntimeDescriptor(), thread.ID), nil
+	return sharedRuntimeBackend().FullRuntime(echoRuntimeDescriptor(), thread.ID), nil
 }
 
 // EchoRuntimeBackend 暴露默认后端，供契约测试与诊断使用。
 // （TTL / 淘汰 / 重启三类检查需要直接操作时钟与持久态，拿不到后端就只能跳过 ——
 // 而静默跳过检查是本项目定义的假绿。）
-func (e *EchoProvider) EchoRuntimeBackend() *runtime.Backend { return echoRuntime() }
+func (e *EchoProvider) EchoRuntimeBackend() *runtime.Backend { return sharedRuntimeBackend() }
 
 // recordEchoTurn 把一轮对话写进公共运行时记忆。
 //
