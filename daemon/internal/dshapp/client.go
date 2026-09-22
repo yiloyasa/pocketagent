@@ -36,18 +36,20 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
 // ---- 定位(不能依赖 PATH:daemon 由计划任务经 WMI 派生,环境变量不保证齐全)----
 
-// 本机实测默认位置(2026-09-20 探针);DSH_NODE / DSH_BIN 环境变量可覆盖。
-// 版本锁定哲学与 CODEX_BIN 同款:生产桥接锁已验证版本,升级是显式动作
-// (蓝本 §5.1;当前验证版本 0.1.5-rc.2)。
-const (
-	defaultNode = `C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe`
-	defaultBin  = `G:\Claude Code\node_modules\@deepseek-ai\dsh\lib\bin.js`
-)
+// 【位置为什么交给 hostenv 派生】本包曾把开发机的 node.exe 与 dsh 入口写成常量
+// (C:\Users\<开发机用户名>\... 与 G:\Claude Code\...)：Go 的 -trimpath 只剥源码
+// 路径、不剥字符串常量，它们会随 pocketagentd.exe 分发出去（规格 §2 明令禁止），
+// 且换一台机器必然不命中。版本锁定哲学不变（升级仍是显式动作），变的是"默认位置"
+// 的求法 —— 按用户环境派生。回归钉子见 devpath_assert_test.go。
+
+// dshBinRel 是 dsh 在 npm 包内的入口相对路径。
+const dshBinRel = "@deepseek-ai/dsh/lib/bin.js"
 
 // defaultDshHome 返回桥接专用隔离 HOME 的默认值(daemon 数据目录内)。
 // 用户显式给 daemon 设过 DSH_HOME 时尊重其选择(蓝本 §5.3 隔离原则)。
@@ -65,12 +67,10 @@ func defaultDshHome() string {
 // → 固定路径(node.exe + @deepseek-ai/dsh/lib/bin.js)→ PATH 兜底(dsh.exe/dsh/
 // dsh.cmd)。WMI 派生环境不保证 PATH(piapp 同款教训),所以固定路径在 PATH 之前。
 func LocateDsh() (node, bin string, err error) {
-	// 入口:DSH_BIN → 固定路径 → PATH
+	// 入口:DSH_BIN → 随包目录/npm 全局探测 → PATH
 	bin = strings.TrimSpace(os.Getenv("DSH_BIN"))
 	if bin == "" {
-		if _, statErr := os.Stat(defaultBin); statErr == nil {
-			bin = defaultBin
-		}
+		bin = hostenv.FirstFile(hostenv.PackageCandidates(dshBinRel))
 	}
 	if bin == "" {
 		for _, name := range []string{"dsh.exe", "dsh", "dsh.cmd"} {
@@ -90,17 +90,10 @@ func LocateDsh() (node, bin string, err error) {
 	if isCmdScript(bin) {
 		return "", bin, nil
 	}
-	// node:DSH_NODE → 固定路径 → PATH
+	// node:DSH_NODE → 用户环境派生 → PATH
 	node = strings.TrimSpace(os.Getenv("DSH_NODE"))
 	if node == "" {
-		if _, statErr := os.Stat(defaultNode); statErr == nil {
-			node = defaultNode
-		}
-	}
-	if node == "" {
-		if p, lookErr := exec.LookPath("node"); lookErr == nil {
-			node = p
-		}
+		node = hostenv.FindNode()
 	}
 	if node == "" {
 		return "", "", fmt.Errorf("未找到 node(可用环境变量 DSH_NODE 指定路径)")

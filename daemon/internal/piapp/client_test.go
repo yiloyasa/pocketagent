@@ -75,22 +75,39 @@ func TestRenderGuardExtension(t *testing.T) {
 	}
 }
 
-// 定位器:环境变量优先,且不因 PATH 缺失而失败(daemon 由 WMI 派生时无用户 PATH)。
+// 定位器：环境变量优先；未设时按用户环境派生，绝不回落到某台开发机的绝对路径
+// （daemon 由 WMI 派生时无用户 PATH，所以派生链必须自己探目录，不能只靠 PATH）。
+//
+// 【语义变更 2026-09-22】原断言「本机固定路径应可定位」依赖写在源码里的开发机
+// 绝对路径 —— 那条路径经 -trimpath 之后仍留在二进制字符串表里，随发布包分发，
+// 属发布边界缺陷（规格 §2：发布包不得包含开发者电脑路径）。改为断言「要么定位
+// 成功且路径真实存在，要么明确失败且报错不泄漏开发机路径」：这是消除硬编码
+// 之后仍然成立、且能继续防回归的表述。
 func TestLocatePiFallbacks(t *testing.T) {
 	t.Setenv("PI_NODE", "")
 	t.Setenv("PI_BIN", "")
 	t.Setenv("PI_CLI", "")
 	node, cli, err := LocatePi()
 	if err != nil {
-		t.Fatalf("本机固定路径应可定位: %v", err)
+		if strings.Contains(err.Error(), "Claude Code") || strings.Contains(err.Error(), "yanzi") {
+			t.Fatalf("定位失败的报错泄漏开发机路径: %v", err)
+		}
+	} else {
+		if node == "" || cli == "" {
+			t.Fatalf("定位成功却返回空路径: %q %q", node, cli)
+		}
+		if _, statErr := os.Stat(node); statErr != nil {
+			t.Fatalf("返回的 node 本机不存在: %q", node)
+		}
+		if _, statErr := os.Stat(cli); statErr != nil {
+			t.Fatalf("返回的 cli 本机不存在: %q", cli)
+		}
 	}
-	if node == "" || cli == "" {
-		t.Fatalf("node/cli 都不能为空: %q %q", node, cli)
-	}
-	// PI_BIN 兜底(CODEX_BIN 式)
-	t.Setenv("PI_BIN", node)
-	if got := LocateNode(); got != node {
-		t.Fatalf("PI_BIN 应优先生效: %q", got)
+	// PI_NODE 兜底（CODEX_BIN 式）：显式指定必须优先生效
+	self := os.Args[0] // 测试二进制自身必然存在
+	t.Setenv("PI_NODE", self)
+	if got := LocateNode(); got != self {
+		t.Fatalf("PI_NODE 应优先生效: %q", got)
 	}
 }
 

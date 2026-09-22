@@ -38,18 +38,22 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
 // ---- 定位(不能依赖 PATH:daemon 由计划任务经 WMI 派生,环境变量不保证齐全)----
+//
+// 【位置为什么交给 hostenv 派生】本包曾把开发机的 node.exe 与 pi 入口写成常量
+// (C:\Users\<开发机用户名>\... 与 G:\Claude Code\...)。Go 的 -trimpath 只剥
+// 源码路径、不剥字符串常量,这两条会被原样编进 pocketagentd.exe 随发布包分发
+// (规格 §2 明令禁止),且换一台机器必然不命中。现在全部按用户环境派生,探测不到
+// 就返回空串、由调用方报一句可操作的错误 —— 回归钉子见 devpath_assert_test.go。
 
-// 本机实测默认位置;PI_NODE / PI_BIN(CODEX_BIN 式)环境变量可覆盖。
-const (
-	defaultNode = `C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe`
-	defaultCLI  = `G:\Claude Code\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js`
-)
+// piCLIRel 是 pi 在 npm 包内的入口相对路径。
+const piCLIRel = "@earendil-works/pi-coding-agent/dist/bundle/cli.js"
 
-// LocateNode 找 node 可执行文件:PI_NODE → PI_BIN → 固定路径 → PATH。
+// LocateNode 找 node 可执行文件:PI_NODE → PI_BIN → 用户环境派生 → PATH。
 func LocateNode() string {
 	for _, k := range []string{"PI_NODE", "PI_BIN"} {
 		if p := strings.TrimSpace(os.Getenv(k)); p != "" {
@@ -58,21 +62,20 @@ func LocateNode() string {
 			}
 		}
 	}
-	if _, err := os.Stat(defaultNode); err == nil {
-		return defaultNode
-	}
-	if p, err := exec.LookPath("node"); err == nil {
-		return p
-	}
-	return ""
+	return hostenv.FindNode()
 }
 
-// LocateCLI 找 pi 的 cli.js:PI_CLI 覆盖 → 固定路径。
+// LocateCLI 找 pi 的 cli.js:PI_CLI 覆盖 → 随包目录/npm 全局探测;都没有返回空串。
+//
+// 【为什么不再无条件返回一个默认值】旧实现无脑返回写死的开发机路径,于是
+// LocatePi 的报错会念出开发机的目录结构 —— 用户既不知道自己该做什么,也无从
+// 判断是配置问题还是安装问题。返回空串让 LocatePi 报「未找到 pi 的 cli.js
+// (可用 PI_CLI 指定路径)」。
 func LocateCLI() string {
 	if p := strings.TrimSpace(os.Getenv("PI_CLI")); p != "" {
 		return p
 	}
-	return defaultCLI
+	return hostenv.FirstFile(hostenv.PackageCandidates(piCLIRel))
 }
 
 // LocatePi 报告 pi 是否可用(node + cli.js 都找得到)。

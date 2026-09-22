@@ -21,8 +21,6 @@ import (
 	"github.com/pocketagent/daemon/internal/hidewin"
 )
 
-const defaultCodexBin = `G:\Claude Code\codex.cmd`
-
 func main() {
 	var (
 		probeAddr  = flag.String("probe", "127.0.0.1:7246", "探测端口是否有人在听")
@@ -110,9 +108,12 @@ func startDaemon(dir, addr, pairCode string) error {
 	}
 	cmd := exec.Command(filepath.Join(dir, "pocketagentd.exe"), args...)
 	cmd.Dir = dir
-	if os.Getenv("CODEX_BIN") == "" {
-		cmd.Env = append(os.Environ(), "CODEX_BIN="+defaultCodexBin)
-	}
+	// 【为什么不再注入 CODEX_BIN 默认值】旧实现在环境未设 CODEX_BIN 时注入一条
+	// 写死的开发机路径（G:\Claude Code\codex.cmd）：它作为字符串常量进 paguard.exe
+	// 随发布包分发（规格 §2 明令禁止），且在用户机器上必然不存在 —— 后果不只是
+	// 泄漏，而是**覆盖**掉 daemon 自己的定位链，把"能找到 codex"变成"找不到"。
+	// 未设即不注入：cmd.Env 保持 nil 时 exec 继承父进程环境，用户自己的 CODEX_BIN
+	// （或 daemon 侧的探测结果）照常生效。
 	cmd.Stdout, cmd.Stderr = out, out
 	hidewin.Apply(cmd)
 	if err := cmd.Start(); err != nil {
