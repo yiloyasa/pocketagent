@@ -34,10 +34,10 @@
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，HEAD `ea0d383`（2026-09-23：W3 收口 + W4 发布边界 + 打包链首次实跑 + npm 配置探测）；**工作树干净** |
-| daemon | 运行中 pid **104724**，`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
+| Git | 分支 `main`，HEAD `46d04c9`（2026-09-23：**W4 用户运行边界完成** + 打包链实跑 + 数据目录派生 + 扇出 flaky 修复）；**工作树干净** |
+| daemon | 运行中 pid **104724**（**仍是改动前的旧二进制，未热部署**）；`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
-| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./internal/...` —— **`internal/server` 有 2 例 flaky**（`TestDispatchCollabFansOutPerMember` / `TestDispatchCollabPartialFailureIsIndependent`，Windows `t.TempDir()` 清理竞态，见 §15），其余包 PASS |
+| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./internal/...` —— **全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
@@ -467,7 +467,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 - **build.ps1 打包链已修并首次实跑验证**（2026-09-23），两处缺陷：① 原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe 与 paguard.exe（提交 `42813da` 引入的回归；仓库 09-17 那份 zip 解包含两个 exe 可证）。② 脚本为 UTF-8 无 BOM，PowerShell 5.1（Windows 自带 5.1.26100）在 GBK 代码页下按 ANSI 读，中文注释乱码后吞掉字符串引号 → **解析即失败**；改动前的版本用同一解析探针同样报错，说明该脚本一直无法在当前环境被执行，09-17 那份 zip 的来历因此存疑。修法：清理上移到构建之前 + 脚本加 UTF-8 BOM + 压缩前插入开发机痕迹字节扫描（命中即中止不出包）。**实跑**：EXIT 0（7.6s），输出「痕迹扫描通过:6 个文件」，zip 含 pocketagentd.exe(19467264B) 与 paguard.exe(2567680B)；解包逐字节复核两个 exe 均无 `yanzi`/`Claude Code`/`G:\项目1`/`100.92.193.109` 命中（旧产物 paguard.exe 命中 `Claude Code`，对照即证）。
 
 - daemon `go vet` 有 protobuf 值拷贝警告（存量噪音，非新问题）。
-- **daemon `internal/server` 有 2 例 flaky 测试**（`TestDispatchCollabFansOutPerMember` / `TestDispatchCollabPartialFailureIsIndependent`）：协同扇出的轮次跑在**脱离取消链**的 goroutine 里（设计如此，避免 RPC 返回即被杀），而测试只断言 RPC 响应、不等轮次落定 —— 于是 Windows 上 `t.TempDir()` 的 `RemoveAll` 清理会撞上仍在写文件的 goroutine，报 `The directory is not empty` 而**间歇 FAIL**（实测 4 次：FAIL/ok/ok/FAIL）。**断言本身未失败，无功能缺陷**。修法二选一：① 测试侧结束前轮询子线程离开 `RUNNING`；② 给 `Server` 加在飞协同计数（`sync.WaitGroup`/atomic）供测试 drain。
+- ~~**daemon `internal/server` 有 2 例 flaky 测试**~~ → **已修**（2026-09-23，提交 `46d04c9`）。根因：协同扇出的轮次跑在**脱离取消链**的 goroutine 里（设计如此，避免 RPC 返回即被杀），而测试只断言 RPC 响应、不等轮次落定 —— 于是 Windows 上 `t.TempDir()` 的 `RemoveAll` 撞上仍在写文件的 goroutine，报 `The directory is not empty` 而间歇 FAIL（修复前实测 `-count=8` 挂 7 次）。修法取本条原列的方案①：`newCollabSessionServer` 注册 `t.Cleanup` 等待 `activeTurns` 清空（再留 20ms 沉降窗口 —— 租约释放与落库尾巴之间仍有间隔），`t.Cleanup` 的 LIFO 保证等待先于 `t.TempDir()` 清理。放在构造器而非各用例各自加：将来新增用例自动获得同一保证。修复后 `-count=8` 零失败，`go test -count=1 ./internal/...` **首次全绿**。
 - 同 provider 多会话不并行（原生 turn 锁排队）。
 - 上下文窗口多数模型真未知（`ListModels` 仅 `codex/default`/`echo-1` 带窗口；codex 不发该字段）。
 - **Vosk 已摘除**（2026-09-20）：依赖 + `Vosk*` 两文件 + 引擎选择分支全部移除；共享错误码迁至 `VoiceErrors.kt`；行为零变化（摘除前引擎恒不可选）。
