@@ -1294,6 +1294,508 @@ func (x *CollabPolicyResponse) GetEffective() *CollabPolicy {
 	return nil
 }
 
+type GetRuntimeStateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRuntimeStateRequest) Reset() {
+	*x = GetRuntimeStateRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRuntimeStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRuntimeStateRequest) ProtoMessage() {}
+
+func (x *GetRuntimeStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRuntimeStateRequest.ProtoReflect.Descriptor instead.
+func (*GetRuntimeStateRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{19}
+}
+
+type RuntimeStateResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	InstallationId       string                 `protobuf:"bytes,1,opt,name=installation_id,json=installationId,proto3" json:"installation_id,omitempty"` // 安装身份(跨重启稳定;换机才变)
+	HostId               string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	DaemonVersion        string                 `protobuf:"bytes,3,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
+	BudgetPolicyRevision uint64                 `protobuf:"varint,4,opt,name=budget_policy_revision,json=budgetPolicyRevision,proto3" json:"budget_policy_revision,omitempty"`
+	CollabPolicyRevision uint64                 `protobuf:"varint,5,opt,name=collab_policy_revision,json=collabPolicyRevision,proto3" json:"collab_policy_revision,omitempty"`
+	// runtime_state:ready / degraded。degraded = 至少有一个 agent 的形态申报不合格
+	// —— "有东西没交代清楚"本身就是需要用户知道的状态,不该只在日志里。
+	RuntimeState    string                   `protobuf:"bytes,6,opt,name=runtime_state,json=runtimeState,proto3" json:"runtime_state,omitempty"`
+	SampledAtUnixMs int64                    `protobuf:"varint,7,opt,name=sampled_at_unix_ms,json=sampledAtUnixMs,proto3" json:"sampled_at_unix_ms,omitempty"`
+	Contracts       []*RuntimeContractReport `protobuf:"bytes,8,rep,name=contracts,proto3" json:"contracts,omitempty"`
+	DataDir         string                   `protobuf:"bytes,9,opt,name=data_dir,json=dataDir,proto3" json:"data_dir,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RuntimeStateResponse) Reset() {
+	*x = RuntimeStateResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeStateResponse) ProtoMessage() {}
+
+func (x *RuntimeStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeStateResponse.ProtoReflect.Descriptor instead.
+func (*RuntimeStateResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RuntimeStateResponse) GetInstallationId() string {
+	if x != nil {
+		return x.InstallationId
+	}
+	return ""
+}
+
+func (x *RuntimeStateResponse) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *RuntimeStateResponse) GetDaemonVersion() string {
+	if x != nil {
+		return x.DaemonVersion
+	}
+	return ""
+}
+
+func (x *RuntimeStateResponse) GetBudgetPolicyRevision() uint64 {
+	if x != nil {
+		return x.BudgetPolicyRevision
+	}
+	return 0
+}
+
+func (x *RuntimeStateResponse) GetCollabPolicyRevision() uint64 {
+	if x != nil {
+		return x.CollabPolicyRevision
+	}
+	return 0
+}
+
+func (x *RuntimeStateResponse) GetRuntimeState() string {
+	if x != nil {
+		return x.RuntimeState
+	}
+	return ""
+}
+
+func (x *RuntimeStateResponse) GetSampledAtUnixMs() int64 {
+	if x != nil {
+		return x.SampledAtUnixMs
+	}
+	return 0
+}
+
+func (x *RuntimeStateResponse) GetContracts() []*RuntimeContractReport {
+	if x != nil {
+		return x.Contracts
+	}
+	return nil
+}
+
+func (x *RuntimeStateResponse) GetDataDir() string {
+	if x != nil {
+		return x.DataDir
+	}
+	return ""
+}
+
+// RuntimeContractReport 是一个 agent 的运行时形态申报 + 核验结果。
+//
+// 【为什么把 descriptor 的六个 model 字段摊平给客户端】它们是"这家 agent 的会话
+// 存在哪、能不能恢复、审批从哪来"的机器可读答案。手机端据此决定显示什么入口,
+// 而不是按 agent 名字分支(那是项目红线)。
+type RuntimeContractReport struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	AgentId       string                  `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	DisplayName   string                  `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Version       string                  `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`    // provider 自报;空 = 未探测到
+	Declared      bool                    `protobuf:"varint,4,opt,name=declared,proto3" json:"declared,omitempty"` // 是否实现了 runtime.Participant(连形态都没申报时为 false)
+	Capabilities  []string                `protobuf:"bytes,5,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Issues        []*RuntimeContractIssue `protobuf:"bytes,6,rep,name=issues,proto3" json:"issues,omitempty"`
+	Limitations   []*RuntimeLimitation    `protobuf:"bytes,7,rep,name=limitations,proto3" json:"limitations,omitempty"`
+	SessionModel  string                  `protobuf:"bytes,8,opt,name=session_model,json=sessionModel,proto3" json:"session_model,omitempty"`     // NATIVE / DAEMON / HYBRID / NONE
+	ResumeModel   string                  `protobuf:"bytes,9,opt,name=resume_model,json=resumeModel,proto3" json:"resume_model,omitempty"`        // native / reattach / none
+	ApprovalModel string                  `protobuf:"bytes,10,opt,name=approval_model,json=approvalModel,proto3" json:"approval_model,omitempty"` // native / daemon / none
+	SubagentModel string                  `protobuf:"bytes,11,opt,name=subagent_model,json=subagentModel,proto3" json:"subagent_model,omitempty"` // native / delegate / none
+	MemoryModel   string                  `protobuf:"bytes,12,opt,name=memory_model,json=memoryModel,proto3" json:"memory_model,omitempty"`       // native / daemon / hybrid
+	CacheModel    string                  `protobuf:"bytes,13,opt,name=cache_model,json=cacheModel,proto3" json:"cache_model,omitempty"`          // native / daemon
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuntimeContractReport) Reset() {
+	*x = RuntimeContractReport{}
+	mi := &file_v1_runtime_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeContractReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeContractReport) ProtoMessage() {}
+
+func (x *RuntimeContractReport) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeContractReport.ProtoReflect.Descriptor instead.
+func (*RuntimeContractReport) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RuntimeContractReport) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetDeclared() bool {
+	if x != nil {
+		return x.Declared
+	}
+	return false
+}
+
+func (x *RuntimeContractReport) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *RuntimeContractReport) GetIssues() []*RuntimeContractIssue {
+	if x != nil {
+		return x.Issues
+	}
+	return nil
+}
+
+func (x *RuntimeContractReport) GetLimitations() []*RuntimeLimitation {
+	if x != nil {
+		return x.Limitations
+	}
+	return nil
+}
+
+func (x *RuntimeContractReport) GetSessionModel() string {
+	if x != nil {
+		return x.SessionModel
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetResumeModel() string {
+	if x != nil {
+		return x.ResumeModel
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetApprovalModel() string {
+	if x != nil {
+		return x.ApprovalModel
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetSubagentModel() string {
+	if x != nil {
+		return x.SubagentModel
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetMemoryModel() string {
+	if x != nil {
+		return x.MemoryModel
+	}
+	return ""
+}
+
+func (x *RuntimeContractReport) GetCacheModel() string {
+	if x != nil {
+		return x.CacheModel
+	}
+	return ""
+}
+
+// RuntimeContractIssue 一条契约违约(机器可读 code 见 runtime 包的 Violation*)。
+type RuntimeContractIssue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
+	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuntimeContractIssue) Reset() {
+	*x = RuntimeContractIssue{}
+	mi := &file_v1_runtime_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeContractIssue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeContractIssue) ProtoMessage() {}
+
+func (x *RuntimeContractIssue) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeContractIssue.ProtoReflect.Descriptor instead.
+func (*RuntimeContractIssue) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *RuntimeContractIssue) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *RuntimeContractIssue) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+// RuntimeLimitation 一条"我明确不支持"的声明及其原因。
+type RuntimeLimitation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Capability    string                 `protobuf:"bytes,1,opt,name=capability,proto3" json:"capability,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuntimeLimitation) Reset() {
+	*x = RuntimeLimitation{}
+	mi := &file_v1_runtime_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeLimitation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeLimitation) ProtoMessage() {}
+
+func (x *RuntimeLimitation) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeLimitation.ProtoReflect.Descriptor instead.
+func (*RuntimeLimitation) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *RuntimeLimitation) GetCapability() string {
+	if x != nil {
+		return x.Capability
+	}
+	return ""
+}
+
+func (x *RuntimeLimitation) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type GetAgentRuntimeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAgentRuntimeRequest) Reset() {
+	*x = GetAgentRuntimeRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAgentRuntimeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAgentRuntimeRequest) ProtoMessage() {}
+
+func (x *GetAgentRuntimeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAgentRuntimeRequest.ProtoReflect.Descriptor instead.
+func (*GetAgentRuntimeRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetAgentRuntimeRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+type AgentRuntimeResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Contract *RuntimeContractReport `protobuf:"bytes,1,opt,name=contract,proto3" json:"contract,omitempty"`
+	// 该 agent 作用域下当前活跃的资源租约(复用 GetResourceUsage 的同一个 message)。
+	Resources       []*ResourceMetric `protobuf:"bytes,2,rep,name=resources,proto3" json:"resources,omitempty"`
+	SampledAtUnixMs int64             `protobuf:"varint,3,opt,name=sampled_at_unix_ms,json=sampledAtUnixMs,proto3" json:"sampled_at_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AgentRuntimeResponse) Reset() {
+	*x = AgentRuntimeResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentRuntimeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentRuntimeResponse) ProtoMessage() {}
+
+func (x *AgentRuntimeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentRuntimeResponse.ProtoReflect.Descriptor instead.
+func (*AgentRuntimeResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *AgentRuntimeResponse) GetContract() *RuntimeContractReport {
+	if x != nil {
+		return x.Contract
+	}
+	return nil
+}
+
+func (x *AgentRuntimeResponse) GetResources() []*ResourceMetric {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+func (x *AgentRuntimeResponse) GetSampledAtUnixMs() int64 {
+	if x != nil {
+		return x.SampledAtUnixMs
+	}
+	return 0
+}
+
 var File_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_v1_runtime_proto_rawDesc = "" +
@@ -1415,7 +1917,48 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x12\x1f\n" +
 	"\vpolicy_path\x18\x03 \x01(\tR\n" +
 	"policyPath\x12:\n" +
-	"\teffective\x18\x04 \x01(\v2\x1c.pocketagent.v1.CollabPolicyR\teffective2\xc5\x06\n" +
+	"\teffective\x18\x04 \x01(\v2\x1c.pocketagent.v1.CollabPolicyR\teffective\"\x18\n" +
+	"\x16GetRuntimeStateRequest\"\x9d\x03\n" +
+	"\x14RuntimeStateResponse\x12'\n" +
+	"\x0finstallation_id\x18\x01 \x01(\tR\x0einstallationId\x12\x17\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12%\n" +
+	"\x0edaemon_version\x18\x03 \x01(\tR\rdaemonVersion\x124\n" +
+	"\x16budget_policy_revision\x18\x04 \x01(\x04R\x14budgetPolicyRevision\x124\n" +
+	"\x16collab_policy_revision\x18\x05 \x01(\x04R\x14collabPolicyRevision\x12#\n" +
+	"\rruntime_state\x18\x06 \x01(\tR\fruntimeState\x12+\n" +
+	"\x12sampled_at_unix_ms\x18\a \x01(\x03R\x0fsampledAtUnixMs\x12C\n" +
+	"\tcontracts\x18\b \x03(\v2%.pocketagent.v1.RuntimeContractReportR\tcontracts\x12\x19\n" +
+	"\bdata_dir\x18\t \x01(\tR\adataDir\"\x8c\x04\n" +
+	"\x15RuntimeContractReport\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12\x1a\n" +
+	"\bdeclared\x18\x04 \x01(\bR\bdeclared\x12\"\n" +
+	"\fcapabilities\x18\x05 \x03(\tR\fcapabilities\x12<\n" +
+	"\x06issues\x18\x06 \x03(\v2$.pocketagent.v1.RuntimeContractIssueR\x06issues\x12C\n" +
+	"\vlimitations\x18\a \x03(\v2!.pocketagent.v1.RuntimeLimitationR\vlimitations\x12#\n" +
+	"\rsession_model\x18\b \x01(\tR\fsessionModel\x12!\n" +
+	"\fresume_model\x18\t \x01(\tR\vresumeModel\x12%\n" +
+	"\x0eapproval_model\x18\n" +
+	" \x01(\tR\rapprovalModel\x12%\n" +
+	"\x0esubagent_model\x18\v \x01(\tR\rsubagentModel\x12!\n" +
+	"\fmemory_model\x18\f \x01(\tR\vmemoryModel\x12\x1f\n" +
+	"\vcache_model\x18\r \x01(\tR\n" +
+	"cacheModel\"B\n" +
+	"\x14RuntimeContractIssue\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\tR\x04code\x12\x16\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"K\n" +
+	"\x11RuntimeLimitation\x12\x1e\n" +
+	"\n" +
+	"capability\x18\x01 \x01(\tR\n" +
+	"capability\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"3\n" +
+	"\x16GetAgentRuntimeRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xc4\x01\n" +
+	"\x14AgentRuntimeResponse\x12A\n" +
+	"\bcontract\x18\x01 \x01(\v2%.pocketagent.v1.RuntimeContractReportR\bcontract\x12<\n" +
+	"\tresources\x18\x02 \x03(\v2\x1e.pocketagent.v1.ResourceMetricR\tresources\x12+\n" +
+	"\x12sampled_at_unix_ms\x18\x03 \x01(\x03R\x0fsampledAtUnixMs2\x87\b\n" +
 	"\x0eRuntimeService\x12b\n" +
 	"\x10GetRuntimePolicy\x12'.pocketagent.v1.GetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10SetRuntimePolicy\x12'.pocketagent.v1.SetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
@@ -1424,7 +1967,9 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x0fGetUnknownEvent\x12&.pocketagent.v1.GetUnknownEventRequest\x1a$.pocketagent.v1.UnknownEventResponse\x12z\n" +
 	"\x17AcknowledgeUnknownEvent\x12..pocketagent.v1.AcknowledgeUnknownEventRequest\x1a/.pocketagent.v1.AcknowledgeUnknownEventResponse\x12_\n" +
 	"\x0fGetCollabPolicy\x12&.pocketagent.v1.GetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponse\x12_\n" +
-	"\x0fSetCollabPolicy\x12&.pocketagent.v1.SetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x0fSetCollabPolicy\x12&.pocketagent.v1.SetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponse\x12_\n" +
+	"\x0fGetRuntimeState\x12&.pocketagent.v1.GetRuntimeStateRequest\x1a$.pocketagent.v1.RuntimeStateResponse\x12_\n" +
+	"\x0fGetAgentRuntime\x12&.pocketagent.v1.GetAgentRuntimeRequest\x1a$.pocketagent.v1.AgentRuntimeResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_runtime_proto_rawDescOnce sync.Once
@@ -1438,7 +1983,7 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_v1_runtime_proto_goTypes = []any{
 	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
 	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
@@ -1459,20 +2004,27 @@ var file_v1_runtime_proto_goTypes = []any{
 	(*GetCollabPolicyRequest)(nil),          // 16: pocketagent.v1.GetCollabPolicyRequest
 	(*SetCollabPolicyRequest)(nil),          // 17: pocketagent.v1.SetCollabPolicyRequest
 	(*CollabPolicyResponse)(nil),            // 18: pocketagent.v1.CollabPolicyResponse
-	nil,                                     // 19: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                                     // 20: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                                     // 21: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                                     // 22: pocketagent.v1.RuntimePolicy.CollabsEntry
+	(*GetRuntimeStateRequest)(nil),          // 19: pocketagent.v1.GetRuntimeStateRequest
+	(*RuntimeStateResponse)(nil),            // 20: pocketagent.v1.RuntimeStateResponse
+	(*RuntimeContractReport)(nil),           // 21: pocketagent.v1.RuntimeContractReport
+	(*RuntimeContractIssue)(nil),            // 22: pocketagent.v1.RuntimeContractIssue
+	(*RuntimeLimitation)(nil),               // 23: pocketagent.v1.RuntimeLimitation
+	(*GetAgentRuntimeRequest)(nil),          // 24: pocketagent.v1.GetAgentRuntimeRequest
+	(*AgentRuntimeResponse)(nil),            // 25: pocketagent.v1.AgentRuntimeResponse
+	nil,                                     // 26: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 27: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 28: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 29: pocketagent.v1.RuntimePolicy.CollabsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	19, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	20, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	21, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	22, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	26, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	27, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	28, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	29, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
 	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
@@ -1480,31 +2032,40 @@ var file_v1_runtime_proto_depIdxs = []int32{
 	15, // 12: pocketagent.v1.SetCollabPolicyRequest.policy:type_name -> pocketagent.v1.CollabPolicy
 	15, // 13: pocketagent.v1.CollabPolicyResponse.policy:type_name -> pocketagent.v1.CollabPolicy
 	15, // 14: pocketagent.v1.CollabPolicyResponse.effective:type_name -> pocketagent.v1.CollabPolicy
-	3,  // 15: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 16: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 17: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 18: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 19: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 20: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 21: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	8,  // 22: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
-	11, // 23: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
-	13, // 24: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
-	16, // 25: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
-	17, // 26: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
-	2,  // 27: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 28: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 29: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	10, // 30: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
-	12, // 31: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
-	14, // 32: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
-	18, // 33: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	18, // 34: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	27, // [27:35] is the sub-list for method output_type
-	19, // [19:27] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	21, // 15: pocketagent.v1.RuntimeStateResponse.contracts:type_name -> pocketagent.v1.RuntimeContractReport
+	22, // 16: pocketagent.v1.RuntimeContractReport.issues:type_name -> pocketagent.v1.RuntimeContractIssue
+	23, // 17: pocketagent.v1.RuntimeContractReport.limitations:type_name -> pocketagent.v1.RuntimeLimitation
+	21, // 18: pocketagent.v1.AgentRuntimeResponse.contract:type_name -> pocketagent.v1.RuntimeContractReport
+	7,  // 19: pocketagent.v1.AgentRuntimeResponse.resources:type_name -> pocketagent.v1.ResourceMetric
+	3,  // 20: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 21: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 22: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 23: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 24: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 25: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 26: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 27: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	11, // 28: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	13, // 29: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	16, // 30: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
+	17, // 31: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
+	19, // 32: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
+	24, // 33: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
+	2,  // 34: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 35: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 36: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	10, // 37: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	12, // 38: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	14, // 39: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	18, // 40: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	18, // 41: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	20, // 42: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
+	25, // 43: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
+	34, // [34:44] is the sub-list for method output_type
+	24, // [24:34] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -1520,7 +2081,7 @@ func file_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

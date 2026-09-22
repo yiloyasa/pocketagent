@@ -25,7 +25,7 @@
 
 - 手机：Kotlin + Jetpack Compose（minSdk 26 / compileSdk 35）
 - daemon：Go **1.27.1**（无 ORM / 无框架，依赖极简）
-- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 77 RPC**，8 proto / 1790 行
+- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 79 RPC**，8 proto / 1859 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**）
 - 代码：android main **86** `.kt` / test **81** `.kt`；daemon 手写 Go（非 gen）**320** 文件
 - 版本：**0.2.2 / versionCode 5**
@@ -36,8 +36,8 @@
 |---|---|
 | Git | 分支 `main`，HEAD `76e752d`（2026-09-23：**W4 / W5 / W6 完成，W7 部分**）；**工作树干净** |
 | daemon | 运行中 pid **104724**（**仍是改动前的旧二进制，未热部署**）；`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
-| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线（轮次租约 soft/hard 取自 `Effective`）· **W8 🔶** 未知事件诊断索引（`ListUnknownEvents`/`GetUnknownEvent`/`AcknowledgeUnknownEvent`，落盘有界 + 丢弃留痕）—— 全 provider 事件信封化未做 · **W10 ✅** 协同策略 daemon 权威化（`GetCollabPolicy`/`SetCollabPolicy`：持久化 `collab-policy.json` + CAS + 立即生效；闸接在扇出入口（开关 + 成员上限）与委派两个入口）· **W9 ⬜** 能力注册消费 + `runtime.proto` 剩余 RPC · **W11 ⬜** Android Runtime UI |
-| **下一刀（2026-09-23 用户裁定）★** | ① ~~**W6b 补齐**~~ → **已完成**。② ~~**W7 补齐两件**~~ → **已完成**。③ ~~**W8**~~ → **部分完成**（未知事件诊断索引闭环；**剩余**：全 provider 事件信封化、未知 response 无落点）。④ ~~**W10**~~ → **已完成**（协同策略 daemon 权威化；**顺序说明**：W10 先于 W9 做 —— 它与刚落地 W7 的控制面同构，可端到端验证；W9 要在 provider 注册路径做启动期核验，与后续 provider 改造一起做更省）。⑤ **接下来**：**W9**（能力注册消费 + `runtime.proto` 剩余 RPC：`GetRuntimeState`/`GetAgentRuntime`/`RecoverTask` 等 + 启动期跑 `VerifyDeclaration`）→ **W11**（Android Runtime UI：把 W6b 恢复报告 / W7 预算 / W8 未知事件 / W10 协同策略接到手机端；顺带退役已确认无调用点的 `CollabPrefs` 死代码）。**验收判据（本轮确立）**：凡"可见/可改"类改动，验收必须落到**手机端能看到或能操作**，仅写日志不算通过。 |
+| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线（轮次租约 soft/hard 取自 `Effective`）· **W8 🔶** 未知事件诊断索引（`ListUnknownEvents`/`GetUnknownEvent`/`AcknowledgeUnknownEvent`，落盘有界 + 丢弃留痕）—— 全 provider 事件信封化未做 · **W10 ✅** 协同策略 daemon 权威化（`GetCollabPolicy`/`SetCollabPolicy`：持久化 `collab-policy.json` + CAS + 立即生效；闸接在扇出入口（开关 + 成员上限）与委派两个入口）· **W9 ✅** 能力注册消费（启动期跑 `VerifyDeclaration` 声明层核验 + `GetRuntimeState`/`GetAgentRuntime` 透出形态与违约；**实测 5 家 provider 全部达标**：declared=true / issues=0 / runtime_state=ready）· **W11 ⬜** Android Runtime UI |
+| **下一刀（2026-09-23 用户裁定）★** | ① ~~**W6b 补齐**~~ → **已完成**。② ~~**W7 补齐两件**~~ → **已完成**。③ ~~**W8**~~ → **部分完成**（未知事件诊断索引闭环；**剩余**：全 provider 事件信封化、未知 response 无落点）。④ ~~**W10**~~ → **已完成**（协同策略 daemon 权威化；**顺序说明**：W10 先于 W9 做 —— 它与刚落地 W7 的控制面同构，可端到端验证；W9 要在 provider 注册路径做启动期核验，与后续 provider 改造一起做更省）。⑤ ~~**W9**~~ → **已完成**（启动期声明层核验 + `GetRuntimeState`/`GetAgentRuntime`；真实 5 家 provider 实测全部达标）。⑥ **接下来只剩 W11**（Android Runtime UI：把 W6b 恢复报告 / W7 预算 / W8 未知事件 / W9 运行时形态 / W10 协同策略接到手机端；顺带退役已确认无调用点的 `CollabPrefs` 死代码）。**验收判据（本轮确立）**：凡"可见/可改"类改动，验收必须落到**手机端能看到或能操作**，仅写日志不算通过。 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
 | 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./...` —— **17 包全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
 
@@ -83,7 +83,7 @@
 |---|---|---|
 | Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）。**vosk-android 已整体摘除（2026-09-20）**：引擎选择收敛为「系统识别 → 端侧 SenseVoice」两级，共享错误码迁至 `VoiceErrors.kt` |
 | daemon | Go **1.27.1** | `grpc` 1.83.2、`protobuf` 1.36.12、`go-pty`、`zeroconf`。**依赖极简，无 ORM / 无框架** |
-| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 77 RPC**：Thread 34、Git 10、Fs 9、Model 8、Runtime 8、Host 5、Terminal 3（8 proto / 1790 行） |
+| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 79 RPC**：Thread 34、Git 10、Fs 9、Runtime 10、Model 8、Host 5、Terminal 3（8 proto / 1859 行） |
 | 终端 | xterm.js 6（WebView）+ JS bridge | ↔ daemon `go-pty`，字节流一致画面一致 |
 
 > 图标全用 lucide 矢量（`ic_lucide_*`）+ 品牌 PNG，**故意不引** `material-icons-extended`（曾占 DEX 一半）。

@@ -99,20 +99,29 @@ func (s *Server) GetResourceUsage(_ context.Context, req *pb.GetResourceUsageReq
 	}
 	rep := s.runtimeBackend.Resources().Usage(context.Background(), req.GetScope())
 	for _, it := range rep.Items {
-		resp.Metrics = append(resp.Metrics, &pb.ResourceMetric{
-			LeaseId:        it.LeaseID,
-			Scope:          it.OwnerScope,
-			Kind:           string(it.Kind),
-			ReservedBytes:  it.ReservedBytes,
-			UsedBytes:      it.UsedBytes,
-			SoftLimitBytes: it.SoftLimit,
-			HardLimitBytes: it.HardLimit,
-			State:          string(it.Pressure()),
-			SpillPolicy:    string(it.SpillPolicy),
-			Optional:       it.Optional,
-		})
+		resp.Metrics = append(resp.Metrics, resourceMetricToProto(it))
 	}
 	return resp, nil
+}
+
+// resourceMetricToProto 把一份资源租约翻成契约形态。
+//
+// 【为什么抽成函数】GetResourceUsage 与 GetAgentRuntime 都要它。两处各写一遍时,
+// 将来新增一个字段只会改到其中一处 —— 表现为"某个界面上这一项永远是空的",
+// 而没有任何测试会喊。
+func resourceMetricToProto(it runtime.ResourceLease) *pb.ResourceMetric {
+	return &pb.ResourceMetric{
+		LeaseId:        it.LeaseID,
+		Scope:          it.OwnerScope,
+		Kind:           string(it.Kind),
+		ReservedBytes:  it.ReservedBytes,
+		UsedBytes:      it.UsedBytes,
+		SoftLimitBytes: it.SoftLimit,
+		HardLimitBytes: it.HardLimit,
+		State:          string(it.Pressure()),
+		SpillPolicy:    string(it.SpillPolicy),
+		Optional:       it.Optional,
+	}
 }
 
 // ---- 契约 ↔ 领域模型转换 ------------------------------------------------------

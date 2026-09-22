@@ -116,6 +116,9 @@ type Server struct {
 	// 改完立即生效(不必重启 daemon)。
 	collabMu     sync.RWMutex
 	collabPolicy rtruntime.CollabPolicy
+	// W9:启动期对每个已注册 provider 跑的运行时形态申报核验(规格 §10)。
+	// 启动时生成、之后只读 —— 它反映的是"接入形态",不随运行变化。
+	contractReports []rtruntime.ContractReport
 }
 
 func New(cfg Config) *Server {
@@ -152,6 +155,11 @@ func New(cfg Config) *Server {
 	// 这里只新增一行汇总。
 	srv.recoveryReport = buildRecoveryReport(cfg.DataDir, cfg.Store, srv.devices, pendingQueueInputs)
 	log.Printf("[recovery] %s", srv.recoveryReport.LogLine())
+	// W9:运行时形态核验(规格 §10)。只做零成本的**声明层**校验 —— 实现层要先
+	// OpenRuntime,而那可能起子进程,不该在启动/诊断路径被触发。不达标者打日志出声,
+	// 并经 GetRuntimeState 送到手机。
+	srv.contractReports = verifyProviderDeclarations(cfg.Providers)
+	logContractReports(srv.contractReports)
 	// 存量修复:旧版本一直没实现自动标题,启动时把仍是"新会话…"默认名的
 	// 线程改成各自首条用户消息(已有真实标题的不动)
 	for _, t := range cfg.Store.List(true) {

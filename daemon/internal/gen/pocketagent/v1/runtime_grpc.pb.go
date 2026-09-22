@@ -27,6 +27,8 @@ const (
 	RuntimeService_AcknowledgeUnknownEvent_FullMethodName = "/pocketagent.v1.RuntimeService/AcknowledgeUnknownEvent"
 	RuntimeService_GetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/GetCollabPolicy"
 	RuntimeService_SetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/SetCollabPolicy"
+	RuntimeService_GetRuntimeState_FullMethodName         = "/pocketagent.v1.RuntimeService/GetRuntimeState"
+	RuntimeService_GetAgentRuntime_FullMethodName         = "/pocketagent.v1.RuntimeService/GetAgentRuntime"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -65,6 +67,13 @@ type RuntimeServiceClient interface {
 	// daemon 持久化并作为唯一事实来源。
 	GetCollabPolicy(ctx context.Context, in *GetCollabPolicyRequest, opts ...grpc.CallOption) (*CollabPolicyResponse, error)
 	SetCollabPolicy(ctx context.Context, in *SetCollabPolicyRequest, opts ...grpc.CallOption) (*CollabPolicyResponse, error)
+	// 本机运行时总览 + 每个 agent 的**能力声明核验**结果(规格 §10)。
+	// 【为什么核验结果要经 RPC 出去】契约的价值在于"缺失可见":某家 agent 没申报
+	// 运行时形态、或申报了却没交代必需入口,这些以前只写进 daemon 日志 —— 用户在
+	// 手机上只会看到"这台 agent 好像少点什么",却指不出是哪一项。
+	GetRuntimeState(ctx context.Context, in *GetRuntimeStateRequest, opts ...grpc.CallOption) (*RuntimeStateResponse, error)
+	// 单个 agent 的运行时形态与用量。
+	GetAgentRuntime(ctx context.Context, in *GetAgentRuntimeRequest, opts ...grpc.CallOption) (*AgentRuntimeResponse, error)
 }
 
 type runtimeServiceClient struct {
@@ -155,6 +164,26 @@ func (c *runtimeServiceClient) SetCollabPolicy(ctx context.Context, in *SetColla
 	return out, nil
 }
 
+func (c *runtimeServiceClient) GetRuntimeState(ctx context.Context, in *GetRuntimeStateRequest, opts ...grpc.CallOption) (*RuntimeStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeStateResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_GetRuntimeState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) GetAgentRuntime(ctx context.Context, in *GetAgentRuntimeRequest, opts ...grpc.CallOption) (*AgentRuntimeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AgentRuntimeResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_GetAgentRuntime_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -191,6 +220,13 @@ type RuntimeServiceServer interface {
 	// daemon 持久化并作为唯一事实来源。
 	GetCollabPolicy(context.Context, *GetCollabPolicyRequest) (*CollabPolicyResponse, error)
 	SetCollabPolicy(context.Context, *SetCollabPolicyRequest) (*CollabPolicyResponse, error)
+	// 本机运行时总览 + 每个 agent 的**能力声明核验**结果(规格 §10)。
+	// 【为什么核验结果要经 RPC 出去】契约的价值在于"缺失可见":某家 agent 没申报
+	// 运行时形态、或申报了却没交代必需入口,这些以前只写进 daemon 日志 —— 用户在
+	// 手机上只会看到"这台 agent 好像少点什么",却指不出是哪一项。
+	GetRuntimeState(context.Context, *GetRuntimeStateRequest) (*RuntimeStateResponse, error)
+	// 单个 agent 的运行时形态与用量。
+	GetAgentRuntime(context.Context, *GetAgentRuntimeRequest) (*AgentRuntimeResponse, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -224,6 +260,12 @@ func (UnimplementedRuntimeServiceServer) GetCollabPolicy(context.Context, *GetCo
 }
 func (UnimplementedRuntimeServiceServer) SetCollabPolicy(context.Context, *SetCollabPolicyRequest) (*CollabPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetCollabPolicy not implemented")
+}
+func (UnimplementedRuntimeServiceServer) GetRuntimeState(context.Context, *GetRuntimeStateRequest) (*RuntimeStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRuntimeState not implemented")
+}
+func (UnimplementedRuntimeServiceServer) GetAgentRuntime(context.Context, *GetAgentRuntimeRequest) (*AgentRuntimeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAgentRuntime not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -390,6 +432,42 @@ func _RuntimeService_SetCollabPolicy_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_GetRuntimeState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRuntimeStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).GetRuntimeState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_GetRuntimeState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).GetRuntimeState(ctx, req.(*GetRuntimeStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_GetAgentRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAgentRuntimeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).GetAgentRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_GetAgentRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).GetAgentRuntime(ctx, req.(*GetAgentRuntimeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -428,6 +506,14 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetCollabPolicy",
 			Handler:    _RuntimeService_SetCollabPolicy_Handler,
+		},
+		{
+			MethodName: "GetRuntimeState",
+			Handler:    _RuntimeService_GetRuntimeState_Handler,
+		},
+		{
+			MethodName: "GetAgentRuntime",
+			Handler:    _RuntimeService_GetAgentRuntime_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

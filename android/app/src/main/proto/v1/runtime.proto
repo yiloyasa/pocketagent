@@ -38,6 +38,13 @@ service RuntimeService {
   // daemon 持久化并作为唯一事实来源。
   rpc GetCollabPolicy(GetCollabPolicyRequest) returns (CollabPolicyResponse);
   rpc SetCollabPolicy(SetCollabPolicyRequest) returns (CollabPolicyResponse);
+  // 本机运行时总览 + 每个 agent 的**能力声明核验**结果(规格 §10)。
+  // 【为什么核验结果要经 RPC 出去】契约的价值在于"缺失可见":某家 agent 没申报
+  // 运行时形态、或申报了却没交代必需入口,这些以前只写进 daemon 日志 —— 用户在
+  // 手机上只会看到"这台 agent 好像少点什么",却指不出是哪一项。
+  rpc GetRuntimeState(GetRuntimeStateRequest) returns (RuntimeStateResponse);
+  // 单个 agent 的运行时形态与用量。
+  rpc GetAgentRuntime(GetAgentRuntimeRequest) returns (AgentRuntimeResponse);
 }
 
 message GetRuntimePolicyRequest {}
@@ -208,4 +215,66 @@ message CollabPolicyResponse {
   uint64 revision = 2;        // 每次成功写入 +1
   string policy_path = 3;     // 落盘位置
   CollabPolicy effective = 4; // 打底默认之后的实际生效值(全字段齐备)
+}
+
+// ---- 运行时形态与契约核验(规格 §10)----------------------------------------
+
+message GetRuntimeStateRequest {}
+
+message RuntimeStateResponse {
+  string installation_id = 1; // 安装身份(跨重启稳定;换机才变)
+  string host_id = 2;
+  string daemon_version = 3;
+  uint64 budget_policy_revision = 4;
+  uint64 collab_policy_revision = 5;
+  // runtime_state:ready / degraded。degraded = 至少有一个 agent 的形态申报不合格
+  // —— "有东西没交代清楚"本身就是需要用户知道的状态,不该只在日志里。
+  string runtime_state = 6;
+  int64 sampled_at_unix_ms = 7;
+  repeated RuntimeContractReport contracts = 8;
+  string data_dir = 9;
+}
+
+// RuntimeContractReport 是一个 agent 的运行时形态申报 + 核验结果。
+//
+// 【为什么把 descriptor 的六个 model 字段摊平给客户端】它们是"这家 agent 的会话
+// 存在哪、能不能恢复、审批从哪来"的机器可读答案。手机端据此决定显示什么入口,
+// 而不是按 agent 名字分支(那是项目红线)。
+message RuntimeContractReport {
+  string agent_id = 1;
+  string display_name = 2;
+  string version = 3;          // provider 自报;空 = 未探测到
+  bool declared = 4;           // 是否实现了 runtime.Participant(连形态都没申报时为 false)
+  repeated string capabilities = 5;
+  repeated RuntimeContractIssue issues = 6;
+  repeated RuntimeLimitation limitations = 7;
+  string session_model = 8;    // NATIVE / DAEMON / HYBRID / NONE
+  string resume_model = 9;     // native / reattach / none
+  string approval_model = 10;  // native / daemon / none
+  string subagent_model = 11;  // native / delegate / none
+  string memory_model = 12;    // native / daemon / hybrid
+  string cache_model = 13;     // native / daemon
+}
+
+// RuntimeContractIssue 一条契约违约(机器可读 code 见 runtime 包的 Violation*)。
+message RuntimeContractIssue {
+  string code = 1;
+  string detail = 2;
+}
+
+// RuntimeLimitation 一条"我明确不支持"的声明及其原因。
+message RuntimeLimitation {
+  string capability = 1;
+  string reason = 2;
+}
+
+message GetAgentRuntimeRequest {
+  string agent_id = 1;
+}
+
+message AgentRuntimeResponse {
+  RuntimeContractReport contract = 1;
+  // 该 agent 作用域下当前活跃的资源租约(复用 GetResourceUsage 的同一个 message)。
+  repeated ResourceMetric resources = 2;
+  int64 sampled_at_unix_ms = 3;
 }
