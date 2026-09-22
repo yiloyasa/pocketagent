@@ -88,6 +88,10 @@ type Server struct {
 	// syncThreadsFromCodex。否则每次 refresh 都新起一个,会在 withClient 的
 	// 生命周期锁上排队等待(最坏等 codex 的 callTimeout=120s)。
 	syncCodexInFlight atomic.Bool
+	// recoveryReport 是启动时汇总的数据源健康度报告(见 recovery_report.go)。
+	// 在 New 里一次性生成,之后只读;由导出的 RecoveryReport() 提供,供将来的
+	// GetHostInfo / 诊断 RPC 消费 —— 让"这次启动干净不干净"不必再靠翻日志。
+	recoveryReport RecoveryReport
 }
 
 func New(cfg Config) *Server {
@@ -114,7 +118,13 @@ func New(cfg Config) *Server {
 	// 启动报告:上次退出时还没轮到执行的排队输入 —— 醒目汇总 + 逐条明细,然后
 	// 清空台账。刻意不自动重发(重放原始 prompt 会重复执行副作用,规格 §8.3),
 	// 只把"丢了几条、丢在哪些会话、丢的是哪句"讲清楚,要不要重发由用户决定。
-	srv.reportPendingQueueInputs()
+	// 它的返回值(本次丢掉的条目)一并接进下面的启动恢复报告,不重复读台账。
+	pendingQueueInputs := srv.reportPendingQueueInputs()
+	// 启动恢复报告:把各数据源的加载来源/健康度汇总成一份机器可读报告并打一条
+	// 醒目日志,同时留在 Server 上(RecoveryReport() 导出)。保持既有启动日志不变,
+	// 这里只新增一行汇总。
+	srv.recoveryReport = buildRecoveryReport(cfg.DataDir, cfg.Store, srv.devices, pendingQueueInputs)
+	log.Printf("[recovery] %s", srv.recoveryReport.LogLine())
 	// 存量修复:旧版本一直没实现自动标题,启动时把仍是"新会话…"默认名的
 	// 线程改成各自首条用户消息(已有真实标题的不动)
 	for _, t := range cfg.Store.List(true) {
@@ -217,10 +227,13 @@ func New(cfg Config) *Server {
 // 要不要重发由用户在手机上自己决定,绝不替用户做这个决定。
 // 【为什么报告后清空】不保留成僵尸条目:每条都在启动时报告过一次,留着会在
 // 每次重启反复报同一批,反而稀释了信号。
-func (s *Server) reportPendingQueueInputs() {
+// 【为什么返回本次读出的条目】启动恢复报告(recovery_report.go)需要把"丢了几条、
+// 丢在哪些会话"接进去;与其再读一次台账(第二份真值),不如把 TakePending 的结果
+// 原样返回给调用方复用。
+func (s *Server) reportPendingQueueInputs() []journalEntry {
 	pending := s.turnJournal.TakePending()
 	if len(pending) == 0 {
-		return
+		return nil
 	}
 	byThread := map[string]int{}
 	for _, e := range pending {
@@ -232,6 +245,7 @@ func (s *Server) reportPendingQueueInputs() {
 		log.Printf("[turnjournal]   丢失 %s:%.120q(入队 %s)",
 			e.ThreadID, e.Preview, time.UnixMilli(e.CreatedAt).Format("2006-01-02 15:04:05"))
 	}
+	return pending
 }
 
 // ---- 鉴权 ----

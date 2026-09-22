@@ -196,10 +196,37 @@ type persistedData struct {
 	Tombstones map[string]int64 `json:"tombstones,omitempty"`
 }
 
+// LoadOutcome 说明"本次 NewFileStore 是从哪条路把 threads.json 读进来的"。
+//
+// 【为什么要有机器可读的来源】P2-5 给 store 加了三条加载路径(正常加载 /
+// 首次运行 / 解析失败隔离留档),但"这次走的是哪条"此前只写进一行启动日志 ——
+// 程序内部、手机端诊断、GetHostInfo 都拿不到。把来源提成显式枚举,启动诊断与
+// 将来的 UI 就能据此判断"这次启动数据是否完整",不必去正则刮日志。
+//
+// 【为什么不复用 runtime.RecoverySource】那个描述的是"单个会话的恢复"(快照 /
+// 原生 session / 损坏),本类型描述的是"持久化文件的加载来源",语义不同 ——
+// 强行复用会让两处含义互相污染。
+type LoadOutcome string
+
+const (
+	// LoadOutcomeClean 正常读入一份已存在且可解析的 threads.json。
+	LoadOutcomeClean LoadOutcome = "clean"
+	// LoadOutcomeFirstRun threads.json 不存在 —— 首次运行,空库不是错误。
+	LoadOutcomeFirstRun LoadOutcome = "first-run"
+	// LoadOutcomeQuarantined threads.json 存在但解析失败:已隔离留档 + 空库启动。
+	LoadOutcomeQuarantined LoadOutcome = "quarantined"
+)
+
 type FileStore struct {
 	mu   sync.Mutex
 	path string
 	data persistedData
+	// loadOutcome 记录本次加载走的是哪条路(clean / first-run / quarantined)。
+	// 由 NewFileStore 一次性写入、之后只读,故读取无需持锁(getter 见 LoadOutcome())。
+	loadOutcome LoadOutcome
+	// quarantinePath 解析失败时的留档文件绝对路径(仅 quarantined 时非空),
+	// 供启动报告把"抢救证据在哪"一并给出。
+	quarantinePath string
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
@@ -207,6 +234,8 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	s.data.Threads = map[string]*Thread{}
 	raw, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
+		// 首次运行:记下来源,供启动报告区分"干净空库"与"自愈后的空库"。
+		s.loadOutcome = LoadOutcomeFirstRun
 		return s, nil // 首次运行:空库不是错误,维持原状。
 	}
 	if err != nil {
@@ -232,11 +261,17 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		if st, statErr := os.Stat(s.path + ".bak"); statErr == nil && !st.IsDir() {
 			hint = fmt.Sprintf("可用 threads.json.bak 手动恢复(复制回 threads.json): %s", s.path+".bak")
 		}
+		// 记下来源与留档路径:这是"数据这次究竟发生了坏"的唯一机器可读证据,
+		// 启动报告/UI 据此把这次启动判为 corrupted 并给出抢救入口。
+		s.loadOutcome = LoadOutcomeQuarantined
+		s.quarantinePath = qPath
 		log.Printf("[store] ERROR: threads.json 无法解析,已隔离留档并以空库启动 | 原错误: %v | 留档: %s | 恢复提示: %s",
 			err, qPath, hint)
 		return s, nil
 	}
 	s.data = loaded
+	// 走到这里说明文件存在且解析成功 —— 记录来源为 clean(启动报告据此判"数据完整")。
+	s.loadOutcome = LoadOutcomeClean
 	if s.data.Threads == nil {
 		s.data.Threads = map[string]*Thread{}
 	}
@@ -248,6 +283,34 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	// 盖回新数据是产品决策,这里只留证据与提示,不擅自替用户选。
 	backupLastGood(s.path, raw)
 	return s, nil
+}
+
+// LoadOutcome 返回本次启动 threads.json 的加载来源(clean / first-run /
+// quarantined)。供启动诊断与将来的 UI 消费;只读 —— 字段在 NewFileStore 里
+// 一次性写入,之后不再变化。
+func (s *FileStore) LoadOutcome() LoadOutcome {
+	if s == nil {
+		return LoadOutcomeFirstRun
+	}
+	return s.loadOutcome
+}
+
+// QuarantinePath 返回解析失败时隔离留档文件的绝对路径;非 quarantined 时为空串。
+func (s *FileStore) QuarantinePath() string {
+	if s == nil {
+		return ""
+	}
+	return s.quarantinePath
+}
+
+// HasBackup 报告是否存在"上一版好数据"的备份 threads.json.bak —— 启动报告据此
+// 判断损坏后能否走人工恢复路径。只读探测,不改动任何状态。
+func (s *FileStore) HasBackup() bool {
+	if s == nil || s.path == "" {
+		return false
+	}
+	st, err := os.Stat(s.path + ".bak")
+	return err == nil && !st.IsDir()
 }
 
 // quarantineCorruptFile 把解析失败的 threads.json 原地改名为
