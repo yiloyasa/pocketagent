@@ -64,6 +64,12 @@ const (
 	CapRuntimeCache      Capability = "runtime.cache"
 	CapRuntimeCheckpoint Capability = "runtime.checkpoint"
 	CapRuntimeResource   Capability = "runtime.resource"
+
+	// CapRuntimeCapabilities 表示该 agent 能自报运行时形态（规格 §10 的
+	// runtime.capabilities）。与上面四个入口不同，它描述的是"能不能自报"这件事
+	// 本身：手机端据此决定是否为这家 agent 显示 Runtime 面板 ——
+	// 没有这个能力的 agent 不该被摆出一块空面板，让人以为是自己没找到。
+	CapRuntimeCapabilities Capability = "runtime.capabilities"
 )
 
 // RequiredEntryPoints 是 P0.5 要求每个 agent 都必须交付的最小入口集。

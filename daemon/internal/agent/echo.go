@@ -28,6 +28,10 @@ func (e *EchoProvider) Models() []pb.ModelInfo {
 }
 
 func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
+	// P0.5 最低契约：真实轮次里走一遍公共运行时记忆（用户输入先入记忆 + checkpoint）。
+	// 这是"契约被使用而不只是被交付"的证据点 —— 说明见 echo_runtime.go。
+	e.recordTurn(req.Thread, "user", req.InputBlocks)
+
 	var userText strings.Builder
 	for i := range req.InputBlocks {
 		b := &req.InputBlocks[i]
@@ -79,6 +83,9 @@ func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appr
 		blockText(fmt.Sprintf("收到:%s\n\n(工作区 %s 共 %d 个条目)", truncate(userText.String(), 500), req.Workspace, strings.Count(resultText, "\n")+1)),
 	}
 	usage := &pb.Usage{InputTokens: int64(len(userText.String()) / 3), OutputTokens: 120}
+	// 助手回复同样入记忆：Echo 的会话事实由 daemon 侧持有（SessionModel=DAEMON），
+	// 不落 checkpoint 则重启后无从恢复。
+	e.recordTurn(req.Thread, "assistant", blocks)
 	return blocks, usage, nil
 }
 
