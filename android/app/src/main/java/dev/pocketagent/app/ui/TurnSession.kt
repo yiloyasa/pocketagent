@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import pocketagent.v1.OutputState
 import pocketagent.v1.SubmitApprovalRequest
 import pocketagent.v1.ApprovalDecision
 import pocketagent.v1.ApprovalRequest
@@ -257,6 +258,37 @@ object TurnSession {
     private fun commitFinalText(st: State, text: String) {
         if (text.isNotBlank()) {
             st.items.add(ChatItem("assistant", text))
+        }
+    }
+
+    /**
+     * 按 daemon 上报的 [state] 给"没有正文"的轮次补一句人话。
+     *
+     * 【为什么这句话在本地拼,而不是让 daemon 发】它是**呈现**决定(说什么、什么语气),
+     * 不是事实。旧实现让 daemon 往 final_blocks 里塞占位文本 —— 那是把呈现混进了数据:
+     * 那条文本会落库、被离线快照读到,最终变成一个"真的存在的助手回复"。事实(状态)
+     * 由 daemon 报,措辞由客户端定,这条边界不能倒过来。
+     *
+     * 【为什么用 WARNING 而不是 STATUS】STATUS 在时间线渲染时被过滤掉(见审批处理的
+     * 同类用法),用了等于没提示 —— 用户还是看到一片空白,问题原封不动。
+     *
+     * 文案与"哪一档要提示"由 [emptyOutputNotice] 决定(纯映射,可单测)。
+     */
+    private fun noticeEmptyOutput(st: State, state: OutputState, source: String) {
+        val notice = emptyOutputNotice(state) ?: return
+        st.items.add(
+            codexEventToChatItem(
+                CodexEvent.newBuilder()
+                    .setKind(CodexEvent.Kind.WARNING)
+                    .setCode("output_state_notice")
+                    .setTitle(notice.first)
+                    .setMessage(notice.second)
+                    .build()
+            )
+        )
+        if (source.isNotEmpty()) {
+            // 来源只用于排障,不摊给用户看;留一条日志让"这轮为什么这样"可追。
+            android.util.Log.i("TurnSession", "empty output notice state=$state source=$source")
         }
     }
 
@@ -691,6 +723,11 @@ object TurnSession {
                     // 终局兜底:Codex 没发 delta 时,正文在 completed.final_blocks。
                     commitFinalText(st, finalText(ev.completed.finalBlocksList))
                 }
+                // 【空正文要给用户一个说法】daemon 现在如实上报 output_state;不解释的话,
+                // 用户看到的就是"任务完成了,但什么都没有" —— 那正是图二里最让人困惑的
+                // 地方。旧实现在这里塞一句 "(完成,无文本输出)" 假占位,是把歧义藏起来,
+                // 而且那条文本会落库、被离线快照读到,变成一个"真的存在的助手回复"。
+                noticeEmptyOutput(st, ev.completed.outputState, ev.completed.outputSource)
                 st.streamText = ""
                 st.streaming = false
                 // 「已插入/发送中」的输入属于刚结束的这一轮:撤标签变回普通消息;
@@ -1094,4 +1131,25 @@ object TurnSession {
             }
         }
     }
+}
+
+/**
+ * "没有正文"这一轮的提示文案;null = 不该提示(有正文,或已被原生历史补偿回来)。
+ *
+ * 【为什么单独抽成纯函数】它是 state → (标题, 正文) 的纯映射,能脱离 Compose、协程
+ * 与网络单测。而"哪一档该提示、提示什么"恰恰最容易被后来者顺手改坏 —— 比如把
+ * RECOVERED 也提示一遍(正文明明已经补回来了),或把 UNSPECIFIED 当成"这一轮没有正文"。
+ * 用测试钉住比用注释提醒可靠。
+ *
+ * 【UNSPECIFIED 为什么不提示】它是旧 daemon 的回放帧(那时还没有这个字段):此刻编
+ * 一句话,等于把"对方没报状态"说成"这一轮确实没正文"。
+ */
+internal fun emptyOutputNotice(state: OutputState): Pair<String, String>? = when (state) {
+    OutputState.OUTPUT_STATE_EMPTY ->
+        "本轮没有正文" to "这一轮没有文字输出,也没有附件。"
+    OutputState.OUTPUT_STATE_ARTIFACT_ONLY ->
+        "本轮只有附件" to "这一轮没有文字说明,产物在上方。"
+    OutputState.OUTPUT_STATE_ADAPTER_LOST_OUTPUT ->
+        "正文可能丢了" to "电脑上有这一轮的记录,但正文没能取回。可以重试同一句话。"
+    else -> null
 }
