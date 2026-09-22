@@ -191,6 +191,13 @@ func (s *Server) ListAgentThreads(ctx context.Context, req *pb.ListAgentThreadsR
 			if s.cfg.Store.SessionHidden(info.AgentId, info.SessionId) {
 				continue
 			}
+			// 【删除墓碑】普通删除路径**不**写 HiddenSessions(那是"移除"专用),所以
+			// 只查 Hidden 挡不住真删除:pi/zcode 的 jsonl 文件还在,扫描就会把它列回来。
+			// 会话 id 与文件路径都可能被同步链当登记键用(删除侧两个都记),这里两个都查。
+			if s.cfg.Store.IsTombstoned(info.SessionId) ||
+				(info.SessionFile != "" && s.cfg.Store.IsTombstoned(info.SessionFile)) {
+				continue
+			}
 			out.Threads = append(out.Threads, info)
 		}
 	}
@@ -253,6 +260,13 @@ func (s *Server) ImportAgentThread(ctx context.Context, req *pb.ImportAgentThrea
 	}
 	sessionID := strings.TrimSpace(req.SessionId)
 	sessionFile := strings.TrimSpace(req.SessionFile)
+	// 【顺序钉:墓碑判定必须在 SetSessionHidden(false) 之前】否则会出现"返回了错误,
+	// 隐藏却已被解开"的半完成状态 —— 用户看到失败,而会话已经回到列表。
+	// 键与删除侧写入的保持一致(会话 id + 文件路径)。
+	if s.cfg.Store.IsTombstoned(sessionID) ||
+		(sessionFile != "" && s.cfg.Store.IsTombstoned(sessionFile)) {
+		return nil, errFailedPrecondition("会话已被删除;如需恢复请先清除删除记录")
+	}
 	if err := s.cfg.Store.SetSessionHidden(agentID, sessionID, false); err != nil {
 		return nil, errInternal(err)
 	}

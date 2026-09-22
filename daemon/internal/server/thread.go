@@ -405,8 +405,18 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 	// 它们按"磁盘/原生会话里有没有"判定,不知道用户刚删过 —— 不记墓碑就会
 	// "删了又冒出来"。键覆盖各同步链的登记键(本地 id / codex 原生 id / 外部
 	// 会话 id·文件),连带子代理存根也在 deleteChildStubs 内一并记。
-	// 必须在 Store.Delete 之前记,且失败只留痕(墓碑记不上也不能阻塞删除)。
-	s.tombstoneThread(t)
+	// 【顺序】墓碑必须在 Store.Delete 之前落盘。若先删本地、再记墓碑失败,就留下
+	// "既删不掉又防不住"的中间态:本地没了,原生侧没有任何保护,下一次刷新即复活。
+	// 【为什么失败必须拦住】原实现把墓碑失败当"留痕不阻塞",于是用户收到"删除成功",
+	// 会话却复活,现场只剩 daemon 日志里一行 —— 无从解释。宁可当场报错让用户重试。
+	// 【为什么只有真删除才记】local_only=true 是"移除"(可恢复的隐藏),它走
+	// HiddenSessions;若也写永久墓碑,导入入口的守卫会让用户点"重新导入"被自己刚
+	// 才的"移除"永久挡住。两条语义在写入侧就必须分开。
+	if !req.LocalOnly {
+		if err := s.tombstoneThread(t); err != nil {
+			return nil, errInternal(err)
+		}
+	}
 
 	// 【连带清理子代理存根】删主会话时,它派出的子代理存根(pi-sub-* / codex 存根)
 	// 会变成**孤儿** —— 列表里已无父会话可归属,条目却还赖着。用户视角就是
@@ -425,15 +435,20 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 // 本地线程 id(子代理存根用它当 id)、codex 原生线程 id(= 存根的 CodexThreadID)、
 // pi/zcode 外部会话 id 与文件。同步链(maybeRegisterCodexSubagentStub /
 // registerPiSubagentStubs)遇到墓碑就跳过,不再把刚删的会话建回来。
-func (s *Server) tombstoneThread(t *store.Thread) {
+// 【只有真删除才记】local_only=true 是"移除"(可恢复的隐藏),走 HiddenSessions,
+// 不该进永久墓碑(见调用点)。【返回 error 时调用方必须中止删除】墓碑没落盘就等于
+// 同步链没有任何保护,报错优于无痕复活。
+func (s *Server) tombstoneThread(t *store.Thread) error {
 	if t == nil {
-		return
+		return nil
 	}
 	if err := s.cfg.Store.AddTombstones(
 		t.ID, t.CodexThreadID, t.ExternalSession.SessionID, t.ExternalSession.SessionFile,
 	); err != nil {
-		log.Printf("[tombstone] 记录删除墓碑失败(不影响本次删除) id=%s: %v", t.ID, err)
+		log.Printf("[tombstone] 记录删除墓碑失败,已中止本次删除 id=%s: %v", t.ID, err)
+		return err
 	}
+	return nil
 }
 
 // deleteChildStubs 删除所有以 parentID 为父的子代理存根(幂等、失败只留痕)。

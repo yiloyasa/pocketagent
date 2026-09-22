@@ -20,6 +20,12 @@ import (
 // 让手机端展示 pcError,而不是挂起等 callTimeout(120s)。
 const codexAppServerBudget = 5 * time.Second
 
+// listCodexSessions 是 agent.ListCodexSessions 的间接层:codex 会话扫描长在
+// agent 包的**包级函数**上(不是 provider 方法),单测没法注入受控会话 ——
+// 而"删除过的 codex 会话会不会被列表挡掉"恰恰只能靠受控输入来钉(真机上
+// 用户看到的正是这个 bug)。默认就是原函数,线上行为逐字不变。
+var listCodexSessions = agent.ListCodexSessions
+
 // runBounded 在 budget 内执行 fn;fn 超时/失败一律返回零值与 error,
 // 调用方据此降级(放弃同步 / 把错误透传给手机),绝不无限挂起。
 // fn 仍在后台跑完(最坏等下游自身超时),但调用方早已带着降级结果返回。
@@ -68,7 +74,7 @@ func (s *Server) ListCodexThreads(ctx context.Context, req *pb.ListCodexThreadsR
 	// 标题/目录兜底:app-server 有时只回 id(标题为空),或干脆一条都没回(此时
 	// 用本地 rollout 扫描兜底,保证"加载 codex 已有项目/任务时能直接看到标题",
 	// 而不是一片"(未命名会话)")。
-	scanned, scanErr := agent.ListCodexSessions()
+	scanned, scanErr := listCodexSessions()
 	if len(sessions) == 0 {
 		if scanErr != nil {
 			return nil, errInternal(scanErr)
@@ -97,6 +103,12 @@ func (s *Server) ListCodexThreads(ctx context.Context, req *pb.ListCodexThreadsR
 	}
 	out := &pb.ListCodexThreadsResponse{}
 	for _, ss := range sessions {
+		// 【删除墓碑】原生删除失败时 rollout 文件仍在,扫描照样会把删过的会话列出来
+		// —— 这就是"删掉后它又出现在『电脑上的 Codex 会话』里"的主力路径。
+		// 挡在列表出口是唯一不依赖"原生删除成功"的可靠位置(降级扫描也走这里)。
+		if s.cfg.Store.IsTombstoned(ss.ID) {
+			continue
+		}
 		out.Threads = append(out.Threads, &pb.CodexThreadInfo{
 			Id:              ss.ID,
 			Title:           ss.Title,
@@ -138,6 +150,12 @@ func codexRolloutMessages(codexThreadID string) ([]store.StoredMessage, error) {
 }
 
 func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThreadRequest) (*pb.ImportCodexThreadResponse, error) {
+	// 【删除墓碑】没有这道守卫,导入入口就是"复活快捷键":列表挡住了,用户在导入页
+	// 点一下就把它拉回来。判定必须在读原生 rollout **之前** —— 否则错误会退化成
+	// NotFound("rollout 不存在"),把"你删过它"说成"它本来就不存在",掩盖真实原因。
+	if s.cfg.Store.IsTombstoned(req.CodexThreadId) {
+		return nil, errFailedPrecondition("会话已被删除;如需恢复请先清除删除记录")
+	}
 	// 已导入过:直接复用现有线程(不重复建)
 	for _, t := range s.cfg.Store.List(true) {
 		if t.CodexThreadID == req.CodexThreadId {
@@ -150,7 +168,7 @@ func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThrea
 		// 语义就是"没这个会话" —— 与改动前一致地回 NotFound。
 		return nil, errNotFound(err.Error())
 	}
-	sessions, _ := agent.ListCodexSessions()
+	sessions, _ := listCodexSessions()
 	title, cwd := "codex 会话", ""
 	for _, ss := range sessions {
 		if ss.ID == req.CodexThreadId {
