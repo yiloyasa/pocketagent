@@ -45,6 +45,11 @@ const (
 	TypePrefixTurn = "turn."
 	// TypePrefixHost HostEvent 的事件类型前缀(与 Turn 帧同一文件、同一 seq 空间)。
 	TypePrefixHost = "host."
+	// TypePrefixDiag 诊断事件前缀:序列化失败这类「元事件」用它,与 turn./host. 分开。
+	// 【为什么必须独立前缀】ReplayTurnFrames / ReplayHostEvents 都按前缀过滤回放
+	// (见本文件 replay 的两个谓词)。诊断行若混进 turn./host.,会被当成正常帧发给
+	// 手机 —— 手机端解析不了,还会把回放语义搅乱。
+	TypePrefixDiag = "diag."
 )
 
 // Event 落盘的一行(JSONL)。
