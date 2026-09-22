@@ -1404,8 +1404,14 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	if text == "" {
 		text = finalText.String()
 	}
+	// 【为什么空就是空】此前这里塞一句 "(完成,无文本输出)" 当**正文**发出去,把
+	// 三种完全不同的情况压成同一条普通 assistant 文本:
+	//   1. 真的没话说;2. 只产出了非文本产物;3. 适配器把正文弄丢了。
+	// 用户看到的都是"任务完成 + 一句占位",无从判断该不该重试(图二)。
+	// 现在如实返回空块,由 server 层按 blocks 派 OutputState;补正文的责任落在
+	// "确有正文却没拿到"那一档,走原生历史补偿。
 	if text == "" {
-		text = "(完成,无文本输出)"
+		return nil, &pb.Usage{}, nil
 	}
 	blocks := []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}}
 	_ = protojson.Marshal

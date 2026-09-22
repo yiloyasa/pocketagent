@@ -1172,6 +1172,43 @@ func concatTextBlocks(blocks []pb.ContentBlock) string {
 	return sb.String()
 }
 
+// outputStateOf 判定这一轮「最终正文是怎么来的」,填进 TurnCompleted.output_state。
+//
+// 【判据】看 final_blocks 里有没有**文本**:
+//   - 有非空文本 → TEXT;
+//   - 没文本,但有产物块(图片 / 工具调用 / 工具结果)→ ARTIFACT_ONLY;
+//   - 其余(空,或只有思考)→ EMPTY。
+//
+// 【思考块为什么不算产物】思考是过程不是交付物。只有思考没有正文时,用户该看到
+// 的是"这轮没有正文",而不是"有产物"—— 后者会让他去附件里找一个不存在的东西。
+// 【为什么没有 ERROR】轮次失败走的是 TurnFailed 帧(Failed 与 Completed 互斥),
+// 不到这里;enum 里保留 ERROR 是为了让手机端有一个统一的状态视角可用。
+// 【为什么不用 final_blocks 是否为空判 EMPTY】空思考块 / 空文本块也算"有块",
+// 直接按 len 判定会把"块里没内容"误报成 TEXT。
+func outputStateOf(blocks []*pb.ContentBlock) pb.OutputState {
+	artifact := false
+	for i := range blocks {
+		b := blocks[i]
+		if b == nil {
+			continue
+		}
+		switch blk := b.Block.(type) {
+		case *pb.ContentBlock_Text:
+			if strings.TrimSpace(blk.Text.GetText()) != "" {
+				return pb.OutputState_OUTPUT_STATE_TEXT
+			}
+		case *pb.ContentBlock_Image, *pb.ContentBlock_ToolCall, *pb.ContentBlock_ToolResult:
+			artifact = true
+		case *pb.ContentBlock_Thinking:
+			// 过程,不算产物。
+		}
+	}
+	if artifact {
+		return pb.OutputState_OUTPUT_STATE_ARTIFACT_ONLY
+	}
+	return pb.OutputState_OUTPUT_STATE_EMPTY
+}
+
 // runTurnOnce 跑"一轮"的完整主体:provider.Run → 思考前置落库 → 自动标题
 // → 落库 + 收尾帧(Failed/Completed)→ 主机事件。从 StartTurn 的轮次循环体
 // 原样抽出(2026-09-20,T-L2wire),StartTurn 与跨 agent 委派引擎
@@ -1269,8 +1306,14 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
 		// final_blocks 同步带思考块:手机端终局帧只提取文本(finalText),
 		// 不会被重复渲染;离线快照/事件回放路径拿到的与落库一致。
+		finalBlocks := refBlocks(persistBlocks)
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Completed{Completed: &pb.TurnCompleted{
-			TurnId: turnID, FinalBlocks: refBlocks(persistBlocks), Usage: usagePtr,
+			TurnId: turnID, FinalBlocks: finalBlocks, Usage: usagePtr,
+			// 【为什么必须带上它】空正文此前被适配器伪装成一条普通 assistant
+			// 文本("(完成,无文本输出)"),手机端只能显示"任务完成 + 一句占位",
+			// 用户无从判断该不该重试。OutputState 把"真的没话说""只有产物"
+			// "失败"如实分开,手机端据此决定提示什么。
+			OutputState: outputStateOf(finalBlocks),
 		}}})
 	}
 	if uerr := s.cfg.Store.Update(t); uerr != nil {

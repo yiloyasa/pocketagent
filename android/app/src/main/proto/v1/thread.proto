@@ -734,11 +734,42 @@ message UsageUpdate {
   int64 model_context_window = 3;
 }
 
+// OutputState 说明「这一轮的最终正文是怎么来的」。
+//
+// 【为什么需要它】此前适配器把空正文伪装成 "(完成,无文本输出)" 这样一条**普通
+// assistant 文本**发出来,手机端无法区分三种完全不同的情况:
+//   - 真的没话说(EMPTY);
+//   - 只产出了非文本产物,比如图片/文件(ARTIFACT_ONLY);
+//   - 适配器把正文弄丢了,原生历史里其实有(ADAPTER_LOST_OUTPUT / RECOVERED_*)。
+// 用户看到的都是"任务完成 + 一句占位文案",于是无从判断该不该重试。
+enum OutputState {
+  // 旧 daemon 未上报:手机端按 final_blocks 自行判断(向后兼容)。
+  OUTPUT_STATE_UNSPECIFIED = 0;
+  OUTPUT_STATE_TEXT = 1;
+  // 确实没有正文(也没有产物)—— 这是事实陈述,不是错误。
+  OUTPUT_STATE_EMPTY = 2;
+  // 只有非文本块(图片/附件等),没有正文。
+  OUTPUT_STATE_ARTIFACT_ONLY = 3;
+  // 轮次失败(正文见 TurnFailed.partial_text)。
+  OUTPUT_STATE_ERROR = 4;
+  // 增量流丢了正文,已从原生历史(thread/read)补偿回真实正文。
+  OUTPUT_STATE_RECOVERED_FROM_NATIVE_HISTORY = 5;
+  // 适配器确认丢了正文,且原生历史也补不回来 —— 必须让用户知道"该重试",
+  // 而不是假装任务正常完成。
+  OUTPUT_STATE_ADAPTER_LOST_OUTPUT = 6;
+}
+
 message TurnCompleted {
   string turn_id = 1;
   repeated ContentBlock final_blocks = 2; // 完整最终消息(增量重组成)
   Usage usage = 3;
   int64 elapsed_ms = 4;
+  OutputState output_state = 5;
+  // output_source 正文来源的可读标注("delta" / "item_completed" /
+  // "turn_items" / "native_history"),诊断用,手机端可忽略。
+  string output_source = 6;
+  // diagnostic_id 关联的诊断事件 id(有诊断可查时非空)。
+  string diagnostic_id = 7;
 }
 
 message TurnFailed {

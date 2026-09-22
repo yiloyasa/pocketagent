@@ -622,10 +622,13 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 	switch stop {
 	case "", "end_turn":
 		text := st.snapshotText()
-		if text == "" {
-			text = "(完成,无文本输出)"
-		}
 		log.Printf("[dsh] 一轮完成 session=%s 用时 %v 回复 %d 字", sid, time.Since(turnStart).Round(time.Millisecond), len([]rune(text)))
+		// 【空就是空】见 codex.go 同处注释:占位文本会把"真的没话说""只有产物"
+		// "适配器丢正文"压成同一条普通 assistant 文本,用户无从判断该不该重试。
+		// 如实返回空块,OutputState 由 server 层按 blocks 判定。
+		if text == "" {
+			return nil, &pb.Usage{}, nil
+		}
 		return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}}, &pb.Usage{}, nil
 	case "cancelled":
 		partial := st.snapshotText()

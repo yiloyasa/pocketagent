@@ -1943,8 +1943,11 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	if text == "" {
 		text = finalText
 	}
+	// 【空就是空】见 codex.go 同处注释:占位文本会把"真的没话说""只有产物"
+	// "适配器丢正文"压成同一条普通 assistant 文本,用户无从判断该不该重试。
+	// 如实返回空块,OutputState 由 server 层按 blocks 判定。
 	if text == "" {
-		text = "(完成,无文本输出)"
+		return nil, lastUsage, nil
 	}
 	blocks := []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}}
 	return blocks, lastUsage, nil
