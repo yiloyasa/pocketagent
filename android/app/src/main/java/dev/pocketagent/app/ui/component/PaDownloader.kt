@@ -285,8 +285,7 @@ object PaDownloader {
                 ?: throw IllegalStateException("无法写入文件")
             Triple(out, "下载/PocketAgent/$name", uri.toString())
         } else {
-            val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                ?: ctx.filesDir
+            val dir = PaPaths.downloadsDir(ctx)
             if (!dir.exists()) dir.mkdirs()
             val file = java.io.File(dir, name)
             Triple(file.outputStream(), file.absolutePath, android.net.Uri.fromFile(file).toString())
@@ -456,9 +455,9 @@ object PaDownloader {
                     }
                 } ?: ""
             } else {
-                val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                val f = dir?.let { java.io.File(it, fileName) }
-                if (f != null && f.exists()) android.net.Uri.fromFile(f).toString() else ""
+                val dir = PaPaths.downloadsDir(ctx)
+                val f = java.io.File(dir, fileName)
+                if (f.exists()) android.net.Uri.fromFile(f).toString() else ""
             }
         }.getOrDefault("")
     }

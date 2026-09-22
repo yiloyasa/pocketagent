@@ -24,7 +24,7 @@ internal object TurnCheckpointStore {
     )
 
     @Volatile private var root: File? = null
-    fun init(context: Context) { root = File(context.applicationContext.filesDir, "turn-checkpoints").also { it.mkdirs() } }
+    fun init(context: Context) { root = PaPaths.turnCheckpointsDir(context.applicationContext).also { it.mkdirs() } }
     internal fun initForTest(dir: File) { root = dir.also { it.mkdirs() } }
 
     @Synchronized fun save(checkpoint: Checkpoint) {

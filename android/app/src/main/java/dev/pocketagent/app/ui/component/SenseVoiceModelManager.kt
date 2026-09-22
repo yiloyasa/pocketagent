@@ -42,7 +42,7 @@ internal object SenseVoiceModelManager {
     @Synchronized fun init(context: Context) {
         if (appContext == null) {
             appContext = context.applicationContext
-            root = File(context.applicationContext.filesDir, "sensevoice-int8")
+            root = PaPaths.sensevoiceDir(context.applicationContext)
         }
         prepareBundledModel()
     }

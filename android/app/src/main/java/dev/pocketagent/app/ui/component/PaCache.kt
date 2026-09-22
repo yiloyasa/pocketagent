@@ -15,10 +15,7 @@ import java.io.File
 object PaCache {
 
     /** PcFilePreview 的临时文件前缀:PDF 渲染字节(pa_pdf_*)、zip 目录列表(pa_ziplist*)。 */
-    private val TEMP_PREFIXES = arrayOf("pa_pdf_", "pa_ziplist")
-
-    /** 预览内容缓存目录(cacheDir 下的子目录,归 [PreviewCache] 管)。 */
-    const val PREVIEW_DIR = "pa_preview"
+    private val TEMP_PREFIXES = arrayOf(PaPaths.TMP_PDF_PREFIX, PaPaths.TMP_ZIPLIST_PREFIX)
 
     fun init(ctx: Context) {
         sweepTemp(ctx)
@@ -108,7 +105,7 @@ object PreviewCache {
     private var dir: File? = null
 
     fun init(ctx: Context) {
-        val d = File(ctx.cacheDir, PaCache.PREVIEW_DIR)
+        val d = PaPaths.previewDir(ctx)
         runCatching { d.mkdirs() }
         dir = d
     }

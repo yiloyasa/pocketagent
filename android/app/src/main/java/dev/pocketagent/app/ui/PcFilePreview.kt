@@ -2,6 +2,7 @@ package dev.pocketagent.app.ui
 
 import android.content.Context
 import android.util.Xml
+import dev.pocketagent.app.ui.component.PaPaths
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
 import java.util.zip.ZipEntry
@@ -637,7 +638,7 @@ object PcFilePreview {
             // 【为什么落盘再用 ZipFile】ZipInputStream 按本地文件头逐条读,而 APK 这类
             // 构建产物把大小写在数据描述符里,逐条流式读会得到 0 长度甚至空名条目
             // (实测:228 条的 APK 读出一串空白行)。ZipFile 走中央目录,名与大小都可靠。
-            val tmp = java.io.File.createTempFile("pa_ziplist", ".zip", ctx.cacheDir)
+            val tmp = java.io.File.createTempFile(PaPaths.TMP_ZIPLIST_PREFIX, ".zip", ctx.cacheDir)
             try {
                 tmp.writeBytes(bytes)
                 java.util.zip.ZipFile(tmp).use { zf ->
@@ -1183,7 +1184,7 @@ object PcFilePreview {
     /** PDF:用系统自带的 PdfRenderer 逐页转位图,内嵌进 HTML —— 不需要装任何阅读器。 */
     private fun pdf(ctx: Context, bytes: ByteArray, pal: Pal): String {
         if (bytes.size < 16) return errorHtml("文件内容为空", pal)
-        val tmp = java.io.File(ctx.cacheDir, "pa_pdf_${System.nanoTime()}.pdf")
+        val tmp = java.io.File(ctx.cacheDir, "${PaPaths.TMP_PDF_PREFIX}${System.nanoTime()}.pdf")
         var pfd: android.os.ParcelFileDescriptor? = null
         var renderer: android.graphics.pdf.PdfRenderer? = null
         return try {
