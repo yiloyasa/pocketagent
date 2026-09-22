@@ -96,10 +96,10 @@ func main() {
 		} else {
 			var resp struct {
 				Data []struct {
-					Name          string `json:"name"`
-					DefaultEnabled bool  `json:"defaultEnabled"`
-					Enabled       bool   `json:"enabled"`
-					Stage         string `json:"stage"`
+					Name           string `json:"name"`
+					DefaultEnabled bool   `json:"defaultEnabled"`
+					Enabled        bool   `json:"enabled"`
+					Stage          string `json:"stage"`
 				} `json:"data"`
 			}
 			_ = json.Unmarshal(raw, &resp)

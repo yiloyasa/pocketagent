@@ -82,12 +82,12 @@ func TestDecodeModelTupleProbeFixture(t *testing.T) {
 // 裸模型名")必须被判非法,绝不能混进 set_config_option 的 value。
 func TestValidModelValueRejectsBareModelName(t *testing.T) {
 	for _, bad := range []string{
-		"deepseek-v4-flash",            // 裸模型名
-		"deepseek-official",            // 裸 route
-		`["deepseek-official"]`,        // 一元组
+		"deepseek-v4-flash",             // 裸模型名
+		"deepseek-official",             // 裸 route
+		`["deepseek-official"]`,         // 一元组
 		`["deepseek-official","a","b"]`, // 三元组
-		``,                             // 空串
-		`[123,456]`,                    // 非字符串数组
+		``,                              // 空串
+		`[123,456]`,                     // 非字符串数组
 	} {
 		if got, ok := ValidModelValue(bad); ok {
 			t.Fatalf("裸值 %q 应被判非法,却返回 %q", bad, got)
@@ -110,9 +110,9 @@ func TestParseModelCatalogWithProbeFixture(t *testing.T) {
 		t.Fatalf("模型叶子应 4 个,实得 %d: %+v", len(cat.ModelOptions), cat.ModelOptions)
 	}
 	wantModels := map[string]string{
-		`["deepseek-official","deepseek-flash"]`:           "DeepSeek-V41-Flash",
-		`["deepseek-official","deepseek-v4-flash"]`:        "DeepSeek-V4-Flash",
-		`["deepseek-official","deepseek-v4-pro"]`:          "DeepSeek-V4-Pro",
+		`["deepseek-official","deepseek-flash"]`:               "DeepSeek-V41-Flash",
+		`["deepseek-official","deepseek-v4-flash"]`:            "DeepSeek-V4-Flash",
+		`["deepseek-official","deepseek-v4-pro"]`:              "DeepSeek-V4-Pro",
 		`["deepseek-official","deepseek-v4-flash-vision-exp"]`: "DeepSeek-V4-Flash-Vision-Exp",
 	}
 	for _, m := range cat.ModelOptions {
