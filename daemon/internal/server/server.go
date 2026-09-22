@@ -96,7 +96,7 @@ func New(cfg Config) *Server {
 	srv := &Server{
 		cfg:         cfg,
 		devices:     newDeviceRegistry(cfg.DataDir, cfg.PairCode),
-		hostID:      randomID("host"),
+		hostID:      hostIDFromInstallation(cfg.DataDir),
 		activeTurns: newActiveTurns(),
 		turnQueue:   newTurnInputQueue(),
 		events:      events,
