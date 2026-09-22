@@ -28,6 +28,7 @@ import (
 	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/mdns"
 	"github.com/pocketagent/daemon/internal/piapp"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/server"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/term"
@@ -230,6 +231,23 @@ func main() {
 	// W6：运行时状态（checkpoint）要落到磁盘，而不是只在内存里活着（规格 §8.2）。
 	// 必须在 provider 注册之前指定 —— 共享后端是惰性单例，首次交付运行时即定型。
 	agent.SetRuntimeDataDir(*dataDir)
+
+	// W7：装载资源预算（规格 §6.5 的逐级覆盖）。配置坏掉不让 daemon 起不来，
+	// 但必须出声 —— 静默用零值等于把所有资源一起封禁。
+	budgetPolicy, budgetErr := runtime.LoadBudgetPolicy(*dataDir)
+	if budgetErr != nil {
+		log.Printf("[budget] WARNING: %v（已回退内置基线）", budgetErr)
+	}
+	{
+		lim, origins := budgetPolicy.EffectiveWithSource("", "", "", "")
+		log.Printf("[budget] 生效预算(全局): ram_working=%dMB event_buffer=%dMB session_index=%dMB disk_conversation=%dMB disk_cache=%dMB disk_artifact=%dMB max_parallel_turns=%d",
+			*lim.RAMWorkingBytes>>20, *lim.RAMEventBufferBytes>>20, *lim.RAMSessionIndexBytes>>20,
+			*lim.DiskConversationBytes>>20, *lim.DiskCacheBytes>>20, *lim.DiskArtifactBytes>>20,
+			*lim.MaxParallelTurns)
+		log.Printf("[budget] 溯源: ram_working←%s max_parallel_turns←%s（配置 %s）",
+			origins["RAMWorkingBytes"], origins["MaxParallelTurns"],
+			runtime.BudgetPolicyPath(*dataDir))
+	}
 	providers := agent.DetectProviders()
 	tm := term.NewManager()
 	// 空闲回收器:随进程存活,daemon 退出时随进程消亡,无需单独停
