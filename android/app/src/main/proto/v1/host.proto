@@ -39,6 +39,11 @@ message HostInfo {
   // 主机的局域网 IPv4(192.168.x.x 等):同一 WiFi 下直连最快,
   // 不依赖 Tailscale 的 DERP 中继
   string lan_ipv4 = 11;
+  // W6b:启动恢复诊断(规格 §8.2/§8.3)。把"这次启动走了哪条恢复路径、有没有数据
+  // 损失"经 RPC 送到手机 —— 此前它只落在 daemon 日志里,用户在手机端无从知道
+  // 「上次退出时还有几条排队输入没轮到执行」。旧 daemon 不带该字段 = 未报告,
+  // 手机端据此隐藏该区块(禁用"未知/错误"措辞,AUDIT §3.3)。
+  HostRecoveryReport recovery = 12;
 }
 
 message AuthorizeRequest {
@@ -123,4 +128,52 @@ message DevServerList {
   repeated DevServer servers = 1;
   // 结果生成时间(daemon 本地时钟,Unix 毫秒)。手机端可提示"多久前扫的";0 = 旧 daemon。
   int64 scanned_at_unix_ms = 2;
+}
+
+// ---- W6b:启动恢复诊断(规格 §8.2 恢复三分支的进程级视图)----
+//
+// 【为什么整块单列,而不是把关键字段摊平进 HostInfo】这张表是"本次启动的健康度
+// 快照",手机端作为一个单元整体呈现(顶部横幅 + 可展开明细);摊平后字段互相失去
+// 归属,HostInfo 的后续演进也更容易撞号。
+message HostRecoveryReport {
+  // ok / degraded / corrupted —— 与 daemon 侧 RecoveryReport.Status 同值域。
+  // 【为什么用 string 不用 enum】手机端只做透传展示,值域由 daemon 单方面定义;
+  // 新增档位不该要求旧 APK 重新生成契约(旧枚举值会落进 UNRECOGNIZED)。
+  string status = 1;
+  string summary = 2;                     // 一句话人话摘要(日志与 UI 直接展示)
+  HostStoreHealth store = 3;              // 会话库 threads.json 健康度
+  HostTurnJournalHealth turn_journal = 4; // 排队输入台账:丢了几条、丢的是哪句
+  HostDeviceHealth devices = 5;
+  HostIdentityHealth identity = 6;
+}
+
+message HostStoreHealth {
+  string outcome = 1;         // clean / first-run / quarantined
+  bool has_backup = 2;        // 存在 threads.json.bak(损坏后可人工恢复)
+  string quarantine_path = 3; // 解析失败时的留档路径(仅 quarantined 非空)
+}
+
+// HostTurnJournalHealth 是"排队输入丢失可见"的载体:条数、涉及会话、逐条明细。
+// 【为什么条数与明细都要】只有条数,用户仍然不知道"丢的是哪句话";只有明细,
+// 横幅文案又得在手机端重算总量。两者都给,各取所需。
+message HostTurnJournalHealth {
+  int32 pending_count = 1;
+  repeated string thread_ids = 2;              // 涉及会话 id(去重,保持出现顺序)
+  repeated HostLostQueueInput lost_inputs = 3; // 逐条明细(供用户辨认丢的是哪句)
+}
+
+message HostLostQueueInput {
+  string thread_id = 1;
+  string preview = 2;                // 输入文本前 120 字符(按 rune 截断)
+  int64 created_at_unix_ms = 3;
+}
+
+message HostDeviceHealth {
+  bool degraded = 1; // 设备表损坏 → 已 fail-closed 暂停远程认证
+  string reason = 2;
+}
+
+message HostIdentityHealth {
+  bool degraded = 1; // 身份文件不可用 → 本次改用临时 host id(手机会认为换了机器)
+  string reason = 2;
 }

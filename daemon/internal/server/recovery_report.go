@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
@@ -42,12 +43,30 @@ type StoreHealth struct {
 	QuarantinePath string `json:"quarantine_path,omitempty"`
 }
 
+// LostQueueInput 是"上次退出时还没轮到执行、已随重启丢失"的一条排队输入明细。
+//
+// 【为什么必须有明细,而不止一个计数】计数只说明"丢了几条";用户真正要判断的是
+// "丢的是不是我正在等回话的那句"。没有文本预览,手机端只能显示"有 2 条输入丢失",
+// 用户无法辨认、也就无法决定要不要重发 —— 而"要不要重发"恰恰是规格 §8.3 明确
+// 留给用户自己的决定。时间戳用于把条目对回当时的会话上下文。
+type LostQueueInput struct {
+	// ThreadID 该输入原本排给的会话。
+	ThreadID string `json:"thread_id"`
+	// Preview 输入文本前 120 字符(按 rune 截断),供用户辨认"丢的是哪句"。
+	Preview string `json:"preview"`
+	// CreatedAt unix 毫秒(入队时刻)。
+	CreatedAt int64 `json:"created_at"`
+}
+
 // TurnJournalHealth 汇总排队输入台账里未完成条目的情况。
 type TurnJournalHealth struct {
 	// PendingCount 上次退出时还没轮到执行的排队输入条数(已随重启丢失)。
 	PendingCount int `json:"pending_count"`
 	// ThreadIDs 涉及的会话 id(去重,保持出现顺序)。
 	ThreadIDs []string `json:"thread_ids,omitempty"`
+	// LostInputs 逐条丢失明细(与 PendingCount 同源,顺序即入队顺序)。
+	// 条数与明细都给:横幅要前者,展开视图要后者,手机端不必自己重算其中一个。
+	LostInputs []LostQueueInput `json:"lost_inputs,omitempty"`
 }
 
 // DevicesHealth 汇总设备表(devices.json)的健康度。
@@ -119,6 +138,13 @@ func buildRecoveryReport(dataDir string, st *store.FileStore, devices *deviceReg
 	rep.TurnJournal = TurnJournalHealth{PendingCount: len(pending)}
 	seen := map[string]bool{}
 	for _, e := range pending {
+		// 明细逐条保留(不跟着 thread_ids 一起去重):同一会话排了两句就是丢了两句,
+		// 去重只该作用于"涉及哪些会话"这个视图,不该抹掉丢失量本身。
+		rep.TurnJournal.LostInputs = append(rep.TurnJournal.LostInputs, LostQueueInput{
+			ThreadID:  e.ThreadID,
+			Preview:   e.Preview,
+			CreatedAt: e.CreatedAt,
+		})
 		if e.ThreadID == "" || seen[e.ThreadID] {
 			continue
 		}
@@ -197,4 +223,41 @@ func errStringOf(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// ToProto 把进程内恢复报告翻成契约形态(host.proto 的 HostRecoveryReport)。
+//
+// 【为什么集中一处转换,而不是在 GetHostInfo 里逐字段拼】报告维度与契约字段一一
+// 对应;散在 RPC 调用点拼装时,将来新增一个健康度维度(比如端点表)极易漏掉某条
+// RPC —— 漏掉的表现只是"手机端少了这一项",没有任何测试会喊。集中转换让"新增
+// 维度"必然经过同一处。
+//
+// 【为什么原样透传 status/summary 而不是在协议层重算】判定逻辑属于 daemon
+// (它才知道各数据源的真实加载路径);协议层重算会给"同一个事实两处推导"留后门,
+// 两边迟早不一致。
+func (r RecoveryReport) ToProto() *pb.HostRecoveryReport {
+	out := &pb.HostRecoveryReport{
+		Status:  r.Status,
+		Summary: r.Summary,
+		Store: &pb.HostStoreHealth{
+			Outcome:        string(r.Store.Outcome),
+			HasBackup:      r.Store.HasBackup,
+			QuarantinePath: r.Store.QuarantinePath,
+		},
+		TurnJournal: &pb.HostTurnJournalHealth{
+			PendingCount: int32(r.TurnJournal.PendingCount),
+			ThreadIds:    append([]string(nil), r.TurnJournal.ThreadIDs...),
+		},
+		Devices:  &pb.HostDeviceHealth{Degraded: r.Devices.Degraded, Reason: r.Devices.Reason},
+		Identity: &pb.HostIdentityHealth{Degraded: r.Identity.Degraded, Reason: r.Identity.Reason},
+	}
+	// 逐条明细:手机端"丢的是哪句"的唯一来源,逐条带上预览与入队时刻。
+	for _, li := range r.TurnJournal.LostInputs {
+		out.TurnJournal.LostInputs = append(out.TurnJournal.LostInputs, &pb.HostLostQueueInput{
+			ThreadId:        li.ThreadID,
+			Preview:         li.Preview,
+			CreatedAtUnixMs: li.CreatedAt,
+		})
+	}
+	return out
 }

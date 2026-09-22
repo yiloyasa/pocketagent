@@ -64,6 +64,11 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		DefaultShell:  shell,
 		TailscaleIpv4: detectTailscaleIP(),
 		LanIpv4:       detectLanIP(),
+		// W6b:把启动恢复报告(含"上次退出时哪几条排队输入丢了")随探活一起带给手机。
+		// 走 GetHostInfo 而不是新增 RPC:手机每 8 秒就会问一次这里,用户打开 App 即
+		// 能看到,无需额外的轮询通道;代价只是一次结构体拷贝。此前这条信息只落在
+		// daemon 日志里,用户端无从知道自己的排队消息没跑成 —— 判为"未达成"。
+		Recovery: s.recoveryReport.ToProto(),
 	}, nil
 }
 
