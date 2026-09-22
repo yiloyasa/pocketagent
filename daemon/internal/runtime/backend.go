@@ -56,6 +56,10 @@ type Backend struct {
 	covered map[string]SequenceRange // memory key -> 已压缩覆盖范围
 	digest  map[string]string        // memory key -> 摘要正文
 	version map[string]int64         // memory key -> 写入版本
+	// hydrated 标记本进程是否已就某条 memory key 咨询过持久层（"首次触碰即装载"）。
+	// 没有它，每个入口都只能靠"内存态空不空"决定要不要读盘 —— 而没落盘过的 key
+	// 内存态恒空，会导致每次操作都探一次磁盘。reset() 清空它（模拟新进程）。
+	hydrated map[string]bool
 
 	// ---- 落盘态（重启后仍在）----
 	durable     map[string][]byte // checkpoint key -> 内容
@@ -125,6 +129,7 @@ func (b *Backend) reset() {
 	b.covered = map[string]SequenceRange{}
 	b.digest = map[string]string{}
 	b.version = map[string]int64{}
+	b.hydrated = map[string]bool{}
 	b.durable = map[string][]byte{}
 	b.sessionRefs = map[string]bool{}
 	b.persistSeq = map[string]int64{}
@@ -203,13 +208,62 @@ type memMemory struct{ b *Backend }
 
 var _ MemoryManager = (*memMemory)(nil)
 
-func (m *memMemory) Load(_ context.Context, key MemoryKey) (*MemorySnapshot, error) {
+func (m *memMemory) Load(ctx context.Context, key MemoryKey) (*MemorySnapshot, error) {
 	if err := key.Validate(); err != nil {
 		return nil, err
 	}
-	m.b.mu.Lock()
-	defer m.b.mu.Unlock()
-	return m.b.snapshotLocked(key), nil
+	if err := m.hydrate(ctx, key); err != nil {
+		return nil, err
+	}
+	b := m.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.snapshotLocked(key), nil
+}
+
+// hydrate 确保这条 key 在本进程里已装载过（"首次触碰即装载"）。
+//
+// 【为什么每个入口都要它，而不只是 Load】checkpoint 在磁盘上，内存态在进程重启后
+// 是空的。若只有 Load 装载，重启后第一条轮次走的是 Append —— 它会在空态上从 seq=1
+// 重新分配，随后 Checkpoint 用这份"只有新内容"的快照把盘上的旧记忆整个覆盖掉：
+// 既丢历史，又让序号与已落盘的对不上账（手机端按 sequence 增量补帧）。
+// 因此 Append/ReadWindow/Compact/Checkpoint 与 Load 一样，动这条 key 前先装载。
+//
+// 【为什么要 hydrated 标记，而不是看内存态空不空】没落盘过的 key 内存态本来就是
+// 空的 —— 只看"空不空"会让每次操作都去探一次磁盘。标记把探测收敛为"每进程每 key 一次"。
+//
+// 【为什么要双检】读盘（锁外）期间别的 goroutine 可能已写入。那是最新的状态，
+// 绝不能被读回来的旧 checkpoint 覆盖。所以真正装填前在锁内再确认一次"内存态仍为空"。
+func (m *memMemory) hydrate(ctx context.Context, key MemoryKey) error {
+	b := m.b
+	ks := key.String()
+	b.mu.Lock()
+	done := b.hydrated[ks]
+	b.mu.Unlock()
+	if done {
+		return nil
+	}
+	cp, found, err := b.readMemoryCheckpoint(ctx, key)
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.hydrated[ks] {
+		return nil // 并发下已被别人装载/写入
+	}
+	b.hydrated[ks] = true
+	if found && b.memoryAbsentLocked(key) {
+		b.applyMemoryCheckpointLocked(key, cp)
+	}
+	return nil
+}
+
+// memoryAbsentLocked 报告本进程从未在这条 key 上写过任何东西（内存态全空）。
+// 它是 hydrate 装填前的并发保护判据。
+func (b *Backend) memoryAbsentLocked(key MemoryKey) bool {
+	ks := key.String()
+	return b.version[ks] == 0 && len(b.items[ks]) == 0 && b.covered[ks].Empty() && b.digest[ks] == ""
 }
 
 // snapshotLocked 必须在 b.mu 持有时调用。
@@ -230,8 +284,12 @@ func (b *Backend) snapshotLocked(key MemoryKey) *MemorySnapshot {
 	return out
 }
 
-func (m *memMemory) Append(_ context.Context, key MemoryKey, item MemoryItem) (int64, error) {
+func (m *memMemory) Append(ctx context.Context, key MemoryKey, item MemoryItem) (int64, error) {
 	if err := key.Validate(); err != nil {
+		return 0, err
+	}
+	// 先装载：重启后的第一轮 Append 必须接着盘上的旧记忆走，而不是从空态重启序号。
+	if err := m.hydrate(ctx, key); err != nil {
 		return 0, err
 	}
 	b := m.b
@@ -252,8 +310,11 @@ func (m *memMemory) Append(_ context.Context, key MemoryKey, item MemoryItem) (i
 	return seq, nil
 }
 
-func (m *memMemory) ReadWindow(_ context.Context, key MemoryKey, limit MemoryLimit) ([]MemoryItem, error) {
+func (m *memMemory) ReadWindow(ctx context.Context, key MemoryKey, limit MemoryLimit) ([]MemoryItem, error) {
 	if err := key.Validate(); err != nil {
+		return nil, err
+	}
+	if err := m.hydrate(ctx, key); err != nil {
 		return nil, err
 	}
 	m.b.mu.Lock()
@@ -291,8 +352,11 @@ func (m *memMemory) ReadWindow(_ context.Context, key MemoryKey, limit MemoryLim
 	return chosen, nil
 }
 
-func (m *memMemory) Compact(_ context.Context, key MemoryKey, policy CompactPolicy) (*MemorySnapshot, error) {
+func (m *memMemory) Compact(ctx context.Context, key MemoryKey, policy CompactPolicy) (*MemorySnapshot, error) {
 	if err := key.Validate(); err != nil {
+		return nil, err
+	}
+	if err := m.hydrate(ctx, key); err != nil {
 		return nil, err
 	}
 	b := m.b
@@ -376,27 +440,58 @@ func structuralDigest(items []MemoryItem) string {
 	return sb.String()
 }
 
-func (m *memMemory) Checkpoint(_ context.Context, key MemoryKey) error {
+func (m *memMemory) Checkpoint(ctx context.Context, key MemoryKey) error {
 	if err := key.Validate(); err != nil {
+		return err
+	}
+	// 先装载：否则重启后第一次 Checkpoint 会用空内存态把盘上的旧记忆覆盖掉
+	// （那是比"不落盘"更隐蔽的丢数据 —— 盘上有过，然后被清成空）。
+	if err := m.hydrate(ctx, key); err != nil {
 		return err
 	}
 	b := m.b
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.checkpointMemoryLocked(key)
+	ck, payload, err := b.prepareMemoryCheckpointLocked(key)
+	b.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// 落盘在**锁外**：写文件 + fsync 是毫秒级 IO，持 b.mu 会让记忆/缓存/记账
+	// 这些与磁盘无关的操作一起阻塞；而且内存后端的 Save 自身也要取 b.mu，
+	// 持锁调用即自死锁。
+	//
+	// 【为什么走 Checkpoints() 而不是直接写 b.durable】dataDir 为空时 Checkpoints()
+	// 是内存实现（写 b.durable，与旧行为一致）；非空时是文件实现（写
+	// <dataDir>/checkpoints/，跨重启存活）。绕开它直接写 b.durable，正是文件后端下
+	// 「checkpoint 从不落盘」这个缺陷的成因。
+	return b.Checkpoints().Save(ctx, ck, payload)
 }
 
-func (b *Backend) checkpointMemoryLocked(key MemoryKey) error {
+// memoryCheckpoint 是 memory 的落盘载荷。
+//
+// 【为什么不直接序列化 MemorySnapshot】快照只含记忆内容，不含 sequence 高水位。
+// 恢复不只要内容回来，还要 Append 接着旧序号走 —— 少了高水位，重启后 Append 从 1
+// 重新分配，与已落盘的 sequence 撞车（手机端按 sequence 增量补帧，撞车即对不上账）。
+type memoryCheckpoint struct {
+	Snapshot *MemorySnapshot `json:"snapshot"`
+	// Seq 是写入那一刻的 sequence 高水位（只升不降，见 applyMemoryCheckpointLocked）。
+	Seq int64 `json:"seq"`
+}
+
+// prepareMemoryCheckpointLocked 在 b.mu 持有时冻结一份待落盘的记忆，返回 checkpoint
+// key 与载荷；**不落盘** —— 写盘由调用方在锁外做（见 memMemory.Checkpoint）。
+func (b *Backend) prepareMemoryCheckpointLocked(key MemoryKey) (CheckpointKey, []byte, error) {
 	ks := key.String()
-	snap := b.snapshotLocked(key)
-	payload, err := json.Marshal(snap)
+	cp := memoryCheckpoint{Snapshot: b.snapshotLocked(key), Seq: b.seq[ks]}
+	payload, err := json.Marshal(cp)
 	if err != nil {
-		return fmt.Errorf("runtime: 序列化记忆失败: %w", err)
+		return CheckpointKey{}, nil, fmt.Errorf("runtime: 序列化记忆失败: %w", err)
 	}
-	ck := CheckpointKey{AgentID: key.AgentID, ThreadID: key.ThreadID, Name: memoryCheckpointName(key)}
-	b.durable[ck.String()] = payload
+	// persistSeq 是**内存态**的高水位记录：ExportDurable/ImportDurable（同进程模拟
+	// 重启）靠它把 seq 恢复回来；文件后端的真重启则靠载荷里的 Seq。两者服务于不同
+	// 的重启形态，都要维护。
 	b.persistSeq[ks] = b.seq[ks]
-	return nil
+	return memoryCheckpointKey(key), payload, nil
 }
 
 // memoryCheckpointName 把 MemoryKey 映射到 checkpoint 名（kind + scope）。
@@ -407,35 +502,73 @@ func memoryCheckpointName(key MemoryKey) string {
 	return "memory:" + string(key.Kind) + ":" + key.Scope
 }
 
-func (m *memMemory) Restore(_ context.Context, key MemoryKey) error {
+func (m *memMemory) Restore(ctx context.Context, key MemoryKey) error {
 	if err := key.Validate(); err != nil {
 		return err
 	}
 	b := m.b
+	// 读盘在锁外（文件 IO 不该持有共享锁）。
+	cp, found, err := b.readMemoryCheckpoint(ctx, key)
+	if err != nil {
+		return err
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ks := key.String()
-	ck := CheckpointKey{AgentID: key.AgentID, ThreadID: key.ThreadID, Name: memoryCheckpointName(key)}
-	raw, ok := b.durable[ck.String()]
-	if !ok {
+	// 咨询过持久层了：标记 hydrated，后续入口不必再探。
+	b.hydrated[key.String()] = true
+	if !found {
 		// 没有 checkpoint 时**不动内存态**：把"没落盘过"当成"清空记忆"会
 		// 在恢复路径上静默丢数据。调用方要靠 found 语义判断，而不是靠副作用。
 		return nil
 	}
-	var snap MemorySnapshot
-	if err := json.Unmarshal(raw, &snap); err != nil {
-		return fmt.Errorf("runtime: 反序列化 checkpoint 失败(%s): %w", ck, err)
+	b.applyMemoryCheckpointLocked(key, cp)
+	return nil
+}
+
+// readMemoryCheckpoint 从持久层读一份 memory checkpoint（**锁外**调用，做文件 IO）。
+// found=false 表示从未落盘（不是错误）。
+func (b *Backend) readMemoryCheckpoint(ctx context.Context, key MemoryKey) (*memoryCheckpoint, bool, error) {
+	ck := memoryCheckpointKey(key)
+	raw, found, err := b.Checkpoints().Load(ctx, ck)
+	if err != nil {
+		return nil, false, err
 	}
+	if !found {
+		return nil, false, nil
+	}
+	var cp memoryCheckpoint
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		return nil, false, fmt.Errorf("runtime: 反序列化记忆 checkpoint 失败(%s): %w", ck, err)
+	}
+	if cp.Snapshot == nil {
+		return nil, false, fmt.Errorf("runtime: 记忆 checkpoint 缺少快照(%s)", ck)
+	}
+	return &cp, true, nil
+}
+
+// applyMemoryCheckpointLocked 把一份 checkpoint 装载进内存态（b.mu 持有时调用）。
+//
+// 【高水位只升不降】Append 按 seq 分配序号；若恢复把高水位降回去，Append 会复用
+// 已发出过的序号 —— 手机端按 sequence 增量补帧，复用即对不上账，也会让摘要的
+// Covered 范围与新项序号重叠。
+func (b *Backend) applyMemoryCheckpointLocked(key MemoryKey, cp *memoryCheckpoint) {
+	ks := key.String()
+	snap := cp.Snapshot
 	b.items[ks] = append([]MemoryItem(nil), snap.Items...)
 	b.covered[ks] = snap.Covered
 	b.digest[ks] = snap.Digest
 	b.version[ks] = snap.Version
-	// sequence 高水位只能升不能降：否则 Append 会复用已发出过的 sequence，
-	// 而手机端是按 sequence 增量补帧的 —— 复用会让它对不上账。
+	if b.seq[ks] < cp.Seq {
+		b.seq[ks] = cp.Seq
+	}
 	if b.seq[ks] < b.persistSeq[ks] {
 		b.seq[ks] = b.persistSeq[ks]
 	}
-	return nil
+}
+
+// memoryCheckpointKey 把 MemoryKey 映射到 checkpoint key（与文件名映射同源）。
+func memoryCheckpointKey(key MemoryKey) CheckpointKey {
+	return CheckpointKey{AgentID: key.AgentID, ThreadID: key.ThreadID, Name: memoryCheckpointName(key)}
 }
 
 // ---- 缓存 ----------------------------------------------------------------

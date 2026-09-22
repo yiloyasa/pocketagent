@@ -127,9 +127,11 @@ func TestEchoTurnWritesRuntimeMemory(t *testing.T) {
 	}
 
 	rt2 := p.mustRuntime(t, thread)
-	// 重启后先验证"不 Restore 就看不到" —— 否则说明重启模拟是假的，恢复断言不成立。
-	if lost, _ := rt2.Memory.Load(ctx, key); len(lost.Items) != 0 {
-		t.Fatalf("模拟重启后内存态应已清空（说明重启是假的），实得 %d 条", len(lost.Items))
+	// 重启后先验证内存态确实被清空 —— 用 Observe 读**原始**内存态取证，
+	// 而不是 Load：Load 现在会在内存为空时自动从 checkpoint 装载（runtime 的懒加载，
+	// 见 memMemory.loadCheckpointIfAbsent），它已不能用来证明"重启清空了内存"。
+	if obs := backend.Observe(echoAgentID); obs.Memory.Items != 0 {
+		t.Fatalf("模拟重启后内存态应已清空（说明重启是假的），实得 %d 条", obs.Memory.Items)
 	}
 	if err := rt2.Memory.Restore(ctx, key); err != nil {
 		t.Fatalf("重启后 Restore 失败: %v", err)
