@@ -1015,6 +1015,11 @@ fun SettingsScreen(
                 }
             }
 
+            // ---------- 运行时 ----------
+            // 只加这一行:区段本体在 ui/RuntimeSection.kt(排版 + 交互都在那边),
+            // 免得继续往这个 178KB 的文件里长内容。
+            item(key = "runtime") { RuntimeSection() }
+
             // ---------- 关于 ----------
             item(key = "about") {
                 Column {

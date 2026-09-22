@@ -434,6 +434,16 @@ object RuntimeControlState {
     var sectionErrors by mutableStateOf<Map<String, String>>(emptyMap())
         private set
 
+    /**
+     * 记一条分块失败原因(保存/确认失败时由 UI 写回同一处呈现)。
+     *
+     * 【为什么失败也要归到"块"上】用户看到的是**一块内容**;原因只有落在同一块上,
+     * 他才分得清"是预算没保存成"还是"这台电脑压根没连上"。
+     */
+    fun noteSectionError(section: String, message: String) {
+        sectionErrors = sectionErrors + (section to message)
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private data class Fetched(
