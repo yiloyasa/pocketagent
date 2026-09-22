@@ -25,6 +25,8 @@ const (
 	RuntimeService_ListUnknownEvents_FullMethodName       = "/pocketagent.v1.RuntimeService/ListUnknownEvents"
 	RuntimeService_GetUnknownEvent_FullMethodName         = "/pocketagent.v1.RuntimeService/GetUnknownEvent"
 	RuntimeService_AcknowledgeUnknownEvent_FullMethodName = "/pocketagent.v1.RuntimeService/AcknowledgeUnknownEvent"
+	RuntimeService_GetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/GetCollabPolicy"
+	RuntimeService_SetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/SetCollabPolicy"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -57,6 +59,12 @@ type RuntimeServiceClient interface {
 	ListUnknownEvents(ctx context.Context, in *ListUnknownEventsRequest, opts ...grpc.CallOption) (*ListUnknownEventsResponse, error)
 	GetUnknownEvent(ctx context.Context, in *GetUnknownEventRequest, opts ...grpc.CallOption) (*UnknownEventResponse, error)
 	AcknowledgeUnknownEvent(ctx context.Context, in *AcknowledgeUnknownEventRequest, opts ...grpc.CallOption) (*AcknowledgeUnknownEventResponse, error)
+	// 协同策略(规格 §11):协同/委派/扇出的开关与扇出成员上限。
+	// 【为什么放在 daemon】手机上的本地开关只是"这台设备当前的显示偏好",换台手机、
+	// 重装 App 就没了;而"允不允许 agent 互相派活"是这台电脑的运行策略,必须由
+	// daemon 持久化并作为唯一事实来源。
+	GetCollabPolicy(ctx context.Context, in *GetCollabPolicyRequest, opts ...grpc.CallOption) (*CollabPolicyResponse, error)
+	SetCollabPolicy(ctx context.Context, in *SetCollabPolicyRequest, opts ...grpc.CallOption) (*CollabPolicyResponse, error)
 }
 
 type runtimeServiceClient struct {
@@ -127,6 +135,26 @@ func (c *runtimeServiceClient) AcknowledgeUnknownEvent(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *runtimeServiceClient) GetCollabPolicy(ctx context.Context, in *GetCollabPolicyRequest, opts ...grpc.CallOption) (*CollabPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollabPolicyResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_GetCollabPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) SetCollabPolicy(ctx context.Context, in *SetCollabPolicyRequest, opts ...grpc.CallOption) (*CollabPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollabPolicyResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_SetCollabPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -157,6 +185,12 @@ type RuntimeServiceServer interface {
 	ListUnknownEvents(context.Context, *ListUnknownEventsRequest) (*ListUnknownEventsResponse, error)
 	GetUnknownEvent(context.Context, *GetUnknownEventRequest) (*UnknownEventResponse, error)
 	AcknowledgeUnknownEvent(context.Context, *AcknowledgeUnknownEventRequest) (*AcknowledgeUnknownEventResponse, error)
+	// 协同策略(规格 §11):协同/委派/扇出的开关与扇出成员上限。
+	// 【为什么放在 daemon】手机上的本地开关只是"这台设备当前的显示偏好",换台手机、
+	// 重装 App 就没了;而"允不允许 agent 互相派活"是这台电脑的运行策略,必须由
+	// daemon 持久化并作为唯一事实来源。
+	GetCollabPolicy(context.Context, *GetCollabPolicyRequest) (*CollabPolicyResponse, error)
+	SetCollabPolicy(context.Context, *SetCollabPolicyRequest) (*CollabPolicyResponse, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -184,6 +218,12 @@ func (UnimplementedRuntimeServiceServer) GetUnknownEvent(context.Context, *GetUn
 }
 func (UnimplementedRuntimeServiceServer) AcknowledgeUnknownEvent(context.Context, *AcknowledgeUnknownEventRequest) (*AcknowledgeUnknownEventResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AcknowledgeUnknownEvent not implemented")
+}
+func (UnimplementedRuntimeServiceServer) GetCollabPolicy(context.Context, *GetCollabPolicyRequest) (*CollabPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCollabPolicy not implemented")
+}
+func (UnimplementedRuntimeServiceServer) SetCollabPolicy(context.Context, *SetCollabPolicyRequest) (*CollabPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetCollabPolicy not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -314,6 +354,42 @@ func _RuntimeService_AcknowledgeUnknownEvent_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_GetCollabPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCollabPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).GetCollabPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_GetCollabPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).GetCollabPolicy(ctx, req.(*GetCollabPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_SetCollabPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetCollabPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).SetCollabPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_SetCollabPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).SetCollabPolicy(ctx, req.(*SetCollabPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -344,6 +420,14 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AcknowledgeUnknownEvent",
 			Handler:    _RuntimeService_AcknowledgeUnknownEvent_Handler,
+		},
+		{
+			MethodName: "GetCollabPolicy",
+			Handler:    _RuntimeService_GetCollabPolicy_Handler,
+		},
+		{
+			MethodName: "SetCollabPolicy",
+			Handler:    _RuntimeService_SetCollabPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

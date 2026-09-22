@@ -14,6 +14,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -39,12 +40,28 @@ const maxCollabTurnDuration = maxDelegateTurnDuration
 // 的 agent 没装好,不该让其它三家一起陪葬。失败的成员在 items 里给**人话原因**,
 // 成功的照常起飞 —— 这正是"部分成功"在扇出场景下的诚实表达。
 func (s *Server) DispatchCollab(ctx context.Context, req *pb.DispatchCollabRequest) (*pb.DispatchCollabResponse, error) {
+	// W10:协同策略闸(规格 §11)。关掉就要"如实拒绝 + 说清怎么开回来",而不是静默照跑
+	// —— 用户关它的目的正是让这件事不再发生。
+	policy := s.collabPolicySnapshot()
+	if !policy.CollabEnabled() {
+		return nil, errFailedPrecondition("协同已在运行时策略里关闭(可在控制面重新开启)")
+	}
+	if !policy.Fanout() {
+		return nil, errFailedPrecondition("协同扇出已在运行时策略里关闭(可在控制面重新开启)")
+	}
 	instruction := strings.TrimSpace(req.GetInstruction())
 	if instruction == "" {
 		return nil, errInvalidArg("协同指令不能为空:请在协同页输入要交给这些 agent 的任务")
 	}
 	if len(req.GetMembers()) == 0 {
 		return nil, errInvalidArg("至少要选一个参与协同的 agent:请先勾选本次要用哪些 agent")
+	}
+	// 成员数上限:超限**如实报错**,不静默截断 —— 用户选了 5 家却只跑 3 家、界面还显示
+	// "已派发",是最难排查的一类"看着有功能、就是不干活"。
+	if max := policy.MaxMembers(); max > 0 && len(req.GetMembers()) > max {
+		return nil, errInvalidArg(fmt.Sprintf(
+			"本次选了 %d 个成员,超过运行时策略里的扇出上限 %d:请减少成员,或在控制面调高上限",
+			len(req.GetMembers()), max))
 	}
 
 	sessionID := randomID("collab")

@@ -32,11 +32,20 @@ service RuntimeService {
   rpc ListUnknownEvents(ListUnknownEventsRequest) returns (ListUnknownEventsResponse);
   rpc GetUnknownEvent(GetUnknownEventRequest) returns (UnknownEventResponse);
   rpc AcknowledgeUnknownEvent(AcknowledgeUnknownEventRequest) returns (AcknowledgeUnknownEventResponse);
+  // 协同策略(规格 §11):协同/委派/扇出的开关与扇出成员上限。
+  // 【为什么放在 daemon】手机上的本地开关只是"这台设备当前的显示偏好",换台手机、
+  // 重装 App 就没了;而"允不允许 agent 互相派活"是这台电脑的运行策略,必须由
+  // daemon 持久化并作为唯一事实来源。
+  rpc GetCollabPolicy(GetCollabPolicyRequest) returns (CollabPolicyResponse);
+  rpc SetCollabPolicy(SetCollabPolicyRequest) returns (CollabPolicyResponse);
 }
 
 message GetRuntimePolicyRequest {}
 
 message SetRuntimePolicyRequest {
+  // 【提交的是**完整策略**,不是补丁】缺席的项 = 未设置(沿用上一级/内置基线),
+  // 不是"不改这一项"。客户端改单项时请先 Get、在拿到的完整对象上改、再 Set
+  // (并带上 revision 做 CAS)。参见 SetCollabPolicyRequest 的同款说明。
   RuntimePolicy policy = 1;
   // 期望的当前 revision;0 = 不做 CAS。
   // 【为什么需要 CAS】策略可能被两处同时改(手机设置页、电脑上直接编辑文件)。
@@ -168,4 +177,35 @@ message AcknowledgeUnknownEventRequest {
 
 message AcknowledgeUnknownEventResponse {
   UnknownEventSummary item = 1;
+}
+
+// ---- 协同策略(规格 §11)----------------------------------------------------
+//
+// 【为什么只落这几项】规格 §11 还列了 auto_summarize / retain_artifacts /
+// max_session_bytes —— 那三项在 daemon 侧目前没有对应的执行点。先放进契约就只是
+// 一个"改了不生效"的开关,比不提供更糟:用户会以为功能坏了,而真正的原因是它
+// 尚未实现。等执行点存在时再加字段。
+message CollabPolicy {
+  optional bool collaboration_enabled = 1;   // 协同总开关
+  optional bool native_delegate_enabled = 2; // 委派(agent 派子任务)开关
+  optional bool fanout_enabled = 3;          // 协同扇出(一次指令给多家并行)开关
+  optional int32 max_parallel_members = 4;   // 单次扇出的成员数上限;<=0 = 不限
+}
+
+message GetCollabPolicyRequest {}
+
+message SetCollabPolicyRequest {
+  // 【提交的是**完整策略**,不是补丁】缺席的项 = 未设置(沿用默认),不是"不改这一项"。
+  // 客户端改单项时请先 Get、在拿到的完整对象上改、再 Set(并带上 revision 做 CAS);
+  // 只提交一个字段会把其它字段重置回默认 —— 实测踩到过:只关扇出会让成员上限
+  // 从 2 变回"不限"。
+  CollabPolicy policy = 1;
+  uint64 expected_revision = 2; // 0 = 不做 CAS
+}
+
+message CollabPolicyResponse {
+  CollabPolicy policy = 1;    // 用户配置(未设置的项缺席 = 沿用默认)
+  uint64 revision = 2;        // 每次成功写入 +1
+  string policy_path = 3;     // 落盘位置
+  CollabPolicy effective = 4; // 打底默认之后的实际生效值(全字段齐备)
 }

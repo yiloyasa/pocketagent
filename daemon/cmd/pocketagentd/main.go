@@ -248,6 +248,16 @@ func main() {
 			origins["RAMWorkingBytes"], origins["MaxParallelTurns"],
 			runtime.BudgetPolicyPath(*dataDir))
 	}
+
+	// W10：装载协同策略（规格 §11）。与预算同款取舍：配置坏掉不让 daemon 起不来
+	// （它不是安全边界），但必须出声 —— 静默回退会让"我明明关过协同"变成灵异事件。
+	collabPolicy, collabErr := runtime.LoadCollabPolicy(*dataDir)
+	if collabErr != nil {
+		log.Printf("[collab] WARNING: %v（已回退内置默认：协同/委派/扇出全开）", collabErr)
+	}
+	log.Printf("[collab] 生效策略: collaboration=%v delegate=%v fanout=%v max_parallel_members=%d（配置 %s）",
+		collabPolicy.CollabEnabled(), collabPolicy.DelegateEnabled(), collabPolicy.Fanout(),
+		collabPolicy.MaxMembers(), runtime.CollabPolicyPath(*dataDir))
 	providers := agent.DetectProviders()
 	tm := term.NewManager()
 	// 空闲回收器:随进程存活,daemon 退出时随进程消亡,无需单独停
@@ -268,6 +278,9 @@ func main() {
 		// W7:把启动时装载的预算策略交给 server —— 它此后是策略的持有者,
 		// RuntimeService 可就地修改并立即生效(不必重启 daemon)。
 		BudgetPolicy: budgetPolicy,
+		// W10:协同策略(规格 §11)同理:daemon 持久化并作为唯一事实来源,
+		// 手机上的本地开关不再是权限判据。
+		CollabPolicy: collabPolicy,
 		// W7:轮次强制点要用与各 provider 同一份资源账(见 agent.SharedRuntimeBackend)。
 		RuntimeBackend: agent.SharedRuntimeBackend(),
 	})

@@ -58,8 +58,11 @@ func (*GetRuntimePolicyRequest) Descriptor() ([]byte, []int) {
 }
 
 type SetRuntimePolicyRequest struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Policy *RuntimePolicy         `protobuf:"bytes,1,opt,name=policy,proto3" json:"policy,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 【提交的是**完整策略**,不是补丁】缺席的项 = 未设置(沿用上一级/内置基线),
+	// 不是"不改这一项"。客户端改单项时请先 Get、在拿到的完整对象上改、再 Set
+	// (并带上 revision 做 CAS)。参见 SetCollabPolicyRequest 的同款说明。
+	Policy *RuntimePolicy `protobuf:"bytes,1,opt,name=policy,proto3" json:"policy,omitempty"`
 	// 期望的当前 revision;0 = 不做 CAS。
 	// 【为什么需要 CAS】策略可能被两处同时改(手机设置页、电脑上直接编辑文件)。
 	// 没有它,后提交的一方会静默覆盖另一方 —— 用户看到的是"我明明改过"。
@@ -1057,6 +1060,240 @@ func (x *AcknowledgeUnknownEventResponse) GetItem() *UnknownEventSummary {
 	return nil
 }
 
+// ---- 协同策略(规格 §11)----------------------------------------------------
+//
+// 【为什么只落这几项】规格 §11 还列了 auto_summarize / retain_artifacts /
+// max_session_bytes —— 那三项在 daemon 侧目前没有对应的执行点。先放进契约就只是
+// 一个"改了不生效"的开关,比不提供更糟:用户会以为功能坏了,而真正的原因是它
+// 尚未实现。等执行点存在时再加字段。
+type CollabPolicy struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	CollaborationEnabled  *bool                  `protobuf:"varint,1,opt,name=collaboration_enabled,json=collaborationEnabled,proto3,oneof" json:"collaboration_enabled,omitempty"`      // 协同总开关
+	NativeDelegateEnabled *bool                  `protobuf:"varint,2,opt,name=native_delegate_enabled,json=nativeDelegateEnabled,proto3,oneof" json:"native_delegate_enabled,omitempty"` // 委派(agent 派子任务)开关
+	FanoutEnabled         *bool                  `protobuf:"varint,3,opt,name=fanout_enabled,json=fanoutEnabled,proto3,oneof" json:"fanout_enabled,omitempty"`                           // 协同扇出(一次指令给多家并行)开关
+	MaxParallelMembers    *int32                 `protobuf:"varint,4,opt,name=max_parallel_members,json=maxParallelMembers,proto3,oneof" json:"max_parallel_members,omitempty"`          // 单次扇出的成员数上限;<=0 = 不限
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *CollabPolicy) Reset() {
+	*x = CollabPolicy{}
+	mi := &file_v1_runtime_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CollabPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CollabPolicy) ProtoMessage() {}
+
+func (x *CollabPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CollabPolicy.ProtoReflect.Descriptor instead.
+func (*CollabPolicy) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CollabPolicy) GetCollaborationEnabled() bool {
+	if x != nil && x.CollaborationEnabled != nil {
+		return *x.CollaborationEnabled
+	}
+	return false
+}
+
+func (x *CollabPolicy) GetNativeDelegateEnabled() bool {
+	if x != nil && x.NativeDelegateEnabled != nil {
+		return *x.NativeDelegateEnabled
+	}
+	return false
+}
+
+func (x *CollabPolicy) GetFanoutEnabled() bool {
+	if x != nil && x.FanoutEnabled != nil {
+		return *x.FanoutEnabled
+	}
+	return false
+}
+
+func (x *CollabPolicy) GetMaxParallelMembers() int32 {
+	if x != nil && x.MaxParallelMembers != nil {
+		return *x.MaxParallelMembers
+	}
+	return 0
+}
+
+type GetCollabPolicyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCollabPolicyRequest) Reset() {
+	*x = GetCollabPolicyRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCollabPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCollabPolicyRequest) ProtoMessage() {}
+
+func (x *GetCollabPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCollabPolicyRequest.ProtoReflect.Descriptor instead.
+func (*GetCollabPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{16}
+}
+
+type SetCollabPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 【提交的是**完整策略**,不是补丁】缺席的项 = 未设置(沿用默认),不是"不改这一项"。
+	// 客户端改单项时请先 Get、在拿到的完整对象上改、再 Set(并带上 revision 做 CAS);
+	// 只提交一个字段会把其它字段重置回默认 —— 实测踩到过:只关扇出会让成员上限
+	// 从 2 变回"不限"。
+	Policy           *CollabPolicy `protobuf:"bytes,1,opt,name=policy,proto3" json:"policy,omitempty"`
+	ExpectedRevision uint64        `protobuf:"varint,2,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"` // 0 = 不做 CAS
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SetCollabPolicyRequest) Reset() {
+	*x = SetCollabPolicyRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetCollabPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetCollabPolicyRequest) ProtoMessage() {}
+
+func (x *SetCollabPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetCollabPolicyRequest.ProtoReflect.Descriptor instead.
+func (*SetCollabPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SetCollabPolicyRequest) GetPolicy() *CollabPolicy {
+	if x != nil {
+		return x.Policy
+	}
+	return nil
+}
+
+func (x *SetCollabPolicyRequest) GetExpectedRevision() uint64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+type CollabPolicyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Policy        *CollabPolicy          `protobuf:"bytes,1,opt,name=policy,proto3" json:"policy,omitempty"`                           // 用户配置(未设置的项缺席 = 沿用默认)
+	Revision      uint64                 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`                      // 每次成功写入 +1
+	PolicyPath    string                 `protobuf:"bytes,3,opt,name=policy_path,json=policyPath,proto3" json:"policy_path,omitempty"` // 落盘位置
+	Effective     *CollabPolicy          `protobuf:"bytes,4,opt,name=effective,proto3" json:"effective,omitempty"`                     // 打底默认之后的实际生效值(全字段齐备)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CollabPolicyResponse) Reset() {
+	*x = CollabPolicyResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CollabPolicyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CollabPolicyResponse) ProtoMessage() {}
+
+func (x *CollabPolicyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CollabPolicyResponse.ProtoReflect.Descriptor instead.
+func (*CollabPolicyResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *CollabPolicyResponse) GetPolicy() *CollabPolicy {
+	if x != nil {
+		return x.Policy
+	}
+	return nil
+}
+
+func (x *CollabPolicyResponse) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *CollabPolicyResponse) GetPolicyPath() string {
+	if x != nil {
+		return x.PolicyPath
+	}
+	return ""
+}
+
+func (x *CollabPolicyResponse) GetEffective() *CollabPolicy {
+	if x != nil {
+		return x.Effective
+	}
+	return nil
+}
+
 var File_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_v1_runtime_proto_rawDesc = "" +
@@ -1159,14 +1396,35 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x12\n" +
 	"\x04note\x18\x03 \x01(\tR\x04note\"Z\n" +
 	"\x1fAcknowledgeUnknownEventResponse\x127\n" +
-	"\x04item\x18\x01 \x01(\v2#.pocketagent.v1.UnknownEventSummaryR\x04item2\x83\x05\n" +
+	"\x04item\x18\x01 \x01(\v2#.pocketagent.v1.UnknownEventSummaryR\x04item\"\xca\x02\n" +
+	"\fCollabPolicy\x128\n" +
+	"\x15collaboration_enabled\x18\x01 \x01(\bH\x00R\x14collaborationEnabled\x88\x01\x01\x12;\n" +
+	"\x17native_delegate_enabled\x18\x02 \x01(\bH\x01R\x15nativeDelegateEnabled\x88\x01\x01\x12*\n" +
+	"\x0efanout_enabled\x18\x03 \x01(\bH\x02R\rfanoutEnabled\x88\x01\x01\x125\n" +
+	"\x14max_parallel_members\x18\x04 \x01(\x05H\x03R\x12maxParallelMembers\x88\x01\x01B\x18\n" +
+	"\x16_collaboration_enabledB\x1a\n" +
+	"\x18_native_delegate_enabledB\x11\n" +
+	"\x0f_fanout_enabledB\x17\n" +
+	"\x15_max_parallel_members\"\x18\n" +
+	"\x16GetCollabPolicyRequest\"{\n" +
+	"\x16SetCollabPolicyRequest\x124\n" +
+	"\x06policy\x18\x01 \x01(\v2\x1c.pocketagent.v1.CollabPolicyR\x06policy\x12+\n" +
+	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\"\xc5\x01\n" +
+	"\x14CollabPolicyResponse\x124\n" +
+	"\x06policy\x18\x01 \x01(\v2\x1c.pocketagent.v1.CollabPolicyR\x06policy\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x04R\brevision\x12\x1f\n" +
+	"\vpolicy_path\x18\x03 \x01(\tR\n" +
+	"policyPath\x12:\n" +
+	"\teffective\x18\x04 \x01(\v2\x1c.pocketagent.v1.CollabPolicyR\teffective2\xc5\x06\n" +
 	"\x0eRuntimeService\x12b\n" +
 	"\x10GetRuntimePolicy\x12'.pocketagent.v1.GetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10SetRuntimePolicy\x12'.pocketagent.v1.SetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10GetResourceUsage\x12'.pocketagent.v1.GetResourceUsageRequest\x1a%.pocketagent.v1.ResourceUsageResponse\x12h\n" +
 	"\x11ListUnknownEvents\x12(.pocketagent.v1.ListUnknownEventsRequest\x1a).pocketagent.v1.ListUnknownEventsResponse\x12_\n" +
 	"\x0fGetUnknownEvent\x12&.pocketagent.v1.GetUnknownEventRequest\x1a$.pocketagent.v1.UnknownEventResponse\x12z\n" +
-	"\x17AcknowledgeUnknownEvent\x12..pocketagent.v1.AcknowledgeUnknownEventRequest\x1a/.pocketagent.v1.AcknowledgeUnknownEventResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x17AcknowledgeUnknownEvent\x12..pocketagent.v1.AcknowledgeUnknownEventRequest\x1a/.pocketagent.v1.AcknowledgeUnknownEventResponse\x12_\n" +
+	"\x0fGetCollabPolicy\x12&.pocketagent.v1.GetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponse\x12_\n" +
+	"\x0fSetCollabPolicy\x12&.pocketagent.v1.SetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_runtime_proto_rawDescOnce sync.Once
@@ -1180,7 +1438,7 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_v1_runtime_proto_goTypes = []any{
 	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
 	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
@@ -1197,45 +1455,56 @@ var file_v1_runtime_proto_goTypes = []any{
 	(*UnknownEventResponse)(nil),            // 12: pocketagent.v1.UnknownEventResponse
 	(*AcknowledgeUnknownEventRequest)(nil),  // 13: pocketagent.v1.AcknowledgeUnknownEventRequest
 	(*AcknowledgeUnknownEventResponse)(nil), // 14: pocketagent.v1.AcknowledgeUnknownEventResponse
-	nil,                                     // 15: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                                     // 16: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                                     // 17: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                                     // 18: pocketagent.v1.RuntimePolicy.CollabsEntry
+	(*CollabPolicy)(nil),                    // 15: pocketagent.v1.CollabPolicy
+	(*GetCollabPolicyRequest)(nil),          // 16: pocketagent.v1.GetCollabPolicyRequest
+	(*SetCollabPolicyRequest)(nil),          // 17: pocketagent.v1.SetCollabPolicyRequest
+	(*CollabPolicyResponse)(nil),            // 18: pocketagent.v1.CollabPolicyResponse
+	nil,                                     // 19: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 20: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 21: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 22: pocketagent.v1.RuntimePolicy.CollabsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	15, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	16, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	17, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	18, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	19, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	20, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	21, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	22, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
 	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 11: pocketagent.v1.AcknowledgeUnknownEventResponse.item:type_name -> pocketagent.v1.UnknownEventSummary
-	3,  // 12: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 13: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 14: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 15: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 16: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 17: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 18: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	8,  // 19: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
-	11, // 20: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
-	13, // 21: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
-	2,  // 22: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 23: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 24: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	10, // 25: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
-	12, // 26: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
-	14, // 27: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
-	22, // [22:28] is the sub-list for method output_type
-	16, // [16:22] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	15, // 12: pocketagent.v1.SetCollabPolicyRequest.policy:type_name -> pocketagent.v1.CollabPolicy
+	15, // 13: pocketagent.v1.CollabPolicyResponse.policy:type_name -> pocketagent.v1.CollabPolicy
+	15, // 14: pocketagent.v1.CollabPolicyResponse.effective:type_name -> pocketagent.v1.CollabPolicy
+	3,  // 15: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 16: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 17: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 18: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 19: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 20: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 21: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 22: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	11, // 23: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	13, // 24: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	16, // 25: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
+	17, // 26: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
+	2,  // 27: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 28: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 29: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	10, // 30: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	12, // 31: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	14, // 32: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	18, // 33: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	18, // 34: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	27, // [27:35] is the sub-list for method output_type
+	19, // [19:27] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -1244,13 +1513,14 @@ func file_v1_runtime_proto_init() {
 		return
 	}
 	file_v1_runtime_proto_msgTypes[3].OneofWrappers = []any{}
+	file_v1_runtime_proto_msgTypes[15].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

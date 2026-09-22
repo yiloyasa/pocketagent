@@ -57,6 +57,9 @@ type Config struct {
 	// RuntimeBackend 是进程共享的运行时后端(记忆/缓存/checkpoint/资源记账,W6 起由
 	// agent 包持有同一实例)。为 nil 时不记账 —— 测试与极简构造路径照常跑,强制点跳过。
 	RuntimeBackend *rtruntime.Backend
+	// CollabPolicy 是启动时装载的协同策略(W10,规格 §11)。零值 = 全部走内置默认
+	// (与既有行为一致:全开、扇出不限)。运行中可经 RuntimeService 热替换。
+	CollabPolicy rtruntime.CollabPolicy
 }
 
 type Server struct {
@@ -109,6 +112,10 @@ type Server struct {
 	// 轮次强制点向它的 ResourceLedger 申请租约 —— 只有共用同一个后端,记的账才是
 	// 同一份账;各持一份会让"用量"这件事出现多个互相矛盾的版本。
 	runtimeBackend *rtruntime.Backend
+	// W10:协同策略(规格 §11)。同为热替换:读取方每次都从这份内存态取,
+	// 改完立即生效(不必重启 daemon)。
+	collabMu     sync.RWMutex
+	collabPolicy rtruntime.CollabPolicy
 }
 
 func New(cfg Config) *Server {
@@ -133,6 +140,7 @@ func New(cfg Config) *Server {
 		hostWatch:      newHostWatchers(),
 		budgetPolicy:   cfg.BudgetPolicy,
 		runtimeBackend: cfg.RuntimeBackend,
+		collabPolicy:   cfg.CollabPolicy,
 	}
 	// 启动报告:上次退出时还没轮到执行的排队输入 —— 醒目汇总 + 逐条明细,然后
 	// 清空台账。刻意不自动重发(重放原始 prompt 会重复执行副作用,规格 §8.3),

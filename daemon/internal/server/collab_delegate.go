@@ -85,6 +85,12 @@ var maxCollabParallel = 3
 // 语义与 maxCollabParallel 一致,默认同样 3。
 var maxCollabParallelPerDevice = 3
 
+// errDelegateDisabled 表示委派已被运行时策略关闭(规格 §11 的 native_delegate_enabled)。
+//
+// 【为什么单列一个错误值】调用方(父轮次的工具调用)要能区分"这次被策略挡了"与
+// "引擎故障":前者是用户可改的状态,提示该说"去控制面开启",而不是当成故障重试。
+var errDelegateDisabled = errors.New("委派已在运行时策略里关闭(可在控制面重新开启)")
+
 // SetCollabMaxParallel 供 cmd/pocketagentd 的 -collab-max-parallel flag 接线:
 // 把全局/单设备并行上限设为 n。n <= 0 视为默认(3),由本函数统一归一化,引擎
 // 只读这两个包级变量、不重复校验范围。整进程只此一处写入并发上限。
@@ -170,6 +176,11 @@ var errDelegateDepthRejected = errors.New("委派被拒绝:委派子任务不能
 //     (伪造 decision = 红线);授权卡(准则 4)属后续任务 L2b。
 //  3. 无排队续跑:一次委派 = 一轮,没有读手 goroutine 与内存队列。
 func (e *collabEngine) Delegate(ctx context.Context, agentID, task string, opts collabmcp.DelegateOptions) (childThreadID, finalSummary string, err error) {
+	// W10:协同策略闸(规格 §11)。放在所有闸的最前面 —— 策略关闭是"这件事根本不该
+	// 发生",比深度/并发闸更靠前;否则关掉之后仍会看到"已达并发上限"这类误导性原因。
+	if !e.srv.collabPolicySnapshot().DelegateEnabled() {
+		return "", "", errDelegateDisabled
+	}
 	// ---- 深度锁 1 第二道闸(入口精确判定,取代旧版 depth>0 一刀切)----
 	// 发起方线程(opts.ParentThreadID)若本身就在 childThreads 登记簿 → 说明
 	// 是"子在生子" → 拒绝。主闸是结构性闸(子线程不挂 collab MCP,看不见
@@ -208,6 +219,10 @@ func (e *collabEngine) Delegate(ctx context.Context, agentID, task string, opts 
 func (e *collabEngine) DelegateForDevice(ctx context.Context, deviceID, agentID, task string, opts collabmcp.DelegateOptions) (childThreadID, finalSummary string, err error) {
 	if strings.TrimSpace(deviceID) == "" {
 		return "", "", errors.New("委派被拒绝:无法识别发起方设备(缺少已配对的 Bearer token);已配对设备才可委派")
+	}
+	// W10:协同策略闸,与 Delegate 同一条(跨进程入口不能绕过策略)。
+	if !e.srv.collabPolicySnapshot().DelegateEnabled() {
+		return "", "", errDelegateDisabled
 	}
 	e.mu.Lock()
 	// 深度锁 1(同 Delegate 入口判定):父链指向委派子线程 → 子在生子 → 拒绝。
