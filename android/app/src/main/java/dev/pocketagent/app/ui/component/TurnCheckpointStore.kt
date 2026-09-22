@@ -67,6 +67,22 @@ internal object TurnCheckpointStore {
     @Synchronized fun load(threadId: String): Checkpoint? =
         root?.let { read(File(it, filename(threadId))) }
 
+    /**
+     * 删掉某个会话的轮次 checkpoint。
+     *
+     * 【为什么必须显式删】checkpoint 里存着**完整消息副本**(见 [Checkpoint.messages])
+     * 与流式进度,是"删了会话还能翻出内容"的第二条路径。它此前只能靠 [save] 里的
+     * LRU 被动淘汰(超过 50 个或累计 8MB 才动手)—— 那不是删除语义:用户删掉的会话
+     * 可能几天后仍躺在磁盘上,而磁盘上留着的是**消息正文**。
+     *
+     * 幂等:不存在即已完成(删除的目标状态就是"没有")。
+     */
+    @Synchronized fun delete(threadId: String) {
+        val dir = root ?: return
+        if (threadId.isEmpty()) return
+        runCatching { File(dir, filename(threadId)).delete() }
+    }
+
     @Synchronized fun active(): List<Checkpoint> =
         root?.listFiles { f -> f.extension == "json" }?.mapNotNull(::read)?.filter { it.active }.orEmpty()
 

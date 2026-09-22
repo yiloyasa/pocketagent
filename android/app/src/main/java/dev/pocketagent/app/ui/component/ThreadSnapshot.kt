@@ -230,6 +230,24 @@ object ThreadSnapshot {
     /** 旧名兼容入口(ChatScreen 在用,本阶段禁止改动该文件),行为与 [readThreadSnapshot] 一致。 */
     fun loadMessages(threadId: String): List<Msg>? = readThreadSnapshot(threadId)
 
+    /**
+     * 删掉某个会话的消息快照。
+     *
+     * 【为什么删除流程必须调它】[saveMessages] 按 threadId 落一份**独立文件**
+     * (md5(threadId)+.json),它不在 threads.json 里 —— 所以
+     * [removeThreadFromSnapshot] 清不到它。用户删了会话之后,离线兜底走
+     * [readThreadSnapshot] 仍能把那条会话的对话整段读回来:"删了还能翻出内容"。
+     * 只有把这层也清掉,删除在本地才算完整。
+     *
+     * 幂等:文件不存在不是错误 —— 删除的目标状态就是"没有",达成即成功。
+     */
+    @Synchronized
+    fun removeMessages(threadId: String) {
+        val d = dir ?: return
+        if (threadId.isEmpty()) return
+        runCatching { File(d, msgFileName(threadId)).delete() }
+    }
+
     /** 该会话消息快照的时间戳(毫秒)。 */
     fun messagesAt(threadId: String): Long =
         dir?.let { File(it, msgFileName(threadId)).takeIf { f -> f.isFile }?.lastModified() } ?: 0L

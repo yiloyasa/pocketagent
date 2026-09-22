@@ -37,4 +37,18 @@ object ThreadPins {
         prefs?.edit()?.putStringSet(KEY, current)?.apply()
         return nowPinned
     }
+
+    /**
+     * 取消置顶(删除会话时用)。幂等:没置顶过就是 no-op。
+     *
+     * 【为什么删除要显式调它】置顶键留着的后果不只是"集合里多一项":置顶是列表
+     * 排序的第一优先级,将来同 id 的会话再建出来(换机重装、重新导入)时会**莫名
+     * 顶着**。删除该把这条会话在这台机器上的痕迹一并带走。
+     */
+    fun unpin(key: String) {
+        if (key.isEmpty()) return
+        val current = all().toMutableSet()
+        if (!current.remove(key)) return
+        prefs?.edit()?.putStringSet(KEY, current)?.apply()
+    }
 }

@@ -457,8 +457,10 @@ fun ThreadsScreen(
         if (index < 0) return
         openKey.value = null
         threads = threads.toMutableList().also { it.removeAt(index) }
-        // 内存删了,快照也得同步删:否则断网兜底时这条会"复活"(删完又出现)。
-        ThreadSnapshot.removeThreadFromSnapshot(t.id)
+        // 【为什么清理不在这里】删除是"乐观移除 + 5 秒可撤销",而撤销是明确的用户
+        // 意图 —— 撤销之后磁盘状态必须和没删过一样。此前在乐观这一刻就清了列表快照,
+        // 撤销后快照里反而**少了这条真实存在的会话**,断网兜底时会凭空少一条。
+        // 清理统一挪到 onCommit(见下),让"撤销 = 什么都没发生"真正成立。
         undo.show(
             message = "已删除「${t.title.ifEmpty { "未命名" }}」",
             onUndo = {
@@ -467,11 +469,13 @@ fun ThreadsScreen(
                 threads = cur
             },
             onCommit = {
+                var deleted = false
                 try {
                     withContext(Dispatchers.IO) {
                         AgentConnection.threadService().deleteThread(
                             DeleteThreadRequest.newBuilder().setThreadId(t.id).build())
                     }
+                    deleted = true
                 } catch (e: Exception) {
                     // daemon 拒绝(如"会话正在运行,请先停止")不能静默:行已被乐观
                     // 移除,用户必须知道操作没成(下面 refresh 会把行复原)。
@@ -479,6 +483,12 @@ fun ThreadsScreen(
                         ctx, threadOpFailureText("删除", e.message), Toast.LENGTH_LONG,
                     ).show()
                 }
+                // 【daemon 删掉了 ≠ 手机忘了它】列表快照 / 消息快照 / checkpoint /
+                // 模型 / 强度 / 用量 / 置顶都还记着这条会话 —— 不一起清,断网兜底或再次
+                // 进入会话就会把它的痕迹翻出来。放在**成功之后**:daemon 拒绝删除时,
+                // 本地状态必须原样留着。置顶键与列表同源(优先 codex 原生 id),
+                // 不能拿本地 id 硬当(见 ThreadPins 的键设计)。
+                if (deleted) ThreadDeletionCoordinator.purge(t.id, pinKey(t, null))
                 // 删除会连带清掉电脑上的 rollout:立刻刷新,电脑列表里那条也随之消失;
                 // 失败路径靠同一次刷新把乐观移除的行复原,不让会话"凭空消失"。
                 refresh()
