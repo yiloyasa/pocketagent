@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pocketagent/daemon/internal/agent"
+	"github.com/pocketagent/daemon/internal/collabmcp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
@@ -222,5 +223,51 @@ func TestEchoTurnWritesConversationThroughServer(t *testing.T) {
 	}
 	if len(snap2.Items) != 2 {
 		t.Fatalf("echo 的会话记忆必须跨重启存活，实得 %d 条", len(snap2.Items))
+	}
+}
+
+// TestDelegatePathWritesBothSidesOfMemory：跨 agent 委派是**不经过 StartTurn** 的
+// 第二条真实轮次路径 —— 它自己 append 用户消息后直接进 runTurnOnce。
+//
+// 【为什么必须有这条】用户侧记忆若写在 StartTurn 的落库处，这条路径就只剩
+// assistant 一半（条目数少一半、诊断页偏低），而所有只经 StartTurn 的用例仍全绿。
+// 这条断言必须走真引擎（eng.Delegate），替身直接调 runTurnOnce 就测不到"调用方漏了"。
+func TestDelegatePathWritesBothSidesOfMemory(t *testing.T) {
+	dir := t.TempDir()
+	fs, err := store.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("建 store 失败: %v", err)
+	}
+	srv := New(Config{
+		Store:          fs,
+		Providers:      map[string]agent.Provider{"echo": agent.NewEcho()},
+		Workspace:      t.TempDir(),
+		RuntimeBackend: runtime.NewFileBackend(dir),
+	})
+	t.Cleanup(func() { _ = srv.events.Close() })
+	eng := NewCollabDelegationEngine(srv)
+
+	childID, _, err := eng.Delegate(context.Background(), "echo", "帮我看日志",
+		collabmcp.DelegateOptions{Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("委派失败: %v", err)
+	}
+	if childID == "" {
+		t.Fatal("委派未返回子线程 id（前置条件不满足）")
+	}
+
+	key := runtime.MemoryKey{AgentID: "echo", ThreadID: childID, Kind: runtime.MemoryConversation}
+	snap, err := srv.runtimeBackend.Memory().Load(context.Background(), key)
+	if err != nil {
+		t.Fatalf("读记忆失败: %v", err)
+	}
+	if len(snap.Items) != 2 {
+		t.Fatalf("委派子线程应有 user + assistant 两条记忆，实得 %d（用户侧被漏写了？）", len(snap.Items))
+	}
+	if snap.Items[0].Role != "user" || snap.Items[1].Role != "assistant" {
+		t.Fatalf("角色顺序应为 user→assistant，实得 %q→%q", snap.Items[0].Role, snap.Items[1].Role)
+	}
+	if !strings.Contains(string(snap.Items[0].Payload), "帮我看日志") {
+		t.Fatalf("委派任务原文应进记忆，实得 %q", snap.Items[0].Payload)
 	}
 }

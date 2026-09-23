@@ -63,9 +63,14 @@ const (
 
 // recordTurnMemory 把一条**已落库**的轮次消息登记进统一 Runtime 的语义记忆。
 //
-// 调用点与"消息落库"同点（StartTurn 的 user 消息、runTurnOnce 的两处 assistant
-// 消息）：记忆是消息的下游，两者必须看到同一份内容 —— 分开取会在"空正文补偿"这类
-// 路径上给出两个事实（补偿后的正文落了库，记忆里却还是空的）。
+// 三个调用点全部在轮次心脏 runTurnOnce 内（用户侧在函数开头、assistant 侧在两处
+// 落库点）：记忆是消息的下游，两者必须看到同一份内容 —— 分开取会在"空正文补偿"
+// 这类路径上给出两个事实（补偿后的正文落了库，记忆里却还是空的）。
+//
+// 【为什么用户侧也在心脏里，而不是各调用点的落库处】StartTurn、排队续跑、跨 agent
+// 委派、协同成员四条路径都经 runTurnOnce，且都把用户输入原样作为 inputBlocks 传入。
+// 写在各调用点会漏掉后两条 —— 实测就是这么漏的：委派与协同自己 append 用户消息后
+// 直接进来，于是子线程只剩 assistant 侧记忆（条目数少一半、诊断页偏低）。
 func (s *Server) recordTurnMemory(provider agent.Provider, t *store.Thread, role, turnID string, blocks []pb.ContentBlock) {
 	if s == nil || s.runtimeBackend == nil || t == nil || provider == nil {
 		return

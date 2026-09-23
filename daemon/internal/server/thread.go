@@ -1086,9 +1086,6 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	userBlocks := derefBlocks(input.Blocks)
 	t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: userBlocks, CreatedAt: time.Now().UnixMilli()})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
-	// 记忆与消息落库**同点**（见 turn_memory.go）：两者必须看到同一份内容 ——
-	// 分开取会在"空正文补偿"这类路径上给出两个事实。
-	s.recordTurnMemory(provider, t, "user", turnID, userBlocks)
 	// P2-4:启动轮的输入落库属"尽力而为"(流已开,错误无法回传给手机),
 	// 但失败必须留痕 —— 否则磁盘异常期间整轮历史静默丢失。
 	logStoreUpdateErr("turn-start", t.ID, s.cfg.Store.Update(t))
@@ -1141,7 +1138,6 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		}}})
 		t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: next.blocks, CreatedAt: time.Now().UnixMilli()})
 		t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
-		s.recordTurnMemory(provider, t, "user", turnID, next.blocks)
 		logStoreUpdateErr("queued-turn-start", t.ID, s.cfg.Store.Update(t))
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
 			TurnId: turnID, ModelId: t.ModelID,
@@ -1283,6 +1279,14 @@ const nativeOutputRecoveryBudget = 2 * time.Second
 // 共享的 concatTextBlocks(同一拼接语义)。StartTurn 行为零变化由全量
 // server 测试套佐证。
 func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnID string, t *store.Thread, inputBlocks []pb.ContentBlock, sink agent.Sink, thinkBuf *turnThinkingBuf, approve agent.ApprovalHook) (finalText string, userStopped bool, err error) {
+	// 【用户侧记忆写在这里，而不是各调用点的落库处】runTurnOnce 是 StartTurn（含
+	// 排队续跑）、跨 agent 委派、协同成员三条路径共用的唯一轮次心脏，四个调用点都把
+	// "用户这一轮的输入"原样作为 inputBlocks 传进来（调用方也都是先选好 provider 再
+	// append 用户消息，所以此处与"消息落库那一刻"看到的是同一份内容）。
+	// 写在各调用点会漏 —— 委派与协同两条路径就是这样：它们自己 append 用户消息后
+	// 直接进来，不经过 StartTurn 的那两行，于是子线程只剩 assistant 侧记忆。
+	s.recordTurnMemory(provider, t, "user", turnID, inputBlocks)
+
 	// 每轮独立的取消函数:CancelTurn RPC / 重入打断拿到的是"当前这一轮"的;
 	// 父 ctx(手机取消帧)被取消时会连带取消这里的子 ctx。
 	// 【先取 Err 再 cancel】cancel 之后再查 runCtx.Err() 永远非 nil,
