@@ -31,7 +31,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
@@ -399,7 +401,7 @@ private fun BudgetEditDialog(
     val isTurns = row.key == "max_parallel_turns"
     val isMembers = row.key == "max_parallel_members"
     val unit = if (isTurns) "路" else if (isMembers) "家" else "MB"
-    var text by remember { mutableStateOf(currentNumeric(row.value)) }
+    var text by remember { mutableStateOf(budgetInputValue(row.value)) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -411,7 +413,8 @@ private fun BudgetEditDialog(
             Column {
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { text = it.filter { c -> c.isDigit() } },
+                    // 只保留数字;光标位置由 TextFieldValue 自带(见 [budgetInputValue])。
+                    onValueChange = { v -> text = v.copy(text = v.text.filter { c -> c.isDigit() }) },
                     singleLine = true,
                     label = { Text("新上限($unit)", fontSize = 13.sp) },
                 )
@@ -423,7 +426,7 @@ private fun BudgetEditDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val n = text.toLongOrNull()
+                val n = text.text.toLongOrNull()
                 if (n == null) {
                     error = "请填一个非负整数"
                     return@TextButton
@@ -451,6 +454,18 @@ private fun BudgetEditDialog(
 /** 只取现值的数字部分("8 MB" → "8"),避免把单位当输入内容回填。 */
 internal fun currentNumeric(display: String): String =
     display.takeWhile { it.isDigit() }
+
+/**
+ * 编辑框的初始内容:**预填当前值,且光标放在末尾**。
+ *
+ * 【为什么必须显式给 selection】用 String 版重载时初始光标落在位置 0 —— 真机实测踩到:
+ * 预填 "3" 时直接输入 "4" 得到 **"43"**(插到了旧值前面)。用户以为设了 4、实际设了 43,
+ * 而预算被改错既没有编译期错误也没有运行期提示,只有下一轮跑出异常行为才显形。
+ */
+internal fun budgetInputValue(display: String): TextFieldValue {
+    val digits = currentNumeric(display)
+    return TextFieldValue(digits, TextRange(digits.length))
+}
 
 /**
  * 预算单项写入 / 清除 presence —— `null` 表示"回到未设置(沿用上一级)",与显式 0 不同。

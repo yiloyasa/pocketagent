@@ -1,6 +1,5 @@
 package dev.pocketagent.app.ui
 
-import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -148,16 +147,4 @@ object CollabState {
         selected = emptySet(); roleBinding = emptyMap(); phases = emptyMap(); lastInstruction = null
         sessionId = null; threadIds = emptyMap(); memberErrors = emptyMap(); dispatchError = null
     }
-}
-
-/** 协同模式开关持久化(SharedPreferences,与 OnboardingPrefs 同款轻量方案)。 */
-object CollabPrefs {
-    private const val NAME = "pa_collab"
-    private const val KEY_ENABLED = "mode_enabled"
-
-    fun isEnabled(ctx: Context): Boolean =
-        ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
-
-    fun setEnabled(ctx: Context, on: Boolean) =
-        ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, on).apply()
 }

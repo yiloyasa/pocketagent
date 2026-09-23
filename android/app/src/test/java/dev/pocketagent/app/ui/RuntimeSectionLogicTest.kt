@@ -114,6 +114,21 @@ class RuntimeSectionLogicTest {
     }
 
     @Test
+    fun `编辑框打开时光标在末尾而不是开头`() {
+        // 真机实测踩到(W11c 走查):光标落在位置 0 时,直接输入会把新值插到旧值**前面** ——
+        // 预填 "3"、敲 "4" 得到 "43",用户以为设了 4、实际设了 43,且预算被改错没有任何提示。
+        val v = budgetInputValue("3")
+        assertEquals("3", v.text)
+        assertEquals(1, v.selection.start)
+        assertEquals(1, v.selection.end)
+
+        // 带单位的现值同理:回填 "8" 且光标在 "8" 之后。
+        val bytes = budgetInputValue("8 MB")
+        assertEquals("8", bytes.text)
+        assertEquals(1, bytes.selection.end)
+    }
+
+    @Test
     fun `分块标签已知的译成人话未知的原样返回`() {
         assertEquals("启动恢复", sectionLabel(RuntimeControlState.SECTION_HOST))
         assertEquals("预算", sectionLabel(RuntimeControlState.SECTION_BUDGET))

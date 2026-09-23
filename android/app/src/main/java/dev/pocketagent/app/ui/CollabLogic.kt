@@ -4,17 +4,20 @@ import dev.pocketagent.app.R
 import pocketagent.v1.CollabRole
 
 /**
- * 协同页纯函数层(单测钉死,见 CollabScreenLogicTest):
+ * 协同页纯函数层:
  *  - 可参与协同的 agent 清单(动态,不写死);
  *  - agent 多选切换;
  *  - 每 agent 的角色绑定;
  *  - 单个 agent 派发相位 → 卡片文案;
- *  - 协同态 vs 普通会话的区分判定;
  *  - 空态/加载态人话文案。
  *
  * 【为什么独立成层】这些规则最容易被"顺手改个条件"悄悄反转且零报错,
- * 只能等用户看到错乱的选中态/角色绑定才暴露。集中到纯函数用单测钉死,
- * 改坏在 `test` 阶段直接红,不依赖真机/daemon。
+ * 只能等用户看到错乱的选中态/角色绑定才暴露。集中成纯函数至少让它们**可被**断言,
+ * 不再依赖真机/daemon。
+ *
+ * ⚠ 本文件当前**没有**对应单测:原注释指向的 CollabScreenLogicTest 并不存在
+ * (2026-09-23 W11c 核验:test 目录下没有任何用例引用这里的函数)。留这句话是为了
+ * 不让下一个人再去找一个不存在的文件 —— 要么补测试,要么别再声称"单测钉死"。
  */
 
 /**
@@ -80,17 +83,6 @@ fun collabPhaseLabel(phase: CollabAgentPhase): String = when (phase) {
     CollabAgentPhase.DONE -> "已完成"
     CollabAgentPhase.ERROR -> "执行出错"
 }
-
-/**
- * 协同态 vs 普通会话区分判定(纯函数):协同会话 = 协同模式开启 且 至少选了 1 个 agent。
- * 收口到这里,供"一眼可辨"的视觉分支(页头横幅/配色)统一取用,单测钉死。
- *
- * 【语义:并行对等协作,不是父子委派】普通会话是"手机 ↔ 单一 agent"的 1:1 对话;
- * 协同会话是"一条指令同时扇出给多个对等 agent",彼此没有上下级。
- * 这个布尔值就是两种形态的总开关 —— 见 CollabScreen 顶部横幅与配色分支。
- */
-fun isCollabSession(selectedAgents: Set<String>, collabMode: Boolean): Boolean =
-    collabMode && selectedAgents.isNotEmpty()
 
 /** 协同页空态/加载态人话文案(集中常量,便于统一口径,禁止"未知/错误"裸词)。 */
 object CollabCopy {
