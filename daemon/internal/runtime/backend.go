@@ -64,7 +64,6 @@ type Backend struct {
 	// ---- 落盘态（重启后仍在）----
 	durable     map[string][]byte // checkpoint key -> 内容
 	sessionRefs map[string]bool   // threadID -> 已建立的原生会话
-	persistSeq  map[string]int64  // memory key -> 落盘的 sequence 高水位
 
 	// ---- 可再生缓存 ----
 	cache map[string]StoredCacheEntry // namespace+"/"+key -> 条目
@@ -132,7 +131,6 @@ func (b *Backend) reset() {
 	b.hydrated = map[string]bool{}
 	b.durable = map[string][]byte{}
 	b.sessionRefs = map[string]bool{}
-	b.persistSeq = map[string]int64{}
 	b.cache = map[string]StoredCacheEntry{}
 	b.stats = map[string]*CacheStats{}
 	b.leases = map[string]*ResourceLease{}
@@ -487,10 +485,9 @@ func (b *Backend) prepareMemoryCheckpointLocked(key MemoryKey) (CheckpointKey, [
 	if err != nil {
 		return CheckpointKey{}, nil, fmt.Errorf("runtime: 序列化记忆失败: %w", err)
 	}
-	// persistSeq 是**内存态**的高水位记录：ExportDurable/ImportDurable（同进程模拟
-	// 重启）靠它把 seq 恢复回来；文件后端的真重启则靠载荷里的 Seq。两者服务于不同
-	// 的重启形态，都要维护。
-	b.persistSeq[ks] = b.seq[ks]
+	// 内容与 sequence 高水位**一起**冻结进这一个载荷（字段取舍见 memoryCheckpoint）：
+	// 恢复时两者同源，不再另存一份内存态镜像 —— 同一事实两个副本，会在某条路径忘了
+	// 同步时静默分叉（实测：那份镜像既没有用例钉住，删掉后全量测试仍全绿）。
 	return memoryCheckpointKey(key), payload, nil
 }
 
@@ -558,11 +555,9 @@ func (b *Backend) applyMemoryCheckpointLocked(key MemoryKey, cp *memoryCheckpoin
 	b.covered[ks] = snap.Covered
 	b.digest[ks] = snap.Digest
 	b.version[ks] = snap.Version
+	// 高水位只升不降：载荷里的 Seq 就是落盘那一刻的高水位。
 	if b.seq[ks] < cp.Seq {
 		b.seq[ks] = cp.Seq
-	}
-	if b.seq[ks] < b.persistSeq[ks] {
-		b.seq[ks] = b.persistSeq[ks]
 	}
 }
 
@@ -1050,7 +1045,6 @@ func (s *memSession) Close(_ context.Context, thread *store.Thread) error {
 // 在测试里显式成立。
 type durableState struct {
 	Checkpoints map[string][]byte           `json:"checkpoints"`
-	PersistSeq  map[string]int64            `json:"persist_seq"`
 	SessionRefs map[string]bool             `json:"session_refs"`
 	Persist     map[string]StoredCacheEntry `json:"persist_cache"`
 }
@@ -1061,7 +1055,6 @@ func (b *Backend) ExportDurable() ([]byte, error) {
 	defer b.mu.Unlock()
 	st := durableState{
 		Checkpoints: b.durable,
-		PersistSeq:  b.persistSeq,
 		SessionRefs: b.sessionRefs,
 		Persist:     map[string]StoredCacheEntry{},
 	}
@@ -1075,8 +1068,9 @@ func (b *Backend) ExportDurable() ([]byte, error) {
 
 // ImportDurable 用落盘态重置后端，**清空全部内存态**（模拟 daemon 重启）。
 //
-// 注意 sequence 高水位随落盘态一起回来：不这么做，重启后 Append 会复用已发出过的
-// sequence，而手机端是按 sequence 增量补帧的 —— 复用即对不上账。
+// 注意 sequence 高水位随落盘态一起回来：checkpoint 载荷自带 Seq 字段（见
+// memoryCheckpoint），重启后第一次触碰该 key 时由 hydrate 装载抬回高水位 ——
+// 不复用已发出过的 sequence 是硬要求：手机端按 sequence 增量补帧，复用即对不上账。
 func (b *Backend) ImportDurable(data []byte) error {
 	var st durableState
 	if err := json.Unmarshal(data, &st); err != nil {
@@ -1088,9 +1082,6 @@ func (b *Backend) ImportDurable(data []byte) error {
 	if st.Checkpoints != nil {
 		b.durable = st.Checkpoints
 	}
-	if st.PersistSeq != nil {
-		b.persistSeq = st.PersistSeq
-	}
 	if st.SessionRefs != nil {
 		b.sessionRefs = st.SessionRefs
 	}
@@ -1098,9 +1089,6 @@ func (b *Backend) ImportDurable(data []byte) error {
 		e.Persist = true
 		b.cache[sk] = e
 		b.recomputeCacheLocked(e.Namespace)
-	}
-	for ks, v := range b.persistSeq {
-		b.seq[ks] = v
 	}
 	return nil
 }
