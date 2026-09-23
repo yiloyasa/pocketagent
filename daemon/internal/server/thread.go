@@ -1086,6 +1086,9 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	userBlocks := derefBlocks(input.Blocks)
 	t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: userBlocks, CreatedAt: time.Now().UnixMilli()})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+	// 记忆与消息落库**同点**（见 turn_memory.go）：两者必须看到同一份内容 ——
+	// 分开取会在"空正文补偿"这类路径上给出两个事实。
+	s.recordTurnMemory(provider, t, "user", turnID, userBlocks)
 	// P2-4:启动轮的输入落库属"尽力而为"(流已开,错误无法回传给手机),
 	// 但失败必须留痕 —— 否则磁盘异常期间整轮历史静默丢失。
 	logStoreUpdateErr("turn-start", t.ID, s.cfg.Store.Update(t))
@@ -1138,6 +1141,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		}}})
 		t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: next.blocks, CreatedAt: time.Now().UnixMilli()})
 		t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+		s.recordTurnMemory(provider, t, "user", turnID, next.blocks)
 		logStoreUpdateErr("queued-turn-start", t.ID, s.cfg.Store.Update(t))
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
 			TurnId: turnID, ModelId: t.ModelID,
@@ -1330,6 +1334,7 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 		// 历史判断"电脑跑完了没有",这里不落库它就永远等不到
 		if partial != "" {
 			t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
+			s.recordTurnMemory(provider, t, "assistant", turnID, persistBlocks)
 		}
 		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE
 		failedError := &pb.Error{Code: "AGENT_ERROR", Message: runErr.Error()}
@@ -1362,6 +1367,7 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 			}
 		}
 		t.Messages = append(t.Messages, store.StoredMessage{Role: "assistant", Blocks: persistBlocks, CreatedAt: now})
+		s.recordTurnMemory(provider, t, "assistant", turnID, persistBlocks)
 		t.Usage.InputTokens += usagePtr.GetInputTokens()
 		t.Usage.OutputTokens += usagePtr.GetOutputTokens()
 		t.Status = pb.ThreadStatus_THREAD_STATUS_IDLE

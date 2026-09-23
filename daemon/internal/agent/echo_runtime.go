@@ -3,10 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
-	"log"
-	"strings"
 
-	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
@@ -85,7 +82,7 @@ func (e *EchoProvider) Descriptor() runtime.AgentDescriptor { return echoRuntime
 // 【为什么不在这里 Open 会话】OpenRuntime 是个交付动作，不是状态变更动作。
 // 在这里顺手把 thread.ExternalSession 写掉，会让"取运行时"这个读起来无害的
 // 调用带上副作用 —— 调用方在健康探测或诊断导出里调它就会改状态。
-// 会话在轮次开始时才 Open（见 recordEchoTurn）。
+// 会话在轮次开始时才 Open（见 server 侧的轮次启动路径）。
 func (e *EchoProvider) OpenRuntime(_ context.Context, thread *store.Thread) (*runtime.AgentRuntime, error) {
 	if thread == nil {
 		return nil, errEchoNilThread
@@ -98,55 +95,10 @@ func (e *EchoProvider) OpenRuntime(_ context.Context, thread *store.Thread) (*ru
 // 而静默跳过检查是本项目定义的假绿。）
 func (e *EchoProvider) EchoRuntimeBackend() *runtime.Backend { return sharedRuntimeBackend() }
 
-// recordEchoTurn 把一轮对话写进公共运行时记忆。
-//
-// 【为什么 Echo 的 Run 里必须真的用它】契约如果只被"交付"却不被"使用"，
-// 它就是一块装饰：没有任何路径会走到它，也就没有任何测试能证明它成立。
-// Echo 作为最低契约 provider，必须在真实轮次里走一遍 memory + checkpoint，
-// 才算"完整接入公共 runtime"（规格 §7 对 Echo 的要求）。
-//
-// 【失败不阻断轮次】运行时段故障不该让用户看不到回复：记日志、照常返回。
-// 但绝不静默 —— 日志里带 agent 与 thread，诊断时能定位。
-func (e *EchoProvider) recordTurn(thread *store.Thread, role string, blocks []pb.ContentBlock) {
-	if thread == nil {
-		return
-	}
-	rt, err := e.OpenRuntime(context.Background(), thread)
-	if err != nil {
-		log.Printf("[runtime] echo 运行时交付失败，本轮不记记忆: thread=%s err=%v", thread.ID, err)
-		return
-	}
-	if rt.Memory == nil {
-		return
-	}
-	key := runtime.MemoryKey{AgentID: echoAgentID, ThreadID: thread.ID, Kind: runtime.MemoryConversation}
-	_, err = rt.Memory.Append(context.Background(), key, runtime.MemoryItem{
-		Role:    role,
-		Payload: []byte(echoTurnText(blocks)),
-	})
-	if err != nil {
-		log.Printf("[runtime] echo 记忆写入失败: thread=%s role=%s err=%v", thread.ID, role, err)
-		return
-	}
-	// 每轮落一次 checkpoint：Echo 的记忆语义就是"daemon 侧持有会话事实"
-	// （SessionModel=DAEMON），不落盘则重启后无从恢复。
-	if err := rt.Memory.Checkpoint(context.Background(), key); err != nil {
-		log.Printf("[runtime] echo 记忆 checkpoint 失败: thread=%s err=%v", thread.ID, err)
-	}
-}
-
-// echoTurnText 把内容块里的文本拼成记忆原文。
-// 非文本块（图片等）以占位符体现，避免"整条记忆只剩文字、看不出还有图"。
-func echoTurnText(blocks []pb.ContentBlock) string {
-	var sb strings.Builder
-	for i := range blocks {
-		b := &blocks[i]
-		switch v := b.Block.(type) {
-		case *pb.ContentBlock_Text:
-			sb.WriteString(v.Text.GetText())
-		default:
-			sb.WriteString("[非文本内容]")
-		}
-	}
-	return sb.String()
-}
+// 【记忆写入搬去了哪】原先这里有个 recordTurn：每轮把用户输入与回复写进公共
+// runtime 记忆（+ checkpoint），作为"契约被使用而不只是被交付"的证据点。
+// D7 把这件事收归 server 的公共轮次路径（server/turn_memory.go）—— 逐家 provider
+// 各写一份会产出五份重复实现，且"谁接了"只在那五个文件里才看得见；收归之后新加
+// 一家 provider 自动入列。echo 的形态声明（SessionModel=DAEMON、MemoryModel=DAEMON）
+// 不变，server 侧按申报写会话原文，落点与语义与原先一致
+// （对应回归用例见 server/turn_memory_test.go::TestEchoTurnWritesConversationThroughServer）。

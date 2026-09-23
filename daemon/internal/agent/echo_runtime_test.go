@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
@@ -73,93 +72,13 @@ func TestEchoRuntimeContract(t *testing.T) {
 	}.RunAll()
 }
 
-// TestEchoTurnWritesRuntimeMemory 是不 mock 中间层的端到端证据：
-// 真实跑一轮 Echo → 记忆真的被写进公共运行时 → 模拟 daemon 重启后仍能恢复。
-//
-// 【为什么这条比契约套件更值钱】契约套件测的是"接口语义成立"；这条测的是
-// "轮次路径真的走了契约"。两者缺一：只有前者 -> 契约可能是一块没人用的装饰；
-// 只有后者 -> 单项语义可能不符合契约。
-func TestEchoTurnWritesRuntimeMemory(t *testing.T) {
-	p := NewEcho()
-	backend := p.EchoRuntimeBackend()
-	thread := &store.Thread{ID: "th-echo-turn-memory"}
-	ctx := context.Background()
-
-	var events int
-	sink := func(_ *pb.TurnServerMessage) { events++ }
-	blocks, _, err := p.Run(ctx, TurnRequest{
-		Thread:      thread,
-		Workspace:   t.TempDir(),
-		InputBlocks: []pb.ContentBlock{blockText("你好，回声")},
-	}, sink, nil)
-	if err != nil {
-		t.Fatalf("Echo 轮次失败: %v", err)
-	}
-	if events == 0 {
-		t.Fatal("Echo 未向 sink 发出任何事件（前置条件不满足，后续断言无意义）")
-	}
-	if len(blocks) == 0 {
-		t.Fatal("Echo 未返回内容块（前置条件不满足）")
-	}
-
-	key := runtime.MemoryKey{AgentID: echoAgentID, ThreadID: thread.ID, Kind: runtime.MemoryConversation}
-	snap, err := p.mustRuntime(t, thread).Memory.Load(ctx, key)
-	if err != nil {
-		t.Fatalf("读记忆失败: %v", err)
-	}
-	if len(snap.Items) != 2 {
-		t.Fatalf("一轮过后应记下 user + assistant 两条，实得 %d", len(snap.Items))
-	}
-	if snap.Items[0].Role != "user" || snap.Items[1].Role != "assistant" {
-		t.Fatalf("记忆角色顺序应为 user→assistant，实得 %q→%q", snap.Items[0].Role, snap.Items[1].Role)
-	}
-	if !strings.Contains(string(snap.Items[0].Payload), "你好，回声") {
-		t.Fatalf("用户输入原文应进入记忆，实得 %q", snap.Items[0].Payload)
-	}
-
-	// ---- 端到端恢复：模拟 daemon 重启 ----
-	durable, err := backend.ExportDurable()
-	if err != nil {
-		t.Fatalf("ExportDurable 失败: %v", err)
-	}
-	if err := backend.ImportDurable(durable); err != nil {
-		t.Fatalf("ImportDurable（模拟重启）失败: %v", err)
-	}
-
-	rt2 := p.mustRuntime(t, thread)
-	// 重启后先验证内存态确实被清空 —— 用 Observe 读**原始**内存态取证，
-	// 而不是 Load：Load 现在会在内存为空时自动从 checkpoint 装载（runtime 的懒加载，
-	// 见 memMemory.loadCheckpointIfAbsent），它已不能用来证明"重启清空了内存"。
-	if obs := backend.Observe(echoAgentID); obs.Memory.Items != 0 {
-		t.Fatalf("模拟重启后内存态应已清空（说明重启是假的），实得 %d 条", obs.Memory.Items)
-	}
-	if err := rt2.Memory.Restore(ctx, key); err != nil {
-		t.Fatalf("重启后 Restore 失败: %v", err)
-	}
-	recovered, err := rt2.Memory.Load(ctx, key)
-	if err != nil {
-		t.Fatalf("重启后 Load 失败: %v", err)
-	}
-	if len(recovered.Items) != 2 {
-		t.Fatalf("重启后应恢复 2 条会话记忆，实得 %d", len(recovered.Items))
-	}
-	if !strings.Contains(string(recovered.Items[0].Payload), "你好，回声") {
-		t.Fatalf("恢复后的用户输入原文应完好，实得 %q", recovered.Items[0].Payload)
-	}
-}
-
-// mustRuntime 取运行时，失败即终止（测试辅助）。
-func (e *EchoProvider) mustRuntime(t *testing.T, thread *store.Thread) *runtime.AgentRuntime {
-	t.Helper()
-	rt, err := e.OpenRuntime(context.Background(), thread)
-	if err != nil {
-		t.Fatalf("OpenRuntime 失败: %v", err)
-	}
-	if rt == nil {
-		t.Fatal("OpenRuntime 返回 nil 运行时")
-	}
-	return rt
-}
+// 【"echo 的记忆能被读到"这条断言的去向】原先这里有个
+// TestEchoTurnWritesRuntimeMemory：跑一轮 echo，断言记忆被写进公共运行时、且
+// 模拟重启后能恢复。D7 把记忆写入从 provider 的 Run 收归 server 的公共轮次路径
+// （server/turn_memory.go）之后，这条断言的前提（provider 自己写）已经不成立 ——
+// 留在原处会变成对一件已经不成立的事的检查，且仍绿会掩盖"接线根本没生效"。
+// 等价且更强的那条（真 echo 经 server 落库 + 换同数据目录的新后端仍读得回）现在在
+// server 包：见 turn_memory_test.go::TestEchoTurnWritesConversationThroughServer。
 
 // TestEchoOpenRuntimeRejectsNilThread：缺 thread 必须 fail closed，
 // 而不是交付一个"无主运行时"让调用方往不存在的会话上写记忆。
