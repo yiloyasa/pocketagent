@@ -77,7 +77,7 @@
 
 机器可扫部分（linter，进 `pa_audit`）：
 
-- 硬编码名单模式报警：agent 字面量数组（如 `[]string{"codex","pi","zcode"}`）、`isLegacy*` 版本二分函数——**新增即报警**；存量挂牌白名单仅剩 1 处（`codex_requests.go` isLegacyApproval，只减不增；CreateThread/order/defaultModelIDFor 三处已于批3整改，见附录 A），豁免登记 3 项见附录 A 尾部。
+- 硬编码名单模式报警：agent 字面量数组（如 `[]string{"codex","pi","zcode"}`）、`isLegacy*` 版本二分函数——**新增即报警**；存量挂牌白名单仅剩 1 处（`codex_requests.go` isLegacyApproval，只减不增；CreateThread/order/defaultModelIDFor 三处已于批3整改，见附录 A），其余命中必须在附录 A 登记并说明为什么不能改为能力透传。
 - UI 层新增 `"未知"` 字符串 → 报警。
 - sheet 溢出巡检（批10 T-PA 固化）：android 全仓 `ModalBottomSheet` 调用点逐站列出处置（溢出风险/有滚动/Lazy 容器/heightIn 上限/静态内容），内容块含 forEach/items 列表渲染而同块无 `verticalScroll`/`LazyColumn`/`heightIn(max)` 上限 → 报警；T-NS/T-SS 已修处回归即现形。
 - 假绿哨兵（批10 T-PA 固化）：解析 `testDebugUnitTest` 结果 XML 的 tests/failures 计数，failures/errors>0 → 红线；最新结果 XML mtime 距今 >10 分钟 → 提示疑似 Gradle UP-TO-DATE，需 `--rerun`（§2 L1 时间戳口径的规则化）。
@@ -146,6 +146,7 @@
 | 日期 | 结论 | 动作 |
 |---|---|---|
 | 2026-09-20 | 规范初版（三轮讨论固化：闸门制 → 持续框架 → 人机分工优化） | 建立本文件 |
+| 2026-09-23 | `pa_audit` 发现 `collabrolecheck` 用固定 `pi/codex` 数组探测模型，违反能力动态发现原则 | 已改为读取 `GetHostInfo.capabilities` 中的 `agent:*`，新增 `daemon/cmd/collabrolecheck/main_test.go`；本轮复跑红线 0 |
 | 2026-09-20 | 批7 死代码清理（T-24/T-26）：dynamicEffortsFor+孤儿接口、PiProvider.ThinkingLevels 及其测试删除 | 回归用例净 -2/-1：被删用例钉的是已删死函数的行为，无独立存在意义；等价性由全绿测试套佐证；同批新增 AST 回归钉子 +1（codexapp client_debug_ast_test）对冲 |
 | 2026-09-20 | UP-TO-DATE 假绿单轮三次被审/执两侧抓住（批2/批3/批5 审核） | 已修复（批10 T-D3，2026-09-21）：tools/device/_pa_gradle.py test 分支已统一补 --rerun 参数；实测连续两次强制真跑并刷新结果 XML（04:26:52→13:34:32→13:35:03），apk/compile 分支不受影响 |
 | 2026-09-20 | 批5 Vosk 全摘除（T-22）：VoskModelManager 状态机/安装器/识别循环等 21 个纯 vosk 用例删除（清单见 T-22 交付报告）；SenseVoiceFallbackTest 24 例同数承接引擎回退钉子，全仓用例数 484 持平不减 | 被测对象已随引擎整体摘除，无行为可钉；端侧兜底/文件校验行为面由 SenseVoice 系测试覆盖；删除逐例清单与理由存档于 T-22 交付报告（2026-09-20 夜航档案） |

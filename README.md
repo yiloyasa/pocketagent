@@ -30,16 +30,17 @@
 - 代码：android main **86** `.kt` / test **81** `.kt`；daemon 手写 Go（非 gen）**320** 文件
 - 版本：**0.2.2 / versionCode 5**
 
-### 0.3 当前状态（真值锚点 · 2026-09-23）
+### 0.3 当前状态（真值锚点 · 2026-09-23 16:22）
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，HEAD `76e752d`（2026-09-23：**W4 / W5 / W6 完成，W7 部分**）；**工作树干净** |
-| daemon | 运行中 pid **104724**（**仍是改动前的旧二进制，未热部署**）；`0.0.0.0:7246` LISTENING；paguard 看门狗在跑 |
-| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线（轮次租约 soft/hard 取自 `Effective`）· **W8 🔶** 未知事件诊断索引（`ListUnknownEvents`/`GetUnknownEvent`/`AcknowledgeUnknownEvent`，落盘有界 + 丢弃留痕）—— 全 provider 事件信封化未做 · **W10 ✅** 协同策略 daemon 权威化（`GetCollabPolicy`/`SetCollabPolicy`：持久化 `collab-policy.json` + CAS + 立即生效；闸接在扇出入口（开关 + 成员上限）与委派两个入口）· **W9 ✅** 能力注册消费（启动期跑 `VerifyDeclaration` 声明层核验 + `GetRuntimeState`/`GetAgentRuntime` 透出形态与违约；**实测 5 家 provider 全部达标**：declared=true / issues=0 / runtime_state=ready）· **W11 ⬜** Android Runtime UI |
-| **下一刀（2026-09-23 用户裁定）★** | ① ~~**W6b 补齐**~~ → **已完成**。② ~~**W7 补齐两件**~~ → **已完成**。③ ~~**W8**~~ → **部分完成**（未知事件诊断索引闭环；**剩余**：全 provider 事件信封化、未知 response 无落点）。④ ~~**W10**~~ → **已完成**（协同策略 daemon 权威化；**顺序说明**：W10 先于 W9 做 —— 它与刚落地 W7 的控制面同构，可端到端验证；W9 要在 provider 注册路径做启动期核验，与后续 provider 改造一起做更省）。⑤ ~~**W9**~~ → **已完成**（启动期声明层核验 + `GetRuntimeState`/`GetAgentRuntime`；真实 5 家 provider 实测全部达标）。⑥ **接下来只剩 W11**（Android Runtime UI：把 W6b 恢复报告 / W7 预算 / W8 未知事件 / W9 运行时形态 / W10 协同策略接到手机端；顺带退役已确认无调用点的 `CollabPrefs` 死代码）。**验收判据（本轮确立）**：凡"可见/可改"类改动，验收必须落到**手机端能看到或能操作**，仅写日志不算通过。 |
+| Git | 分支 `main`，**代码基线** `735e094`（2026-09-23：Runtime 缺陷修复、统一记忆落盘、Android Runtime UI 收口、审计探针动态发现）；文档同步后工作树应保持干净，当前提交以 `git log` 为准 |
+| daemon | 本轮未重启生产进程；源码侧 `go test -count=1 ./...`、`go build ./...`、`go vet ./...` 均通过。运行中的 daemon 是否已热部署，必须按 AUDIT §2 的 L0 产物自证单独确认 |
+| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线 · **W8 🔶** 未知事件诊断索引已闭环，仍有全 provider 事件信封化与未知 response 落点待补 · **W9 ✅** 5 家 provider 统一 Runtime 合同声明与运行时观测 · **W10 ✅** 协同策略由用户电脑上的 daemon 权威持有 · **W11 ✅（JVM）** Android Runtime 区段、预算编辑、未知事件、恢复报告、Agent 形态、协同策略与主页“开始协同”入口已接线；`CollabPrefs` 已退役，真机 L2 尚未执行 |
+| **本轮已完成的用户问题** | 删除会话的墓碑过滤覆盖列表/导入/重启/迟到子代理；Codex 空正文分层并支持原生历史补偿；断线恢复改为 150ms 起的退避增量回放；Android 删除统一清理本地缓存；所有 Agent 的 Runtime memory/cache/resource/checkpoint 合同与记忆 checkpoint 已接入公共轮次路径 |
+| **下一刀（已明确）★** | ① L0 产物自证与 L2 真机回归；② W8 全 provider 事件信封化与未知 response 落点；③ WatchEvents 作为终局加速通道；④ 数据目录迁移 `%USERPROFILE%\\.pocketagentd\\` → `%LOCALAPPDATA%\\PocketAgent\\data\\` 另开任务，本轮不做 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
-| 测试基线 | Android **81 套件 / 607 用例 / 0 失败**（2026-09-22 本机 `--rerun` 复跑，XML 时间戳核对）；daemon `go test -count=1 ./...` —— **17 包全绿**（2026-09-23 起；此前 `internal/server` 的 2 例 flaky 已修，见 §15） |
+| 测试基线 | Android **87 份 XML / 665 用例 / 0 失败 / 0 错误**（2026-09-23，`_pa_gradle.py test` 强制 `--rerun`）；daemon `go test -count=1 ./...` —— **17 包全绿**；`pa_audit --json`：红线 **0**、提示 **1**、通过 **6** |
 
 ### 0.4 现阶段阻碍（按优先级）★
 

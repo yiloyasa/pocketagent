@@ -3,7 +3,7 @@
 > 文档类型：诊断结论、实施方案、审核方案  
 > 生成日期：2026-09-22  
 > 适用项目：`G:\项目1\pocketagent`  
-> 当前阶段：只读诊断完成，尚未开始修改生产代码  
+> 当前阶段：D1-D7 代码实现已落地；D8 数据目录迁移按决策延期；L0/L2 仍需在发布前完成
 > 控制面位置：每个用户自己的电脑上的 `pocketagentd`，手机只负责控制和显示
 
 ## 1. 结论先行
@@ -50,7 +50,7 @@ daemon 持久化状态 / 手机可见状态
 
 ## 2. 当前项目状态与工作树边界
 
-本方案生成前只做了只读检查，没有修改源码、README 或 `AUDIT.md`。
+本方案最初生成时只做了只读检查；截至 2026-09-23，D1-D7 已按本方案落地，README 已同步实际状态，`AUDIT.md` 仍是唯一审核标准。
 
 当前仓库：
 
@@ -58,30 +58,43 @@ daemon 持久化状态 / 手机可见状态
 G:\项目1\pocketagent
 ```
 
-当前 Git：
+当前 Git（2026-09-23 16:22）：
 
 ```text
 分支：main
-HEAD：932b59a feat(runtime): W11b 设置页「运行时」区段(恢复横幅/形态卡/预算/未知事件/协同策略)
+代码基线：735e094 fix(ui): keep runtime controls daemon-authoritative
+工作树：clean
 ```
 
-当前已有未提交改动，实施时不得覆盖：
+本轮已提交的执行结果：
 
 ```text
-M android/app/src/main/java/dev/pocketagent/app/ui/CollabLogic.kt
-M android/app/src/main/java/dev/pocketagent/app/ui/CollabState.kt
-M android/app/src/main/java/dev/pocketagent/app/ui/RuntimeSection.kt
-M android/app/src/test/java/dev/pocketagent/app/ui/RuntimeSectionLogicTest.kt
-?? tools/device/_pa_verify_runtime.py
+8cb37d0  fix(runtime): prevent deleted sessions from resurrection
+24e1489  fix(runtime): normalize empty agent outputs
+5adc0eb  fix(runtime): recover empty turn output from native history
+23ebe22 fix(recovery): cut reconnect latency, stop redundant full pulls
+f6b2273 fix(ui): purge every local cache on thread deletion
+a16868d fix(ui): also purge task-center and subagent-preview caches on deletion
+7c02521 feat(runtime): 按 agent 聚合的运行时状态观测
+b92fef7 fix(runtime): memory checkpoint 真正落盘并在重启后装载
+5e00a9c feat(runtime): 服务端公共轮次路径接线统一 Runtime 记忆
+9a63c07 fix(memory): 用户侧记忆收进轮次心脏
+34d12b9 refactor(runtime): 删除被载荷 Seq 取代的 persistSeq
+7056133 feat(ui): expose collaboration entry from home
+56f4aa5 fix(audit): discover probe agents from host capabilities
+735e094 fix(ui): keep runtime controls daemon-authoritative
 ```
 
-README 当前存在真值漂移：
+当前仍需单独验收：
 
 ```text
-G:\项目1\pocketagent\README.md:37
+L0：确认运行中的 daemon/APK 是本轮产物；
+L2：连接真实手机执行删除、空输出、断线恢复、Runtime UI 和协同入口；
+W8：全 provider 事件信封化与未知 response 落点；
+D8：数据目录迁移与旧 daemon/旧 APK 兼容矩阵（已决定另开任务）。
 ```
 
-README 记录的是旧 HEAD、旧工作树状态和旧 W11 进度，不能在实施前直接覆盖。README、AUDIT 和 Git 状态应在代码及测试证据完成后统一同步。
+README 已更新到上述实际状态；不应把 JVM/Go 通过外推为真机或运行中 daemon 已更新。
 
 现有审核唯一真源：
 
@@ -1354,4 +1367,3 @@ README 与 AUDIT 反映实际状态
 Git 提交可按功能和审核边界追溯
 L0/L1/L2 全部通过
 ```
-
