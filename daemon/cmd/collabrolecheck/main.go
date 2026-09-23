@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -178,8 +179,16 @@ func main() {
 	}
 
 	// ---- 8) pi 的模型与思考强度(用户报障:列表为空、刷新无效)----
-	// refresh=true 必须真的重新向 pi 问一次,而不是读缓存。
-	for _, ag := range []string{"pi", "codex"} {
+	// refresh=true 必须真的重新向每个**已注册** agent 问一次,而不是读缓存。
+	// agent 名称从 GetHostInfo.capabilities 的 agent:* 动态提取,不在探针里复制
+	// 一份名单;新增 provider 后探针自动覆盖,也不会触发 AUDIT 的名单红线。
+	hi, hiErr := pb.NewHostServiceClient(conn).GetHostInfo(ctx, &pb.GetHostInfoRequest{})
+	if hiErr != nil {
+		fmt.Printf("[8] GetHostInfo 失败,跳过模型检查: %v\n", hiErr)
+		return
+	}
+	agentIDs := agentIDsFromCapabilities(hi.GetCapabilities())
+	for _, ag := range agentIDs {
 		md, merr := mcli.ListModels(ctx, &pb.ListModelsRequest{AgentId: ag, Refresh: true})
 		if merr != nil {
 			fmt.Printf("[8] %s: ListModels 失败: %v\n", ag, merr)
@@ -195,4 +204,31 @@ func main() {
 			fmt.Printf("      · %s (%s)\n", m.GetId(), m.GetDisplayName())
 		}
 	}
+}
+
+// agentIDsFromCapabilities 把 daemon 的能力声明还原为可探测的 agent id。
+//
+// 能力串允许携带版本后缀(例如 agent:pi:v0.85.1),所以只取第一个冒号
+// 后的 id。重复声明去重并排序,让探针输出稳定;空值直接忽略。这里的
+// 解析规则与手机端的 agent:<id> 前缀语义一致,不维护第二份 agent 名单。
+func agentIDsFromCapabilities(capabilities []string) []string {
+	ids := make(map[string]struct{})
+	for _, capability := range capabilities {
+		if !strings.HasPrefix(capability, "agent:") {
+			continue
+		}
+		id := strings.TrimSpace(strings.TrimPrefix(capability, "agent:"))
+		if i := strings.IndexByte(id, ':'); i >= 0 {
+			id = id[:i]
+		}
+		if id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
