@@ -1,7 +1,6 @@
 package dev.pocketagent.app.ui.component
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -49,8 +48,11 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaGlassToken
+import dev.pocketagent.app.ui.theme.paGlass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pocketagent.v1.ListThreadsRequest
@@ -89,10 +91,11 @@ fun RecentThreadsDrawer(
     val panelWidth = (config.screenWidthDp * 0.84f).coerceAtMost(340f).dp
     val panelWidthPx = with(LocalDensity.current) { panelWidth.toPx() }
 
-    // 跟手时进度由页面给;没有外部进度时自己播入场动画(保持组件可独立使用)
+    // 跟手时进度由页面给;没有外部进度时自己播入场动画(保持组件可独立使用)。
+    // 【令牌化】入场用 PaMotion.sheet(大面积位移的从容 spring,可打断)。
     val inner = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        if (dragProgress == null) inner.animateTo(1f, spring(dampingRatio = 0.9f, stiffness = 700f))
+        if (dragProgress == null) inner.animateTo(1f, PaMotion.sheet())
     }
     val progress = dragProgress ?: inner.value
 
@@ -106,12 +109,12 @@ fun RecentThreadsDrawer(
     }
 
     Box(Modifier.fillMaxSize()) {
-        // 遮罩:点一下关闭
+        // 遮罩:点一下关闭。压暗色统一走 PaGlassToken.Scrim(与全局抽屉/推背同口径)
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = progress * 0.55f }
-                .background(Color.Black)
+                .graphicsLayer { alpha = progress }
+                .background(PaGlassToken.Scrim)
                 .clickable { onClose() },
         )
 
@@ -119,9 +122,15 @@ fun RecentThreadsDrawer(
             Modifier
                 .width(panelWidth)
                 .fillMaxHeight()
-                .graphicsLayer { translationX = -panelWidth.toPx() * (1f - progress) }
+                .graphicsLayer { translationX = -panelWidthPx * (1f - progress) }
+                // 【玻璃面板】与全局抽屉 AppDrawer 同一材质语言:半透明烟玻璃 + 右缘投影;
+                // 发丝线关(上下缘贴屏幕边),被覆盖内容的推背模糊由调用方(ChatScreen)负责
+                .paGlass(
+                    RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                    hairline = false,
+                    shadowElevation = 10.dp,
+                )
                 .clip(RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp))
-                .background(Pa.Card)
                 // 面板打开后在面板上向左拖也能跟手关闭(与边缘手势共用同一进度)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(

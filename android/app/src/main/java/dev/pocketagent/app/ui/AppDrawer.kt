@@ -7,7 +7,6 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -59,12 +58,15 @@ import androidx.compose.ui.window.Popup
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaBadge
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaGlassToken
+import dev.pocketagent.app.ui.theme.paGlass
 import kotlinx.coroutines.delay
 
 /** 侧边栏主导航项。 */
@@ -135,9 +137,10 @@ fun AppDrawer(
     BackHandler(enabled = true) { requestClose() }
 
     val shown = visibleState.targetState || visibleState.currentState
+    // 【令牌化】遮罩浓淡走 PaMotion.standard(spring 可打断);减弱动效时 snap 瞬时到位
     val animatedScrim by animateFloatAsState(
         targetValue = if (shown) 1f else 0f,
-        animationSpec = tween(220),
+        animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.standard(),
         label = "drawerScrim",
     )
     // 跟手时进度由外部给,否则走内部动画
@@ -147,24 +150,30 @@ fun AppDrawer(
     // 折叠偏好:展开(图标+文字) / 收起(窄 rail 仅图标)。AgentConnection 内已持久化。
     val collapsed = AgentConnection.drawerCollapsed
 
-    // 遮罩:铺满整个屏幕(全屏点击区),淡入淡出
+    // 遮罩:铺满整个屏幕(全屏点击区),淡入淡出。
+    // 【压暗色统一走 PaGlassToken.Scrim】与 paPushBack 的压暗同源 —— 浮层之下
+    // "退后一层"的深度感全 app 一个口径,不再各处手写黑色透明度。
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.62f * scrimAlpha))
+            .background(PaGlassToken.Scrim.copy(alpha = PaGlassToken.Scrim.alpha * scrimAlpha))
             // scaleDown=1f:遮罩本身不做缩放,只当点击区
             .pressable(scaleDown = 1f) { requestClose() },
     ) {
-        // 动效:减弱动态效果时退化为纯淡入(不移位)
+        // 动效:全部走 spring 令牌(可打断=丝滑根基)。
+        // 跟手时无内部动画(位移由手势驱动);减弱动效时按设计规范 §1.5 退化为
+        // "仅淡入/淡出",且用 snap(零时长)——spring 不受系统动画缩放影响,只有
+        // snap 能真正做到"瞬时到位"。fadeIn 要求 FiniteAnimationSpec,而
+        // PaMotion.instant() 的静态类型是 AnimationSpec,故此处直接用同义的 snap()。
         val enter = when {
             progress != null -> androidx.compose.animation.EnterTransition.None
-            reduceMotion -> fadeIn(tween(120))
-            else -> fadeIn(tween(180)) + slideInHorizontally(tween(280)) { -it }
+            reduceMotion -> fadeIn(androidx.compose.animation.core.snap())
+            else -> fadeIn(PaMotion.sheet()) + slideInHorizontally(PaMotion.sheet()) { -it }
         }
         val exit = when {
             progress != null -> androidx.compose.animation.ExitTransition.None
-            reduceMotion -> fadeOut(tween(100))
-            else -> fadeOut(tween(160)) + slideOutHorizontally(tween(220)) { -it }
+            reduceMotion -> fadeOut(androidx.compose.animation.core.snap())
+            else -> fadeOut(PaMotion.sheet()) + slideOutHorizontally(PaMotion.sheet()) { -it }
         }
 
         // 跟手时:整体位移 = 面板宽 × (1 - 进度)
@@ -185,10 +194,10 @@ fun AppDrawer(
                 .fillMaxHeight()
                 .graphicsLayer { translationX = followOffset },
         ) {
-            // 折叠/展开宽度平滑过渡(rail 76dp ↔ 面板 330dp)
+            // 折叠/展开宽度平滑过渡(rail 76dp ↔ 面板 330dp);spring 令牌,可打断
             val panelWidth by animateDpAsState(
                 targetValue = if (collapsed) 76.dp else 330.dp,
-                animationSpec = tween(260),
+                animationSpec = PaMotion.standard(),
                 label = "panelWidth",
             )
             DrawerPanel(
@@ -250,15 +259,21 @@ private fun DrawerPanel(
     Column(
         modifier
             .fillMaxHeight()
+            // 【玻璃面板】磨砂观感的招牌场景:面板半透明,被覆盖的主内容由调用方
+            // paPushBack 做模糊+缩放,透过面板就是真磨砂。发丝线关(上下缘贴屏幕边,
+            // 玻璃的边界靠屏幕边不靠亮边);投影给一档,面板"浮"在内容之上。
+            .paGlass(
+                RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp),
+                hairline = false,
+                shadowElevation = 10.dp,
+            )
             .clip(RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp))
-            // 与页面同族的 Pa.Card(而非更亮的 CardHigh):侧边栏不再比页面"亮一档"
-            .background(Pa.Card)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
         Crossfade(
             targetState = collapsed,
-            animationSpec = tween(200),
+            animationSpec = PaMotion.standard(),
             label = "drawerMode",
             modifier = Modifier.weight(1f),
         ) { c ->
@@ -640,15 +655,16 @@ private fun QuickTile(
     }
 }
 
-/** 分组小标题。 */
+/** 分组小标题:字号小、加字距,让"导航/更多"读作分区标签而不是一行普通文字。 */
 @Composable
 private fun DrawerGroupLabel(text: String) {
     Text(
         text,
-        Modifier.padding(start = 10.dp, top = 18.dp, bottom = 6.dp),
+        Modifier.padding(start = 12.dp, top = 20.dp, bottom = 8.dp),
         fontSize = 10.5.sp,
         color = Pa.TextTertiary,
         fontWeight = FontWeight.Medium,
+        letterSpacing = 1.4.sp, // 中文字距拉开一档,分区标签的"轻层级"靠它
     )
 }
 
@@ -664,9 +680,10 @@ private fun DrawerItem(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    // 选中态高亮(spring 令牌,可打断:快速连续切换不跳帧)
     val highlight by animateFloatAsState(
         targetValue = if (selected) 1f else 0f,
-        animationSpec = tween(220),
+        animationSpec = PaMotion.standard(),
         label = "drawerSelected",
     )
     Box(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {

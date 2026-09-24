@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -55,7 +54,10 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.paGlass
+import dev.pocketagent.app.ui.theme.paPushBack
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -295,9 +297,15 @@ fun HomeScreen(
     val disabledAgents = AgentConnection.disabledAgents
     val visibleAgents = remember(agents, disabledAgents) { filterAgents(agents, disabledAgents) }
 
+    // 【推背模糊】任一浮层(侧边栏/管理面板/引导弹窗/新建任务)激活时,主页内容根
+    // 模糊+缩放+压暗 —— 浮层是玻璃,透过玻璃看内容才是真磨砂。模糊挂在被覆盖的
+    // 内容层上(整屏一次一层),不在浮层自己身上,性能纪律见 PaGlass.kt。
+    val overlayActive = drawerCtrl.visible || showManage || guideAgent != null || showNewThread
+
     // 左边缘右滑也能唤出侧边栏(问题 7),与左上角图标点按是同一个入口的两种手势
     Column(
         modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()
+            .paPushBack(overlayActive)
             .edgeSwipeToOpenDrawer(
                         onDragFraction = drawerCtrl::onDrag,
                         onRelease = drawerCtrl::onRelease,
@@ -308,10 +316,15 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 左上角:菜单入口(全 App 统一用汉堡图标;品牌 logo 只出现在侧边栏与启动页)
-            IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
+            // 顶部工具钮:悬空玻璃片(paGlass + 发丝高光 + 轻投影),浮在内容之上的
+            // "亮边朝光"。IconActionButton 内部有 background,传透明底让玻璃材质负责底色。
+            Box(Modifier.paGlass(RoundedCornerShape(14.dp), shadowElevation = 3.dp)) {
+                IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Color.Transparent)
+            }
             // 右上角:设置
-            IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings, bg = Pa.Card)
+            Box(Modifier.paGlass(RoundedCornerShape(14.dp), shadowElevation = 3.dp)) {
+                IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings, bg = Color.Transparent)
+            }
         }
 
         LazyVerticalGrid(
@@ -330,7 +343,7 @@ fun HomeScreen(
                         Modifier
                             .fillMaxWidth()
                             .pressable { reloadKey++ }
-                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .paGlass(RoundedCornerShape(16.dp), shadowElevation = 2.dp)
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -345,7 +358,7 @@ fun HomeScreen(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(22.dp))
+                        .paGlass(RoundedCornerShape(22.dp), shadowElevation = 2.dp)
                         .padding(14.dp),
                 ) {
                     // 管理 agent 抽屉入口(停用/恢复都在抽屉里):网格只负责"停用后
@@ -395,7 +408,7 @@ fun HomeScreen(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(22.dp))
+                        .paGlass(RoundedCornerShape(22.dp), shadowElevation = 2.dp)
                         .padding(14.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -515,7 +528,7 @@ fun HomeScreen(
                     Modifier
                         .fillMaxWidth()
                         .pressable { showNewThread = true }
-                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .paGlass(RoundedCornerShape(18.dp), shadowElevation = 2.dp)
                         .padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -541,7 +554,7 @@ fun HomeScreen(
                     Modifier
                         .fillMaxWidth()
                         .pressable { onOpenBrowser() }
-                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .paGlass(RoundedCornerShape(18.dp), shadowElevation = 2.dp)
                         .padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -571,7 +584,8 @@ fun HomeScreen(
             if (recent.isEmpty()) {
                 item(span = { GridItemSpan(4) }) {
                     Column(
-                        Modifier.fillMaxWidth().background(Pa.Card, RoundedCornerShape(20.dp)).padding(vertical = 36.dp),
+                        Modifier.fillMaxWidth().paGlass(RoundedCornerShape(20.dp), shadowElevation = 2.dp)
+                            .padding(vertical = 36.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.TextTertiary, modifier = Modifier.size(36.dp))
@@ -585,7 +599,7 @@ fun HomeScreen(
                         Modifier
                             .fillMaxWidth()
                             .pressable { onOpenThread(t.id) }
-                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .paGlass(RoundedCornerShape(16.dp), shadowElevation = 2.dp)
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -724,24 +738,14 @@ fun AgentTile(a: AgentInfo, onClick: () -> Unit) {
 
 /**
  * agent 可用性引导弹窗:灰显磁贴点击后讲清"为什么不可用、怎么装"。
- * 风格仿 ManageAgentsSheet(同款圆角/拖柄/关闭按钮)。
+ * 统一玻璃浮层 PaSheet(玻璃底 + 内建滚动与高度上限,防小屏溢出)。
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDismiss: () -> Unit) {
     // 已装版本(daemon 报 "agent:<id>:<version>" 时非 null)→ 状态行区分两态
     val installedVersion = resolveAgentInstalledVersion(agent.id, capabilities)
     val guide = agentGuideCopy(agent.id)
-    val state = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 10.dp).width(40.dp).height(4.dp).background(Pa.Hover, androidx.compose.foundation.shape.CircleShape))
-        },
-    ) {
+    PaSheet(onDismissRequest = onDismiss) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -813,7 +817,7 @@ private fun ConnectionCardCompact(host: HostInfo?, onRetry: () -> Unit = {}, mod
         modifier
             .fillMaxWidth()
             .pressable { onRetry() }
-            .background(Pa.Card, RoundedCornerShape(20.dp))
+            .paGlass(RoundedCornerShape(20.dp), shadowElevation = 2.dp)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -848,21 +852,13 @@ private fun ConnectionCardCompact(host: HostInfo?, onRetry: () -> Unit = {}, mod
 
 /**
  * 管理 agent 抽屉:真实图标 + 名称 + 连接方式副标题 + 开关。
+ * 统一玻璃浮层 PaSheet;列表滚动交给 PaSheet 内建滚动(高度上限防溢出,
+ * pa_audit 的 sheet_overflow 规则在结构上不可能再触发)。
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    val state = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 10.dp).width(40.dp).height(4.dp).background(Pa.Hover, androidx.compose.foundation.shape.CircleShape))
-        },
-    ) {
+    PaSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Column(Modifier.weight(1f)) {
                 Text("管理 agent", fontSize = 19.sp, color = Pa.TextPrimary)
@@ -874,15 +870,11 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
             IconActionButton(R.drawable.ic_lucide_x, "关闭", onDismiss, bg = Color.Transparent, size = 38.dp, iconSize = 18.dp)
         }
         Spacer(Modifier.height(12.dp))
-        // 整列可滚:agents 列表随接入数增长无上限(pa_audit sheet_overflow 规则首例命中,T-MS),
-        // 条目一多,底部 agent 行的开关会被推出视口且不可点 —— 被滚动裁掉的 Compose 节点
-        // 不进无障碍树也不可点(README §12 坑 6 的产品化形态)。同 T-NS/T-SS 最小修法:
-        // 列表列整体 verticalScroll,标题行/关闭按钮固定不动,交互破坏最小;
-        // 不选"列表定高+底部固定"(定高上限自适应不了任意视口,横屏矮视口照样溢出)。
+        // 之前此处整列 verticalScroll(T-MS):pa_audit sheet_overflow 规则首例命中。
+        // PaSheet 的内容列已自带滚动与 82% 屏高上限,这里不再嵌套 verticalScroll。
         Column(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {

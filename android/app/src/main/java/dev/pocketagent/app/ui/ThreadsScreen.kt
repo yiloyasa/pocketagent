@@ -28,7 +28,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
@@ -39,9 +38,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -69,9 +66,11 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
@@ -82,6 +81,8 @@ import dev.pocketagent.app.ui.component.shortWorkspace
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.paGlass
+import dev.pocketagent.app.ui.theme.paPushBack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -758,10 +759,22 @@ fun ThreadsScreen(
     // 看起来像"滑开了又自动弹回"。改为:纵向真正滚动超过一屏距离才收起(见 listState 监听无需)。
     // 左边缘右滑也能唤出侧边栏(问题 7)。挂在页面根节点上,子节点仍在命中链里,
     // 只有判定为"从左边缘起手的右滑"才会 consume,不会吃掉列表的点击。
+    // 【推背模糊】任一浮层(侧边栏/组织面板/分组面板/新建/电脑会话确认)激活时,
+    // 会话页内容根模糊+缩放+压暗 —— 浮层是玻璃,被覆盖内容自己"退后一层",
+    // 透过玻璃看过去才是真磨砂(整屏一次一层,性能纪律见 PaGlass.kt)。
+    val overlayActive = drawerCtrl.visible || showNewThread ||
+        organizeTarget != null || sectionSheet != null || pcActionConfirm != null
+    // 【增删动画的减弱动效适配】animateItem 的 spec 传 null = 关闭该段动画(瞬时到位)——
+    // spring 不受系统"动画时长缩放 0"影响,只有显式传 null 才能真正做到无动效。
+    // (animateItem 是 LazyItemScope 扩展,只能预计算 spec,不能把调用包成页面级函数。)
+    val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
+    val itemFade: androidx.compose.animation.core.FiniteAnimationSpec<Float>? =
+        if (reduceMotion) null else PaMotion.standard()
     Box(
         modifier
             .fillMaxSize()
             .background(Pa.Bg)
+            .paPushBack(overlayActive)
             // 有行处于展开态时让位给"右滑收起动作":两者不再抢同一段手势
             .edgeSwipeToOpenDrawer(
             enabled = openKey.value == null,
@@ -799,7 +812,7 @@ fun ThreadsScreen(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 2.dp)
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        .paGlass(RoundedCornerShape(14.dp), shadowElevation = 2.dp)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1063,6 +1076,9 @@ fun ThreadsScreen(
                                     SwipeRevealRow(
                                         rowKey = t.id,
                                         openKey = openKey,
+                                        // 【增删动画】淡入+位置回弹走 spring(可打断,轻):
+                                        // 乐观删除/撤销还原时行平滑退场/进场,不再"啪"地消失
+                                        modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
                                         actions = listOf(
                                             // 【可见可达的"移入分组"入口】之前分组只藏在长按菜单里
                                             // (没有任何可见提示,用户反馈"功能缺失")。放到左滑动作栏
@@ -1148,6 +1164,8 @@ fun ThreadsScreen(
                                     SwipeRevealRow(
                                         rowKey = c.id,
                                         openKey = openKey,
+                                        // 与本地会话行同款增删动画(见上)
+                                        modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
                                         actions = listOf(
                                             SwipeAction(
                                                 "pin",
@@ -1212,6 +1230,8 @@ fun ThreadsScreen(
                                     SwipeRevealRow(
                                         rowKey = key,
                                         openKey = openKey,
+                                        // 与本地会话行同款增删动画(见上)
+                                        modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
                                         actions = listOf(
                                             SwipeAction("pin", if (isPinned) "取消置顶" else "置顶", R.drawable.ic_lucide_pin, Pa.AccentText),
                                             SwipeAction("archive", "App归档", R.drawable.ic_lucide_archive, Pa.AccentText),
@@ -1234,7 +1254,9 @@ fun ThreadsScreen(
                                             }
                                         },
                                     ) {
-                                        Column(Modifier.animateItem()) {
+                                        // 动画收口在 SwipeRevealRow 的 modifier.animateItem 上,
+                                        // 这里不再叠一层(双重动画会互相打架)
+                                        Column {
                                             PcAgentSessionCard(info = a, importing = importingId == key || key in pendingPcActions)
                                             if (key in pendingPcActions) {
                                                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment=Alignment.CenterVertically) {
@@ -1257,14 +1279,14 @@ fun ThreadsScreen(
         // ---- 撤销条(模块 8):删除会话后顶部浮出,5 秒内可一键还原 ----
         UndoBarHost(undo, Modifier.align(Alignment.TopCenter))
 
-        // ---- FAB:圆形深灰卡 + 蓝色 + 号(弹出新建会话,可自选工作区) ----
+        // ---- FAB:玻璃圆钮(paGlass 发丝高光+投影),悬浮于列表之上"亮边朝光" ----
         Box(
             Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 24.dp, bottom = 28.dp)
                 .size(60.dp)
                 .pressable(scaleDown = 0.9f) { showNewThread = true }
-                .background(Pa.CardHigh, CircleShape),
+                .paGlass(CircleShape, shadowElevation = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1275,34 +1297,63 @@ fun ThreadsScreen(
     }
 
     pcActionConfirm?.let { (session, action) ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pcActionConfirm = null },
-            title = { Text(when(action) { "delete" -> "删除电脑端会话"; "remove" -> "从 App 移除"; else -> "在 App 中归档" }) },
-            text = { Text(if(action=="delete") "将删除「${session.title}」及其电脑端会话记录。" else "电脑端原始会话保留。${if(action=="archive") "可在 App 已归档列表恢复。" else "从 App 列表隐藏。"}") },
-            dismissButton = { TextButton(onClick={pcActionConfirm=null}) { Text("取消") } },
-            confirmButton = { TextButton(onClick={
-                pcActionConfirm=null
-                val key=agentPcKey(session)
-                pendingPcActions=pendingPcActions+key
-                scope.launch {
-                    try {
-                        withContext(Dispatchers.IO) {
-                            val tid=AgentConnection.threadService().importAgentThread(
-                                ImportAgentThreadRequest.newBuilder().setAgentId(session.agentId).setSessionId(session.sessionId)
-                                    .setSessionFile(session.sessionFile).setCwd(session.cwd).setTitle(session.title).build()).threadId
-                            if(action=="archive") AgentConnection.threadService().archiveThread(
-                                ArchiveThreadRequest.newBuilder().setThreadId(tid).setArchived(true).build())
-                            else AgentConnection.threadService().deleteThread(
-                                DeleteThreadRequest.newBuilder().setThreadId(tid).setLocalOnly(action=="remove").build())
+        // 删除/移除/归档的确认:从 AlertDialog 换成统一玻璃浮层 PaSheet
+        // (文案与回调逻辑一字未动,只换容器)
+        PaSheet(onDismissRequest = { pcActionConfirm = null }) {
+            Text(
+                when (action) {
+                    "delete" -> "删除电脑端会话"
+                    "remove" -> "从 App 移除"
+                    else -> "在 App 中归档"
+                },
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                fontSize = 17.sp,
+                color = Pa.TextPrimary,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            )
+            Text(
+                if (action == "delete") "将删除「${session.title}」及其电脑端会话记录。"
+                else "电脑端原始会话保留。${if (action == "archive") "可在 App 已归档列表恢复。" else "从 App 列表隐藏。"}",
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 10.dp),
+                fontSize = 14.sp,
+                color = Pa.TextSecondary,
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = { pcActionConfirm = null }) { Text("取消") }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        pcActionConfirm = null
+                        val key = agentPcKey(session)
+                        pendingPcActions = pendingPcActions + key
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    val tid = AgentConnection.threadService().importAgentThread(
+                                        ImportAgentThreadRequest.newBuilder().setAgentId(session.agentId).setSessionId(session.sessionId)
+                                            .setSessionFile(session.sessionFile).setCwd(session.cwd).setTitle(session.title).build()).threadId
+                                    if (action == "archive") AgentConnection.threadService().archiveThread(
+                                        ArchiveThreadRequest.newBuilder().setThreadId(tid).setArchived(true).build())
+                                    else AgentConnection.threadService().deleteThread(
+                                        DeleteThreadRequest.newBuilder().setThreadId(tid).setLocalOnly(action == "remove").build())
+                                }
+                                agentPcThreads = agentPcThreads.filterNot { agentPcKey(it) == key }
+                                doRefresh()
+                            } catch (e: Exception) {
+                                Toast.makeText(ctx, "操作未完成：${e.message}", Toast.LENGTH_LONG).show()
+                            } finally { pendingPcActions = pendingPcActions - key }
                         }
-                        agentPcThreads=agentPcThreads.filterNot { agentPcKey(it)==key }
-                        doRefresh()
-                    } catch(e: Exception) {
-                        Toast.makeText(ctx,"操作未完成：${e.message}",Toast.LENGTH_LONG).show()
-                    } finally { pendingPcActions=pendingPcActions-key }
-                }
-            }) { Text("确认") } },
-        )
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = if (action == "delete") Pa.Red else Pa.Accent,
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("确认", color = Color.White) }
+            }
+        }
     }
 
     // 新建会话抽屉:选工作区(在哪个文件夹里工作)
@@ -1351,17 +1402,13 @@ fun ThreadsScreen(
     // "长按弹一层、再点一次"更连贯)。长按只承载**左滑放不下**的动作 —— 分组有
     // 任意多个、"移动到哪个分组"天然需要一个列表,塞进左滑动作区会超过 72% 宽度上限。
     organizeTarget?.let { t ->
-        ModalBottomSheet(
-            onDismissRequest = { organizeTarget = null },
-            containerColor = Pa.CardHigh,
-            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        ) {
-            // 整列可滚:自建分组(sections)无上限,多时"新建分组并移入…/分叉会话"
-            // 会被推出视口不可点(同 SLA-21a:被滚动裁掉的节点不进无障碍树,README §12 坑 6)。
+        // 统一玻璃浮层 PaSheet(内容滚动与高度上限内建,不再自挂 verticalScroll)
+        PaSheet(onDismissRequest = { organizeTarget = null }) {
+            // 自建分组(sections)无上限,长内容靠 PaSheet 内建滚动,"新建分组并移入…/
+            // 分叉会话"不会被推出视口不可点(原 SLA-21a 诉求由 PaSheet 结构性兜住)。
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .padding(bottom = 26.dp),
             ) {
                 Text(
@@ -1518,7 +1565,7 @@ private fun ConnectionCard(host: HostInfo?, onRetry: () -> Unit, modifier: Modif
         modifier
             .fillMaxWidth()
             .pressable { onRetry() }
-            .background(Pa.Card, RoundedCornerShape(20.dp))
+            .paGlass(RoundedCornerShape(20.dp), shadowElevation = 2.dp)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1589,7 +1636,10 @@ private fun ThreadCard(
         Modifier
             .fillMaxWidth()
             // 不要在这里挂 clickable:手势由外层 SwipeRevealRow 独占,否则侧滑会被内层消费掉
-            .background(Pa.Card, RoundedCornerShape(18.dp))
+            // 【玻璃读感·不透明】左滑行内容层必须不透明(盖住底下的动作层),所以这里
+            // 不能用半透玻璃底;发丝高光(paGlass 的 1px 顶缘亮边)给玻璃的"材质读感",
+            // 透明度让位给可用性 —— 可读性优先的层级铁律。
+            .paGlass(RoundedCornerShape(18.dp), tint = Pa.Card)
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         if (renaming) {
@@ -1677,8 +1727,8 @@ private fun PcSessionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable
-            .background(Pa.Card, RoundedCornerShape(18.dp))
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;不透明玻璃读感(同 ThreadCard)
+            .paGlass(RoundedCornerShape(18.dp), tint = Pa.Card)
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Text(
@@ -1727,8 +1777,8 @@ private fun PcAgentSessionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable
-            .background(Pa.Card, RoundedCornerShape(18.dp))
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;不透明玻璃读感(同 ThreadCard)
+            .paGlass(RoundedCornerShape(18.dp), tint = Pa.Card)
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1778,19 +1828,13 @@ private fun PcAgentSessionCard(
  * 工作区通过文件式目录选择器浏览电脑选定,真实传给 codex(rollout 的 cwd),
  * 桌面端在同项目下可见本会话。所有新建对话入口共用。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val recents = AgentConnection.recentWorkspaces.collectAsState().value
     var picked by remember { mutableStateOf("") } // 空 = 默认工作区
     var showBrowser by remember { mutableStateOf(false) }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    // 统一玻璃浮层 PaSheet;内容滚动由 PaSheet 内建(不再嵌套 verticalScroll)
+    PaSheet(onDismissRequest = onDismiss) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1819,14 +1863,11 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
             fontSize = 12.sp, color = Pa.TextSecondary,
         )
         Spacer(Modifier.height(10.dp))
-        // 整列可滚:recents 多时"浏览电脑文件夹…/取消/创建"不再被推出视口(SLA-21a:
-        // 6 条 recents 即在矮视口下把操作区整体裁掉,被裁节点不进无障碍树也不可点)。
-        // 选整体 verticalScroll 而非"recents 定高+按钮固定底部":定高上限自适应不了
-        // 任意视口高度(横屏 ≈390dp 高时定高方案照样溢出),整体滚动视口无关。
+        // recents 多时靠 PaSheet 内建滚动,"浏览电脑文件夹…/取消/创建"不会被推出视口
+        // (原 SLA-21a 诉求由 PaSheet 的高度上限+滚动结构性兜住,不再嵌套 verticalScroll)。
         Column(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 4.dp),
         ) {
             recents.map { it to it }.forEach { (ws, label) ->
@@ -2073,11 +2114,8 @@ private fun SectionManagerSheet(
     var confirmDelete by remember(sheet) { mutableStateOf(false) }
     val manage = sheet as? SectionSheet.Manage
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    // 统一玻璃浮层 PaSheet
+    PaSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 26.dp)) {
             Text(
                 if (manage == null) "新建分组" else "分组设置",

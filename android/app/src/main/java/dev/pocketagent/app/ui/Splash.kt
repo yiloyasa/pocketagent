@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.anim.PaMotion
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -70,6 +72,8 @@ fun Splash(onDone: () -> Unit) {
     val markScale = remember { Animatable(0.92f) }
     val glow = remember { Animatable(0f) }
     val sweep = remember { Animatable(0f) }
+    // 减弱动效:字标/进度线瞬时到位,整体短驻留后直接交接主页(不播任何位移/缩放)
+    val reduceMotion = rememberReduceMotion()
 
     // 跟随主题取色:浅色主题近白、深色主题近黑,避免启动瞬间的色彩跳变
     val bg = Pa.Bg
@@ -86,9 +90,20 @@ fun Splash(onDone: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        // 1) 字标先立住:淡入 + 轻微放大并行
-        launch { markAlpha.animateTo(1f, tween(340, easing = FastOutSlowInEasing)) }
-        markScale.animateTo(1f, tween(560, easing = FastOutSlowInEasing))
+        if (reduceMotion) {
+            typed = FULL.length
+            markAlpha.snapTo(1f); markScale.snapTo(1f); glow.snapTo(1f); sweep.snapTo(1f)
+            delay(420)
+            visible = false
+            delay(120)
+            onDone()
+            return@LaunchedEffect
+        }
+        // 1) 字标先立住:淡入 + 轻微放大并行。
+        // 【令牌化】位移/缩放类过渡用 spring(emphasized 的轻微过冲正好是"立住"的物理感),
+        // 打字节奏保持 tween(它是逐字内容的节拍器,不是状态过渡,速率要恒定)。
+        launch { markAlpha.animateTo(1f, PaMotion.standard()) }
+        markScale.animateTo(1f, PaMotion.emphasized())
         delay(140)
 
         // 2) 逐字打出;到 "agent" 时触发光晕与进度线
@@ -107,15 +122,15 @@ fun Splash(onDone: () -> Unit) {
             }
         }
         sweep.animateTo(1f, tween(320, easing = FastOutSlowInEasing))
-        delay(540)
+        delay(460)
 
-        // 3) 整屏淡出,交接主页
+        // 3) 整屏淡出,交接主页(收尾快而稳,不拖节奏)
         visible = false
-        delay(300)
+        delay(240)
         onDone()
     }
 
-    AnimatedVisibility(visible = visible, exit = fadeOut(tween(300))) {
+    AnimatedVisibility(visible = visible, exit = fadeOut(PaMotion.standard())) {
         Box(
             Modifier
                 .fillMaxSize()

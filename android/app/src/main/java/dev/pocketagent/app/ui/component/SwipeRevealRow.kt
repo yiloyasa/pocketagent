@@ -1,7 +1,7 @@
 package dev.pocketagent.app.ui.component
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -22,8 +22,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +43,8 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.ui.anim.PaMotion
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.launch
 
@@ -57,7 +62,6 @@ data class SwipeAction(
 )
 
 private val ACTION_WIDTH = 64.dp
-private val RevealSpring = spring<Float>(dampingRatio = 0.85f, stiffness = 500f)
 
 /**
  * 互斥侧滑容器(设计规范 §2.1)。
@@ -68,6 +72,14 @@ private val RevealSpring = spring<Float>(dampingRatio = 0.85f, stiffness = 500f)
  *
  * 【手势】8dp 方向阈值:垂直位移大于水平位移时**不拦截**事件,保证列表纵向滚动不受影响。
  * 滑动位移越过动作区宽度 40% 时触发一次触感反馈。
+ *
+ * 【跟手 + 动量落位】拖动中逐帧 snapTo(1:1 贴手指);松手把最后一刻的**手指速度**
+ * 作为 initialVelocity 交给 [PaMotion.momentum] 的 spring —— 快扫带速度滑开、
+ * 慢拖松手即停,落位是物理连续的,不是"播完为止"的固定动画。
+ *
+ * 【按压反馈】整行按压缩放挂在**外层容器**(内容层与动作层一起缩):
+ * 只缩内容层会在边缘露出底下的动作层(红色删除钮从缝里渗出来)。反馈在按下瞬间,
+ * 与全 app 的 pressable 同一手感。
  *
  * 【无障碍】侧滑手势不是唯一入口 —— 已在容器上注册 [CustomAccessibilityAction],
  * TalkBack 用户可直接从操作菜单里选择「重命名 / 删除」。
@@ -117,18 +129,32 @@ fun SwipeRevealRow(
     val thresholdPx = minOf(revealPx * 0.28f, with(density) { 44.dp.toPx() })
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
+    val reduceMotion = rememberReduceMotion()
     val offset = remember { Animatable(0f) }
     val isOpen = openKey.value == rowKey
 
-    // 互斥:本行不是当前展开项时回弹归位
+    // ---- 按压缩放(整行,含动作层一起缩,见类注释) ----
+    var pressed by remember { mutableStateOf(false) }
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.98f else 1f,
+        animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.press(),
+        label = "swipeRowPress",
+    )
+
+    // 互斥:本行不是当前展开项时回弹归位(这是状态修正,不是动量落位,用标准 spring)
     LaunchedEffect(isOpen) {
-        if (!isOpen && offset.value != 0f) offset.animateTo(0f, RevealSpring)
-        if (isOpen && offset.value != -revealPx) offset.animateTo(-revealPx, RevealSpring)
+        if (!isOpen && offset.value != 0f) offset.animateTo(0f, PaMotion.standard())
+        if (isOpen && offset.value != -revealPx) offset.animateTo(-revealPx, PaMotion.momentum())
     }
+
+    // ---- 松手速度采样:与 DrawerController 同一套 120ms 窗口 + 0.6/0.4 平滑 ----
+    var lastDragMs by remember { mutableStateOf(0L) }
+    var dragVelocityPx by remember { mutableStateOf(0f) }
 
     Box(
         modifier
             .fillMaxWidth()
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
             .semantics {
                 customActions = actions.map { a ->
                     CustomAccessibilityAction(a.label) {
@@ -198,6 +224,15 @@ fun SwipeRevealRow(
                 // 一旦拖动越过阈值它就 consume,内层的 tap 检测器随即自动取消。
                 .pointerInput(rowKey) {
                     detectTapGestures(
+                        onPress = {
+                            // 按下即反馈(pressed 状态驱动缩放);取消/抬起都要复位
+                            pressed = true
+                            try {
+                                awaitRelease()
+                            } finally {
+                                pressed = false
+                            }
+                        },
                         onTap = {
                             // 已展开时点内容 = 收起;未展开才真正触发 onClick
                             if (openKey.value == rowKey) openKey.value = null else onClick?.invoke()
@@ -210,20 +245,37 @@ fun SwipeRevealRow(
                         onDragEnd = {
                             val target = if (-offset.value > thresholdPx) -revealPx else 0f
                             openKey.value = if (target != 0f) rowKey else null
-                            scope.launch { offset.animateTo(target, RevealSpring) }
+                            val v = dragVelocityPx
+                            dragVelocityPx = 0f
+                            scope.launch {
+                                offset.animateTo(target, PaMotion.momentum(), initialVelocity = v)
+                            }
                         },
                         onDragCancel = {
+                            dragVelocityPx = 0f
                             scope.launch {
-                                offset.animateTo(if (isOpen) -revealPx else 0f, RevealSpring)
+                                offset.animateTo(if (isOpen) -revealPx else 0f, PaMotion.standard())
                             }
                         },
                         onHorizontalDrag = { change, dragAmount ->
                             change.consume()
                             val before = offset.value
                             val next = (before + dragAmount).coerceIn(-revealPx, 0f)
-                            // 越过展开阈值时给一次触感(只在跨越的那一帧触发)
+                            // 【速度采样】dt 窗口 120ms,断流(手指停顿)即清零;
+                            // 0.6/0.4 指数平滑去掉单帧噪声,松手交接才不抖。
+                            val dtMs = change.uptimeMillis - lastDragMs
+                            if (dtMs in 1..120) {
+                                val v = dragAmount / (dtMs / 1000f)
+                                dragVelocityPx =
+                                    if (dragVelocityPx == 0f) v else dragVelocityPx * 0.6f + v * 0.4f
+                            } else {
+                                dragVelocityPx = 0f
+                            }
+                            lastDragMs = change.uptimeMillis
+                            // 越过展开阈值时给一次轻触感(只在跨越的那一帧触发;
+                            // TextHandleMove 比 LongPress 轻,是"档位"感不是"警告"感)
                             val crossed = (before > -thresholdPx) != (next > -thresholdPx)
-                            if (crossed) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (crossed) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             scope.launch { offset.snapTo(next) }
                         },
                     )
