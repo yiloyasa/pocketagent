@@ -98,7 +98,6 @@ private fun RuntimeSectionBody() {
     var expanded by remember { mutableStateOf(false) }
     var editingBudget by remember { mutableStateOf<BudgetRow?>(null) }
     var expandedAgent by remember { mutableStateOf<String?>(null) }
-    var showDialysisSheet by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -212,7 +211,7 @@ private fun RuntimeSectionBody() {
                         Text("0", fontSize = 12.sp, color = Pa.TextTertiary)
                     }
                 },
-                onClick = { showDialysisSheet = true },
+                onClick = { RuntimeControlState.dialysisSheetOpen = true },
             )
 
             // ---- 协同策略(可改) ----
@@ -282,8 +281,8 @@ private fun RuntimeSectionBody() {
         )
     }
 
-    if (showDialysisSheet) {
-        UnknownEventSheet(onDismiss = { showDialysisSheet = false })
+    if (RuntimeControlState.dialysisSheetOpen) {
+        UnknownEventSheet(onDismiss = { RuntimeControlState.dialysisSheetOpen = false })
     }
 }
 
@@ -794,10 +793,17 @@ private fun UnknownEventRow(
                                 color = Pa.TextPrimary,
                             )
                         }
+                        // 五键分两行:一行塞五个在窄屏会挤到换行截断。
+                        // 忽略(IGNORED)=明确不处理;转人工(ESCALATED)=需要人/上游接手
+                        // —— daemon 协议两值早已支持,此前只是没上屏。
                         Row(Modifier.fillMaxWidth()) {
                             AckButton("已查看", "INSPECTED", pendingAck, onAck)
-                            AckButton("待上游支持", "NEEDS_NATIVE_SUPPORT", pendingAck, onAck)
                             AckButton("稍后再看", "RETRY_LATER", pendingAck, onAck)
+                            AckButton("忽略", "IGNORED", pendingAck, onAck)
+                        }
+                        Row(Modifier.fillMaxWidth()) {
+                            AckButton("转人工", "ESCALATED", pendingAck, onAck)
+                            AckButton("待上游支持", "NEEDS_NATIVE_SUPPORT", pendingAck, onAck)
                         }
                         ackFailure?.let {
                             Text(it, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = Pa.Yellow)

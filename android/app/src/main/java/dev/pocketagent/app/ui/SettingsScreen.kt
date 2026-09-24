@@ -72,6 +72,7 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.CredentialMode
 import dev.pocketagent.app.R
 import dev.pocketagent.app.credentialModeFor
+import dev.pocketagent.app.ui.RuntimeControlState
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
@@ -815,7 +816,7 @@ fun SettingsScreen(
     }
     if (subPage == "agent") {
         // 【推背模糊】Agent 二级页内也会弹出审批预览玻璃浮层,内容根同样后退一层。
-        Box(Modifier.fillMaxSize().paPushBack(showApprovalPreview)) {
+        Box(Modifier.fillMaxSize().paPushBack(showApprovalPreview || RuntimeControlState.dialysisSheetOpen)) {
             AgentPage(
             onBack = { subPage = null },
             runningAgent = runningAgent,
@@ -888,7 +889,7 @@ fun SettingsScreen(
             .fillMaxSize()
             .background(Pa.Bg)
             .statusBarsPadding()
-            .paPushBack(showApprovalPreview),
+            .paPushBack(showApprovalPreview || RuntimeControlState.dialysisSheetOpen),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 8.dp),

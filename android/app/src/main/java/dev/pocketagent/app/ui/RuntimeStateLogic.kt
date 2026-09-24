@@ -562,6 +562,13 @@ enum class RuntimeLoadState { LOADING, READY, ERROR }
  * 调用方拿不到"只提交一个字段"这条路。
  */
 object RuntimeControlState {
+    /**
+     * 消息透析弹窗开关。提升到共享状态而非 RuntimeSection 本地 remember:
+     * 设置页内容根的推背模糊(paPushBack)要读它 —— 浮层开时整页内容后退一层,
+     * 玻璃弹窗才有真磨砂。状态在本文件 = 数据层,弹窗 UI 在 RuntimeSection。
+     */
+    var dialysisSheetOpen by mutableStateOf(false)
+
     const val SECTION_HOST = "host"
     const val SECTION_STATE = "state"
     const val SECTION_BUDGET = "budget"
