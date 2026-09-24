@@ -157,13 +157,15 @@ fun CollabRoleEditorScreen(
 
         val errShown = saveError
         if (errShown != null) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp).background(Pa.Card, RoundedCornerShape(12.dp)).padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(errShown, fontSize = 13.sp, color = Pa.RedText, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.height(8.dp))
+            // 后端原文如实透传:扁平行,语义色文字足矣(统一卡语言:去底色块)
+            Text(
+                errShown,
+                fontSize = 13.sp,
+                color = Pa.RedText,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            )
         }
 
         Column(
@@ -177,14 +179,13 @@ fun CollabRoleEditorScreen(
                     Text(idError!!, fontSize = 12.sp, color = Pa.RedText, modifier = Modifier.padding(start = 3.dp))
                 }
             } else {
-                Row(Modifier.fillMaxWidth().background(Pa.Bg, RoundedCornerShape(12.dp)).padding(13.dp)) {
-                    Column {
-                        Text("角色 id(引用键)", fontSize = 10.5.sp, color = Pa.TextTertiary)
-                        Spacer(Modifier.height(4.dp))
-                        Text(existing?.id ?: "", fontSize = 13.5.sp, color = Pa.TextPrimary)
-                        Spacer(Modifier.height(2.dp))
-                        Text("只读:它是委派里的引用键,改了会让已有引用失效", fontSize = 11.sp, color = Pa.TextTertiary)
-                    }
+                // 只读 id:扁平行,层级靠字号颜色(统一卡语言:无底色块)
+                Column(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 4.dp)) {
+                    Text("角色 id(引用键)", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                    Spacer(Modifier.height(4.dp))
+                    Text(existing?.id ?: "", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                    Spacer(Modifier.height(2.dp))
+                    Text("只读:它是委派里的引用键,改了会让已有引用失效", fontSize = 11.sp, color = Pa.TextTertiary)
                 }
             }
 
@@ -227,7 +228,7 @@ fun CollabRoleEditorScreen(
             // ---- 工作区覆盖(暴露但明确"留空=用默认") ----
             RoleTextField(value = workspaceText, onValueChange = { workspaceText = it }, label = "工作区覆盖", placeholder = "留空=用默认工作区(手填易错,一般无需填)")
 
-            // ---- 底部保存按钮(可用态颜色 spring 过渡:合法/非法切换不硬跳) ----
+            // ---- 底部保存按钮(CTA 保留 AccentDim 强调底;可用态颜色 spring 过渡) ----
             val saveBg by animateColorAsState(
                 targetValue = if (canSave) Pa.AccentDim else Pa.Card,
                 animationSpec = PaMotion.standard(),
@@ -236,8 +237,7 @@ fun CollabRoleEditorScreen(
             Row(
                 Modifier.fillMaxWidth()
                     .pressable(enabled = canSave) { doSave() }
-                    .background(saveBg, RoundedCornerShape(14.dp))
-                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(14.dp))
+                    .background(saveBg, RoundedCornerShape(16.dp))
                     .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -262,12 +262,11 @@ fun CollabRoleEditorScreen(
 }
 
 /**
- * 自绘输入框:顶部小标签 + 深底圆角输入区(对齐 SettingsTextField 风格,不用 OutlinedTextField)。
+ * 自绘输入框:顶部小标签 + 描边输入区(对齐 SettingsTextField,不用 OutlinedTextField)。
  * [multiline]=true 时允许多行(minLines=3),用于职责描述/长期要求这类长文本。
  *
- * 【焦点态】聚焦时发丝边亮成品牌蓝(颜色 spring 过渡,不是硬切)——表单行的
- * "当前在哪一格"一眼可辨;离开焦点 quietly 退回分隔线色。这是本页表单唯一的
- * 视觉修饰,不加 explanation 小字(与设置页同一取向)。
+ * 【焦点态】聚焦时 1dp 描边亮成品牌蓝(颜色 spring 过渡,不是硬切)——表单行的
+ * "当前在哪一格"一眼可辨。统一卡语言:输入区无底色(只靠描边划界),卡外铺 Bg。
  */
 @Composable
 private fun RoleTextField(
@@ -289,7 +288,6 @@ private fun RoleTextField(
         Box(
             Modifier
                 .fillMaxWidth()
-                .background(Pa.Bg, RoundedCornerShape(12.dp))
                 .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
         ) {

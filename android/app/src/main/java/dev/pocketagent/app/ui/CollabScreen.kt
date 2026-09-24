@@ -131,20 +131,19 @@ fun CollabScreen(
                 )
             }
 
-            // ---- 已发指令回显 + 诚实等待说明 ----
+            // ---- 已发指令回显 + 诚实等待说明(扁平行,不做底色块) ----
             if (lastInstruction != null) {
                 item {
                     Column {
                         Row(
-                            Modifier.fillMaxWidth()
-                                .background(Pa.AccentDim, RoundedCornerShape(14.dp)).padding(12.dp),
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(8.dp))
                             Text(lastInstruction!!, fontSize = 13.sp, color = Pa.TextPrimary)
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(4.dp))
                         Text(CollabCopy.WAITING_DAEMON, fontSize = 11.5.sp, color = Pa.TextTertiary)
                     }
                 }
@@ -174,11 +173,11 @@ fun CollabScreen(
     }
 }
 
-/** 顶部横幅:绿色调 + 分支图标 + 协同徽标,与普通会话页明显区分。 */
+/** 顶部横幅:分支图标 + 协同徽标,铺在 Bg 上(页面头部不是卡,统一卡语言下去底)。 */
 @Composable
 private fun CollabHeader(onBack: () -> Unit, agentCount: Int) {
     Column(
-        Modifier.fillMaxWidth().background(Pa.CardHigh)
+        Modifier.fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -188,13 +187,8 @@ private fun CollabHeader(onBack: () -> Unit, agentCount: Int) {
             Spacer(Modifier.width(8.dp))
             Text("多 Agent 协同", fontSize = 18.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
             Spacer(Modifier.weight(1f))
-            // 协同中徽标(绿色 pill,普通会话没有)
-            Box(
-                Modifier.background(Pa.Green.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Text("协同模式", fontSize = 11.sp, color = Pa.GreenText)
-            }
+            // 协同中徽标:纯色文字(统一卡语言:去底色 pill)
+            Text("协同模式", fontSize = 11.sp, color = Pa.GreenText)
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -237,23 +231,23 @@ private fun AgentSelector(
     }
 }
 
-/** 单个 agent 多选芯片:品牌图标 + 名称,选中=绿色高亮描边;底色 spring 过渡。 */
+/**
+ * 单个 agent 多选芯片:品牌图标 + 名称。
+ * 【统一卡语言】底色一律 Pa.Card(唯一卡型);选中态只用 1.5dp Accent 描边 +
+ * 文字颜色表达,不再换底色(信息层级靠颜色,不靠第二种底)。
+ */
 @Composable
 private fun CollabAgentChip(a: AgentInfo, on: Boolean, onClick: () -> Unit) {
-    // 选中底色用 spring 过渡:点选瞬间颜色"流"进去,与按压缩放叠出跟手感
-    val bg by animateColorAsState(
-        targetValue = if (on) Pa.AccentDim else Pa.Card,
+    // 选中描边色 spring 过渡:点选瞬间描边"流"成品牌色,与按压缩放叠出跟手感
+    val borderColor by animateColorAsState(
+        targetValue = if (on) Pa.Accent else Pa.Separator,
         animationSpec = PaMotion.standard(),
-        label = "collabChipBg",
+        label = "collabChipBorder",
     )
     Column(
         Modifier.pressable { onClick() }.width(84.dp)
-            .background(bg, RoundedCornerShape(16.dp))
-            .border(
-                if (on) 1.5.dp else 0.5.dp,
-                if (on) Pa.Accent else Pa.Separator,
-                RoundedCornerShape(16.dp),
-            )
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .border(if (on) 1.5.dp else 0.5.dp, borderColor, RoundedCornerShape(16.dp))
             .padding(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -283,10 +277,9 @@ private fun CollabAgentCard(
     val phaseTint = phaseColor(phase)
     Column(
         Modifier.fillMaxWidth()
-            // 实色卡 + 发丝边:协同状态卡与任务中心/设置分组卡同一材质语言
+            // 唯一卡型:16dp/Pa.Card/无边框无阴影
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
-            .padding(14.dp),
+            .padding(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(
@@ -303,19 +296,14 @@ private fun CollabAgentCard(
                     Text("角色 · $roleName", fontSize = 11.5.sp, color = Pa.AccentText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            // 相位徽标:用颜色区分 收到/执行中/完成/出错
-            Box(
-                Modifier.background(phaseTint.copy(alpha = 0.16f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Text(collabPhaseLabel(phase), fontSize = 11.sp, color = phaseTint)
-            }
+            // 相位徽标:纯语义色文字(去底色 pill)
+            Text(collabPhaseLabel(phase), fontSize = 11.sp, color = phaseTint)
         }
         Spacer(Modifier.height(10.dp))
-        // 角色配置行(可点,复用既有角色数据)
+        // 角色配置行(可点,复用既有角色数据);卡内扁平行,不做底色子容器
         Row(
             Modifier.fillMaxWidth().pressable { onConfigRole() }
-                .background(Pa.Bg, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 2.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(painterResource(R.drawable.ic_lucide_sliders), null, tint = Pa.Accent, modifier = Modifier.size(16.dp))
@@ -348,8 +336,7 @@ private fun CommandInput(
     onSend: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().background(Pa.Card, RoundedCornerShape(18.dp))
-            .border(0.5.dp, Pa.Separator, RoundedCornerShape(18.dp))
+        Modifier.fillMaxWidth().background(Pa.Card, RoundedCornerShape(16.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -413,12 +400,11 @@ private fun CollabRolePickerSheet(
             if (roles.isEmpty()) {
                 Text("该 agent 还没有专属角色,去「协同角色」里新建", fontSize = 12.sp, color = Pa.TextTertiary, modifier = Modifier.padding(vertical = 6.dp))
             }
-            // 管理角色入口(复用现有 CollabRolesScreen)
+            // 管理角色入口(复用现有 CollabRolesScreen;唯一卡型)
             Row(
                 Modifier.fillMaxWidth().pressable { onManage() }
                     .background(Pa.Card, RoundedCornerShape(16.dp))
-                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
-                    .padding(14.dp),
+                    .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(painterResource(R.drawable.ic_lucide_sliders), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
@@ -430,14 +416,13 @@ private fun CollabRolePickerSheet(
     }
 }
 
-/** 角色选择项(实色卡 + 发丝边:玻璃 Sheet 上不叠玻璃,可读性优先)。 */
+/** 角色选择项(唯一卡型:16dp/Pa.Card/无边)。 */
 @Composable
 private fun RolePickRow(title: String, desc: String, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().pressable { onClick() }
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
-            .padding(14.dp),
+            .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {

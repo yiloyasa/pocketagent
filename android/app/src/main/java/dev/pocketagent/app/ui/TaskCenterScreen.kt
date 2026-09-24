@@ -10,7 +10,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -171,30 +170,27 @@ fun TaskCenterScreen(
             }
 
             // ---------- 概览条 ----------
+            // ---------- 概览条(唯一卡型:16dp/Pa.Card/无边) ----------
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp)
-                    .background(Pa.Card, RoundedCornerShape(18.dp))
-                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(18.dp))
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                    .background(Pa.Card, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 StatCell("进行中", running.toString(), if (running > 0) Pa.Accent else Pa.TextTertiary, Modifier.weight(1f))
-                Box(Modifier.width(1.dp).height(26.dp).background(Pa.Separator))
+                Box(Modifier.width(0.5.dp).height(26.dp).background(Pa.Separator))
                 StatCell("待处理", failed.toString(), if (failed > 0) Pa.Red else Pa.TextTertiary, Modifier.weight(1f))
-                Box(Modifier.width(1.dp).height(26.dp).background(Pa.Separator))
+                Box(Modifier.width(0.5.dp).height(26.dp).background(Pa.Separator))
                 StatCell("全部", all.size.toString(), Pa.TextPrimary, Modifier.weight(1f))
             }
 
-            // ---------- 分类切换 ----------
+            // ---------- 分类切换(容器无底,选中态用 Accent 胶囊表达) ----------
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .background(Pa.Card, RoundedCornerShape(50))
-                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(50))
-                    .padding(4.dp),
+                    .padding(horizontal = 16.dp),
             ) {
                 KindTab("消息处理", kindTab == TaskCenter.Kind.MESSAGE, Modifier.weight(1f)) {
                     kindTab = TaskCenter.Kind.MESSAGE
@@ -239,7 +235,7 @@ fun TaskCenterScreen(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 16.dp, end = 16.dp, top = 4.dp,
                         ),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(rows, key = { it.id }) { task ->
                             TaskRow(
@@ -298,8 +294,8 @@ fun TaskCenterScreen(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .pressable(haptic = true) { TaskCenter.clearFinished() }
-                    .background(Pa.CardHigh, RoundedCornerShape(16.dp))
-                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
+                    // 悬浮操作条也用唯一卡型(Pa.Card 16dp 无边)
+                    .background(Pa.Card, RoundedCornerShape(16.dp))
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -383,7 +379,6 @@ private fun TaskRow(
         TaskCenter.Kind.DOWNLOAD -> kind?.iconRes ?: R.drawable.ic_lucide_download
     }
     val iconTint = kind?.color ?: accent
-    val iconBg = kind?.color?.copy(alpha = 0.16f) ?: Pa.CardHigh
     val statusText = when (task.status) {
         TaskCenter.Status.RUNNING -> "进行中"
         TaskCenter.Status.DONE -> "已完成"
@@ -396,19 +391,14 @@ private fun TaskRow(
         Modifier
             .fillMaxWidth()
             .pressable(haptic = true) { onClick() }
-            // 实色卡 + 发丝边:与全 app 分组卡同一材质语言(可读性优先,卡片不做玻璃)
-            .background(Pa.Card, RoundedCornerShape(18.dp))
-            .border(0.5.dp, Pa.Separator, RoundedCornerShape(18.dp))
-            .padding(horizontal = 14.dp, vertical = 13.dp),
+            // 唯一卡型:16dp/Pa.Card/无边框无阴影
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 13.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(36.dp).background(iconBg, RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(painterResource(icon), null, tint = iconTint, modifier = Modifier.size(17.dp))
-            }
-            Spacer(Modifier.width(11.dp))
+            // 行首图标裸放(不套 chip 底),类型用颜色表达
+            Icon(painterResource(icon), null, tint = iconTint, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -421,25 +411,12 @@ private fun TaskRow(
                     )
                     if (kind != null) {
                         Spacer(Modifier.width(6.dp))
-                        Text(
-                            kind.label,
-                            Modifier
-                                .background(kind.color.copy(alpha = 0.18f), RoundedCornerShape(50))
-                                .padding(horizontal = 6.dp, vertical = 1.dp),
-                            fontSize = 9.5.sp,
-                            color = kind.color,
-                        )
+                        // 类型标签:纯色文字(去底色 pill)
+                        Text(kind.label, fontSize = 9.5.sp, color = kind.color)
                     }
                     if (task.rounds > 1) {
                         Spacer(Modifier.width(6.dp))
-                        Text(
-                            "${task.rounds} 轮",
-                            Modifier
-                                .background(Pa.AccentDim, RoundedCornerShape(50))
-                                .padding(horizontal = 6.dp, vertical = 1.dp),
-                            fontSize = 9.5.sp,
-                            color = Pa.AccentText,
-                        )
+                        Text("${task.rounds} 轮", fontSize = 9.5.sp, color = Pa.AccentText)
                     }
                 }
                 Spacer(Modifier.height(3.dp))

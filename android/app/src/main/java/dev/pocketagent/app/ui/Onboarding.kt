@@ -429,15 +429,11 @@ private fun OnboardPageContent(page: OnboardPage) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(8.dp))
-        Box(
-            Modifier.size(92.dp).background(Pa.AccentDim, RoundedCornerShape(26.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painterResource(page.icon), null,
-                tint = Pa.Accent, modifier = Modifier.size(44.dp),
-            )
-        }
+        // 页首图标裸放(统一卡语言:图标不套底色块),品牌色即层级
+        Icon(
+            painterResource(page.icon), null,
+            tint = Pa.Accent, modifier = Modifier.size(52.dp),
+        )
         Spacer(Modifier.height(22.dp))
         Text(
             page.title,
@@ -465,23 +461,18 @@ private fun OnboardPageContent(page: OnboardPage) {
     }
 }
 
-/** 带图标的小卡片块。 */
+/** 带图标的小卡片块(唯一卡型:16dp/Pa.Card/无边;行首图标裸放)。 */
 @Composable
 private fun OnboardBullet(b: OnboardBlock.Bullet) {
     Row(
         Modifier
             .fillMaxWidth()
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(14.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (b.icon != null) {
-            Box(
-                Modifier.size(38.dp).background(Pa.AccentDim, RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(painterResource(b.icon), null, tint = Pa.Accent, modifier = Modifier.size(19.dp))
-            }
+            Icon(painterResource(b.icon), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -504,20 +495,16 @@ private fun OnboardAgentRow(b: OnboardBlock.AgentRow) {
         Modifier
             .fillMaxWidth()
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(14.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(38.dp).background(Pa.AccentDim, RoundedCornerShape(11.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                bitmap = agentBitmap(b.iconRes),
-                contentDescription = null,
-                modifier = Modifier.size(26.dp),
-                colorFilter = if (b.dimmed) grayscale() else null,
-            )
-        }
+        // 品牌位图头像裸放(灰阶=未点亮,与主页同语言)
+        Image(
+            bitmap = agentBitmap(b.iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(28.dp),
+            colorFilter = if (b.dimmed) grayscale() else null,
+        )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(b.name, fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
@@ -532,14 +519,14 @@ private fun OnboardAgentRow(b: OnboardBlock.AgentRow) {
     }
 }
 
-/** Info 提示卡块。 */
+/** Info 提示卡块(唯一卡型:16dp/Pa.Card/无边)。 */
 @Composable
 private fun OnboardNote(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Pa.CardHigh, RoundedCornerShape(14.dp))
-            .padding(12.dp),
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(

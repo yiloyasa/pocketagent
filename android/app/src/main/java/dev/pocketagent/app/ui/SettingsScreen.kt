@@ -148,14 +148,14 @@ private fun <T> filterByManagedPolicy(
     id: (T) -> String,
 ): List<T> = if (allowed.isEmpty()) all else all.filter { id(it) in allowed }
 
-/** 状态胶囊:一行小字 + 语义色底。用于 MCP 服务器"就绪/失败"这类一眼判断。 */
+/**
+ * 状态胶囊:MCP"就绪/失败"这类一眼判断。
+ * 【统一卡语言】卡内禁止带底色子容器 → 纯语义色文字,层级靠颜色不靠底。
+ */
 @Composable
 private fun StatusChip(text: String, color: Color) {
     Text(
         text,
-        Modifier
-            .background(color.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 7.dp, vertical = 2.dp),
         color = color,
         fontSize = 10.5.sp,
         fontWeight = FontWeight.Medium,
@@ -288,13 +288,12 @@ private fun formatTokenCount(value: Long): String = when {
     value >= 1_000L -> String.format(java.util.Locale.US, "%.0fk", value / 1_000.0)
     else -> value.toString()
 }
-/** 托管策略生效时的说明条:告诉用户"为什么选项变少了",而不是让他自己发现少了。 */
+/** 托管策略生效时的说明:卡内扁平行(盾图标裸放 + 文字),不做底色子容器。 */
 @Composable
 private fun ManagedPolicyNote(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Yellow.copy(alpha = 0.10f), RoundedCornerShape(11.dp))
             .padding(horizontal = 11.dp, vertical = 9.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -326,16 +325,14 @@ private fun agentIcon(id: String): Int? = agentBrandIcon(id)
 private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
 
 /**
- * 设置页分组卡的统一材质:实色卡 + 发丝边。
+ * 全 app 唯一卡型(统一卡片语言):16dp 圆角 + Pa.Card 实色底,无边框、无发丝边、无阴影。
  *
- * 【为什么不是玻璃】玻璃留给浮层(Sheet/菜单)——设置行长内容若也做半透明,
- * 下层文字透上来读不清("玻璃上不叠玻璃"的材质铁律);实色 Pa.Card 配 0.5dp
- * 分隔线色的发丝边,在纯黑底上给出"卡片的物理边界",这就是设置页的层级语言。
+ * 【为什么收敛到一个函数】此前玻璃/实色/发丝边/阴影混用,用户裁定「层级很脏」——
+ * 乱的不是卡片本身,是卡型不统一。现在设置页所有分区卡(含 hero)只此一种材质;
+ * 卡内禁止任何带底色子容器,行首图标裸放;行间分隔统一 0.5dp Separator 细线。
  */
 private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(16.dp)): Modifier = composed {
-    this
-        .background(Pa.Card, shape)
-        .border(0.5.dp, Pa.Separator, shape)
+    this.background(Pa.Card, shape)
 }
 
 /**
@@ -909,7 +906,7 @@ fun SettingsScreen(
                 .fillMaxWidth()
                 .navigationBarsPadding(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item(key = "banner") {
                 Column {
@@ -950,31 +947,22 @@ fun SettingsScreen(
                 }
             }
 
-            // ---------- 电脑连接卡(点进去 = 用户数据管理) ----------
+            // ---------- 电脑连接卡(点进去 = 用户数据管理;唯一卡型:16dp/无边) ----------
             item(key = "hero") {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .pressable(haptic = true) { subPage = "userdata" }
-                        .paSettingsCard(RoundedCornerShape(18.dp))
-                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                        .paSettingsCard()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        Modifier
-                            .size(46.dp)
-                            .background(
-                                if (connStateTop == "ok") Pa.AccentDim else Pa.Hover,
-                                RoundedCornerShape(14.dp),
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_lucide_monitor), null,
-                            tint = if (connStateTop == "ok") Pa.Accent else Pa.TextSecondary,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
+                    // 行首图标裸放(不套 chip 底):连接状态用颜色表达
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_monitor), null,
+                        tint = if (connStateTop == "ok") Pa.Accent else Pa.TextSecondary,
+                        modifier = Modifier.size(24.dp),
+                    )
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -1010,7 +998,7 @@ fun SettingsScreen(
                         Modifier
                             .fillMaxWidth()
                             .paSettingsCard()
-                            .padding(horizontal = 14.dp),
+                            .padding(horizontal = 16.dp),
                     ) {
                         SettingRow(
                             title = "外观与阅读",
@@ -1042,7 +1030,7 @@ fun SettingsScreen(
                         Modifier
                             .fillMaxWidth()
                             .paSettingsCard()
-                            .padding(horizontal = 14.dp),
+                            .padding(horizontal = 16.dp),
                     ) {
                         SettingRow(
                             title = "Agent 与模型",
@@ -1069,7 +1057,7 @@ fun SettingsScreen(
                         Modifier
                             .fillMaxWidth()
                             .paSettingsCard()
-                            .padding(horizontal = 14.dp),
+                            .padding(horizontal = 16.dp),
                     ) {
                         SettingRow(
                             title = "版本",
@@ -1108,11 +1096,11 @@ fun SettingsScreen(
     }
 }
 
-/** 卡片外的灰字分组标题(小图标 + 12sp 灰字)。 */
+/** 卡片外的分区标题(iOS 分组表语言):13sp/TextSecondary/字距 1.4sp,小图标裸放。 */
 @Composable
 private fun GroupLabel(icon: Int, title: String) {
     Row(
-        Modifier.padding(start = 14.dp, top = 18.dp, bottom = 8.dp),
+        Modifier.padding(start = 14.dp, top = 12.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -1123,9 +1111,9 @@ private fun GroupLabel(icon: Int, title: String) {
         Spacer(Modifier.width(7.dp))
         Text(
             title,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
+            letterSpacing = 1.4.sp,
             color = Pa.TextSecondary,
-            fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -1219,13 +1207,12 @@ private fun AppearancePage(
                 },
             )
             Spacer(Modifier.height(8.dp))
-            // 实时预览:改动立刻可见(唯一保留的说明性内容)
+            // 实时预览:改动立刻可见(唯一保留的说明性内容);卡内扁平行,无底色子容器
             Text(
                 "预览:这是一段界面文字,当前字号 ×" +
                     String.format(java.util.Locale.US, "%.2f", AgentConnection.uiTextScale),
                 Modifier
                     .fillMaxWidth()
-                    .background(Pa.Bg, RoundedCornerShape(12.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 fontSize = (13 * AgentConnection.uiTextScale).sp,
                 color = Pa.TextSecondary,
@@ -1570,8 +1557,8 @@ private fun AgentPage(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
-                        .padding(start = 13.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                        .paSettingsCard()
+                        .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
@@ -1760,15 +1747,15 @@ private fun AgentPage(
                 DesktopEchoLine(settings, "sandbox")
                 Spacer(Modifier.height(10.dp))
 
+                // 预览入口:卡内扁平行,按压缩放反馈,不做底色子容器
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .pressable(haptic = true) { onShowApprovalPreview() }
-                        .background(Pa.Bg, RoundedCornerShape(13.dp))
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("预览审批弹窗", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                    Text("预览审批弹窗", fontSize = 13.5.sp, color = Pa.AccentText)
                 }
                 Spacer(Modifier.height(6.dp))
             }
@@ -1828,23 +1815,15 @@ private fun AgentPage(
                 // 【桌面只读回显】provider 能力徽标(modelProvider/capabilities/read):
                 // 解释"为什么某模型不可用"—— 图像生成/联网搜索是 provider 级声明,
                 // 不是模型页的开关。没读到时不渲染,不把"没读到"说成"不支持"。
+                // provider 能力徽标:纯文字一行(卡内去底色子容器),层级靠颜色分隔
                 val capsBadges = DesktopEchoLogic.providerCapsBadges(settings)
                 if (capsBadges.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        capsBadges.forEach { badge ->
-                            Text(
-                                badge,
-                                fontSize = 10.5.sp,
-                                color = Pa.TextSecondary,
-                                modifier = Modifier
-                                    .background(Pa.Hover, RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                            )
-                        }
-                    }
+                    Text(
+                        capsBadges.joinToString(" · "),
+                        fontSize = 10.5.sp,
+                        color = Pa.TextSecondary,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
                 }
                 DesktopEchoLine(settings, "model")
                 Spacer(Modifier.height(8.dp))
@@ -2244,14 +2223,13 @@ private fun deleteLocalFile(ctx: android.content.Context, uri: String): Boolean 
 }
 
 /**
- * 自绘输入框:顶部小标签 + 深底圆角输入区。
+ * 自绘输入框:顶部小标签 + 描边输入区。
  *
- * 【为什么不用 OutlinedTextField】Material 默认描边框在纯黑页面上是一圈灰线,
- * 和"深灰圆角卡"的语言不搭;而且自带的内边距会撑高整张卡。这里只用 [BasicTextField],
- * 外观完全由我们控制。
+ * 【为什么不用 OutlinedTextField】Material 默认描边框的字体样式和内边距跟
+ * 自绘语言不搭;这里只用 [BasicTextField],外观完全由我们控制。
  *
- * 【焦点态】聚焦时发丝边亮成品牌蓝(颜色 spring 过渡)——连接地址/token 这种
- * 长表单,"当前在哪一格"必须一眼可辨;失焦 quietly 退回分隔线色。
+ * 【统一卡语言】卡内禁止带底色子容器 → 输入框无底色,只靠 1dp 描边划出可输入区;
+ * 聚焦时描边亮成品牌蓝(颜色 spring 过渡)——"当前在哪一格"一眼可辨。
  */
 @Composable
 private fun SettingsTextField(
@@ -2278,7 +2256,6 @@ private fun SettingsTextField(
         Box(
             Modifier
                 .fillMaxWidth()
-                .background(Pa.Bg, RoundedCornerShape(12.dp))
                 .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
             contentAlignment = Alignment.CenterStart,
@@ -2319,7 +2296,6 @@ private fun ModelPickerDialog(
             Modifier
                 .fillMaxWidth()
                 .background(Pa.CardHigh, RoundedCornerShape(22.dp))
-                .border(0.5.dp, Pa.Separator, RoundedCornerShape(22.dp))
                 .padding(20.dp),
         ) {
             Row(
@@ -2528,7 +2504,7 @@ fun SectionBlock(
             Modifier
                 .fillMaxWidth()
                 .paSettingsCard()
-                .padding(horizontal = 14.dp, vertical = 2.dp),
+                .padding(horizontal = 16.dp, vertical = 2.dp),
         ) {
             content()
         }
@@ -2606,7 +2582,8 @@ fun SettingRow(
             }
         }
         if (divider) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+            // 行间分隔统一 0.5dp Separator 细线(统一卡片语言:全页行分隔二选一,选细线)
+            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
         }
     }
 }
@@ -2773,11 +2750,9 @@ private fun UserDataPage(
                                 )
                                 if (ep.active) {
                                     Spacer(Modifier.width(7.dp))
+                                    // 状态用纯色文字表达(统一卡语言:去底色 pill)
                                     Text(
                                         "使用中",
-                                        Modifier
-                                            .background(Pa.AccentDim, RoundedCornerShape(50))
-                                            .padding(horizontal = 6.dp, vertical = 1.dp),
                                         fontSize = 9.5.sp,
                                         color = Pa.Accent,
                                     )
@@ -2845,30 +2820,29 @@ private fun UserDataPage(
 
             // 【T-32】配对失败原文:必须紧挨输入框展示(connError 被重连循环覆盖,
             // 不能承载;settingsError 横幅只在一级页渲染,二级页看不见)。
+            // 卡内扁平行:语义色文字足矣,不做底色子容器。
             if (pairError != null) {
                 Text(
                     "配对失败：$pairError",
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
-                        .padding(11.dp),
+                        .padding(vertical = 6.dp),
                     fontSize = 11.sp,
                     color = Pa.Red,
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(6.dp))
             }
             if (errorMessage != null) {
                 Text(
                     errorMessage + (if (errorAddress.isNotEmpty()) "\n地址:" + errorAddress else ""),
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Bg, RoundedCornerShape(12.dp))
-                        .padding(11.dp),
+                        .padding(vertical = 6.dp),
                     fontSize = 11.sp,
                     // 【不省略】失败地址同样必须完整可读,方便用户排查。
                     color = Pa.Red,
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(6.dp))
             }
             SettingsTextField(
                 value = addr,
@@ -2920,66 +2894,58 @@ private fun UserDataPage(
             } else {
                 downloads.forEach { d ->
                     val kind = fileKindOf(d.title)
-                    Column {
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 11.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(34.dp)
-                                    .background(kind.color.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
-                                contentAlignment = Alignment.Center,
+                        Column {
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                // 行首文件类型图标裸放(不套 chip 底)
                                 Icon(
                                     painterResource(kind.iconRes), null,
                                     tint = kind.color,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(18.dp),
                                 )
-                            }
-                            Spacer(Modifier.width(11.dp))
-                            Column(Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(Modifier.width(11.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            d.title.ifEmpty { "(未命名文件)" },
+                                            Modifier.weight(1f, fill = false),
+                                            fontSize = 13.sp,
+                                            color = Pa.TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        // 类型标签:纯色文字(统一卡语言:去底色 pill)
+                                        Text(
+                                            kind.label,
+                                            fontSize = 9.5.sp,
+                                            color = kind.color,
+                                        )
+                                    }
                                     Text(
-                                        d.title.ifEmpty { "(未命名文件)" },
-                                        Modifier.weight(1f, fill = false),
-                                        fontSize = 13.sp,
-                                        color = Pa.TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        kind.label,
-                                        Modifier
-                                            .background(kind.color.copy(alpha = 0.18f), RoundedCornerShape(50))
-                                            .padding(horizontal = 6.dp, vertical = 1.dp),
-                                        fontSize = 9.5.sp,
-                                        color = kind.color,
-                                    )
-                                }
-                                Text(
-                                    listOf(
-                                        d.sizeText,
-                                        if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
-                                        statusLabel(d.status),
-                                    ).filter { it.isNotEmpty() }.joinToString("  ·  "),
-                                    Modifier.padding(top = 2.dp),
-                                    fontSize = 10.5.sp,
-                                    color = Pa.TextTertiary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if (d.detail.isNotEmpty()) {
-                                    Text(
-                                        d.detail,
-                                        fontSize = 9.5.sp,
+                                        listOf(
+                                            d.sizeText,
+                                            if (d.sourceTitle.isNotEmpty()) "来自「" + d.sourceTitle + "」" else "",
+                                            statusLabel(d.status),
+                                        ).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                                        Modifier.padding(top = 2.dp),
+                                        fontSize = 10.5.sp,
                                         color = Pa.TextTertiary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                    if (d.detail.isNotEmpty()) {
+                                        Text(
+                                            d.detail,
+                                            fontSize = 9.5.sp,
+                                            color = Pa.TextTertiary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
-                            }
                             val canOpen = d.status == TaskCenter.Status.DONE &&
                                 d.localUri.isNotEmpty() && (dlStates[d.id]?.exists ?: false)
                             when {
@@ -3029,7 +2995,8 @@ private fun UserDataPage(
                                 tint = Pa.TextTertiary,
                             )
                         }
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                        // 行间分隔:0.5dp 细线(统一卡片语言)
+                        Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
                     }
                 }
             }

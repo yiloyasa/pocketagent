@@ -326,7 +326,8 @@ fun HomeScreen(
         LazyVerticalGrid(
             columns = GridCells.Fixed(4),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            // 【统一卡语言】卡与卡间距 12dp(全 app 唯一卡距)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // 连接卡(点按重试)
@@ -339,8 +340,8 @@ fun HomeScreen(
                         Modifier
                             .fillMaxWidth()
                             .pressable { reloadKey++ }
-                            // 单层:错误色 8% 透明底、无框无阴影——横幅是"信息",不是"容器"
-                            .background(Pa.Red.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                            // 单层:错误色 8% 透明底——横幅是语义状态,不是层级;圆角随统一卡型 16dp
+                            .background(Pa.Red.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -432,14 +433,14 @@ fun HomeScreen(
                         // 【开始协同:主入口,排在"协同角色"之前】两者刻意分两行:
                         // 这行是"现在就派活",下一行是"改岗位配置"。混成一行会让用户
                         // 以为协同必须先配角色才能用。
-                        // 【单层实色卡】卡内不再有带背景的子结构(图标/文字裸放),
-                        // "外层大卡包白色行卡"的三层观感即由此打平。
+                        // 【统一卡】单层 Pa.Card·16dp 圆角·无阴影无发丝边·水平内距 16dp;
+                        // 卡内图标裸放(无底盒)——"外层大卡包白色行卡"的三层观感即由此打平。
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .pressable { onOpenCollab() }
-                                .background(Pa.Card, RoundedCornerShape(14.dp))
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                .background(Pa.Card, RoundedCornerShape(16.dp))
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
@@ -453,13 +454,13 @@ fun HomeScreen(
                             }
                             Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(12.dp))
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .pressable { onOpenCollabRoles() }
-                                .background(Pa.Card, RoundedCornerShape(14.dp))
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                .background(Pa.Card, RoundedCornerShape(16.dp))
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
@@ -516,14 +517,14 @@ fun HomeScreen(
                 }
             }
 
-            // 新建任务入口并入 agent 板块行尾?保持独立小行(单层实色卡,图标裸放)
+            // 新建任务入口并入 agent 板块行尾?保持独立小行(统一卡:单层 Pa.Card·16dp 圆角)
             item(span = { GridItemSpan(4) }) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .pressable { showNewThread = true }
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(painterResource(R.drawable.ic_lucide_plus), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
@@ -543,8 +544,8 @@ fun HomeScreen(
                     Modifier
                         .fillMaxWidth()
                         .pressable { onOpenBrowser() }
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
@@ -583,8 +584,8 @@ fun HomeScreen(
                         Modifier
                             .fillMaxWidth()
                             .pressable { onOpenThread(t.id) }
-                            .background(Pa.Card, RoundedCornerShape(14.dp))
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Image(
@@ -801,10 +802,10 @@ private fun ConnectionCardCompact(host: HostInfo?, onRetry: () -> Unit = {}, mod
         modifier
             .fillMaxWidth()
             .pressable { onRetry() }
-            // 单层实色卡:无阴影无发丝边;行内无带背景的子容器(图标裸放),
-            // "灰盒套白矩形"的三层观感即由此打平。
+            // 页面唯一的 hero 统一卡:单层 Pa.Card·16dp 圆角·无阴影无发丝边;
+            // 行内无带背景的子容器(图标裸放),信息层级靠字重与颜色。
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(24.dp))

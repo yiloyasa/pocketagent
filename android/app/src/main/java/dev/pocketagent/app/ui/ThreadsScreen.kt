@@ -812,8 +812,12 @@ fun ThreadsScreen(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 2.dp)
-                        // 单层实色卡(无阴影无发丝边)——横幅是"信息",不是"容器"
-                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        // 语义横幅(不算卡):警示色 8% 透明底、16dp 圆角——黄=离线快照、
+                        // 红=失败,配色语义在文字色上,底色只做低饱和的"状态"提示
+                        .background(
+                            (if (offline) Pa.Yellow else Pa.Red).copy(alpha = 0.08f),
+                            RoundedCornerShape(16.dp),
+                        )
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -999,7 +1003,7 @@ fun ThreadsScreen(
                             Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
                                 .padding(12.dp),
                             fontSize = 12.sp,
                             color = Pa.Red,
@@ -1019,7 +1023,7 @@ fun ThreadsScreen(
                             Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
                                 .padding(12.dp),
                             fontSize = 12.sp,
                             color = Pa.Red,
@@ -1057,7 +1061,8 @@ fun ThreadsScreen(
                             },
                         state = listState,
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        // 【统一卡语言】卡与卡间距 12dp(全 app 唯一卡距)
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(
                             items = rows.distinctBy { it.key },
@@ -1077,6 +1082,9 @@ fun ThreadsScreen(
                                     SwipeRevealRow(
                                         rowKey = t.id,
                                         openKey = openKey,
+                                        // 【统一卡语言】16dp 圆角(唯一卡型),内容层实色 Pa.Card
+                                        // 是 SwipeRevealRow 的机构约束(盖住动作层)
+                                        shape = RoundedCornerShape(16.dp),
                                         // 【增删动画】淡入+位置回弹走 spring(可打断,轻):
                                         // 乐观删除/撤销还原时行平滑退场/进场,不再"啪"地消失
                                         modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
@@ -1165,7 +1173,8 @@ fun ThreadsScreen(
                                     SwipeRevealRow(
                                         rowKey = c.id,
                                         openKey = openKey,
-                                        // 与本地会话行同款增删动画(见上)
+                                        // 与本地会话行同款增删动画(见上);16dp 圆角同统一卡型
+                                        shape = RoundedCornerShape(16.dp),
                                         modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
                                         actions = listOf(
                                             SwipeAction(
@@ -1231,7 +1240,8 @@ fun ThreadsScreen(
                                     SwipeRevealRow(
                                         rowKey = key,
                                         openKey = openKey,
-                                        // 与本地会话行同款增删动画(见上)
+                                        // 与本地会话行同款增删动画(见上);16dp 圆角同统一卡型
+                                        shape = RoundedCornerShape(16.dp),
                                         modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
                                         actions = listOf(
                                             SwipeAction("pin", if (isPinned) "取消置顶" else "置顶", R.drawable.ic_lucide_pin, Pa.AccentText),
@@ -1634,8 +1644,9 @@ private fun ThreadCard(
         Modifier
             .fillMaxWidth()
             // 不要在这里挂 clickable:手势由外层 SwipeRevealRow 独占,否则侧滑会被内层消费掉
-            // 【单层实色卡】无阴影无发丝边;玻璃只留给抽屉与浮层,内容卡回归扁平。
-            .background(Pa.Card, RoundedCornerShape(18.dp))
+            // 【统一卡】单层 Pa.Card·16dp 圆角·无阴影无发丝边;实色底是 SwipeRevealRow
+            // 的机构约束(盖住动作层),也是全 app 唯一保留实色底的卡型。
+            .background(Pa.Card, RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         if (renaming) {
@@ -1723,8 +1734,8 @@ private fun PcSessionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;单层实色卡(同 ThreadCard)
-            .background(Pa.Card, RoundedCornerShape(18.dp))
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;统一卡 16dp(同 ThreadCard)
+            .background(Pa.Card, RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Text(
@@ -1773,8 +1784,8 @@ private fun PcAgentSessionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;单层实色卡(同 ThreadCard)
-            .background(Pa.Card, RoundedCornerShape(18.dp))
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;统一卡 16dp(同 ThreadCard)
+            .background(Pa.Card, RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1901,7 +1912,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                 Modifier
                     .fillMaxWidth()
                     .pressable { showBrowser = true }
-                    .background(Pa.Card, RoundedCornerShape(12.dp))
+                    .background(Pa.Card, RoundedCornerShape(16.dp))
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

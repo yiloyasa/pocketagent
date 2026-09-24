@@ -1,7 +1,6 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -89,7 +88,7 @@ fun CollabRolesScreen(
                 } else {
                     LazyColumn(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(roles, key = { it.id }) { role ->
                             CollabRoleRow(role = role, onClick = { onOpenEditor(role.id) })
@@ -121,7 +120,7 @@ private fun CollabEmptyState(onNew: () -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .pressable { onNew() }
-                .background(Pa.AccentDim, RoundedCornerShape(14.dp))
+                .background(Pa.AccentDim, RoundedCornerShape(16.dp))
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -148,7 +147,7 @@ private fun CollabErrorState(error: String, onRetry: () -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .pressable { onRetry() }
-                .background(Pa.Card, RoundedCornerShape(14.dp))
+                .background(Pa.Card, RoundedCornerShape(16.dp))
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -169,10 +168,9 @@ private fun CollabRoleRow(role: CollabRole, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .pressable { onClick() }
-            // 实色卡 + 发丝边:与任务中心/设置分组卡同一材质语言
+            // 唯一卡型:16dp/Pa.Card/无边框无阴影
             .background(Pa.Card, RoundedCornerShape(16.dp))
-            .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
-            .padding(14.dp),
+            .padding(16.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
