@@ -77,15 +77,25 @@ func TestZcodeNoticeKindClassification(t *testing.T) {
 			t.Errorf("zcodeNoticeKind(%q) = %q, want PASSTHROUGH(0.16.9 收编批,只留痕不投影)", m, got)
 		}
 	}
+	// session/event 内部五类(尾巴 4 收编):Run 的专案分支把 model.streaming /
+	// tool.updated / turn.completed / turn.failed 投影成协议内帧,turn.started
+	// 只落日志。全局钩子先于 Run 轮次钩子对每条通知都记一次账,"Run 处理过了"
+	// 不等于"全局路径记它就是路径不符" —— 不收编,轮次期间每条事件都灌 UNKNOWN。
+	for _, m := range []string{"model.streaming", "tool.updated", "turn.completed", "turn.failed"} {
+		if got := zcodeNoticeKind(m); got != runtime.KindKnownProjected {
+			t.Errorf("zcodeNoticeKind(%q) = %q, want PROJECTED(Run 专案分支已投影成协议内帧)", m, got)
+		}
+	}
+	if got := zcodeNoticeKind("turn.started"); got != runtime.KindKnownPassthrough {
+		t.Errorf("zcodeNoticeKind(\"turn.started\") = %q, want PASSTHROUGH(只落日志,无正式投影)", got)
+	}
 	// 刻意留 UNKNOWN(不猜):permission.requested / userInput.requested 与反向
 	// 请求 interaction/requestPermission 的关系,探针证不出(审批流需真实轮次,
 	// 本轮红线禁跑)。等有实证再定档,不许按名字眼熟洗成已知。
-	// turn.started / model.streaming 由 Run 内专案分支处理(投影成流式帧/日志),
-	// 真到兜底记录说明路径与预期不符 —— 分类表不认识它们,如实 UNKNOWN。
 	for _, m := range []string{"permission.requested", "userInput.requested", "permission.resolved", "userInput.resolved",
-		"turn.started", "model.streaming", "brand.new.event", ""} {
+		"brand.new.event", ""} {
 		if got := zcodeNoticeKind(m); got != runtime.KindUnknownNotification {
-			t.Errorf("zcodeNoticeKind(%q) = %q, want UNKNOWN(未实证/专案分支处理,兜底不冒充已知)", m, got)
+			t.Errorf("zcodeNoticeKind(%q) = %q, want UNKNOWN(未实证,兜底不冒充已知)", m, got)
 		}
 	}
 }

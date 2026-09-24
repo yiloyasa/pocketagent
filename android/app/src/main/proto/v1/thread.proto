@@ -25,6 +25,10 @@ service ThreadService {
   rpc StartTurn(stream TurnClientMessage) returns (stream TurnServerMessage);
 
   rpc CancelTurn(CancelTurnRequest) returns (Empty);
+  // 撤回该会话在上游排队中的全部输入(0.87.1 pi clear_queue 接线,只增)。
+  // 等价 pi TUI 里按 Esc:清空的是 pi 子进程内存里的原生队列(steer/followUp),
+  // 不是 daemon 侧的续跑队列(那归 CancelTurn/轮次收尾管)。仅 pi 会话支持。
+  rpc ClearQueuedInputs(ClearQueuedInputsRequest) returns (ClearQueuedInputsResponse);
   // Reconnect-safe approval delivery; request_id must still be pending.
   rpc SubmitApproval(SubmitApprovalRequest) returns (Empty);
 
@@ -779,6 +783,19 @@ message TurnFailed {
 }
 
 message CancelTurnRequest { string thread_id = 1; }
+
+// ---- 撤回排队输入(pi 0.87.1 clear_queue,只增,字段号从 1 起,不碰旧消息)----
+
+message ClearQueuedInputsRequest {
+  string thread_id = 1;  // 目标会话(必须是 pi 会话)
+}
+
+message ClearQueuedInputsResponse {
+  // 被撤销的条数,两个口径与 pi 的队列一致:steered = 插队(当前轮还没结束、
+  // 会被优先消费的),follow_up = 排队(当前轮结束后依次执行的)。
+  int32 steered = 1;
+  int32 follow_up = 2;
+}
 
 message SubmitApprovalRequest {
   string thread_id = 1;

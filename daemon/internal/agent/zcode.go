@@ -454,8 +454,31 @@ func (p *ZcodeProvider) attachUnknownResponseHandler(c *zcodeapp.Client) {
 
 func (p *ZcodeProvider) attachGlobalHandler(c *zcodeapp.Client) {
 	c.SetGlobalHandler(func(method string, params json.RawMessage) {
-		recordProviderEvent("zcode", method, "", zcodeNoticeKind(method), params)
+		ledgerMethod, kind := zcodeLedgerMethod(method, params)
+		recordProviderEvent("zcode", ledgerMethod, "", kind, params)
 	})
+}
+
+// zcodeLedgerMethod 计算一条 zcode 通知进诊断台账时的 method 名与分类。
+//
+// 【session/event 必须拆壳再分类】session/event 通知的 params 外壳是
+// {sessionId,type,payload,…}(zcodeEventEnvelope),分类表(zcodeNoticeKind)
+// 认的键是**内部 type**。全局钩子直接拿外层 method="session/event" 记账的话,
+// 分类器永远查空 —— 轮次期间 model.streaming/tool.updated/turn.completed
+// 每条都被灌成 UNKNOWN,把真未知挤出滚动窗。
+// 这里在记账前把 method 换成 "session/event:<内部type>"(与 dsh 的
+// "session/update:<kind>" 同款拼法):SourceMethod 同时保留原始方法名与内部
+// type,既诚实又可检索。壳解析失败/type 为空:按原样 "session/event" 记
+// UNKNOWN —— 拆不开的壳最该让人看见,不替它编一个已知身份。
+func zcodeLedgerMethod(method string, params json.RawMessage) (string, string) {
+	if method != "session/event" {
+		return method, zcodeNoticeKind(method)
+	}
+	var ev zcodeEventEnvelope
+	if json.Unmarshal(params, &ev) != nil || ev.Type == "" {
+		return method, runtime.KindUnknownNotification
+	}
+	return "session/event:" + ev.Type, zcodeNoticeKind(ev.Type)
 }
 
 // withClient 无 ctx 的便捷入口。

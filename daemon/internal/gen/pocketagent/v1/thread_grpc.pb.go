@@ -29,6 +29,7 @@ const (
 	ThreadService_CompactThread_FullMethodName               = "/pocketagent.v1.ThreadService/CompactThread"
 	ThreadService_StartTurn_FullMethodName                   = "/pocketagent.v1.ThreadService/StartTurn"
 	ThreadService_CancelTurn_FullMethodName                  = "/pocketagent.v1.ThreadService/CancelTurn"
+	ThreadService_ClearQueuedInputs_FullMethodName           = "/pocketagent.v1.ThreadService/ClearQueuedInputs"
 	ThreadService_SubmitApproval_FullMethodName              = "/pocketagent.v1.ThreadService/SubmitApproval"
 	ThreadService_GetThreadHistory_FullMethodName            = "/pocketagent.v1.ThreadService/GetThreadHistory"
 	ThreadService_GetThreadEventsSince_FullMethodName        = "/pocketagent.v1.ThreadService/GetThreadEventsSince"
@@ -71,6 +72,10 @@ type ThreadServiceClient interface {
 	// 服务端 → 客户端:文本增量/工具调用/审批请求/turn 结束。
 	StartTurn(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TurnClientMessage, TurnServerMessage], error)
 	CancelTurn(ctx context.Context, in *CancelTurnRequest, opts ...grpc.CallOption) (*Empty, error)
+	// 撤回该会话在上游排队中的全部输入(0.87.1 pi clear_queue 接线,只增)。
+	// 等价 pi TUI 里按 Esc:清空的是 pi 子进程内存里的原生队列(steer/followUp),
+	// 不是 daemon 侧的续跑队列(那归 CancelTurn/轮次收尾管)。仅 pi 会话支持。
+	ClearQueuedInputs(ctx context.Context, in *ClearQueuedInputsRequest, opts ...grpc.CallOption) (*ClearQueuedInputsResponse, error)
 	// Reconnect-safe approval delivery; request_id must still be pending.
 	SubmitApproval(ctx context.Context, in *SubmitApprovalRequest, opts ...grpc.CallOption) (*Empty, error)
 	// 历史消息(打开旧会话时拉取)
@@ -276,6 +281,16 @@ func (c *threadServiceClient) CancelTurn(ctx context.Context, in *CancelTurnRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, ThreadService_CancelTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ClearQueuedInputs(ctx context.Context, in *ClearQueuedInputsRequest, opts ...grpc.CallOption) (*ClearQueuedInputsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearQueuedInputsResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ClearQueuedInputs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -547,6 +562,10 @@ type ThreadServiceServer interface {
 	// 服务端 → 客户端:文本增量/工具调用/审批请求/turn 结束。
 	StartTurn(grpc.BidiStreamingServer[TurnClientMessage, TurnServerMessage]) error
 	CancelTurn(context.Context, *CancelTurnRequest) (*Empty, error)
+	// 撤回该会话在上游排队中的全部输入(0.87.1 pi clear_queue 接线,只增)。
+	// 等价 pi TUI 里按 Esc:清空的是 pi 子进程内存里的原生队列(steer/followUp),
+	// 不是 daemon 侧的续跑队列(那归 CancelTurn/轮次收尾管)。仅 pi 会话支持。
+	ClearQueuedInputs(context.Context, *ClearQueuedInputsRequest) (*ClearQueuedInputsResponse, error)
 	// Reconnect-safe approval delivery; request_id must still be pending.
 	SubmitApproval(context.Context, *SubmitApprovalRequest) (*Empty, error)
 	// 历史消息(打开旧会话时拉取)
@@ -684,6 +703,9 @@ func (UnimplementedThreadServiceServer) StartTurn(grpc.BidiStreamingServer[TurnC
 }
 func (UnimplementedThreadServiceServer) CancelTurn(context.Context, *CancelTurnRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelTurn not implemented")
+}
+func (UnimplementedThreadServiceServer) ClearQueuedInputs(context.Context, *ClearQueuedInputsRequest) (*ClearQueuedInputsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearQueuedInputs not implemented")
 }
 func (UnimplementedThreadServiceServer) SubmitApproval(context.Context, *SubmitApprovalRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SubmitApproval not implemented")
@@ -943,6 +965,24 @@ func _ThreadService_CancelTurn_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ThreadServiceServer).CancelTurn(ctx, req.(*CancelTurnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ClearQueuedInputs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearQueuedInputsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ClearQueuedInputs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ClearQueuedInputs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ClearQueuedInputs(ctx, req.(*ClearQueuedInputsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1414,6 +1454,10 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelTurn",
 			Handler:    _ThreadService_CancelTurn_Handler,
+		},
+		{
+			MethodName: "ClearQueuedInputs",
+			Handler:    _ThreadService_ClearQueuedInputs_Handler,
 		},
 		{
 			MethodName: "SubmitApproval",

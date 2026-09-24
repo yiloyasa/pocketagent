@@ -337,6 +337,23 @@ func (p *CodexProvider) ForkThread(codexThreadID, lastTurnID string) (string, er
 }
 
 // RollbackThread 丢掉最近 numTurns 个回合。
+//
+// 【0.156.1 版本锚定:thread/rollback 已删,直接切 thread/revert】0.156.1 删除了
+// thread/rollback {threadId,numTurns}(探针实证,docs/verify/evidence/
+// codex-0156-probe.log),替代口子是 thread/revert {threadId,beforeTurnId} ——
+// 按"回合 id 锚点"回退:锚点回合**及其之后**的全部历史被丢弃。旧版 codex
+// (仍有 thread/rollback)不认 revert,同样是调不通 —— 本机 daemon 面对的就是
+// 0.156.1,不做新旧版本探测,直接锚定这一版。
+//
+// 【对外语义不变:仍是"回退 N 个回合"】内部先走 thread/read v2
+// (codexThreadReadVia,与子代理历史同一封装)拉全量回合(应答按时间升序),
+// 取倒数第 N 个回合的 id 作锚点 —— revert 丢掉它和它后面的所有回合,恰好
+// 等于旧 numTurns 的效果。
+//
+// 【N 超过历史长度】旧 numTurns 对"超过部分"没有定义;回滚是破坏性操作,
+// 这里显式报错而不是顺手把整个会话清空 —— 宁可让用户看到"退不动了"再决定,
+// 也不冒"多删"的险。N == 历史长度(清空全部回合)仍放行:那是用户照着
+// 回合数点的按钮,是明确意图。
 func (p *CodexProvider) RollbackThread(codexThreadID string, numTurns int32) error {
 	if codexThreadID == "" {
 		return fmt.Errorf("这个会话还没有在电脑上落地,无法回滚")
@@ -345,8 +362,24 @@ func (p *CodexProvider) RollbackThread(codexThreadID string, numTurns int32) err
 		return fmt.Errorf("回滚回合数必须大于 0")
 	}
 	return p.withClient(func(c *codexapp.Client) error {
-		_, err := c.Call("thread/rollback", map[string]interface{}{
-			"threadId": codexThreadID, "numTurns": numTurns,
+		// thread/read 是只读快照:给独立短预算(与状态查询同口径),
+		// 不把 revert 本身也陪绑在这个超时里。
+		ctx, cancel := context.WithTimeout(context.Background(), statusBudget)
+		defer cancel()
+		snap, err := codexThreadReadVia(ctx, c, codexThreadID, true)
+		if err != nil {
+			return fmt.Errorf("定位回滚锚点失败: %w", err)
+		}
+		total := len(snap.Turns)
+		if int(numTurns) > total {
+			return fmt.Errorf("回滚 %d 个回合超过会话已有回合数(%d),已原地不动", numTurns, total)
+		}
+		anchor := snap.Turns[total-int(numTurns)]
+		if anchor.ID == "" {
+			return fmt.Errorf("无法定位倒数第 %d 个回合的 turnId(thread/read 未给出该回合 id),拒绝盲改历史", numTurns)
+		}
+		_, err = c.Call("thread/revert", map[string]interface{}{
+			"threadId": codexThreadID, "beforeTurnId": anchor.ID,
 		})
 		return err
 	})

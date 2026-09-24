@@ -207,7 +207,9 @@ func piNoticeKind(eventType string) string {
 }
 
 // zcodeNoticeKind 给 zcode 的通知分档(顶层通知 method 与 session/event 的
-// event.type 共用这一张表 —— 两者都汇进 recordAs/recordProviderEvent)。
+// event.type 共用这一张表 —— 两者都汇进 recordAs/recordProviderEvent;全局钩子
+// 路径的 session/event 已由 zcodeLedgerMethod 拆壳成 "session/event:<type>"
+// 再进来)。
 //
 // 【0.16.9 实证结论(2026-09-24,docs/verify/evidence/zcode-0169-probe.log)】
 // 模型/思考档变化在 0.16.9 stdio 上的唯一载体是顶层通知 state.updated
@@ -222,6 +224,12 @@ func piNoticeKind(eventType string) string {
 // 【判定依据仍是"daemon 对这个类别做了什么"】
 //   - state.updated / session.updated / settings.updated / session.modelUpdated:
 //     记录前已走 emitRuntimeSelection 投影成协议内 Started 帧 → PROJECTED;
+//   - session/event 内部五类(model.streaming/tool.updated/turn.completed/
+//     turn.failed/turn.started):Run 的专案分支把前四类投影成流式文本/思考帧、
+//     工具卡、用量帧与失败原因,turn.started 只落一条日志 → PROJECTED /
+//     PASSTHROUGH。全局钩子先于 Run 的轮次钩子对每条通知都记一次账(zcodeapp
+//     先 global 后 notif),所以"Run 处理过了"不等于"全局路径记它就是路径
+//     不符" —— 不收编它们,轮次期间每条事件都灌 UNKNOWN(尾巴 4 的病根)。
 //   - session.titleUpdated:Run 内已有 TitleHandler 投影分支(桌面改名→手机
 //     同步,zcode.go)。0.16.9 bundle 静态可见(payload 含 previousTitle/
 //     source/title),探针未触发(改名需轮次或桌面操作,证据分级:静态)。
@@ -238,9 +246,11 @@ func piNoticeKind(eventType string) string {
 func zcodeNoticeKind(method string) string {
 	switch method {
 	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated",
-		"session.titleUpdated":
+		"session.titleUpdated",
+		"model.streaming", "tool.updated", "turn.completed", "turn.failed":
 		return runtime.KindKnownProjected
-	case "turn.steerQueued", "turn.steerDrained",
+	case "turn.started",
+		"turn.steerQueued", "turn.steerDrained",
 		"session.created", "session.resumed", "session.closed",
 		"checkpoint.created", "rewind.triggered",
 		"usage.delta", "subagent.lifecycle", "turn.terminal",
@@ -262,20 +272,7 @@ func (r *nativeNoticeRecorder) record(agentID, method string, raw json.RawMessag
 // kind 为空回落 UNKNOWN_NOTIFICATION:调用方没分类 = 我们确实不知道它是什么,
 // 如实记未知,不冒充已知。
 func (r *nativeNoticeRecorder) recordAs(kind, agentID, method string, raw json.RawMessage, sink Sink) {
-	if kind == "" {
-		kind = runtime.KindUnknownNotification
-	}
-	// 【顺序有意为之】先登记诊断台账,再过下面的推送限频。
-	// 推送限频(每方法 2 条)是为了不让手机端被同一条未知通知刷屏;而台账是**索引**,
-	// 必须反映真实频次 —— 否则用户点开诊断页只看到两条,分不清"偶尔来一次"还是
-	// "每轮都在来",那正是这个功能要回答的问题。
-	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-		ThreadID:       r.threadID,
-		SourceAgent:    agentID,
-		SourceMethod:   method,
-		NormalizedKind: kind,
-		RawPayload:     redactNativePayload(raw),
-	})
+	r.recordLedger(kind, agentID, method, raw)
 
 	r.mu.Lock()
 	if r.count == nil {
@@ -291,6 +288,30 @@ func (r *nativeNoticeRecorder) recordAs(kind, agentID, method string, raw json.R
 		Kind: pb.CodexEvent_STATUS, Code: "native_notification", Title: agentID + " · " + method,
 		Message: "原生状态通知", RawJson: redactNativePayload(raw),
 	}}})
+}
+
+// recordLedger 只写诊断台账,不向 sink 推任何帧(recordAs 的台账半边;推送的
+// 限频语义只属于 recordAs 自己 —— 台账是索引,必须记全真实频次,推送才是被
+// 限频的对象)。
+func (r *nativeNoticeRecorder) recordLedger(kind, agentID, method string, raw json.RawMessage) {
+	if kind == "" {
+		kind = runtime.KindUnknownNotification
+	}
+	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+		ThreadID:       r.threadID,
+		SourceAgent:    agentID,
+		SourceMethod:   method,
+		NormalizedKind: kind,
+		RawPayload:     redactNativePayload(raw),
+	})
+}
+
+// recordLedgerOnly 只落台账、不推 sink:给"已知但每轮必来、推给手机纯属噪音"
+// 的事件用(现役只有 pi 0.87.1 的 turn_start/message_start/message_end,见
+// pi.go 的 piLedgerOnlyEvent)。分类语义与 recordAs 完全一致(kind 为空回落
+// UNKNOWN),缺的只是推送那半边。
+func (r *nativeNoticeRecorder) recordLedgerOnly(kind, agentID, method string, raw json.RawMessage) {
+	r.recordLedger(kind, agentID, method, raw)
 }
 
 func redactNativePayload(raw json.RawMessage) string {

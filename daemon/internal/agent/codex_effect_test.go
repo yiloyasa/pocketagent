@@ -113,6 +113,17 @@ func runFakeCodexAppServer() int {
 		defer mu.Unlock()
 		_, _ = os.Stdout.Write(append(raw, '\n'))
 	}
+	// respondErr 应答 JSON-RPC error 帧(只进 stdout,不进请求日志 —— 日志只记
+	// 请求与通知)。供 thread/revert 失败路径的注入(PA_FAKE_CODEX_REVERT_ERROR)。
+	respondErr := func(id int64, code int, msg string) {
+		raw, _ := json.Marshal(map[string]interface{}{
+			"jsonrpc": "2.0", "id": id,
+			"error":   map[string]interface{}{"code": code, "message": msg},
+		})
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = os.Stdout.Write(append(raw, '\n'))
+	}
 	notify := func(method string, params interface{}) {
 		_ = writeLine(map[string]interface{}{
 			"jsonrpc": "2.0", "method": method, "params": params,
@@ -157,6 +168,25 @@ func runFakeCodexAppServer() int {
 			logOnly(m.Method, m.Params)
 			counter++
 			respond(id, map[string]interface{}{"threadId": fmt.Sprintf("fake-thread-%d", counter)})
+		case "thread/read":
+			// RollbackThread 迁移 thread/revert 后要先读历史定位锚点回合:
+			// PA_FAKE_CODEX_THREAD_READ 注入应答原文(带 turns[].id),缺省回
+			// 空对象(= 0 回合,"N 超过历史长度"路径的直接来源)。
+			logOnly(m.Method, m.Params)
+			if tr := os.Getenv("PA_FAKE_CODEX_THREAD_READ"); tr != "" {
+				respond(id, json.RawMessage(tr))
+			} else {
+				respond(id, map[string]interface{}{})
+			}
+		case "thread/revert":
+			// 记录请求形状(父进程断言 beforeTurnId),按注入值决定成败:
+			// PA_FAKE_CODEX_REVERT_ERROR 非空 = 回 error 帧(消息原文给上层)。
+			logOnly(m.Method, m.Params)
+			if e := os.Getenv("PA_FAKE_CODEX_REVERT_ERROR"); e != "" {
+				respondErr(id, -32000, e)
+			} else {
+				respond(id, map[string]interface{}{})
+			}
 		case "turn/start":
 			logOnly(m.Method, m.Params)
 			respond(id, map[string]interface{}{})

@@ -545,6 +545,28 @@ func piEventNoticeKind(eventType string) string {
 	return piNoticeKind(eventType)
 }
 
+// piLedgerOnlyEvent 判定"只落台账、不推 sink"的轮次骨架事件(0.87.1 探针实证,
+// docs/verify/evidence/pi-087-usage-probe.log)。
+//
+// 【为什么 turn_start/message_start/message_end 三类不推 sink】
+//  1. 载荷不可推:message_start/end 携带完整 messages 数组,其中 system prompt
+//     全量 ~70KB —— 即便台账侧有 8KiB 截断,推送侧也是一帧巨大的 STATUS 卡,
+//     手机端时间线被无意义的"系统提示词快照"顶开。
+//  2. 轮次噪音:这三类每条消息/每轮必然各来一次,0.87.1 起经 consume 的兜底
+//     分支变成"原生状态通知"卡(每方法限 2 条也只是把刷屏压成 6 卡/轮)——
+//     真正的过程感已由 message_update/tool_execution_* 的正式投影承担,
+//     骨架事件对手机端零增量信息,只淹内容。
+//
+// 【台账为什么保留】诊断索引必须如实反映"上游每轮都发这些",上游哪天改形状、
+// 改频次,台账是第一个看见的地方(KNOWN_PASSTHROUGH 分类不变)。
+func piLedgerOnlyEvent(eventType string) bool {
+	switch eventType {
+	case "turn_start", "message_start", "message_end":
+		return true
+	}
+	return false
+}
+
 // ---- 一轮 ----
 
 // acquireRunning 登记本轮为该线程的 running 轮(P2-2 重入闭环)。
@@ -788,6 +810,13 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		default:
 			if ev.Type == "extension_ui_request" {
 				return // dialog 已由 handler 处理,fire-and-forget 忽略(实测 26 次 setStatus 噪声)
+			}
+			if piLedgerOnlyEvent(ev.Type) {
+				// 0.87.1 噪音治理:轮次骨架事件只落台账、不推 sink(理由见
+				// piLedgerOnlyEvent)。分类照旧走 piEventNoticeKind → KNOWN_PASSTHROUGH,
+				// 治的是推送,不动台账。
+				notices.recordLedgerOnly(piEventNoticeKind(ev.Type), "pi", ev.Type, ev.Raw)
+				return
 			}
 			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})

@@ -571,6 +571,13 @@ type piThreadDropper interface {
 	DropThread(threadID string)
 }
 
+// piQueueClearer pi 侧「撤销上游原生排队输入」的最小接口(pi 0.87.1
+// clear_queue,生产由 *agent.PiProvider 实现 —— agent.QueueClearer;抽接口同
+// piThreadCompactor:单测可注 fake,不依赖真子进程)。
+type piQueueClearer interface {
+	ClearQueue(ctx context.Context, threadID string) (steered, followUp int, err error)
+}
+
 // codexThreadDeleter codex 侧协议真删能力的最小接口(生产由 *agent.CodexProvider
 // 实现 —— thread/delete;抽接口同 piThreadDropper:单测可注 fake,不依赖真
 // 子进程)。失败不阻塞本地删除:墓碑已是防复活的权威。
@@ -663,6 +670,38 @@ func (s *Server) CancelTurn(ctx context.Context, req *pb.CancelTurnRequest) (*pb
 		log.Printf("[turn] 手机端主动取消 %s", req.ThreadId)
 	}
 	return &pb.Empty{}, nil
+}
+
+// ClearQueuedInputs 撤回指定会话在上游排队中的全部输入(pi 0.87.1 clear_queue,
+// 等价 pi TUI 里按 Esc)。
+//
+// 【接的是 provider 的原生队列,不是 daemon 的续跑队列】pi 的 steer/followUp
+// 队列活在 pi 子进程内存里(agent.QueueClearer 的职责边界,见 pi.go);daemon
+// 侧 turnInputQueue 的撤销发生在 CancelTurn/轮次收尾,不经本 RPC —— 两者名字
+// 相近,职责分开,别在这里顺手清 daemon 队列(那会把"用户只想撤回排队消息"
+// 扩大成"把还没跑的续跑输入也扔了")。
+//
+// 【路由纪律与 CompactThread 一致】会话归属以 AgentID 为准,非 pi 会话显式
+// FailedPrecondition(它没有原生排队面),不静默换人、不假装成功。条数回给
+// 手机端做 Toast 确认;provider 失败(PI_QUEUE_CLEAR_FAILED 等)如实转 Internal。
+func (s *Server) ClearQueuedInputs(ctx context.Context, req *pb.ClearQueuedInputsRequest) (*pb.ClearQueuedInputsResponse, error) {
+	t, ok := s.cfg.Store.Get(req.GetThreadId())
+	if !ok {
+		return nil, errNotFound("会话不存在")
+	}
+	if threadAgentID(t) != "pi" {
+		return nil, errFailedPrecondition("该会话的 agent 没有可撤回的原生排队输入(仅 pi 会话支持)")
+	}
+	qc, ok := s.cfg.Providers["pi"].(piQueueClearer)
+	if !ok {
+		return nil, errUnavailable("电脑上没有可用的 pi")
+	}
+	steered, followUp, err := qc.ClearQueue(ctx, t.ID)
+	if err != nil {
+		return nil, errInternal(err)
+	}
+	log.Printf("[turn] 已撤回 pi 排队输入 %s:插队 %d 条、排队 %d 条", t.ID, steered, followUp)
+	return &pb.ClearQueuedInputsResponse{Steered: int32(steered), FollowUp: int32(followUp)}, nil
 }
 
 // RenameThread 重命名会话(双端同步:落库后桌面端/手机端读到同一标题)。
