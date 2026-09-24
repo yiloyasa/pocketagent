@@ -151,6 +151,18 @@ message UnknownEventSummary {
   string safety_class = 8;    // 目前恒为 UNKNOWN:分类规则未定,如实标注而非猜一个
   string processing_status = 9;
   uint64 revision = 10;       // 每次确认 +1
+  // daemon 生成的一句话人话翻译:说「发生了什么」,不复述术语。
+  // 翻译是摘要不是裁决 —— 原文永远可查(GetUnknownEvent.raw_json),冲突以原文为准。
+  // 旧 daemon / 旧台账条目可能为空:客户端空值时显示方法名原文并如实说明,不得编造。
+  string summary = 11;
+}
+
+// UnknownEventField 是字段级透析表的一行:把这个载荷「拆开读」的结果。
+message UnknownEventField {
+  string key = 1;      // 字段名原文
+  string kind = 2;     // 值类型:text / number / bool / array / object / null
+  string preview = 3;  // 脱敏后的值预览(超长截断;已随载荷整体脱敏)
+  string meaning = 4;  // 字段含义的人话(可识别时给;识别不出留空,不猜)
 }
 
 message ListUnknownEventsResponse {
@@ -171,6 +183,11 @@ message UnknownEventResponse {
   string raw_json = 2;           // 脱敏后的原始载荷(密钥类字段已打码)
   string decoded_fields_json = 3; // 我们能解出来的部分;解不出来为空
   string note = 4;               // 确认时写下的一句话
+  // 字段级透析表:载荷拆开读的每一行(见 UnknownEventField)。旧 daemon 为空。
+  repeated UnknownEventField digest = 5;
+  // 详细人话解读:比 summary 长 —— 字段怎么读、各部分像什么、daemon 打算怎么处理
+  // (已投影/只透传/安全拒绝)。旧 daemon 为空。
+  string translation = 6;
 }
 
 message AcknowledgeUnknownEventRequest {

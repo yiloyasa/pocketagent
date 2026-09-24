@@ -674,8 +674,12 @@ type UnknownEventSummary struct {
 	SafetyClass      string                 `protobuf:"bytes,8,opt,name=safety_class,json=safetyClass,proto3" json:"safety_class,omitempty"` // 目前恒为 UNKNOWN:分类规则未定,如实标注而非猜一个
 	ProcessingStatus string                 `protobuf:"bytes,9,opt,name=processing_status,json=processingStatus,proto3" json:"processing_status,omitempty"`
 	Revision         uint64                 `protobuf:"varint,10,opt,name=revision,proto3" json:"revision,omitempty"` // 每次确认 +1
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// daemon 生成的一句话人话翻译:说「发生了什么」,不复述术语。
+	// 翻译是摘要不是裁决 —— 原文永远可查(GetUnknownEvent.raw_json),冲突以原文为准。
+	// 旧 daemon / 旧台账条目可能为空:客户端空值时显示方法名原文并如实说明,不得编造。
+	Summary       string `protobuf:"bytes,11,opt,name=summary,proto3" json:"summary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UnknownEventSummary) Reset() {
@@ -778,6 +782,82 @@ func (x *UnknownEventSummary) GetRevision() uint64 {
 	return 0
 }
 
+func (x *UnknownEventSummary) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+// UnknownEventField 是字段级透析表的一行:把这个载荷「拆开读」的结果。
+type UnknownEventField struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`         // 字段名原文
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`       // 值类型:text / number / bool / array / object / null
+	Preview       string                 `protobuf:"bytes,3,opt,name=preview,proto3" json:"preview,omitempty"` // 脱敏后的值预览(超长截断;已随载荷整体脱敏)
+	Meaning       string                 `protobuf:"bytes,4,opt,name=meaning,proto3" json:"meaning,omitempty"` // 字段含义的人话(可识别时给;识别不出留空,不猜)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnknownEventField) Reset() {
+	*x = UnknownEventField{}
+	mi := &file_v1_runtime_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnknownEventField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnknownEventField) ProtoMessage() {}
+
+func (x *UnknownEventField) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnknownEventField.ProtoReflect.Descriptor instead.
+func (*UnknownEventField) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *UnknownEventField) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *UnknownEventField) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *UnknownEventField) GetPreview() string {
+	if x != nil {
+		return x.Preview
+	}
+	return ""
+}
+
+func (x *UnknownEventField) GetMeaning() string {
+	if x != nil {
+		return x.Meaning
+	}
+	return ""
+}
+
 type ListUnknownEventsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Items []*UnknownEventSummary `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
@@ -792,7 +872,7 @@ type ListUnknownEventsResponse struct {
 
 func (x *ListUnknownEventsResponse) Reset() {
 	*x = ListUnknownEventsResponse{}
-	mi := &file_v1_runtime_proto_msgTypes[10]
+	mi := &file_v1_runtime_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -804,7 +884,7 @@ func (x *ListUnknownEventsResponse) String() string {
 func (*ListUnknownEventsResponse) ProtoMessage() {}
 
 func (x *ListUnknownEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[10]
+	mi := &file_v1_runtime_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -817,7 +897,7 @@ func (x *ListUnknownEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUnknownEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListUnknownEventsResponse) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{10}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListUnknownEventsResponse) GetItems() []*UnknownEventSummary {
@@ -850,7 +930,7 @@ type GetUnknownEventRequest struct {
 
 func (x *GetUnknownEventRequest) Reset() {
 	*x = GetUnknownEventRequest{}
-	mi := &file_v1_runtime_proto_msgTypes[11]
+	mi := &file_v1_runtime_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -862,7 +942,7 @@ func (x *GetUnknownEventRequest) String() string {
 func (*GetUnknownEventRequest) ProtoMessage() {}
 
 func (x *GetUnknownEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[11]
+	mi := &file_v1_runtime_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -875,7 +955,7 @@ func (x *GetUnknownEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUnknownEventRequest.ProtoReflect.Descriptor instead.
 func (*GetUnknownEventRequest) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{11}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetUnknownEventRequest) GetEventId() string {
@@ -891,13 +971,18 @@ type UnknownEventResponse struct {
 	RawJson           string                 `protobuf:"bytes,2,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`                                 // 脱敏后的原始载荷(密钥类字段已打码)
 	DecodedFieldsJson string                 `protobuf:"bytes,3,opt,name=decoded_fields_json,json=decodedFieldsJson,proto3" json:"decoded_fields_json,omitempty"` // 我们能解出来的部分;解不出来为空
 	Note              string                 `protobuf:"bytes,4,opt,name=note,proto3" json:"note,omitempty"`                                                      // 确认时写下的一句话
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// 字段级透析表:载荷拆开读的每一行(见 UnknownEventField)。旧 daemon 为空。
+	Digest []*UnknownEventField `protobuf:"bytes,5,rep,name=digest,proto3" json:"digest,omitempty"`
+	// 详细人话解读:比 summary 长 —— 字段怎么读、各部分像什么、daemon 打算怎么处理
+	// (已投影/只透传/安全拒绝)。旧 daemon 为空。
+	Translation   string `protobuf:"bytes,6,opt,name=translation,proto3" json:"translation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UnknownEventResponse) Reset() {
 	*x = UnknownEventResponse{}
-	mi := &file_v1_runtime_proto_msgTypes[12]
+	mi := &file_v1_runtime_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -909,7 +994,7 @@ func (x *UnknownEventResponse) String() string {
 func (*UnknownEventResponse) ProtoMessage() {}
 
 func (x *UnknownEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[12]
+	mi := &file_v1_runtime_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -922,7 +1007,7 @@ func (x *UnknownEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnknownEventResponse.ProtoReflect.Descriptor instead.
 func (*UnknownEventResponse) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{12}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UnknownEventResponse) GetSummary() *UnknownEventSummary {
@@ -953,6 +1038,20 @@ func (x *UnknownEventResponse) GetNote() string {
 	return ""
 }
 
+func (x *UnknownEventResponse) GetDigest() []*UnknownEventField {
+	if x != nil {
+		return x.Digest
+	}
+	return nil
+}
+
+func (x *UnknownEventResponse) GetTranslation() string {
+	if x != nil {
+		return x.Translation
+	}
+	return ""
+}
+
 type AcknowledgeUnknownEventRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	EventId string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
@@ -967,7 +1066,7 @@ type AcknowledgeUnknownEventRequest struct {
 
 func (x *AcknowledgeUnknownEventRequest) Reset() {
 	*x = AcknowledgeUnknownEventRequest{}
-	mi := &file_v1_runtime_proto_msgTypes[13]
+	mi := &file_v1_runtime_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -979,7 +1078,7 @@ func (x *AcknowledgeUnknownEventRequest) String() string {
 func (*AcknowledgeUnknownEventRequest) ProtoMessage() {}
 
 func (x *AcknowledgeUnknownEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[13]
+	mi := &file_v1_runtime_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -992,7 +1091,7 @@ func (x *AcknowledgeUnknownEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcknowledgeUnknownEventRequest.ProtoReflect.Descriptor instead.
 func (*AcknowledgeUnknownEventRequest) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{13}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AcknowledgeUnknownEventRequest) GetEventId() string {
@@ -1025,7 +1124,7 @@ type AcknowledgeUnknownEventResponse struct {
 
 func (x *AcknowledgeUnknownEventResponse) Reset() {
 	*x = AcknowledgeUnknownEventResponse{}
-	mi := &file_v1_runtime_proto_msgTypes[14]
+	mi := &file_v1_runtime_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1136,7 @@ func (x *AcknowledgeUnknownEventResponse) String() string {
 func (*AcknowledgeUnknownEventResponse) ProtoMessage() {}
 
 func (x *AcknowledgeUnknownEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[14]
+	mi := &file_v1_runtime_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1149,7 @@ func (x *AcknowledgeUnknownEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcknowledgeUnknownEventResponse.ProtoReflect.Descriptor instead.
 func (*AcknowledgeUnknownEventResponse) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{14}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AcknowledgeUnknownEventResponse) GetItem() *UnknownEventSummary {
@@ -1078,7 +1177,7 @@ type CollabPolicy struct {
 
 func (x *CollabPolicy) Reset() {
 	*x = CollabPolicy{}
-	mi := &file_v1_runtime_proto_msgTypes[15]
+	mi := &file_v1_runtime_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1090,7 +1189,7 @@ func (x *CollabPolicy) String() string {
 func (*CollabPolicy) ProtoMessage() {}
 
 func (x *CollabPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[15]
+	mi := &file_v1_runtime_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1103,7 +1202,7 @@ func (x *CollabPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollabPolicy.ProtoReflect.Descriptor instead.
 func (*CollabPolicy) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{15}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CollabPolicy) GetCollaborationEnabled() bool {
@@ -1142,7 +1241,7 @@ type GetCollabPolicyRequest struct {
 
 func (x *GetCollabPolicyRequest) Reset() {
 	*x = GetCollabPolicyRequest{}
-	mi := &file_v1_runtime_proto_msgTypes[16]
+	mi := &file_v1_runtime_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1154,7 +1253,7 @@ func (x *GetCollabPolicyRequest) String() string {
 func (*GetCollabPolicyRequest) ProtoMessage() {}
 
 func (x *GetCollabPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[16]
+	mi := &file_v1_runtime_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1167,7 +1266,7 @@ func (x *GetCollabPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCollabPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetCollabPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{16}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{17}
 }
 
 type SetCollabPolicyRequest struct {
@@ -1184,7 +1283,7 @@ type SetCollabPolicyRequest struct {
 
 func (x *SetCollabPolicyRequest) Reset() {
 	*x = SetCollabPolicyRequest{}
-	mi := &file_v1_runtime_proto_msgTypes[17]
+	mi := &file_v1_runtime_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1196,7 +1295,7 @@ func (x *SetCollabPolicyRequest) String() string {
 func (*SetCollabPolicyRequest) ProtoMessage() {}
 
 func (x *SetCollabPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[17]
+	mi := &file_v1_runtime_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1209,7 +1308,7 @@ func (x *SetCollabPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetCollabPolicyRequest.ProtoReflect.Descriptor instead.
 func (*SetCollabPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{17}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SetCollabPolicyRequest) GetPolicy() *CollabPolicy {
@@ -1238,7 +1337,7 @@ type CollabPolicyResponse struct {
 
 func (x *CollabPolicyResponse) Reset() {
 	*x = CollabPolicyResponse{}
-	mi := &file_v1_runtime_proto_msgTypes[18]
+	mi := &file_v1_runtime_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1250,7 +1349,7 @@ func (x *CollabPolicyResponse) String() string {
 func (*CollabPolicyResponse) ProtoMessage() {}
 
 func (x *CollabPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[18]
+	mi := &file_v1_runtime_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1263,7 +1362,7 @@ func (x *CollabPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollabPolicyResponse.ProtoReflect.Descriptor instead.
 func (*CollabPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{18}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CollabPolicyResponse) GetPolicy() *CollabPolicy {
@@ -1302,7 +1401,7 @@ type GetRuntimeStateRequest struct {
 
 func (x *GetRuntimeStateRequest) Reset() {
 	*x = GetRuntimeStateRequest{}
-	mi := &file_v1_runtime_proto_msgTypes[19]
+	mi := &file_v1_runtime_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1314,7 +1413,7 @@ func (x *GetRuntimeStateRequest) String() string {
 func (*GetRuntimeStateRequest) ProtoMessage() {}
 
 func (x *GetRuntimeStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[19]
+	mi := &file_v1_runtime_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1327,7 +1426,7 @@ func (x *GetRuntimeStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRuntimeStateRequest.ProtoReflect.Descriptor instead.
 func (*GetRuntimeStateRequest) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{19}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{20}
 }
 
 type RuntimeStateResponse struct {
@@ -1349,7 +1448,7 @@ type RuntimeStateResponse struct {
 
 func (x *RuntimeStateResponse) Reset() {
 	*x = RuntimeStateResponse{}
-	mi := &file_v1_runtime_proto_msgTypes[20]
+	mi := &file_v1_runtime_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1361,7 +1460,7 @@ func (x *RuntimeStateResponse) String() string {
 func (*RuntimeStateResponse) ProtoMessage() {}
 
 func (x *RuntimeStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[20]
+	mi := &file_v1_runtime_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1374,7 +1473,7 @@ func (x *RuntimeStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeStateResponse.ProtoReflect.Descriptor instead.
 func (*RuntimeStateResponse) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{20}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RuntimeStateResponse) GetInstallationId() string {
@@ -1466,7 +1565,7 @@ type RuntimeContractReport struct {
 
 func (x *RuntimeContractReport) Reset() {
 	*x = RuntimeContractReport{}
-	mi := &file_v1_runtime_proto_msgTypes[21]
+	mi := &file_v1_runtime_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1478,7 +1577,7 @@ func (x *RuntimeContractReport) String() string {
 func (*RuntimeContractReport) ProtoMessage() {}
 
 func (x *RuntimeContractReport) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[21]
+	mi := &file_v1_runtime_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1491,7 +1590,7 @@ func (x *RuntimeContractReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeContractReport.ProtoReflect.Descriptor instead.
 func (*RuntimeContractReport) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{21}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RuntimeContractReport) GetAgentId() string {
@@ -1596,7 +1695,7 @@ type RuntimeContractIssue struct {
 
 func (x *RuntimeContractIssue) Reset() {
 	*x = RuntimeContractIssue{}
-	mi := &file_v1_runtime_proto_msgTypes[22]
+	mi := &file_v1_runtime_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1608,7 +1707,7 @@ func (x *RuntimeContractIssue) String() string {
 func (*RuntimeContractIssue) ProtoMessage() {}
 
 func (x *RuntimeContractIssue) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[22]
+	mi := &file_v1_runtime_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1621,7 +1720,7 @@ func (x *RuntimeContractIssue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeContractIssue.ProtoReflect.Descriptor instead.
 func (*RuntimeContractIssue) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{22}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RuntimeContractIssue) GetCode() string {
@@ -1649,7 +1748,7 @@ type RuntimeLimitation struct {
 
 func (x *RuntimeLimitation) Reset() {
 	*x = RuntimeLimitation{}
-	mi := &file_v1_runtime_proto_msgTypes[23]
+	mi := &file_v1_runtime_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1661,7 +1760,7 @@ func (x *RuntimeLimitation) String() string {
 func (*RuntimeLimitation) ProtoMessage() {}
 
 func (x *RuntimeLimitation) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[23]
+	mi := &file_v1_runtime_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1674,7 +1773,7 @@ func (x *RuntimeLimitation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeLimitation.ProtoReflect.Descriptor instead.
 func (*RuntimeLimitation) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{23}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RuntimeLimitation) GetCapability() string {
@@ -1700,7 +1799,7 @@ type GetAgentRuntimeRequest struct {
 
 func (x *GetAgentRuntimeRequest) Reset() {
 	*x = GetAgentRuntimeRequest{}
-	mi := &file_v1_runtime_proto_msgTypes[24]
+	mi := &file_v1_runtime_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +1811,7 @@ func (x *GetAgentRuntimeRequest) String() string {
 func (*GetAgentRuntimeRequest) ProtoMessage() {}
 
 func (x *GetAgentRuntimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[24]
+	mi := &file_v1_runtime_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +1824,7 @@ func (x *GetAgentRuntimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentRuntimeRequest.ProtoReflect.Descriptor instead.
 func (*GetAgentRuntimeRequest) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{24}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetAgentRuntimeRequest) GetAgentId() string {
@@ -1753,7 +1852,7 @@ type AgentRuntimeResponse struct {
 
 func (x *AgentRuntimeResponse) Reset() {
 	*x = AgentRuntimeResponse{}
-	mi := &file_v1_runtime_proto_msgTypes[25]
+	mi := &file_v1_runtime_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1765,7 +1864,7 @@ func (x *AgentRuntimeResponse) String() string {
 func (*AgentRuntimeResponse) ProtoMessage() {}
 
 func (x *AgentRuntimeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[25]
+	mi := &file_v1_runtime_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1778,7 +1877,7 @@ func (x *AgentRuntimeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRuntimeResponse.ProtoReflect.Descriptor instead.
 func (*AgentRuntimeResponse) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{25}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *AgentRuntimeResponse) GetContract() *RuntimeContractReport {
@@ -1843,7 +1942,7 @@ type AgentMemoryUsage struct {
 
 func (x *AgentMemoryUsage) Reset() {
 	*x = AgentMemoryUsage{}
-	mi := &file_v1_runtime_proto_msgTypes[26]
+	mi := &file_v1_runtime_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1855,7 +1954,7 @@ func (x *AgentMemoryUsage) String() string {
 func (*AgentMemoryUsage) ProtoMessage() {}
 
 func (x *AgentMemoryUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[26]
+	mi := &file_v1_runtime_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1868,7 +1967,7 @@ func (x *AgentMemoryUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentMemoryUsage.ProtoReflect.Descriptor instead.
 func (*AgentMemoryUsage) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{26}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *AgentMemoryUsage) GetThreads() int32 {
@@ -1914,7 +2013,7 @@ type AgentCacheUsage struct {
 
 func (x *AgentCacheUsage) Reset() {
 	*x = AgentCacheUsage{}
-	mi := &file_v1_runtime_proto_msgTypes[27]
+	mi := &file_v1_runtime_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1926,7 +2025,7 @@ func (x *AgentCacheUsage) String() string {
 func (*AgentCacheUsage) ProtoMessage() {}
 
 func (x *AgentCacheUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[27]
+	mi := &file_v1_runtime_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1939,7 +2038,7 @@ func (x *AgentCacheUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCacheUsage.ProtoReflect.Descriptor instead.
 func (*AgentCacheUsage) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{27}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *AgentCacheUsage) GetNamespaces() int32 {
@@ -1995,7 +2094,7 @@ type AgentCheckpointUsage struct {
 
 func (x *AgentCheckpointUsage) Reset() {
 	*x = AgentCheckpointUsage{}
-	mi := &file_v1_runtime_proto_msgTypes[28]
+	mi := &file_v1_runtime_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2007,7 +2106,7 @@ func (x *AgentCheckpointUsage) String() string {
 func (*AgentCheckpointUsage) ProtoMessage() {}
 
 func (x *AgentCheckpointUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[28]
+	mi := &file_v1_runtime_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2020,7 +2119,7 @@ func (x *AgentCheckpointUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCheckpointUsage.ProtoReflect.Descriptor instead.
 func (*AgentCheckpointUsage) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{28}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AgentCheckpointUsage) GetCount() int32 {
@@ -2057,7 +2156,7 @@ type AgentRecoveryState struct {
 
 func (x *AgentRecoveryState) Reset() {
 	*x = AgentRecoveryState{}
-	mi := &file_v1_runtime_proto_msgTypes[29]
+	mi := &file_v1_runtime_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2069,7 +2168,7 @@ func (x *AgentRecoveryState) String() string {
 func (*AgentRecoveryState) ProtoMessage() {}
 
 func (x *AgentRecoveryState) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_runtime_proto_msgTypes[29]
+	mi := &file_v1_runtime_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2082,7 +2181,7 @@ func (x *AgentRecoveryState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRecoveryState.ProtoReflect.Descriptor instead.
 func (*AgentRecoveryState) Descriptor() ([]byte, []int) {
-	return file_v1_runtime_proto_rawDescGZIP(), []int{29}
+	return file_v1_runtime_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AgentRecoveryState) GetReported() bool {
@@ -2200,7 +2299,7 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
 	"\tthread_id\x18\x03 \x01(\tR\bthreadId\x12+\n" +
 	"\x11processing_status\x18\x04 \x01(\tR\x10processingStatus\x12\x14\n" +
-	"\x05limit\x18\x05 \x01(\x05R\x05limit\"\xf5\x02\n" +
+	"\x05limit\x18\x05 \x01(\x05R\x05limit\"\x8f\x03\n" +
 	"\x13UnknownEventSummary\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x03R\bsequence\x12-\n" +
@@ -2212,18 +2311,26 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\fsafety_class\x18\b \x01(\tR\vsafetyClass\x12+\n" +
 	"\x11processing_status\x18\t \x01(\tR\x10processingStatus\x12\x1a\n" +
 	"\brevision\x18\n" +
-	" \x01(\x04R\brevision\"\x86\x01\n" +
+	" \x01(\x04R\brevision\x12\x18\n" +
+	"\asummary\x18\v \x01(\tR\asummary\"m\n" +
+	"\x11UnknownEventField\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x18\n" +
+	"\apreview\x18\x03 \x01(\tR\apreview\x12\x18\n" +
+	"\ameaning\x18\x04 \x01(\tR\ameaning\"\x86\x01\n" +
 	"\x19ListUnknownEventsResponse\x129\n" +
 	"\x05items\x18\x01 \x03(\v2#.pocketagent.v1.UnknownEventSummaryR\x05items\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x03R\x05total\x12\x18\n" +
 	"\adropped\x18\x03 \x01(\x03R\adropped\"3\n" +
 	"\x16GetUnknownEventRequest\x12\x19\n" +
-	"\bevent_id\x18\x01 \x01(\tR\aeventId\"\xb4\x01\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\"\x91\x02\n" +
 	"\x14UnknownEventResponse\x12=\n" +
 	"\asummary\x18\x01 \x01(\v2#.pocketagent.v1.UnknownEventSummaryR\asummary\x12\x19\n" +
 	"\braw_json\x18\x02 \x01(\tR\arawJson\x12.\n" +
 	"\x13decoded_fields_json\x18\x03 \x01(\tR\x11decodedFieldsJson\x12\x12\n" +
-	"\x04note\x18\x04 \x01(\tR\x04note\"g\n" +
+	"\x04note\x18\x04 \x01(\tR\x04note\x129\n" +
+	"\x06digest\x18\x05 \x03(\v2!.pocketagent.v1.UnknownEventFieldR\x06digest\x12 \n" +
+	"\vtranslation\x18\x06 \x01(\tR\vtranslation\"g\n" +
 	"\x1eAcknowledgeUnknownEventRequest\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x12\n" +
@@ -2348,7 +2455,7 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_v1_runtime_proto_goTypes = []any{
 	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
 	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
@@ -2360,87 +2467,89 @@ var file_v1_runtime_proto_goTypes = []any{
 	(*ResourceMetric)(nil),                  // 7: pocketagent.v1.ResourceMetric
 	(*ListUnknownEventsRequest)(nil),        // 8: pocketagent.v1.ListUnknownEventsRequest
 	(*UnknownEventSummary)(nil),             // 9: pocketagent.v1.UnknownEventSummary
-	(*ListUnknownEventsResponse)(nil),       // 10: pocketagent.v1.ListUnknownEventsResponse
-	(*GetUnknownEventRequest)(nil),          // 11: pocketagent.v1.GetUnknownEventRequest
-	(*UnknownEventResponse)(nil),            // 12: pocketagent.v1.UnknownEventResponse
-	(*AcknowledgeUnknownEventRequest)(nil),  // 13: pocketagent.v1.AcknowledgeUnknownEventRequest
-	(*AcknowledgeUnknownEventResponse)(nil), // 14: pocketagent.v1.AcknowledgeUnknownEventResponse
-	(*CollabPolicy)(nil),                    // 15: pocketagent.v1.CollabPolicy
-	(*GetCollabPolicyRequest)(nil),          // 16: pocketagent.v1.GetCollabPolicyRequest
-	(*SetCollabPolicyRequest)(nil),          // 17: pocketagent.v1.SetCollabPolicyRequest
-	(*CollabPolicyResponse)(nil),            // 18: pocketagent.v1.CollabPolicyResponse
-	(*GetRuntimeStateRequest)(nil),          // 19: pocketagent.v1.GetRuntimeStateRequest
-	(*RuntimeStateResponse)(nil),            // 20: pocketagent.v1.RuntimeStateResponse
-	(*RuntimeContractReport)(nil),           // 21: pocketagent.v1.RuntimeContractReport
-	(*RuntimeContractIssue)(nil),            // 22: pocketagent.v1.RuntimeContractIssue
-	(*RuntimeLimitation)(nil),               // 23: pocketagent.v1.RuntimeLimitation
-	(*GetAgentRuntimeRequest)(nil),          // 24: pocketagent.v1.GetAgentRuntimeRequest
-	(*AgentRuntimeResponse)(nil),            // 25: pocketagent.v1.AgentRuntimeResponse
-	(*AgentMemoryUsage)(nil),                // 26: pocketagent.v1.AgentMemoryUsage
-	(*AgentCacheUsage)(nil),                 // 27: pocketagent.v1.AgentCacheUsage
-	(*AgentCheckpointUsage)(nil),            // 28: pocketagent.v1.AgentCheckpointUsage
-	(*AgentRecoveryState)(nil),              // 29: pocketagent.v1.AgentRecoveryState
-	nil,                                     // 30: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                                     // 31: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                                     // 32: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                                     // 33: pocketagent.v1.RuntimePolicy.CollabsEntry
-	nil,                                     // 34: pocketagent.v1.AgentMemoryUsage.KindsEntry
+	(*UnknownEventField)(nil),               // 10: pocketagent.v1.UnknownEventField
+	(*ListUnknownEventsResponse)(nil),       // 11: pocketagent.v1.ListUnknownEventsResponse
+	(*GetUnknownEventRequest)(nil),          // 12: pocketagent.v1.GetUnknownEventRequest
+	(*UnknownEventResponse)(nil),            // 13: pocketagent.v1.UnknownEventResponse
+	(*AcknowledgeUnknownEventRequest)(nil),  // 14: pocketagent.v1.AcknowledgeUnknownEventRequest
+	(*AcknowledgeUnknownEventResponse)(nil), // 15: pocketagent.v1.AcknowledgeUnknownEventResponse
+	(*CollabPolicy)(nil),                    // 16: pocketagent.v1.CollabPolicy
+	(*GetCollabPolicyRequest)(nil),          // 17: pocketagent.v1.GetCollabPolicyRequest
+	(*SetCollabPolicyRequest)(nil),          // 18: pocketagent.v1.SetCollabPolicyRequest
+	(*CollabPolicyResponse)(nil),            // 19: pocketagent.v1.CollabPolicyResponse
+	(*GetRuntimeStateRequest)(nil),          // 20: pocketagent.v1.GetRuntimeStateRequest
+	(*RuntimeStateResponse)(nil),            // 21: pocketagent.v1.RuntimeStateResponse
+	(*RuntimeContractReport)(nil),           // 22: pocketagent.v1.RuntimeContractReport
+	(*RuntimeContractIssue)(nil),            // 23: pocketagent.v1.RuntimeContractIssue
+	(*RuntimeLimitation)(nil),               // 24: pocketagent.v1.RuntimeLimitation
+	(*GetAgentRuntimeRequest)(nil),          // 25: pocketagent.v1.GetAgentRuntimeRequest
+	(*AgentRuntimeResponse)(nil),            // 26: pocketagent.v1.AgentRuntimeResponse
+	(*AgentMemoryUsage)(nil),                // 27: pocketagent.v1.AgentMemoryUsage
+	(*AgentCacheUsage)(nil),                 // 28: pocketagent.v1.AgentCacheUsage
+	(*AgentCheckpointUsage)(nil),            // 29: pocketagent.v1.AgentCheckpointUsage
+	(*AgentRecoveryState)(nil),              // 30: pocketagent.v1.AgentRecoveryState
+	nil,                                     // 31: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 32: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 33: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 34: pocketagent.v1.RuntimePolicy.CollabsEntry
+	nil,                                     // 35: pocketagent.v1.AgentMemoryUsage.KindsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	30, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	31, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	32, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	33, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	31, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	32, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	33, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	34, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
 	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
-	9,  // 11: pocketagent.v1.AcknowledgeUnknownEventResponse.item:type_name -> pocketagent.v1.UnknownEventSummary
-	15, // 12: pocketagent.v1.SetCollabPolicyRequest.policy:type_name -> pocketagent.v1.CollabPolicy
-	15, // 13: pocketagent.v1.CollabPolicyResponse.policy:type_name -> pocketagent.v1.CollabPolicy
-	15, // 14: pocketagent.v1.CollabPolicyResponse.effective:type_name -> pocketagent.v1.CollabPolicy
-	21, // 15: pocketagent.v1.RuntimeStateResponse.contracts:type_name -> pocketagent.v1.RuntimeContractReport
-	22, // 16: pocketagent.v1.RuntimeContractReport.issues:type_name -> pocketagent.v1.RuntimeContractIssue
-	23, // 17: pocketagent.v1.RuntimeContractReport.limitations:type_name -> pocketagent.v1.RuntimeLimitation
-	21, // 18: pocketagent.v1.AgentRuntimeResponse.contract:type_name -> pocketagent.v1.RuntimeContractReport
-	7,  // 19: pocketagent.v1.AgentRuntimeResponse.resources:type_name -> pocketagent.v1.ResourceMetric
-	26, // 20: pocketagent.v1.AgentRuntimeResponse.memory:type_name -> pocketagent.v1.AgentMemoryUsage
-	27, // 21: pocketagent.v1.AgentRuntimeResponse.cache:type_name -> pocketagent.v1.AgentCacheUsage
-	28, // 22: pocketagent.v1.AgentRuntimeResponse.checkpoint:type_name -> pocketagent.v1.AgentCheckpointUsage
-	29, // 23: pocketagent.v1.AgentRuntimeResponse.recovery:type_name -> pocketagent.v1.AgentRecoveryState
-	34, // 24: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
-	3,  // 25: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 26: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 27: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 28: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 29: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 30: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 31: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	8,  // 32: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
-	11, // 33: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
-	13, // 34: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
-	16, // 35: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
-	17, // 36: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
-	19, // 37: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
-	24, // 38: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
-	2,  // 39: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 40: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 41: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	10, // 42: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
-	12, // 43: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
-	14, // 44: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
-	18, // 45: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	18, // 46: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	20, // 47: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
-	25, // 48: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
-	39, // [39:49] is the sub-list for method output_type
-	29, // [29:39] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	10, // 11: pocketagent.v1.UnknownEventResponse.digest:type_name -> pocketagent.v1.UnknownEventField
+	9,  // 12: pocketagent.v1.AcknowledgeUnknownEventResponse.item:type_name -> pocketagent.v1.UnknownEventSummary
+	16, // 13: pocketagent.v1.SetCollabPolicyRequest.policy:type_name -> pocketagent.v1.CollabPolicy
+	16, // 14: pocketagent.v1.CollabPolicyResponse.policy:type_name -> pocketagent.v1.CollabPolicy
+	16, // 15: pocketagent.v1.CollabPolicyResponse.effective:type_name -> pocketagent.v1.CollabPolicy
+	22, // 16: pocketagent.v1.RuntimeStateResponse.contracts:type_name -> pocketagent.v1.RuntimeContractReport
+	23, // 17: pocketagent.v1.RuntimeContractReport.issues:type_name -> pocketagent.v1.RuntimeContractIssue
+	24, // 18: pocketagent.v1.RuntimeContractReport.limitations:type_name -> pocketagent.v1.RuntimeLimitation
+	22, // 19: pocketagent.v1.AgentRuntimeResponse.contract:type_name -> pocketagent.v1.RuntimeContractReport
+	7,  // 20: pocketagent.v1.AgentRuntimeResponse.resources:type_name -> pocketagent.v1.ResourceMetric
+	27, // 21: pocketagent.v1.AgentRuntimeResponse.memory:type_name -> pocketagent.v1.AgentMemoryUsage
+	28, // 22: pocketagent.v1.AgentRuntimeResponse.cache:type_name -> pocketagent.v1.AgentCacheUsage
+	29, // 23: pocketagent.v1.AgentRuntimeResponse.checkpoint:type_name -> pocketagent.v1.AgentCheckpointUsage
+	30, // 24: pocketagent.v1.AgentRuntimeResponse.recovery:type_name -> pocketagent.v1.AgentRecoveryState
+	35, // 25: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
+	3,  // 26: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 27: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 28: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 29: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 30: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 31: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 32: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 33: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	12, // 34: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	14, // 35: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	17, // 36: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
+	18, // 37: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
+	20, // 38: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
+	25, // 39: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
+	2,  // 40: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 41: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 42: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	11, // 43: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	13, // 44: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	15, // 45: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	19, // 46: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	19, // 47: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	21, // 48: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
+	26, // 49: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
+	40, // [40:50] is the sub-list for method output_type
+	30, // [30:40] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -2449,14 +2558,14 @@ func file_v1_runtime_proto_init() {
 		return
 	}
 	file_v1_runtime_proto_msgTypes[3].OneofWrappers = []any{}
-	file_v1_runtime_proto_msgTypes[15].OneofWrappers = []any{}
+	file_v1_runtime_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   35,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
