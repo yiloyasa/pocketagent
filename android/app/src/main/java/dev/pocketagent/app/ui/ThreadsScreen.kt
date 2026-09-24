@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -81,7 +82,6 @@ import dev.pocketagent.app.ui.component.shortWorkspace
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.Pa
-import dev.pocketagent.app.ui.theme.paGlass
 import dev.pocketagent.app.ui.theme.paPushBack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -812,7 +812,8 @@ fun ThreadsScreen(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 2.dp)
-                        .paGlass(RoundedCornerShape(14.dp), shadowElevation = 2.dp)
+                        // 单层实色卡(无阴影无发丝边)——横幅是"信息",不是"容器"
+                        .background(Pa.Card, RoundedCornerShape(14.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1279,14 +1280,15 @@ fun ThreadsScreen(
         // ---- 撤销条(模块 8):删除会话后顶部浮出,5 秒内可一键还原 ----
         UndoBarHost(undo, Modifier.align(Alignment.TopCenter))
 
-        // ---- FAB:玻璃圆钮(paGlass 发丝高光+投影),悬浮于列表之上"亮边朝光" ----
+        // ---- FAB:唯一的悬浮件之一,允许投影;实色底(玻璃与发丝边不再叠加) ----
         Box(
             Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 24.dp, bottom = 28.dp)
                 .size(60.dp)
                 .pressable(scaleDown = 0.9f) { showNewThread = true }
-                .paGlass(CircleShape, shadowElevation = 6.dp),
+                .shadow(6.dp, CircleShape)
+                .background(Pa.CardHigh, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1565,19 +1567,15 @@ private fun ConnectionCard(host: HostInfo?, onRetry: () -> Unit, modifier: Modif
         modifier
             .fillMaxWidth()
             .pressable { onRetry() }
-            .paGlass(RoundedCornerShape(20.dp), shadowElevation = 2.dp)
-            .padding(16.dp),
+            // 单层实色卡:无阴影无发丝边;行内无带背景的子容器(图标裸放)
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(44.dp).background(Pa.AccentDim, RoundedCornerShape(13.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painterResource(R.drawable.ic_lucide_monitor), null,
-                tint = Pa.Accent, modifier = Modifier.size(22.dp),
-            )
-        }
+        Icon(
+            painterResource(R.drawable.ic_lucide_monitor), null,
+            tint = Pa.Accent, modifier = Modifier.size(24.dp),
+        )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             if (ok) {
@@ -1636,10 +1634,8 @@ private fun ThreadCard(
         Modifier
             .fillMaxWidth()
             // 不要在这里挂 clickable:手势由外层 SwipeRevealRow 独占,否则侧滑会被内层消费掉
-            // 【玻璃读感·不透明】左滑行内容层必须不透明(盖住底下的动作层),所以这里
-            // 不能用半透玻璃底;发丝高光(paGlass 的 1px 顶缘亮边)给玻璃的"材质读感",
-            // 透明度让位给可用性 —— 可读性优先的层级铁律。
-            .paGlass(RoundedCornerShape(18.dp), tint = Pa.Card)
+            // 【单层实色卡】无阴影无发丝边;玻璃只留给抽屉与浮层,内容卡回归扁平。
+            .background(Pa.Card, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         if (renaming) {
@@ -1727,8 +1723,8 @@ private fun PcSessionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;不透明玻璃读感(同 ThreadCard)
-            .paGlass(RoundedCornerShape(18.dp), tint = Pa.Card)
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;单层实色卡(同 ThreadCard)
+            .background(Pa.Card, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Text(
@@ -1777,8 +1773,8 @@ private fun PcAgentSessionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;不透明玻璃读感(同 ThreadCard)
-            .paGlass(RoundedCornerShape(18.dp), tint = Pa.Card)
+            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;单层实色卡(同 ThreadCard)
+            .background(Pa.Card, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -56,7 +56,6 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
-import dev.pocketagent.app.ui.theme.paGlass
 import dev.pocketagent.app.ui.theme.paPushBack
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
@@ -316,15 +315,12 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 顶部工具钮:悬空玻璃片(paGlass + 发丝高光 + 轻投影),浮在内容之上的
-            // "亮边朝光"。IconActionButton 内部有 background,传透明底让玻璃材质负责底色。
-            Box(Modifier.paGlass(RoundedCornerShape(14.dp), shadowElevation = 3.dp)) {
-                IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Color.Transparent)
-            }
+            // 顶部工具钮:裸图标(icon-only,无底、无阴影、无发丝边)。反馈只在按下
+            // 瞬间(IconActionButton 内建 pressable 缩放)——首页唯一"浮"的东西应该
+            // 是内容本身,不是工具钮的容器。
+            IconActionButton(R.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Color.Transparent)
             // 右上角:设置
-            Box(Modifier.paGlass(RoundedCornerShape(14.dp), shadowElevation = 3.dp)) {
-                IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings, bg = Color.Transparent)
-            }
+            IconActionButton(R.drawable.ic_lucide_settings, "设置", onOpenSettings, bg = Color.Transparent)
         }
 
         LazyVerticalGrid(
@@ -343,7 +339,8 @@ fun HomeScreen(
                         Modifier
                             .fillMaxWidth()
                             .pressable { reloadKey++ }
-                            .paGlass(RoundedCornerShape(16.dp), shadowElevation = 2.dp)
+                            // 单层:错误色 8% 透明底、无框无阴影——横幅是"信息",不是"容器"
+                            .background(Pa.Red.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -353,26 +350,28 @@ fun HomeScreen(
                 }
             }
 
-            // ---- agent 板块:整块卡片包住网格 ----
+            // ---- agent 板块:标题 + 直接铺背景的网格(无外层大卡) ----
             item(span = { GridItemSpan(4) }) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .paGlass(RoundedCornerShape(22.dp), shadowElevation = 2.dp)
-                        .padding(14.dp),
-                ) {
-                    // 管理 agent 抽屉入口(停用/恢复都在抽屉里):网格只负责"停用后
-                    // 不再显示",恢复入口必须永远可达(抽屉收全量清单),否则停用的
-                    // agent 会连恢复的门一起消失。
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Column(Modifier.fillMaxWidth()) {
+                    // 区块头:标题在左、「管理」入口在右,直接放背景上(不再包卡)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Agents", fontSize = 16.sp, color = Pa.TextPrimary)
+                        // 管理 agent 抽屉入口(停用/恢复都在抽屉里):网格只负责"停用后
+                        // 不再显示",恢复入口必须永远可达(抽屉收全量清单),否则停用的
+                        // agent 会连恢复的门一起消失。
                         Text(
                             "管理",
                             Modifier.pressable { showManage = true }.padding(horizontal = 6.dp, vertical = 2.dp),
                             fontSize = 12.sp, color = Pa.Accent,
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
-                    // 磁贴:真实图标 + 灰阶对比(不可用),尺寸收小;已停用不在列
+                    Spacer(Modifier.height(12.dp))
+                    // 磁贴:真实图标 + 灰阶对比(不可用),透明底直接铺在页面背景上;
+                    // 已停用不在列。磁贴本身 pressable(按下即缩放),不再有任何底盒。
                     androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         visibleAgents.chunked(4).forEach { rowAgents ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -405,12 +404,8 @@ fun HomeScreen(
             // 与否"的事实回显;可拨 = 假可用(旧实现正是栽在这)。所以只读展示 +
             // 常显状态点,让"已接入几家、谁"一眼可见。
             item(span = { GridItemSpan(4) }) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .paGlass(RoundedCornerShape(22.dp), shadowElevation = 2.dp)
-                        .padding(14.dp),
-                ) {
+                Column(Modifier.fillMaxWidth()) {
+                    // 区块头(状态点 + 标题 + 副标):直接铺背景,不包卡
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             Modifier
@@ -422,7 +417,7 @@ fun HomeScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("多agent协同", fontSize = 15.sp, color = Pa.TextPrimary)
+                            Text("多agent协同", fontSize = 16.sp, color = Pa.TextPrimary)
                             Text(
                                 collabSubtitle(collabIds),
                                 fontSize = 11.sp,
@@ -433,16 +428,18 @@ fun HomeScreen(
                     // 协同角色入口:只有设备确实支持协同时才显示(无能力不显示假入口)。
                     // 列出已配置数量,点进去是角色列表页(真正完成"分工编排")。
                     if (multiAgent) {
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                         // 【开始协同:主入口,排在"协同角色"之前】两者刻意分两行:
                         // 这行是"现在就派活",下一行是"改岗位配置"。混成一行会让用户
                         // 以为协同必须先配角色才能用。
+                        // 【单层实色卡】卡内不再有带背景的子结构(图标/文字裸放),
+                        // "外层大卡包白色行卡"的三层观感即由此打平。
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .pressable { onOpenCollab() }
-                                .background(Pa.Bg, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .background(Pa.Card, RoundedCornerShape(14.dp))
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
@@ -461,8 +458,8 @@ fun HomeScreen(
                             Modifier
                                 .fillMaxWidth()
                                 .pressable { onOpenCollabRoles() }
-                                .background(Pa.Bg, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .background(Pa.Card, RoundedCornerShape(14.dp))
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
@@ -478,8 +475,8 @@ fun HomeScreen(
                             Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
                         }
                     }
-                    Spacer(Modifier.height(10.dp))
-                    // 协同行
+                    Spacer(Modifier.height(12.dp))
+                    // 协同行:直接铺背景,与主网格同一磁贴语言(透明底)
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -497,7 +494,7 @@ fun HomeScreen(
                             }
                         }
                         if (multiAgent) {
-                            // 添加位:把更多 agent 加进协同
+                            // 添加位:把更多 agent 加进协同(与磁贴同语言:裸 + 号,无底盒)
                             Column(
                                 Modifier
                                     .width(72.dp)
@@ -506,38 +503,30 @@ fun HomeScreen(
                                     },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                Box(
-                                    Modifier.size(56.dp).background(Pa.Hover, RoundedCornerShape(15.dp)),
-                                    contentAlignment = Alignment.Center,
-                                ) {
+                                Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
                                     Icon(
                                         painterResource(R.drawable.ic_lucide_plus), null,
-                                        tint = Pa.TextSecondary, modifier = Modifier.size(22.dp),
+                                        tint = Pa.TextTertiary, modifier = Modifier.size(26.dp),
                                     )
                                 }
-                                Text("添加", Modifier.padding(top = 6.dp), fontSize = 11.5.sp, color = Pa.TextSecondary)
+                                Text("添加", Modifier.padding(top = 6.dp), fontSize = 11.5.sp, color = Pa.TextTertiary)
                             }
                         }
                     }
                 }
             }
 
-            // 新建任务入口并入 agent 板块行尾?保持独立小行
+            // 新建任务入口并入 agent 板块行尾?保持独立小行(单层实色卡,图标裸放)
             item(span = { GridItemSpan(4) }) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .pressable { showNewThread = true }
-                        .paGlass(RoundedCornerShape(18.dp), shadowElevation = 2.dp)
-                        .padding(14.dp),
+                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        Modifier.size(40.dp).background(Pa.AccentDim, RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(painterResource(R.drawable.ic_lucide_plus), null, tint = Pa.Accent, modifier = Modifier.size(20.dp))
-                    }
+                    Icon(painterResource(R.drawable.ic_lucide_plus), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
                     Spacer(Modifier.width(12.dp))
                     Text("新建任务", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
                     // 右侧 agent 名标签:跟随唯一选中源 AgentConnection.selectedAgent 实时显示
@@ -554,16 +543,11 @@ fun HomeScreen(
                     Modifier
                         .fillMaxWidth()
                         .pressable { onOpenBrowser() }
-                        .paGlass(RoundedCornerShape(18.dp), shadowElevation = 2.dp)
-                        .padding(14.dp),
+                        .background(Pa.Card, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        Modifier.size(40.dp).background(Pa.AccentDim, RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(20.dp))
-                    }
+                    Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
                     Spacer(Modifier.width(12.dp))
                     Text("电脑预览", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
                     Text("dev server", fontSize = 11.sp, color = Pa.TextTertiary)
@@ -583,9 +567,9 @@ fun HomeScreen(
             }
             if (recent.isEmpty()) {
                 item(span = { GridItemSpan(4) }) {
+                    // 空状态:直接铺背景(无容器),靠留白与居中自成一块
                     Column(
-                        Modifier.fillMaxWidth().paGlass(RoundedCornerShape(20.dp), shadowElevation = 2.dp)
-                            .padding(vertical = 36.dp),
+                        Modifier.fillMaxWidth().padding(vertical = 36.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.TextTertiary, modifier = Modifier.size(36.dp))
@@ -599,7 +583,7 @@ fun HomeScreen(
                         Modifier
                             .fillMaxWidth()
                             .pressable { onOpenThread(t.id) }
-                            .paGlass(RoundedCornerShape(16.dp), shadowElevation = 2.dp)
+                            .background(Pa.Card, RoundedCornerShape(14.dp))
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -817,16 +801,13 @@ private fun ConnectionCardCompact(host: HostInfo?, onRetry: () -> Unit = {}, mod
         modifier
             .fillMaxWidth()
             .pressable { onRetry() }
-            .paGlass(RoundedCornerShape(20.dp), shadowElevation = 2.dp)
-            .padding(14.dp),
+            // 单层实色卡:无阴影无发丝边;行内无带背景的子容器(图标裸放),
+            // "灰盒套白矩形"的三层观感即由此打平。
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(42.dp).background(Pa.AccentDim, RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(20.dp))
-        }
+        Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(24.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(host?.displayName ?: "未连接", fontSize = 15.sp, color = Pa.TextPrimary)
