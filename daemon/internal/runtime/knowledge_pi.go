@@ -19,4 +19,15 @@ var piEventSummaries = map[string]string{
 	"pi\x1fauto_retry_end":        "pi 的自动重试结束了",
 	"pi\x1fqueue_update":          "pi 的消息排队状态有变化",
 	"pi\x1fextension_ui_request":  "pi 的扩展请求界面交互(由 daemon 守护栏处理)",
+	// ---- 0.86/0.87 新增事件(pi 0.87.1 探针实证 + bundle emit 点核对,
+	// 证据 docs/verify/evidence/pi-087-usage-probe.log)----
+	"pi\x1fturn_start":                        "pi 开始新的一轮处理",
+	"pi\x1fturn_end":                          "pi 完成了这一轮对话",
+	"pi\x1fmessage_start":                     "pi 开始组织一条消息",
+	"pi\x1fmessage_end":                       "pi 写完了一条消息",
+	"pi\x1fentry_appended":                    "pi 往会话记录里写入了一条条目",
+	"pi\x1fsummarization_retry_scheduled":     "pi 的上下文摘要没成功,安排了自动重试",
+	"pi\x1fsummarization_retry_attempt_start": "pi 正在重试上下文摘要",
+	"pi\x1fsummarization_retry_finished":      "pi 的上下文摘要重试结束了",
+	"pi\x1fextension_error":                   "pi 的一个扩展出了错(通常不影响主流程,重复出现再排查)",
 }

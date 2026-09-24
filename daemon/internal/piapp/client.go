@@ -19,6 +19,11 @@
 //   - tool_execution_update.partialResult 是累积值(直接替换,不追加);
 //   - fire-and-forget 扩展 UI(notify/setStatus/setWidget/setTitle/set_editor_text)
 //     不期待应答,绝不能回 extension_ui_response(会污染协议流)。
+//
+// 【0.87.1 复测(docs/verify/evidence/pi-087-usage-probe.log)】message_update
+// 的流式增量帧 usage 仍恒 0,但每条 assistant 消息的**最后一个增量帧(实测
+// text_end)带上该消息的真实 usage**(per-message 口径,非会话累计)—— 消费方
+// 见 internal/agent/pi.go 的 piUsageTracker。
 package piapp
 
 import (

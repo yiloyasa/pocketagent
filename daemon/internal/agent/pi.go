@@ -10,7 +10,8 @@
 //	审批弹卡          extension_ui_request(confirm/select)→ 经 approve hook
 //	压缩/重试/排队    compaction_*/auto_retry_*/queue_update → CodexEvent
 //	一轮真正结束      agent_settled(【不是】agent_end —— 后面可能还有重试/压缩/排队)
-//	用量              get_session_stats(流式 usage 恒 0,实测)
+//	用量              message_update 终帧(0.87.1+,探针实证)→ 事件驱动推送;
+//	                  get_session_stats 收尾定稿 + 旧版(≤0.85.x 流式恒 0)轮询兜底
 //
 // 【进程模型】Pi 一个子进程 = 一个会话(与 codex app-server 不同),所以
 // Thread ↔ 子进程 1:1:clients[threadID] 各自独立、可并行;daemon 重启后按
@@ -33,6 +34,7 @@ import (
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
@@ -52,10 +54,14 @@ const (
 	piToolClip = 8000
 	// modelsTTL 模型列表缓存(Pi 模型列表要拉一个子进程,不能每次都冷启)。
 	modelsTTL = 10 * time.Minute
-	// piUsagePushInterval 轮次进行中用量推送的间隔。pi 的流式 usage 恒 0、
-	// get_session_stats 是唯一真相:不定期推,轮次进行中(尤其长任务)手机端
-	// 上下文窗口卡就恒为 0%(真机实锤,2026-09-19)。5s 足够"会话中可见",
+	// piUsagePushInterval 轮次进行中用量**轮询兜底**的间隔。pi ≤0.85.x 的流式
+	// usage 恒 0、get_session_stats 是唯一真相:不定期推,轮次进行中(尤其长任务)
+	// 手机端上下文窗口卡就恒为 0%(真机实锤,2026-09-19)。5s 足够"会话中可见",
 	// 又不至于让 get_session_stats 的 RPC 频率成为负担。
+	// 【0.87.1 起(探针实证,docs/verify/evidence/pi-087-usage-probe.log)】
+	// message_update 的最后一个增量帧自带本条消息的真实 usage,Run 的事件泵据此
+	// 即时推送(piUsageTracker):一旦见过流式 usage,本轮询自动歇脚 —— 它只服务
+	// 旧版 pi(流式恒 0,observed 恒假),保留为旧版兜底。
 	piUsagePushInterval = 5 * time.Second
 )
 
@@ -304,7 +310,7 @@ func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client
 		if json.Unmarshal(ev.Raw, &frame) == nil {
 			method, payload = frame.Type, frame.Data
 		}
-		recordProviderEvent("pi", method, threadID, piNoticeKind(method), payload)
+		recordProviderEvent("pi", method, threadID, piEventNoticeKind(method), payload)
 		if name, ok := MapSessionNameChange(ev.Raw); ok && p.TitleHandler != nil {
 			go p.TitleHandler(threadID, name)
 		}
@@ -515,6 +521,30 @@ func (p *PiProvider) setThinkingLevel(ctx context.Context, c *piapp.Client, leve
 	}
 }
 
+// piEventNoticeKind 是 pi 事件分档入口:0.86/0.87 新增事件在此补归
+// KNOWN_PASSTHROUGH,其余回落 native_notifications.go 的 piNoticeKind。
+//
+// 【为什么这里再包一层,而不直接扩 piNoticeKind】piNoticeKind 驻
+// native_notifications.go,该文件本轮归 zcode 适配线所有(约定互不踩文件);
+// 于是两份词表分工:**0.85.1 及以前的老事件**分档以那边为准,**0.86/0.87 新增
+// 事件**以这里为准。判据与那边同款:事件在 pi 0.87.1 真实存在(本轮探针抓到
+// turn_start/turn_end/message_start/message_end,其余在 bundle 里有 emit 点,
+// 证据 docs/verify/evidence/pi-087-usage-probe.log),daemon 只是没把它投影成
+// TurnServerMessage —— 是取舍,不是"没见过",不能记成 UNKNOWN 淹没诊断页。
+// 【extension_error 为什么也归已知】它带 extensionPath/event/error,留痕本身
+// 就是诊断价值;Run 路径另有 MapStatusEvent 把它投影成 ERROR 卡,双路不冲突
+// (本函数只服务 GlobalHandler/兜底留痕这两条记录路径)。
+func piEventNoticeKind(eventType string) string {
+	switch eventType {
+	case "turn_start", "turn_end", "message_start", "message_end",
+		"entry_appended", "summarization_retry_scheduled",
+		"summarization_retry_attempt_start", "summarization_retry_finished",
+		"extension_error":
+		return runtime.KindKnownPassthrough
+	}
+	return piNoticeKind(eventType)
+}
+
 // ---- 一轮 ----
 
 // acquireRunning 登记本轮为该线程的 running 轮(P2-2 重入闭环)。
@@ -608,7 +638,8 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		return nil, nil, err
 	}
 
-	// 用量基线(本轮增量 = settled 后 stats - 基线;流式 usage 恒 0,实测)。
+	// 用量基线(本轮增量 = stats - 基线;0.87.1 起流式帧另有 per-message usage
+	// 事件驱动推送,基线仍承担"会话累计的减数"与窗口快照,收尾定稿依旧靠 stats)。
 	baseline := p.statsQuiet(c)
 
 	// ---- 审批接线:dialog 类 extension_ui_request → approve hook → 手机审批卡 ----
@@ -665,6 +696,9 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	)
 
 	var notices nativeNoticeRecorder
+	// usageTrack 流式用量累计(0.87.1+ message_update 终帧;事件驱动推送的数据源,
+	// 同时是"轮询兜底是否歇脚"与收尾兜底链的一环,见各使用点注释)。
+	usageTrack := &piUsageTracker{}
 	consume := func(ev piapp.Event) {
 		if ev.Type == "model_changed" || ev.Type == "model_select" || ev.Type == "thinking_level_changed" || ev.Type == "state_changed" {
 			p.InvalidateModels()
@@ -672,6 +706,19 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		}
 		switch ev.Type {
 		case "message_update":
+			// 流式用量(0.87.1+,探针实证):每条 assistant 消息的最后一个增量帧
+			// 自带真实 usage —— 入账并立即推 UsageUpdate(事件驱动,取代旧版
+			// 5 秒轮询的"会话中可见";压缩闸门与 ticker 同款,压缩中不入屏)。
+			if usageTrack.observe(ev.Raw) {
+				mu.Lock()
+				busy := compacting
+				mu.Unlock()
+				if !busy {
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{
+						Usage: usageUpdateFromStream(usageTrack.snapshot(), baseline),
+					}})
+				}
+			}
 			if d, ok := MapTextDelta(ev.Raw); ok {
 				mu.Lock()
 				textBuf.WriteString(d.Delta)
@@ -745,7 +792,7 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
 			} else {
-				notices.recordAs(piNoticeKind(ev.Type), "pi", ev.Type, ev.Raw, sink)
+				notices.recordAs(piEventNoticeKind(ev.Type), "pi", ev.Type, ev.Raw, sink)
 			}
 		}
 	}
@@ -773,12 +820,15 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		return partialText(&mu, &textBuf), nil, &piError{code: "PI_PROMPT_REJECTED", msg: err.Error()}
 	}
 
-	// ---- 轮次中定期用量推送 ----
-	// 【图10 实锤】过去 UsageUpdate 只在收尾发一次:pi 的流式 usage 恒 0、
+	// ---- 轮次中定期用量推送(轮询兜底) ----
+	// 【图10 实锤】过去 UsageUpdate 只在收尾发一次:pi ≤0.85.x 的流式 usage 恒 0、
 	// get_session_stats 是唯一真相,轮次进行中(尤其长任务)手机端上下文窗口卡
-	// 恒为 "0% · 0/窗口"。现在每 piUsagePushInterval 取一次 stats 推中程
-	// UsageUpdate:usage=本轮增量(stats - baseline),total=会话累计,
-	// 窗口=contextUsage.contextWindow —— 与收尾帧同一套口径(UsageUpdateFromStats)。
+	// 恒为 "0% · 0/窗口"。现在用量主路径是事件驱动的(message_update 终帧 →
+	// usageTrack 即时推送,见上方 consume);本 ticker 降级为**旧版兜底**:
+	// 0.87.1+ 会话(observed=true)轮询纯冗余,自动歇脚;旧版(恒假)按原频率
+	// 轮询,行为与 0.85.1 时代完全一致。usage=本轮增量(stats - baseline),
+	// total=会话累计,窗口=contextUsage.contextWindow —— 与收尾帧同一套口径
+	// (UsageUpdateFromStats)。
 	// 【压缩期间暂停】compaction_start 后 stats 会先缩后涨,手机端正显示
 	// "压缩中/已压缩"(turnUsage 已清):中程推送会把旧状态顶掉,故跳过;
 	// 收尾推送不受影响(压缩后 stats 已定稿,即"新一轮用量上报")。
@@ -803,6 +853,10 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 				busy := compacting
 				mu.Unlock()
 				if busy {
+					continue
+				}
+				// 0.87.1+:流式 usage 已事件驱动推送,轮询纯冗余;旧版兜底照旧。
+				if usageTrack.observed() {
 					continue
 				}
 				cur := p.statsQuiet(c)
@@ -874,10 +928,15 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	if userStop {
 		return blocks, nil, ctx.Err()
 	}
-	// 优先用 session stats 的本轮增量;stats 不可用时退 agent_end 携带的 usage。
+	// 优先用 session stats 的本轮增量(settle 时最权威:流式帧没赶上的都在会话
+	// 文件里);stats 不可用时按 0.87.1 流式累计兜底,再退 agent_end 携带的 usage。
 	outUsage := usage.Usage
-	if outUsage == nil || (outUsage.GetInputTokens() == 0 && outUsage.GetOutputTokens() == 0 && lastUsage != nil) {
-		outUsage = lastUsage
+	if outUsage == nil || (outUsage.GetInputTokens() == 0 && outUsage.GetOutputTokens() == 0) {
+		if su := usageTrack.snapshot(); su != nil && (su.GetInputTokens() != 0 || su.GetOutputTokens() != 0) {
+			outUsage = su
+		} else if lastUsage != nil {
+			outUsage = lastUsage
+		}
 	}
 	return blocks, outUsage, nil
 }
@@ -895,16 +954,22 @@ func (p *PiProvider) statsQuiet(c *piapp.Client) *piSessionStats {
 }
 
 // usageFromAgentEnd 从 agent_end 的 messages 里取最后一条 assistant 的 usage。
+//
+// 【cost 为什么按对象解析】0.85.1/0.87.1 实测 message.usage.cost 都是对象
+// {"input":…,"output":…,"total":…}(探针报文),曾按 float64 解析导致整条
+// json.Unmarshal 失败、本兜底从未生效 —— 现取 cost.total。
 func usageFromAgentEnd(raw json.RawMessage) *pb.Usage {
 	var e struct {
 		Messages []struct {
 			Role  string `json:"role"`
 			Usage struct {
-				Input      int64   `json:"input"`
-				Output     int64   `json:"output"`
-				CacheRead  int64   `json:"cacheRead"`
-				CacheWrite int64   `json:"cacheWrite"`
-				Cost       float64 `json:"cost"`
+				Input      int64 `json:"input"`
+				Output     int64 `json:"output"`
+				CacheRead  int64 `json:"cacheRead"`
+				CacheWrite int64 `json:"cacheWrite"`
+				Cost       struct {
+					Total float64 `json:"total"`
+				} `json:"cost"`
 			} `json:"usage"`
 		} `json:"messages"`
 	}
@@ -919,11 +984,147 @@ func usageFromAgentEnd(raw json.RawMessage) *pb.Usage {
 				OutputTokens:     m.Usage.Output,
 				CacheReadTokens:  m.Usage.CacheRead,
 				CacheWriteTokens: m.Usage.CacheWrite,
-				CostUsd:          m.Usage.Cost,
+				CostUsd:          m.Usage.Cost.Total,
 			}
 		}
 	}
 	return nil
+}
+
+// ---- 流式用量(0.87.1+,探针实证)----
+
+// usageFromMessageUpdate 从 message_update 帧提取流式用量;没有可用的非零
+// usage 返回 nil。
+//
+// 【0.87.1 实测(docs/verify/evidence/pi-087-usage-probe.log)】RPC 层
+// toJsonEvent 把帧上的 usage 定为"当前 assistant 消息自己的 usage"(bundle:
+// `usage:event.message.usage`):流式增量帧(text_start/text_delta/thinking_delta)
+// 期间恒为 0,**本条消息的最后一个增量帧(实测 text_end)才带上真实值**。
+// 与 0.85.1"全程恒 0"不同,也和文档宣称的"累计"不符 —— 它是 **per-message**
+// 口径:多步轮次有多条 assistant 消息,各带各的,轮次总量必须求和,不能拿
+// 最后一帧冒充总量(求和口径与 get_session_stats 的轮次增量核对一致)。
+func usageFromMessageUpdate(raw json.RawMessage) *pb.Usage {
+	var e struct {
+		Usage *struct {
+			Input      int64 `json:"input"`
+			Output     int64 `json:"output"`
+			CacheRead  int64 `json:"cacheRead"`
+			CacheWrite int64 `json:"cacheWrite"`
+			Reasoning  int64 `json:"reasoning"`
+			Total      int64 `json:"totalTokens"`
+			Cost       struct {
+				Total float64 `json:"total"`
+			} `json:"cost"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &e) != nil || e.Usage == nil {
+		return nil
+	}
+	u := e.Usage
+	// 过程帧(0/全零)不入账:这是"非零才算真用量"的唯一判据,也是新旧版本
+	// 自动分流的关键 —— 旧版(≤0.85.x)全帧为零,observed 恒假,轮询兜底照旧。
+	if u.Total == 0 && u.Input == 0 && u.Output == 0 && u.CacheRead == 0 && u.CacheWrite == 0 && u.Cost.Total == 0 {
+		return nil
+	}
+	return &pb.Usage{
+		InputTokens:      u.Input,
+		OutputTokens:     u.Output,
+		CacheReadTokens:  u.CacheRead,
+		CacheWriteTokens: u.CacheWrite,
+		ReasoningTokens:  u.Reasoning,
+		CostUsd:          u.Cost.Total,
+	}
+}
+
+// piUsageTracker 累计本轮从 message_update 帧见到的流式用量。
+//
+// 【为什么按消息求和】流式 usage 是 per-message 口径(见 usageFromMessageUpdate),
+// 每条 assistant 消息只在最后一个增量帧报一次非零值,天然不重复;求和恰等于
+// 本轮增量(与 stats 差值同口径)。并发:observe 在事件泵消费 goroutine 调用,
+// observed/snapshot 在轮询与收尾路径调用 —— 全走 mu;snapshot 逐字段拷贝
+// (pb 消息含互斥量,按值复制会被 vet 拒绝,也不能共享指针被并发累加)。
+type piUsageTracker struct {
+	mu   sync.Mutex
+	acc  *pb.Usage
+	seen bool
+}
+
+// observe 解析一帧 message_update;带非零 usage 时入账并返回 true,调用方据此
+// 立即推一帧 UsageUpdate(事件驱动,取代旧版 5 秒轮询的"会话中可见")。
+func (t *piUsageTracker) observe(raw json.RawMessage) bool {
+	u := usageFromMessageUpdate(raw)
+	if u == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.acc == nil {
+		t.acc = u
+	} else {
+		t.acc.InputTokens += u.InputTokens
+		t.acc.OutputTokens += u.OutputTokens
+		t.acc.CacheReadTokens += u.CacheReadTokens
+		t.acc.CacheWriteTokens += u.CacheWriteTokens
+		t.acc.ReasoningTokens += u.ReasoningTokens
+		t.acc.CostUsd += u.CostUsd
+	}
+	t.seen = true
+	return true
+}
+
+// observed 报告本轮是否见过至少一帧非零流式 usage。真(0.87.1+)→ 轮询兜底
+// 歇脚;假(旧版 pi)→ 轮询照旧,行为与 0.85.1 时代完全一致。
+func (t *piUsageTracker) observed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.seen
+}
+
+// snapshot 返回累计快照(逐字段拷贝);没见过非零帧返回 nil。
+func (t *piUsageTracker) snapshot() *pb.Usage {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.acc == nil {
+		return nil
+	}
+	return &pb.Usage{
+		InputTokens:      t.acc.InputTokens,
+		OutputTokens:     t.acc.OutputTokens,
+		CacheReadTokens:  t.acc.CacheReadTokens,
+		CacheWriteTokens: t.acc.CacheWriteTokens,
+		ReasoningTokens:  t.acc.ReasoningTokens,
+		CostUsd:          t.acc.CostUsd,
+	}
+}
+
+// usageUpdateFromStream 用流式累计构造中程 UsageUpdate 帧,口径与收尾的
+// UsageUpdateFromStats 对齐:usage=本轮增量(已累计部分),total_usage=会话累计
+// (基线+本轮),窗口沿用基线快照(同一会话窗口不变;基线取不到时如实留 0,
+// App 端忽略空窗口)。返回指针:pb 消息含互斥量,禁止按值返回(vet)。
+func usageUpdateFromStream(acc *pb.Usage, baseline *piSessionStats) *pb.UsageUpdate {
+	if acc == nil {
+		acc = &pb.Usage{}
+	}
+	total := &pb.Usage{
+		InputTokens:      acc.InputTokens,
+		OutputTokens:     acc.OutputTokens,
+		CacheReadTokens:  acc.CacheReadTokens,
+		CacheWriteTokens: acc.CacheWriteTokens,
+		ReasoningTokens:  acc.ReasoningTokens,
+		CostUsd:          acc.CostUsd,
+	}
+	if baseline != nil {
+		total.InputTokens += baseline.Tokens.Input
+		total.OutputTokens += baseline.Tokens.Output
+		total.CacheReadTokens += baseline.Tokens.CacheRead
+		total.CacheWriteTokens += baseline.Tokens.CacheWrite
+		total.CostUsd += baseline.Cost.Total
+	}
+	upd := &pb.UsageUpdate{Usage: acc, TotalUsage: total}
+	if baseline != nil && baseline.ContextUsage != nil {
+		upd.ModelContextWindow = baseline.ContextUsage.ContextWindow
+	}
+	return upd
 }
 
 func toolCallIDOf(raw json.RawMessage) string {
@@ -1000,6 +1201,52 @@ func (p *PiProvider) Steer(ctx context.Context, threadID string, blocks []pb.Con
 		return false, "", err
 	}
 	return true, "", nil
+}
+
+// ---- QueueClearer:清空上游原生排队输入(0.87.1 clear_queue)----
+
+// QueueClearer 是「撤销上游原生队列里排队中的输入」的可选扩展能力(与 Steerer
+// 同款探测模式:server 层类型断言,想支持的 provider 自行实现,不想就不用管)。
+//
+// 【与 daemon 自己的 turnInputQueue 是两码事】pi 的 steer/follow_up 队列活在
+// pi 子进程内存里(0.87.1 探针 get_state 实证 pendingMessageCount 计数),用户
+// 在手机端撤回排队消息时经它原生命中 pi 的 clear_queue —— 等价 pi TUI 里按
+// Esc;daemon 侧排队的撤销不归它管。
+type QueueClearer interface {
+	// ClearQueue 清空 threadID 在上游排队中的全部输入,返回 (插队条数, 排队条数)。
+	ClearQueue(ctx context.Context, threadID string) (steered, followUp int, err error)
+}
+
+// 编译期钉死能力声明(与 PrefsAware 的 var _ 同款)。
+var _ QueueClearer = (*PiProvider)(nil)
+
+// ClearQueue 实现 QueueClearer。
+//
+// 【没有活子进程 = 按空队列成功】原生队列在 pi 进程内存里,进程没了队列必然
+// 已空(重挂载是新会话),按 (0,0,nil) 返回,绝不为"撤回一条可能不存在的消息"
+// 冷启一个 node 子进程(与 SlashCommandsFor 的"不冷启"同哲学)。
+func (p *PiProvider) ClearQueue(ctx context.Context, threadID string) (int, int, error) {
+	c := p.aliveClient(threadID)
+	if c == nil {
+		return 0, 0, nil
+	}
+	return clearQueueOn(ctx, c)
+}
+
+// queueClearerRPC 撤销排队对 piapp.Client 的窄接口(单测打桩,不依赖子进程;
+// piapp.Client 的 ClearQueue 签名天然满足,生产零适配)。
+type queueClearerRPC interface {
+	ClearQueue(ctx context.Context) (*piapp.ClearedQueue, error)
+}
+
+// clearQueueOn 下发 clear_queue 并折算被撤销的条数(抽成函数便于注入桩,与
+// sendSessionName 同模式);失败包结构化 piError 交调用方上报。
+func clearQueueOn(ctx context.Context, c queueClearerRPC) (int, int, error) {
+	q, err := c.ClearQueue(ctx)
+	if err != nil {
+		return 0, 0, &piError{code: "PI_QUEUE_CLEAR_FAILED", msg: "撤销排队输入失败: " + err.Error()}
+	}
+	return len(q.Steering), len(q.FollowUp), nil
 }
 
 // ---- S 级增量能力:压缩 / 离线导出 / 动态思考档位 / 斜杠命令清单 ----

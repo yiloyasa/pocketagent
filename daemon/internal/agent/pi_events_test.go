@@ -303,13 +303,20 @@ func TestAnswerNoteMapArrayShape(t *testing.T) {
 }
 
 // agent_end 里的 usage 提取(完整消息才有真实用量 —— 探针 §11#1)。
+// 【cost 形状勘误(2026-09-25)】实测报文(0.85.1/0.87.1 探针)与官方 json.md 里
+// usage.cost 都是对象 {"input":…,"total":…},不是数字 —— 旧夹具写成 "cost":0.001
+// 是在给"cost 按 float64 解析"的实现 bug 背书(整条 unmarshal 失败、兜底恒 nil);
+// 解析修复见 pi.go 的 usageFromAgentEnd,夹具改回真实线上形状。
 func TestUsageFromAgentEnd(t *testing.T) {
 	line := `{"type":"agent_end","messages":[
 		{"role":"user","content":[{"type":"text","text":"hi"}]},
-		{"role":"assistant","usage":{"input":100,"output":50,"cacheRead":10,"cacheWrite":5,"cost":0.001}}]}`
+		{"role":"assistant","usage":{"input":100,"output":50,"cacheRead":10,"cacheWrite":5,"cost":{"input":0.0009,"output":0.0001,"cacheRead":0,"cacheWrite":0,"total":0.001}}}]}`
 	u := usageFromAgentEnd(json.RawMessage(line))
 	if u == nil || u.InputTokens != 100 || u.OutputTokens != 50 || u.CacheReadTokens != 10 {
 		t.Fatalf("agent_end usage 提取错误: %+v", u)
+	}
+	if u.CostUsd < 0.0009 || u.CostUsd > 0.0011 {
+		t.Fatalf("cost 应取 cost.total=0.001,得到 %v", u.CostUsd)
 	}
 	if _, has := any(u).(interface{ ErrorInfo() *pb.Error }); has {
 		t.Fatal("usage 不应实现 ErrorInfoCarrier")
