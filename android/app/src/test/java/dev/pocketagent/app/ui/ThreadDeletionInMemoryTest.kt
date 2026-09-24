@@ -13,10 +13,10 @@ import org.junit.Test
  * 用户会在任务中心看到一条永远点不开的记录;子代理预览按 threadId 缓存,同一 id 的
  * 会话再建出来时会命中旧预览,显示上一世的内容。
  *
- * 【覆盖边界如实说明】本文件只覆盖 [TaskCenter] 那一半。[SubAgentsState.forget] 的
- * previews 是私有 ConcurrentHashMap,唯一写入路径 requestPreview 是**异步拉网络**的,
- * 纯 JVM 测不了;为它加一个仅测试用的写入挂钩会给生产 API 多开一个口子,不值当 ——
- * 它的实现是一行 Map.remove,风险由代码审查而非测试兜。
+ * 【覆盖边界如实说明】[SubAgentsState.forget] 的 previews 是私有 ConcurrentHashMap,
+ * 唯一写入路径 requestPreview 是**异步拉网络**的,纯 JVM 测不了;为它加一个仅测试用的
+ * 写入挂钩会给生产 API 多开一个口子,不值当 —— 它的实现是一行 Map.remove,风险由
+ * 代码审查而非测试兜。
  */
 class ThreadDeletionInMemoryTest {
 
@@ -42,5 +42,23 @@ class ThreadDeletionInMemoryTest {
         ThreadDeletionCoordinator.purgeInMemory("th-never-tracked-x9")
         ThreadDeletionCoordinator.purgeInMemory("th-never-tracked-x9")
         ThreadDeletionCoordinator.purgeInMemory("")
+    }
+
+    @Test
+    fun `会话删除释放 TurnSession 内存态并关掉恢复信号`() {
+        val first = TurnSession.state("th-del-x2")
+        // tryReceive().isClosed 是不开挂的关闭探测:open+空缓冲=false,close 后=true。
+        assertFalse("前置:未删除时恢复信号通道应是打开的", first.recoverySignal.tryReceive().isClosed)
+
+        ThreadDeletionCoordinator.purgeInMemory("th-del-x2")
+
+        assertTrue(
+            "被删会话的恢复信号通道必须关闭 —— 在等的恢复循环据此立即退出,不再为已删除会话补事件",
+            first.recoverySignal.tryReceive().isClosed,
+        )
+        assertTrue(
+            "同 id 再建必须拿到全新 State,不得命中上一世的旧状态",
+            TurnSession.state("th-del-x2") !== first,
+        )
     }
 }

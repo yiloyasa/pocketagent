@@ -16,7 +16,9 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import pocketagent.v1.OutputState
 import pocketagent.v1.SubmitApprovalRequest
@@ -37,6 +39,7 @@ import pocketagent.v1.ToolCallUpdate
 import pocketagent.v1.TurnClientMessage
 import pocketagent.v1.TurnInput
 import pocketagent.v1.TurnServerMessage
+import pocketagent.v1.HostEvent
 
 /**
  * 轮次会话单例 —— 解决"退出对话界面,之前发的消息就不工作了":
@@ -95,6 +98,8 @@ object TurnSession {
         var pendingApproval by mutableStateOf<ApprovalRequest?>(null)
         var approvalError by mutableStateOf<String?>(null)
         var replyCh: Channel<TurnClientMessage>? = null
+        /** WatchEvents 只作为恢复唤醒信号，不承载正文或终局事实。 */
+        val recoverySignal = Channel<Unit>(Channel.CONFLATED)
         /**
          * 已排队等待执行的输入条数(P1-4)。
          * Queued 回执(position>0)时 +1,QueueFlushed 时 -1;为 0 表示没有排队。
@@ -121,6 +126,26 @@ object TurnSession {
     /** app 级作用域:导航离开聊天页也不会取消协程。 */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val cacheScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+    /** WatchEvents 只写恢复信号，不触碰 Compose 状态，因此不依赖 Android Main dispatcher。 */
+    private val hostEventScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        hostEventScope.launch {
+            AgentConnection.hostEvents.collect { event ->
+                onHostEvent(event)
+            }
+        }
+    }
+
+    private fun onHostEvent(event: HostEvent) {
+        val threadId = dev.pocketagent.app.HostEventRouter.turnFinishedThreadId(event) ?: return
+        val st = states[threadId] ?: return
+        if (st.running || st.recovering) {
+            // 事件可能先于流的 onError 到达，因此保留一个可合并信号，保证
+            // 进入 recovering 后第一轮也能立即醒来。
+            st.recoverySignal.trySend(Unit)
+        }
+    }
 
     fun acceptRuntimeSelection(threadId: String, model: String, effort: String?, confirmedEvent: Boolean = false) {
         val st = state(threadId)
@@ -145,6 +170,18 @@ object TurnSession {
             dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(threadId,messages)
             TurnCheckpointStore.save(cursor)
         }
+    }
+
+    /**
+     * 会话删除后释放内存态：关掉恢复信号通道并移除 State。
+     *
+     * 【为什么必须做】State 及其 recoverySignal 常驻 app 进程,而删除走
+     * [ThreadDeletionCoordinator.purgeInMemory] 时若不释放,恢复循环还会继续为一个
+     * 已删除的会话拉历史/写时间线 —— 内存层"复活";同 id 重建也会命中旧 State。
+     * close() 同时是在等信号的恢复循环的立即退出指令。
+     */
+    fun release(threadId: String) {
+        states.remove(threadId)?.recoverySignal?.close()
     }
 
     fun state(threadId: String): State = states.getOrPut(threadId) {
@@ -976,7 +1013,14 @@ object TurnSession {
             for (i in 0 until RECOVERY_ATTEMPTS) {
                 if (recovered) break
                 if (st.generation != generation) return@launch
-                delay(recoveryBackoffMs(i))
+                // WatchEvents 到达时立即唤醒；没有通知时仍按原退避节奏轮询。
+                // receiveCatching 而非 receive:release() 会 close 通道,让在等的循环
+                // 立即醒来 —— close 会使 receive 抛异常,而这里要的是"退出恢复"不是崩溃;
+                // closed 结果从超时包装里带出来,即为"会话已删除,别再为它补事件"。
+                val wake = withTimeoutOrNull(recoveryBackoffMs(i)) {
+                    st.recoverySignal.receiveCatching()
+                }
+                if (wake != null && wake.isClosed) return@launch
                 if (st.generation != generation) return@launch
                 // ---- 优先:事件增量续传(P1-5) ----
                 val outcome = tryIncrementalRecovery(threadId, st)

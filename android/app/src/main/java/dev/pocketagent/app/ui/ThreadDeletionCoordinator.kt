@@ -63,10 +63,12 @@ object ThreadDeletionCoordinator {
     }
 
     /**
-     * 清掉本次删除在**内存态**里留下的痕迹(任务中心条目 / 子代理预览缓存)。
+     * 清掉本次删除在**内存态**里留下的痕迹(聊天会话状态 / 任务中心条目 / 子代理预览缓存)。
      *
-     * 【为什么这两处也要一起删(用户明确要求)】它们不是"这条会话还在不在"的权威副本,
+     * 【为什么这几处也要一起删(用户明确要求)】它们不是"这条会话还在不在"的权威副本,
      * 但都**按 threadId 索引**:
+     *   - 聊天会话状态([TurnSession])常驻 app 进程:不释放的话,断流恢复循环会继续
+     *     为一个已删除的会话补事件,内存层"复活";同 id 重建也会命中旧 State;
      *   - 任务中心的"消息类"条目 id 就是 `msg:$threadId`,会话删了它还在,用户会看到
      *     一条永远点不开的记录;
      *   - 子代理预览按 threadId 缓存,**同一 id 的会话再建出来时会命中旧预览**,显示
@@ -76,6 +78,7 @@ object ThreadDeletionCoordinator {
      */
     fun purgeInMemory(threadId: String) {
         if (threadId.isBlank()) return
+        TurnSession.release(threadId)
         TaskCenter.removeByThread(threadId)
         SubAgentsState.forget(threadId)
     }

@@ -10,13 +10,24 @@ import io.grpc.ClientInterceptor
 import io.grpc.ManagedChannel
 import io.grpc.Metadata
 import io.grpc.MethodDescriptor
+import io.grpc.stub.StreamObserver
 import io.grpc.okhttp.OkHttpChannelBuilder
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import pocketagent.v1.AuthorizeRequest
 import pocketagent.v1.ChallengeAnswer
 import pocketagent.v1.GetHostInfoRequest
+import pocketagent.v1.HostEvent
 import pocketagent.v1.HostServiceGrpc
 import pocketagent.v1.TerminalServiceGrpc
 import pocketagent.v1.FileSystemServiceGrpc
@@ -24,6 +35,7 @@ import pocketagent.v1.GitServiceGrpc
 import pocketagent.v1.ModelServiceGrpc
 import pocketagent.v1.ThreadServiceGrpc
 import pocketagent.v1.RuntimeServiceGrpc
+import pocketagent.v1.WatchEventsRequest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -51,6 +63,19 @@ object AgentConnection {
     val connAddress = kotlinx.coroutines.flow.MutableStateFlow("")
     /** 最近一次连接失败，设置页和首页可直接展示。 */
     val connError = kotlinx.coroutines.flow.MutableStateFlow<ConnectionDiagnostic?>(null)
+
+    /**
+     * WatchEvents 事件总线：只负责低延迟通知，不取代 GetThreadEventsSince/
+     * GetThreadHistory 的事实补齐链。事件先经过序号去重，再广播给会话层。
+     */
+    val hostEvents = MutableSharedFlow<HostEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    private val hostEventScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val hostEventLock = Any()
+    private var hostEventJob: Job? = null
+    @Volatile private var hostEventTracker = HostEventTracker()
 
     /**
      * 最近一次 GetHostInfo 成功返回的 capabilities 快照 —— **agent 可用性的唯一
@@ -165,6 +190,7 @@ object AgentConnection {
         // 候选队列也把它排最前(同一网络下首次连接最快)。
         prefs?.edit()?.putString("lastGoodAddr", candidate)?.apply()
         lastGoodAddr = candidate
+        ensureWatchEvents()
     }
 
     // ============ 最近工作区(新建会话/终端选目录用) ============
@@ -242,6 +268,7 @@ object AgentConnection {
             lastLanAddr = it.getString("lanAddr", "") ?: ""
             manualAddress = it.getString("manualAddr", "") ?: ""
             lastGoodAddr = it.getString("lastGoodAddr", "") ?: ""
+            hostEventTracker = HostEventTracker(it.getLong("lastHostEventSequence", 0L))
             showThinkingState = it.getBoolean("showThinking", true)
             // 提示词优化(实验功能):默认关,在外观与阅读里手动打开
             optimizePromptEnabled = it.getBoolean("optimizePrompt", false)
@@ -1098,6 +1125,10 @@ object AgentConnection {
 
     fun shutdown() {
         synchronized(this) {
+            synchronized(hostEventLock) {
+                hostEventJob?.cancel()
+                hostEventJob = null
+            }
             channel?.shutdownNow()
             channel = null
         }
@@ -1112,10 +1143,73 @@ object AgentConnection {
      */
     fun recycleChannel(reason: String) {
         synchronized(this) {
+            synchronized(hostEventLock) {
+                hostEventJob?.cancel()
+                hostEventJob = null
+            }
             val old = channel ?: return
             channel = null
             Log.w(TAG, "回收 gRPC 通道: $reason")
             old.shutdownNow()
+        }
+    }
+
+    /**
+     * 启动一条与主 RPC 相互隔离的服务器流。
+     *
+     * 断开时只重订阅 WatchEvents，不销毁主通道，也不重发用户 prompt；实际内容仍由
+     * TurnSession 的增量/全量恢复链负责，避免把通知流误当成事实数据库。
+     */
+    private fun ensureWatchEvents() {
+        synchronized(hostEventLock) {
+            if (hostEventJob?.isActive == true) return
+            hostEventJob = hostEventScope.launch {
+                watchEventsLoop()
+            }
+        }
+    }
+
+    private suspend fun watchEventsLoop() {
+        var retryDelayMs = 500L
+        while (currentCoroutineContext().isActive) {
+            val finished = CompletableDeferred<Throwable?>()
+            try {
+                val request = WatchEventsRequest.newBuilder()
+                    .setAfterSequence(hostEventTracker.lastSequence)
+                    .build()
+                HostServiceGrpc.newStub(channel()).watchEvents(
+                    request,
+                    object : StreamObserver<HostEvent> {
+                        override fun onNext(value: HostEvent) {
+                            if (!hostEventTracker.accept(value)) return
+                            if (value.sequence > 0L) {
+                                prefs?.edit()
+                                    ?.putLong("lastHostEventSequence", value.sequence)
+                                    ?.apply()
+                            }
+                            hostEvents.tryEmit(value)
+                        }
+
+                        override fun onError(t: Throwable) {
+                            finished.complete(t)
+                        }
+
+                        override fun onCompleted() {
+                            finished.complete(null)
+                        }
+                    },
+                )
+                val err = finished.await()
+                if (err != null && currentCoroutineContext().isActive) {
+                    Log.w(TAG, "WatchEvents 断开，将重订阅: ${err.message ?: err::class.java.simpleName}")
+                }
+            } catch (t: Throwable) {
+                if (!currentCoroutineContext().isActive) break
+                Log.w(TAG, "WatchEvents 建立失败，将重试: ${t.message ?: t::class.java.simpleName}")
+            }
+            if (!currentCoroutineContext().isActive) break
+            delay(retryDelayMs)
+            retryDelayMs = (retryDelayMs * 2).coerceAtMost(10_000L)
         }
     }
 
