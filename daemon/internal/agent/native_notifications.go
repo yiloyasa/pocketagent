@@ -198,10 +198,16 @@ func piNoticeKind(eventType string) string {
 // zcodeNoticeKind 给 zcode 的通知分档。
 // state.updated / session.updated / settings.updated / session.modelUpdated 在记录前
 // 都已 emitRuntimeSelection —— 即**已经被投影**成协议内的 Started 帧。
+// turn.steerQueued / turn.steerDrained 是 zcode 桌面端内部 steer 队列的回执
+// （stdio 通道对 running session 发 session/send 会被拒，见 zcode.go 头注），
+// daemon 不投影它们，但方法是已知的 —— 归 PASSTHROUGH 只留痕，不再污染 UNKNOWN
+// （翻译层已为这两个方法备好人话）。
 func zcodeNoticeKind(method string) string {
 	switch method {
 	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated":
 		return runtime.KindKnownProjected
+	case "turn.steerQueued", "turn.steerDrained":
+		return runtime.KindKnownPassthrough
 	}
 	return runtime.KindUnknownNotification
 }

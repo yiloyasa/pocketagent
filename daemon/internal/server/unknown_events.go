@@ -80,12 +80,22 @@ func (s *Server) GetUnknownEvent(_ context.Context, req *pb.GetUnknownEventReque
 		// 显示成"事件存在但没有内容"。
 		return nil, errNotFound("找不到该未知事件(可能已被更早的记录挤出保留窗口)")
 	}
-	return &pb.UnknownEventResponse{
+	tr := translateEventSafely(e)
+	resp := &pb.UnknownEventResponse{
 		Summary:           unknownSummaryToProto(e),
 		RawJson:           e.RawPayload,
 		DecodedFieldsJson: e.DecodedFields,
 		Note:              e.Note,
-	}, nil
+	}
+	// 字段级透析表:与 Translation 同源(读时翻译),已知事件同样有 ——
+	// "daemon 已把这条投影成思考过程"配上关键字段,比方法名有用得多。
+	for _, f := range tr.Fields {
+		resp.Digest = append(resp.Digest, &pb.UnknownEventField{
+			Key: f.Key, Kind: f.Kind, Preview: f.Preview, Meaning: f.Meaning,
+		})
+	}
+	resp.Translation = tr.Detail
+	return resp, nil
 }
 
 // AcknowledgeUnknownEvent 记录处置动作。
@@ -112,6 +122,10 @@ func (s *Server) AcknowledgeUnknownEvent(_ context.Context, req *pb.AcknowledgeU
 }
 
 // unknownSummaryToProto 把台账条目翻成契约形态(列表与详情共用同一映射)。
+// Summary 是读时人话翻译(见 runtime.TranslateEvent):已知方法翻成"daemon 对它
+// 做了什么",未知方法翻成"它长什么样、像不像错误"。
+// 【翻译失败宁可留空】翻译是摘要不是裁决:任何异常下都宁可不给,也不给一份
+// 可能错的翻译误导人工排查(与 runtime 侧"不编造"红线同一取向)。
 func unknownSummaryToProto(e runtime.EventEnvelope) *pb.UnknownEventSummary {
 	return &pb.UnknownEventSummary{
 		EventId:          e.ID,
@@ -124,5 +138,17 @@ func unknownSummaryToProto(e runtime.EventEnvelope) *pb.UnknownEventSummary {
 		SafetyClass:      e.SafetyClass,
 		ProcessingStatus: e.ProcessingStatus,
 		Revision:         e.Revision,
+		Summary:          translateEventSafely(e).Summary,
 	}
+}
+
+// translateEventSafely 包装纯函数翻译:极端输入下 panic 也降级为空翻译,
+// 绝不让诊断 RPC 因翻译失败而报错 —— 台账查询是诊断路径,不是业务路径。
+func translateEventSafely(e runtime.EventEnvelope) (tr runtime.Translation) {
+	defer func() {
+		if recover() != nil {
+			tr = runtime.Translation{}
+		}
+	}()
+	return runtime.TranslateEvent(e.SourceAgent, e.SourceMethod, e.NormalizedKind, e.RawPayload)
 }

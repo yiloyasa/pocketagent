@@ -10,6 +10,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -130,5 +131,77 @@ func TestUnknownEventsWithoutBackendReturnsEmpty(t *testing.T) {
 	}
 	if len(resp.GetItems()) != 0 {
 		t.Fatalf("应回空清单,得到 %+v", resp.GetItems())
+	}
+}
+
+// TestUnknownEventListSummariesAreHumanReadable 列表页每项都要带人话摘要。
+//
+// 【钉什么】已知事件与未知事件都要翻:已知翻成"daemon 对它做了什么"(比方法名
+// 有用),未知翻成"它长什么样、像不像错误"。翻译失败宁可留空也不给错翻译 ——
+// 但本用例的两个输入都必须翻出来,空摘要在这里算失败。
+func TestUnknownEventListSummariesAreHumanReadable(t *testing.T) {
+	srv := newUnknownTestServer(t)
+	ctx := context.Background()
+	log := srv.runtimeBackend.UnknownEvents()
+	log.Record(runtime.EventEnvelope{
+		SourceAgent: "codex", SourceMethod: "turn.completed", NormalizedKind: runtime.KindKnownProjected,
+	})
+	log.Record(runtime.EventEnvelope{
+		SourceAgent: "pi", SourceMethod: "brandNewPiEvent", RawPayload: `{"error":{"message":"boom"}}`,
+	})
+
+	resp, err := srv.ListUnknownEvents(ctx, &pb.ListUnknownEventsRequest{})
+	if err != nil {
+		t.Fatalf("ListUnknownEvents 失败: %v", err)
+	}
+	seen := map[string]string{}
+	for _, item := range resp.GetItems() {
+		if item.GetSummary() == "" {
+			t.Fatalf("事件 %s 的 summary 不得为空(人话翻译是本轮的交付)", item.GetEventId())
+		}
+		seen[item.GetSourceMethod()] = item.GetSummary()
+	}
+	if s := seen["turn.completed"]; strings.Contains(s, "turn.completed") {
+		t.Errorf("已知事件的 summary 复述了方法名: %s", s)
+	}
+	if s := seen["brandNewPiEvent"]; !strings.Contains(s, "错误上报") {
+		t.Errorf("未知事件含 error 字段,summary 应判'像一次错误上报': %s", s)
+	}
+}
+
+// TestGetUnknownEventCarriesDigestAndTranslation 详情页要给字段级透析表与详细解读。
+func TestGetUnknownEventCarriesDigestAndTranslation(t *testing.T) {
+	srv := newUnknownTestServer(t)
+	ctx := context.Background()
+	e := srv.runtimeBackend.UnknownEvents().Record(runtime.EventEnvelope{
+		SourceAgent: "zcode", SourceMethod: "brandNewZcodeEvent",
+		RawPayload: `{"threadId":"th-9","count":3,"token":"[redacted]","zzUnfamiliar":"v"}`,
+	})
+
+	got, err := srv.GetUnknownEvent(ctx, &pb.GetUnknownEventRequest{EventId: e.ID})
+	if err != nil {
+		t.Fatalf("GetUnknownEvent 失败: %v", err)
+	}
+	digest := map[string]*pb.UnknownEventField{}
+	for _, f := range got.GetDigest() {
+		digest[f.GetKey()] = f
+	}
+	if len(digest) != 4 {
+		t.Fatalf("digest 应与载荷字段一一对应(4 个),得到 %d: %+v", len(digest), got.GetDigest())
+	}
+	if f := digest["threadId"]; f.GetKind() != "text" || f.GetMeaning() != "会话标识" || f.GetPreview() != "th-9" {
+		t.Errorf("threadId 行不对: %+v", f)
+	}
+	if f := digest["count"]; f.GetKind() != "number" || f.GetMeaning() != "数量" {
+		t.Errorf("count 行不对: %+v", f)
+	}
+	if f := digest["zzUnfamiliar"]; f.GetMeaning() != "" {
+		t.Errorf("识别不出的字段含义必须留空不猜: %+v", f)
+	}
+	if !strings.Contains(got.GetTranslation(), "原文") {
+		t.Errorf("translation 缺'以原文为准'红线句: %s", got.GetTranslation())
+	}
+	if !strings.Contains(got.GetTranslation(), "留痕") {
+		t.Errorf("translation 应写明 daemon 处置(未知通知已留痕): %s", got.GetTranslation())
 	}
 }
