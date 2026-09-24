@@ -200,6 +200,8 @@ func main() {
 	steer := flag.Bool("steer", false, "只跑 steer 实证(长任务运行中 session/send)")
 	ctrl := flag.Bool("ctrl", false, "只跑控制面探针(setThoughtLevel/compact/goal/close 应答形状,见 ctrl.go)")
 	image := flag.Bool("image", false, "只跑图片附件实证(session/send attachments 两种形状各问一次颜色,见 image.go)")
+	// -model:0.16.9 模型/思考档同步实证(无 LLM 轮次,零费用,见 model.go)
+	model := flag.Bool("model", false, "只跑模型同步实证(setModel/setThoughtLevel 后的事件序列,见 model.go)")
 	flag.Parse()
 
 	if _, err := os.Stat(nodeExe); err != nil {
@@ -229,6 +231,10 @@ func main() {
 	} else if *ctrl {
 		// 控制面子模式(2026-09-19 覆盖审计 §8 待实测项的形状实证,见 ctrl.go)
 		runCtrl(p, abs, res)
+	} else if *model {
+		// 模型同步子模式(2026-09-24:0.16.9 settings.updated/session.modelUpdated
+		// 消失疑云的实证,见 model.go)
+		runModel(p, abs, res)
 	} else {
 		// ---- 进程 1:主验证流程(步骤 1-6 + 同进程 resume)----
 		sid := runMain(p, abs, res)

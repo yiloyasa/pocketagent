@@ -140,6 +140,13 @@ process.stdin.on('data', (chunk) => {
         write({method:'state.updated',params:{sessionId:sid,scope:'session',patch:{model:{current:{providerId:'p1',modelId:'native-switched',options:{reasoningLevel:'future-level'}}}}}});
         write({method:'future.unknown.notification',params:{sessionId:sid,newField:true}});
       }
+      if (process.env.PA_FAKE_ZCODE_EVENTS) {
+        // 注入任意 session/event 序列(标题同步等事件形状的接线测试用);
+        // 元素形状 {type, payload},payload 缺省给 {}。
+        for (const e of JSON.parse(process.env.PA_FAKE_ZCODE_EVENTS)) {
+          env(e.type, e.payload || {});
+        }
+      }
       env('model.streaming', {kind: 'text_delta', delta: 'fake-ok', done: false});
       env('turn.completed', {response: 'fake-ok', resultType: 'success',
         usage: {inputTokens: 1, outputTokens: 1, totalTokens: 2,

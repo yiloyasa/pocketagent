@@ -59,12 +59,23 @@ func decodeRuntimeSelection(agentID, method string, raw json.RawMessage) Runtime
 					} `json:"options"`
 				} `json:"current"`
 			} `json:"model"`
+			ThoughtLevel struct {
+				Current *string `json:"current"`
+			} `json:"thoughtLevel"`
 		}
 		if json.Unmarshal(value["settings"], &settings) == nil {
 			if settings.Model.Current.ModelID != "" {
 				result.ModelID = "zcode/" + settings.Model.Current.ModelID
 			}
 			result.Effort = settings.Model.Current.Options.ReasoningLevel
+			// 思考档回退与 zcodeConfirmedSelection 同语义:0.16.9 实测
+			// (docs/verify/evidence/zcode-0169-probe.log)setThoughtLevel 的
+			// state.updated patch 里 model.current.options.reasoningLevel 与
+			// thoughtLevel.current 同轴联动,但只换思考档时 thinking 载体在
+			// settings.thoughtLevel —— model.current 缺失时从这里取,不丢档。
+			if result.Effort == nil {
+				result.Effort = settings.ThoughtLevel.Current
+			}
 		}
 	}
 	return result
@@ -195,18 +206,46 @@ func piNoticeKind(eventType string) string {
 	return runtime.KindUnknownNotification
 }
 
-// zcodeNoticeKind 给 zcode 的通知分档。
-// state.updated / session.updated / settings.updated / session.modelUpdated 在记录前
-// 都已 emitRuntimeSelection —— 即**已经被投影**成协议内的 Started 帧。
-// turn.steerQueued / turn.steerDrained 是 zcode 桌面端内部 steer 队列的回执
-// （stdio 通道对 running session 发 session/send 会被拒，见 zcode.go 头注），
-// daemon 不投影它们，但方法是已知的 —— 归 PASSTHROUGH 只留痕，不再污染 UNKNOWN
-// （翻译层已为这两个方法备好人话）。
+// zcodeNoticeKind 给 zcode 的通知分档(顶层通知 method 与 session/event 的
+// event.type 共用这一张表 —— 两者都汇进 recordAs/recordProviderEvent)。
+//
+// 【0.16.9 实证结论(2026-09-24,docs/verify/evidence/zcode-0169-probe.log)】
+// 模型/思考档变化在 0.16.9 stdio 上的唯一载体是顶层通知 state.updated
+// (params={scope:"session", sessionId, revision, reason:"model_changed"|
+// "thought_level_changed", patch:<settings 段>}),事件流(session/event)里
+// settings.updated 与 session.modelUpdated 零出现,bundle 静态检索也是 0 次
+// —— 0.16.5 探针确认的两个事件已消失。daemon 的模型同步链路没断:Run 的
+// state.updated 分支把 patch 包成 {"settings":…} 后照样解码(zcode.go);
+// 下面的 session/event 三键是旧 bundle(≤0.16.5)连过来时的兼容路径,处理
+// 分支保留作死代码防护,分档维持 PROJECTED 与词表改注一致。
+//
+// 【判定依据仍是"daemon 对这个类别做了什么"】
+//   - state.updated / session.updated / settings.updated / session.modelUpdated:
+//     记录前已走 emitRuntimeSelection 投影成协议内 Started 帧 → PROJECTED;
+//   - session.titleUpdated:Run 内已有 TitleHandler 投影分支(桌面改名→手机
+//     同步,zcode.go)。0.16.9 bundle 静态可见(payload 含 previousTitle/
+//     source/title),探针未触发(改名需轮次或桌面操作,证据分级:静态)。
+//   - 其余 PASSTHROUGH:已知、只留痕、不投影。其中 usage.delta/subagent.
+//     lifecycle/turn.terminal 属桌面桥投影族词表(bundle 静态),不在 stdio
+//     session/event 校验 union 内 —— 真出现也只留痕;daemon 的同类事实各有
+//     自己的载体(turn.completed payload.usage、tool.updated、session/usage)。
+//     process/resourceSample 与 process/mcpResourceSamples 是 0.16.9 实测
+//     每分钟灌台账的遥测(0.16.9 上线两天记了 193 条 UNKNOWN,把真未知挤出
+//     200 条滚动窗),收编为已知是本轮分档的直接动机。
+//   - permission.requested / userInput.requested:与反向请求
+//     interaction/requestPermission 的关系探针证不出(审批流需要真实轮次,
+//     本轮红线禁跑),按"证不出就留 UNKNOWN(不猜)"处理。
 func zcodeNoticeKind(method string) string {
 	switch method {
-	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated":
+	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated",
+		"session.titleUpdated":
 		return runtime.KindKnownProjected
-	case "turn.steerQueued", "turn.steerDrained":
+	case "turn.steerQueued", "turn.steerDrained",
+		"session.created", "session.resumed", "session.closed",
+		"checkpoint.created", "rewind.triggered",
+		"usage.delta", "subagent.lifecycle", "turn.terminal",
+		"process/resourceSample", "process/mcpResourceSamples",
+		"process/mcpTelemetry", "startup/storageState":
 		return runtime.KindKnownPassthrough
 	}
 	return runtime.KindUnknownNotification

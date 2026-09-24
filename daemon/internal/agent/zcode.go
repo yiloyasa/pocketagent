@@ -1802,6 +1802,11 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				}
 				switch ev.Type {
 				case "session.updated", "settings.updated", "session.modelUpdated":
+					// 【0.16.9 实证(2026-09-24,zcode-0169-probe.log)】这三个
+					// event.type 已从 0.16.9 事件流消失(setModel/setThoughtLevel
+					// 只发顶层 state.updated,bundle 静态检索 0 次)——本分支在
+					// 0.16.9 上是死代码,保留只为旧 bundle(≤0.16.5)兼容;现行
+					// 载体的投影走上方 nm.method=="state.updated" 分支。
 					p.recordProjection(req.Thread.ID, ev.Payload)
 					p.InvalidateModels()
 					emitRuntimeSelection(p.confirmedZcodeSelection(ev.Payload), sink)
