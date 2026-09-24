@@ -54,6 +54,9 @@ const dshBinRel = "@deepseek-ai/dsh/lib/bin.js"
 // defaultDshHome 返回桥接专用隔离 HOME 的默认值(daemon 数据目录内)。
 // 用户显式给 daemon 设过 DSH_HOME 时尊重其选择(蓝本 §5.3 隔离原则)。
 func defaultDshHome() string {
+	if dir := resolvedConfiguredDataDir(); dir != "" {
+		return filepath.Join(dir, "dsh-home")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return filepath.Join(os.TempDir(), "pocketagentd", "dsh-home")
@@ -216,7 +219,8 @@ type Client struct {
 	// GlobalHandler 常驻通知钩子(先于 NotifHandler 调用,只做记录,不做流式渲染)。
 	GlobalHandler func(method string, params json.RawMessage)
 	// ReqHandler 反向请求(服务器 → 客户端,必须应答):session/request_permission 等。
-	ReqHandler func(id int64, method string, params json.RawMessage)
+	ReqHandler             func(id int64, method string, params json.RawMessage)
+	UnknownResponseHandler func(id int64, raw json.RawMessage)
 
 	// Setter 写入与 CallCtx 快照读取均受 handlerMu 保护;dispatch 只读不可变
 	// 快照且在锁外调用回调,回调可安全地发请求或卸载自身(codexapp 同款)。
@@ -225,9 +229,10 @@ type Client struct {
 
 // dshHandlers 某一时刻的 handler 快照(发布后不可变)。
 type dshHandlers struct {
-	global func(method string, params json.RawMessage)
-	notif  func(method string, params json.RawMessage)
-	req    func(id int64, method string, params json.RawMessage)
+	global          func(method string, params json.RawMessage)
+	notif           func(method string, params json.RawMessage)
+	req             func(id int64, method string, params json.RawMessage)
+	unknownResponse func(id int64, raw json.RawMessage)
 }
 
 // SyncHandlers 是 syncHandlers 的导出版:provider 在轮次收尾卸下 handler 后
@@ -241,13 +246,23 @@ func (c *Client) syncHandlers() {
 }
 
 func (c *Client) publishHandlersLocked() {
-	c.hs.Store(&dshHandlers{global: c.GlobalHandler, notif: c.NotifHandler, req: c.ReqHandler})
+	c.hs.Store(&dshHandlers{
+		global: c.GlobalHandler, notif: c.NotifHandler, req: c.ReqHandler,
+		unknownResponse: c.UnknownResponseHandler,
+	})
 }
 
 func (c *Client) SetGlobalHandler(handler func(string, json.RawMessage)) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.GlobalHandler = handler
+	c.publishHandlersLocked()
+}
+
+func (c *Client) SetUnknownResponseHandler(handler func(int64, json.RawMessage)) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.UnknownResponseHandler = handler
 	c.publishHandlersLocked()
 }
 
@@ -284,7 +299,11 @@ func startProcess(exe string, args []string, opts StartOptions) (*Client, error)
 	// DSH_HOME 缺省注入(用户已设则尊重);其余 env(含 DEEPSEEK_API_KEY)原样透传。
 	env := os.Environ()
 	if os.Getenv("DSH_HOME") == "" {
-		env = append(env, "DSH_HOME="+defaultDshHome())
+		home := defaultDshHome()
+		if opts.DataDir != "" {
+			home = filepath.Join(opts.DataDir, "dsh-home")
+		}
+		env = append(env, "DSH_HOME="+home)
 	}
 	// ExtraEnv 在 DSH_HOME 之后追加:允许上层用显式值覆盖前面已设项(如补 dsh 凭据);
 	// 凭据键的"进程 env 优先"已在 LoadCredentialEnv 解析时保证,这里不重复判。
@@ -585,6 +604,9 @@ func (c *Client) dispatch(m *wireMsg) {
 			} else {
 				ch <- rpcResp{raw: m.Result}
 			}
+		} else if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
+			raw, _ := json.Marshal(m)
+			go hs.unknownResponse(*m.ID, raw)
 		}
 	}
 }

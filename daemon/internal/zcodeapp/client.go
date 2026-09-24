@@ -69,7 +69,8 @@ type Client struct {
 	// 由本包 autoAnswer 先行处理,轮不到它。
 	// 【调用约定】由独立 goroutine 调用(不堵 readLoop),应答仍按原样 id 回写;
 	// 可能并发多条反向请求,实现侧须自行保证并发安全。
-	ReqHandler func(rawID json.RawMessage, method string, params json.RawMessage) bool
+	ReqHandler             func(rawID json.RawMessage, method string, params json.RawMessage) bool
+	UnknownResponseHandler func(rawID json.RawMessage, raw json.RawMessage)
 
 	// Setter 写入和 CallCtx 快照读取均受 handlerMu 保护。dispatch 只读
 	// 不可变快照且在锁外调用回调，回调可重入请求或卸载自身。
@@ -79,9 +80,10 @@ type Client struct {
 
 // zcHandlers 某一时刻的 handler 快照。
 type zcHandlers struct {
-	global func(method string, params json.RawMessage)
-	notif  func(method string, params json.RawMessage)
-	req    func(rawID json.RawMessage, method string, params json.RawMessage) bool
+	global          func(method string, params json.RawMessage)
+	notif           func(method string, params json.RawMessage)
+	req             func(rawID json.RawMessage, method string, params json.RawMessage) bool
+	unknownResponse func(rawID json.RawMessage, raw json.RawMessage)
 }
 
 // syncHandlers 兼容旧探针的串行赋值后 CallCtx；生产写入统一用 Setter。
@@ -92,13 +94,23 @@ func (c *Client) syncHandlers() {
 }
 
 func (c *Client) publishHandlersLocked() {
-	c.hs.Store(&zcHandlers{global: c.GlobalHandler, notif: c.NotifHandler, req: c.ReqHandler})
+	c.hs.Store(&zcHandlers{
+		global: c.GlobalHandler, notif: c.NotifHandler, req: c.ReqHandler,
+		unknownResponse: c.UnknownResponseHandler,
+	})
 }
 
 func (c *Client) SetGlobalHandler(handler func(string, json.RawMessage)) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.GlobalHandler = handler
+	c.publishHandlersLocked()
+}
+
+func (c *Client) SetUnknownResponseHandler(handler func(json.RawMessage, json.RawMessage)) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.UnknownResponseHandler = handler
 	c.publishHandlersLocked()
 }
 
@@ -594,6 +606,9 @@ func (c *Client) dispatch(m *wireMsg) {
 			} else {
 				ch <- rpcResp{raw: m.Result}
 			}
+		} else if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
+			raw, _ := json.Marshal(m)
+			go hs.unknownResponse(append(json.RawMessage(nil), m.ID...), raw)
 		}
 	}
 }

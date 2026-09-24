@@ -288,6 +288,20 @@ func (p *DshProvider) startClientLocked() (dshClient, error) {
 		return nil, err
 	}
 	p.client, p.inited, p.caps = c, false, nil
+	if h, ok := c.(interface {
+		SetUnknownResponseHandler(func(int64, json.RawMessage))
+	}); ok {
+		h.SetUnknownResponseHandler(func(id int64, raw json.RawMessage) {
+			recordUnknownResponse("dsh", fmt.Sprintf("%d", id), raw)
+		})
+	}
+	if h, ok := c.(interface {
+		SetGlobalHandler(func(string, json.RawMessage))
+	}); ok {
+		h.SetGlobalHandler(func(method string, params json.RawMessage) {
+			recordProviderEvent("dsh", method, "", dshNoticeKind(method), params)
+		})
+	}
 	p.gen.Add(1)
 	return c, nil
 }

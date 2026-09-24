@@ -54,7 +54,8 @@ type Client struct {
 	// GlobalHandler 常驻通知钩子(先于 NotifHandler 调用,只做记录,不做流式渲染)
 	GlobalHandler func(method string, params json.RawMessage)
 	// 反向请求(服务器 → 客户端,必须应答):审批等
-	ReqHandler func(id int64, method string, params json.RawMessage)
+	ReqHandler             func(id int64, method string, params json.RawMessage)
+	UnknownResponseHandler func(id int64, raw json.RawMessage)
 
 	// Setter 写入与 CallCtx 快照读取均受 handlerMu 保护；dispatch 只读
 	// 不可变快照且在锁外调用回调，回调可安全地发请求或卸载自身。
@@ -63,9 +64,10 @@ type Client struct {
 
 // codexHandlers 某一时刻的 handler 快照(发布后不可变)。
 type codexHandlers struct {
-	global func(method string, params json.RawMessage)
-	notif  func(method string, params json.RawMessage)
-	req    func(id int64, method string, params json.RawMessage)
+	global          func(method string, params json.RawMessage)
+	notif           func(method string, params json.RawMessage)
+	req             func(id int64, method string, params json.RawMessage)
+	unknownResponse func(id int64, raw json.RawMessage)
 }
 
 // syncHandlers 兼容旧探针的串行赋值后 CallCtx；生产写入统一用 Setter。
@@ -76,13 +78,23 @@ func (c *Client) syncHandlers() {
 }
 
 func (c *Client) publishHandlersLocked() {
-	c.hs.Store(&codexHandlers{global: c.GlobalHandler, notif: c.NotifHandler, req: c.ReqHandler})
+	c.hs.Store(&codexHandlers{
+		global: c.GlobalHandler, notif: c.NotifHandler, req: c.ReqHandler,
+		unknownResponse: c.UnknownResponseHandler,
+	})
 }
 
 func (c *Client) SetGlobalHandler(handler func(string, json.RawMessage)) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.GlobalHandler = handler
+	c.publishHandlersLocked()
+}
+
+func (c *Client) SetUnknownResponseHandler(handler func(int64, json.RawMessage)) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.UnknownResponseHandler = handler
 	c.publishHandlersLocked()
 }
 
@@ -390,6 +402,9 @@ func (c *Client) dispatch(m *wireMsg) {
 			} else {
 				ch <- rpcResp{raw: m.Result}
 			}
+		} else if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
+			raw, _ := json.Marshal(m)
+			go hs.unknownResponse(*m.ID, raw)
 		}
 	}
 }

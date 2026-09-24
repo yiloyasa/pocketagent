@@ -177,7 +177,8 @@ type Client struct {
 	// nil = 立即回 cancelled(失败安全:Pi 的 dialog 无 timeout 时会永久等待,
 	// 默认拒绝比默认放行安全 —— 调研 §10/§4.6)。
 	// 返回 respond=false 表示不回写(慎用:会让扩展永久挂起,仅 fire-and-forget 可)。
-	UIRequestHandler func(req *UIRequest) (payload map[string]any, respond bool)
+	UIRequestHandler       func(req *UIRequest) (payload map[string]any, respond bool)
+	UnknownResponseHandler func(rawID json.RawMessage, raw json.RawMessage)
 
 	// sess 是当前挂载会话的缓存(Start 后由 get_state 填,switch_session 后更新),
 	// 以原子快照发布。【P2-4】Rename/ExportHTML 的挂载路径(ensureMounted→
@@ -205,9 +206,10 @@ type Client struct {
 
 // piHandlers 某一时刻的 handler 快照。
 type piHandlers struct {
-	global func(Event)
-	ev     func(Event)
-	ui     func(*UIRequest) (payload map[string]any, respond bool)
+	global          func(Event)
+	ev              func(Event)
+	ui              func(*UIRequest) (payload map[string]any, respond bool)
+	unknownResponse func(rawID json.RawMessage, raw json.RawMessage)
 }
 
 // sessState 某一时刻的会话挂载缓存快照。
@@ -259,13 +261,23 @@ func (c *Client) syncHandlers() {
 }
 
 func (c *Client) publishHandlersLocked() {
-	c.hs.Store(&piHandlers{global: c.GlobalHandler, ev: c.EventHandler, ui: c.UIRequestHandler})
+	c.hs.Store(&piHandlers{
+		global: c.GlobalHandler, ev: c.EventHandler, ui: c.UIRequestHandler,
+		unknownResponse: c.UnknownResponseHandler,
+	})
 }
 
 func (c *Client) SetGlobalHandler(handler func(Event)) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.GlobalHandler = handler
+	c.publishHandlersLocked()
+}
+
+func (c *Client) SetUnknownResponseHandler(handler func(json.RawMessage, json.RawMessage)) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.UnknownResponseHandler = handler
 	c.publishHandlersLocked()
 }
 
@@ -556,6 +568,9 @@ func (c *Client) dispatch(line []byte) {
 		delete(c.pending, id)
 		c.mu.Unlock()
 		if !ok {
+			if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
+				go hs.unknownResponse(append(json.RawMessage(nil), m.ID...), append(json.RawMessage(nil), line...))
+			}
 			return
 		}
 		if m.OK == nil || !*m.OK {

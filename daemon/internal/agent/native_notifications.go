@@ -90,6 +90,22 @@ type nativeNoticeRecorder struct {
 	threadID string
 }
 
+// recordProviderEvent is the shared event-envelope projection used by provider
+// protocol boundaries. It records known projections/passthroughs as well as
+// genuinely unknown values; the raw payload is always bounded and redacted.
+func recordProviderEvent(agentID, method, threadID, kind string, raw json.RawMessage) {
+	if kind == "" {
+		kind = runtime.KindUnknownNotification
+	}
+	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+		ThreadID:       threadID,
+		SourceAgent:    agentID,
+		SourceMethod:   method,
+		NormalizedKind: kind,
+		RawPayload:     redactNativePayload(raw),
+	})
+}
+
 // codexItemNoticeKind 给"落到主线 A 透传的 codex item 类型"分档(规格 §4.6 的
 // normalized_kind 词表)。
 //
@@ -169,7 +185,11 @@ func dshNoticeKind(method string) string {
 // 把已知事件记成未知会让它重新淹进噪音 —— 正是本轮要修的病。
 func piNoticeKind(eventType string) string {
 	switch eventType {
-	case "agent_start":
+	case "agent_start", "message_update", "tool_execution_start",
+		"tool_execution_update", "tool_execution_end", "agent_end",
+		"agent_settled", "abort", "compaction_start", "compaction_end",
+		"auto_retry_start", "auto_retry_end", "queue_update",
+		"extension_ui_request":
 		return runtime.KindKnownPassthrough
 	}
 	return runtime.KindUnknownNotification

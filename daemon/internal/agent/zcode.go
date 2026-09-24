@@ -420,6 +420,8 @@ func (p *ZcodeProvider) withClientCtx(ctx context.Context, budget time.Duration,
 				return serr
 			}
 			p.client, p.inited = c, true
+			p.attachUnknownResponseHandler(c)
+			p.attachGlobalHandler(c)
 			p.gen.Add(1)
 			log.Printf("[zcode] app-server 子进程已启动(gen=%d)", p.gen.Load())
 			err = try()
@@ -436,9 +438,23 @@ func (p *ZcodeProvider) withClientCtx(ctx context.Context, budget time.Duration,
 		return serr
 	}
 	p.client, p.inited = c, true
+	p.attachUnknownResponseHandler(c)
+	p.attachGlobalHandler(c)
 	p.gen.Add(1)
 	log.Printf("[zcode] app-server 子进程已重启(gen=%d),所有会话缓存作废", p.gen.Load())
 	return try()
+}
+
+func (p *ZcodeProvider) attachUnknownResponseHandler(c *zcodeapp.Client) {
+	c.SetUnknownResponseHandler(func(rawID json.RawMessage, raw json.RawMessage) {
+		recordUnknownResponse("zcode", string(rawID), raw)
+	})
+}
+
+func (p *ZcodeProvider) attachGlobalHandler(c *zcodeapp.Client) {
+	c.SetGlobalHandler(func(method string, params json.RawMessage) {
+		recordProviderEvent("zcode", method, "", zcodeNoticeKind(method), params)
+	})
 }
 
 // withClient 无 ctx 的便捷入口。

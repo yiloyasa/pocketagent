@@ -282,6 +282,9 @@ func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client
 		// 无轮次上下文的 dialog:失败安全,拒绝(正常路径的审批在 Run 内接线)。
 		return map[string]any{"cancelled": true}, true
 	})
+	nc.SetUnknownResponseHandler(func(rawID json.RawMessage, raw json.RawMessage) {
+		recordUnknownResponse("pi", string(rawID), raw)
+	})
 	// 标题回调:Pi 的 set_session_name(我们挂载时下发,或电脑端 pi -r 同进程改名)
 	// 都会发 session_info_changed 事件(0.85.1 实测:{"name":"...","type":
 	// "session_info_changed"})。用常驻 GlobalHandler 接住它 → TitleHandler →
@@ -292,6 +295,16 @@ func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client
 	// "标题相同就不写库"守卫,不会形成回调环。
 	threadID := t.ID
 	nc.SetGlobalHandler(func(ev piapp.Event) {
+		var method string
+		var payload json.RawMessage
+		var frame struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(ev.Raw, &frame) == nil {
+			method, payload = frame.Type, frame.Data
+		}
+		recordProviderEvent("pi", method, threadID, piNoticeKind(method), payload)
 		if name, ok := MapSessionNameChange(ev.Raw); ok && p.TitleHandler != nil {
 			go p.TitleHandler(threadID, name)
 		}

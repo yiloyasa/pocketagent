@@ -528,7 +528,11 @@ func (p *CodexProvider) withClientCtx(ctx context.Context, budget time.Duration,
 // 这里只做**廉价记录**(加锁写 map / 回调),绝不碰 sink 与手机网络:
 // 它在 readLoop 里被同步调用,一旦阻塞,整条事件管道都会卡住。
 func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
+	c.SetUnknownResponseHandler(func(id int64, raw json.RawMessage) {
+		recordUnknownResponse("codex", strconv.FormatInt(id, 10), raw)
+	})
 	c.SetGlobalHandler(func(method string, params json.RawMessage) {
+		recordProviderEvent("codex", method, codexThreadIDOf(params), codexGlobalNoticeKind(method), params)
 		switch {
 		case strings.HasPrefix(method, "item/autoApprovalReview/"),
 			method == "autoApprovalReview/strictReviewRequired", method == "guardianWarning":
@@ -545,6 +549,21 @@ func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 			}
 		}
 	})
+}
+
+func codexGlobalNoticeKind(method string) string {
+	switch method {
+	case "thread/archived", "thread/unarchived", "thread/deleted",
+		"thread/reverted", "thread/closed", "thread/name/updated",
+		"thread/queue/changed", "thread/status/changed", "thread/started",
+		"skills/changed", "thread/plan/updated", "thread/goal/updated",
+		"thread/goal/cleared":
+		return runtime.KindKnownProjected
+	case "turn/diff/updated", "model/verification":
+		return runtime.KindKnownPassthrough
+	default:
+		return runtime.KindUnknownNotification
+	}
 }
 
 // ThreadEventHandlerAsync 在独立 goroutine 里回调 server 层。
