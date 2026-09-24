@@ -45,6 +45,17 @@ service RuntimeService {
   rpc GetRuntimeState(GetRuntimeStateRequest) returns (RuntimeStateResponse);
   // 单个 agent 的运行时形态与用量。
   rpc GetAgentRuntime(GetAgentRuntimeRequest) returns (AgentRuntimeResponse);
+  // 按会话列出某 agent 名下的语义记忆(内存态 + 盘上 checkpoint 载荷合并视图)。
+  // 【为什么按会话而不是整家一团】"哪几个会话占了记忆"回答不了,管理就无从谈起:
+  // 用户需要的粒度是"把这个走歪了的会话的记忆清掉重新开始",不是"整家清空伤及无辜"。
+  // loaded=false 的行 = 重启后从未触碰、值来自盘上落盘那一刻的快照 —— 两个口径
+  // 分开报,客户端不得把"盘上快照"当成实时值展示。
+  rpc ListThreadMemories(ListThreadMemoriesRequest) returns (ListThreadMemoriesResponse);
+  // 清掉一个会话名下全部 PocketAgent 侧记忆(内存态 + 盘上 checkpoint),返回剩余合计。
+  // 【红线】只动 PocketAgent 自己的数据目录;~/.codex、~/.pi 等原生侧的会话与用户
+  // 数据一个字节都不碰。会话不存在时回 NotFound —— "没清任何东西"必须让客户端
+  // 知道,不能谎报成功。
+  rpc ClearThreadMemory(ClearThreadMemoryRequest) returns (ClearThreadMemoryResponse);
 }
 
 message GetRuntimePolicyRequest {}
@@ -339,4 +350,44 @@ message AgentRecoveryState {
   string from = 4;    // checkpoint / native / corrupted / none
   string reason = 5;
   string at = 6;
+}
+
+// ---- 按会话的记忆清单与清除 --------------------------------------------------
+
+message ListThreadMemoriesRequest {
+  string agent_id = 1; // 必须是注册表里已注册的 agent,否则 InvalidArgument(文案动态列出已注册名单)
+}
+
+// ThreadMemoryRow 是清单里一个会话的记忆合计。
+message ThreadMemoryRow {
+  string thread_id = 1;
+  int32 entries = 2;   // 条目数(全部 kind 槽合计)
+  int64 bytes = 3;     // 载荷字节合计
+  int64 seq = 4;       // sequence 高水位(该会话全部槽里的最大值)
+  // 最后一次 checkpoint 落盘时刻(文件 mtime);0 = 从未落盘。
+  int64 last_checkpoint_unix_ms = 5;
+  // true = 本进程已装载(内存实时值);false = 重启后从未触碰,值来自盘上落盘那一刻
+  // 的快照。两种口径必须分开:客户端把快照当实时值展示,就是在编一个"看起来更新"的数。
+  bool loaded = 6;
+}
+
+message ListThreadMemoriesResponse {
+  // 按字节降序(daemon 侧排好;同字节按 thread_id 字典序),客户端保持次序不再重排。
+  repeated ThreadMemoryRow rows = 1;
+  int32 total_threads = 2;
+  int32 total_entries = 3;
+  int64 total_bytes = 4;
+  int64 sampled_at_unix_ms = 5;
+}
+
+message ClearThreadMemoryRequest {
+  string agent_id = 1;
+  string thread_id = 2; // 会话不存在时回 NotFound
+}
+
+message ClearThreadMemoryResponse {
+  // 清除后该 agent 名下的剩余合计(客户端拿它刷新合计行,不必再发一次 List)。
+  int32 total_threads = 1;
+  int32 total_entries = 2;
+  int64 total_bytes = 3;
 }

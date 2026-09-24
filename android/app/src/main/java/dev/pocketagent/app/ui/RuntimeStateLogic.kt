@@ -20,6 +20,8 @@ import pocketagent.v1.AgentRecoveryState
 import pocketagent.v1.AgentRuntimeResponse
 import pocketagent.v1.CollabPolicy
 import pocketagent.v1.CollabPolicyResponse
+import pocketagent.v1.ClearThreadMemoryRequest
+import pocketagent.v1.ClearThreadMemoryResponse
 import pocketagent.v1.GetAgentRuntimeRequest
 import pocketagent.v1.GetCollabPolicyRequest
 import pocketagent.v1.GetHostInfoRequest
@@ -28,6 +30,8 @@ import pocketagent.v1.GetRuntimeStateRequest
 import pocketagent.v1.GetUnknownEventRequest
 import pocketagent.v1.HostInfo
 import pocketagent.v1.HostRecoveryReport
+import pocketagent.v1.ListThreadMemoriesRequest
+import pocketagent.v1.ListThreadMemoriesResponse
 import pocketagent.v1.ListUnknownEventsRequest
 import pocketagent.v1.ListUnknownEventsResponse
 import pocketagent.v1.RuntimeContractReport
@@ -237,7 +241,7 @@ fun cacheModelLabel(raw: String): String = when (raw) {
 // ---- 每 agent 用量(§9.5 后四块)----------------------------------------------
 
 /** 形态卡展开体里的用量行(GetAgentRuntime 的 memory/cache/checkpoint/recovery 四块)。 */
-data class RuntimeUsageRow(val label: String, val value: String)
+data class RuntimeUsageRow(val label: String, val value: String, val key: String? = null)
 
 // memory.kinds 的分层顺序照 proto 注释里的 working/conversation/summary/artifact;
 // map 本身无序,不钉一个顺序的话同一份数据两次刷新会换位,看起来像出了问题。
@@ -278,7 +282,9 @@ fun memoryUsageRow(m: AgentMemoryUsage?): RuntimeUsageRow {
             )
             .joinToString(" / ") { "${it.key} ${it.value}" }
     }
-    return RuntimeUsageRow("记忆用量", parts.joinToString(" · "))
+    // key="memory" 是内存管理入口的锚点:daemon 真给了 memory 块,这一行才可点进
+    // 内存详情/管理弹窗;缺席(null)时没有入口 —— 没有数据的入口就是假入口。
+    return RuntimeUsageRow("记忆用量", parts.joinToString(" · "), key = "memory")
 }
 
 /** 缓存块:命名空间 / 条目 / 字节 / 命中三计数 —— 可再生缓存的量与效率一起给,照 proto。 */
@@ -332,6 +338,132 @@ fun recoveredFromLabel(raw: String): String = when (raw) {
     "corrupted" -> "损坏副本"
     else -> raw
 }
+
+// ---- 内存管理(按会话的记忆清单与清除) ----------------------------------------
+
+/**
+ * 内存详情/管理弹窗里的一个会话行(ListThreadMemories 的一行 → UI 模型)。
+ *
+ * 【为什么次序不重排】daemon 侧已按字节降序排好(同字节按 thread_id 字典序)。
+ * 客户端再排一遍就是"同一事实两处推导",两边口径一旦漂移,用户看到的次序就会
+ * 无缘无故变 —— 保持 daemon 的次序,谁排的谁负责。
+ */
+data class ThreadMemoryRowUi(
+    val threadId: String,
+    val entries: Int,
+    val bytes: Long,
+    val seq: Long,
+    /** 最后落盘时刻的人话;空串 = 从未落盘(照 proto 的 0 值语义,不编一个时刻)。 */
+    val lastCheckpointLabel: String,
+    /** false = 重启后从未触碰,值来自盘上落盘那一刻的快照 —— 必须如实标注,不当实时值。 */
+    val loaded: Boolean,
+)
+
+/**
+ * ListThreadMemories 响应 → 会话行列表;**null = 没问到(RPC 失败/旧 daemon),返回空**。
+ * 空列表与"没有记忆"由调用方用加载态区分,这里不造第三种值。
+ */
+fun mapThreadMemories(resp: ListThreadMemoriesResponse?): List<ThreadMemoryRowUi> {
+    if (resp == null) return emptyList()
+    return resp.rowsList.map { r ->
+        ThreadMemoryRowUi(
+            threadId = r.threadId,
+            entries = r.entries,
+            bytes = r.bytes,
+            seq = r.seq,
+            lastCheckpointLabel = if (r.lastCheckpointUnixMs > 0) relativeTimeLabel(r.lastCheckpointUnixMs) else "",
+            loaded = r.loaded,
+        )
+    }
+}
+
+/** 一个会话行的人话正文:"N 条 · 大小 · 落盘 时间[ · 未装载]"。 */
+fun threadMemoryLine(r: ThreadMemoryRowUi): String = buildString {
+    append(r.entries).append(" 条")
+    append(" · ").append(formatBytesLabel(r.bytes))
+    if (r.seq > 0) append(" · 序号到 ").append(r.seq)
+    if (r.lastCheckpointLabel.isNotEmpty()) append(" · 落盘 ").append(r.lastCheckpointLabel)
+    if (!r.loaded) append(" · 未装载")
+}
+
+/** 弹窗顶部的合计行模型。 */
+data class ThreadMemoryTotalsUi(val threads: Int, val entries: Int, val bytes: Long)
+
+/** 合计行的人话:"N 会话 · M 条 · X"。 */
+fun threadTotalsLine(t: ThreadMemoryTotalsUi): String =
+    "${t.threads} 会话 · ${t.entries} 条 · ${formatBytesLabel(t.bytes)}"
+
+/**
+ * 从行列表现算合计 —— 清除的**乐观更新**唯一算法:行没了,合计同步少。
+ * daemon 回传的真值(清除响应里的剩余合计)到达后整行替换它;这里只负责
+ * "点了清除到响应回来"这个窗口里界面不出现"行没了合计还在"的自相矛盾。
+ */
+fun threadTotalsFrom(rows: List<ThreadMemoryRowUi>): ThreadMemoryTotalsUi = ThreadMemoryTotalsUi(
+    threads = rows.size,
+    entries = rows.sumOf { it.entries },
+    bytes = rows.sumOf { it.bytes },
+)
+
+/** 乐观移除一个会话行(返回新列表;不动原列表 —— 回滚就是换回原引用)。 */
+fun threadRowsWithout(rows: List<ThreadMemoryRowUi>, threadId: String): List<ThreadMemoryRowUi> =
+    rows.filter { it.threadId != threadId }
+
+/**
+ * 某 agent 申报的记忆形态(descriptor 的 memory_model 原文);null = 没读到申报。
+ * 【为什么从总览里找而不是记住上一次】形态申报是启动期核验的快照,总览就是
+ * 它的唯一出口;在这里另存一份会跟总览漂移。
+ */
+fun memoryModelOf(resp: RuntimeStateResponse?, agentId: String): String? =
+    resp?.contractsList.orEmpty()
+        .firstOrNull { it.agentId == agentId }
+        ?.memoryModel?.takeIf { it.isNotBlank() }
+
+/**
+ * 记忆形态的人话解释(弹窗顶部那一段)。讲清"记忆记在哪、清除动的是什么",
+ * 不讲实现术语;值域外照抄原文(与六个形态标签同一纪律)。
+ */
+fun memoryModelExplanation(raw: String): String = when (raw) {
+    "daemon" -> "这家 agent 的会话记忆由 daemon 记在电脑端的数据目录里。下面的清除只删 PocketAgent 记的这份,不影响电脑端的其他数据。"
+    "hybrid" -> "电脑端原生程序保存对话原文,PocketAgent 只记轻量索引与检查点。清除只删这些索引,原生会话内容不受影响。"
+    "native" -> "对话记忆由电脑端原生程序自己管理,PocketAgent 侧没有存会话记忆,也没有可清的东西。"
+    else -> raw
+}
+
+/** 分层计数的人话:已知四层译成人话,值域外照抄 proto 原文。 */
+fun memoryKindLabel(raw: String): String = when (raw) {
+    "working" -> "工作记忆"
+    "conversation" -> "会话记忆"
+    "summary" -> "摘要"
+    "artifact" -> "产物与索引"
+    else -> raw
+}
+
+/**
+ * 内存管理 RPC 是否属于"此 daemon 未提供"(UNIMPLEMENTED)。
+ *
+ * 【为什么按状态码判而不是试错重试】旧 daemon 没有这两条 RPC,调用会稳定地回
+ * UNIMPLEMENTED —— 这是能力缺席的确定信号,据此把入口灰显并给一句事实陈述;
+ * 其余失败(网络/参数)照常按失败呈现,不与"版本没这功能"混为一谈。
+ */
+internal fun memoryMgmtUnsupported(e: Throwable): Boolean =
+    Status.fromThrowable(e).code == Status.Code.UNIMPLEMENTED
+
+/** 分层计数的一行(kind 原文 + 条数)。 */
+data class MemoryKindCount(val kind: String, val count: Int)
+
+/**
+ * memory.kinds → 排好序的分层计数(照 [memoryKindOrder] 的次序;值域外的排最后、
+ * 按键名字典序)。map 本身无序,不钉死次序的话同一份数据两次刷新会换位。
+ */
+fun memoryKindsList(kinds: Map<String, Int>): List<MemoryKindCount> =
+    kinds.entries
+        .sortedWith(
+            compareBy(
+                { memoryKindOrder.indexOf(it.key).let { i -> if (i >= 0) i else Int.MAX_VALUE } },
+                { it.key },
+            )
+        )
+        .map { MemoryKindCount(it.key, it.value) }
 
 // ---- 预算 --------------------------------------------------------------------
 
@@ -569,6 +701,14 @@ object RuntimeControlState {
      */
     var dialysisSheetOpen by mutableStateOf(false)
 
+    /**
+     * 此 daemon 未提供内存管理(ListThreadMemories/ClearThreadMemory 回 UNIMPLEMENTED)。
+     * 【为什么记住而不是每次试】确定的能力缺席要反映到入口上:灰显 + 一句事实陈述,
+     * 而不是让用户每次点开都撞一次"必然失败"。连接到别的 daemon 时 reset 清零。
+     */
+    var memoriesUnsupported by mutableStateOf(false)
+        private set
+
     const val SECTION_HOST = "host"
     const val SECTION_STATE = "state"
     const val SECTION_BUDGET = "budget"
@@ -750,11 +890,47 @@ object RuntimeControlState {
         }
     }
 
+    /**
+     * 按会话列某 agent 的记忆清单。命中 UNIMPLEMENTED 时把 [memoriesUnsupported]
+     * 记成事实 —— 入口据此灰显;其余失败照常走 Result.failure,由调用方呈现原因。
+     */
+    suspend fun listThreadMemories(agentId: String): Result<ListThreadMemoriesResponse> {
+        val r = runCatching {
+            withContext(Dispatchers.IO) {
+                AgentConnection.runtimeService().listThreadMemories(
+                    ListThreadMemoriesRequest.newBuilder().setAgentId(agentId).build()
+                )
+            }
+        }
+        if (r.isFailure && memoryMgmtUnsupported(r.exceptionOrNull() ?: return r)) {
+            memoriesUnsupported = true
+        }
+        return r
+    }
+
+    /**
+     * 清一个会话的 PocketAgent 侧记忆。**乐观更新在调用方(sheet)**:这里只发请求、
+     * 回传 daemon 的剩余合计真值,成功/失败都原样交给调用方裁决 —— 回滚需要还原
+     * 调用那一刻的行快照,只有调用方还留着它。
+     */
+    suspend fun clearThreadMemory(agentId: String, threadId: String): Result<ClearThreadMemoryResponse> =
+        runCatching {
+            withContext(Dispatchers.IO) {
+                AgentConnection.runtimeService().clearThreadMemory(
+                    ClearThreadMemoryRequest.newBuilder()
+                        .setAgentId(agentId)
+                        .setThreadId(threadId)
+                        .build()
+                )
+            }
+        }
+
     /** 退出页面:清空本地快照(下次进入重新拉,避免展示上一台机器的数据)。 */
     fun reset() {
         recovery = null; overview = null; budget = null; collab = null
         unknownEvents = emptyList(); unknownTotal = 0L; unknownDropped = 0L
         sectionErrors = emptyMap()
+        memoriesUnsupported = false
         loadState = RuntimeLoadState.LOADING
     }
 

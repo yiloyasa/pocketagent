@@ -52,6 +52,8 @@ import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import pocketagent.v1.CollabPolicy
 import pocketagent.v1.RuntimePolicy
@@ -98,6 +100,9 @@ private fun RuntimeSectionBody() {
     var expanded by remember { mutableStateOf(false) }
     var editingBudget by remember { mutableStateOf<BudgetRow?>(null) }
     var expandedAgent by remember { mutableStateOf<String?>(null) }
+    // 内存详情/管理弹窗挂在哪张形态卡上(agent id)。提升到区段级:AgentRuntimeDetail
+    // 的展开体在卡片折叠时会被移出组合,行级 remember 存不住跨折叠的弹窗状态。
+    var memorySheetAgent by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -167,7 +172,7 @@ private fun RuntimeSectionBody() {
                     onClick = { expandedAgent = if (open) null else card.agentId },
                 )
                 if (open) {
-                    AgentRuntimeDetail(card)
+                    AgentRuntimeDetail(card, onOpenMemory = { memorySheetAgent = card.agentId })
                 }
             }
 
@@ -284,6 +289,10 @@ private fun RuntimeSectionBody() {
     if (RuntimeControlState.dialysisSheetOpen) {
         UnknownEventSheet(onDismiss = { RuntimeControlState.dialysisSheetOpen = false })
     }
+
+    memorySheetAgent?.let { agentId ->
+        ThreadMemorySheet(agentId = agentId, onDismiss = { memorySheetAgent = null })
+    }
 }
 
 /** 恢复横幅:降级摘要 + **逐条**"哪句没跑到"(只报条数等于没说)。 */
@@ -332,9 +341,13 @@ private fun RecoveryBannerBlock(banner: RecoveryBanner) {
  * 【四块用量为什么排在资源租约之后】§9.5 的原文顺序是 memory/cache/resource/
  * checkpoint/recovery,但资源租约的成败(网络失败时显示 note)同时是四块能否取到
  * 的前置信号 —— 读不到时四块整段缺席,排在前面的失败原因正好解释这件事。
+ *
+ * 【记忆行为什么是入口】记忆用量有下钻内容(按会话清单 + 清除动作,见
+ * [ThreadMemorySheet]),其余三块只是数值。入口只绑在 key=="memory" 的行上 ——
+ * 那是数据层钉过的锚点:daemon 真给了 memory 块才有 key,缺席时没有假入口。
  */
 @Composable
-private fun AgentRuntimeDetail(card: AgentContractCard) {
+private fun AgentRuntimeDetail(card: AgentContractCard, onOpenMemory: () -> Unit) {
     var resources by remember(card.agentId) { mutableStateOf<List<String>?>(null) }
     var resourceNote by remember(card.agentId) { mutableStateOf<String?>(null) }
     var usage by remember(card.agentId) { mutableStateOf<List<RuntimeUsageRow>>(emptyList()) }
@@ -370,7 +383,53 @@ private fun AgentRuntimeDetail(card: AgentContractCard) {
             resources?.isEmpty() == true -> DetailLine("资源", "当前没有活跃的资源租约")
             resources != null -> resources!!.forEach { DetailLine("资源", it) }
         }
-        usage.forEach { DetailLine(it.label, it.value) }
+        usage.forEach { row ->
+            if (row.key == "memory") {
+                MemoryUsageEntryRow(row = row, onOpen = onOpenMemory)
+            } else {
+                DetailLine(row.label, row.value)
+            }
+        }
+    }
+}
+
+/**
+ * 「记忆用量」入口行:可点进内存详情/管理弹窗。
+ *
+ * 【降级是事实陈述】旧 daemon 没有内存管理两条 RPC(listThreadMemories 会回
+ * UNIMPLEMENTED,数据层已把它记成 [RuntimeControlState.memoriesUnsupported]):
+ * 此时入口灰显(不可点、无 chevron),补一句"此 daemon 版本未提供内存管理" ——
+ * 用量数值照常显示(那条 RPC 属于更早的版本,仍然可用)。不写"未知/不支持错误"
+ * 这类猜测词,只陈述版本事实。
+ */
+@Composable
+private fun MemoryUsageEntryRow(row: RuntimeUsageRow, onOpen: () -> Unit) {
+    val unsupported = RuntimeControlState.memoriesUnsupported
+    if (unsupported) {
+        DetailLine(row.label, row.value)
+        DetailLine("内存管理", "此 daemon 版本未提供内存管理", Pa.TextTertiary)
+        return
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(haptic = true) { onOpen() }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("记忆用量", fontSize = 12.sp, color = Pa.TextTertiary, modifier = Modifier.width(72.dp))
+        Text(
+            row.value,
+            fontSize = 12.5.sp,
+            color = Pa.TextPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            painterResource(R.drawable.ic_lucide_chevron_right),
+            contentDescription = null,
+            tint = Pa.TextTertiary,
+            modifier = Modifier.size(13.dp),
+        )
     }
 }
 
@@ -858,5 +917,275 @@ private fun rawBlockText(d: UnknownEventResponseOf): String =
 private fun AckButton(label: String, action: String, disabled: Boolean, onClick: (String) -> Unit) {
     TextButton(onClick = { onClick(action) }, enabled = !disabled) {
         Text(label, fontSize = 13.sp, color = Pa.AccentText)
+    }
+}
+
+/**
+ * 内存详情/管理弹窗(PaSheet 统一玻璃浮层)。
+ *
+ * 【内容三段】① 记忆形态人话(这台 agent 的记忆记在哪、清除动的是什么);② 该
+ * agent 的记忆合计与分层计数(working/conversation/summary/artifact);③ 按会话
+ * 的清单(ListThreadMemories,daemon 已按字节降序排好),每行一个「清除」动作。
+ *
+ * 【清除必须过确认框】确认文案写清「只清 PocketAgent 侧记忆,不动电脑端原生会话」
+ * —— 这个动作对用户不可逆,而这句正是他与"删会话"区分开的唯一凭据。
+ *
+ * 【乐观更新 + 失败回滚】点确认后本行先消失、合计同步少(界面不出现"行没了合计
+ * 还在"的自相矛盾);daemon 真值(剩余合计)回来后接管;失败则换回点击那一刻的行
+ * 快照,并给一句"已还原"。行快照在确认时冻结 —— 只有那一刻的数据才能忠实还原。
+ *
+ * 【降级】listThreadMemories 回 UNIMPLEMENTED(旧 daemon)时整弹窗换成一句事实
+ * 陈述「此 daemon 版本未提供内存管理」,不摆必然失败的空清单。
+ *
+ * 【paPushBack 说明】与 UnknownEventSheet 同款取舍:宿主内容根在 SettingsScreen,
+ * 本文件够不到那个根,弹窗本体用 PaSheet 玻璃材质照常渲染。
+ */
+@Composable
+private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
+    // rows 为 null = 清单还在拉;非 null = daemon 的次序(字节降序)原样上屏。
+    var rows by remember { mutableStateOf<List<ThreadMemoryRowUi>?>(null) }
+    var totals by remember { mutableStateOf<ThreadMemoryTotalsUi?>(null) }
+    var kinds by remember { mutableStateOf<List<MemoryKindCount>>(emptyList()) }
+    var kindsNote by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    // 管理动作状态:待确认的行 / 是否在清除 / 失败回滚后的提示。
+    var pendingClear by remember { mutableStateOf<ThreadMemoryRowUi?>(null) }
+    var clearing by remember { mutableStateOf(false) }
+    var rollbackNote by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // 旧 daemon 的确定信号在数据层记忆;打开弹窗时若已是事实,直接给陈述页。
+    val unsupported = RuntimeControlState.memoriesUnsupported
+    val modelRaw = memoryModelOf(RuntimeControlState.overview, agentId)
+
+    LaunchedEffect(agentId) {
+        if (unsupported) return@LaunchedEffect
+        // 两路并发:清单(按会话)与用量(合计/分层的权威来源)。清单失败且不是
+        // "版本没这功能"才给错误行 —— UNIMPLEMENTED 已经换陈述页,不再叠加报错。
+        coroutineScope {
+            val listJob = async {
+                RuntimeControlState.listThreadMemories(agentId)
+                    .onSuccess { resp ->
+                        rows = mapThreadMemories(resp)
+                        totals = ThreadMemoryTotalsUi(resp.totalThreads, resp.totalEntries, resp.totalBytes)
+                    }
+                    .onFailure { e ->
+                        if (!RuntimeControlState.memoriesUnsupported) {
+                            loadError = e.message ?: e::class.java.simpleName
+                        }
+                    }
+            }
+            val usageJob = async {
+                RuntimeControlState.agentRuntime(agentId)
+                    .onSuccess { r ->
+                        val m = if (r.hasMemory()) r.memory else null
+                        kinds = memoryKindsList(m?.kindsMap ?: emptyMap())
+                        kindsNote = null
+                    }
+                    .onFailure { e -> kindsNote = e.message ?: e::class.java.simpleName }
+            }
+            listJob.await()
+            usageJob.await()
+        }
+    }
+
+    PaSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+            Text(
+                "内存管理",
+                fontSize = 19.sp,
+                color = Pa.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            when {
+                // ---- 降级:事实陈述,不摆空清单也不报错 ----
+                unsupported -> {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "此 daemon 版本未提供内存管理",
+                        fontSize = 13.sp,
+                        color = Pa.TextSecondary,
+                    )
+                    Text(
+                        "电脑端的记忆用量仍显示在形态卡里;升级 daemon 后这里可以按会话查看与清除。",
+                        Modifier.padding(top = 4.dp),
+                        fontSize = 12.sp,
+                        color = Pa.TextTertiary,
+                    )
+                }
+                else -> {
+                    // ---- ① 形态人话 ----
+                    if (modelRaw != null) {
+                        Text(
+                            memoryModelExplanation(modelRaw),
+                            Modifier.padding(top = 4.dp),
+                            fontSize = 12.5.sp,
+                            color = Pa.TextSecondary,
+                        )
+                    }
+                    // ---- ② 合计 + 分层 ----
+                    totals?.let {
+                        Text(
+                            threadTotalsLine(it),
+                            Modifier.padding(top = 8.dp),
+                            fontSize = 13.sp,
+                            color = Pa.TextPrimary,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    if (kinds.isNotEmpty()) {
+                        Text(
+                            kinds.joinToString(" · ") { "${memoryKindLabel(it.kind)} ${it.count}" },
+                            Modifier.padding(top = 3.dp),
+                            fontSize = 12.sp,
+                            color = Pa.TextTertiary,
+                        )
+                    }
+                    kindsNote?.let {
+                        Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = Pa.TextTertiary)
+                    }
+                    rollbackNote?.let {
+                        Text(it, Modifier.padding(top = 4.dp), fontSize = 12.sp, color = Pa.Yellow)
+                    }
+
+                    // ---- ③ 按会话清单 ----
+                    when {
+                        rows == null && loadError == null && !unsupported -> {
+                            Text("读取中…", Modifier.padding(top = 12.dp), fontSize = 12.sp, color = Pa.TextTertiary)
+                        }
+                        loadError != null -> {
+                            Text(loadError!!, Modifier.padding(top = 12.dp), fontSize = 12.sp, color = Pa.Yellow)
+                        }
+                        rows?.isEmpty() == true -> {
+                            EmptyState(
+                                iconRes = R.drawable.ic_lucide_brain,
+                                title = "这个 agent 还没有会话记忆",
+                                hint = "对话跑起来之后,记忆会按会话出现在这里",
+                            )
+                        }
+                        rows != null -> {
+                            Text(
+                                "按会话(占得多的在前)",
+                                Modifier.padding(top = 12.dp, bottom = 2.dp),
+                                fontSize = 11.sp,
+                                color = Pa.TextTertiary,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            rows!!.forEachIndexed { i, r ->
+                                MemoryThreadRow(
+                                    row = r,
+                                    clearing = clearing,
+                                    onClear = { pendingClear = r },
+                                )
+                                if (i < rows!!.lastIndex) {
+                                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+
+    // ---- 清除确认:独立弹窗,文案把"动什么/不动什么"说死 ----
+    pendingClear?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (!clearing) pendingClear = null },
+            containerColor = Pa.CardHigh,
+            title = {
+                Text("清除这个会话的记忆?", fontSize = 16.sp, color = Pa.TextPrimary)
+            },
+            text = {
+                Column {
+                    Text(
+                        target.threadId,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Pa.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "只清除 PocketAgent 在电脑端记的这份会话记忆" +
+                            "(${target.entries} 条 · ${formatBytesLabel(target.bytes)})，" +
+                            "不动电脑端原生程序里的会话内容。清除后这个会话的记忆从零开始。",
+                        fontSize = 13.sp,
+                        color = Pa.TextSecondary,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !clearing,
+                    onClick = {
+                        clearing = true
+                        rollbackNote = null
+                        // 冻结快照:失败回滚还原的是"点确认那一刻"的界面。
+                        val snapshot = rows ?: emptyList()
+                        val snapshotTotals = totals
+                        // 乐观更新:行先消失,合计同步少(算式唯一,见 threadTotalsFrom)。
+                        val optimistic = threadRowsWithout(snapshot, target.threadId)
+                        rows = optimistic
+                        totals = threadTotalsFrom(optimistic)
+                        scope.launch {
+                            val result = RuntimeControlState.clearThreadMemory(agentId, target.threadId)
+                            result
+                                .onSuccess { resp ->
+                                    // daemon 真值接管乐观合计。
+                                    totals = ThreadMemoryTotalsUi(resp.totalThreads, resp.totalEntries, resp.totalBytes)
+                                }
+                                .onFailure { e ->
+                                    rows = snapshot
+                                    totals = snapshotTotals
+                                    rollbackNote = "清除失败:" +
+                                        (e.message ?: e::class.java.simpleName) + ",已还原"
+                                }
+                            clearing = false
+                            pendingClear = null
+                        }
+                    },
+                ) { Text("清除", color = Pa.RedText) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !clearing,
+                    onClick = { pendingClear = null },
+                ) { Text("取消", color = Pa.TextSecondary) }
+            },
+        )
+    }
+}
+
+/** 清单里的一个会话行:thread id + 人话合计,行尾「清除」动作(裸图标按钮)。 */
+@Composable
+private fun MemoryThreadRow(row: ThreadMemoryRowUi, clearing: Boolean, onClear: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                row.threadId,
+                fontSize = 12.5.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Pa.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                threadMemoryLine(row),
+                Modifier.padding(top = 2.dp),
+                fontSize = 11.5.sp,
+                color = Pa.TextTertiary,
+            )
+        }
+        TextButton(onClick = onClear, enabled = !clearing) {
+            Text("清除", fontSize = 13.sp, color = Pa.RedText)
+        }
     }
 }

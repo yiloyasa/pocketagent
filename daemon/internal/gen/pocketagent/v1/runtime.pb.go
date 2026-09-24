@@ -2226,6 +2226,328 @@ func (x *AgentRecoveryState) GetAt() string {
 	return ""
 }
 
+type ListThreadMemoriesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // 必须是注册表里已注册的 agent,否则 InvalidArgument(文案动态列出已注册名单)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListThreadMemoriesRequest) Reset() {
+	*x = ListThreadMemoriesRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListThreadMemoriesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListThreadMemoriesRequest) ProtoMessage() {}
+
+func (x *ListThreadMemoriesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListThreadMemoriesRequest.ProtoReflect.Descriptor instead.
+func (*ListThreadMemoriesRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ListThreadMemoriesRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+// ThreadMemoryRow 是清单里一个会话的记忆合计。
+type ThreadMemoryRow struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	Entries  int32                  `protobuf:"varint,2,opt,name=entries,proto3" json:"entries,omitempty"` // 条目数(全部 kind 槽合计)
+	Bytes    int64                  `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`     // 载荷字节合计
+	Seq      int64                  `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`         // sequence 高水位(该会话全部槽里的最大值)
+	// 最后一次 checkpoint 落盘时刻(文件 mtime);0 = 从未落盘。
+	LastCheckpointUnixMs int64 `protobuf:"varint,5,opt,name=last_checkpoint_unix_ms,json=lastCheckpointUnixMs,proto3" json:"last_checkpoint_unix_ms,omitempty"`
+	// true = 本进程已装载(内存实时值);false = 重启后从未触碰,值来自盘上落盘那一刻
+	// 的快照。两种口径必须分开:客户端把快照当实时值展示,就是在编一个"看起来更新"的数。
+	Loaded        bool `protobuf:"varint,6,opt,name=loaded,proto3" json:"loaded,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ThreadMemoryRow) Reset() {
+	*x = ThreadMemoryRow{}
+	mi := &file_v1_runtime_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ThreadMemoryRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ThreadMemoryRow) ProtoMessage() {}
+
+func (x *ThreadMemoryRow) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ThreadMemoryRow.ProtoReflect.Descriptor instead.
+func (*ThreadMemoryRow) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ThreadMemoryRow) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *ThreadMemoryRow) GetEntries() int32 {
+	if x != nil {
+		return x.Entries
+	}
+	return 0
+}
+
+func (x *ThreadMemoryRow) GetBytes() int64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *ThreadMemoryRow) GetSeq() int64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *ThreadMemoryRow) GetLastCheckpointUnixMs() int64 {
+	if x != nil {
+		return x.LastCheckpointUnixMs
+	}
+	return 0
+}
+
+func (x *ThreadMemoryRow) GetLoaded() bool {
+	if x != nil {
+		return x.Loaded
+	}
+	return false
+}
+
+type ListThreadMemoriesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 按字节降序(daemon 侧排好;同字节按 thread_id 字典序),客户端保持次序不再重排。
+	Rows            []*ThreadMemoryRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	TotalThreads    int32              `protobuf:"varint,2,opt,name=total_threads,json=totalThreads,proto3" json:"total_threads,omitempty"`
+	TotalEntries    int32              `protobuf:"varint,3,opt,name=total_entries,json=totalEntries,proto3" json:"total_entries,omitempty"`
+	TotalBytes      int64              `protobuf:"varint,4,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	SampledAtUnixMs int64              `protobuf:"varint,5,opt,name=sampled_at_unix_ms,json=sampledAtUnixMs,proto3" json:"sampled_at_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ListThreadMemoriesResponse) Reset() {
+	*x = ListThreadMemoriesResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListThreadMemoriesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListThreadMemoriesResponse) ProtoMessage() {}
+
+func (x *ListThreadMemoriesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListThreadMemoriesResponse.ProtoReflect.Descriptor instead.
+func (*ListThreadMemoriesResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ListThreadMemoriesResponse) GetRows() []*ThreadMemoryRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+func (x *ListThreadMemoriesResponse) GetTotalThreads() int32 {
+	if x != nil {
+		return x.TotalThreads
+	}
+	return 0
+}
+
+func (x *ListThreadMemoriesResponse) GetTotalEntries() int32 {
+	if x != nil {
+		return x.TotalEntries
+	}
+	return 0
+}
+
+func (x *ListThreadMemoriesResponse) GetTotalBytes() int64 {
+	if x != nil {
+		return x.TotalBytes
+	}
+	return 0
+}
+
+func (x *ListThreadMemoriesResponse) GetSampledAtUnixMs() int64 {
+	if x != nil {
+		return x.SampledAtUnixMs
+	}
+	return 0
+}
+
+type ClearThreadMemoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ThreadId      string                 `protobuf:"bytes,2,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"` // 会话不存在时回 NotFound
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearThreadMemoryRequest) Reset() {
+	*x = ClearThreadMemoryRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearThreadMemoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearThreadMemoryRequest) ProtoMessage() {}
+
+func (x *ClearThreadMemoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearThreadMemoryRequest.ProtoReflect.Descriptor instead.
+func (*ClearThreadMemoryRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ClearThreadMemoryRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ClearThreadMemoryRequest) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+type ClearThreadMemoryResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 清除后该 agent 名下的剩余合计(客户端拿它刷新合计行,不必再发一次 List)。
+	TotalThreads  int32 `protobuf:"varint,1,opt,name=total_threads,json=totalThreads,proto3" json:"total_threads,omitempty"`
+	TotalEntries  int32 `protobuf:"varint,2,opt,name=total_entries,json=totalEntries,proto3" json:"total_entries,omitempty"`
+	TotalBytes    int64 `protobuf:"varint,3,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearThreadMemoryResponse) Reset() {
+	*x = ClearThreadMemoryResponse{}
+	mi := &file_v1_runtime_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearThreadMemoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearThreadMemoryResponse) ProtoMessage() {}
+
+func (x *ClearThreadMemoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearThreadMemoryResponse.ProtoReflect.Descriptor instead.
+func (*ClearThreadMemoryResponse) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ClearThreadMemoryResponse) GetTotalThreads() int32 {
+	if x != nil {
+		return x.TotalThreads
+	}
+	return 0
+}
+
+func (x *ClearThreadMemoryResponse) GetTotalEntries() int32 {
+	if x != nil {
+		return x.TotalEntries
+	}
+	return 0
+}
+
+func (x *ClearThreadMemoryResponse) GetTotalBytes() int64 {
+	if x != nil {
+		return x.TotalBytes
+	}
+	return 0
+}
+
 var File_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_v1_runtime_proto_rawDesc = "" +
@@ -2430,7 +2752,31 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\tsucceeded\x18\x03 \x01(\bR\tsucceeded\x12\x12\n" +
 	"\x04from\x18\x04 \x01(\tR\x04from\x12\x16\n" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason\x12\x0e\n" +
-	"\x02at\x18\x06 \x01(\tR\x02at2\x87\b\n" +
+	"\x02at\x18\x06 \x01(\tR\x02at\"6\n" +
+	"\x19ListThreadMemoriesRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xbf\x01\n" +
+	"\x0fThreadMemoryRow\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x18\n" +
+	"\aentries\x18\x02 \x01(\x05R\aentries\x12\x14\n" +
+	"\x05bytes\x18\x03 \x01(\x03R\x05bytes\x12\x10\n" +
+	"\x03seq\x18\x04 \x01(\x03R\x03seq\x125\n" +
+	"\x17last_checkpoint_unix_ms\x18\x05 \x01(\x03R\x14lastCheckpointUnixMs\x12\x16\n" +
+	"\x06loaded\x18\x06 \x01(\bR\x06loaded\"\xe9\x01\n" +
+	"\x1aListThreadMemoriesResponse\x123\n" +
+	"\x04rows\x18\x01 \x03(\v2\x1f.pocketagent.v1.ThreadMemoryRowR\x04rows\x12#\n" +
+	"\rtotal_threads\x18\x02 \x01(\x05R\ftotalThreads\x12#\n" +
+	"\rtotal_entries\x18\x03 \x01(\x05R\ftotalEntries\x12\x1f\n" +
+	"\vtotal_bytes\x18\x04 \x01(\x03R\n" +
+	"totalBytes\x12+\n" +
+	"\x12sampled_at_unix_ms\x18\x05 \x01(\x03R\x0fsampledAtUnixMs\"R\n" +
+	"\x18ClearThreadMemoryRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1b\n" +
+	"\tthread_id\x18\x02 \x01(\tR\bthreadId\"\x86\x01\n" +
+	"\x19ClearThreadMemoryResponse\x12#\n" +
+	"\rtotal_threads\x18\x01 \x01(\x05R\ftotalThreads\x12#\n" +
+	"\rtotal_entries\x18\x02 \x01(\x05R\ftotalEntries\x12\x1f\n" +
+	"\vtotal_bytes\x18\x03 \x01(\x03R\n" +
+	"totalBytes2\xde\t\n" +
 	"\x0eRuntimeService\x12b\n" +
 	"\x10GetRuntimePolicy\x12'.pocketagent.v1.GetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10SetRuntimePolicy\x12'.pocketagent.v1.SetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
@@ -2441,7 +2787,9 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x0fGetCollabPolicy\x12&.pocketagent.v1.GetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponse\x12_\n" +
 	"\x0fSetCollabPolicy\x12&.pocketagent.v1.SetCollabPolicyRequest\x1a$.pocketagent.v1.CollabPolicyResponse\x12_\n" +
 	"\x0fGetRuntimeState\x12&.pocketagent.v1.GetRuntimeStateRequest\x1a$.pocketagent.v1.RuntimeStateResponse\x12_\n" +
-	"\x0fGetAgentRuntime\x12&.pocketagent.v1.GetAgentRuntimeRequest\x1a$.pocketagent.v1.AgentRuntimeResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x0fGetAgentRuntime\x12&.pocketagent.v1.GetAgentRuntimeRequest\x1a$.pocketagent.v1.AgentRuntimeResponse\x12k\n" +
+	"\x12ListThreadMemories\x12).pocketagent.v1.ListThreadMemoriesRequest\x1a*.pocketagent.v1.ListThreadMemoriesResponse\x12h\n" +
+	"\x11ClearThreadMemory\x12(.pocketagent.v1.ClearThreadMemoryRequest\x1a).pocketagent.v1.ClearThreadMemoryResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_runtime_proto_rawDescOnce sync.Once
@@ -2455,7 +2803,7 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_v1_runtime_proto_goTypes = []any{
 	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
 	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
@@ -2488,21 +2836,26 @@ var file_v1_runtime_proto_goTypes = []any{
 	(*AgentCacheUsage)(nil),                 // 28: pocketagent.v1.AgentCacheUsage
 	(*AgentCheckpointUsage)(nil),            // 29: pocketagent.v1.AgentCheckpointUsage
 	(*AgentRecoveryState)(nil),              // 30: pocketagent.v1.AgentRecoveryState
-	nil,                                     // 31: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                                     // 32: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                                     // 33: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                                     // 34: pocketagent.v1.RuntimePolicy.CollabsEntry
-	nil,                                     // 35: pocketagent.v1.AgentMemoryUsage.KindsEntry
+	(*ListThreadMemoriesRequest)(nil),       // 31: pocketagent.v1.ListThreadMemoriesRequest
+	(*ThreadMemoryRow)(nil),                 // 32: pocketagent.v1.ThreadMemoryRow
+	(*ListThreadMemoriesResponse)(nil),      // 33: pocketagent.v1.ListThreadMemoriesResponse
+	(*ClearThreadMemoryRequest)(nil),        // 34: pocketagent.v1.ClearThreadMemoryRequest
+	(*ClearThreadMemoryResponse)(nil),       // 35: pocketagent.v1.ClearThreadMemoryResponse
+	nil,                                     // 36: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 37: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 38: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 39: pocketagent.v1.RuntimePolicy.CollabsEntry
+	nil,                                     // 40: pocketagent.v1.AgentMemoryUsage.KindsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	31, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	32, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	33, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	34, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	36, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	37, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	38, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	39, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
 	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
@@ -2520,36 +2873,41 @@ var file_v1_runtime_proto_depIdxs = []int32{
 	28, // 22: pocketagent.v1.AgentRuntimeResponse.cache:type_name -> pocketagent.v1.AgentCacheUsage
 	29, // 23: pocketagent.v1.AgentRuntimeResponse.checkpoint:type_name -> pocketagent.v1.AgentCheckpointUsage
 	30, // 24: pocketagent.v1.AgentRuntimeResponse.recovery:type_name -> pocketagent.v1.AgentRecoveryState
-	35, // 25: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
-	3,  // 26: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 27: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 28: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 29: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 30: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 31: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 32: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	8,  // 33: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
-	12, // 34: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
-	14, // 35: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
-	17, // 36: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
-	18, // 37: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
-	20, // 38: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
-	25, // 39: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
-	2,  // 40: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 41: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 42: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	11, // 43: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
-	13, // 44: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
-	15, // 45: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
-	19, // 46: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	19, // 47: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	21, // 48: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
-	26, // 49: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
-	40, // [40:50] is the sub-list for method output_type
-	30, // [30:40] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	40, // 25: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
+	32, // 26: pocketagent.v1.ListThreadMemoriesResponse.rows:type_name -> pocketagent.v1.ThreadMemoryRow
+	3,  // 27: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 28: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 29: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 30: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 31: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 32: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 33: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 34: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	12, // 35: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	14, // 36: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	17, // 37: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
+	18, // 38: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
+	20, // 39: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
+	25, // 40: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
+	31, // 41: pocketagent.v1.RuntimeService.ListThreadMemories:input_type -> pocketagent.v1.ListThreadMemoriesRequest
+	34, // 42: pocketagent.v1.RuntimeService.ClearThreadMemory:input_type -> pocketagent.v1.ClearThreadMemoryRequest
+	2,  // 43: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 44: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 45: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	11, // 46: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	13, // 47: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	15, // 48: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	19, // 49: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	19, // 50: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	21, // 51: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
+	26, // 52: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
+	33, // 53: pocketagent.v1.RuntimeService.ListThreadMemories:output_type -> pocketagent.v1.ListThreadMemoriesResponse
+	35, // 54: pocketagent.v1.RuntimeService.ClearThreadMemory:output_type -> pocketagent.v1.ClearThreadMemoryResponse
+	43, // [43:55] is the sub-list for method output_type
+	31, // [31:43] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -2565,7 +2923,7 @@ func file_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   36,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

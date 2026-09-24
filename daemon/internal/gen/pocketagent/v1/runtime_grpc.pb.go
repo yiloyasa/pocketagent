@@ -29,6 +29,8 @@ const (
 	RuntimeService_SetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/SetCollabPolicy"
 	RuntimeService_GetRuntimeState_FullMethodName         = "/pocketagent.v1.RuntimeService/GetRuntimeState"
 	RuntimeService_GetAgentRuntime_FullMethodName         = "/pocketagent.v1.RuntimeService/GetAgentRuntime"
+	RuntimeService_ListThreadMemories_FullMethodName      = "/pocketagent.v1.RuntimeService/ListThreadMemories"
+	RuntimeService_ClearThreadMemory_FullMethodName       = "/pocketagent.v1.RuntimeService/ClearThreadMemory"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -74,6 +76,17 @@ type RuntimeServiceClient interface {
 	GetRuntimeState(ctx context.Context, in *GetRuntimeStateRequest, opts ...grpc.CallOption) (*RuntimeStateResponse, error)
 	// 单个 agent 的运行时形态与用量。
 	GetAgentRuntime(ctx context.Context, in *GetAgentRuntimeRequest, opts ...grpc.CallOption) (*AgentRuntimeResponse, error)
+	// 按会话列出某 agent 名下的语义记忆(内存态 + 盘上 checkpoint 载荷合并视图)。
+	// 【为什么按会话而不是整家一团】"哪几个会话占了记忆"回答不了,管理就无从谈起:
+	// 用户需要的粒度是"把这个走歪了的会话的记忆清掉重新开始",不是"整家清空伤及无辜"。
+	// loaded=false 的行 = 重启后从未触碰、值来自盘上落盘那一刻的快照 —— 两个口径
+	// 分开报,客户端不得把"盘上快照"当成实时值展示。
+	ListThreadMemories(ctx context.Context, in *ListThreadMemoriesRequest, opts ...grpc.CallOption) (*ListThreadMemoriesResponse, error)
+	// 清掉一个会话名下全部 PocketAgent 侧记忆(内存态 + 盘上 checkpoint),返回剩余合计。
+	// 【红线】只动 PocketAgent 自己的数据目录;~/.codex、~/.pi 等原生侧的会话与用户
+	// 数据一个字节都不碰。会话不存在时回 NotFound —— "没清任何东西"必须让客户端
+	// 知道,不能谎报成功。
+	ClearThreadMemory(ctx context.Context, in *ClearThreadMemoryRequest, opts ...grpc.CallOption) (*ClearThreadMemoryResponse, error)
 }
 
 type runtimeServiceClient struct {
@@ -184,6 +197,26 @@ func (c *runtimeServiceClient) GetAgentRuntime(ctx context.Context, in *GetAgent
 	return out, nil
 }
 
+func (c *runtimeServiceClient) ListThreadMemories(ctx context.Context, in *ListThreadMemoriesRequest, opts ...grpc.CallOption) (*ListThreadMemoriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListThreadMemoriesResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ListThreadMemories_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) ClearThreadMemory(ctx context.Context, in *ClearThreadMemoryRequest, opts ...grpc.CallOption) (*ClearThreadMemoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearThreadMemoryResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ClearThreadMemory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -227,6 +260,17 @@ type RuntimeServiceServer interface {
 	GetRuntimeState(context.Context, *GetRuntimeStateRequest) (*RuntimeStateResponse, error)
 	// 单个 agent 的运行时形态与用量。
 	GetAgentRuntime(context.Context, *GetAgentRuntimeRequest) (*AgentRuntimeResponse, error)
+	// 按会话列出某 agent 名下的语义记忆(内存态 + 盘上 checkpoint 载荷合并视图)。
+	// 【为什么按会话而不是整家一团】"哪几个会话占了记忆"回答不了,管理就无从谈起:
+	// 用户需要的粒度是"把这个走歪了的会话的记忆清掉重新开始",不是"整家清空伤及无辜"。
+	// loaded=false 的行 = 重启后从未触碰、值来自盘上落盘那一刻的快照 —— 两个口径
+	// 分开报,客户端不得把"盘上快照"当成实时值展示。
+	ListThreadMemories(context.Context, *ListThreadMemoriesRequest) (*ListThreadMemoriesResponse, error)
+	// 清掉一个会话名下全部 PocketAgent 侧记忆(内存态 + 盘上 checkpoint),返回剩余合计。
+	// 【红线】只动 PocketAgent 自己的数据目录;~/.codex、~/.pi 等原生侧的会话与用户
+	// 数据一个字节都不碰。会话不存在时回 NotFound —— "没清任何东西"必须让客户端
+	// 知道,不能谎报成功。
+	ClearThreadMemory(context.Context, *ClearThreadMemoryRequest) (*ClearThreadMemoryResponse, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -266,6 +310,12 @@ func (UnimplementedRuntimeServiceServer) GetRuntimeState(context.Context, *GetRu
 }
 func (UnimplementedRuntimeServiceServer) GetAgentRuntime(context.Context, *GetAgentRuntimeRequest) (*AgentRuntimeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAgentRuntime not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ListThreadMemories(context.Context, *ListThreadMemoriesRequest) (*ListThreadMemoriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListThreadMemories not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ClearThreadMemory(context.Context, *ClearThreadMemoryRequest) (*ClearThreadMemoryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearThreadMemory not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -468,6 +518,42 @@ func _RuntimeService_GetAgentRuntime_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_ListThreadMemories_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListThreadMemoriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ListThreadMemories(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ListThreadMemories_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ListThreadMemories(ctx, req.(*ListThreadMemoriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_ClearThreadMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearThreadMemoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ClearThreadMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ClearThreadMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ClearThreadMemory(ctx, req.(*ClearThreadMemoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -514,6 +600,14 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetAgentRuntime",
 			Handler:    _RuntimeService_GetAgentRuntime_Handler,
+		},
+		{
+			MethodName: "ListThreadMemories",
+			Handler:    _RuntimeService_ListThreadMemories_Handler,
+		},
+		{
+			MethodName: "ClearThreadMemory",
+			Handler:    _RuntimeService_ClearThreadMemory_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
