@@ -34,13 +34,13 @@
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，**代码基线** `8d46452`（2026-09-24/25 两轮：收口轮 = W8 未知 response 落点、D8 数据目录迁移、WatchEvents Android 客户端、删除会话释放内存态；优化轮 = D7 收尾 cache/resource 落盘 + recovery 产出方、Android 运行时四块上屏、新消息适配回归加固、zcode 未知反向请求补台账）；文档同步 = 本提交，工作树应保持干净，当前提交以 `git log` 为准 |
+| Git | 分支 `main`，**代码基线** `b119f4f`（2026-09-25 三轮：收口轮 = W8/D8 迁移/WatchEvents/删除释放；优化轮 = D7 收尾 + 四块上屏 + 新消息适配；**UI 改版轮 = 磨砂玻璃设计系统 + 三线屏幕改造**）；文档同步 = 本提交，工作树应保持干净，当前提交以 `git log` 为准 |
 | daemon | 本轮未重启生产进程（**有意推迟到优化轮结束后一次部署**，届时迁移代码随重启生效：默认数据目录 `~/.pocketagentd` → `%LOCALAPPDATA%\PocketAgent\data`，校验+原子 rename+失败保留旧目录可回滚）。源码侧 `go test -count=1 ./...` **18 包全绿**、受影响包 `CGO_ENABLED=1 go test -race` 通过、`go build`/`go vet` 通过 |
 | 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线 · **W8 ✅** 未知 response 落点 + 已知事件白名单扩容（daemon 侧）· **W9 ✅** 六家 provider 统一 Runtime 合同（memory/cache/resource/checkpoint 全部落盘可观测，D7 收尾完成）+ recovery 产出方（推导式）· **W10 ✅** 协同策略由用户电脑上的 daemon 权威持有 · **W11 ✅（JVM）** Android Runtime 区段全量接线（含 per-agent 四块数值上屏）；真机 L2 尚未执行 · **WatchEvents ✅（代码）** Android 客户端 + 断点状态机 + 恢复循环事件唤醒，实测归 L2 |
-| **本轮已完成的用户问题** | 删除会话的墓碑过滤覆盖列表/导入/重启/迟到子代理；Codex 空正文分层并支持原生历史补偿；断线恢复改为 150ms 起的退避增量回放 + WatchEvents 事件驱动立即唤醒；Android 删除统一清理本地缓存（含内存层 `TurnSession.release`）；无法关联的 response/request 脱敏落诊断不再无主（四 client 兜底 + zcode 补台账）；数据目录迁移安全链落地；cache/resource 重启不再归零；per-agent 恢复状态真实上报并可上屏 |
-| **下一刀（已明确）★** | ① daemon 新构建热部署 + L0 产物自证（迁移随重启生效）；② APK 重装 + L2 真机回归（WatchEvents 立即唤醒 / 迁移后首启与兼容矩阵 / 删除不复活 / 未知 response 注入 / 运行时四块显示）；③ 内存分层（Summary/Artifact 主动收敛）与原生 session 适配器收编（spec §6.3/§7）；④ 决策项：B 开关 ON 态是否实现（现在全域无实现）、zcode/codex 反向请求端到端钉的 fake harness 扩展 |
-| APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
-| 测试基线 | Android **89 份 XML / 679 用例 / 0 失败 / 0 错误**（2026-09-25，`_pa_gradle.py test` 强制 `--rerun`，结果 XML 时间戳本轮）；daemon **18 包全绿** + 受影响包 `-race` 通过；`pa_audit --json`：红线 **0**、提示 **1**（附录 A 挂牌例行 5 处）、通过 **6** |
+| **本轮已完成的用户问题** | **UI 大改版（用户要求：高级感/磨砂玻璃/丝滑跟手）**：设计系统三件套（PaGlass 磨砂玻璃材质+推背模糊、PaMotion 全 spring 动效令牌、PaSheet 统一玻璃浮层）+ 聊天/首页列表抽屉/设置任务中心协同三线全量改造 + 模拟器实机视觉验收（Pixel 5 API 34：推背模糊/玻璃材质/spring 转场实测生效）。同轮：删除复活根治、断线恢复 150ms 退避+WatchEvents 立即唤醒、未知 response/request 脱敏落诊断、D8 数据目录迁移、cache/resource 落盘、per-agent recovery 上屏 |
+| **下一刀（已明确）★** | ① daemon 新构建热部署 + L0 产物自证（迁移随重启生效）；② APK 重装 + L2 真机回归（WatchEvents 立即唤醒 / 迁移后首启与兼容矩阵 / 删除不复活 / 未知 response 注入 / 运行时四块显示 / **UI 改版真机手感：深色主题玻璃质感、抽屉动量、键盘跟随**）；③ UI 改版收尾：ApprovalSheet/ExpandedInputSheet 收敛（PaSheet 需加 sheetState/properties/insets 参数）、RecentThreadsDrawer 推背、ChatScreen 配对态实测、浅色主题玻璃对比度复核；④ 内存分层与原生 session 收编（spec §6.3/§7）；⑤ 决策项：B 开关 ON 态、fake harness 扩展 |
+| APK | debug `build/app-debug.apk` **221 MB**（增量构建 sha256 060f69ba…；体积结论仍须 `cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
+| 测试基线 | Android **89 份 XML / 679 用例 / 0 失败 / 0 错误**（2026-09-25，UI 改版轮后 `--rerun` 本轮）；daemon **18 包全绿** + 受影响包 `-race` 通过；`pa_audit --json`：红线 **0**、提示 **1**（附录 A 挂牌例行）、通过 **6**；模拟器视觉验收证据 `docs/verify/evidence/ui-revamp/`（不入 git，结论在提交信息与 AUDIT 附录 B） |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
