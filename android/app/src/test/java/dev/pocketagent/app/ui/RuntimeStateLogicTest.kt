@@ -18,6 +18,8 @@ import pocketagent.v1.RuntimeContractReport
 import pocketagent.v1.RuntimeLimitation
 import pocketagent.v1.RuntimeLimits
 import pocketagent.v1.RuntimeStateResponse
+import pocketagent.v1.UnknownEventField
+import pocketagent.v1.UnknownEventResponse
 import pocketagent.v1.UnknownEventSummary
 
 /**
@@ -316,6 +318,99 @@ class RuntimeStateLogicTest {
                 .setEventId("evt-2").setNormalizedKind("UNKNOWN_REQUEST").build()
         )
         assertEquals("新请求", line.title)
+    }
+
+    // ---- 消息透析(summary 人话 + 旧 daemon 降级 + 相对时间 + 详情透析表) ----
+
+    private fun dialysisItem(): UnknownEventSummary.Builder = UnknownEventSummary.newBuilder()
+        .setEventId("evt-x")
+        .setSourceAgent("codex")
+        .setSourceMethod("item/weird/thing/started")
+        .setNormalizedKind("UNKNOWN_NOTIFICATION")
+        .setProcessingStatus("NEW")
+        .setReceivedAtUnixMs(1_756_000_000_000)
+
+    @Test
+    fun `summary有值时行带人话翻译且不降级`() {
+        // 新 daemon 给了 summary(一句话人话):原样透出,不得再套一层改写。
+        val line = unknownEventLine(dialysisItem().setSummary("codex 报告了一条新通知").build())
+        assertEquals("codex 报告了一条新通知", line.summary)
+        assertNull(line.degradedNote)
+        assertEquals("codex", line.sourceAgent)
+        assertEquals("item/weird/thing/started", line.title)
+    }
+
+    @Test
+    fun `summary空白时降级为原文加固定说明且不写未知`() {
+        // 旧 daemon / 旧台账条目没有 summary:折叠行回落到 source_method 原文,
+        // 外加一句**事实陈述**(此 daemon 版本未提供翻译)。禁"未知/错误"(AUDIT §3.3):
+        // "没提供翻译"是上游版本的事实,不是这台手机的故障。
+        val line = unknownEventLine(dialysisItem().build())
+        assertNull(line.summary)
+        assertEquals("此 daemon 版本未提供翻译", line.degradedNote)
+        assertFalse(line.degradedNote!!.contains("未知"))
+        assertFalse(line.degradedNote!!.contains("错误"))
+    }
+
+    @Test
+    fun `相对时间按档位人话且now由调用方注入`() {
+        val now = 1_756_000_000_000L
+        // 无时间戳 = 不出时间,而不是显示"0 分钟前"。
+        assertEquals("", relativeTimeLabel(0, now))
+        assertEquals("刚刚", relativeTimeLabel(now - 30_000, now))
+        assertEquals("3 分钟前", relativeTimeLabel(now - 3 * 60_000, now))
+        assertEquals("2 小时前", relativeTimeLabel(now - 2 * 3_600_000, now))
+        assertEquals("5 天前", relativeTimeLabel(now - 5 * 86_400_000, now))
+        // 超一周回落绝对日期(是哪天的给人看日子),不为空即可。
+        assertTrue(relativeTimeLabel(now - 30L * 86_400_000, now).isNotEmpty())
+        // 客户端时钟偏慢(时间戳在未来):回落绝对日期,不许出现"负 N 分钟前"。
+        assertTrue(relativeTimeLabel(now + 60_000, now).isNotEmpty())
+    }
+
+    @Test
+    fun `详情透析表逐行映射且meaning空白不造值`() {
+        // digest 是字段级透析表的每一行:四个字段照 daemon 原文带出;
+        // meaning 留空 = daemon 识别不出含义 —— 置 null 让 UI 只显示 key+预览,
+        // 手机端绝不能猜一个含义填进去(静默造值的表格版)。
+        val resp = UnknownEventResponse.newBuilder()
+            .setRawJson("{\"a\":1}")
+            .setTranslation("载荷是一条通知,daemon 已照常透传")
+            .addDigest(
+                UnknownEventField.newBuilder()
+                    .setKey("title").setKind("text").setPreview("\"hi\"").setMeaning("通知标题")
+            )
+            .addDigest(
+                UnknownEventField.newBuilder().setKey("payload.b").setKind("number").setPreview("42")
+            )
+            .build()
+        val d = mapUnknownEventDetail(resp)
+        assertEquals("载荷是一条通知,daemon 已照常透传", d.translation)
+        assertEquals(2, d.digest.size)
+        assertEquals("title", d.digest[0].key)
+        assertEquals("text", d.digest[0].kind)
+        assertEquals("\"hi\"", d.digest[0].preview)
+        assertEquals("通知标题", d.digest[0].meaning)
+        assertNull(d.digest[1].meaning)
+        assertEquals("42", d.digest[1].preview)
+    }
+
+    @Test
+    fun `详情透析内容缺席时整块不渲染`() {
+        // 旧 daemon 的 GetUnknownEvent 没有 digest/translation:空列表 + null,
+        // 让 UI 对应区块整块缺席 —— 不是显示两块"空"的占位。
+        val d = mapUnknownEventDetail(UnknownEventResponse.newBuilder().setRawJson("{}").build())
+        assertTrue(d.digest.isEmpty())
+        assertNull(d.translation)
+        assertEquals("{}", d.rawJson)
+    }
+
+    @Test
+    fun `处理状态全档人话`() {
+        // 弹窗里处置后状态就地更新,六个档位的文案都要能对上(daemon 值域见 proto 注释)。
+        assertEquals("已忽略", unknownStatusLabel("IGNORED"))
+        assertEquals("已升级", unknownStatusLabel("ESCALATED"))
+        assertEquals("已查看", unknownStatusLabel("INSPECTED"))
+        assertEquals("稍后再看", unknownStatusLabel("RETRY_LATER"))
     }
 
     @Test

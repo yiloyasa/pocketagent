@@ -36,6 +36,7 @@ import pocketagent.v1.RuntimePolicyResponse
 import pocketagent.v1.RuntimeStateResponse
 import pocketagent.v1.SetCollabPolicyRequest
 import pocketagent.v1.SetRuntimePolicyRequest
+import pocketagent.v1.UnknownEventResponse
 import pocketagent.v1.UnknownEventSummary
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -430,7 +431,52 @@ data class UnknownEventLine(
     val title: String,
     val subtitle: String,
     val statusLabel: String,
+    /** 来源 agent 名(弹窗折叠行单独展示用);daemon 未给时为空串。 */
+    val sourceAgent: String = "",
+    /**
+     * daemon 生成的一句话人话翻译(说"发生了什么")。
+     * **null = 此 daemon 未提供**(旧版本 daemon 或旧台账条目),走 [degradedNote] 降级,
+     * 手机端绝不替 daemon 编一句看起来像翻译的文案。
+     */
+    val summary: String? = null,
+    /** summary 缺席时的固定降级说明(见 [UNKNOWN_SUMMARY_FALLBACK_NOTE]);有翻译时为 null。 */
+    val degradedNote: String? = null,
+    /** 相对时间(「3 分钟前」);无时间戳时为空串。 */
+    val relativeTime: String = "",
 )
+
+/**
+ * summary 缺席(旧 daemon / 旧台账条目)时的固定降级说明。
+ *
+ * 【为什么是这句】这是**事实陈述**:翻译没给出来,原因是手里的 daemon 版本没实现
+ * 这个字段 —— 它不判断对错、不定性,所以既不写「未知」也不写「错误」
+ * (AUDIT §3.3:机器无从裁决用户可见性,索性只陈述事实)。
+ */
+const val UNKNOWN_SUMMARY_FALLBACK_NOTE = "此 daemon 版本未提供翻译"
+
+/**
+ * 相对时间标签:刚刚 / N 分钟前 / N 小时前 / N 天前;超过一周回落绝对日期。
+ *
+ * 【为什么 now 由调用方注入】相对时间是 (unixMs, now) 的二元函数;把"现在"藏在
+ * System.currentTimeMillis() 里,单测就只能断言"刚生成那一刻的值",跑慢一秒就翻车。
+ */
+fun relativeTimeLabel(unixMs: Long, nowMs: Long): String {
+    if (unixMs <= 0) return ""
+    val diff = nowMs - unixMs
+    // 客户端时钟偏慢(时间戳在未来):回落绝对日期,不显示"负 N 分钟前"。
+    if (diff < 0) return timeLabel(unixMs)
+    return when {
+        diff < 60_000L -> "刚刚"
+        diff < 3_600_000L -> "${diff / 60_000L} 分钟前"
+        diff < 86_400_000L -> "${diff / 3_600_000L} 小时前"
+        diff < 7L * 86_400_000L -> "${diff / 86_400_000L} 天前"
+        else -> timeLabel(unixMs)
+    }
+}
+
+/** 单参重载: now 取当前时钟(仅 UI 直接调用;单测一律走双参纯函数)。 */
+fun relativeTimeLabel(unixMs: Long): String =
+    relativeTimeLabel(unixMs, System.currentTimeMillis())
 
 /**
  * 安全分级的展示文案。
@@ -464,17 +510,25 @@ fun unknownKindLabel(raw: String): String = when (raw) {
 /**
  * 列表项:标题用**原生方法名原文**(不翻译、不改写),只把归类/状态译成人话。
  * 方法名缺席时才退回归类文案 —— 空白标题会让整个列表看起来像坏了。
+ *
+ * summary 是 daemon 给的一句话人话,有就透出;缺席时降级为原文 + 固定说明
+ * (见 [UNKNOWN_SUMMARY_FALLBACK_NOTE]),不造翻译。
  */
 fun unknownEventLine(s: UnknownEventSummary): UnknownEventLine {
     val kindLabel = unknownKindLabel(s.normalizedKind)
     val title = s.sourceMethod.ifBlank { kindLabel }.ifBlank { s.eventId }
     val parts = listOf(s.sourceAgent, kindLabel, timeLabel(s.receivedAtUnixMs))
         .filter { it.isNotBlank() }
+    val summary = s.summary.ifBlank { null }
     return UnknownEventLine(
         eventId = s.eventId,
         title = title,
         subtitle = parts.joinToString(" · ").ifBlank { "原生发来了一条新事件" },
         statusLabel = unknownStatusLabel(s.processingStatus),
+        sourceAgent = s.sourceAgent,
+        summary = summary,
+        degradedNote = if (summary == null) UNKNOWN_SUMMARY_FALLBACK_NOTE else null,
+        relativeTime = relativeTimeLabel(s.receivedAtUnixMs),
     )
 }
 
@@ -677,7 +731,7 @@ object RuntimeControlState {
                     GetUnknownEventRequest.newBuilder().setEventId(eventId).build()
                 )
             }
-            UnknownEventResponseOf(r.rawJson, r.decodedFieldsJson, r.note)
+            mapUnknownEventDetail(r)
         }
 
     /** 展开某 agent 的运行时资源用量(形态卡来自总览,用量要单独问)。 */
@@ -708,9 +762,45 @@ object RuntimeControlState {
     }
 }
 
-/** 未知事件详情(展开后才拉的三段文本)。 */
+/** 未知事件详情(展开后才拉的内容:原文三段 + 新 daemon 的透析表/详细解读)。 */
 data class UnknownEventResponseOf(
     val rawJson: String,
     val decodedFieldsJson: String,
     val note: String,
+    /** 字段级透析表;**空 = 此 daemon 未提供**(旧版本),UI 对应区块整块不渲染。 */
+    val digest: List<UnknownEventDigestRow> = emptyList(),
+    /** 详细人话解读;**null = 未提供**,同上。 */
+    val translation: String? = null,
 )
+
+/** 透析表的一行:字段名 / 值类型 / 脱敏预览 / 含义人话。 */
+data class UnknownEventDigestRow(
+    val key: String,
+    val kind: String,
+    val preview: String,
+    /** daemon 识别不出含义时为 null —— UI 只显示 key+预览,**不许猜一个含义填进去**。 */
+    val meaning: String?,
+)
+
+/**
+ * GetUnknownEvent 响应 → 详情模型(digest/translation 的唯一映射点)。
+ *
+ * 【为什么空串一律归空值】新 daemon 才给 digest/translation;旧 daemon 的响应里
+ * 这两个字段读出来是空串/空列表。若在此处拿旧字段(raw_json 等)"拼一份差不多的",
+ * 用户会以为透析内容来自 daemon —— 那是我们编的。空值让 UI 整块缺席,才是如实。
+ */
+fun mapUnknownEventDetail(r: UnknownEventResponse): UnknownEventResponseOf =
+    UnknownEventResponseOf(
+        rawJson = r.rawJson,
+        decodedFieldsJson = r.decodedFieldsJson,
+        note = r.note,
+        digest = r.digestList.map {
+            UnknownEventDigestRow(
+                key = it.key,
+                kind = it.kind,
+                preview = it.preview,
+                meaning = it.meaning.ifBlank { null },
+            )
+        },
+        translation = r.translation.ifBlank { null },
+    )
