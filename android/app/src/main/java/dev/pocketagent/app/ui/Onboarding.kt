@@ -1,6 +1,15 @@
 package dev.pocketagent.app.ui
 
 import android.content.Context
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.launch
@@ -338,7 +348,13 @@ fun Onboarding(onDone: () -> Unit) {
                     .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (pager.currentPage > 0) {
+                // 上一步:非首页淡入,回首页时淡出(spring 令牌,可打断)——
+                // 原来是 if/else 硬生成/移除,翻回第一页那一帧会"闪没"。
+                AnimatedVisibility(
+                    visible = pager.currentPage > 0,
+                    enter = fadeIn(PaMotion.standard()) + slideInHorizontally(PaMotion.standard()) { -it / 2 },
+                    exit = fadeOut(PaMotion.nav(600f)) + slideOutHorizontally(PaMotion.nav(600f)) { -it / 2 },
+                ) {
                     Text(
                         "上一步",
                         Modifier
@@ -346,8 +362,6 @@ fun Onboarding(onDone: () -> Unit) {
                             .padding(8.dp),
                         fontSize = 14.sp, color = Pa.TextSecondary,
                     )
-                } else {
-                    Spacer(Modifier.width(1.dp))
                 }
 
                 Row(
@@ -355,12 +369,24 @@ fun Onboarding(onDone: () -> Unit) {
                     horizontalArrangement = Arrangement.Center,
                 ) {
                     repeat(pages.size) { i ->
+                        // 指示点:当前点放大 + 品牌色,尺寸/颜色都 spring 过渡(原来是硬切)
+                        val active = i == pager.currentPage
+                        val dotSize by animateDpAsState(
+                            targetValue = if (active) 9.dp else 7.dp,
+                            animationSpec = PaMotion.emphasized(),
+                            label = "onboardDotSize",
+                        )
+                        val dotColor by animateColorAsState(
+                            targetValue = if (active) Pa.Accent else Pa.Hover,
+                            animationSpec = PaMotion.standard(),
+                            label = "onboardDotColor",
+                        )
                         Box(
                             Modifier
                                 .padding(horizontal = 4.dp)
-                                .size(if (i == pager.currentPage) 9.dp else 7.dp)
+                                .size(dotSize)
                                 .clip(CircleShape)
-                                .background(if (i == pager.currentPage) Pa.Accent else Pa.Hover),
+                                .background(dotColor),
                         )
                     }
                 }
@@ -375,10 +401,17 @@ fun Onboarding(onDone: () -> Unit) {
                         .background(Pa.Accent)
                         .padding(horizontal = 22.dp, vertical = 11.dp),
                 ) {
-                    Text(
-                        if (isLast) "开始使用" else "下一步",
-                        fontSize = 14.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold,
-                    )
+                    // 文案切换(下一步 ↔ 开始使用)淡入淡出,不再同帧硬换字
+                    AnimatedContent(
+                        targetState = isLast,
+                        transitionSpec = { fadeIn(PaMotion.standard()) togetherWith fadeOut(PaMotion.nav(700f)) },
+                        label = "onboardCta",
+                    ) { last ->
+                        Text(
+                            if (last) "开始使用" else "下一步",
+                            fontSize = 14.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
             }
         }

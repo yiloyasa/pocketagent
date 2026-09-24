@@ -1,8 +1,16 @@
 package dev.pocketagent.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,8 +63,10 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.fileKindOf
@@ -166,6 +176,7 @@ fun TaskCenterScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp)
                     .background(Pa.Card, RoundedCornerShape(18.dp))
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(18.dp))
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -182,6 +193,7 @@ fun TaskCenterScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
                     .background(Pa.Card, RoundedCornerShape(50))
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(50))
                     .padding(4.dp),
             ) {
                 KindTab("消息处理", kindTab == TaskCenter.Kind.MESSAGE, Modifier.weight(1f)) {
@@ -270,25 +282,28 @@ fun TaskCenterScreen(
             }
         }
 
-        // ---------- 底部操作:清理已完成 ----------
-        if (all.any { it.status != TaskCenter.Status.RUNNING }) {
+        // ---------- 底部操作:清理已完成(出现/退场 spring 化,随时可打断) ----------
+        val hasFinished = all.any { it.status != TaskCenter.Status.RUNNING }
+        AnimatedVisibility(
+            visible = hasFinished,
+            enter = fadeIn(PaMotion.standard()) + slideInVertically(PaMotion.sheet()) { it },
+            exit = fadeOut(PaMotion.nav(700f)) + slideOutVertically(PaMotion.nav(600f)) { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 20.dp),
+        ) {
             Box(
                 Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                    .navigationBarsPadding()
+                    .pressable(haptic = true) { TaskCenter.clearFinished() }
+                    .background(Pa.CardHigh, RoundedCornerShape(16.dp))
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .pressable(haptic = true) { TaskCenter.clearFinished() }
-                        .background(Pa.CardHigh, RoundedCornerShape(16.dp))
-                        .padding(vertical = 13.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("清理已完成的任务", fontSize = 14.sp, color = Pa.TextSecondary)
-                }
+                Text("清理已完成的任务", fontSize = 14.sp, color = Pa.TextSecondary)
             }
         }
 
@@ -319,10 +334,16 @@ private fun StatCell(label: String, value: String, valueColor: Color, modifier: 
 
 @Composable
 private fun KindTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    // 选中底色 spring 过渡:胶囊在两个页签间"滑"过去,而不是硬切(AUDIT 无新 tween)
+    val bg by animateColorAsState(
+        targetValue = if (selected) Pa.Accent else Color.Transparent,
+        animationSpec = PaMotion.standard(),
+        label = "kindTabBg",
+    )
     Box(
         modifier
             .pressable(haptic = true) { onClick() }
-            .background(if (selected) Pa.Accent else Color.Transparent, RoundedCornerShape(50))
+            .background(bg, RoundedCornerShape(50))
             .padding(vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -375,7 +396,9 @@ private fun TaskRow(
         Modifier
             .fillMaxWidth()
             .pressable(haptic = true) { onClick() }
+            // 实色卡 + 发丝边:与全 app 分组卡同一材质语言(可读性优先,卡片不做玻璃)
             .background(Pa.Card, RoundedCornerShape(18.dp))
+            .border(0.5.dp, Pa.Separator, RoundedCornerShape(18.dp))
             .padding(horizontal = 14.dp, vertical = 13.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -496,12 +519,27 @@ private fun TaskRow(
                     .background(Pa.Bg, RoundedCornerShape(50)),
             ) {
                 if (task.progress > 0f) {
-                    // 真实进度:任务层保证单调不减,不会出现"前进又倒退"
+                    // 真实进度:spring 过渡(任务层保证单调不减),进度推进是"流"过去的,
+                    // 不是一格一格跳;减弱动效时瞬时到位。
+                    val reduceMotion = rememberReduceMotion()
+                    val animated by animateFloatAsState(
+                        targetValue = task.progress.coerceIn(0.02f, 1f),
+                        animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.standard(),
+                        label = "taskProgress",
+                    )
                     Box(
                         Modifier
-                            .fillMaxWidth(task.progress.coerceIn(0.02f, 1f))
+                            .fillMaxWidth(animated)
                             .fillMaxHeight()
                             .background(accent, RoundedCornerShape(50)),
+                    )
+                } else if (rememberReduceMotion()) {
+                    // 减弱动效:不确定进度退化为静态半程条(状态可见,位移消失)
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.40f)
+                            .fillMaxHeight()
+                            .background(accent.copy(alpha = 0.6f), RoundedCornerShape(50)),
                     )
                 } else {
                     // 不确定进度:一道 40% 宽的高光匀速扫过(左→右循环,两端羽化),

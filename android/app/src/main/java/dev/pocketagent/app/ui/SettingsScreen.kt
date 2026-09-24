@@ -2,7 +2,13 @@ package dev.pocketagent.app.ui
 
 import android.widget.Toast
 import dev.pocketagent.app.BuildConfig
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,12 +35,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,7 +51,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -59,6 +65,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.pocketagent.app.AgentConnection
@@ -66,8 +73,11 @@ import dev.pocketagent.app.CredentialMode
 import dev.pocketagent.app.R
 import dev.pocketagent.app.credentialModeFor
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaPaths
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.SenseVoiceModelManager
 import dev.pocketagent.app.ui.component.fileKindOf
@@ -78,6 +88,7 @@ import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
 import dev.pocketagent.app.ui.theme.AgentTheme
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.paPushBack
 import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -313,6 +324,30 @@ private fun ManagedPolicyNote(text: String) {
 private fun agentIcon(id: String): Int? = agentBrandIcon(id)
 
 private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
+
+/**
+ * 设置页分组卡的统一材质:实色卡 + 发丝边。
+ *
+ * 【为什么不是玻璃】玻璃留给浮层(Sheet/菜单)——设置行长内容若也做半透明,
+ * 下层文字透上来读不清("玻璃上不叠玻璃"的材质铁律);实色 Pa.Card 配 0.5dp
+ * 分隔线色的发丝边,在纯黑底上给出"卡片的物理边界",这就是设置页的层级语言。
+ */
+private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(16.dp)): Modifier = composed {
+    this
+        .background(Pa.Card, shape)
+        .border(0.5.dp, Pa.Separator, shape)
+}
+
+/**
+ * 展开收起(高度动画)的令牌化规格。
+ *
+ * 【为什么要在这个文件里再包一层】animateContentSize 要求 FiniteAnimationSpec,
+ * 而 PaMotion.instant() 的声明返回类型是宽化的 AnimationSpec,传不进去;
+ * 令牌文件(PaMotion.kt)禁改,所以这里用同值的 snap() 承接"瞬时到位"档——
+ * 默认档是 PaMotion.emphasized()(轻微过冲的揭示,展开收起读作"跟手")。
+ */
+private fun Modifier.paExpandable(reduceMotion: Boolean): Modifier =
+    this.animateContentSize(if (reduceMotion) snap<IntSize>() else PaMotion.emphasized())
 
 /**
  * 设置页(重做版:一级导航、二级编辑)。
@@ -782,7 +817,9 @@ fun SettingsScreen(
         return
     }
     if (subPage == "agent") {
-        AgentPage(
+        // 【推背模糊】Agent 二级页内也会弹出审批预览玻璃浮层,内容根同样后退一层。
+        Box(Modifier.fillMaxSize().paPushBack(showApprovalPreview)) {
+            AgentPage(
             onBack = { subPage = null },
             runningAgent = runningAgent,
             settings = settings,
@@ -806,7 +843,8 @@ fun SettingsScreen(
             onShowApprovalPreview = { showApprovalPreview = true },
             // 打开二级页时记下返回目标("agent"),返回才会回到本页而非设置首页。
             onOpenCapabilities = { subPageReturn = "agent"; subPage = "capabilities" },
-        )
+            )
+        }
         // 【必须在 return 之前渲染】AgentPage 是二级页,上面 return 之后下面的
         // 一级页渲染点永远不会执行 —— 预览按钮点了没反应/要退出二级页才冒出来的根因。
         if (showApprovalPreview) {
@@ -846,11 +884,14 @@ fun SettingsScreen(
     }
 
     // ---------------- 一级页 ----------------
+    // 【推背模糊】玻璃浮层(审批预览 PaSheet)打开时,设置内容自身模糊+缩小+压暗——
+    // 透过玻璃看过去才是真磨砂(PaGlass 职责分离:模糊在内容层,不在浮层上)。
     Column(
         modifier
             .fillMaxSize()
             .background(Pa.Bg)
-            .statusBarsPadding(),
+            .statusBarsPadding()
+            .paPushBack(showApprovalPreview),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 8.dp),
@@ -915,7 +956,7 @@ fun SettingsScreen(
                     Modifier
                         .fillMaxWidth()
                         .pressable(haptic = true) { subPage = "userdata" }
-                        .background(Pa.Card, RoundedCornerShape(18.dp))
+                        .paSettingsCard(RoundedCornerShape(18.dp))
                         .padding(horizontal = 14.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -968,7 +1009,7 @@ fun SettingsScreen(
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .paSettingsCard()
                             .padding(horizontal = 14.dp),
                     ) {
                         SettingRow(
@@ -1000,7 +1041,7 @@ fun SettingsScreen(
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .paSettingsCard()
                             .padding(horizontal = 14.dp),
                     ) {
                         SettingRow(
@@ -1027,7 +1068,7 @@ fun SettingsScreen(
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .background(Pa.Card, RoundedCornerShape(16.dp))
+                            .paSettingsCard()
                             .padding(horizontal = 14.dp),
                     ) {
                         SettingRow(
@@ -2208,6 +2249,9 @@ private fun deleteLocalFile(ctx: android.content.Context, uri: String): Boolean 
  * 【为什么不用 OutlinedTextField】Material 默认描边框在纯黑页面上是一圈灰线,
  * 和"深灰圆角卡"的语言不搭;而且自带的内边距会撑高整张卡。这里只用 [BasicTextField],
  * 外观完全由我们控制。
+ *
+ * 【焦点态】聚焦时发丝边亮成品牌蓝(颜色 spring 过渡)——连接地址/token 这种
+ * 长表单,"当前在哪一格"必须一眼可辨;失焦 quietly 退回分隔线色。
  */
 @Composable
 private fun SettingsTextField(
@@ -2217,6 +2261,13 @@ private fun SettingsTextField(
     password: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) Pa.Accent.copy(alpha = 0.55f) else Pa.Separator,
+        animationSpec = PaMotion.standard(),
+        label = "settingsFieldBorder",
+    )
     Column(Modifier.fillMaxWidth()) {
         Text(
             label,
@@ -2228,6 +2279,7 @@ private fun SettingsTextField(
             Modifier
                 .fillMaxWidth()
                 .background(Pa.Bg, RoundedCornerShape(12.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
@@ -2243,6 +2295,7 @@ private fun SettingsTextField(
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
                 modifier = Modifier.fillMaxWidth(),
+                interactionSource = interaction,
             )
         }
     }
@@ -2266,6 +2319,7 @@ private fun ModelPickerDialog(
             Modifier
                 .fillMaxWidth()
                 .background(Pa.CardHigh, RoundedCornerShape(22.dp))
+                .border(0.5.dp, Pa.Separator, RoundedCornerShape(22.dp))
                 .padding(20.dp),
         ) {
             Row(
@@ -2377,19 +2431,20 @@ private fun ModelChoiceRow(
  * 审批弹窗预览:与聊天中真实弹出的审批卡同款样式 + 使用说明。
  * 真实审批:agent 要执行危险命令时弹出 → 允许=执行 / 拒绝=不执行但继续对话;
  * 不操作时任务结束前自动拒绝;断网时 daemon 自动拒绝并让 agent 继续作答。
+ *
+ * 【PaSheet 统一浮层】玻璃底 + 内建滚动;展开/收起详情用 animateContentSize +
+ * PaMotion 弹簧——高度变化从当前值续走,连点"展开/收起"不跳帧。
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var expanded by remember { mutableStateOf(false) }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+    PaSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .paExpandable(rememberReduceMotion()),
+        ) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2472,7 +2527,7 @@ fun SectionBlock(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Pa.Card, RoundedCornerShape(16.dp))
+                .paSettingsCard()
                 .padding(horizontal = 14.dp, vertical = 2.dp),
         ) {
             content()
@@ -3347,11 +3402,14 @@ private fun CacheActionRow(
 /**
  * 默认折叠的「详情」展开区:把长解释收进来,默认不刷屏,点一下才展开。
  * 用简单 state 切换,不引第三方依赖。
+ *
+ * 【展开收起 spring 化】[paExpandable]:高度从当前值续走(可打断、1:1 跟手),
+ * 减弱动效开启时瞬时到位。
  */
 @Composable
 private fun CollapsibleDetail(content: @Composable () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+    Column(Modifier.fillMaxWidth().paExpandable(rememberReduceMotion()).padding(top = 4.dp)) {
         Row(
             Modifier
                 .fillMaxWidth()

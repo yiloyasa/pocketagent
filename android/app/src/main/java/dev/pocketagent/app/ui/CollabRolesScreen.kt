@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -168,7 +169,9 @@ private fun CollabRoleRow(role: CollabRole, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .pressable { onClick() }
+            // 实色卡 + 发丝边:与任务中心/设置分组卡同一材质语言
             .background(Pa.Card, RoundedCornerShape(16.dp))
+            .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
             .padding(14.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

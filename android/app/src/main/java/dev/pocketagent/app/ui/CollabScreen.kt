@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.Image
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -22,12 +23,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -50,8 +47,11 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.paPushBack
 
 /**
  * 协同页(专属):一条指令扇出给多个对等 agent 并行协作。
@@ -97,7 +97,9 @@ fun CollabScreen(
     val selectedAgents = capable.filter { it.id in selected }
     val canSend = selected.isNotEmpty() && cmd.isNotBlank()
 
-    Column(Modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()) {
+    // 【推背模糊】角色选择浮层(PaSheet,玻璃材质)打开时,本页内容模糊+缩小+压暗,
+    // 透过玻璃看过去才是真磨砂(PaGlass 的职责分离:模糊在内容层,不在浮层上)。
+    Column(Modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding().paPushBack(roleFor != null)) {
         // ---- 顶部横幅:协同身份(一眼可辨)----
         CollabHeader(onBack = onBack, agentCount = selected.size)
 
@@ -235,13 +237,23 @@ private fun AgentSelector(
     }
 }
 
-/** 单个 agent 多选芯片:品牌图标 + 名称,选中=绿色高亮描边。 */
+/** 单个 agent 多选芯片:品牌图标 + 名称,选中=绿色高亮描边;底色 spring 过渡。 */
 @Composable
 private fun CollabAgentChip(a: AgentInfo, on: Boolean, onClick: () -> Unit) {
+    // 选中底色用 spring 过渡:点选瞬间颜色"流"进去,与按压缩放叠出跟手感
+    val bg by animateColorAsState(
+        targetValue = if (on) Pa.AccentDim else Pa.Card,
+        animationSpec = PaMotion.standard(),
+        label = "collabChipBg",
+    )
     Column(
         Modifier.pressable { onClick() }.width(84.dp)
-            .background(if (on) Pa.AccentDim else Pa.Card, RoundedCornerShape(16.dp))
-            .border(if (on) 1.5.dp else 0.dp, if (on) Pa.Accent else Color.Transparent, RoundedCornerShape(16.dp))
+            .background(bg, RoundedCornerShape(16.dp))
+            .border(
+                if (on) 1.5.dp else 0.5.dp,
+                if (on) Pa.Accent else Pa.Separator,
+                RoundedCornerShape(16.dp),
+            )
             .padding(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -270,7 +282,11 @@ private fun CollabAgentCard(
 ) {
     val phaseTint = phaseColor(phase)
     Column(
-        Modifier.fillMaxWidth().background(Pa.Card, RoundedCornerShape(16.dp)).padding(14.dp),
+        Modifier.fillMaxWidth()
+            // 实色卡 + 发丝边:协同状态卡与任务中心/设置分组卡同一材质语言
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
+            .padding(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(
@@ -333,6 +349,7 @@ private fun CommandInput(
 ) {
     Row(
         Modifier.fillMaxWidth().background(Pa.Card, RoundedCornerShape(18.dp))
+            .border(0.5.dp, Pa.Separator, RoundedCornerShape(18.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -357,8 +374,10 @@ private fun CommandInput(
 /**
  * 角色选择底部弹层:列出该 agent 的协同角色(复用 CollabRolesState 既有数据),
  * 可解绑(未配置角色),也可跳去「协同角色」页做完整管理(复用 CollabRolesScreen)。
+ *
+ * 【PaSheet 统一浮层】玻璃底 + 82% 屏高上限 + 内建滚动(AUDIT sheet 溢出规则的
+ * 结构化落地);被覆盖内容的推背模糊由 CollabScreen 根上的 paPushBack 负责。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CollabRolePickerSheet(
     agentId: String,
@@ -368,16 +387,7 @@ private fun CollabRolePickerSheet(
     onDismiss: () -> Unit,
 ) {
     val roles = CollabRolesState.roles.filter { it.agentId == agentId }
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 10.dp).width(40.dp).height(4.dp).background(Pa.Hover, CircleShape))
-        },
-    ) {
+    PaSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Column(Modifier.weight(1f)) {
                 Text("为 ${selectedAgentLabel(agentId)} 选角色", fontSize = 18.sp, color = Pa.TextPrimary)
@@ -387,7 +397,7 @@ private fun CollabRolePickerSheet(
         }
         Spacer(Modifier.height(12.dp))
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // 未配置角色(解绑)
@@ -406,7 +416,9 @@ private fun CollabRolePickerSheet(
             // 管理角色入口(复用现有 CollabRolesScreen)
             Row(
                 Modifier.fillMaxWidth().pressable { onManage() }
-                    .background(Pa.Card, RoundedCornerShape(16.dp)).padding(14.dp),
+                    .background(Pa.Card, RoundedCornerShape(16.dp))
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(painterResource(R.drawable.ic_lucide_sliders), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
@@ -418,12 +430,14 @@ private fun CollabRolePickerSheet(
     }
 }
 
-/** 角色选择项。 */
+/** 角色选择项(实色卡 + 发丝边:玻璃 Sheet 上不叠玻璃,可读性优先)。 */
 @Composable
 private fun RolePickRow(title: String, desc: String, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().pressable { onClick() }
-            .background(Pa.Card, RoundedCornerShape(16.dp)).padding(14.dp),
+            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .border(0.5.dp, Pa.Separator, RoundedCornerShape(16.dp))
+            .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {

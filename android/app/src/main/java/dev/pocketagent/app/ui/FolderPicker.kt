@@ -14,14 +14,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +37,7 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.Dispatchers
@@ -54,11 +51,12 @@ import pocketagent.v1.ListRootsRequest
  * 文件式目录选择器(与"文件"页同款浏览体验):
  * 此电脑盘符 → 逐级点进文件夹 → 底部"选择此文件夹"确认。
  * 供 新建会话选工作区 / 终端切换目录 等所有需要选文件夹的地方复用。
+ *
+ * 【PaSheet 统一浮层】玻璃底 + 82% 屏高上限 + 内建滚动(AUDIT sheet 溢出规则的
+ * 结构化落地);目录列表自身是 LazyColumn,故 scrollable=false 防滚动嵌套打架。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var path by remember { mutableStateOf("") }
     var showRoots by remember { mutableStateOf(true) }
@@ -116,16 +114,11 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
         return true
     }
 
-    // ModalBottomSheet 自身的返回处理是"直接关闭",会吞掉第一级层级。
+    // ModalBottomSheet(PaSheet 底层)自身的返回处理是"直接关闭",会吞掉第一级层级。
     // 这里用优先级更高的 BackHandler 先吃掉,退到顶层后才放行给 onDismiss。
     androidx.activity.compose.BackHandler(enabled = !showRoots) { goUpOneLevel() }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    PaSheet(onDismissRequest = onDismiss, scrollable = false) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text(
                 "选择文件夹", Modifier.fillMaxWidth().padding(horizontal = 8.dp),

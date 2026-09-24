@@ -1,7 +1,11 @@
 package dev.pocketagent.app.ui
 
 import android.widget.Toast
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
@@ -222,11 +227,17 @@ fun CollabRoleEditorScreen(
             // ---- 工作区覆盖(暴露但明确"留空=用默认") ----
             RoleTextField(value = workspaceText, onValueChange = { workspaceText = it }, label = "工作区覆盖", placeholder = "留空=用默认工作区(手填易错,一般无需填)")
 
-            // ---- 底部保存按钮 ----
+            // ---- 底部保存按钮(可用态颜色 spring 过渡:合法/非法切换不硬跳) ----
+            val saveBg by animateColorAsState(
+                targetValue = if (canSave) Pa.AccentDim else Pa.Card,
+                animationSpec = PaMotion.standard(),
+                label = "saveBtnBg",
+            )
             Row(
                 Modifier.fillMaxWidth()
                     .pressable(enabled = canSave) { doSave() }
-                    .background(if (canSave) Pa.AccentDim else Pa.Card, RoundedCornerShape(14.dp))
+                    .background(saveBg, RoundedCornerShape(14.dp))
+                    .border(0.5.dp, Pa.Separator, RoundedCornerShape(14.dp))
                     .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -253,6 +264,10 @@ fun CollabRoleEditorScreen(
 /**
  * 自绘输入框:顶部小标签 + 深底圆角输入区(对齐 SettingsTextField 风格,不用 OutlinedTextField)。
  * [multiline]=true 时允许多行(minLines=3),用于职责描述/长期要求这类长文本。
+ *
+ * 【焦点态】聚焦时发丝边亮成品牌蓝(颜色 spring 过渡,不是硬切)——表单行的
+ * "当前在哪一格"一眼可辨;离开焦点 quietly 退回分隔线色。这是本页表单唯一的
+ * 视觉修饰,不加 explanation 小字(与设置页同一取向)。
  */
 @Composable
 private fun RoleTextField(
@@ -262,12 +277,20 @@ private fun RoleTextField(
     placeholder: String = "",
     multiline: Boolean = false,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) Pa.Accent.copy(alpha = 0.55f) else Pa.Separator,
+        animationSpec = PaMotion.standard(),
+        label = "roleFieldBorder",
+    )
     Column(Modifier.fillMaxWidth()) {
         Text(label, Modifier.padding(start = 3.dp, bottom = 6.dp), fontSize = 10.5.sp, color = Pa.TextTertiary)
         Box(
             Modifier
                 .fillMaxWidth()
                 .background(Pa.Bg, RoundedCornerShape(12.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
         ) {
             if (value.isEmpty() && placeholder.isNotEmpty()) {
@@ -281,6 +304,7 @@ private fun RoleTextField(
                 cursorBrush = SolidColor(Pa.Accent),
                 singleLine = !multiline,
                 minLines = if (multiline) 3 else 1,
+                interactionSource = interaction,
             )
         }
     }

@@ -2,12 +2,10 @@ package dev.pocketagent.app.ui.component
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -52,7 +50,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import dev.pocketagent.app.ui.anim.PaMotion
+import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.paGlass
 import kotlin.math.roundToInt
 
 /**
@@ -174,8 +175,12 @@ fun ContextMenu(
 
             AnimatedVisibility(
                 visibleState = visibleState,
-                enter = fadeIn(tween(120)) + scaleIn(tween(120), initialScale = 0.92f),
-                exit = fadeOut(tween(100)),
+                // 【动效令牌】入场从手指位置"长出来":轻微过冲的 scale + 临界阻尼 fade,
+                // spring 从当前值续走,长按连发时被打断也不跳帧(替代原 tween(120) 硬切)。
+                enter = fadeIn(PaMotion.standard()) +
+                    scaleIn(PaMotion.emphasized(), initialScale = 0.92f),
+                // 退场要干脆:更大 stiffness 的 spring,让位快但不砖墙
+                exit = fadeOut(PaMotion.nav(600f)),
                 modifier = Modifier.offset { IntOffset(x.roundToInt(), y.roundToInt()) },
             ) {
                 Column(
@@ -188,8 +193,9 @@ fun ContextMenu(
                             )
                         }
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Pa.CardHigh)
-                        .border(0.5.dp, Pa.Separator, RoundedCornerShape(14.dp))
+                        // 玻璃语言:悬浮菜单 = 实色底(Pa.CardHigh,可读性优先)+ 顶缘发丝高光
+                        // + 一点投影——"浮在内容之上"的层级感来自亮边与影子,不是透。
+                        .paGlass(RoundedCornerShape(14.dp), tint = Pa.CardHigh, shadowElevation = 16.dp)
                         .padding(vertical = 6.dp),
                 ) {
                     // 对象摘要行 —— 让用户确认"这次操作针对谁"
@@ -211,7 +217,8 @@ fun ContextMenu(
                             Modifier
                                 .fillMaxWidth()
                                 .height(ITEM_H)
-                                .clickable { onPick(item) }
+                                // 按下即缩放反馈(全 app 统一 pressable),不再是只有涟漪的裸 clickable
+                                .pressable { onPick(item) }
                                 .padding(horizontal = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {

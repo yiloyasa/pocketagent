@@ -10,7 +10,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.ui.anim.PaMotion
+import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -193,8 +194,10 @@ fun UndoBarHost(
 
     AnimatedVisibility(
         visible = item != null,
-        enter = slideInVertically(tween(180)) { -it } + fadeIn(tween(150)),
-        exit = slideOutVertically(tween(150)) { -it } + fadeOut(tween(120)),
+        // 【动效令牌】顶部滑入给少量过冲(sheet 的从容感),从当前值续走——
+        // 连续删除时新旧提示条交替,弹簧被打断不会跳帧(替代原 tween(180/150) 硬切)。
+        enter = slideInVertically(PaMotion.sheet()) { -it } + fadeIn(PaMotion.standard()),
+        exit = slideOutVertically(PaMotion.nav(600f)) { -it } + fadeOut(PaMotion.nav(700f)),
         modifier = modifier,
     ) {
         val it0 = item ?: return@AnimatedVisibility
@@ -238,7 +241,8 @@ fun UndoBarHost(
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = true) {
+                            // 撤销是高频连点动作:按下瞬间给缩放反馈,不用裸 clickable
+                            .pressable(enabled = true) {
                                 handled = true
                                 val scopeMarker = it0
                                 UndoScope.launch {
