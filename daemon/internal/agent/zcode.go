@@ -44,6 +44,7 @@ import (
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/zcodeapp"
 )
@@ -1753,8 +1754,20 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		case "elicitation/create":
 			return p.handleZcodeElicitation(rawID, params, ctx, c, approve, &approvalWaiting)
 		}
-		// 其余(官方 MCP 的 auth headers、provider runtime headers 等)交回客户端层
-		// 统一回 -32601 —— 不伪造应答(与 codex 的第一条规则同款)。
+		// 交回客户端层统一回 -32601 —— 不伪造应答(与 codex 的第一条规则同款)。
+		// 回 error 只让对端知道"这次没做成",而"我们收到过一个不认识的请求"要能
+		// 事后查(规格 §9:未知 request 保留原始 payload、关联会话)。与 codex/dsh
+		// 同款登记;粒度差异如实声明:zcode 侧尚无 reqUnsupported/reqUnknown 分类器,
+		// auth headers 等**已知拒答**也会进台账 —— 宁可台账有噪声,不可漏掉真未知
+		// (上游发来全新 method 时,这里是唯一的痕迹)。
+		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+			ThreadID:       req.Thread.ID,
+			SourceAgent:    "zcode",
+			SourceMethod:   method,
+			NormalizedKind: runtime.KindUnknownRequest,
+			RawPayload:     redactNativePayload(params),
+			Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
+		})
 		return false
 	}
 	c.SetTurnHandlers(notifHandler, reqHandler)
