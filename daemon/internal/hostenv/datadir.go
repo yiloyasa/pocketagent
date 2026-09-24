@@ -18,8 +18,9 @@ const (
 
 // LegacyDataDir 返回历史数据目录（<家目录>/.pocketagentd）。
 //
-// 保留它的用途是**沿用**，不是兼容读取：老用户的数据就在那里，daemon 继续用它，
-// 不搬、不删、不双写。
+// 保留它的用途是**沿用 + 迁移源**：老用户的数据在那里，默认路径由 migration.go
+// 的 ResolveDataDir 把它安全搬进 UserDataDir（校验+原子 rename+失败回滚）；
+// 显式 -data 路径则完全绕开迁移逻辑。此处只回答"老目录在哪"。
 func LegacyDataDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -44,33 +45,4 @@ func UserDataDir() string {
 		return filepath.Join(appDirName, "data")
 	}
 	return filepath.Join(base, appDirName, "data")
-}
-
-// DaemonDataDir 决策 daemon 该用哪个数据目录，并报告是否沿用了历史位置。
-//
-// 优先级：新位置已存在 → 老位置已存在 → 新位置（全新安装）。
-//
-// 【为什么不自动搬移老数据】数据目录里有配对的设备 token、自签证书与配对码
-// （本机实测 99MB，其中 85MB 是 pi-agent）。自动搬移会同时引入三件危险事：
-// daemon 运行中搬、搬一半失败、两边都有数据时以谁为准。项目既有红线是
-// 「绝不自动删用户数据」，此处把同一纪律延伸为「绝不自动搬用户数据」——
-// 新装用户走新位置（规格 §2），老用户原地不动（零风险），搬迁交给用户显式决定
-// （用 -data 指定，或手动移动目录）。
-//
-// 返回的 legacy 供调用方如实打印当前用的是哪个位置：数据在哪，用户就该知道。
-func DaemonDataDir() (dir string, legacy bool) {
-	newDir := UserDataDir()
-	if isDir(newDir) {
-		return newDir, false
-	}
-	oldDir := LegacyDataDir()
-	if isDir(oldDir) {
-		return oldDir, true
-	}
-	return newDir, false
-}
-
-func isDir(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && st.IsDir()
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/pocketagent/daemon/internal/term"
 	"github.com/pocketagent/daemon/internal/tlscert"
 	"github.com/pocketagent/daemon/internal/version"
+	"github.com/pocketagent/daemon/internal/zcodeapp"
 )
 
 // defaultDataDir 返回 daemon 的默认数据目录。
@@ -47,18 +48,9 @@ import (
 // 这条既有红线在这里延伸为「绝不自动搬用户数据」—— 搬迁由用户显式决定。
 //
 // 这里只负责在沿用历史位置时把事实打印出来：数据在哪，用户就该知道。
-func defaultDataDir() string {
-	dir, legacy := hostenv.DaemonDataDir()
-	if legacy {
-		log.Printf("[data] 沿用历史数据目录 %s（新位置 %s 尚未使用；如需搬迁：停 daemon 后移动目录，或用 -data 指定）",
-			dir, hostenv.UserDataDir())
-	}
-	return dir
-}
-
 func main() {
 	addr := flag.String("addr", ":7246", "gRPC 监听地址")
-	dataDir := flag.String("data", defaultDataDir(), "数据目录(线程存储、token)")
+	dataDir := flag.String("data", "", "数据目录(线程存储、token)")
 	// 【PA-REAL-0001 修复】为空不再等于关闭鉴权:不传=自动生成 8 位随机码并
 	// 持久化到 <data>/pair-code.txt,启动日志会打印,手机首次连接时输入。
 	pairCode := flag.String("pair-code", "", "配对码(鉴权默认开启);不传=自动生成并持久化到 <数据目录>/pair-code.txt")
@@ -104,6 +96,24 @@ func main() {
 	// 不会把 pi 的凭据与扩展弄丢。要关掉仍可显式传 -pi-collab=false。
 	piCollab := flag.Bool("pi-collab", true, "启用 pi 协作 MCP(默认开):把本 daemon 注册为 pi 的 pocketagent-collab MCP 服务器;-pi-collab=false 可关闭")
 	flag.Parse()
+
+	resolvedData, resolveErr := hostenv.ResolveDataDir(*dataDir)
+	if resolveErr != nil {
+		log.Fatalf("解析 daemon 数据目录失败: %v", resolveErr)
+	}
+	*dataDir = resolvedData.SelectedDir
+	switch {
+	case resolvedData.Migrated:
+		log.Printf("[data] 已将历史数据迁移到 %s（旧目录保留：%s；marker=%s）",
+			resolvedData.SelectedDir, hostenv.LegacyDataDir(), resolvedData.MarkerPath)
+	case resolvedData.UsedLegacy:
+		log.Printf("[data] 使用历史数据目录 %s", resolvedData.SelectedDir)
+	default:
+		log.Printf("[data] 使用数据目录 %s", resolvedData.SelectedDir)
+	}
+	piapp.SetDataDir(*dataDir)
+	dshapp.SetDataDir(*dataDir)
+	zcodeapp.SetDataDir(*dataDir)
 
 	// 并行委派上限(有界并发,不排队):把 -collab-max-parallel 传导进引擎。
 	// SetCollabMaxParallel 统一归一化(<=0 → 默认 3),整进程只此一处写入。

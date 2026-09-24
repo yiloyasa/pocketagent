@@ -63,7 +63,15 @@ const CollabMcpServerName = "pocketagent-collab"
 var (
 	collabOverride    atomic.Bool
 	collabOverrideSet atomic.Bool
+	configuredDataDir atomic.Pointer[string]
 )
+
+// SetDataDir wires the daemon-resolved data root into pi's isolated agent
+// directory. A user-provided PI_CODING_AGENT_DIR still has precedence.
+func SetDataDir(dir string) {
+	dir = strings.TrimSpace(dir)
+	configuredDataDir.Store(&dir)
+}
 
 // SetCollabEnabled 显式设置协作 MCP 总开关(优先于 env)。供将来 cmd/pocketagentd
 // 的 --pi-collab flag 调用;当前生产路径无人调用,默认关。
@@ -94,6 +102,9 @@ func envTruthy(v string) bool {
 // DefaultCollabAgentDir daemon 自有 pi agent 目录默认值:~/.pocketagentd/pi-agent。
 // 取不到用户主目录返回 ""(调用方按未就绪处理,绝不退化到用户 ~/.pi)。
 func DefaultCollabAgentDir() string {
+	if p := configuredDataDir.Load(); p != nil && strings.TrimSpace(*p) != "" {
+		return filepath.Join(strings.TrimSpace(*p), "pi-agent")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""

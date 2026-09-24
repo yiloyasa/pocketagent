@@ -58,6 +58,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -375,9 +376,21 @@ type modelPref struct {
 // (generate_test.go 的 TestMain 统一接管,单测绝不读写真实用户目录);
 // 拿不到用户主目录时为空串,读写双方都按 no-op 处理。
 var modelPrefFile = defaultModelPrefPath()
+var configuredDataDir atomic.Pointer[string]
+
+// SetDataDir wires the daemon-resolved data root into zcode's small auxiliary
+// preference file; it does not alter the native ZCode home.
+func SetDataDir(dir string) {
+	dir = strings.TrimSpace(dir)
+	configuredDataDir.Store(&dir)
+	modelPrefFile = defaultModelPrefPath()
+}
 
 // defaultModelPrefPath 计算 ~/.pocketagentd/model-pref.json;拿不到主目录返回空串。
 func defaultModelPrefPath() string {
+	if p := configuredDataDir.Load(); p != nil && strings.TrimSpace(*p) != "" {
+		return filepath.Join(strings.TrimSpace(*p), "model-pref.json")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""

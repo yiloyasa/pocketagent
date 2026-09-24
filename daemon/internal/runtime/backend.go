@@ -21,8 +21,11 @@ import (
 // 契约反而成了空转。Backend 让这类 agent 一行接线即达标；日后想换成原生实现，
 // 只需替换 AgentRuntime 里的单个字段，契约不变。
 //
-// 【它不做什么】不生成语义摘要（那要有模型）、不落盘到文件（P1 的 journal 负责）、
-// 不做删除（见 ResourceLedger 的注释）。本实现只保证**契约语义**成立。
+// 【它不做什么】不生成语义摘要（那要有模型）、cache 与资源记账仍不落盘
+// （checkpoint 与 memory 载荷已落盘：dataDir 非空时 Checkpoints() 走文件实现，
+// memory 靠"每轮 Checkpoint 落盘 + 重启 hydrate"跨进程存活；cache/resource 的
+// 文件后端与删除仍归 P1 journal）、不做删除（见 ResourceLedger 的注释）。
+// 本实现只保证**契约语义**成立。
 //
 // 【并发】单锁保护。按"单 daemon、少量 thread"的量级设计；分片是 P1 资源管理的事。
 type Backend struct {
@@ -107,8 +110,9 @@ func NewBackend() *Backend {
 // 落盘反而会让用例互相污染）。这里沿用 identity.go 的约定 —— dataDir 为空退化为
 // 内存实现，非空才落盘 —— 让"要不要持久化"变成一处显式决定。
 //
-// 【它只改 checkpoint】memory/cache/资源记账仍走内存实现：本包的 memory 目前靠
-// Backend 内部的落盘态（ExportDurable/ImportDurable）表达，不在此次范围内。
+// 【它只改 checkpoint 的载体，memory 随之跨进程】checkpoint 落文件；memory 不再有
+// 独立的落盘通道 —— 它在每轮 Checkpoint 时被写进 checkpoint 信封，重启后 hydrate
+// 读回（见 Checkpoints/hydrate）。cache 与资源记账仍走内存实现，文件后端归 P1。
 func NewFileBackend(dataDir string) *Backend {
 	b := &Backend{dataDir: dataDir}
 	b.reset()

@@ -7,7 +7,23 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
+
+var configuredDataDir atomic.Pointer[string]
+
+// SetDataDir wires the daemon-resolved data root into dsh's auxiliary files.
+func SetDataDir(dir string) {
+	dir = strings.TrimSpace(dir)
+	configuredDataDir.Store(&dir)
+}
+
+func resolvedConfiguredDataDir() string {
+	if p := configuredDataDir.Load(); p != nil {
+		return strings.TrimSpace(*p)
+	}
+	return ""
+}
 
 // dshCredentialWhitelist 是我们主动支持、允许从 dsh-credentials.env 注入子进程的
 // "环境变量键"白名单。
@@ -33,6 +49,9 @@ func DefaultDataDir() string {
 // defaultDataDir 与 client.go 的 defaultDshHome 同源:都以 ~/.pocketagentd 为
 // daemon 数据根(home 取不到时退 TempDir)。
 func defaultDataDir() string {
+	if dir := resolvedConfiguredDataDir(); dir != "" {
+		return dir
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return filepath.Join(os.TempDir(), "pocketagentd")
