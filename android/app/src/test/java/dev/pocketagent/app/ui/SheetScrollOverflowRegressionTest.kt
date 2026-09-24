@@ -60,6 +60,34 @@ class SheetScrollOverflowRegressionTest {
     private fun homeSource(): String =
         locate("src/main/java/dev/pocketagent/app/ui/HomeScreen.kt").readText()
 
+    private fun paSheetSource(): String =
+        locate("src/main/java/dev/pocketagent/app/ui/component/PaSheet.kt").readText()
+
+    /**
+     * 【UI 改版后的钉法】sheet 滚动保证已结构性收口进统一的玻璃浮层 PaSheet
+     * (内建 heightIn 高度上限 + verticalScroll)。此前各 sheet 段各自携带
+     * `verticalScroll(rememberScrollState())`,迁移 PaSheet 后钉子改为两级:
+     *  1) sheet 段必须使用 `PaSheet(` —— 回退成裸 ModalBottomSheet 就丢滚动,钉住;
+     *  2) PaSheet 本体必须自带 heightIn 上限与 verticalScroll —— 封装被掏空也钉住。
+     * 两级同过,滚动保证与迁移前等价(甚至更强:新 sheet 忘记滚动在结构上不可能)。
+     */
+    private fun assertSheetScrollGuarantee(sectionSrc: String, label: String) {
+        assertTrue(
+            "$label 应使用统一玻璃浮层 PaSheet(其内建滚动与高度上限是滚动保证的载体);" +
+                "若回退为裸 ModalBottomSheet 必须自带 verticalScroll(rememberScrollState())",
+            sectionSrc.contains("PaSheet("),
+        )
+        val src = paSheetSource()
+        assertTrue(
+            "PaSheet 本体缺 heightIn(max=…) 高度上限 —— 小屏上长内容会把 sheet 顶出屏幕",
+            src.contains("heightIn(max = maxH)"),
+        )
+        assertTrue(
+            "PaSheet 本体缺 verticalScroll(rememberScrollState()) —— 滚动保证被掏空",
+            src.contains("verticalScroll(rememberScrollState())"),
+        )
+    }
+
     @Test
     fun `终端切换工作目录sheet_内容列必须可滚动且关键操作可达`() {
         val src = section(terminalSource(), "if (showDirPicker) {", "FolderPickerSheet(")
@@ -77,11 +105,8 @@ class SheetScrollOverflowRegressionTest {
     @Test
     fun `分组整理sheet_内容列必须可滚动且新建分组分叉可达`() {
         val src = section(threadsSource(), "organizeTarget?.let", "\"分叉会话\"")
-        assertTrue(
-            "分组整理 sheet 内容 Column 缺 verticalScroll(rememberScrollState()) —— " +
-                "自建分组(sections)无上限,多时新建分组并移入/分叉被推出视口且不可点(T-SS 回归)",
-            src.contains("verticalScroll(rememberScrollState())"),
-        )
+        // 滚动保证收口进 PaSheet(内建 heightIn+verticalScroll),见 assertSheetScrollGuarantee
+        assertSheetScrollGuarantee(src, "分组整理 sheet")
         // 关键控件必须都在该可滚区域内:未分组行 + 全部分组行 + 新建入口 + 分叉
         assertTrue(src.contains("sections.forEach"))
         assertTrue(src.contains("未分组"))
@@ -91,11 +116,8 @@ class SheetScrollOverflowRegressionTest {
     @Test
     fun `回滚会话sheet_内容列必须可滚动且确认取消可达`() {
         val src = section(chatSource(), "if (rollbackOpen) {", "\"确认回滚\"")
-        assertTrue(
-            "回滚会话 sheet 内容 Column 缺 verticalScroll(rememberScrollState()) —— " +
-                "回滚选项随会话回合数增长,长会话时取消/确认回滚被推出视口且不可点(T-SS 回归)",
-            src.contains("verticalScroll(rememberScrollState())"),
-        )
+        // 滚动保证收口进 PaSheet(内建 heightIn+verticalScroll),见 assertSheetScrollGuarantee
+        assertSheetScrollGuarantee(src, "回滚会话 sheet")
         // 关键控件必须都在该可滚区域内:选项列表 + 取消(确认回滚本身是段尾边界,单独钉)
         assertTrue(src.contains("options.forEach"))
         assertTrue(src.contains("取消"))
@@ -117,18 +139,14 @@ class SheetScrollOverflowRegressionTest {
     @Test
     fun `管理agent抽屉_列表列必须可滚动且开关条目在滚区域内`() {
         val src = section(homeSource(), "fun ManageAgentsSheet(", "// ---- 新建会话的 agent 接线")
-        val scrollAt = src.indexOf("verticalScroll(rememberScrollState())")
-        assertTrue(
-            "管理 agent 抽屉列表列缺 verticalScroll(rememberScrollState()) —— " +
-                "agents 接入数无上限(dsh 接入后继续增长),条目一多底部行开关被推出视口" +
-                "且不可点(被裁节点不进无障碍树,README §12 坑 6;pa_audit sheet_overflow 回归)",
-            scrollAt >= 0,
-        )
-        // 开关条目列表必须位于滚动列之内(列表/开关的声明晚于滚动修饰符,即被它包裹)
+        // 滚动保证收口进 PaSheet(内建 heightIn+verticalScroll),见 assertSheetScrollGuarantee
+        assertSheetScrollGuarantee(src, "管理 agent 抽屉")
+        // 条目列表必须位于 PaSheet 的内容列之内(agents 列表随接入数增长无上限,
+        // PaSheet 内建滚动兜底;PaSheet 本体的滚动由上面的两级断言钉住)
         val listAt = src.indexOf("agents.forEach")
         val switchAt = src.indexOf("Switch(")
-        assertTrue("agents.forEach 应在 verticalScroll 列内(声明晚于滚动修饰符)", listAt > scrollAt)
-        assertTrue("行内 Switch 应在 verticalScroll 列内(声明晚于滚动修饰符)", switchAt > scrollAt)
+        assertTrue("agents.forEach 应在 PaSheet 内容列内", listAt >= 0)
+        assertTrue("行内 Switch 应在 PaSheet 内容列内", switchAt >= 0)
         // 关键元素都在 sheet 区域内:标题 + 副标题 + 固定头关闭按钮 + 条目副信息
         assertTrue(src.contains("管理 agent"))
         assertTrue(src.contains("停用后不再显示"))

@@ -43,10 +43,15 @@ class NewThreadSheetScrollRegressionTest {
     @Test
     fun `内容列必须可滚动_修复后不得回退`() {
         val src = newThreadSheetSource()
+        // 【UI 改版后的钉法】滚动保证结构性收口进统一玻璃浮层 PaSheet(内建
+        // heightIn 高度上限 + verticalScroll;PaSheet.kt 本体另由
+        // SheetScrollOverflowRegressionTest 的两级断言钉住)。这里钉:
+        // NewThreadSheet 必须使用 PaSheet —— 回退成裸 ModalBottomSheet 即失败,
+        // 此时必须自带 verticalScroll(rememberScrollState()) 才算守住 SLA-21a。
         assertTrue(
-            "NewThreadSheet 内容 Column 缺 verticalScroll(rememberScrollState()) —— " +
+            "NewThreadSheet 应使用统一玻璃浮层 PaSheet(内建滚动与高度上限)—— " +
                 "recents 多时创建/取消/浏览按钮会被推出视口且不可点(SLA-21a 回归)",
-            src.contains("verticalScroll(rememberScrollState())"),
+            src.contains("PaSheet("),
         )
     }
 
