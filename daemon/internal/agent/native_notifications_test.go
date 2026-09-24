@@ -24,6 +24,26 @@ func TestNativeSelectionPreservesUnfamiliarModelsAndLevels(t *testing.T) {
 	}
 }
 
+// TestDecodeRuntimeSelectionZcodeStateUpdatedPatch 0.16.9 回归钉:模型/思考档
+// 变化在 0.16.9 的实测载体是顶层 state.updated,zcodeStateUpdateSnapshot 把
+// patch 包成 {"settings":…} 后由本函数解码。fixture 摘自探针真实报文
+// (docs/verify/evidence/zcode-0169-probe.log):reason=model_changed 的 patch
+// 带 model.current{modelId, options.reasoningLevel} 与 thoughtLevel.current;
+// 只换思考档时 model.current 可能缺位,Effort 应回退 settings.thoughtLevel
+// (与 zcodeConfirmedSelection 同语义),ModelID 不得凭空编造。
+func TestDecodeRuntimeSelectionZcodeStateUpdatedPatch(t *testing.T) {
+	modelSwitch := decodeRuntimeSelection("zcode", "state.updated", json.RawMessage(
+		`{"settings":{"model":{"current":{"providerId":"10c04b9f-64ed-4762-ae26-b81026c06bc7","modelId":"gpt-5.6-terra","options":{"reasoningLevel":"max"}},"available":[]},"thoughtLevel":{"current":"max"}}}`))
+	if modelSwitch.ModelID != "zcode/gpt-5.6-terra" || modelSwitch.Effort == nil || *modelSwitch.Effort != "max" {
+		t.Fatalf("0.16.9 state.updated patch 解码丢值: %+v", modelSwitch)
+	}
+	thoughtOnly := decodeRuntimeSelection("zcode", "state.updated", json.RawMessage(
+		`{"settings":{"thoughtLevel":{"current":"none"}}}`))
+	if thoughtOnly.ModelID != "" || thoughtOnly.Effort == nil || *thoughtOnly.Effort != "none" {
+		t.Fatalf("纯思考档 patch 应只出 Effort(不编造模型): %+v", thoughtOnly)
+	}
+}
+
 func TestUnknownNativeNotificationsAreBoundedNonFatalAndRedacted(t *testing.T) {
 	var recorder nativeNoticeRecorder
 	var frames []*pb.TurnServerMessage
