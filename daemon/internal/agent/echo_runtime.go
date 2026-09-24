@@ -87,7 +87,11 @@ func (e *EchoProvider) OpenRuntime(_ context.Context, thread *store.Thread) (*ru
 	if thread == nil {
 		return nil, errEchoNilThread
 	}
-	return sharedRuntimeBackend().FullRuntime(echoRuntimeDescriptor(), thread.ID), nil
+	// 与五家 provider 走同一条 openSharedRuntime 交付路径（D7 收尾补齐）：共享
+	// 后端 + 文件缓存 + 账本刷盘。echo 声明 SessionModel=DAEMON，NativeSession
+	// 分支不会动它 —— 交付物与原先的 FullRuntime 直取完全一致，只多出缓存与
+	// 账本两张持久化皮。
+	return openSharedRuntime(e, thread)
 }
 
 // EchoRuntimeBackend 暴露默认后端，供契约测试与诊断使用。

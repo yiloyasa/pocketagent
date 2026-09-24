@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -253,7 +254,17 @@ func openSharedRuntime(p runtime.Participant, th *store.Thread) (*runtime.AgentR
 		return nil, fmt.Errorf("%s: thread 为空，无法交付运行时", p.Descriptor().ID)
 	}
 	desc := p.Descriptor()
-	rt := sharedRuntimeBackend().FullRuntime(desc, th.ID)
+	backend := sharedRuntimeBackend()
+	rt := backend.FullRuntime(desc, th.ID)
+	// D7 收尾：缓存走文件后端 —— PersistToDisk 条目落 <dataDir>/cache/，跨重启读回；
+	// dataDir 未配置时 DiskCache() 就是原内存实现，行为零分叉。
+	// 【覆盖面】echo 的 OpenRuntime 也已改走本函数（echo_runtime.go），六家统一。
+	rt.Cache = backend.DiskCache()
+	// 资源账本：轮次交付是刷盘周期的另一半（另一半是诊断读路径 Observe）。
+	// 账本是记账投影：失败只丢"重启后可见的历史用量"，不阻断轮次交付。
+	if err := backend.SyncResourceLedger(); err != nil {
+		log.Printf("[resource] WARNING: 账本刷盘失败（记账性质，不影响轮次）: %v", err)
+	}
 	// 共享默认后端交付的 DaemonSession 只对"会话事实在 daemon 侧"的家成立。
 	// 对声明 NATIVE/HYBRID 的家（codex/pi/zcode/dsh），原生会话适配器属 P1 迁移项，
 	// 此刻尚未交付；塞一个 Source=DAEMON 的替身会构成 source-mismatch 违约

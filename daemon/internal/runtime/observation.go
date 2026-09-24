@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,9 +45,9 @@ type CheckpointObservation struct {
 
 // AgentObservation 是一个 agent 的运行时状态快照。
 //
-// 【Recovery 为什么在结构里】规格 §9.5 要求显示它；但目前**没有产出方**
-// （RecoveryState 挂在 per-thread 的临时 AgentRuntime 上，而恢复是跨重启的事件）。
-// 所以这里如实返回「未上报」，而不是留空让人以为"没这一项"。
+// 【Recovery 的口径】规格 §9.5 要求显示它。恢复是跨进程事件，而 AgentRuntime 是
+// per-thread 的临时对象，所以这里不走运行时字段，而由 recovery_events.go 从
+// 进程内证据推导；没有证据时如实返回「未上报」，而不是留空让人以为"没这一项"。
 type AgentObservation struct {
 	AgentID    string                `json:"agent_id"`
 	Memory     MemoryObservation     `json:"memory"`
@@ -64,6 +65,17 @@ func (b *Backend) Observe(agentID string) AgentObservation {
 	if b == nil || agentID == "" {
 		return obs
 	}
+	// 文件后端：聚合前先把磁盘上的持久缓存装回来、把资源账本按变化刷出去
+	// （两者都 fail-open，失败只影响诊断完整度，不影响观测本身）。
+	// 【为什么挂在读路径】这是"定期刷盘"的落地形式：以真实诊断读流量为周期，
+	// 没有空转定时器；也顺手修复"重启后诊断页显示 0"的误导（cache_disk.go /
+	// resource_disk.go 的注释各有机理说明）。
+	if b.dataDir != "" {
+		hydrateDiskCache(b)
+		if err := b.SyncResourceLedger(); err != nil {
+			log.Printf("[resource] WARNING: 账本刷盘失败（记账性质，不影响观测）: %v", err)
+		}
+	}
 	b.mu.Lock()
 	obs.Memory = b.observeMemoryLocked(agentID)
 	obs.Cache = b.observeCacheLocked(agentID)
@@ -77,8 +89,9 @@ func (b *Backend) Observe(agentID string) AgentObservation {
 	if b.dataDir != "" {
 		obs.Checkpoint = observeFileCheckpoints(b.dataDir, agentID)
 	}
-	// recovery：目前没有产出方 —— 如实报"未上报"，不凭空造一个"恢复成功"。
-	obs.Recovery = RecoveryState{From: RecoveredNone}
+	// recovery：由进程内证据推导（recovery_events.go）。无证据时如实报
+	// "未上报" —— 没发生过的事一个字都不编。
+	obs.Recovery = b.recoveryStateFor(agentID)
 	return obs
 }
 

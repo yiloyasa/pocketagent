@@ -159,9 +159,10 @@ func checkpointUsageToProto(c runtime.CheckpointObservation) *pb.AgentCheckpoint
 
 // recoveryStateToProto 把恢复状态翻成契约形态。
 //
-// 【reported 的判据】RecoveryState.Attempted 为 false 即"没有产出方上报过" ——
-// 目前 daemon 侧恒为此值（见 proto 里 AgentRecoveryState 的注释）。把它显式标出来，
-// 客户端才不会把"没这一项"读成"恢复失败"。
+// 【reported 的判据】RecoveryState.Attempted 为 false 即"没有产出方上报过"。
+// 产出方在 runtime 包的 recovery_events.go：文件后端的 runtime 从磁盘 hydrate
+// 装载过记忆时即上报（真实事件推导，不是占位）；它为 false 仍表示"本进程内
+// 没发生过可证的恢复"，与"恢复失败"是两回事，客户端必须分开显示。
 func recoveryStateToProto(r runtime.RecoveryState) *pb.AgentRecoveryState {
 	return &pb.AgentRecoveryState{
 		Reported:  r.Attempted || r.Succeeded || r.From != "" && r.From != runtime.RecoveredNone,

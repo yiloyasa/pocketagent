@@ -260,6 +260,12 @@ func (s *Server) closeTurnLease(lease *runtime.ResourceLease) {
 	if err := s.runtimeBackend.Resources().Release(context.Background(), lease.LeaseID); err != nil {
 		log.Printf("[runtime] 轮次资源租约释放失败: %v", err)
 	}
+	// 刷盘放在轮次收尾这个自然边界,而不是 Charge(它是每帧热路径,逐帧写盘
+	// 会把记账投影变成 I/O 瓶颈)。丢失窗口由此缩到"崩溃发生在轮次中途"——
+	// 账本是记账投影,这个量级的丢失符合"丢账可接受"。
+	if err := s.runtimeBackend.SyncResourceLedger(); err != nil {
+		log.Printf("[runtime] 轮次资源账本刷盘失败(记账性质,不影响轮次): %v", err)
+	}
 }
 
 // chargeTurnLease 把一帧事件的字节数记到本轮租约上。
