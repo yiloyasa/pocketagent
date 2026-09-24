@@ -13,6 +13,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pocketagent.v1.AcknowledgeUnknownEventRequest
+import pocketagent.v1.AgentCacheUsage
+import pocketagent.v1.AgentCheckpointUsage
+import pocketagent.v1.AgentMemoryUsage
+import pocketagent.v1.AgentRecoveryState
 import pocketagent.v1.AgentRuntimeResponse
 import pocketagent.v1.CollabPolicy
 import pocketagent.v1.CollabPolicyResponse
@@ -226,6 +230,105 @@ fun memoryModelLabel(raw: String): String = when (raw) {
 fun cacheModelLabel(raw: String): String = when (raw) {
     "native" -> "原生"
     "daemon" -> "由 daemon 承担"
+    else -> raw
+}
+
+// ---- 每 agent 用量(§9.5 后四块)----------------------------------------------
+
+/** 形态卡展开体里的用量行(GetAgentRuntime 的 memory/cache/checkpoint/recovery 四块)。 */
+data class RuntimeUsageRow(val label: String, val value: String)
+
+// memory.kinds 的分层顺序照 proto 注释里的 working/conversation/summary/artifact;
+// map 本身无序,不钉一个顺序的话同一份数据两次刷新会换位,看起来像出了问题。
+private val memoryKindOrder = listOf("working", "conversation", "summary", "artifact")
+
+/**
+ * GetAgentRuntime 响应的四块用量 → 展开体数值行(排在资源租约行之下)。
+ *
+ * 【为什么 resp 为 null 时返回空而不是占位】null = 整条 RPC 没成功,那是"没问到",
+ * 不是"daemon 没提供";失败原因已由展开体里资源行的 note 说清,这里再补四行占位
+ * 等于把一次网络失败放大成四个疑点。
+ *
+ * 【为什么逐块查 has】proto3 的消息字段缺席时读 getter 会得到全零对象,"旧 daemon
+ * 没这块"与"这块的真实观测就是 0"在界面上必须分得开:前者说"daemon 未提供",
+ * 后者照实显示 0 —— 把缺席画成 0 就是造了一份假账。
+ */
+fun agentRuntimeUsageRows(resp: AgentRuntimeResponse?): List<RuntimeUsageRow> {
+    if (resp == null) return emptyList()
+    return listOf(
+        memoryUsageRow(if (resp.hasMemory()) resp.memory else null),
+        cacheUsageRow(if (resp.hasCache()) resp.cache else null),
+        checkpointUsageRow(if (resp.hasCheckpoint()) resp.checkpoint else null),
+        recoveryUsageRow(if (resp.hasRecovery()) resp.recovery else null),
+    )
+}
+
+/** 记忆块:线程 / 条目 / 字节,带分层计数(键名照 proto 原文透出,值域由 daemon 定义)。 */
+fun memoryUsageRow(m: AgentMemoryUsage?): RuntimeUsageRow {
+    if (m == null) return RuntimeUsageRow("记忆用量", "daemon 未提供")
+    val parts = mutableListOf("${m.threads} 会话", "${m.items} 条", formatBytesLabel(m.bytes))
+    if (m.kindsMap.isNotEmpty()) {
+        parts += m.kindsMap.entries
+            .sortedWith(
+                compareBy(
+                    { memoryKindOrder.indexOf(it.key).let { i -> if (i >= 0) i else Int.MAX_VALUE } },
+                    { it.key },
+                )
+            )
+            .joinToString(" / ") { "${it.key} ${it.value}" }
+    }
+    return RuntimeUsageRow("记忆用量", parts.joinToString(" · "))
+}
+
+/** 缓存块:命名空间 / 条目 / 字节 / 命中三计数 —— 可再生缓存的量与效率一起给,照 proto。 */
+fun cacheUsageRow(c: AgentCacheUsage?): RuntimeUsageRow {
+    if (c == null) return RuntimeUsageRow("缓存用量", "daemon 未提供")
+    return RuntimeUsageRow(
+        "缓存用量",
+        listOf(
+            "${c.namespaces} 命名空间",
+            "${c.entries} 条",
+            formatBytesLabel(c.bytes),
+            "命中 ${c.hits} / 未命中 ${c.misses} / 淘汰 ${c.evictions}",
+        ).joinToString(" · "),
+    )
+}
+
+/** 检查点块:个数与字节。 */
+fun checkpointUsageRow(c: AgentCheckpointUsage?): RuntimeUsageRow {
+    if (c == null) return RuntimeUsageRow("检查点", "daemon 未提供")
+    return RuntimeUsageRow("检查点", "${c.count} 个 · ${formatBytesLabel(c.bytes)}")
+}
+
+/**
+ * 恢复块:最近一次恢复尝试的结果。
+ *
+ * 【为什么"未上报"绝不能画成"失败"】proto 里 AgentRecoveryState 明文说明:daemon 侧
+ * 目前还没有产出方,reported 恒为 false —— "没这一项"和"恢复失败"是完全不同的两件事,
+ * 把前者读成后者是无中生有的坏消息。这是本块唯一的判据,其余字段照 daemon 原文带出。
+ */
+fun recoveryUsageRow(r: AgentRecoveryState?): RuntimeUsageRow {
+    if (r == null) return RuntimeUsageRow("最近恢复", "daemon 未提供")
+    if (!r.reported) return RuntimeUsageRow("最近恢复", "该 agent 未上报恢复状态")
+    val parts = mutableListOf(
+        when {
+            r.succeeded -> "恢复成功"
+            r.attempted -> "尝试过恢复,未成功"
+            else -> "有恢复记录,未说明结果"
+        },
+    )
+    // "none" 表示没有恢复来源可说,不占一段字。
+    if (r.from.isNotBlank() && r.from != "none") parts += "来源 ${recoveredFromLabel(r.from)}"
+    if (r.reason.isNotBlank()) parts += r.reason
+    if (r.at.isNotBlank()) parts += r.at
+    return RuntimeUsageRow("最近恢复", parts.joinToString(" · "))
+}
+
+/** 恢复来源的展示:已知取值译成人话,值域外的照抄原文(与六个形态标签同一纪律)。 */
+fun recoveredFromLabel(raw: String): String = when (raw) {
+    "checkpoint" -> "检查点"
+    "native" -> "原生"
+    "corrupted" -> "损坏副本"
     else -> raw
 }
 

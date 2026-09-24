@@ -302,11 +302,19 @@ private fun RecoveryBannerBlock(banner: RecoveryBanner) {
     }
 }
 
-/** 形态卡的展开体:六项形态 + 违约 + 显式不支持 + 该 agent 当前资源租约。 */
+/**
+ * 形态卡的展开体:六项形态 + 违约 + 显式不支持 + 该 agent 当前资源租约
+ * + §9.5 后四块用量(记忆 / 缓存 / 检查点 / 恢复)。
+ *
+ * 【四块用量为什么排在资源租约之后】§9.5 的原文顺序是 memory/cache/resource/
+ * checkpoint/recovery,但资源租约的成败(网络失败时显示 note)同时是四块能否取到
+ * 的前置信号 —— 读不到时四块整段缺席,排在前面的失败原因正好解释这件事。
+ */
 @Composable
 private fun AgentRuntimeDetail(card: AgentContractCard) {
     var resources by remember(card.agentId) { mutableStateOf<List<String>?>(null) }
     var resourceNote by remember(card.agentId) { mutableStateOf<String?>(null) }
+    var usage by remember(card.agentId) { mutableStateOf<List<RuntimeUsageRow>>(emptyList()) }
 
     LaunchedEffect(card.agentId) {
         RuntimeControlState.agentRuntime(card.agentId)
@@ -317,6 +325,7 @@ private fun AgentRuntimeDetail(card: AgentContractCard) {
                     "${m.kind} · $used / $hard${if (m.optional) "(可选)" else ""}"
                 }
                 resourceNote = null
+                usage = agentRuntimeUsageRows(r)
             }
             .onFailure { resourceNote = it.message ?: it::class.java.simpleName }
     }
@@ -338,6 +347,7 @@ private fun AgentRuntimeDetail(card: AgentContractCard) {
             resources?.isEmpty() == true -> DetailLine("资源", "当前没有活跃的资源租约")
             resources != null -> resources!!.forEach { DetailLine("资源", it) }
         }
+        usage.forEach { DetailLine(it.label, it.value) }
     }
 }
 
