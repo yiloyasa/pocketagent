@@ -66,84 +66,24 @@ func eventKnowledgeKey(agent, method string) string {
 // (codex.go、native_notifications.go)、piNoticeKind(pi.go)、
 // zcodeNoticeKind(zcode.go)、dshNoticeKind(dsh.go 的事件对照表)。
 // 词表扩容 = 在这里加一行,翻译层零改动 —— 这就是"同一框架"的扩展方式。
-var knownEventSummaries = map[string]string{
-	// ---- codex:轮次与上下文(方案点名的已知高频方法) ----
-	"codex\x1fturn.completed":     "Codex 完成了这一轮任务",
-	"codex\x1fturn.failed":        "Codex 这一轮任务失败了",
-	"codex\x1fcontextCompaction":  "Codex 正在压缩上下文,给后续对话腾出空间",
-	"codex\x1ftoken_count":        "Codex 报告了本轮 token 用量",
-	"codex\x1fsession_configured": "Codex 完成了会话初始化(模型与工作目录已确认)",
-	"codex\x1ferror":              "Codex 上报了一次错误",
-	"codex\x1fwarning":            "Codex 发出了一条警告提示",
-	// ---- codex:item 通知路径(method 形如 item/completed:<类型>) ----
-	"codex\x1fitem/completed:userMessage": "Codex 回显了你发过的那条消息(仅留痕,不产生新内容)",
-	"codex\x1fitem/completed:summary":     "Codex 记录了这段会话的摘要",
-	"codex\x1fitem/started:reasoning":     "Codex 输出了一段思考过程(已投影为思考流)",
-	"codex\x1fitem/completed:reasoning":   "Codex 输出了一段思考过程(已投影为思考流)",
-	// ---- codex:全局通知(会话级事实,daemon 已投影落库) ----
-	"codex\x1fthread/started":        "Codex 开启了一个新会话",
-	"codex\x1fthread/archived":       "Codex 把一个会话归档了",
-	"codex\x1fthread/unarchived":     "Codex 把一个会话从归档中恢复了",
-	"codex\x1fthread/deleted":        "Codex 删除了一个会话",
-	"codex\x1fthread/reverted":       "Codex 把会话回退到了较早的状态",
-	"codex\x1fthread/closed":         "Codex 关闭了一个会话",
-	"codex\x1fthread/name/updated":   "Codex 更新了会话标题",
-	"codex\x1fthread/queue/changed":  "Codex 的任务排队发生了变化",
-	"codex\x1fthread/status/changed": "Codex 的会话状态变化了(如空闲/运行中)",
-	"codex\x1fthread/plan/updated":   "Codex 更新了本会话的执行计划",
-	"codex\x1fthread/goal/updated":   "Codex 更新了本会话的目标",
-	"codex\x1fthread/goal/cleared":   "Codex 清除了本会话的目标",
-	"codex\x1fskills/changed":        "Codex 的可用技能列表发生了变化",
-	// ---- codex:全局通知(只透传留痕) ----
-	"codex\x1fturn/diff/updated":      "Codex 更新了本轮的代码改动汇总",
-	"codex\x1fmodel/verification":     "Codex 上报了模型校验信息",
-	"codex\x1fguardianWarning":        "Codex 的安全防护机制发出了警告",
-	"codex\x1fserverRequest/resolved": "Codex 桌面端已处理完一个反向请求",
-	// ---- pi(事件类型,见 piNoticeKind) ----
-	"pi\x1fsession_info_changed":  "pi 更新了会话信息(如标题)",
-	"pi\x1fmessage_update":        "pi 正在推送消息内容(流式输出)",
-	"pi\x1fagent_start":           "pi 开始处理任务",
-	"pi\x1fagent_end":             "pi 结束了这一轮处理",
-	"pi\x1fagent_settled":         "pi 完成了这一轮的收尾工作",
-	"pi\x1ftool_execution_start":  "pi 开始执行一个工具",
-	"pi\x1ftool_execution_update": "pi 的工具执行有了新进展",
-	"pi\x1ftool_execution_end":    "pi 的工具执行结束了",
-	"pi\x1fabort":                 "pi 中止了当前操作",
-	"pi\x1fcompaction_start":      "pi 开始压缩上下文",
-	"pi\x1fcompaction_end":        "pi 完成了上下文压缩",
-	"pi\x1fauto_retry_start":      "pi 遇到问题,正在自动重试",
-	"pi\x1fauto_retry_end":        "pi 的自动重试结束了",
-	"pi\x1fqueue_update":          "pi 的消息排队状态有变化",
-	"pi\x1fextension_ui_request":  "pi 的扩展请求界面交互(由 daemon 守护栏处理)",
-	// ---- zcode(方法名,见 zcode.go 事件对照表与 zcodeNoticeKind) ----
-	"zcode\x1fmodel.streaming":               "ZCode 正在流式输出内容",
-	"zcode\x1ftool.updated":                  "ZCode 更新了工具执行状态",
-	"zcode\x1fturn.started":                  "ZCode 开始处理这一轮",
-	"zcode\x1fturn.completed":                "ZCode 完成了这一轮任务",
-	"zcode\x1fturn.failed":                   "ZCode 这一轮任务失败了",
-	"zcode\x1fturn.steerQueued":              "ZCode 把一条新输入排进队列(当前轮结束后执行)",
-	"zcode\x1fturn.steerDrained":             "ZCode 清空了排队中的插话输入",
-	"zcode\x1finteraction/requestPermission": "ZCode 请求批准一项操作",
-	"zcode\x1fstate.updated":                 "ZCode 同步了运行状态(daemon 已据此更新界面)",
-	"zcode\x1fsession.updated":               "ZCode 同步了会话状态(daemon 已据此更新界面)",
-	"zcode\x1fsettings.updated":              "ZCode 同步了设置变化(daemon 已据此更新界面)",
-	"zcode\x1fsession.modelUpdated":          "ZCode 切换了会话使用的模型(daemon 已据此更新界面)",
-}
+var knownEventSummaries = func() map[string]string {
+	m := make(map[string]string)
+	for _, src := range []map[string]string{
+		codexEventSummaries, piEventSummaries, zcodeEventSummaries, dshEventSummaries,
+	} {
+		for k, v := range src {
+			if _, dup := m[k]; dup {
+				panic("event_translate: 重复词表键 " + k)
+			}
+			m[k] = v
+		}
+	}
+	return m
+}()
 
 // knownEventPrefixes 是"方法带运行时后缀变体"的前缀知识库(最长前缀优先)。
 // 【为什么单独一张表】dsh 的通知 method 形如 session/update:tool_call:completed,
-// 状态后缀是开放的;逐个枚举状态值会让词表永远追不上上游。
-var knownEventPrefixes = []struct {
-	agent, methodPrefix, summary string
-}{
-	{"dsh", "session/update:agent_message_chunk", "dsh 正在输出助手消息(流式)"},
-	{"dsh", "session/update:agent_thought_chunk", "dsh 正在输出思考过程"},
-	{"dsh", "session/update:user_message_chunk", "dsh 回显了用户消息片段"},
-	{"dsh", "session/update:context_usage", "dsh 报告了上下文用量(daemon 已投影为用量帧)"},
-	{"dsh", "session/update:tool_call", "dsh 更新了工具调用状态(daemon 已投影为工具卡片)"},
-	{"dsh", "session/update:plan", "dsh 更新了任务计划(daemon 只透传留痕)"},
-	{"dsh", "session/update:available_commands_update", "dsh 更新了可用命令列表(daemon 只透传留痕)"},
-}
+// knownEventPrefixes(dsh 前缀词表)驻 knowledge_dsh.go。
 
 // fieldMeaningGlossary 是字段名 → 中文含义的对照表。
 // 【为什么只收通用词】领域词(如 codex 的 codexErrorInfo)给错含义比不给更糟;
