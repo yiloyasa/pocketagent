@@ -61,6 +61,16 @@ def scroll_to(label, max_scrolls=8):
     return has(label)
 
 
+def wait_for(label, timeout=20.0, interval=1.0):
+    """等待异步设置内容进入 UI 树，避免冷启动竞速造成假 FAIL。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if has(label):
+            return True
+        time.sleep(interval)
+    return has(label)
+
+
 def check(name, ok, detail=''):
     results.append((name, bool(ok), detail))
     print('  [%s] %s%s' % ('PASS' if ok else 'FAIL', name, ('  <- ' + detail) if detail else ''))
@@ -136,11 +146,17 @@ def main():
         check('冷启动后首页存在「设置」入口', False, '首页未见右上角「设置」')
         return
     check('冷启动后首页存在「设置」入口', True)
-    tap('设置')
-    time.sleep(3.0)
+    if not tap('设置'):
+        check('打开设置页', False, '未找到设置入口')
+        return
+    # 设置页的运行时能力来自 daemon 异步握手；固定 sleep 在设备负载高时
+    # 会把真实可见内容误判成缺失。先等稳定锚点，再进入滚动断言。
+    if not wait_for('设置', timeout=12.0):
+        check('设置页完成加载', False, '设置页标题未进入 UI 树')
+        return
 
     print('== 一级设置页 ==')
-    check('设置页出现「运行时」分组标题', scroll_to('运行时'))
+    check('设置页出现「运行时」分组标题', wait_for('运行时', timeout=20.0) or scroll_to('运行时'))
     if not check('出现「运行时控制面」入口行', scroll_to('运行时控制面')):
         return
 
