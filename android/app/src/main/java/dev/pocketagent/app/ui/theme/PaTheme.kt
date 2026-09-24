@@ -47,6 +47,7 @@ object Pa {
     /** 应用深/浅两套色板(浅色 = 同一设计语言的反相:白底浅灰卡)。 */
     internal fun apply(dark: Boolean) {
         IsDark = dark
+        PaGlassToken.apply(dark)  // 玻璃材质随主题一起换肤,与实色同一时机生效
         if (dark) {
             Bg = Color(0xFF000000); Card = Color(0xFF151517); CardHigh = Color(0xFF1F1F22)
             Hover = Color(0xFF2A2A2E); Accent = Color(0xFF4A9DFF); AccentDim = Color(0xFF1E3A5C)

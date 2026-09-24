@@ -5,7 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.core.tween
+import dev.pocketagent.app.ui.anim.PaMotion
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -162,11 +162,13 @@ private fun RootNav() {
     NavHost(
         navController = nav,
         startDestination = startDestination,
-        // 【动效】进场慢一点、退场快一点 —— 苹果式转场节奏
-        enterTransition = { fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 20 } },
-        exitTransition = { fadeOut(tween(140)) },
-        popEnterTransition = { fadeIn(tween(220)) },
-        popExitTransition = { fadeOut(tween(140)) + slideOutHorizontally(tween(140)) { it / 20 } },
+        // 【动效】spring 化的页面转场:tween 是"播完为止"的固定时长,连点两次
+        // 会跳帧;spring 从当前值续走,打断永远平滑(可中断性 = 丝滑的根基)。
+        // 进场带 1/20 屏宽的滑入 + 淡入(空间连续性:去哪从哪来,对称路径)。
+        enterTransition = { fadeIn(PaMotion.nav()) + slideInHorizontally(PaMotion.nav()) { it / 20 } },
+        exitTransition = { fadeOut(PaMotion.nav(900f)) },
+        popEnterTransition = { fadeIn(PaMotion.nav()) },
+        popExitTransition = { fadeOut(PaMotion.nav(900f)) + slideOutHorizontally(PaMotion.nav(900f)) { it / 20 } },
     ) {
         composable("onboarding") {
             // 新手教程:看完写标志并切回主页(无返回栈残留)
