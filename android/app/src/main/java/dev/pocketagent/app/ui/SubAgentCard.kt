@@ -1,13 +1,11 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -16,23 +14,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,7 +47,9 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaGlassToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import pocketagent.v1.GetThreadHistoryRequest
@@ -96,21 +89,23 @@ private fun subAgentStateColor(state: SubAgentRunState): Color = when (state) {
 }
 
 /**
- * 状态点:运行中做 1.2s 周期的呼吸(alpha 0.4↔1.0,蓝本 §8),
+ * 状态点:运行中做 ~1.2s 周期的呼吸(alpha 0.4↔1.0,蓝本 §8),
  * 其余状态常亮 —— 与工具卡三色语义同源(见 ChatScreen ToolCallCard)。
+ * 呼吸驱动用 Animatable + 临界阻尼低刚度 spring 往返(与 TypingDots 同族):
+ * 速度两端自然归零,没有 tween 定时器到点掐断的生硬感;协程随组合取消,不泄漏。
  */
 @Composable
 private fun SubAgentStatusDot(state: SubAgentRunState, size: Int = 8) {
     val color = subAgentStateColor(state)
     if (state == SubAgentRunState.RUNNING) {
-        val transition = rememberInfiniteTransition(label = "subAgentBreath")
-        val alpha by transition.animateFloat(
-            initialValue = 0.4f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(600)),
-            label = "subAgentBreathAlpha",
-        )
-        Box(Modifier.size(size.dp).alpha(alpha).background(color, CircleShape))
+        val breath = remember { Animatable(0.4f) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                breath.animateTo(1f, spring(dampingRatio = 1f, stiffness = 55f))
+                breath.animateTo(0.4f, spring(dampingRatio = 1f, stiffness = 55f))
+            }
+        }
+        Box(Modifier.size(size.dp).alpha(breath.value).background(color, CircleShape))
     } else {
         Box(Modifier.size(size.dp).background(color, CircleShape))
     }
@@ -151,6 +146,8 @@ fun SubAgentCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(Pa.AccentDim)
+            // 玻璃材质语言:实色底(AccentDim) + 0.5dp 发丝高光边(同玻璃家族的亮边令牌)
+            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(12.dp))
             .pressableLong(
                 onClick = {
                     hf.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -272,6 +269,8 @@ fun SubAgentGroupCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(Pa.AccentDim)
+            // 同单卡:实色底 + 发丝高光边(材质家族统一)
+            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(12.dp))
             .animateContentSize(
                 spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
             ),
@@ -463,7 +462,6 @@ fun SubAgentSiblingSwitch(
  * 定位是"不打断主对话浏览的偷看":sheet 收起不影响任何状态;消息拉取失败
  * 显示空态(不伪造对话)。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubAgentPeekSheet(
     meta: SubAgentThreadMeta,
@@ -492,19 +490,13 @@ fun SubAgentPeekSheet(
         }
         loading = false
     }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    // 【本轮换 PaSheet】统一玻璃浮层:82% 高度上限 + 滚动 + 导航栏安全区由封装内建,
+    // 原先手写的 verticalScroll / navigationBarsPadding / imePadding 全部交给封装。
+    PaSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .navigationBarsPadding()
-                .imePadding(),
+                .padding(horizontal = 20.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SubAgentBrandIcon(meta.agentId, 16)

@@ -1,12 +1,7 @@
 package dev.pocketagent.app.ui.component
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.StartOffset
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -15,7 +10,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -24,19 +20,24 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.sin
 
 /**
  * 「电脑端正在思考」三点指示器。
  *
- * 【这一版的动效取向:克制】上一版是"抛跳"(位移 1.6×点径,线性 easing),
- * 三点各自独立跳,视觉上显得歪斜、振幅过大,和 App 的静态卡片语言不搭。
- * 现在改为**呼吸式**:
+ * 【这一版的动效取向:呼吸式 + 真物理 spring】
  *  - 位移只留 2.5dp(点径的 0.5 倍),远看几乎不动,近看有轻微起伏;
  *  - 主导变化是透明度 0.30 → 1.00 与缩放 0.82 → 1.00,像"脉冲"而不是"蹦跳";
- *  - 周期拉到 1100ms、相位差 130ms,节奏舒缓,配 FastOutSlowIn 缓动;
- *  - 对齐方式改成居中(Bottom 对齐会因位移把点推得高低不齐)。
+ *  - 周期驱动用 **Animatable + spring 临界阻尼往返**(而非 tween 定时循环):
+ *    spring 的速度曲线两端自然归零,没有定时器到点"掐断"的生硬感;
+ *    本版 Compose 的 infiniteRepeatable 只收 DurationBasedAnimationSpec
+ *    (spring 无固定时长进不去),所以用协程 while 循环驱动 —— 这也是"真 spring"
+ *    的唯一通路,组件离开组合时协程随 LaunchedEffect 一并取消,不泄漏。
+ *  - 三点相位差 160ms,节奏舒缓;只动 graphicsLayer(scale/alpha/translationY),
+ *    不触发布局,流式期间逐帧文本更新也不会放大它的开销。
  *
  * 【无障碍】减弱动态效果时退化为静态三点(只保留透明度差)。
  */
@@ -61,28 +62,26 @@ fun TypingDots(
         return
     }
 
-    val transition = rememberInfiniteTransition(label = "typingDots")
-    val phases = List(3) { i ->
-        transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(
-                    durationMillis = 1100,
-                    easing = FastOutSlowInEasing,
-                ),
-                repeatMode = RepeatMode.Restart,
-                initialStartOffset = StartOffset(i * 130),
-            ),
-            label = "dot$i",
-        )
+    // 每点一条 0..1 相位的 spring 往返协程;相位差靠错峰启动(160ms/点)
+    val lifts = List(3) { remember { Animatable(0f) } }
+    LaunchedEffect(Unit) {
+        lifts.forEachIndexed { i, anim ->
+            launch {
+                delay(i * 160L)
+                while (true) {
+                    // 临界阻尼低刚度 spring:半程 ~0.55s,整周期 ~1.1s,节奏与旧版一致
+                    anim.animateTo(1f, spring(dampingRatio = 1f, stiffness = 55f))
+                    anim.animateTo(0f, spring(dampingRatio = 1f, stiffness = 55f))
+                }
+            }
+        }
     }
 
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        phases.forEachIndexed { i, p ->
+        lifts.forEachIndexed { i, anim ->
             if (i > 0) Spacer(Modifier.width(gap))
             // sin 曲线:0 → 1 → 0,比抛物线更平滑(两端导数为 0,没有生硬的起停)
-            val lift = sin(PI * p.value).toFloat()
+            val lift = sin(PI * anim.value).toFloat()
             Box(
                 Modifier
                     .size(dotSize)

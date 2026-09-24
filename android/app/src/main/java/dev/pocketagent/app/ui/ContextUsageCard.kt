@@ -14,14 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.usageOfflineLabel
 import dev.pocketagent.app.ui.theme.Pa
 import pocketagent.v1.Usage
@@ -54,7 +50,6 @@ import pocketagent.v1.Usage
  *
  * 【自动刷新】卡片打开期间由调用方每 3s 触发一次重组(见 ChatScreen 的 LaunchedEffect)。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContextUsageCard(
     contextWindow: Long,
@@ -79,7 +74,6 @@ fun ContextUsageCard(
     agentLabel: String = "",
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // Tab 只切换下面 4 项的口径:0 = 本 turn,1 = 本会话累计。
     // 【圆环不受 Tab 影响】圆环恒用 turnUsage:每轮输入都重发全部上下文,
     // 本 turn 用量就是"当前窗口被占了多少",与桌面端 Agent 的 context% 同口径。
@@ -94,17 +88,13 @@ fun ContextUsageCard(
     val occupied = usageTotalTokens(turnUsage)
     val ratio = if (windowKnown && !compactedPending) occupied.toFloat() / contextWindow.toFloat() else 0f
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Pa.CardHigh,
-        dragHandle = { Box(Modifier.padding(vertical = 10.dp).size(36.dp, 4.dp).background(Pa.Separator, RoundedCornerShape(50))) },
-    ) {
+    // 【本轮换 PaSheet】统一玻璃浮层:82% 屏高上限 + 竖向滚动由封装内建
+    // (AUDIT sheet 溢出规则的结构化落地),底色走玻璃 Tint 而不是 CardHigh。
+    PaSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(20.dp, 16.dp, 20.dp, 28.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(20.dp, 16.dp, 20.dp, 28.dp),
         ) {
             // 标题
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

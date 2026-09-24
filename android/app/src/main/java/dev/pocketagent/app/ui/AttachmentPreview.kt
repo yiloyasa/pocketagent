@@ -2,6 +2,7 @@ package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaGlassToken
 import java.util.Locale
 import kotlin.math.max
 
@@ -91,7 +93,11 @@ fun AttachmentCard(
                     android.widget.Toast.makeText(ctx, "已复制文件名", android.widget.Toast.LENGTH_SHORT).show()
                 },
             )
+            // 【玻璃材质语言】附件卡保持实色底(AccentDim,用户侧家族色)——卡内有
+            // 缩略图与文件名正文,叠玻璃会透字;高级感由 0.5dp 发丝高光边给出
+            // (与玻璃家族同一根亮边令牌),材质家族一致、可读性不打折。
             .background(Pa.AccentDim, RoundedCornerShape(14.dp))
+            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(14.dp))
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

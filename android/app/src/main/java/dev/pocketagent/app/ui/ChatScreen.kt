@@ -17,20 +17,30 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +70,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -82,6 +93,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -121,12 +133,15 @@ import androidx.compose.runtime.collectAsState
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.UsageCache
 import dev.pocketagent.app.ui.component.UsageSnapshot
@@ -141,6 +156,8 @@ import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.component.rememberUndoState
 // VoiceEngineKind / pickVoiceEngine 定义在本文件尾部纯逻辑区(与状态机同处,JVM 单测共用)
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaGlassToken
+import dev.pocketagent.app.ui.theme.paGlass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -386,6 +403,42 @@ private fun CodexEventCard(
             )
         }
     }
+}
+
+/**
+ * 消息进入动画:淡入 + 轻微上移(新消息"落进"时间线,而不是凭空出现)。
+ *
+ * 【为什么只动 graphicsLayer】性能铁律:动画只碰 transform/opacity(绘制层),
+ * 不触发布局与重绘;绝不给逐条消息挂 blur/重动画。
+ *
+ * 【为什么是 spring(PaMotion.emphasized)】可打断是铁律:动画没播完时这条消息
+ * 若还在流式更新,从当前值续走,不跳帧不重播。
+ *
+ * 【arm 语义】只在"新消息追加的那一帧"为 true(调用方用上一帧的条目数判定)。
+ * LaunchedEffect(Unit) 只在进入组合时跑一次:历史加载/回滚/往回滚动重组
+ * (arm=false 或复用已有实例)绝不重播动画 —— 空间连续性:元素从哪来回哪去。
+ * 减弱动效时瞬时到位(不播位移,消息照常出现)。
+ */
+@Composable
+private fun MessageEnterAnimation(
+    arm: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val reduceMotion = rememberReduceMotion()
+    val progress = remember { Animatable(1f) }
+    LaunchedEffect(Unit) {
+        if (arm && !reduceMotion) {
+            progress.snapTo(0f)
+            progress.animateTo(1f, PaMotion.emphasized())
+        }
+    }
+    Box(
+        modifier.graphicsLayer {
+            alpha = progress.value
+            translationY = (1f - progress.value) * 14.dp.toPx()
+        },
+    ) { content() }
 }
 
 /**
@@ -2033,7 +2086,18 @@ fun ChatScreen(
         val subRunIds = remember(st.running, SubAgentsState.lastRefreshedAt) {
             TurnSession.runningThreadIds() // TurnSession 无锁快照,不进 Compose 状态
         }
-        if (subChildren.isNotEmpty()) {
+        // 【出入场】子代理卡区块出现/消失走 AnimatedContent(淡入+轻微上移 / 淡出,
+        // 全 spring 可打断):subChildren 出现的瞬间卡片"浮入",清空时平滑让位,
+        // 不硬跳占位。内容刷新(数量不变)不重播转场(同一 targetState)。
+        AnimatedContent(
+            targetState = subChildren.isNotEmpty(),
+            transitionSpec = {
+                (fadeIn(PaMotion.emphasized()) + slideInVertically(PaMotion.emphasized()) { it / 6 })
+                    .togetherWith(fadeOut(PaMotion.standard()))
+            },
+            label = "subAgentEntry",
+        ) { present ->
+            if (present) {
             Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp)) {
                 if (subChildren.size == 1) {
                     val only = subChildren[0]
@@ -2051,6 +2115,7 @@ fun ChatScreen(
                         onPeek = { meta -> peekSub = meta },
                     )
                 }
+            }
             }
         }
 
@@ -2202,6 +2267,11 @@ fun ChatScreen(
         }
 
         // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----
+        // 【进入动画的武装记录】记住"上一帧组合时的条目数":仅在"末尾追加了新消息"
+        // 的那一帧允许进入动画(见 MessageEnterAnimation)。null = 本页首帧,绝不播
+        // (打开会话加载历史时整套静默出现);SideEffect 在组合后登记当前数量,
+        // 回滚缩容/加载更早前插都不满足"末尾追加",不会误触发。
+        val prevItemCount = remember(threadId) { mutableStateOf<Int?>(null) }
         LazyColumn(
             Modifier.weight(1f).padding(horizontal = 16.dp),
             state = listState,
@@ -2226,14 +2296,23 @@ fun ChatScreen(
                     }
                 }
             }
-            items(st.items) { item ->
-                when (item.role) {
+            itemsIndexed(st.items) { index, item ->
+                // 进入动画只武装"新消息追加"的那一帧(见上方 prevItemCount 注释)
+                val prevCount = prevItemCount.value
+                val enterArm = prevCount != null &&
+                    index == st.items.lastIndex &&
+                    st.items.size > prevCount
+                MessageEnterAnimation(arm = enterArm) {
+                    when (item.role) {
                     "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         Column(
                             Modifier
                                 .widthIn(max = 300.dp)
-                                .background(Pa.AccentDim, RoundedCornerShape(18.dp, 6.dp, 18.dp, 18.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                // 【本轮打磨】圆角 18→20(尾角 6→7)、内距 12/10→13/11:
+                                // 气泡读作更"饱满"的一块,同侧小尾角保留出向感(空间连续性);
+                                // 配色不动 —— 用户气泡 AccentDim、助手正文铺底的层级关系保持。
+                                .background(Pa.AccentDim, RoundedCornerShape(20.dp, 7.dp, 20.dp, 20.dp))
+                                .padding(horizontal = 13.dp, vertical = 11.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             item.attachments.chunked(2).forEach { rowAttachments ->
@@ -2358,6 +2437,7 @@ fun ChatScreen(
                             }
                         }
                     }
+                    }
                 }
             }
             // 流式思考:边想边展示,和落定的思考卡同款样式
@@ -2370,35 +2450,52 @@ fun ChatScreen(
             // 这里不再重复渲染,否则同一步骤会出现两份。
             if (st.streaming) {
                 item(key = "streaming-bubble") {
-                    if (st.streamText.isEmpty()) {
-                        // 等待首个 token:三点跳动"正在输入"指示(替代旧的光标闪烁)
-                        Row(Modifier.fillMaxWidth()) {
-                            Box(
-                                Modifier
-                                    .background(Pa.Card, RoundedCornerShape(18.dp))
-                                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                            ) {
-                                TypingDots()
+                    // 【流式两相切换】等首 token(三点) → 正文流式:AnimatedContent +
+                    // spring 过渡(淡入+轻微上移,可打断)。AnimatedContent 自带尺寸
+                    // 过渡,相位切换时高度不跳变;正文帧间更新不重播转场(同一 targetState)。
+                    AnimatedContent(
+                        targetState = st.streamText.isEmpty(),
+                        transitionSpec = {
+                            (fadeIn(PaMotion.emphasized()) +
+                                slideInVertically(PaMotion.emphasized()) { it / 8 })
+                                .togetherWith(fadeOut(PaMotion.standard()))
+                        },
+                        label = "streamPhase",
+                    ) { waiting ->
+                        if (waiting) {
+                            // 等待首个 token:三点跳动"正在输入"指示(替代旧的光标闪烁)。
+                            // 气泡走玻璃材质(透+顶缘发丝高光),与整屏玻璃语言同族;
+                            // 三点自身只动 graphicsLayer(见 TypingDots)。
+                            Row(Modifier.fillMaxWidth()) {
+                                Box(
+                                    Modifier
+                                        .paGlass(RoundedCornerShape(18.dp))
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                ) {
+                                    TypingDots()
+                                }
                             }
-                        }
-                    } else {
-                        // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
-                        Column(Modifier.fillMaxWidth()) {
-                            InAppMarkdown(
-                                text = st.streamText,
-                                modifier = Modifier.fillMaxWidth(),
-                                fontSize = 15f * uiScale,
-                                onOpenUrl = onOpenBrowser,
-                            )
-                            TypingDots(
-                                Modifier.padding(start = 2.dp, top = 6.dp),
-                                dotSize = 4.dp,
-                            )
+                        } else {
+                            // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
+                            Column(Modifier.fillMaxWidth()) {
+                                InAppMarkdown(
+                                    text = st.streamText,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    fontSize = 15f * uiScale,
+                                    onOpenUrl = onOpenBrowser,
+                                )
+                                TypingDots(
+                                    Modifier.padding(start = 2.dp, top = 6.dp),
+                                    dotSize = 4.dp,
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+        // 组合完成后登记本帧条目数(下一帧据此判定"是否末尾追加了新消息")
+        SideEffect { prevItemCount.value = st.items.size }
 
         // ---- 输入区(对标图五):附件行 + 双行胶囊 [输入 / + 审批 模型·强度 发送] ----
         Column(
@@ -2413,8 +2510,18 @@ fun ChatScreen(
                 .keyboardAwareBottomPadding()
                 .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 16.dp),
         ) {
-            // 已上传附件 chips
-            if (attachments.isNotEmpty()) {
+            // 已上传附件 chips:出现/收起走 AnimatedContent(展开+淡入 / 收缩+淡出,
+            // 全 spring 可打断)—— 编辑条"带附件 ↔ 无附件"两个状态之间不再硬跳。
+            AnimatedContent(
+                targetState = attachments.isNotEmpty(),
+                transitionSpec = {
+                    (fadeIn(PaMotion.emphasized()) + expandVertically(PaMotion.emphasized()))
+                        .togetherWith(fadeOut(PaMotion.standard()) + shrinkVertically(PaMotion.standard()))
+                },
+                label = "attachRow",
+            ) { hasAttachments ->
+                if (hasAttachments) {
+                    Column {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2473,8 +2580,10 @@ fun ChatScreen(
                             }
                         }
                     }
+                    }
+                        Spacer(Modifier.height(8.dp))
+                    }
                 }
-                Spacer(Modifier.height(8.dp))
             }
 
             // 【生效模型名】在输入栏前统一计算,供"输入框上方全宽行"与"工具行模型 chip"复用。
@@ -2494,10 +2603,24 @@ fun ChatScreen(
             val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: st.runningEffort.orEmpty())
 
             var approvalMenu by remember { mutableStateOf(false) }
+            // 【聚焦辉光】输入框聚焦/失焦经 spring 淡入淡出 1dp Accent 描边:
+            // "正在输入"有一圈安静的状态光,而不是生硬的有/无两态。
+            val inputInteraction = remember { MutableInteractionSource() }
+            val inputFocused by inputInteraction.collectIsFocusedAsState()
+            val focusGlow by animateFloatAsState(
+                targetValue = if (inputFocused) 1f else 0f,
+                animationSpec = PaMotion.standard(),
+                label = "inputFocusGlow",
+            )
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Pa.Card, RoundedCornerShape(26.dp)),
+                    // 【玻璃材质】编辑条是本屏最常驻的玻璃面:半透明底 + 顶缘发丝高光
+                    // (亮边朝上,符合"光从上来");它浮在实色 Bg 条上,不叠第二层玻璃。
+                    // 内部高度变化(斜杠卡面出现/输入行数增减)由 spring 平滑过渡。
+                    .paGlass(RoundedCornerShape(26.dp), hairline = true)
+                    .border(1.dp, Pa.Accent.copy(alpha = 0.30f * focusGlow), RoundedCornerShape(26.dp))
+                    .animateContentSize(PaMotion.emphasized()),
             ) {
                 // [斜杠命令卡面(纵向)] 会话是面板 agent(zcode/codex/pi 三源)且输入以 "/"
                 // 开头时,列出该线程可用的命令 + 内置伪命令(zcode=会话快照 slashCommands[],
@@ -2599,7 +2722,8 @@ fun ChatScreen(
                 LaunchedEffect(voiceLandedTick) {
                     if (voiceLandedTick > 0) {
                         voiceLandPulse.snapTo(0.45f)
-                        voiceLandPulse.animateTo(1f, tween(280))
+                        // 落定脉动走 spring 令牌:中途再收到语音片段,从当前透明度续走不跳变
+                        voiceLandPulse.animateTo(1f, PaMotion.emphasized())
                     }
                 }
                 Box(Modifier.fillMaxWidth().animateContentSize()) {
@@ -2609,12 +2733,14 @@ fun ChatScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             // 【动画 ③】文本落定脉动:识别文本并入的一瞬整框 45%→100% 透明度
-                            // (280ms),只动绘制层(alpha),不触发重新布局,开销可忽略
+                            // (spring ~0.3s),只动绘制层(alpha),不触发重新布局,开销可忽略
                             .graphicsLayer { alpha = voiceLandPulse.value }
                             // 右侧预留 30dp:保证右上角图标不会压住光标 / 末尾文字
                             .padding(start = 18.dp, end = 30.dp, top = 12.dp, bottom = 12.dp)
                             .heightIn(min = 24.dp),
                         textStyle = TextStyle(fontSize = 15.sp, color = Pa.TextPrimary),
+                        // 聚焦态喂给外层胶囊的辉光描边(见上方 inputFocused)
+                        interactionSource = inputInteraction,
                         cursorBrush = SolidColor(Pa.Accent),
                         maxLines = 4,
                         // 【P1-4】running 不再锁输入(运行中发消息=插入/排队);
@@ -2968,7 +3094,8 @@ fun ChatScreen(
                             // PA-REAL-0004:触控箱 ≥48dp(原 40dp)。Accent 圆底下沉一层保持
                             // 40dp 视觉不变(按下缩放仍作用于整体),只放大不可见命中区。
                             .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            .pressable(scaleDown = 0.88f, enabled = sendEnabled) {
+                            // 发送键:按压缩放 + 触发瞬间轻触觉反馈(反馈在按下瞬间发生)
+                            .pressable(scaleDown = 0.88f, haptic = true, enabled = sendEnabled) {
                                 if (send(input)) input = ""
                             },
                         contentAlignment = Alignment.Center,
@@ -3085,11 +3212,8 @@ fun ChatScreen(
 
     // ---- 更多:分叉 / 回滚 ----
     if (showMore) {
-        ModalBottomSheet(
-            onDismissRequest = { showMore = false },
-            containerColor = Pa.CardHigh,
-            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        ) {
+        // 【本轮换 PaSheet】统一玻璃浮层(滚动/高度上限/安全区内建)
+        PaSheet(onDismissRequest = { showMore = false }) {
             Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
                 Text(
                     "会话操作",
@@ -3145,11 +3269,8 @@ fun ChatScreen(
     if (slashGoalSheet) {
         var goalDraft by remember { mutableStateOf("") }
         var goalSaving by remember { mutableStateOf(false) }
-        ModalBottomSheet(
-            onDismissRequest = { if (!goalSaving) slashGoalSheet = false },
-            containerColor = Pa.CardHigh,
-            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        ) {
+        // 【本轮换 PaSheet】统一玻璃浮层
+        PaSheet(onDismissRequest = { if (!goalSaving) slashGoalSheet = false }) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 26.dp)) {
                 Text(
                     "设置会话目标",
@@ -3239,18 +3360,14 @@ fun ChatScreen(
         val turnTotal = st.items.count { it.role == "user" }
         val options = rollbackOptions(turnTotal)
         var picked by remember(turnTotal) { mutableStateOf(1) }
-        ModalBottomSheet(
-            onDismissRequest = { rollbackOpen = false },
-            containerColor = Pa.CardHigh,
-            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        ) {
-            // 整列可滚:选项随回合数增长(每条用户消息=一个回合),长会话时
-            // "取消/确认回滚"会被推出视口不可点(同 SLA-21a:被滚动裁掉的节点
-            // 不进无障碍树也不可点,README §12 坑 6)。
+        // 【本轮换 PaSheet】统一玻璃浮层;滚动由封装内建(选项随回合数增长时
+        // "取消/确认回滚"不会被推出视口,同 SLA-21a 语义),内容列不再自带 verticalScroll。
+        PaSheet(onDismissRequest = { rollbackOpen = false }) {
+            // 整列可滚(PaSheet 提供):选项随回合数增长(每条用户消息=一个回合),长会话时
+            // "取消/确认回滚"保持可点(被滚动裁掉的节点不进无障碍树也不可点,README §12 坑 6)。
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .padding(bottom = 26.dp),
             ) {
                 Text(
@@ -3977,7 +4094,10 @@ private fun ApprovalSheet(
         properties = ModalBottomSheetProperties(
             shouldDismissOnBackPress = false,
         ),
-        containerColor = Pa.CardHigh,
+        // 【本轮改版·只动视觉】底色对齐全 app 玻璃材质令牌(Tint);ModalBottomSheet
+        // 本体**保持不换**:审批是红线 UI,"不可下滑关闭 + 拦截返回键"是语义,
+        // PaSheet 封装不提供这两个开关,为保语义不替用户做决定,这里不换 PaSheet。
+        containerColor = PaGlassToken.Tint,
         shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
         // 【状态栏重叠的真因】material3 的 ModalBottomSheet 默认
         // `contentWindowInsets = WindowInsets.safeDrawing.only(Bottom)` ——
@@ -4210,7 +4330,18 @@ private fun ApprovalSheet(
                     }
                 }
             }
-        } else if (expanded || name == "permissions") {
+        } else {
+            // 【详情区出入场】展开/收起走 AnimatedContent(淡入+轻微上移 / 淡出,
+            // spring 可打断):详情不再硬切出现/消失,收回时平滑让位。
+            AnimatedContent(
+                targetState = expanded || name == "permissions",
+                transitionSpec = {
+                    (fadeIn(PaMotion.emphasized()) + slideInVertically(PaMotion.emphasized()) { it / 10 })
+                        .togetherWith(fadeOut(PaMotion.standard()))
+                },
+                label = "approvalDetails",
+            ) { showDetails ->
+            if (showDetails) {
             // 权限提升没有"展开才看"的道理:它要用户看清放开了什么,默认就展示。
             // 【详情区改造】三个问题一起解决:
             //  1) 原来是裸 Text,命令一长就把抽屉顶到全屏,既不滚动也没法收;
@@ -4241,6 +4372,8 @@ private fun ApprovalSheet(
                     )
                 }
             }
+            }
+            }
         }
         Row(
             Modifier
@@ -4251,7 +4384,7 @@ private fun ApprovalSheet(
             Box(
                 Modifier
                     .weight(1f)
-                    .pressable { onDecision(false, "") }
+                    .pressable(haptic = true) { onDecision(false, "") }
                     .background(Pa.Card, RoundedCornerShape(16.dp))
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
@@ -4262,7 +4395,9 @@ private fun ApprovalSheet(
             Box(
                 Modifier
                     .weight(1f)
-                    .pressable(enabled = !isAsk || canSubmit) { if (isAsk) submit() else onDecision(true, "") }
+                    .pressable(haptic = true, enabled = !isAsk || canSubmit) {
+                        if (isAsk) submit() else onDecision(true, "")
+                    }
                     .background(
                         if (isAsk && !canSubmit) Pa.Hover else Pa.Accent,
                         RoundedCornerShape(16.dp),
@@ -4643,7 +4778,10 @@ private fun ExpandedInputSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
-        containerColor = Pa.CardHigh,
+        // 【本轮改版·只动视觉】底色对齐全 app 玻璃材质令牌;ModalBottomSheet 本体
+        // 保持不换:大窗编辑需要 safeDrawing insets(防顶部压状态栏的历史修复),
+        // PaSheet 封装没有 contentWindowInsets 参数,为不回退该修复保留原容器。
+        containerColor = PaGlassToken.Tint,
         shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
         // 与审批抽屉同一套 insets 处理,避免顶部压到状态栏
         contentWindowInsets = { WindowInsets.safeDrawing },
@@ -4779,7 +4917,6 @@ internal fun buildExportBody(chosen: List<ChatItem>): String {
     return sb.toString()
 }
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ExportChatSheet(
     title: String,
@@ -4789,7 +4926,6 @@ private fun ExportChatSheet(
     onDismiss: () -> Unit,
     onExport: (text: String, count: Int) -> Unit,
 ) {
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // 只导出有正文的对话消息(思考/工具另有开关,避免把日志塞进文档)
     val exportable = remember(items) {
         items.filter { (it.role == "user" || it.role == "assistant") && it.text.isNotBlank() }
@@ -4826,17 +4962,13 @@ private fun ExportChatSheet(
     // agentId 未知(空)时保持原样,交给 daemon 裁决(见 htmlExportGate 注释)。
     val htmlGateBlocked = htmlExportGate(agentId) == HtmlExportGate.UNSUPPORTED_AGENT
 
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Pa.CardHigh,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    // 【本轮换 PaSheet】统一玻璃浮层;scrollable=false —— 内容主体是 LazyColumn
+    // (自己会滚),避免两层滚动嵌套打架;82% 高度上限仍然生效。
+    PaSheet(onDismissRequest = onDismiss, scrollable = false) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .navigationBarsPadding()
                 .padding(bottom = 16.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {

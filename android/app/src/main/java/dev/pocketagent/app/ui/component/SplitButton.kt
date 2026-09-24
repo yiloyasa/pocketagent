@@ -24,7 +24,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -38,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
 
@@ -72,8 +72,9 @@ fun SplitButton(
     compact: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
-    // chevron_right 旋转 90° 即指向下;展开时转到 270° 指向上
-    val chevron by animateFloatAsState(if (open) 270f else 90f, tween(180), label = "chevron")
+    // chevron_right 旋转 90° 即指向下;展开时转到 270° 指向上。
+    // 状态动画走 PaMotion 令牌(spring):中途反向点击可从当前角度续走,不回跳。
+    val chevron by animateFloatAsState(if (open) 270f else 90f, PaMotion.standard(), label = "chevron")
     val density = LocalDensity.current
     val buttonHeight = if (compact) 34.dp else 48.dp
     val corner = if (compact) RoundedCornerShape(10.dp) else RoundedCornerShape(14.dp)
