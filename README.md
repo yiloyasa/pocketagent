@@ -27,20 +27,20 @@
 - daemon：Go **1.27.1**（无 ORM / 无框架，依赖极简）
 - 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 79 RPC**，8 proto / 1859 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**）
-- 代码：android main **91** `.kt` / test **88** `.kt`；daemon Go **404** 文件（生成 pb.go **15**，手写 **389** 含测试）
+- 代码：android main **91** `.kt` / test **89** `.kt`；daemon Go **417** 文件（生成 pb.go **15**，手写 **402** 含测试）
 - 版本：**0.2.2 / versionCode 5**
 
-### 0.3 当前状态（真值锚点 · 2026-09-24 收口轮）
+### 0.3 当前状态（真值锚点 · 2026-09-25 优化轮）
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，**代码基线** `3d40fae`（2026-09-24 收口轮：W8 未知 response 落点、D8 数据目录迁移、WatchEvents Android 客户端、删除会话释放内存态、验收脚本等待锚点化）；文档同步 = 本提交，工作树应保持干净，当前提交以 `git log` 为准 |
-| daemon | 本轮未重启生产进程（**有意推迟到优化轮结束后一次部署**，届时迁移代码随重启生效：默认数据目录 `~/.pocketagentd` → `%LOCALAPPDATA%\PocketAgent\data`，校验+原子 rename+失败保留旧目录可回滚）。源码侧 `go test -count=1 ./...` **17 包全绿**、六核心包 `CGO_ENABLED=1 go test -race` 通过、`go build`/`go vet` 通过 |
-| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线 · **W8 ✅（daemon）** 未知 response 落点 + 已知事件白名单扩容（2026-09-24）· **W9 ✅** provider 统一 Runtime 合同声明与运行时观测 · **W10 ✅** 协同策略由用户电脑上的 daemon 权威持有 · **W11 ✅（JVM）** Android Runtime 区段、预算编辑、未知事件、恢复报告、Agent 形态、协同策略与主页“开始协同”入口已接线；真机 L2 尚未执行 · **WatchEvents ✅（代码）** Android 客户端 + 断点状态机 + 恢复循环事件唤醒，实测归 L2 |
-| **本轮已完成的用户问题** | 删除会话的墓碑过滤覆盖列表/导入/重启/迟到子代理；Codex 空正文分层并支持原生历史补偿；断线恢复改为 150ms 起的退避增量回放 + WatchEvents 事件驱动立即唤醒；Android 删除统一清理本地缓存（本轮补上内存层 `TurnSession.release`，恢复循环不再为已删除会话补事件）；无法关联的 response 脱敏落诊断不再无主；数据目录迁移安全链落地 |
-| **下一刀（已明确）★** | ① daemon 新构建热部署 + L0 产物自证（迁移随重启生效）；② APK 重装 + L2 真机回归（WatchEvents 立即唤醒 / 迁移后首启 / 删除不复活 / 未知 response 注入 / 兼容矩阵四行）；③ 优化轮：cache/resource 文件后端、per-agent recovery 产出方、Android 运行时四块（memory/cache/checkpoint/recovery）上屏；④ 新消息适配回归（mock 未知 method/新模型 ID/未知反向请求 B 开关两态/第 4 个 agent） |
+| Git | 分支 `main`，**代码基线** `8d46452`（2026-09-24/25 两轮：收口轮 = W8 未知 response 落点、D8 数据目录迁移、WatchEvents Android 客户端、删除会话释放内存态；优化轮 = D7 收尾 cache/resource 落盘 + recovery 产出方、Android 运行时四块上屏、新消息适配回归加固、zcode 未知反向请求补台账）；文档同步 = 本提交，工作树应保持干净，当前提交以 `git log` 为准 |
+| daemon | 本轮未重启生产进程（**有意推迟到优化轮结束后一次部署**，届时迁移代码随重启生效：默认数据目录 `~/.pocketagentd` → `%LOCALAPPDATA%\PocketAgent\data`，校验+原子 rename+失败保留旧目录可回滚）。源码侧 `go test -count=1 ./...` **18 包全绿**、受影响包 `CGO_ENABLED=1 go test -race` 通过、`go build`/`go vet` 通过 |
+| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线 · **W8 ✅** 未知 response 落点 + 已知事件白名单扩容（daemon 侧）· **W9 ✅** 六家 provider 统一 Runtime 合同（memory/cache/resource/checkpoint 全部落盘可观测，D7 收尾完成）+ recovery 产出方（推导式）· **W10 ✅** 协同策略由用户电脑上的 daemon 权威持有 · **W11 ✅（JVM）** Android Runtime 区段全量接线（含 per-agent 四块数值上屏）；真机 L2 尚未执行 · **WatchEvents ✅（代码）** Android 客户端 + 断点状态机 + 恢复循环事件唤醒，实测归 L2 |
+| **本轮已完成的用户问题** | 删除会话的墓碑过滤覆盖列表/导入/重启/迟到子代理；Codex 空正文分层并支持原生历史补偿；断线恢复改为 150ms 起的退避增量回放 + WatchEvents 事件驱动立即唤醒；Android 删除统一清理本地缓存（含内存层 `TurnSession.release`）；无法关联的 response/request 脱敏落诊断不再无主（四 client 兜底 + zcode 补台账）；数据目录迁移安全链落地；cache/resource 重启不再归零；per-agent 恢复状态真实上报并可上屏 |
+| **下一刀（已明确）★** | ① daemon 新构建热部署 + L0 产物自证（迁移随重启生效）；② APK 重装 + L2 真机回归（WatchEvents 立即唤醒 / 迁移后首启与兼容矩阵 / 删除不复活 / 未知 response 注入 / 运行时四块显示）；③ 内存分层（Summary/Artifact 主动收敛）与原生 session 适配器收编（spec §6.3/§7）；④ 决策项：B 开关 ON 态是否实现（现在全域无实现）、zcode/codex 反向请求端到端钉的 fake harness 扩展 |
 | APK | debug `build/app-debug.apk` 约 **219 MB**（`cleanapk` 重建）；**手机侧仍装旧包**，待重装 |
-| 测试基线 | Android **88 份 XML / 670 用例 / 0 失败 / 0 错误**（2026-09-24，`_pa_gradle.py test` 强制 `--rerun`，结果 XML 时间戳本轮）；daemon **17 包全绿** + 六核心包 `-race` 通过；`pa_audit --json`：红线 **0**、提示 **1**（附录 A 挂牌例行 5 处）、通过 **6** |
+| 测试基线 | Android **89 份 XML / 679 用例 / 0 失败 / 0 错误**（2026-09-25，`_pa_gradle.py test` 强制 `--rerun`，结果 XML 时间戳本轮）；daemon **18 包全绿** + 受影响包 `-race` 通过；`pa_audit --json`：红线 **0**、提示 **1**（附录 A 挂牌例行 5 处）、通过 **6** |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
