@@ -58,7 +58,7 @@
 
 1. **伪造 decision**：daemon 替用户做任何审批决定（README §7 核心红线）。
 2. **假绿**：测试未 `--rerun`；结果 XML 时间戳非本次；拿增量 APK 当体积/功能结论。
-3. **契约不同步**：proto 改一份未同步另一份；RPC 计数（现 6 服务 / 69 RPC）变化未在提交信息中说明。
+3. **契约不同步**：proto 改一份未同步另一份；RPC 计数（现 7 服务 / 79 RPC，2026-09-24 按 proto/v1 实测校正）变化未在提交信息中说明。
 4. **产物不对**：apkanalyzer 查无新类 / dex 无新字面量 / daemon 跑的是旧进程。
 
 ### 3.2 提示项（不阻塞合入，限期补录）
@@ -150,3 +150,4 @@
 | 2026-09-20 | 批7 死代码清理（T-24/T-26）：dynamicEffortsFor+孤儿接口、PiProvider.ThinkingLevels 及其测试删除 | 回归用例净 -2/-1：被删用例钉的是已删死函数的行为，无独立存在意义；等价性由全绿测试套佐证；同批新增 AST 回归钉子 +1（codexapp client_debug_ast_test）对冲 |
 | 2026-09-20 | UP-TO-DATE 假绿单轮三次被审/执两侧抓住（批2/批3/批5 审核） | 已修复（批10 T-D3，2026-09-21）：tools/device/_pa_gradle.py test 分支已统一补 --rerun 参数；实测连续两次强制真跑并刷新结果 XML（04:26:52→13:34:32→13:35:03），apk/compile 分支不受影响 |
 | 2026-09-20 | 批5 Vosk 全摘除（T-22）：VoskModelManager 状态机/安装器/识别循环等 21 个纯 vosk 用例删除（清单见 T-22 交付报告）；SenseVoiceFallbackTest 24 例同数承接引擎回退钉子，全仓用例数 484 持平不减 | 被测对象已随引擎整体摘除，无行为可钉；端侧兜底/文件校验行为面由 SenseVoice 系测试覆盖；删除逐例清单与理由存档于 T-22 交付报告（2026-09-20 夜航档案） |
+| 2026-09-24 | 收口轮死代码清理：`hostenv.DaemonDataDir` 及其 3 个策略用例（prefers-new/falls-back-legacy/fresh-install）删除，`WithoutLocalAppData` 改钉仍在线的 `UserDataDir`；净回归用例 **-3**。同轮新增：Android `TurnSession.release` 删除释放回归 +1、`unknown_response` 脱敏钉子 +1（daemon）、migration 4 例（2026-09-24 未提交工作流自带） | 被删用例钉的是「不自动搬移」策略下死函数的择路规则；该策略与函数已被 `ResolveDataDir`（校验+原子 rename+失败回滚）取代，择路语义由 `migration_test.go` 覆盖。理由同批7先例：钉死代码行为无独立存在意义。同轮校正 §3.1 RPC 计数漂移（6/69 → 7/79） |
