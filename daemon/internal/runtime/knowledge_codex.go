@@ -1,6 +1,21 @@
 // codexEventSummaries 是 codex 方法的中文人话词表(键规则见 eventKnowledgeKey)。
 // 按 agent 分文件:各 provider 适配只动自家词表,互不踩文件。
-
+//
+// 【0.156.1 收编批】(2026-09,证据 docs/verify/evidence/codex-0156-probe.log)
+// daemon 基线协议面是 0.155.1 vendored schema(95 请求 + 75 通知);0.156.1
+// 通知面无消失(二进制逐名全命中),以下 13 条是此批收编的"daemon 代码此前
+// 零引用"通知,分类一律 KNOWN_PASSTHROUGH(codex.go 的 codexGlobalNoticeKind):
+// 其中 configWarning 在 0.156.1 握手窗口实测到真实帧(本机 config.toml 有
+// 被忽略的设置项),词表文案与实测语义对齐。
+//
+// 【明确不收清单】——桌面产品面通知,手机端没有消费方,别再翻一遍了:
+// thread/realtime/*(语音实时会话)、app/*(桌面应用管理)、fs/changed
+// (桌面文件监视)、remoteControl/*(远程控制)、externalAgentConfig/*(桌面
+// 导入)、fuzzyFileSearch/*(桌面模糊搜索)、windowsSandbox/*(Windows 沙箱
+// 安装向导)、windows/worldWritableWarning、project/changed。
+// 0.156.1 新增的请求面方法(userVerification/*、project/*、memory/*、
+// environment/*、account/bedrock/*、process/spawn、mock/experimentalMethod、
+// server/diagnostics 等)同属桌面/探针面,同样不收;完整 diff 见上述证据日志。
 package runtime
 
 var codexEventSummaries = map[string]string{
@@ -32,4 +47,19 @@ var codexEventSummaries = map[string]string{
 	"codex\x1fmodel/verification":         "Codex 上报了模型校验信息",
 	"codex\x1fguardianWarning":            "Codex 的安全防护机制发出了警告",
 	"codex\x1fserverRequest/resolved":     "Codex 桌面端已处理完一个反向请求",
+
+	// ---- 0.156.1 收编批(证据与不收清单见文件头注释)----
+	"codex\x1fthread/environment/connected":    "Codex 的执行环境已接通,可以开始执行命令了",
+	"codex\x1fthread/environment/disconnected": "Codex 的执行环境掉线了,可能影响后续命令执行",
+	"codex\x1fthread/settings/updated":         "这个会话的设置被修改了(通常是桌面端改的),以最新设置为准",
+	"codex\x1fconfigWarning":                   "Codex 的配置文件有问题,已忽略无效项继续运行",
+	"codex\x1fdeprecationNotice":               "Codex 提示某个配置将来会弃用,建议按提示迁移",
+	"codex\x1fitem/reasoning/summaryPartAdded": "Codex 输出了一段新的思考摘要",
+	"codex\x1fturn/moderationMetadata":         "Codex 上报了本轮内容安全审核的元数据",
+	"codex\x1faccount/updated":                 "Codex 的账号信息有变化(如套餐或登录方式)",
+	"codex\x1faccount/login/completed":         "Codex 的登录流程结束了",
+	"codex\x1fmcpServer/oauthLogin/completed":  "一个 MCP 服务的授权登录结束了",
+	"codex\x1fprocess/exited":                  "Codex 拉起的一个后台进程退出了",
+	"codex\x1fhook/started":                    "Codex 开始执行一个生命周期钩子",
+	"codex\x1fhook/completed":                  "Codex 执行完一个生命周期钩子",
 }

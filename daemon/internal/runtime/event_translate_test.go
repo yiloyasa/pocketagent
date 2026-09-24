@@ -46,9 +46,11 @@ func TestKnownMethodsTranslateToPlainLanguage(t *testing.T) {
 		// zcode。
 		{"zcode", "model.streaming", KindKnownProjected, "流式", "投影"},
 		{"zcode", "tool.updated", KindKnownProjected, "工具", "投影"},
-		// steer 类在 zcodeNoticeKind 里没有专档(现网记 UNKNOWN),翻译层按方法翻,
-		// detail 断言空 —— 钉"翻译不依赖 kind 分档"这件事。
-		{"zcode", "turn.steerQueued", KindUnknownNotification, "队列", ""},
+		// 0.16.9 实测:模型/思考档变化的唯一载体(state.updated,词表措辞随实证更新)。
+		{"zcode", "state.updated", KindKnownProjected, "状态", "投影"},
+		// steer 类在 zcodeNoticeKind 归 PASSTHROUGH(现网真实 kind);detail 断言
+		// "透传" —— 钉"翻译按方法给处置措辞,不依赖分类表"这件事。
+		{"zcode", "turn.steerQueued", KindKnownPassthrough, "队列", "透传"},
 		{"zcode", "session.modelUpdated", KindKnownProjected, "模型", "投影"},
 		// dsh(带状态后缀的变体走前缀匹配)。
 		{"dsh", "session/update:context_usage", KindKnownProjected, "上下文", "投影"},

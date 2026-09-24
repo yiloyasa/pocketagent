@@ -363,6 +363,17 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 					log.Printf("[thread] 删除会话 %s:电脑上的 codex 会话未清掉(codex=%s),仅删本地: %v",
 						t.ID, t.CodexThreadID, err)
 				}
+				// 【thread/delete 真删同步】文件删除只抽落盘痕迹,app-server/桌面端
+				// 握着的线程索引可能仍把它当活会话报回来;协议层的 thread/delete
+				// 才是权威删除(codex 删完自己会广播 thread/deleted,双端一致)。
+				// 同样尽力而为:失败只留日志,不阻塞本地删除与墓碑 —— 墓碑已是
+				// 防复活的权威。抽最小接口同 piThreadDropper,单测可注 fake。
+				if p, ok := s.cfg.Providers[id].(codexThreadDeleter); ok {
+					if err := p.DeleteCodexThread(t.CodexThreadID); err != nil {
+						log.Printf("[thread] 删除会话 %s:codex thread/delete 未成功(codex=%s),本地删除与墓碑不受影响: %v",
+							t.ID, t.CodexThreadID, err)
+					}
+				}
 			}
 		case "zcode":
 			if t.ExternalSession.SessionID != "" {
@@ -558,6 +569,13 @@ type piThreadCompactor interface {
 // clients/cursors,DeleteThread 时同步调用;抽最小接口同上,单测可注 fake)。
 type piThreadDropper interface {
 	DropThread(threadID string)
+}
+
+// codexThreadDeleter codex 侧协议真删能力的最小接口(生产由 *agent.CodexProvider
+// 实现 —— thread/delete;抽接口同 piThreadDropper:单测可注 fake,不依赖真
+// 子进程)。失败不阻塞本地删除:墓碑已是防复活的权威。
+type codexThreadDeleter interface {
+	DeleteCodexThread(threadID string) error
 }
 
 // titlePusher 重命名下发能力的最小接口(生产由 *agent.PiProvider 实现 ——

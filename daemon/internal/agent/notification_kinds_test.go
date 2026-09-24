@@ -49,15 +49,43 @@ func TestDshNoticeKindClassification(t *testing.T) {
 }
 
 func TestZcodeNoticeKindClassification(t *testing.T) {
-	// 这些 method 在记录前都已经 emitRuntimeSelection —— 即已投影成协议内的 Started 帧。
-	for _, m := range []string{"state.updated", "session.updated", "settings.updated", "session.modelUpdated"} {
+	// 【0.16.9 实证校准(2026-09-24,zcode-0169-probe.log)】state.updated 是
+	// 模型/思考档变化的唯一载体(reason=model_changed/thought_level_changed);
+	// settings.updated / session.modelUpdated 在 0.16.9 消失,但旧 bundle(≤0.16.5)
+	// 兼容路径的处理分支仍在(记录前已 emitRuntimeSelection)→ 维持 PROJECTED。
+	// session.titleUpdated 有 TitleHandler 投影分支(桌面改名→手机同步)。
+	for _, m := range []string{"state.updated", "session.updated", "settings.updated", "session.modelUpdated", "session.titleUpdated"} {
 		if got := zcodeNoticeKind(m); got != runtime.KindKnownProjected {
-			t.Errorf("zcodeNoticeKind(%q) = %q, want PROJECTED(记录前已 emitRuntimeSelection)", m, got)
+			t.Errorf("zcodeNoticeKind(%q) = %q, want PROJECTED(记录前已 emitRuntimeSelection/TitleHandler)", m, got)
 		}
 	}
-	for _, m := range []string{"turn.started", "model.streaming", "brand.new.event", ""} {
+	// 0.16.9 收编批:已知、只留痕、不投影。
+	// 会话生命周期回声(daemon 主动 create/resume/close 管理)/ 检查点与回挡 /
+	// 桌面桥投影族(usage.delta、subagent.lifecycle、turn.terminal,不在 stdio
+	// union,daemon 各有自己的载体:turn.completed usage、tool.updated)/
+	// 实测每分钟灌台账的遥测(0.16.9 两天记 193 条 resourceSample UNKNOWN,
+	// 把真未知挤出 200 条滚动窗 —— 收编是本轮分档的直接动机)。
+	for _, m := range []string{
+		"turn.steerQueued", "turn.steerDrained",
+		"session.created", "session.resumed", "session.closed",
+		"checkpoint.created", "rewind.triggered",
+		"usage.delta", "subagent.lifecycle", "turn.terminal",
+		"process/resourceSample", "process/mcpResourceSamples",
+		"process/mcpTelemetry", "startup/storageState",
+	} {
+		if got := zcodeNoticeKind(m); got != runtime.KindKnownPassthrough {
+			t.Errorf("zcodeNoticeKind(%q) = %q, want PASSTHROUGH(0.16.9 收编批,只留痕不投影)", m, got)
+		}
+	}
+	// 刻意留 UNKNOWN(不猜):permission.requested / userInput.requested 与反向
+	// 请求 interaction/requestPermission 的关系,探针证不出(审批流需真实轮次,
+	// 本轮红线禁跑)。等有实证再定档,不许按名字眼熟洗成已知。
+	// turn.started / model.streaming 由 Run 内专案分支处理(投影成流式帧/日志),
+	// 真到兜底记录说明路径与预期不符 —— 分类表不认识它们,如实 UNKNOWN。
+	for _, m := range []string{"permission.requested", "userInput.requested", "permission.resolved", "userInput.resolved",
+		"turn.started", "model.streaming", "brand.new.event", ""} {
 		if got := zcodeNoticeKind(m); got != runtime.KindUnknownNotification {
-			t.Errorf("zcodeNoticeKind(%q) = %q, want UNKNOWN", m, got)
+			t.Errorf("zcodeNoticeKind(%q) = %q, want UNKNOWN(未实证/专案分支处理,兜底不冒充已知)", m, got)
 		}
 	}
 }

@@ -559,7 +559,19 @@ func codexGlobalNoticeKind(method string) string {
 		"skills/changed", "thread/plan/updated", "thread/goal/updated",
 		"thread/goal/cleared":
 		return runtime.KindKnownProjected
-	case "turn/diff/updated", "model/verification":
+	case "turn/diff/updated", "model/verification",
+		// 0.156.1 收编批(docs/verify/evidence/codex-0156-probe.log;词表在
+		// runtime/knowledge_codex.go):这些通知 daemon 只留痕/透传,不做投影,
+		// 但"已知"的定性要让台账如实记录 —— environment 接通/掉线、会话设置被
+		// 桌面端改动、配置警告/弃用提示、账号与 MCP 授权变更、后台进程退出、
+		// 0.156 生命周期钩子,以及思考摘要分段(思考流投影已有
+		// item/reasoning/summaryTextDelta,本条只补"新一段开始"的留痕)。
+		"thread/environment/connected", "thread/environment/disconnected",
+		"thread/settings/updated", "configWarning", "deprecationNotice",
+		"item/reasoning/summaryPartAdded", "turn/moderationMetadata",
+		"account/updated", "account/login/completed",
+		"mcpServer/oauthLogin/completed", "process/exited",
+		"hook/started", "hook/completed":
 		return runtime.KindKnownPassthrough
 	default:
 		return runtime.KindUnknownNotification
@@ -602,6 +614,26 @@ func codexThreadIDOf(params json.RawMessage) string {
 }
 
 var errNoClient = fmt.Errorf("codex 子进程未启动")
+
+// DeleteCodexThread 走 app-server 协议把一条线程从 codex 侧真删(thread/delete)。
+//
+// 【为什么有了 DeleteCodexSession(直接删 rollout 文件)还要它】文件删除只抽掉
+// 落盘痕迹;app-server/桌面端还握着线程索引时,thread/list 仍可能把它当活会话
+// 报回来。thread/delete 是协议层的权威删除,codex 删完还会广播 thread/deleted,
+// 双端事实自然一致。0.156.1 实测仍支持 thread/delete(运行时自报请求面含此
+// 方法,docs/verify/evidence/codex-0156-probe.log 第四节)。
+//
+// 【失败语义】调用方(server 层删除路径)必须把它当"尽力而为":失败只留日志,
+// 不阻塞本地删除与墓碑 —— 墓碑才是防复活的权威(见 server.DeleteThread)。
+func (p *CodexProvider) DeleteCodexThread(codexThreadID string) error {
+	if codexThreadID == "" {
+		return fmt.Errorf("缺少 codex 线程 id")
+	}
+	return p.withClient(func(c *codexapp.Client) error {
+		_, err := c.Call("thread/delete", map[string]interface{}{"threadId": codexThreadID})
+		return err
+	})
+}
 
 // ErrBusy 表示另一个调用正持有 codex 生命周期锁(正在初始化/探测)。
 //

@@ -38,6 +38,22 @@ func TestCodexGlobalNoticeKindClassification(t *testing.T) {
 			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PASSTHROUGH(已知 method,本次无可投影)", m, got)
 		}
 	}
+	// 0.156.1 收编批(docs/verify/evidence/codex-0156-probe.log):通知面无消失,
+	// 13 条原"daemon 零引用"通知定性为 PASSTHROUGH —— 只留痕/透传,不投影落库;
+	// 词表人话在 runtime/knowledge_codex.go。这里钉死分档,防止后续改动把
+	// "已知"洗回"未知"灌满诊断页,或反过来把没投影的东西冒充 PROJECTED。
+	for _, m := range []string{
+		"thread/environment/connected", "thread/environment/disconnected",
+		"thread/settings/updated", "configWarning", "deprecationNotice",
+		"item/reasoning/summaryPartAdded", "turn/moderationMetadata",
+		"account/updated", "account/login/completed",
+		"mcpServer/oauthLogin/completed", "process/exited",
+		"hook/started", "hook/completed",
+	} {
+		if got := codexGlobalNoticeKind(m); got != runtime.KindKnownPassthrough {
+			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PASSTHROUGH(0.156.1 收编批,只留痕不投影)", m, got)
+		}
+	}
 	// 上游升级后真发来的怪东西必须保持 UNKNOWN;空 method 同样如实记未知。
 	for _, m := range []string{"brand/new/notice", "item/guardian/v2", ""} {
 		if got := codexGlobalNoticeKind(m); got != runtime.KindUnknownNotification {
