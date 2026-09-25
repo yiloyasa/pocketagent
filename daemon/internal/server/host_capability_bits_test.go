@@ -8,6 +8,13 @@ package server
 //   - steer:<id>     = agent.Steerer(codex ✓ pi ✓;zcode 实测不支持原生插话,
 //                     dsh 无 → 缺位也是声明,手机端据此区分"插话/排队"回执);
 //   - queue_clear:<id> = agent.QueueClearer(仅 pi 的原生 clear_queue);
+//   - compact:<id>   = CompactThread 路由的三种原生形状之一(codex thread/compact
+//                     的 string 形、pi compact 的 *store.Thread 形、zcode
+//                     session/compact 的 CompactSession 形;dsh 无 → 手机端
+//                     "压缩上下文"入口只应在这三家点亮);
+//   - fork/rollback/review:<id> = codex 专属(ForkThread / RollbackThread /
+//                     StartReview 路由只落 codexProvider;pi/zcode/dsh 缺位);
+//   - export_html:<id> = pi 专属(ExportThreadHtml 路由只认 pi 的 ExportHTML);
 //   - agent_settings / agent_native_settings / text_generation 既有位一并
 //     对表,防止将来接口增减时声明悄悄失真。
 
@@ -52,6 +59,37 @@ func TestGetHostInfoCapabilityBitsAlignedWithControllers(t *testing.T) {
 	for _, id := range []string{"codex", "zcode", "dsh"} {
 		if caps["queue_clear:"+id] {
 			t.Fatalf("%s 不实现 QueueClearer,不得虚报 queue_clear 位", id)
+		}
+	}
+	// compact:压缩路由的三种原生形状(codex/pi/zcode 各一种),dsh 无压缩实现。
+	// 三种形状互斥(参数类型不同),但都声明同一个 compact:<id> 位 —— 手机端
+	// 只关心"能不能压",不关心压到哪条原生通道。
+	for _, id := range []string{"codex", "pi", "zcode"} {
+		if !caps["compact:"+id] {
+			t.Fatalf("%s 有原生压缩实现,应声明 compact 位, caps=%v", id, resp.Capabilities)
+		}
+	}
+	if caps["compact:dsh"] {
+		t.Fatal("dsh 无任何压缩实现(thread.go CompactThread 会误落 codex 路径),不得虚报 compact 位")
+	}
+	// fork/rollback/review:路由只落 codexProvider 的三件事,pi/zcode/dsh 缺位。
+	for _, family := range []string{"fork", "rollback", "review"} {
+		if !caps[family+":codex"] {
+			t.Fatalf("codex 应声明 %s 位, caps=%v", family, resp.Capabilities)
+		}
+		for _, id := range []string{"pi", "zcode", "dsh"} {
+			if caps[family+":"+id] {
+				t.Fatalf("%s 无 %s 对等能力,不得虚报 %s 位", id, family, family)
+			}
+		}
+	}
+	// export_html:HTML 存档导出只有 pi 有 ExportHTML 实现。
+	if !caps["export_html:pi"] {
+		t.Fatalf("pi 应声明 export_html 位, caps=%v", resp.Capabilities)
+	}
+	for _, id := range []string{"codex", "zcode", "dsh"} {
+		if caps["export_html:"+id] {
+			t.Fatalf("%s 不实现 ExportHTML,不得虚报 export_html 位", id)
 		}
 	}
 	// 既有位对表:四家都消费桌面偏好;原生设置目录只有 pi/dsh;提示词优化

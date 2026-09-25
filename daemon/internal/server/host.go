@@ -13,7 +13,51 @@ import (
 	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
+	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/version"
+)
+
+// 会话级控制面能力的窄接口(host_capability_bits 生成用)。
+//
+// 【为什么在 server 包再定义一套同形状接口】thread.go 里已有 piThreadCompactor /
+// zcodeCompacter / piThreadExporter 等同款窄接口,但 host.go 的能力位生成只该依赖
+// "方法形状"本身(结构化类型),不该与并行改动中的路由文件符号耦合 —— Go 接口
+// 天然按形状满足,这里自带一套独立命名,路由文件将来怎么重构都不影响位生成。
+// 每个接口只认一种 provider 的原生方法形状,所以断言通过即等价于"该 agent 的
+// RPC 路由真的有实现可调"(CompactThread 路由按 AgentID 分流到这三种形状之一,
+// 见 thread.go CompactThread)。
+type (
+	// codexShapedCompactor codex 原生压缩形状(thread/compact/start)。
+	// 参数是 string,与 pi 的 *store.Thread 形状天然互斥 —— 一家只命中一个。
+	codexShapedCompactor interface {
+		CompactThread(codexTID string) error
+	}
+	// piShapedCompactor pi 原生压缩形状(compact 命令,同步等真实压缩完成)。
+	piShapedCompactor interface {
+		CompactThread(t *store.Thread) error
+	}
+	// zcodeShapedCompactor zcode 原生压缩形状(session/compact)。
+	zcodeShapedCompactor interface {
+		CompactSession(sessionID string) error
+	}
+	// codexShapedForker 分叉(codex thread/fork;pi/zcode/dsh 无对等能力,
+	// ForkThread 路由只落 codexProvider)。
+	codexShapedForker interface {
+		ForkThread(codexThreadID, lastTurnID string) (string, error)
+	}
+	// codexShapedRollbacker 回滚回合(codex 专属;路由见 thread_ext.go RollbackThread)。
+	codexShapedRollbacker interface {
+		RollbackThread(codexThreadID string, numTurns int32) error
+	}
+	// codexShapedReviewer 计划审查(review/start;路由见 thread_review.go,
+	// 非 codex 会话显式 FailedPrecondition)。
+	codexShapedReviewer interface {
+		StartReview(t *store.Thread, focus string) (*agent.CodexReviewStart, error)
+	}
+	// piShapedExporter HTML 存档导出(pi 专属;路由见 thread.go ExportThreadHtml)。
+	piShapedExporter interface {
+		ExportHTML(t *store.Thread) (string, error)
+	}
 )
 
 func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb.HostInfo, error) {
@@ -64,6 +108,36 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		// 输入"入口只在真正可撤的 agent 上点亮(缺位=入口隐藏,不摆假按钮)。
 		if _, ok := provider.(agent.QueueClearer); ok {
 			caps = append(caps, "queue_clear:"+id)
+		}
+		// 【能力声明对齐 2026-09-25】会话级控制面五件套,同 steer/queue_clear 先例:
+		// 压缩/分叉/回滚/计划审查/HTML 导出在四家上的支持面**不对等**(路由代码
+		// 实证:CompactThread 三家有三种原生形状、Fork/Rollback/Review 只落
+		// codexProvider、ExportThreadHtml 只落 pi),而手机端这些入口此前无位可查,
+		// 只能按 agent 名单硬编码或干脆全量显示 —— dsh 会话里"压缩上下文/分叉/回滚"
+		// 点了必败(ForkThread/RollbackThread 对非 codex 线程回误导性的"先发一条
+		// 消息")。按接口形状逐位如实声明:谁有真实现谁带位,缺位=手机端入口隐藏。
+		// 旧 daemon 不带这些位,新 APK 按位点亮,旧 APK 多收几个未知串无副作用
+		// (按前缀过滤,不认识的串自然忽略)。
+		if _, ok := provider.(codexShapedCompactor); ok {
+			caps = append(caps, "compact:"+id)
+		}
+		if _, ok := provider.(piShapedCompactor); ok {
+			caps = append(caps, "compact:"+id)
+		}
+		if _, ok := provider.(zcodeShapedCompactor); ok {
+			caps = append(caps, "compact:"+id)
+		}
+		if _, ok := provider.(codexShapedForker); ok {
+			caps = append(caps, "fork:"+id)
+		}
+		if _, ok := provider.(codexShapedRollbacker); ok {
+			caps = append(caps, "rollback:"+id)
+		}
+		if _, ok := provider.(codexShapedReviewer); ok {
+			caps = append(caps, "review:"+id)
+		}
+		if _, ok := provider.(piShapedExporter); ok {
+			caps = append(caps, "export_html:"+id)
 		}
 	}
 	sort.Strings(caps) // 稳定输出,便于测试与客户端缓存
