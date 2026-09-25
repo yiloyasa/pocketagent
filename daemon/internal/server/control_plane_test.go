@@ -11,11 +11,18 @@
 //	⑥ 没有运行时后端的装配里,memory/dialysis/resources 三个域如实降级为
 //	   status_code=2,整条 RPC 仍成功返回全部域;
 //	⑦ dialysis 域如实计数未知事件的 NEW 条数,确认后跟着变;
-//	⑧ approvals 域如实计数挂起的审批请求。
+//	⑧ approvals 域如实计数挂起的审批请求;
+//	⑨ agents 域对 codex 透出桌面偏好 select 项:候选全部动态(模型列表 /
+//	   托管白名单),current 与 GetCodexSettings 同值,无动态候选的键
+//	   (model_verbosity / model_reasoning_summary)宁缺毋假不透出;
+//	⑩ 候选拿不到(模型列表失败 / 未托管)或 codex 未注册时,select 项整项缺席、
+//	   域不降级 —— 不摆假入口;
+//	⑪ codex 拉候选受短预算约束:总览页是聚合读,单个 agent 的设置目录拖不垮整页。
 package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -355,5 +362,293 @@ func TestControlPlaneApprovalsCount(t *testing.T) {
 	}
 	if ap2.GetStatusCode() != 0 {
 		t.Fatalf("无待处理审批时 status_code 应为 0,得到 %d", ap2.GetStatusCode())
+	}
+}
+
+// ---- agents 域:codex 桌面偏好 select 项 --------------------------------------
+
+// codexPrefsStub 是 agents 域桌面偏好的假 codex:只实现控制面需要的两个动态
+// 候选源(生产对应 *agent.CodexProvider 的 model/list 与 configRequirements/read),
+// 绝不拉真进程;其余 Provider 方法按测试件红线报错,被调到就响。
+type codexPrefsStub struct {
+	models          []pb.ModelInfo
+	modelsErr       error
+	requirements    agent.CodexRequirements
+	requirementsErr error
+}
+
+func (p *codexPrefsStub) ID() string          { return "codex" }
+func (p *codexPrefsStub) DisplayName() string { return "测试 codex" }
+func (p *codexPrefsStub) Models() []pb.ModelInfo {
+	return p.models
+}
+func (p *codexPrefsStub) Run(context.Context, agent.TurnRequest, agent.Sink, agent.ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
+	return nil, nil, errors.New("测试件不执行轮次")
+}
+func (p *codexPrefsStub) ModelsStatusCtx(context.Context) ([]pb.ModelInfo, error) {
+	return p.models, p.modelsErr
+}
+func (p *codexPrefsStub) RequirementsCtx(context.Context) (agent.CodexRequirements, error) {
+	return p.requirements, p.requirementsErr
+}
+
+// blockUntilCtxDone 把调用挂到 ctx 结束为止:钉"控制面拉候选受短预算约束"。
+type blockUntilCtxDone struct{}
+
+func (blockUntilCtxDone) ID() string          { return "codex" }
+func (blockUntilCtxDone) DisplayName() string { return "阻塞 codex" }
+func (blockUntilCtxDone) Models() []pb.ModelInfo {
+	return nil
+}
+func (blockUntilCtxDone) Run(context.Context, agent.TurnRequest, agent.Sink, agent.ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
+	return nil, nil, errors.New("测试件不执行轮次")
+}
+func (blockUntilCtxDone) ModelsStatusCtx(ctx context.Context) ([]pb.ModelInfo, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (blockUntilCtxDone) RequirementsCtx(ctx context.Context) (agent.CodexRequirements, error) {
+	<-ctx.Done()
+	return agent.CodexRequirements{}, ctx.Err()
+}
+
+// newAgentsPrefsTestServer 建一台带 codex 假件的控制面测试机,并把桌面偏好
+// 预置进 store —— 预置走的是 SetCodexSettings 落盘的**同一组 store 写口**,
+// 这样 current 的同源断言验的是真实读写闭环,不是测试自说自话。
+func newAgentsPrefsTestServer(t *testing.T, providers map[string]agent.Provider) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("建 store 失败: %v", err)
+	}
+	if err := st.SetCodexPrefs(store.CodexPrefs{
+		ApprovalPolicy:   "on-request",
+		Sandbox:          "workspace-write",
+		Verbosity:        "low",
+		ReasoningSummary: "auto",
+	}); err != nil {
+		t.Fatalf("预置 codex 偏好失败: %v", err)
+	}
+	if err := st.SetDefaultModelID("codex/gpt-5.1"); err != nil {
+		t.Fatalf("预置默认模型失败: %v", err)
+	}
+	if err := st.SetDefaultEffort("high"); err != nil {
+		t.Fatalf("预置思考强度失败: %v", err)
+	}
+	srv := New(Config{
+		Store:          st,
+		Providers:      providers,
+		DataDir:        dir,
+		BudgetPolicy:   runtime.BudgetPolicy{Global: runtime.DefaultLimits()},
+		CollabPolicy:   runtime.DefaultCollabPolicy(),
+		RuntimeBackend: runtime.NewBackend(),
+	})
+	t.Cleanup(func() { _ = srv.events.Close() })
+	return srv
+}
+
+// itemAbsent 反向断言:词条必须不在域里(宁缺毋假,不摆假入口)。
+func itemAbsent(t *testing.T, d *pb.ControlDomain, id string) {
+	t.Helper()
+	for _, it := range d.GetItems() {
+		if it.GetId() == id {
+			t.Fatalf("域 %s 不应有条目 %q(实际: %v)", d.GetId(), id, d.GetItems())
+		}
+	}
+}
+
+// TestControlPlaneAgentsCodexSelectItems 覆盖验收点 ⑨:候选全动态、current 与
+// GetCodexSettings 同值、无动态候选的两键不透出。
+func TestControlPlaneAgentsCodexSelectItems(t *testing.T) {
+	stub := &codexPrefsStub{
+		models: []pb.ModelInfo{
+			{Id: "default"},
+			{Id: "gpt-5.1", AvailableEfforts: []string{"low", "high"}},
+		},
+		requirements: agent.CodexRequirements{
+			Managed:                 true,
+			AllowedApprovalPolicies: []string{"untrusted", "on-request", "never"},
+			AllowedSandboxModes:     []string{"read-only", "workspace-write", "danger-full-access"},
+		},
+	}
+	srv := newAgentsPrefsTestServer(t, map[string]agent.Provider{"codex": stub})
+	ctx := context.Background()
+
+	cp, err := srv.GetControlPlane(ctx, &pb.GetControlPlaneRequest{})
+	if err != nil {
+		t.Fatalf("GetControlPlane 失败: %v", err)
+	}
+	agents := findDomain(t, cp, "agents")
+	// 同源基准:与 GetCodexSettings(同一把 store 读数)当场对账。
+	st, err := srv.GetCodexSettings(ctx, &pb.GetCodexSettingsRequest{})
+	if err != nil {
+		t.Fatalf("GetCodexSettings 失败: %v", err)
+	}
+
+	cases := []struct {
+		id      string
+		current string
+		options []string
+	}{
+		{"agents.codex.approval_policy", st.GetApprovalPolicy(), []string{"untrusted", "on-request", "never"}},
+		{"agents.codex.sandbox", st.GetSandbox(), []string{"read-only", "workspace-write", "danger-full-access"}},
+		{"agents.codex.model", st.GetModel(), []string{"codex/default", "codex/gpt-5.1"}},
+	}
+	for _, tc := range cases {
+		it := findItem(t, agents, tc.id)
+		if it.GetKind() != "select" {
+			t.Fatalf("%s 应为 select,得到 %q", tc.id, it.GetKind())
+		}
+		if it.GetCurrent() != tc.current {
+			t.Fatalf("%s 的 current 应与 GetCodexSettings 同值: %q != %q", tc.id, it.GetCurrent(), tc.current)
+		}
+		if len(it.GetOptions()) != len(tc.options) {
+			t.Fatalf("%s 候选数应 %d,得到 %v", tc.id, len(tc.options), it.GetOptions())
+		}
+		for i, want := range tc.options {
+			if it.GetOptions()[i] != want {
+				t.Fatalf("%s 候选[%d] 应 %q,得到 %q", tc.id, i, want, it.GetOptions()[i])
+			}
+		}
+		if it.GetHint() == "" || it.GetLabel() == "" {
+			t.Fatalf("%s 的 label/hint 必须由 daemon 给齐: %q / %q", tc.id, it.GetLabel(), it.GetHint())
+		}
+	}
+	// effort:当前默认模型(codex/gpt-5.1)申报了档位 → 候选就是它的档位,
+	// current 与 GetCodexSettings.Effort 同值。
+	effort := findItem(t, agents, "agents.codex.effort")
+	if effort.GetKind() != "select" || effort.GetCurrent() != st.GetEffort() {
+		t.Fatalf("effort 应为 select 且 current 同源: %+v vs %q", effort, st.GetEffort())
+	}
+	if got := effort.GetOptions(); len(got) != 2 || got[0] != "low" || got[1] != "high" {
+		t.Fatalf("effort 候选应为当前模型申报的档位,得到 %v", got)
+	}
+	// model_verbosity / model_reasoning_summary:codex 无枚举查询,候选拿不到
+	// 就整项不透出 —— 宁缺毋假,不写死名单冒充候选。
+	itemAbsent(t, agents, "agents.codex.model_verbosity")
+	itemAbsent(t, agents, "agents.codex.model_reasoning_summary")
+	// store 里的 verbosity/summary 有值也不该漏成 select:词表六键只透出拿得到
+	// 动态候选的四键。
+}
+
+// TestControlPlaneAgentsSelectsSkipWithoutCandidates 覆盖验收点 ⑩:候选源失败
+// (模型列表报错 / 未托管白名单为空)时,对应 select 整项缺席,形态 info 项照旧,
+// 域不因此降级 —— 没有可选值的编辑入口是假入口。
+func TestControlPlaneAgentsSelectsSkipWithoutCandidates(t *testing.T) {
+	// 模型列表失败 + 未托管(白名单全空)→ 六键一个都不摆。
+	srv := newAgentsPrefsTestServer(t, map[string]agent.Provider{"codex": &codexPrefsStub{
+		modelsErr: agent.ErrModelsInitializing,
+	}})
+	cp, err := srv.GetControlPlane(context.Background(), &pb.GetControlPlaneRequest{})
+	if err != nil {
+		t.Fatalf("GetControlPlane 失败: %v", err)
+	}
+	agents := findDomain(t, cp, "agents")
+	for _, it := range agents.GetItems() {
+		if it.GetKind() == "select" {
+			t.Fatalf("候选拿不到时不应有 select 项: %+v", it)
+		}
+	}
+	// 形态事实项照常在场(info 不依赖动态候选)。
+	findItem(t, agents, "agents.codex.session")
+	findItem(t, agents, "agents.codex.capabilities")
+
+	// 模型列表正常 + 托管策略读不到 → 只摆 model/effort,approval/sandbox 缺席。
+	srv2 := newAgentsPrefsTestServer(t, map[string]agent.Provider{"codex": &codexPrefsStub{
+		models:         []pb.ModelInfo{{Id: "gpt-5.1", AvailableEfforts: []string{"low"}}},
+		requirementsErr: errors.New("codex 未响应"),
+	}})
+	cp2, err := srv2.GetControlPlane(context.Background(), &pb.GetControlPlaneRequest{})
+	if err != nil {
+		t.Fatalf("第二次 GetControlPlane 失败: %v", err)
+	}
+	agents2 := findDomain(t, cp2, "agents")
+	findItem(t, agents2, "agents.codex.model")
+	findItem(t, agents2, "agents.codex.effort")
+	itemAbsent(t, agents2, "agents.codex.approval_policy")
+	itemAbsent(t, agents2, "agents.codex.sandbox")
+}
+
+// TestControlPlaneAgentsNoCodexNoSelects 覆盖验收点 ⑩(codex 未注册的降级):
+// agents 域照常给已注册 agent 的形态事实,不出现任何 codex 条目,更不假造 select。
+func TestControlPlaneAgentsNoCodexNoSelects(t *testing.T) {
+	srv := newControlPlaneTestServer(t) // 只有 echo
+	cp, err := srv.GetControlPlane(context.Background(), &pb.GetControlPlaneRequest{})
+	if err != nil {
+		t.Fatalf("GetControlPlane 失败: %v", err)
+	}
+	agents := findDomain(t, cp, "agents")
+	if agents.GetStatusCode() == 2 {
+		t.Fatalf("codex 未注册只是没有偏好可选,域本身不该降级: %+v", agents)
+	}
+	for _, it := range agents.GetItems() {
+		if strings.HasPrefix(it.GetId(), "agents.codex.") {
+			t.Fatalf("codex 未注册不应有 codex 条目: %+v", it)
+		}
+		if it.GetKind() == "select" {
+			t.Fatalf("非 codex agent 不走桌面偏好,不应有 select 项: %+v", it)
+		}
+	}
+	findItem(t, agents, "agents.echo.session")
+}
+
+// TestControlPlaneAgentsPrefsBudgetBounded 覆盖验收点 ⑪:codex 候选源挂死时,
+// 拉候选必须被短预算截断、对应 select 跳过 —— 总览页是聚合读,一个 agent 的
+// 设置目录不能把整页八个域拖住。
+func TestControlPlaneAgentsPrefsBudgetBounded(t *testing.T) {
+	srv := newAgentsPrefsTestServer(t, map[string]agent.Provider{"codex": blockUntilCtxDone{}})
+	start := time.Now()
+	cp, err := srv.GetControlPlane(context.Background(), &pb.GetControlPlaneRequest{})
+	if err != nil {
+		t.Fatalf("GetControlPlane 失败: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > agentsPrefsBudget+2*time.Second {
+		t.Fatalf("codex 候选拉取应被 %v 预算截断,实际耗时 %v", agentsPrefsBudget, elapsed)
+	}
+	agents := findDomain(t, cp, "agents")
+	for _, it := range agents.GetItems() {
+		if it.GetKind() == "select" {
+			t.Fatalf("候选超时的键应整项跳过,不应出现 select: %+v", it)
+		}
+	}
+	// 其余域照常返回(聚合读不被单域拖垮的整页级证据)。
+	findDomain(t, cp, "budget")
+	findDomain(t, cp, "transports")
+}
+
+// TestCodexPrefsOptionHelpers 纯函数钉子:模型候选补前缀/去重保序;effort 候选
+// 优先当前模型申报档,缺失时并集兜底,无人申报时整项放弃。
+func TestCodexPrefsOptionHelpers(t *testing.T) {
+	models := []pb.ModelInfo{
+		{Id: "default"},
+		{Id: "gpt-5.1", AvailableEfforts: []string{"low", "high"}},
+		{Id: "gpt-5.1"}, // 重复 id:去重保序
+		{Id: "o4-mini", AvailableEfforts: []string{"high", "minimal"}},
+	}
+	got := codexModelOptions(models)
+	want := []string{"codex/default", "codex/gpt-5.1", "codex/o4-mini"}
+	if len(got) != len(want) {
+		t.Fatalf("模型候选应 %v,得到 %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("模型候选[%d] 应 %q,得到 %q(保序去重)", i, want[i], got[i])
+		}
+	}
+	// 当前模型申报了档位 → 就用它的(档位随模型走,摆别家的档是骗人)。
+	if got := codexEffortOptions(models, nil, "codex/gpt-5.1"); len(got) != 2 || got[0] != "low" {
+		t.Fatalf("当前模型申报档位应原样透出,得到 %v", got)
+	}
+	// 当前是 codex/default(跟随桌面,尚无具体模型)→ 全部模型档位并集,首见序。
+	if got := codexEffortOptions(models, nil, "codex/default"); len(got) != 3 || got[0] != "low" || got[2] != "minimal" {
+		t.Fatalf("无具体模型时应并集兜底,得到 %v", got)
+	}
+	// 列表失败 / 无人申报档位 → nil(调用方整项跳过)。
+	if got := codexEffortOptions(models, errors.New("boom"), ""); got != nil {
+		t.Fatalf("列表失败应返回 nil,得到 %v", got)
+	}
+	if got := codexEffortOptions([]pb.ModelInfo{{Id: "default"}}, nil, ""); got != nil {
+		t.Fatalf("无人申报档位应返回 nil,得到 %v", got)
 	}
 }

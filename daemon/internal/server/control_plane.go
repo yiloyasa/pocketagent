@@ -30,7 +30,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/pocketagent/daemon/internal/agent"
 	"github.com/pocketagent/daemon/internal/hostenv"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -214,8 +216,9 @@ func membersText(n int) string {
 
 // ---- agents:Agent 接入形态 ---------------------------------------------------
 
-// controlDomainAgents 各 agent 的在线形态与能力位数。数据源与 GetRuntimeState
-// 同一份 contractReports(启动时生成、之后只读 —— 它反映接入形态,不随运行变化)。
+// controlDomainAgents 各 agent 的在线形态、能力位数,以及 codex 的桌面偏好
+// select 项。形态数据源与 GetRuntimeState 同一份 contractReports(启动时生成、
+// 之后只读 —— 它反映接入形态,不随运行变化)。
 func (s *Server) controlDomainAgents() *pb.ControlDomain {
 	reports := s.contractReportsSnapshot()
 	d := &pb.ControlDomain{Id: domainAgents, Title: "Agent 接入", Writable: true}
@@ -243,6 +246,13 @@ func (s *Server) controlDomainAgents() *pb.ControlDomain {
 				Hint: "该 Agent 声明支持的入口(终端/文件/审批等);缺报的必需入口会被核验标出",
 			},
 		)
+		// 桌面偏好 select 只给 codex:六键的写通道是 SetCodexSettings 的同名
+		// 字段,而非 codex agent 走 setAgentSettings(AgentDefaults:只认
+		// model/effort/native_mode),approval/sandbox/verbosity/summary 会被
+		// 静默忽略 —— 给它们摆入口就是造一份写了不生效的假账。
+		if rep.AgentID == "codex" {
+			d.Items = append(d.Items, s.codexDesktopPrefItems(name)...)
+		}
 	}
 	switch {
 	case len(reports) == 0:
@@ -273,6 +283,135 @@ func sessionModelText(m runtime.SessionSource) string {
 	default:
 		return string(m)
 	}
+}
+
+// agentsPrefsBudget 是 agents 域为 codex 桌面偏好拉候选(模型列表 + 托管策略)
+// 的整段上界。总览页是聚合读:预算内拿不到候选就跳过对应 select 项(客户端对
+// 无候选的项按只读呈现),绝不能让一个设置目录把整页八个域拖住。
+const agentsPrefsBudget = 3 * time.Second
+
+// codexPrefsSource 是 agents 域透出 codex 桌面偏好所需的**动态候选**来源
+// (生产由 *agent.CodexProvider 满足;抽成接口,回归测试塞假件确定性钉行为,
+// 与 codexProbe 同款取舍)。
+type codexPrefsSource interface {
+	// ModelsStatusCtx 模型列表(model/list;候选连同各模型的思考档位),错误如实返回。
+	ModelsStatusCtx(ctx context.Context) ([]pb.ModelInfo, error)
+	// RequirementsCtx 托管策略白名单(configRequirements/read),错误如实返回。
+	RequirementsCtx(ctx context.Context) (agent.CodexRequirements, error)
+}
+
+// codexDesktopPrefItems 组装 codex 的桌面偏好 select 项(id 形如 agents.codex.<键>)。
+//
+// 【候选来源全部动态,宁缺毋假】每键的 options 都取自 codex app-server 的既有
+// 查询,daemon 不写死任何名单:
+//   - approval_policy / sandbox ← configRequirements/read 的托管白名单;
+//     未托管或读不到 = 白名单为空 → 该键整项不透出(拿不到真候选就绝不用
+//     猜的名单顶上,否则"选了被桌面拒绝"的账算谁的);
+//   - model ← model/list 全部条目(含 codex/default = 跟随桌面),带 codex/
+//     前缀,与 ListModels、store.DefaultModelID 同一口径;
+//   - effort ← model/list 的 supportedReasoningEfforts(当前默认模型申报了
+//     档位就用它的,否则取全部模型的并集);无人申报 → 不透出;
+//   - model_verbosity / model_reasoning_summary ← codex app-server 没有任何
+//     枚举查询(config/read 只回当前值,model/list 只有档位没有它们),候选
+//     无法动态取得 → 这两键**恒不透出**,等协议给出枚举源再点亮。
+//
+// 【current 与 GetCodexSettings 同源】同一组 store 读数(CodexPrefs /
+// DefaultModelID / DefaultEffort,即 codexSettingsSnapshot 的取数);写通道
+// SetCodexSettings 落盘的正是这几处 —— 写后回读即见新值,两边界面永远一致。
+// 电脑端此刻的实况由 GetCodexSettings 的 desktop echo 字段另行携带,不混进 current。
+func (s *Server) codexDesktopPrefItems(name string) []*pb.ControlItem {
+	src, ok := s.cfg.Providers["codex"].(codexPrefsSource)
+	if !ok {
+		return nil // codex 未注册或不是动态候选来源:一项不摆,不做假入口
+	}
+	// 不吃 RPC ctx:GetControlPlane 的域组装函数是纯 () *ControlDomain 形状,
+	// 这里与 agent 层 withStatusClientBudget 同款 —— 用 Background 起自己的
+	// 短上界,手机取消请求也最多多跑这 3 秒,不影响正确性。
+	ctx, cancel := context.WithTimeout(context.Background(), agentsPrefsBudget)
+	defer cancel()
+	prefs := s.cfg.Store.CodexPrefs()
+	currentModel := s.cfg.Store.DefaultModelID()
+	currentEffort := s.cfg.Store.DefaultEffort()
+	// 两个候选源共用同一个预算:模型列表若把预算耗尽,托管策略读取会立刻随
+	// 同一个已过期的 ctx 返回,不会各自再等一遍。
+	models, modelsErr := src.ModelsStatusCtx(ctx)
+	reqs, reqsErr := src.RequirementsCtx(ctx)
+	mk := func(key, label, current, hint string, options []string) *pb.ControlItem {
+		return &pb.ControlItem{
+			Id: "agents.codex." + key, Label: name + " · " + label,
+			Current: current, Kind: "select", Options: options, Hint: hint,
+		}
+	}
+	// 键序钉死成词表序(approval/sandbox/model/effort),缺候选的键整项跳过;
+	// 次序稳定,客户端总览页前后两次刷新排版不抖。
+	var items []*pb.ControlItem
+	if reqsErr == nil && len(reqs.AllowedApprovalPolicies) > 0 {
+		items = append(items, mk("approval_policy", "审批策略", prefs.ApprovalPolicy,
+			"codex 执行命令前要不要先征得同意;电脑端被托管策略限制时,这里只列允许的档",
+			reqs.AllowedApprovalPolicies))
+	}
+	if reqsErr == nil && len(reqs.AllowedSandboxModes) > 0 {
+		items = append(items, mk("sandbox", "沙箱模式", prefs.Sandbox,
+			"限定 codex 能动哪里:只读 / 限工作区 / 全盘;越宽越省事也越危险",
+			reqs.AllowedSandboxModes))
+	}
+	if modelsErr == nil && len(models) > 0 {
+		if options := codexModelOptions(models); len(options) > 0 {
+			items = append(items, mk("model", "默认模型", currentModel,
+				"新建对话默认用的模型;codex/default 表示跟随电脑端 codex 自己的配置", options))
+		}
+	}
+	if options := codexEffortOptions(models, modelsErr, currentModel); len(options) > 0 {
+		items = append(items, mk("effort", "思考强度", currentEffort,
+			"推理的深浅档;档位更高想得更周到,也更耗时耗额度", options))
+	}
+	return items
+}
+
+// codexModelOptions 模型候选:列表 id 补上 codex/ 前缀(ListModels 与
+// store.DefaultModelID 的全局唯一口径),去重保序 —— codex 给什么就摆什么,
+// 顺序也照它,前端排版不重排。
+func codexModelOptions(models []pb.ModelInfo) []string {
+	seen := make(map[string]bool, len(models))
+	out := make([]string, 0, len(models))
+	// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+	for i := range models {
+		id := "codex/" + strings.TrimPrefix(models[i].GetId(), "codex/")
+		if id == "codex/" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// codexEffortOptions 思考强度候选:当前默认模型申报了档位就用它的(档位随模型
+// 走,摆别的模型的档位就是骗人);否则取全部模型档位的并集兜底(默认模型常是
+// codex/default=跟随桌面,此刻还不知道具体是哪家)。模型列表没拿到或无人申报
+// → 返回 nil,effort 整项跳过。
+func codexEffortOptions(models []pb.ModelInfo, modelsErr error, currentModel string) []string {
+	if modelsErr != nil || len(models) == 0 {
+		return nil
+	}
+	cur := strings.TrimPrefix(currentModel, "codex/")
+	// 【vet】按下标取址遍历,避免 range 复制 pb 消息(内嵌 MessageState 含锁)。
+	for i := range models {
+		if models[i].GetId() == cur && len(models[i].GetAvailableEfforts()) > 0 {
+			return append([]string(nil), models[i].GetAvailableEfforts()...)
+		}
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for i := range models {
+		for _, e := range models[i].GetAvailableEfforts() {
+			if !seen[e] {
+				seen[e] = true
+				out = append(out, e)
+			}
+		}
+	}
+	return out
 }
 
 // ---- memory:会话记忆 ---------------------------------------------------------
