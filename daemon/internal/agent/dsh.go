@@ -904,6 +904,17 @@ func (p *DshProvider) handleSessionUpdate(raw json.RawMessage, sink Sink, st *ds
 			return
 		}
 		notices.recordAs(dshNoticeKind("session/update:context_usage"), "dsh", "session/update:context_usage", raw, sink)
+	case "usage_update":
+		// 0.1.5-rc.3 探针实测(dsh-p0-probe.md §3):每轮至少 1 帧
+		// {"sessionUpdate":"usage_update","used":N,"size":M} —— used/size 是
+		// 上下文窗口占用(≈codex last 口径的 total/窗口),与 context_usage 的
+		// token 计数是两种形状。此前它落 default 变 UNKNOWN,每轮必来必脏台账。
+		// used+size 都在场才投影(字段缺失不猜);与 context_usage 同一 UsageUpdate 通道。
+		if u := dshUsageUpdateFromUsedSize(raw); u != nil {
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{Usage: u}})
+			return
+		}
+		notices.recordAs(dshNoticeKind("session/update:usage_update"), "dsh", "session/update:usage_update", raw, sink)
 	case "plan", "available_commands_update":
 		// 透传进诊断视图(蓝本 §4.3:plan / available_commands 透传/忽略分支)
 		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
@@ -1046,6 +1057,21 @@ func dshUsageUpdate(raw json.RawMessage) *pb.UsageUpdate {
 	return &pb.UsageUpdate{Usage: us}
 }
 
+// dshUsageUpdateFromUsedSize 解 0.1.5-rc.3 实测的 usage_update 形状
+// {"used":N,"size":M}:上下文窗口占用,InputTokens=used(≈codex last 口径:
+// InputTokens 承载"当前窗口占用",ContextUsageCard 按此渲染)。
+// used/size 任一缺失返回 nil —— 字段不全不猜。
+func dshUsageUpdateFromUsedSize(raw json.RawMessage) *pb.UsageUpdate {
+	var u struct {
+		Used *int64 `json:"used"`
+		Size *int64 `json:"size"`
+	}
+	if json.Unmarshal(raw, &u) != nil || u.Used == nil || u.Size == nil {
+		return nil
+	}
+	return &pb.UsageUpdate{Usage: &pb.Usage{InputTokens: *u.Used}}
+}
+
 // ---- 审批桥(反向请求 → 手机 → outcome;对标 codex_requests.go 纪律)----
 
 // handleDshRequest 反向请求分派,三条规则与 codex_requests.go 同款:
@@ -1053,8 +1079,10 @@ func dshUsageUpdate(raw json.RawMessage) *pb.UsageUpdate {
 //  2. 审批卡按请求真实内容构造,不猜不编造;
 //  3. 超时(2min)/断线/通道故障 → 拒绝路径,绝不伪造"同意"(红线 1)。
 //
-// 【待验标注】本链路受缺 DEEPSEEK_API_KEY 阻塞无法实测(探针第 4 项受阻),
-// 选项 kind 前缀与应答形状按 ACP v1 规范防御性实现,配 key 后按验证清单专项补测。
+// 【已实证 2026-09-25】key 配齐后 dsh-p0 探针 8/8 通过:第 4 项实测
+// session/request_permission 的请求/应答原始帧与 allow/reject 双路行为、
+// 第 5 项实测 cancel 中断语义(stopReason=cancelled),形状与本实现一致;
+// 证据 docs/verify/evidence/dsh-p0-probe.md。
 func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
 	if method != "session/request_permission" {
 		// 精确匹配分派:未登记的一律诚实回 error(codex 第一条规则)

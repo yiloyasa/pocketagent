@@ -954,3 +954,23 @@ func TestDshWarmupRetriesUntilHandshakeSucceeds(t *testing.T) {
 		t.Fatalf("恢复后再次预热应成功: initCalls=%d", n)
 	}
 }
+
+// TestDshUsageUpdateVariantProjectsUsage 0.1.5-rc.3 探针回归钉(dsh-p0-probe.md §3):
+// usage_update 变体 {"sessionUpdate":"usage_update","used":N,"size":M} 每轮至少 1 帧,
+// 必须投影为 UsageUpdate(此前落 default 变 UNKNOWN,每轮必脏台账);
+// 字段缺失时不猜(投影失败回落诊断透传)。
+func TestDshUsageUpdateVariantProjectsUsage(t *testing.T) {
+	frame := func(body string) json.RawMessage {
+		return json.RawMessage(`{"sessionUpdate":"usage_update","sessionId":"s1","update":` + body + `}`)
+	}
+	// 探针真实形状:update 即 {used,size}(无嵌套字段),handleDshUpdate 收到的 raw
+	// 是 update 对象本身(与 context_usage 同层),这里按同层形状测。
+	real := dshUsageUpdateFromUsedSize(json.RawMessage(`{"used":8057,"size":1000000}`))
+	if real == nil || real.Usage == nil || real.Usage.InputTokens != 8057 {
+		t.Fatalf("探针实测形状应投影 InputTokens=used: %+v", real)
+	}
+	if dshUsageUpdateFromUsedSize(json.RawMessage(`{"used":8057}`)) != nil {
+		t.Fatalf("缺 size 不应投影(不猜): 帧应落诊断透传")
+	}
+	_ = frame
+}
