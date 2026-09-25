@@ -42,6 +42,15 @@ type BudgetPolicy struct {
 	// "未来值"，CAS 从此永久失败——用户表现为"怎么改都提示冲突"。
 	Revision uint64 `json:"revision,omitempty"`
 
+	// UnknownRequestPassthrough 是辅线 B 的全局开关（nil = 缺席 = 关，安全姿态）。
+	//
+	// 【为什么放在策略顶层而不是 Limits 里】它不是"某一级的额度"，而是跨全部 agent
+	// 的行为开关：agent 发来不认识的反向请求时，关（默认）直接回 -32601 + 台账；
+	// 开则先弹手机通用确认卡，由用户逐次决定。指针语义与 proto 的 optional bool
+	// 一一对应（缺席 ≠ false：缺席是"用户没碰过"，false 是"用户显式选过关"，
+	// 两者生效值相同，但设置页呈现默认态时用得上有区别的依据）。
+	UnknownRequestPassthrough *bool `json:"unknown_request_passthrough,omitempty"`
+
 	Global     Limits            `json:"global"`
 	Agents     map[string]Limits `json:"agents,omitempty"`
 	Workspaces map[string]Limits `json:"workspaces,omitempty"`

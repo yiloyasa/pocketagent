@@ -1782,6 +1782,12 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		case "elicitation/create":
 			return p.handleZcodeElicitation(rawID, params, ctx, c, approve, &approvalWaiting)
 		}
+		// 【辅线 B】开关 ON 时,未知反向请求先弹手机通用确认卡:允许 → 回空对象 {}
+		// + 台账 KNOWN_PASSTHROUGH(用户看过脱敏原文后授权这次试探);拒绝/超时/
+		// 通道缺失 → 未消费,落回下面的既有安全拒绝路径,与 OFF 态逐字节一致。
+		if unknownPassthroughQuery() && p.handleZcodeUnknownRequest(rawID, method, req.Thread.ID, params, ctx, c, approve, &approvalWaiting, zcodeUIBudget) {
+			return true
+		}
 		// 交回客户端层统一回 -32601 —— 不伪造应答(与 codex 的第一条规则同款)。
 		// 回 error 只让对端知道"这次没做成",而"我们收到过一个不认识的请求"要能
 		// 事后查(规格 §9:未知 request 保留原始 payload、关联会话)。与 codex/dsh

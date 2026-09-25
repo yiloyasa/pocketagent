@@ -166,7 +166,11 @@ func limitsFromProto(p *pb.RuntimeLimits) runtime.Limits {
 }
 
 func policyToProto(p runtime.BudgetPolicy) *pb.RuntimePolicy {
-	out := &pb.RuntimePolicy{Global: limitsToProto(p.Global)}
+	out := &pb.RuntimePolicy{
+		Global: limitsToProto(p.Global),
+		// 辅线 B 开关:*bool ↔ optional bool 直映(缺席保缺席,Set/Get 自然携带)。
+		UnknownRequestPassthrough: p.UnknownRequestPassthrough,
+	}
 	if len(p.Agents) > 0 {
 		out.Agents = make(map[string]*pb.RuntimeLimits, len(p.Agents))
 		for k, v := range p.Agents {
@@ -200,6 +204,9 @@ func policyFromProto(p *pb.RuntimePolicy) runtime.BudgetPolicy {
 		return out
 	}
 	out.Global = limitsFromProto(p.GetGlobal())
+	// 辅线 B 开关:完整策略提交语义的一部分 —— 缺席 = 未设置(= 关),显式 false =
+	// 用户选过关,两者都原样落盘,不在此处归一(归一就该发生在行为读取点)。
+	out.UnknownRequestPassthrough = p.UnknownRequestPassthrough
 	fill := func(dst *map[string]runtime.Limits, src map[string]*pb.RuntimeLimits) {
 		if len(src) == 0 {
 			return

@@ -289,14 +289,22 @@ func (x *RuntimeLimits) GetMaxParallelTurns() int32 {
 }
 
 type RuntimePolicy struct {
-	state         protoimpl.MessageState    `protogen:"open.v1"`
-	Global        *RuntimeLimits            `protobuf:"bytes,1,opt,name=global,proto3" json:"global,omitempty"`
-	Agents        map[string]*RuntimeLimits `protobuf:"bytes,2,rep,name=agents,proto3" json:"agents,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`         // key = agent_id
-	Workspaces    map[string]*RuntimeLimits `protobuf:"bytes,3,rep,name=workspaces,proto3" json:"workspaces,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // key = 工作区绝对路径
-	Threads       map[string]*RuntimeLimits `protobuf:"bytes,4,rep,name=threads,proto3" json:"threads,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`       // key = thread_id
-	Collabs       map[string]*RuntimeLimits `protobuf:"bytes,5,rep,name=collabs,proto3" json:"collabs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`       // key = 协同 session id
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState    `protogen:"open.v1"`
+	Global     *RuntimeLimits            `protobuf:"bytes,1,opt,name=global,proto3" json:"global,omitempty"`
+	Agents     map[string]*RuntimeLimits `protobuf:"bytes,2,rep,name=agents,proto3" json:"agents,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`         // key = agent_id
+	Workspaces map[string]*RuntimeLimits `protobuf:"bytes,3,rep,name=workspaces,proto3" json:"workspaces,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // key = 工作区绝对路径
+	Threads    map[string]*RuntimeLimits `protobuf:"bytes,4,rep,name=threads,proto3" json:"threads,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`       // key = thread_id
+	Collabs    map[string]*RuntimeLimits `protobuf:"bytes,5,rep,name=collabs,proto3" json:"collabs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`       // key = 协同 session id
+	// 【辅线 B】未知反向请求透传确认(全局开关,默认缺 = 关)。
+	//
+	// 【为什么是 optional】关是安全姿态:agent 发来我们不认识的反向请求时,缺省直接
+	// 回协议错误 -32601(绝不替用户做任何决定)。用户显式打开后,daemon 才会把未知
+	// 请求的脱敏原文弹成手机确认卡,由用户逐次决定"允许(回空对象 {})/拒绝"。
+	// optional 保住的是"用户从没碰过这个开关"这一事实 —— 设置页据此显示默认态,
+	// 而不是把"没设"渲染成"用户选过关"。
+	UnknownRequestPassthrough *bool `protobuf:"varint,6,opt,name=unknown_request_passthrough,json=unknownRequestPassthrough,proto3,oneof" json:"unknown_request_passthrough,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *RuntimePolicy) Reset() {
@@ -362,6 +370,13 @@ func (x *RuntimePolicy) GetCollabs() map[string]*RuntimeLimits {
 		return x.Collabs
 	}
 	return nil
+}
+
+func (x *RuntimePolicy) GetUnknownRequestPassthrough() bool {
+	if x != nil && x.UnknownRequestPassthrough != nil {
+		return *x.UnknownRequestPassthrough
+	}
+	return false
 }
 
 type GetResourceUsageRequest struct {
@@ -2896,7 +2911,7 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x18_disk_conversation_bytesB\x13\n" +
 	"\x11_disk_cache_bytesB\x16\n" +
 	"\x14_disk_artifact_bytesB\x15\n" +
-	"\x13_max_parallel_turns\"\xd2\x05\n" +
+	"\x13_max_parallel_turns\"\xb7\x06\n" +
 	"\rRuntimePolicy\x125\n" +
 	"\x06global\x18\x01 \x01(\v2\x1d.pocketagent.v1.RuntimeLimitsR\x06global\x12A\n" +
 	"\x06agents\x18\x02 \x03(\v2).pocketagent.v1.RuntimePolicy.AgentsEntryR\x06agents\x12M\n" +
@@ -2904,7 +2919,8 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"workspaces\x18\x03 \x03(\v2-.pocketagent.v1.RuntimePolicy.WorkspacesEntryR\n" +
 	"workspaces\x12D\n" +
 	"\athreads\x18\x04 \x03(\v2*.pocketagent.v1.RuntimePolicy.ThreadsEntryR\athreads\x12D\n" +
-	"\acollabs\x18\x05 \x03(\v2*.pocketagent.v1.RuntimePolicy.CollabsEntryR\acollabs\x1aX\n" +
+	"\acollabs\x18\x05 \x03(\v2*.pocketagent.v1.RuntimePolicy.CollabsEntryR\acollabs\x12C\n" +
+	"\x1bunknown_request_passthrough\x18\x06 \x01(\bH\x00R\x19unknownRequestPassthrough\x88\x01\x01\x1aX\n" +
 	"\vAgentsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x123\n" +
 	"\x05value\x18\x02 \x01(\v2\x1d.pocketagent.v1.RuntimeLimitsR\x05value:\x028\x01\x1a\\\n" +
@@ -2916,7 +2932,8 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x1d.pocketagent.v1.RuntimeLimitsR\x05value:\x028\x01\x1aY\n" +
 	"\fCollabsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x123\n" +
-	"\x05value\x18\x02 \x01(\v2\x1d.pocketagent.v1.RuntimeLimitsR\x05value:\x028\x01\"/\n" +
+	"\x05value\x18\x02 \x01(\v2\x1d.pocketagent.v1.RuntimeLimitsR\x05value:\x028\x01B\x1e\n" +
+	"\x1c_unknown_request_passthrough\"/\n" +
 	"\x17GetResourceUsageRequest\x12\x14\n" +
 	"\x05scope\x18\x01 \x01(\tR\x05scope\"~\n" +
 	"\x15ResourceUsageResponse\x128\n" +
@@ -3268,6 +3285,7 @@ func file_v1_runtime_proto_init() {
 		return
 	}
 	file_v1_runtime_proto_msgTypes[3].OneofWrappers = []any{}
+	file_v1_runtime_proto_msgTypes[4].OneofWrappers = []any{}
 	file_v1_runtime_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

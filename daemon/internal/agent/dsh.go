@@ -1201,6 +1201,12 @@ func dshUsageUpdateFromUsedSize(raw json.RawMessage) *pb.UsageUpdate {
 // 证据 docs/verify/evidence/dsh-p0-probe.md。
 func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
 	if method != "session/request_permission" {
+		// 【辅线 B】开关 ON 时,未知反向请求先弹手机通用确认卡:允许 → 回空对象 {}
+		// + 台账 KNOWN_PASSTHROUGH(用户看过脱敏原文后授权这次试探);拒绝/超时/
+		// 通道缺失 → 未消费,落到下面的既有安全拒绝路径,与 OFF 态逐字节一致。
+		if unknownPassthroughQuery() && p.handleDshUnknownRequest(rsp, id, method, params, ctx, approve, waiting) {
+			return
+		}
 		// 精确匹配分派:未登记的一律诚实回 error(codex 第一条规则)
 		log.Printf("[dsh] %s → 回 error(未实现,不伪造 decision)", method)
 		// 登记进诊断台账(规格 §9):回 error 只让对端知道"这次没做成",而"收到过一个

@@ -3668,6 +3668,31 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer:
                 onMainClick={ if(optimizerModels.isNotEmpty()) AgentConnection.setOptimizer(AgentConnection.optimizeAgent,optimizerModels.first().id) },
                 options=listOf(SplitOption("Agent 默认模型", selected=AgentConnection.optimizeModel.isEmpty()) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent, "") }) +
                     optimizerModels.map { m -> SplitOption(m.displayName, selected=m.id==AgentConnection.optimizeModel) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent,m.id) } })
+
+            // 【辅线 B】未识别操作确认(实验,全局默认关):读 daemon RuntimePolicy 的
+            // 全局布尔,写走既有 SetRuntimePolicy(完整策略 + CAS,与「运行时」区段的
+            // budget 块共用 [RuntimeControlState] 同一份真值 —— 两个界面一个数)。
+            // 开启后 agent 发来的未识别反向请求先弹手机确认卡,由用户逐次决定;
+            // 关闭(默认)时 daemon 直接安全拒绝,行为与历史一致。
+            LaunchedEffect(Unit) { RuntimeControlState.ensureBudgetSnapshot() }
+            val passthroughScope = rememberCoroutineScope()
+            val passthroughOn = unknownRequestPassthroughOn(RuntimeControlState.budget?.policy)
+            fun setPassthrough(on: Boolean, done: String) {
+                passthroughScope.launch {
+                    val err = RuntimeControlState.saveBudget { b -> applyUnknownRequestPassthrough(b, on) }
+                    onFeedback(err ?: done)
+                }
+            }
+            SplitButton(
+                label = "未识别操作确认(实验)",
+                caption = "开启后,agent 发来的未识别操作会先征求你的同意,而不是直接拒绝",
+                mainLabel = if (passthroughOn) "开" else "关",
+                onMainClick = { setPassthrough(!passthroughOn, if (!passthroughOn) "已开启:未识别操作将先征求你的同意" else "已关闭:未识别操作将直接安全拒绝") },
+                options = listOf(
+                    SplitOption("开", selected = passthroughOn) { setPassthrough(true, "已开启:未识别操作将先征求你的同意") },
+                    SplitOption("关", selected = !passthroughOn) { setPassthrough(false, "已关闭:未识别操作将直接安全拒绝") },
+                ),
+            )
             Spacer(Modifier.height(6.dp))
         }
 

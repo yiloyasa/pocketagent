@@ -317,3 +317,60 @@ func TestGetResourceUsageExposesLeaseLimits(t *testing.T) {
 		t.Fatal("应带采样时刻(手机端要显示'多久前')")
 	}
 }
+
+// TestRuntimePolicyCarriesUnknownRequestPassthrough 辅线 B:策略字段经
+// SetRuntimePolicy / GetRuntimePolicy 自然携带(字段追加,RPC 数不变),且
+// optional 的缺席语义保真 —— 缺席 ≠ false:客户端设置页要靠这个区别呈现
+// "默认态"与"用户显式选过关"。
+func TestRuntimePolicyCarriesUnknownRequestPassthrough(t *testing.T) {
+	srv, dir := newPolicyTestServer(t)
+	ctx := context.Background()
+
+	// 从未设置:Get 回缺席(不是 false)。
+	before, err := srv.GetRuntimePolicy(ctx, &pb.GetRuntimePolicyRequest{})
+	if err != nil {
+		t.Fatalf("GetRuntimePolicy 失败: %v", err)
+	}
+	if before.GetPolicy().UnknownRequestPassthrough != nil {
+		t.Fatal("从未设置时字段应缺席(缺席 ≠ false,设置页靠它显示默认态)")
+	}
+
+	// 显式 true:Set → 落盘 → Get 回 true;重启(重载)后仍为 true。
+	on := true
+	if _, err := srv.SetRuntimePolicy(ctx, &pb.SetRuntimePolicyRequest{
+		Policy: &pb.RuntimePolicy{UnknownRequestPassthrough: &on},
+	}); err != nil {
+		t.Fatalf("SetRuntimePolicy 失败: %v", err)
+	}
+	after, err := srv.GetRuntimePolicy(ctx, &pb.GetRuntimePolicyRequest{})
+	if err != nil {
+		t.Fatalf("GetRuntimePolicy 失败: %v", err)
+	}
+	if !after.GetPolicy().GetUnknownRequestPassthrough() {
+		t.Fatalf("显式 true 未回读: %+v", after.GetPolicy())
+	}
+	reloaded, err := runtime.LoadBudgetPolicy(dir)
+	if err != nil {
+		t.Fatalf("重载策略失败: %v", err)
+	}
+	if reloaded.UnknownRequestPassthrough == nil || !*reloaded.UnknownRequestPassthrough {
+		t.Fatalf("落盘丢失开关: %+v", reloaded.UnknownRequestPassthrough)
+	}
+
+	// 显式 false:保留为"设了 false",不得归一成缺席(整块替换语义下,缺席会被
+	// 当成"未设置",用户显式关掉的事实必须留得住)。
+	off := false
+	if _, err := srv.SetRuntimePolicy(ctx, &pb.SetRuntimePolicyRequest{
+		Policy:        &pb.RuntimePolicy{UnknownRequestPassthrough: &off},
+		ExpectedRevision: after.GetRevision(),
+	}); err != nil {
+		t.Fatalf("SetRuntimePolicy(false) 失败: %v", err)
+	}
+	final, err := srv.GetRuntimePolicy(ctx, &pb.GetRuntimePolicyRequest{})
+	if err != nil {
+		t.Fatalf("GetRuntimePolicy 失败: %v", err)
+	}
+	if final.GetPolicy().UnknownRequestPassthrough == nil || final.GetPolicy().GetUnknownRequestPassthrough() {
+		t.Fatalf("显式 false 应保留为已设置的 false: %+v", final.GetPolicy().UnknownRequestPassthrough)
+	}
+}

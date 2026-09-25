@@ -116,6 +116,14 @@ message RuntimePolicy {
   map<string, RuntimeLimits> workspaces = 3; // key = 工作区绝对路径
   map<string, RuntimeLimits> threads = 4;    // key = thread_id
   map<string, RuntimeLimits> collabs = 5;    // key = 协同 session id
+  // 【辅线 B】未知反向请求透传确认(全局开关,默认缺 = 关)。
+  //
+  // 【为什么是 optional】关是安全姿态:agent 发来我们不认识的反向请求时,缺省直接
+  // 回协议错误 -32601(绝不替用户做任何决定)。用户显式打开后,daemon 才会把未知
+  // 请求的脱敏原文弹成手机确认卡,由用户逐次决定"允许(回空对象 {})/拒绝"。
+  // optional 保住的是"用户从没碰过这个开关"这一事实 —— 设置页据此显示默认态,
+  // 而不是把"没设"渲染成"用户选过关"。
+  optional bool unknown_request_passthrough = 6;
 }
 
 message GetResourceUsageRequest {
