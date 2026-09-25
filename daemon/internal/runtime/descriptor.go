@@ -213,16 +213,6 @@ func (d AgentDescriptor) Has(c Capability) bool {
 	return false
 }
 
-// HasAll 报告是否声明了全部给定能力（空参数集恒为 true）。
-func (d AgentDescriptor) HasAll(cs ...Capability) bool {
-	for _, c := range cs {
-		if !d.Has(c) {
-			return false
-		}
-	}
-	return true
-}
-
 // Limit 返回某能力被显式声明为不支持的那条 Limitation。
 func (d AgentDescriptor) Limit(c Capability) (Limitation, bool) {
 	for _, l := range d.Limitations {

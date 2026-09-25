@@ -1,6 +1,5 @@
 package dev.pocketagent.app.ui
 
-import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

@@ -71,19 +71,10 @@ func MapThinkingDelta(raw json.RawMessage) (pb.ThinkingDelta, bool) {
 	return pb.ThinkingDelta{Delta: m.Assistant.Delta}, true
 }
 
-// MapToolcallStart 提取 toolcall_start(id+toolName)。
+// MapToolcallEnd toolcall_end → STARTED 帧(参数完整)。
 // 【P1 取舍】参数要 28 个 delta 才拼完(实测),STARTED 卡片等 toolcall_end
 // (参数完整)再发,执行进度由 tool_execution_update 的 UPDATE 帧承担 ——
 // 手机端按 callId 原地覆盖,不缺过程感,也不会出现参数半截的卡片。
-func MapToolcallStart(raw json.RawMessage) (id, toolName string, ok bool) {
-	m := parseMessageUpdate(raw)
-	if m == nil || m.Assistant.Type != "toolcall_start" {
-		return "", "", false
-	}
-	return m.Assistant.ID, m.Assistant.ToolName, true
-}
-
-// MapToolcallEnd toolcall_end → STARTED 帧(参数完整)。
 func MapToolcallEnd(raw json.RawMessage) (pb.ToolCallUpdate, bool) {
 	m := parseMessageUpdate(raw)
 	if m == nil || m.Assistant.Type != "toolcall_end" || m.Assistant.ToolCall == nil {

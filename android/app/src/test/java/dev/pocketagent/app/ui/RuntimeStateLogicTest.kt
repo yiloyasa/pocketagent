@@ -17,7 +17,6 @@ import pocketagent.v1.RuntimeContractIssue
 import pocketagent.v1.RuntimeContractReport
 import pocketagent.v1.RuntimeLimitation
 import pocketagent.v1.RuntimeLimits
-import pocketagent.v1.RuntimeStateResponse
 import pocketagent.v1.UnknownEventField
 import pocketagent.v1.UnknownEventResponse
 import pocketagent.v1.UnknownEventSummary
@@ -115,36 +114,6 @@ class RuntimeStateLogicTest {
         // 我们没读懂它 —— 此时显示"一切正常"是最坏的选择,保守降级才是如实的。
         val report = okReport().toBuilder().setStatus("").build()
         assertTrue(recoveryBanner(report)!!.degraded)
-    }
-
-    // ---- 本机总览 --------------------------------------------------------------
-
-    @Test
-    fun `总览缺响应时不造值`() {
-        assertNull(runtimeOverview(null))
-    }
-
-    @Test
-    fun `形态不合格时总览降级并给出人话`() {
-        val resp = RuntimeStateResponse.newBuilder()
-            .setDaemonVersion("0.2.2")
-            .setRuntimeState("degraded")
-            .setBudgetPolicyRevision(4)
-            .setCollabPolicyRevision(2)
-            .setDataDir("C:\\Users\\x\\.pocketagentd")
-            .build()
-        val ov = runtimeOverview(resp)!!
-        assertTrue(ov.degraded)
-        assertTrue(ov.stateLabel.contains("未交代"))
-        assertEquals("0.2.2", ov.version)
-        assertEquals(4L, ov.budgetRevision)
-    }
-
-    @Test
-    fun `形态就绪时总览不降级`() {
-        val resp = RuntimeStateResponse.newBuilder().setRuntimeState("ready").build()
-        val ov = runtimeOverview(resp)!!
-        assertFalse(ov.degraded)
     }
 
     // ---- 每 agent 形态卡 -------------------------------------------------------

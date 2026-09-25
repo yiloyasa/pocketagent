@@ -536,12 +536,6 @@ func (s *FileStore) DefaultWorkspace() string {
 	defer s.mu.Unlock()
 	return s.data.DefaultWorkspace
 }
-func (s *FileStore) SetDefaultWorkspace(ws string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data.DefaultWorkspace = ws
-	return s.saveLocked()
-}
 func (s *FileStore) DefaultModelID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -803,24 +797,6 @@ func (s *FileStore) IsTombstoned(key string) bool {
 	defer s.mu.Unlock()
 	_, ok := s.data.Tombstones[key]
 	return ok
-}
-
-// RemoveTombstone 撤销一条墓碑(重新导入 / 误删恢复时用)。
-func (s *FileStore) RemoveTombstone(key string) error {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.data.Tombstones == nil {
-		return nil
-	}
-	if _, ok := s.data.Tombstones[key]; !ok {
-		return nil
-	}
-	delete(s.data.Tombstones, key)
-	return s.saveLocked()
 }
 
 // evictOldestTombstones 就地淘汰最旧的 (len-keep) 条,使剩余恰好 keep 条。

@@ -968,6 +968,48 @@ internal fun queueClearFailureMessage(error: Throwable): String {
     return "撤回排队失败：$raw"
 }
 
+// ---- 会话级动作的能力位门控(daemon GetHostInfo.capabilities;纯函数,JVM 单测)----
+// 【背景】压缩/分叉/回滚/HTML 导出在四家 agent 上的支持面**不对等**(daemon
+// 2026-09-25 能力位对齐,基线 511269d:host.go 按 provider 接口逐 agent 宣告
+// compact/fork/rollback/review/export_html:<id>):手机端这些入口此前无位可查,
+// 只能按 agent 名单硬编码或全量显示 —— dsh 会话里"分叉/回滚"点了必败。本轮起
+// 能力位是唯一门控数据源:位在才亮入口,缺位=隐藏,不摆点了必败的假入口
+// (与上方 queueClearVisible 同口径;判定纯函数 agentCapableOf 见 SlashCommandsLogic.kt)。
+
+/** 「压缩上下文」入口(更多面板 + /压缩 伪命令):compact:<agentId> 位。 */
+internal fun compactActionOn(agentId: String?, capabilities: List<String>): Boolean =
+    agentCapableOf("compact", agentId, capabilities)
+
+/** 「分叉会话」入口:fork:<agentId> 位(现仅 codex 有 ForkThread 真实现)。 */
+internal fun forkActionOn(agentId: String?, capabilities: List<String>): Boolean =
+    agentCapableOf("fork", agentId, capabilities)
+
+/** 「回滚…」入口:rollback:<agentId> 位(现仅 codex 有 RollbackThread 真实现)。 */
+internal fun rollbackActionOn(agentId: String?, capabilities: List<String>): Boolean =
+    agentCapableOf("rollback", agentId, capabilities)
+
+/**
+ * 附件/图片入口的隐藏门(最小事实门控):dsh 当前路由不支持图片输入
+ * (daemon/internal/agent/dsh.go:promptCapabilities.image=false 时发图如实报
+ * "请改用文本输入"),附件按钮是手机端唯一的图片入口 —— dsh 会话里隐藏,
+ * 免得用户选完图必吃失败壳;其余 agent 行为不变。
+ * 【切换预案】daemon 的 `image_input:<id>` 位尚未生成(位就绪后本函数改为
+ * `!agentCapableOf("image_input", agentId, capabilities)`,与 compact/fork 同一
+ * 节奏);在那之前按"事实"先挡住唯一确定的必败入口。
+ */
+internal fun attachmentEntryHiddenFor(agentId: String?): Boolean =
+    agentId?.trim().equals("dsh", ignoreCase = true)
+
+/**
+ * 运行中发送的回执文案(纯函数,两态):`steer:<agentId>` 位在 = daemon 侧真插话
+ * (codex 原生 turn/steer、pi 原生插队,本条会进当前轮次),报"已插入运行中任务";
+ * 缺位 = daemon 按排队兜底(当前轮结束后自动续跑),报"已排队"。
+ * 【为什么不报"将插入或排队"】能力位已经说清了发送语义,二选一如实报;
+ * 最终落点仍以时间线的投递小标签为准(daemon 应答裁定),Toast 只报提交口径。
+ */
+internal fun steerSubmitNotice(steerCapable: Boolean): String =
+    if (steerCapable) "已插入运行中任务" else "已排队"
+
 /** 思考强度选项(id 与 codex turn/start 的 effort 取值一致)。 */
 data class EffortOption(val id: String, val label: String)
 
@@ -1305,14 +1347,14 @@ fun ChatScreen(
     var showMore by remember { mutableStateOf(false) }
     // 【内置伪命令"/目标"的弹窗开关】斜杠卡面伪命令点选 = 执行动作:/目标
     // 打开下方的设置目标底栏(slashGoalSheet 块),/压缩 直接走 doCompact(),
-    // /计划(仅 codex)直接走 doStartReview()。
+    // /计划(review:<agentId> 位会话,现仅 codex)直接走 doStartReview()。
     var slashGoalSheet by remember { mutableStateOf(false) }
     // 回滚选择(二级面板):先选丢几个回合,再确认
     var rollbackOpen by remember { mutableStateOf(false) }
     var rollbackBusy by remember { mutableStateOf(false) }
     // 手动压缩是低频的会话级动作,与回滚一样放在“更多”里。
     var compactBusy by remember { mutableStateOf(false) }
-    // "/计划"发起计划审查(仅 codex 会话):防重入标记,与 compactBusy 同款。
+    // "/计划"发起计划审查(review:<agentId> 位会话,现仅 codex):防重入标记,与 compactBusy 同款。
     var reviewBusy by remember { mutableStateOf(false) }
     // 【长文本大窗编辑】输入框最多 4 行,写长需求/贴代码时不够用。
     // 打开一个整屏可用高度的编辑面板,内容与输入框双向同一份 state。
@@ -1386,9 +1428,15 @@ fun ChatScreen(
     // ---- 斜杠命令面板(zcode/codex/pi 三源)----
     // threadAgentId 在下方 getThread 处赋值;命令列表按会话进程内缓存
     // (SlashCommandCache,见 SlashCommandsLogic.kt),进会话/重连/下拉刷新才重拉。
-    // daemon 回空列表 / RPC 失败都安静降级,绝不 Toast 报错打断输入;pi 会话即使
-    // daemon 命令暂未到位,面板仍有内置伪命令(见 slashCandidatesFor)可弹。
+    // daemon 回空列表 / RPC 失败都安静降级,绝不 Toast 报错打断输入;在线时
+    // hostCapabilities 已就位,内置伪命令(随 compact/review 位点亮,见
+    // slashCandidatesFor)仍给三源会话兜出可用卡面。
     var threadAgentId by remember { mutableStateOf("") }
+    // 【能力位数据源】hostCapabilities 共享快照(与主页网格/设置页同一真源):
+    // 会话级动作(压缩/分叉/回滚/计划审查/HTML 导出)与运行中发送回执(steer)
+    // 的唯一门控数据源 —— 位在才亮入口,缺位不显示假入口(硬红线)。
+    // 声明在函数级:send 的回执文案与本页各浮层都要读它。
+    val hostCaps = AgentConnection.hostCapabilities.collectAsState().value
     // daemon 落库的 Thread.ModelID(getThread 回填):会话真实生效模型,
     // "pi/zai-coding-cn/glm-5.3" 这种 agent 前缀形式。模型芯片/弹窗的选中态以它
     // 为准(图3 实锤:过去 pi 会话没取到它,链路落到 codex 桌面默认
@@ -1902,8 +1950,10 @@ fun ChatScreen(
         if (!TurnSession.send(threadId, text, sent)) return false
         attachments = emptyList()
         if (wasRunning) {
-            // 运行中提交的反馈:插入/排队由 daemon 决定,时间线小标签会给出最终状态
-            Toast.makeText(ctx, "已提交:将插入当前任务或自动排队", Toast.LENGTH_SHORT).show()
+            // 运行中提交的回执:发送语义随 daemon 的 steer:<agentId> 位如实二选一
+            // (有位=真插话进当前轮次,缺位=daemon 排队兜底);最终落点以时间线
+            // 投递小标签为准(daemon 应答裁定),这里只报提交口径,不猜结果。
+            Toast.makeText(ctx, steerSubmitNotice(agentCapableOf("steer", threadAgentId, hostCaps)), Toast.LENGTH_SHORT).show()
         }
         return true
     }
@@ -1988,7 +2038,8 @@ fun ChatScreen(
     }
 
     /**
-     * "/计划"(仅 codex 会话):发起计划审查。review/start 是"发起即回"
+     * "/计划"(review:<agentId> 位会话,现仅 codex;可见性由斜杠面板按能力位
+     * 裁决):发起计划审查。review/start 是"发起即回"
      * (daemon 侧实测 0.0s 返回,turn.status=inProgress),审查产出以
      * 事件(item/turn 系列)流回**本会话**,时间线直接可见,这里不需要任何后续轮询。
      * focus 是词元后已敲的审查重点(通常为空,daemon 有默认审查口径);
@@ -2402,11 +2453,10 @@ fun ChatScreen(
         // 回滚缩容/加载更早前插都不满足"末尾追加",不会误触发。
         val prevItemCount = remember(threadId) { mutableStateOf<Int?>(null) }
         // 「撤回排队」入口(pi 0.87.1 clear_queue):
-        // 【能力位数据源】hostCapabilities 共享快照(与主页网格/设置页同一真源),
-        // 门控纯函数 queueClearVisible 锁三重条件(agent==pi + 确有排队 + daemon
-        // 宣告 queue_clear:pi)—— 旧 daemon / 非 pi 会话 / 没有排队都不出按钮,
-        // 不显示点了必败的假入口。
-        val hostCaps = AgentConnection.hostCapabilities.collectAsState().value
+        // 【能力位数据源】读函数级的 hostCaps 共享快照(与主页网格/设置页同一
+        // 真源),门控纯函数 queueClearVisible 锁三重条件(agent==pi + 确有排队 +
+        // daemon 宣告 queue_clear:pi)—— 旧 daemon / 非 pi 会话 / 没有排队都不出
+        // 按钮,不显示点了必败的假入口。
         val queueClearOn = queueClearVisible(threadAgentId, st.queuedCount, hostCaps)
         // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
         val lastQueuedIndex = st.items.indexOfLast { it.deliverState == DELIVERY_QUEUED }
@@ -2784,8 +2834,8 @@ fun ChatScreen(
                 // [斜杠命令卡面(纵向)] 会话是面板 agent(zcode/codex/pi 三源)且输入以 "/"
                 // 开头时,列出该线程可用的命令 + 内置伪命令(zcode=会话快照 slashCommands[],
                 // codex=skills 映射,pi=get_commands 真名映射,daemon 按 agent_id 路由同一
-                // RPC;内置伪命令由 slashCandidatesFor 置顶合并,/计划 仅 codex 会话)。
-                // 点选按动作分流:
+                // RPC;内置伪命令由 slashCandidatesFor 置顶合并,/压缩 认 compact:<id>、
+                // /计划 认 review:<id> 能力位,缺位不进列表)。点选按动作分流:
                 //   - FILL 普通命令 → applySlashPick 回填(zcode/pi→"/命令 " 保留后续文字,
                 //     pi 真命令由 pi 原生展开;codex→自然语言触发技能);
                 //   - GOAL/COMPACT/REVIEW 内置伪命令 → 执行动作(弹目标底栏 / doCompact /
@@ -2795,8 +2845,8 @@ fun ChatScreen(
                 // 视觉:纵向可滑卡面(最大 320dp,每行名称+说明完整不截断)—— 取代旧
                 // "横滚 8 条"候选条,解决 codex/pi 长列表"看不全"的问题;
                 // 可见性/过滤/合并/回填纯逻辑在 SlashCommandsLogic.kt。
-                val slashCandidates = if (slashPanelVisible(threadAgentId, input, slashCommands, offlineSnapshot)) {
-                    filterSlashCandidates(slashCandidatesFor(threadAgentId, slashCommands), input)
+                val slashCandidates = if (slashPanelVisible(threadAgentId, input, slashCommands, offlineSnapshot, hostCaps)) {
+                    filterSlashCandidates(slashCandidatesFor(threadAgentId, slashCommands, hostCaps), input)
                 } else {
                     emptyList()
                 }
@@ -2997,6 +3047,11 @@ fun ChatScreen(
                     Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                         verticalAlignment=Alignment.CenterVertically) {
                     // [+ 附件]
+                    // 【dsh 排除门】dsh 当前路由不支持图片输入(daemon dsh.go 对图片块
+                    // 如实报"请改用文本输入"),附件按钮是手机端唯一的图片入口 —— dsh
+                    // 会话隐藏,免得选完图必吃失败壳;其余 agent 不动。daemon 的
+                    // image_input:<id> 位就绪后切换为按位判定(见 attachmentEntryHiddenFor)。
+                    if (!attachmentEntryHiddenFor(threadAgentId)) {
                     Box(
                         Modifier
                             // PA-REAL-0004:触控箱 ≥48dp(原 32dp);图标仍 20dp 居中,视觉不变。
@@ -3010,6 +3065,7 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.width(2.dp))
+                    }
                     // [Git] 会话项目的版本管理侧栏
                     Box(
                         Modifier
@@ -3406,38 +3462,55 @@ fun ChatScreen(
                         NativePermissionsSection("zcode",threadId)
                     }
                 }
-                SheetAction(
-                    AppR.drawable.ic_lucide_refresh_cw,
-                    if (compactBusy) "压缩中…" else "压缩上下文",
-                    Pa.Accent,
-                ) { doCompact() }
-                Text(
-                    // 文案按会话归属 agent 动态(daemon 的 CompactThread 已按 AgentID
-                    // 路由):Pi 会话说"让 Pi 压缩",codex 会话说"让 Codex 压缩"。
-                    // 真机实锤(图9):过去硬编码"让 Codex 压缩…",Pi 会话里张冠李戴。
-                    compactionConsequenceCopy(threadAgentId),
-                    Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
-                    fontSize = 11.5.sp, color = Pa.TextTertiary,
-                )
-                HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Pa.Separator)
-                SheetAction(AppR.drawable.ic_lucide_git_branch, "分叉会话") { doFork() }
-                Text(
-                    forkConsequence(),
-                    Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
-                    fontSize = 11.5.sp, color = Pa.TextTertiary,
-                )
-                HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Pa.Separator)
-                SheetAction(
-                    AppR.drawable.ic_lucide_undo_2, "回滚…", Pa.Red,
-                ) {
-                    showMore = false
-                    rollbackOpen = true
+                // 【能力位门控】三个动作按 daemon 逐 agent 宣告的 compact/fork/
+                // rollback:<agentId> 位点亮(判定见 ThreadActionGateTest 钉死的纯函数):
+                // dsh 会话三项全无位 → 只剩标题与(zcode 的)权限区,不摆点了必败的
+                // 假入口;分隔线只在两个可见区段之间出现,不出现在末尾。
+                val compactOn = compactActionOn(threadAgentId, hostCaps)
+                val forkOn = forkActionOn(threadAgentId, hostCaps)
+                val rollbackOn = rollbackActionOn(threadAgentId, hostCaps)
+                if (compactOn) {
+                    SheetAction(
+                        AppR.drawable.ic_lucide_refresh_cw,
+                        if (compactBusy) "压缩中…" else "压缩上下文",
+                        Pa.Accent,
+                    ) { doCompact() }
+                    Text(
+                        // 文案按会话归属 agent 动态(daemon 的 CompactThread 已按 AgentID
+                        // 路由):Pi 会话说"让 Pi 压缩",codex 会话说"让 Codex 压缩"。
+                        // 真机实锤(图9):过去硬编码"让 Codex 压缩…",Pi 会话里张冠李戴。
+                        compactionConsequenceCopy(threadAgentId),
+                        Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
+                        fontSize = 11.5.sp, color = Pa.TextTertiary,
+                    )
+                    if (forkOn || rollbackOn) {
+                        HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Pa.Separator)
+                    }
                 }
-                Text(
-                    rollbackSummary(),
-                    Modifier.padding(start = 24.dp, end = 24.dp),
-                    fontSize = 11.5.sp, color = Pa.TextTertiary,
-                )
+                if (forkOn) {
+                    SheetAction(AppR.drawable.ic_lucide_git_branch, "分叉会话") { doFork() }
+                    Text(
+                        forkConsequence(),
+                        Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
+                        fontSize = 11.5.sp, color = Pa.TextTertiary,
+                    )
+                    if (rollbackOn) {
+                        HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Pa.Separator)
+                    }
+                }
+                if (rollbackOn) {
+                    SheetAction(
+                        AppR.drawable.ic_lucide_undo_2, "回滚…", Pa.Red,
+                    ) {
+                        showMore = false
+                        rollbackOpen = true
+                    }
+                    Text(
+                        rollbackSummary(),
+                        Modifier.padding(start = 24.dp, end = 24.dp),
+                        fontSize = 11.5.sp, color = Pa.TextTertiary,
+                    )
+                }
             }
         }
     }
@@ -3620,8 +3693,10 @@ fun ChatScreen(
             title = threadTitle,
             items = st.items.toList(),
             threadId = threadId,
-            // 会话归属 agent(GetThread 里带回来):HTML 存档按它做 Pi-only 门控
+            // 会话归属 agent(GetThread 里带回来):HTML 存档按 export_html:<agentId>
+            // 能力位门控,位来自共享快照 hostCaps
             agentId = threadAgentId,
+            capabilities = hostCaps,
             onDismiss = { showExport = false },
             onExport = { text, count ->
                 showExport = false
@@ -5028,13 +5103,13 @@ private fun ExpandedInputSheet(
     }
 }
 
-// ---- 导出 HTML 存档(daemon 侧 ExportThreadHtml,Pi-only)的门控与文案纯函数 ----
+// ---- 导出 HTML 存档(daemon 侧 ExportThreadHtml)的门控与文案纯函数 ----
 
-/** HTML 导出按钮的可用性(按会话归属 agent 判定,纯函数便于单测)。 */
+/** HTML 导出按钮的可用性(按 export_html:<agentId> 能力位判定,纯函数便于单测)。 */
 internal enum class HtmlExportGate {
-    /** pi 会话:直接发 RPC。 */
+    /** daemon 宣告 export_html:<agentId> 位:直接发 RPC(现状仅 pi 有位)。 */
     SUPPORTED,
-    /** 已确认非 pi(codex/zcode/其他):本地人话拒绝,不发 RPC —— 无声就是 bug。 */
+    /** 已确认无位(含旧 daemon 没发过位):本地人话拒绝,不发 RPC —— 无声就是 bug。 */
     UNSUPPORTED_AGENT,
     /** agentId 未知(空:GetThread 未回/旧数据):不拦截,交给 daemon 裁决。 */
     UNKNOWN,
@@ -5044,10 +5119,13 @@ internal enum class HtmlExportGate {
  * 【为什么空串放行】agent_id 缺失的旧数据里可能藏着真 pi 会话;若把"未知"误判成
  * "不支持",会被本地误杀(拦错比放错更伤)。放行的代价有限:就算真是 codex,
  * daemon 也会回错误,经失败 Toast 人话展示,永远有反馈。
+ * 【门控数据源】`export_html:<agentId>` 能力位(daemon 2026-09-25 对齐):现状仍
+ * 只有 pi 有位(行为等价),但不再按 agent 名单硬编码 —— 将来别家补上 ExportHTML
+ * 实现并宣告位时,入口自动点亮,手机端零改动。
  */
-internal fun htmlExportGate(agentId: String): HtmlExportGate = when {
+internal fun htmlExportGate(agentId: String, capabilities: List<String>): HtmlExportGate = when {
     agentId.isBlank() -> HtmlExportGate.UNKNOWN
-    agentId.trim().equals("pi", ignoreCase = true) -> HtmlExportGate.SUPPORTED
+    agentCapableOf("export_html", agentId, capabilities) -> HtmlExportGate.SUPPORTED
     else -> HtmlExportGate.UNSUPPORTED_AGENT
 }
 
@@ -5091,6 +5169,7 @@ private fun ExportChatSheet(
     items: List<ChatItem>,
     threadId: String,
     agentId: String,
+    capabilities: List<String>,
     onDismiss: () -> Unit,
     onExport: (text: String, count: Int) -> Unit,
 ) {
@@ -5126,9 +5205,10 @@ private fun ExportChatSheet(
     var exportingHtml by remember { mutableStateOf(false) }
     val htmlScope = rememberCoroutineScope()
     val htmlCtx = LocalContext.current
-    // 可见性门控:已确认非 pi 的会话,按钮置灰降级(点击仍给人话 Toast,不许无声);
-    // agentId 未知(空)时保持原样,交给 daemon 裁决(见 htmlExportGate 注释)。
-    val htmlGateBlocked = htmlExportGate(agentId) == HtmlExportGate.UNSUPPORTED_AGENT
+    // 可见性门控:已确认无 export_html:<agentId> 位的会话,按钮置灰降级(点击仍给
+    // 人话 Toast,不许无声);agentId 未知(空)时保持原样,交给 daemon 裁决
+    // (见 htmlExportGate 注释)。
+    val htmlGateBlocked = htmlExportGate(agentId, capabilities) == HtmlExportGate.UNSUPPORTED_AGENT
 
     // 【本轮换 PaSheet】统一玻璃浮层;scrollable=false —— 内容主体是 LazyColumn
     // (自己会滚),避免两层滚动嵌套打架;82% 高度上限仍然生效。
@@ -5287,10 +5367,11 @@ private fun ExportChatSheet(
             }
 
             Spacer(Modifier.height(10.dp))
-            // 导出 HTML 存档:调 daemon 的 ExportThreadHtml(目前 Pi 会话支持)。
-            // pi 会话:发 RPC,成功 Toast 电脑上的绝对路径并收起面板,引导去文件页下载;
+            // 导出 HTML 存档:调 daemon 的 ExportThreadHtml(export_html:<agentId>
+            // 位会话支持,现状仅 pi 宣告)。
+            // 有位:发 RPC,成功 Toast 电脑上的绝对路径并收起面板,引导去文件页下载;
             // 失败人话 Toast(daemon 业务错误原样透传,传输层错误翻成人话)。
-            // 非 pi 会话(codex 等):点击直接本地人话拒绝,不发 RPC —— 无声就是 bug。
+            // 无位(codex 等):点击直接本地人话拒绝,不发 RPC —— 无声就是 bug。
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -5300,7 +5381,9 @@ private fun ExportChatSheet(
                         if (htmlGateBlocked) {
                             Toast.makeText(
                                 htmlCtx,
-                                "HTML 存档目前仅 Pi 会话支持",
+                                // 能力位口径:该会话归属的助手没有 export_html 位(现状仅
+                                // pi 宣告),不点名 agent,免得 daemon 将来扩位后文案说谎。
+                                "该会话的助手暂不支持导出 HTML 存档",
                                 Toast.LENGTH_LONG,
                             ).show()
                             return@pressable

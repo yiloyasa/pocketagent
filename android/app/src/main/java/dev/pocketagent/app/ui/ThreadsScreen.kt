@@ -95,7 +95,6 @@ import pocketagent.v1.ImportCodexThreadRequest
 import pocketagent.v1.ImportAgentThreadRequest
 import pocketagent.v1.ListCodexThreadsRequest
 import pocketagent.v1.ListAgentThreadsRequest
-import pocketagent.v1.ListModelsRequest
 import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ListThreadSectionsRequest
 import pocketagent.v1.ArchiveThreadRequest
@@ -103,7 +102,6 @@ import pocketagent.v1.CreateThreadSectionRequest
 import pocketagent.v1.DeleteThreadRequest
 import pocketagent.v1.DeleteThreadSectionRequest
 import pocketagent.v1.ForkThreadRequest
-import pocketagent.v1.ModelInfo
 import pocketagent.v1.MoveThreadToSectionRequest
 import pocketagent.v1.RenameThreadRequest
 import pocketagent.v1.RenameThreadSectionRequest

@@ -1773,17 +1773,6 @@ func (p *CodexProvider) callThreadResume(threadID string, cfgOverride map[string
 	return nil
 }
 
-// TurnSummary 返回每轮 turn/start 要带的 summary。
-//
-// 【为什么是 summary 而不是 model_reasoning_summary】turn/start 的参数里,
-// 思考摘要的字段名就叫 `summary`(schema: TurnStartParams.summary → ReasoningSummary),
-// 它按轮覆盖"思考摘要详略",是比 thread 级 config 更直接、可逐轮验证的生效路径。
-func (p *CodexProvider) TurnSummary() string {
-	p.setMu.Lock()
-	defer p.setMu.Unlock()
-	return p.modelReasoningSummary
-}
-
 // Ready 探测 app-server 是否真的可用(会按需拉起子进程并 initialize)。
 //
 // 【为什么要它】设置写入后必须能回答"到底打没打到 codex"。以前所有失败都只

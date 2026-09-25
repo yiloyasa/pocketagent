@@ -110,37 +110,6 @@ fun recoveryBanner(report: HostRecoveryReport?): RecoveryBanner? {
     )
 }
 
-// ---- 本机总览 ----------------------------------------------------------------
-
-/** 本机运行时总览(总览行 + 后续各块共用的版本/代数信息)。 */
-data class RuntimeOverview(
-    val stateLabel: String,
-    val degraded: Boolean,
-    val version: String,
-    val budgetRevision: Long,
-    val collabRevision: Long,
-    val dataDir: String,
-)
-
-/** 总览;**null = 没读到(旧 daemon 或 RPC 失败),UI 走空态而不是显示一排 0**。 */
-fun runtimeOverview(resp: RuntimeStateResponse?): RuntimeOverview? {
-    if (resp == null) return null
-    val degraded = resp.runtimeState != "ready"
-    return RuntimeOverview(
-        // 取值域由 daemon 定义(ready / degraded);将来多一档时原样透出,不猜。
-        stateLabel = when (resp.runtimeState) {
-            "ready" -> "运行时形态就绪"
-            "degraded" -> "有 agent 未交代清楚运行时形态"
-            else -> resp.runtimeState
-        },
-        degraded = degraded,
-        version = resp.daemonVersion.ifBlank { "版本未报告" },
-        budgetRevision = resp.budgetPolicyRevision,
-        collabRevision = resp.collabPolicyRevision,
-        dataDir = resp.dataDir,
-    )
-}
-
 // ---- 每 agent 形态卡 ---------------------------------------------------------
 
 /** 形态卡里的一行(会话 / 恢复 / 审批 / 子代理 / 记忆 / 缓存)。 */

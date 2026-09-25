@@ -1,7 +1,6 @@
 package dev.pocketagent.app.ui
 
 import dev.pocketagent.app.R
-import pocketagent.v1.CollabRole
 
 /**
  * 协同页纯函数层:

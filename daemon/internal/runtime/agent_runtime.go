@@ -252,18 +252,3 @@ func VerifyRuntime(rt *AgentRuntime) ContractReport {
 
 	return rep
 }
-
-// MergeReports 把声明层与实现层的报告合成一份（同一 agent）。
-func MergeReports(a, b ContractReport) ContractReport {
-	out := a
-	if b.AgentID != "" && out.AgentID == "" {
-		out.AgentID = b.AgentID
-	}
-	if b.Declared {
-		out.Declared = true
-		out.Descriptor = b.Descriptor
-		out.Limitations = b.Limitations
-	}
-	out.Violations = append(out.Violations, b.Violations...)
-	return out
-}

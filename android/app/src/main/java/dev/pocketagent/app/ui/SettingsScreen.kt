@@ -1326,7 +1326,7 @@ private fun CapabilityRowItem(c: CodexCapability, divider: Boolean) {
  * 重试统一放在本页顶部，避免同一次 Codex 探测失败在每一项下面重复显示。
  */
 @Composable
-private fun SettingStateLine(key: String, states: Map<String, String>, _onRetry: () -> Unit) {
+private fun SettingStateLine(key: String, states: Map<String, String>) {
     val info = states[key]?.let { settingStateInfo(it) }
     if (info != null && info.level != "ok") {
         val color = when (info.level) {
@@ -1698,7 +1698,7 @@ private fun AgentPage(
                         },
                     )
                 }
-                SettingStateLine("approval_policy", settingStates, onRetrySettings)
+                SettingStateLine("approval_policy", settingStates)
                 DesktopEchoLine(settings, "approval_policy")
                 Spacer(Modifier.height(8.dp))
 
@@ -1748,7 +1748,7 @@ private fun AgentPage(
                         },
                     )
                 }
-                SettingStateLine("sandbox", settingStates, onRetrySettings)
+                SettingStateLine("sandbox", settingStates)
                 DesktopEchoLine(settings, "sandbox")
                 Spacer(Modifier.height(10.dp))
 
@@ -1816,7 +1816,7 @@ private fun AgentPage(
                         }
                     },
                 )
-                SettingStateLine("model", settingStates, onRetrySettings)
+                SettingStateLine("model", settingStates)
                 // 【桌面只读回显】provider 能力徽标(modelProvider/capabilities/read):
                 // 解释"为什么某模型不可用"—— 图像生成/联网搜索是 provider 级声明,
                 // 不是模型页的开关。没读到时不渲染,不把"没读到"说成"不支持"。
@@ -1864,7 +1864,7 @@ private fun AgentPage(
                         ) { writeCodex.copy(effort = id).commit() }
                     },
                 )
-                SettingStateLine("effort", settingStates, onRetrySettings)
+                SettingStateLine("effort", settingStates)
                 DesktopEchoLine(settings, "effort")
                 Spacer(Modifier.height(6.dp))
             }
@@ -1912,7 +1912,7 @@ private fun AgentPage(
                         ) { writeCodex.copy(verbosity = id).commit() }
                     },
                 )
-                SettingStateLine("model_verbosity", settingStates, onRetrySettings)
+                SettingStateLine("model_verbosity", settingStates)
                 DesktopEchoLine(settings, "model_verbosity")
                 Spacer(Modifier.height(8.dp))
 
@@ -1946,7 +1946,7 @@ private fun AgentPage(
                         ) { writeCodex.copy(reasoningSummary = id).commit() }
                     },
                 )
-                SettingStateLine("model_reasoning_summary", settingStates, onRetrySettings)
+                SettingStateLine("model_reasoning_summary", settingStates)
                 DesktopEchoLine(settings, "model_reasoning_summary")
                 Spacer(Modifier.height(8.dp))
 

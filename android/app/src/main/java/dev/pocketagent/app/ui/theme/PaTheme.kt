@@ -45,7 +45,8 @@ object Pa {
     var IsDark by mutableStateOf(true); private set
 
     /**
-     * 应用色板。dark=深/浅两套(hacker 也恒为 true);hacker=黑客终端专用磷光绿板。
+     * 应用色板。dark=深/浅两套(hacker 也恒为 true);hacker=黑客代码风「代码暗房」色板
+     * (中性纯黑底+电光青强调+语法色点缀,v2 重做:全屏绿 tint 被用户否决)。
      * 浅色 = 同一设计语言的反相(白底浅灰卡)。
      */
     internal fun apply(dark: Boolean, hacker: Boolean = false) {
@@ -53,21 +54,24 @@ object Pa {
         // 玻璃材质随主题一起换肤,与实色同一时机生效;hacker 有自己的深绿玻璃
         PaGlassToken.apply(dark = dark, hacker = hacker)
         if (hacker) {
-            // 【黑客终端】设计意图:CRT 磷光屏的"纯黑底 + 发光绿字"。
-            //  - 层级仍走"海拔"模型,但整层压绿:卡片不是灰而是"暗屏上一块稍亮的磷光区";
-            //  - Accent 换终端绿 #00E676(Material Green A400,亮度足够在纯黑上发光),
-            //    用户气泡底 AccentDim 用极暗绿 #0D2B14——"按下的磷光余辉",不是蓝;
-            //  - 文字三档全部带绿相(#C9F7CD/#63A96B/#3D6B45),次级文字像"余辉衰减",
-            //    而不是中性灰——灰在纯绿世界里会显脏;
-            //  - IsDark 恒为 true:纯黑底没有"浅色版",浅色磷光屏不是这个母题。
-            Bg = Color(0xFF000000); Card = Color(0xFF0A120C); CardHigh = Color(0xFF101A12)
-            Hover = Color(0xFF182418); Accent = Color(0xFF00E676); AccentDim = Color(0xFF0D2B14)
-            TextPrimary = Color(0xFFC9F7CD); TextSecondary = Color(0xFF63A96B); TextTertiary = Color(0xFF3D6B45)
-            Separator = Color(0xFF1B2E1E); Green = Color(0xFF4ADE80); Red = Color(0xFFFF6B6B)
-            Yellow = Color(0xFFFFD60A)
-            // 小字号变体:在暗绿底上把三色整体提亮一档,保 WCAG AA(同 §1.1 审计纪律)
-            AccentText = Color(0xFF7DF0A0); GreenText = Color(0xFF5BE070); RedText = Color(0xFFFF8A80)
-            Mcp = Color(0xFFB584FF)
+            // 【黑客代码风 v2】v1 教训(用户原话:「狗不拉屎的绿看了犯恶心」):把绿
+            // tint 到每个表面和每级文字,整屏灰绿一坨,低对比=脏。真正的黑客/代码
+            // 美学是**代码编辑器暗色主题**:中性纯黑底、近白正文、高对比,
+            // 颜色只出现在该出现的地方——
+            //  - 底/卡:中性黑灰,零色相(像 #0D1117 的 GitHub Dark);
+            //  - 强调:一处电光青 #22D3EE(终端 HUD 语言),只给标题/激活态/当前值;
+            //  - 语法色(Mcp 紫/语法绿/琥珀黄)只做小面积点缀,像代码高亮;
+            //  - 文字三档中性:近白/灰/暗灰,靠字重与亮度分层,不靠色相。
+            Bg = Color(0xFF050507); Card = Color(0xFF0C0D11); CardHigh = Color(0xFF12141A)
+            Hover = Color(0xFF1A1D26); Accent = Color(0xFF22D3EE); AccentDim = Color(0xFF0E2A33)
+            TextPrimary = Color(0xFFE6E9EF); TextSecondary = Color(0xFF8B93A3); TextTertiary = Color(0xFF565E6E)
+            Separator = Color(0xFF1C2028)
+            // Green 在 hacker 下=teal:app 里大量交互图标/链接装饰性使用语义绿,
+            // 不换色相的话整屏仍是绿感(用户红线)。teal 对「成功/在线」语义同样成立,
+            // 与 Accent 电光青同族,整屏色相收敛为 黑白+青族+语法紫。
+            Green = Color(0xFF2DD4BF); Red = Color(0xFFF87171); Yellow = Color(0xFFFBBF24)
+            AccentText = Color(0xFF67E8F9); GreenText = Color(0xFF5EEAD4); RedText = Color(0xFFFCA5A5)
+            Mcp = Color(0xFFA78BFA)
         } else if (dark) {
             Bg = Color(0xFF000000); Card = Color(0xFF151517); CardHigh = Color(0xFF1F1F22)
             Hover = Color(0xFF2A2A2E); Accent = Color(0xFF4A9DFF); AccentDim = Color(0xFF1E3A5C)

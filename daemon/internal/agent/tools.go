@@ -11,8 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
 // Tool 是 agent 能用的"手"。每个工具有名字、说明、参数 JSON Schema,
@@ -175,11 +173,4 @@ func ToolByName(tools []Tool, name string) *Tool {
 		}
 	}
 	return nil
-}
-
-// BlockFromToolCall 把模型的工具调用请求转成 ContentBlock。
-func BlockFromToolCall(name, id, args string) pb.ContentBlock {
-	return pb.ContentBlock{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallBlock{
-		Id: id, Name: name, JsonArgs: args,
-	}}}
 }

@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -90,7 +89,6 @@ fun RuntimeSection() {
 private fun RuntimeSectionBody() {
     val loadState = RuntimeControlState.loadState
     val sectionErrors = RuntimeControlState.sectionErrors
-    val overview = runtimeOverview(RuntimeControlState.overview)
     val cards = agentContractCards(RuntimeControlState.overview)
     val banner = recoveryBanner(RuntimeControlState.recovery)
     val budgets = budgetRows(RuntimeControlState.budget?.effectiveGlobal)

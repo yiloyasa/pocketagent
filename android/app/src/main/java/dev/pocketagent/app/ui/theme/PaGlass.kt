@@ -63,11 +63,11 @@ object PaGlassToken {
 
     internal fun apply(dark: Boolean, hacker: Boolean = false) {
         when {
-            // 【黑客终端】深绿玻璃:磷光绿世界的"烟玻璃"带绿相,不发灰;
-            // 发丝高光用绿光(#33FF66)且可见度调低(0x24)——CRT 暗房里高光只该"隐约透边",
-            // 沿用白系高光会在纯黑上刺眼;Scrim 加深(0x73)让浮层下的内容退得更远。
+            // 【黑客代码风 v2】中性深玻璃(零色相,同 Card 的暗灰阶)+ 青色发丝高光
+            // (与 Accent 同源的电光青,隐约透边)——玻璃跟随底色走,不再自带色相;
+            // Scrim 加深(0x73)让浮层下的内容退得更远。
             hacker -> {
-                Tint = Color(0xE60C160C); Highlight = Color(0x2433FF66); Scrim = Color(0x73000000)
+                Tint = Color(0xE60C0D11); Highlight = Color(0x2422D3EE); Scrim = Color(0x73000000)
             }
             dark -> {
                 Tint = Color(0xE6151517); Highlight = Color(0x2EFFFFFF); Scrim = Color(0x66000000)

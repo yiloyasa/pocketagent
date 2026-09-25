@@ -25,11 +25,18 @@ internal enum class SlashAction {
     FILL,
     /** 内置伪命令"/目标":打开设置会话目标(SetThreadGoal)弹窗。 */
     GOAL,
-    /** 内置伪命令"/压缩":触发 CompactThread RPC 压缩上下文。 */
+    /**
+     * 内置伪命令"/压缩":触发 CompactThread RPC 压缩上下文。
+     * 可见性挂 `compact:<agentId>` 能力位(daemon 的 CompactThread 按原生形状
+     * 三家实现、dsh 没有):位不在的会话列表里就不出现,不摆点了必败的假入口。
+     */
     COMPACT,
     /**
-     * 内置伪命令"/计划"(仅 codex 会话):触发 StartReview RPC 发起计划审查,
-     * 审查结果以事件形式流回本会话(daemon 路由见 thread_review.go)。
+     * 内置伪命令"/计划":触发 StartReview RPC 发起计划审查,审查结果以事件
+     * 形式流回本会话(daemon 路由见 thread_review.go)。
+     * 可见性挂 `review:<agentId>` 能力位 —— 现状仅 codex 宣告(review/start 是
+     * codex app-server 的对等能力),将来别家补上实现并宣告位时自动点亮;
+     * 缺位不出现,与"点了才被 daemon 拒"相比宁可不在列表里。
      */
     REVIEW,
 }
@@ -67,32 +74,59 @@ internal fun isSlashPanelAgent(agentId: String?): Boolean =
     isZcodeAgent(agentId) || isCodexAgent(agentId) || isPiAgent(agentId)
 
 /**
+ * 按 agent 绑定的能力位判定(纯函数,门控统一入口):
+ * daemon 在 GetHostInfo.capabilities 里逐 agent 宣告 `<位>:<agentId>`(steer/
+ * queue_clear/compact/fork/rollback/review/export_html 族,见
+ * daemon/internal/server/host.go),位在 = 真。
+ *   - 大小写/空白不敏感(与 queueClearVisible、RuntimeStateLogic.runtimeControlCapable 同口径);
+ *   - agentId 为空/空白(GetThread 还在路上)= 绑定不到具体会话,一律 false ——
+ *     硬红线"无能力不显示假入口",绝不放空;
+ *   - 只认绑定同一 agent 的位:别家的位不开我家的门(能力位按 agent 逐个宣告)。
+ */
+internal fun agentCapableOf(bit: String, agentId: String?, capabilities: List<String>): Boolean {
+    val id = agentId?.trim().orEmpty()
+    if (id.isEmpty()) return false
+    return capabilities.any { it.trim().equals("$bit:$id", ignoreCase = true) }
+}
+
+/**
  * 内置伪命令层(与 daemon 数据源无关的本地命令):
  * 用户点选后**执行动作而非填充文本**(对应 RPC/弹窗由 ChatScreen 接线)。
  *   - /目标:设置会话目标(常驻上下文)→ SetThreadGoal 弹窗;三源通用(daemon
  *     的 SetThreadGoal 按 agent 落库 + 下发 codex/zcode,pi 落库跟随);
- *   - /压缩:压缩会话上下文省 token → CompactThread RPC;daemon 已按 AgentID
- *     路由(codex/pi/zcode 各自实现),三源通用;
- *   - /计划:发起计划审查 → StartReview RPC。**仅 codex 会话**:底层的
- *     review/start 是 codex app-server 的对等能力,pi/zcode 没有对应方法,
- *     daemon 侧会 FailedPrecondition(见 thread_review.go),与其点了才被拒,
- *     不如面板里就不出现。
+ *   - /压缩:压缩会话上下文省 token → CompactThread RPC;可见性随
+ *     `compact:<agentId>` 能力位(daemon 已按 AgentID 路由 codex/pi/zcode 三种
+ *     原生形状,dsh 没有 —— 缺位不出现);
+ *   - /计划:发起计划审查 → StartReview RPC;可见性随 `review:<agentId>` 能力位
+ *     (现状仅 codex 宣告:review/start 是 codex app-server 的对等能力)。
  * 【排序意图】内置伪命令是用户点名的"计划/目标模式"入口,置顶展示。
  * 【防御】与 daemon 命令重名时让位(daemon 的同名命令是真实可触发的,优先级更高)。
  */
 internal fun builtinSlashCommands(): List<SlashCommandInfo> = listOf(
     SlashCommandInfo("目标", "设置会话目标(常驻上下文,agent 每轮都会看到)", "", SlashAction.GOAL),
     SlashCommandInfo("压缩", "压缩会话历史上下文,省 token", "", SlashAction.COMPACT),
+    SlashCommandInfo("计划", "发起计划审查(审查结果以事件流回本会话)", "", SlashAction.REVIEW),
 )
 
 /**
- * 内置伪命令按会话归属 agent 过滤后的全集:三源通用的置顶,外加
- * codex 专属的 "/计划"(isCodexAgent 为 false 时不出现,大小写不敏感)。
- * 面板候选合并(slashCandidatesFor)一律走这里,保证"看到什么"与"能不能执行"一致。
+ * 内置伪命令按会话归属 agent 与**能力位**过滤后的全集:
+ *   - /目标三源通用(pi 没有 goal 概念,落库跟随也不展示 —— daemon 按路由事实
+ *     过滤,该事实暂无对应能力位,保留按 agent 判这一处);
+ *   - /压缩 认 `compact:<agentId>`、/计划 认 `review:<agentId>`:位不在
+ *     (旧 daemon 没发过位 / dsh 没有实现)就绝不进列表 —— 能力位是"看到什么"
+ *     与"能不能执行"一致的唯一数据源,面板候选合并(slashCandidatesFor)一律走这里。
  */
-internal fun builtinSlashCommandsFor(agentId: String?): List<SlashCommandInfo> =
-    if (isPiAgent(agentId)) builtinSlashCommands().filter { it.action != SlashAction.GOAL }
+internal fun builtinSlashCommandsFor(agentId: String?, capabilities: List<String>): List<SlashCommandInfo> {
+    val base = if (isPiAgent(agentId)) builtinSlashCommands().filter { it.action != SlashAction.GOAL }
     else builtinSlashCommands()
+    return base.filter { cmd ->
+        when (cmd.action) {
+            SlashAction.COMPACT -> agentCapableOf("compact", agentId, capabilities)
+            SlashAction.REVIEW -> agentCapableOf("review", agentId, capabilities)
+            else -> true
+        }
+    }
+}
 
 /**
  * 输入框当前敲出的"命令词元":第一个空白(空格/换行/Tab)之前的前缀。
@@ -124,14 +158,18 @@ internal fun filterSlashCandidates(commands: List<SlashCommandInfo>, input: Stri
 }
 
 /**
- * 面板候选全集:内置伪命令(按 agent 过滤,/计划 仅 codex)置顶 + daemon 命令
- * (重名让位),一次合并去重。
+ * 面板候选全集:内置伪命令(随能力位点亮,见 builtinSlashCommandsFor)置顶 +
+ * daemon 命令(重名让位),一次合并去重。
  * 这是可见性与 UI 共用的唯一候选来源(保证"看到什么"与"能不能开面板"一致)。
  */
-internal fun slashCandidatesFor(agentId: String?, commands: List<SlashCommandInfo>): List<SlashCommandInfo> {
+internal fun slashCandidatesFor(
+    agentId: String?,
+    commands: List<SlashCommandInfo>,
+    capabilities: List<String>,
+): List<SlashCommandInfo> {
     if (!isSlashPanelAgent(agentId)) return emptyList()
     val names = commands.mapTo(HashSet()) { it.name.lowercase() }
-    val builtins = builtinSlashCommandsFor(agentId)
+    val builtins = builtinSlashCommandsFor(agentId, capabilities)
     val merged = ArrayList<SlashCommandInfo>(commands.size + builtins.size)
     for (b in builtins) {
         val nativeAlias = when (b.action) { SlashAction.GOAL -> "goal"; SlashAction.COMPACT -> "compact"; else -> b.name.lowercase() }
@@ -144,17 +182,19 @@ internal fun slashCandidatesFor(agentId: String?, commands: List<SlashCommandInf
 /**
  * 面板可见性(单一入口,UI 与单测共用):会话是面板 agent(zcode/codex/pi,见
  * isSlashPanelAgent)且不处于离线快照态,且输入以 "/" 开头敲出了词元,且过滤
- * 结果非空。内置伪命令常驻,所以 pi 会话哪怕 daemon 命令还没到位(子进程没起 /
- * server 还没路由 pi 源)也保证有卡面可弹。
+ * 结果非空。内置伪命令随能力位点亮(zcode/codex 至少有 /目标兜底;pi 需要
+ * compact:<id> 位给 /压缩 —— hostCapabilities 连机即拉,先于进会话,正常在线
+ * 时不缺位),所以在线的三源会话哪怕 daemon 命令还没到位也有卡面可弹。
  */
 internal fun slashPanelVisible(
     agentId: String?,
     input: String,
     commands: List<SlashCommandInfo>,
     offline: Boolean,
+    capabilities: List<String>,
 ): Boolean {
     if (!isSlashPanelAgent(agentId) || offline) return false
-    return filterSlashCandidates(slashCandidatesFor(agentId, commands), input).isNotEmpty()
+    return filterSlashCandidates(slashCandidatesFor(agentId, commands, capabilities), input).isNotEmpty()
 }
 
 /** 未知助手的空态文案(AUDIT §3.3:遇未知值给人话,禁止静默、禁止"未知/错误"字样)。 */

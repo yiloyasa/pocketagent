@@ -9,8 +9,9 @@ package dev.pocketagent.app.ui
 //      codex 技能填自然语言「请使用 <名称> 技能:」;pi 真命令走 "/命令 " 回填(pi 原生展开);
 //   5) 词元清理:stripSlashToken 摘掉 "/词元"(伪命令执行后输入框不留残词);
 //   6) 缓存:按会话存取、空列表不入缓存(下次进会话重拉)、可清理;
-//   7) "/计划"(仅 codex 的内置伪命令):codex 才可见、带 REVIEW 动作、
-//      可按中文前缀筛出;失败文案按错误形状分流(daemon 业务错误透传 description,
+//   7) "/计划" "/压缩" 随能力位增减:daemon 宣告 review/compact:<agentId>
+//      (2026-09-25 能力位对齐,基线 511269d)才出现在候选里,缺位绝不摆
+//      点了必败的假入口;失败文案按错误形状分流(daemon 业务错误透传 description,
 //      UNIMPLEMENTED/UNAVAILABLE 翻成人话,兜底永远有反馈)。
 
 import org.junit.Assert.assertEquals
@@ -25,6 +26,13 @@ class SlashCommandsLogicTest {
         SlashCommandInfo("goal", "常驻目标", "/goal [pause|resume|…]"),
         SlashCommandInfo("compact", "历史压缩", ""),
         SlashCommandInfo("init", "生成项目说明", "/init"),
+    )
+
+    /** 模拟 daemon 四家 agent 的能力位全集(按 host.go 的接口事实摆位)。 */
+    private val capsAll = listOf(
+        "compact:codex", "compact:pi", "compact:zcode",
+        "fork:codex", "rollback:codex", "review:codex",
+        "export_html:pi", "steer:codex", "steer:pi", "queue_clear:pi", "runtime.v1",
     )
 
     // ---- 词元识别 ----
@@ -45,21 +53,21 @@ class SlashCommandsLogicTest {
 
     @Test
     fun `面板只对面板会话且输入带斜杠词元时可见`() {
-        assertTrue(slashPanelVisible("zcode", "/g", cmds, offline = false))
-        assertTrue(slashPanelVisible("ZCode", "/goal", cmds, offline = false)) // 大小写不敏感
+        assertTrue(slashPanelVisible("zcode", "/g", cmds, offline = false, capabilities = capsAll))
+        assertTrue(slashPanelVisible("ZCode", "/goal", cmds, offline = false, capabilities = capsAll)) // 大小写不敏感
         // codex 双源:skills 即命令(daemon 侧按 agent_id 自动路由同一 RPC)
-        assertTrue(slashPanelVisible("codex", "/g", cmds, offline = false))
-        assertTrue(slashPanelVisible("Codex", "/goal", cmds, offline = false))
-        // pi 三源:get_commands 真名映射;且内置伪命令常驻,daemon 列表为空也有卡面
-        assertTrue(slashPanelVisible("pi", "/g", cmds, offline = false))
-        assertTrue(slashPanelVisible("pi", "/", emptyList(), offline = false))
+        assertTrue(slashPanelVisible("codex", "/g", cmds, offline = false, capabilities = capsAll))
+        assertTrue(slashPanelVisible("Codex", "/goal", cmds, offline = false, capabilities = capsAll))
+        // pi 三源:get_commands 真名映射;有 compact 位时 /压缩 兜底,daemon 列表为空也有卡面
+        assertTrue(slashPanelVisible("pi", "/g", cmds, offline = false, capabilities = capsAll))
+        assertTrue(slashPanelVisible("pi", "/", emptyList(), offline = false, capabilities = capsAll))
         // 其余归属 / 未知(旧库空串是 codex 兜底,但归属字段层面仍不算面板会话)
-        assertFalse(slashPanelVisible(null, "/", cmds, offline = false))
-        assertFalse(slashPanelVisible("", "/g", cmds, offline = false))
+        assertFalse(slashPanelVisible(null, "/", cmds, offline = false, capabilities = capsAll))
+        assertFalse(slashPanelVisible("", "/g", cmds, offline = false, capabilities = capsAll))
         // 离线快照态输入已停用,面板不出现
-        assertFalse(slashPanelVisible("zcode", "/g", cmds, offline = true))
+        assertFalse(slashPanelVisible("zcode", "/g", cmds, offline = true, capabilities = capsAll))
         // 非斜杠输入不显示
-        assertFalse(slashPanelVisible("zcode", "帮我修 bug", cmds, offline = false))
+        assertFalse(slashPanelVisible("zcode", "帮我修 bug", cmds, offline = false, capabilities = capsAll))
     }
 
     @Test
@@ -113,8 +121,12 @@ class SlashCommandsLogicTest {
         assertEquals(listOf("init"), filterSlashCandidates(cmds, "/in").map { it.name })
         assertEquals(listOf("goal"), filterSlashCandidates(cmds, "/GOAL").map { it.name })
         // 中文伪命令前缀过滤:slashCandidatesFor 合并后按词元筛
-        val merged = slashCandidatesFor("pi", cmds)
+        val merged = slashCandidatesFor("pi", cmds, capsAll)
         assertTrue(merged.none { it.action == SlashAction.GOAL })
+        // pi 带 compact 位:/压缩 进候选(内置伪命令随能力位点亮)。注意 daemon
+        // 已有真 "compact" 命令时伪命令让位,所以拿掉同名命令的列表来验证点亮
+        val mergedNoNative = slashCandidatesFor("pi", cmds.filter { it.name != "compact" }, capsAll)
+        assertTrue(mergedNoNative.any { it.action == SlashAction.COMPACT })
     }
 
     @Test
@@ -139,24 +151,28 @@ class SlashCommandsLogicTest {
     // ---- 内置伪命令层 ----
 
     @Test
-    fun `内置伪命令置顶且非面板会话没有候选`() {
-        // 置顶:伪命令在最前(用户点名的"目标"入口第一眼可见)
-        val merged = slashCandidatesFor("zcode", cmds)
-        assertEquals(listOf("goal", "compact", "init"), merged.map { it.name })
-        assertTrue(merged.all { it.action == SlashAction.FILL })
+    fun `内置伪命令随能力位增减且置顶`() {
+        // zcode:有 compact 位、无 review 位 → 置顶伪命令 = 目标 + 压缩(无 /计划)
+        val z = slashCandidatesFor("zcode", emptyList(), capsAll)
+        assertEquals(listOf("目标", "压缩"), z.map { it.name })
+        assertTrue(z.first().action == SlashAction.GOAL)
+        // codex:review 位在 → /计划 进置顶组(动作执行,不回填输入框)
+        val c = slashCandidatesFor("codex", emptyList(), capsAll)
+        assertEquals(listOf("目标", "压缩", "计划"), c.map { it.name })
+        assertEquals(SlashAction.REVIEW, c.first { it.name == "计划" }.action)
         // 非面板会话:连伪命令也没有(面板整体不显示)
-        assertTrue(slashCandidatesFor("echo", cmds).isEmpty())
-        assertTrue(slashCandidatesFor(null, cmds).isEmpty())
+        assertTrue(slashCandidatesFor("echo", cmds, capsAll).isEmpty())
+        assertTrue(slashCandidatesFor(null, cmds, capsAll).isEmpty())
     }
 
     @Test
     fun `内置伪命令带动作且daemon重名让位`() {
         val builtin = builtinSlashCommands()
-        assertEquals(listOf("目标", "压缩"), builtin.map { it.name })
+        assertEquals(listOf("目标", "压缩", "计划"), builtin.map { it.name })
         assertTrue(builtin.all { it.action != SlashAction.FILL })
         // daemon 回了同名命令(假设某天 zcode 有真 "/压缩"):真实命令优先,伪命令让位
         val clash = listOf(SlashCommandInfo("压缩", "真命令", ""))
-        val merged = slashCandidatesFor("zcode", clash)
+        val merged = slashCandidatesFor("zcode", clash, capsAll)
         assertEquals(2, merged.size) // 目标(伪) + 压缩(daemon),无重复
         assertEquals(1, merged.count { it.name == "压缩" })
         assertEquals(SlashAction.FILL, merged.first { it.name == "压缩" }.action)
@@ -229,15 +245,36 @@ class SlashCommandsLogicTest {
         assertNull(SlashCommandCache.get(tid))
     }
 
-    // ---- /计划(仅 codex 的内置伪命令)----
+    // ---- /计划 /压缩 随能力位增减(daemon 2026-09-25 能力位对齐)----
 
     @Test
-    fun `never advertise review as a native plan mode`() {
+    fun `计划伪命令只随review能力位出现`() {
+        // daemon 宣告 review:codex(现仅 codex 有 StartReview 真实现)→ codex 面板出现 /计划
+        assertTrue(slashCandidatesFor("codex", emptyList(), capsAll).any { it.action == SlashAction.REVIEW })
+        // 缺位绝不出现:pi/zcode daemon 不宣告 review 位;空快照(快照未就绪/旧 daemon)同理
+        // —— 不摆点了必败的假入口,守住"never advertise where it can't run"的底线,只是
+        // 裁决依据从 agent 名单硬编码换成了能力位。
         for (id in listOf("codex", "pi", "zcode")) {
-            assertTrue(slashCandidatesFor(id,cmds).none { it.action==SlashAction.REVIEW })
+            assertTrue(slashCandidatesFor(id, emptyList(), emptyList()).none { it.action == SlashAction.REVIEW })
         }
-        val native=listOf(SlashCommandInfo("plan", "Native plan", "/plan"))
-        assertTrue(slashCandidatesFor("zcode",native).any { it.name=="plan" && it.action==SlashAction.FILL })
+        assertTrue(slashCandidatesFor("pi", emptyList(), capsAll).none { it.action == SlashAction.REVIEW })
+        assertTrue(slashCandidatesFor("zcode", emptyList(), capsAll).none { it.action == SlashAction.REVIEW })
+        // daemon 原生 "plan" 命令不受影响(真命令优先,恒 FILL)
+        val native = listOf(SlashCommandInfo("plan", "Native plan", "/plan"))
+        val got = slashCandidatesFor("zcode", native, capsAll)
+        assertTrue(got.any { it.name == "plan" && it.action == SlashAction.FILL })
+    }
+
+    @Test
+    fun `压缩伪命令只随compact能力位出现`() {
+        // 三家有位(daemon 的 CompactThread 三种原生形状):/压缩 在列表
+        for (id in listOf("codex", "pi", "zcode")) {
+            assertTrue(slashCandidatesFor(id, emptyList(), capsAll).any { it.name == "压缩" })
+            // 旧 daemon / 快照未就绪(空快照):不摆假入口
+            assertTrue(slashCandidatesFor(id, emptyList(), emptyList()).none { it.name == "压缩" })
+        }
+        // dsh 无压缩实现:daemon 不宣告 compact:dsh(面板本身也不对 dsh 开,双保险)
+        assertTrue(slashCandidatesFor("dsh", emptyList(), capsAll).none { it.name == "压缩" })
     }
 
     @Test

@@ -10,8 +10,6 @@ package piapp
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -76,21 +74,4 @@ export default function (pi: any) {
   });
 }
 `
-}
-
-// WriteGuardExtension 把守护扩展写到稳定路径并返回。每次 daemon 启动覆盖写一次
-// (规则表更新随 daemon 生效);文件固定放数据目录,避免每次起子进程都重写。
-func WriteGuardExtension(dataDir string) (string, error) {
-	if dataDir == "" {
-		return "", fmt.Errorf("数据目录为空,无法写守护扩展")
-	}
-	dir := filepath.Join(dataDir, "pi")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	p := filepath.Join(dir, "pocketagent-guard.ts")
-	if err := os.WriteFile(p, []byte(RenderGuardExtension(GuardRules)), 0o644); err != nil {
-		return "", err
-	}
-	return p, nil
 }

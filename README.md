@@ -25,7 +25,7 @@
 
 - 手机：Kotlin + Jetpack Compose（minSdk 26 / compileSdk 35）
 - daemon：Go **1.27.1**（无 ORM / 无框架，依赖极简）
-- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 79 RPC**，8 proto / 1859 行
+- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 84 RPC**，8 proto / 2146 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**）
 - 代码：android main **91** `.kt` / test **89** `.kt`；daemon Go **417** 文件（生成 pb.go **15**，手写 **402** 含测试）
 - 版本：**0.2.2 / versionCode 5**
@@ -84,7 +84,7 @@
 |---|---|---|
 | Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）。**vosk-android 已整体摘除（2026-09-20）**：引擎选择收敛为「系统识别 → 端侧 SenseVoice」两级，共享错误码迁至 `VoiceErrors.kt` |
 | daemon | Go **1.27.1** | `grpc` 1.83.2、`protobuf` 1.36.12、`go-pty`、`zeroconf`。**依赖极简，无 ORM / 无框架** |
-| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 79 RPC**：Thread 34、Git 10、Fs 9、Runtime 10、Model 8、Host 5、Terminal 3（8 proto / 1859 行） |
+| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 84 RPC**：Thread 35、Git 10、Fs 9、Runtime 13、Model 9、Host 5、Terminal 3（8 proto / 2146 行） |
 | 终端 | xterm.js 6（WebView）+ JS bridge | ↔ daemon `go-pty`，字节流一致画面一致 |
 
 > 图标全用 lucide 矢量（`ic_lucide_*`）+ 品牌 PNG，**故意不引** `material-icons-extended`（曾占 DEX 一半）。
@@ -201,7 +201,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 | App 入口 | `MainActivity.kt` → NavHost | 冷启 Splash → onboarding(未配对)/home |
 | App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.2.2/5）；sherpa AAR 由构建脚本下载+哈希校验 |
 | 构建脚本 | `tools/device/_pa_gradle.py`、`android/build-ascii.ps1` | 中文路径 Gradle 处理不了 → robocopy 镜像到 `G:\pa\android` 再 gradlew |
-| 看门狗 | `daemon/cmd/paguard` + `watchdog_hidden.vbs` | 计划任务 PocketAgentDaemonGuard 每分钟 → wscript → WMI 拉起 paguard → 探测 7246 死了才拉 daemon（WMI 派生脱离 job object，4s 内拉起）。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
+| 看门狗 | `daemon/cmd/paguard` | 计划任务 PocketAgentDaemonGuard 每分钟**直跑 paguard.exe**（windowsgui 子系统物理无窗口）→ 探测 7246 死了才以同参数拉起 daemon（4s 内拉起）。旧链「计划任务 → wscript → watchdog_hidden.vbs → WMI → paguard」已于 2026-09-25 弃用（`6077295`：wscript 每分钟调度触发 VBScript 弃用弹窗，事件日志实锤），`watchdog.bat`/`watchdog_hidden.vbs` 两脚本已随之删除。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
 | 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+version.txt+install/uninstall/使用说明 → `PocketAgent桌面端.zip`。2026-09-23 修：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe/paguard.exe（提交 `42813da` 引入的回归）；现顺序为 清理 → 创建 → 构建 → 痕迹扫描 → 压缩，扫描命中开发机痕迹即中止不出包 |
 
 ---
