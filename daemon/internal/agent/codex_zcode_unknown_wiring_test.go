@@ -20,14 +20,16 @@ import (
 )
 
 // TestCodexGlobalNoticeKindClassification 钉住 W8 扩容后的全局通知分档表:
-// 会话级事实(thread/*、skills/*)daemon 会投影落库 → PROJECTED;
+// 会话级事实(thread/*、skills/*)与 turn/plan/updated(执行计划投影,方法名经
+// codexplanprobe 实测定案,证据 docs/verify/evidence/codex-plan-probe.log;
+// 审计误写的 thread/plan/updated 已删)daemon 会投影落库 → PROJECTED;
 // turn/diff、model/verification 只透传留痕 → PASSTHROUGH;其余如实 UNKNOWN。
 func TestCodexGlobalNoticeKindClassification(t *testing.T) {
 	for _, m := range []string{
 		"thread/archived", "thread/unarchived", "thread/deleted", "thread/reverted",
 		"thread/closed", "thread/name/updated", "thread/queue/changed",
 		"thread/status/changed", "thread/started", "skills/changed",
-		"thread/plan/updated", "thread/goal/updated", "thread/goal/cleared",
+		"turn/plan/updated", "thread/goal/updated", "thread/goal/cleared",
 	} {
 		if got := codexGlobalNoticeKind(m); got != runtime.KindKnownProjected {
 			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PROJECTED(会话级事实会投影落库)", m, got)

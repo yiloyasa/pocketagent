@@ -33,19 +33,6 @@ class ThreadSnapshotTest {
     }
 
     @Test
-    fun agoTextFormatsRelativeTime() {
-        val now = System.currentTimeMillis()
-        assertEquals("刚刚", agoText(now))
-        assertEquals("刚刚", agoText(now - 59_000))
-        assertEquals("1 分钟前", agoText(now - 60_000))
-        assertEquals("59 分钟前", agoText(now - 59 * 60_000))
-        assertEquals("1 小时前", agoText(now - 3_600_000))
-        assertEquals("1 天前", agoText(now - 86_400_000))
-        // 时钟回拨/未来时间戳不能显示成负数
-        assertEquals("刚刚", agoText(now + 60_000))
-    }
-
-    @Test
     fun keepsOnlyMostRecentMessages() {
         val msgs = (0 until 100).map { ThreadSnapshot.Msg("user", "m$it") }
         ThreadSnapshot.saveMessages("t1", msgs)

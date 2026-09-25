@@ -8,17 +8,6 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-/** "刚刚 / X 分钟前 / X 小时前 / X 天前" —— 离线快照提示里的相对时间。 */
-fun agoText(atMs: Long): String {
-    val d = (System.currentTimeMillis() - atMs).coerceAtLeast(0)
-    return when {
-        d < 60_000 -> "刚刚"
-        d < 3_600_000 -> "${d / 60_000} 分钟前"
-        d < 86_400_000 -> "${d / 3_600_000} 小时前"
-        else -> "${d / 86_400_000} 天前"
-    }
-}
-
 /**
  * 会话离线快照(P1-8 · O1 档;沿袭审查 C3 / O2)。
  *

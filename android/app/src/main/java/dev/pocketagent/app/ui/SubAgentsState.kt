@@ -55,7 +55,6 @@ data class SubAgentThreadMeta(
     val agentId: String = "",
     val messageCount: Int = 0,
     val createdAtMs: Long = 0L,
-    val updatedAtMs: Long = 0L,
     /** daemon 落库 last_turn_error 非空(上一轮失败,如实显示失败态)。 */
     val lastTurnFailed: Boolean = false,
     /** Thread.Status = WAITING_APPROVAL(子线程也有自己的审批)。 */
@@ -217,7 +216,6 @@ object SubAgentsLogic {
         agentId = t.agentId,
         messageCount = t.messageCount,
         createdAtMs = t.createdAtUnixMs,
-        updatedAtMs = t.updatedAtUnixMs,
         lastTurnFailed = t.lastTurnError.isNotBlank(),
         waitingApproval = t.status == ThreadStatus.THREAD_STATUS_WAITING_APPROVAL,
         statusRunning = t.status == ThreadStatus.THREAD_STATUS_RUNNING,

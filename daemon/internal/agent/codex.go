@@ -542,7 +542,7 @@ func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 			method == "thread/deleted", method == "thread/reverted", method == "thread/closed",
 			method == "thread/name/updated", method == "thread/queue/changed",
 			method == "thread/status/changed", method == "thread/started",
-			method == "skills/changed", method == "thread/plan/updated":
+			method == "skills/changed":
 			// 会话级事实的变化:交给 server 层同步本地库(异步,别拖住 readLoop)。
 			if h := p.ThreadEventHandler; h != nil {
 				p.ThreadEventHandlerAsync(h, method, params)
@@ -553,10 +553,15 @@ func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 
 func codexGlobalNoticeKind(method string) string {
 	switch method {
+	// turn/plan/updated 是真实通知名(vendored schema + 0.156.1 二进制命中;
+	// 审计时误写的 thread/plan/updated 已由 codexplanprobe 实测定案为幻影 ——
+	// 证据 docs/verify/evidence/codex-plan-probe.log)。它在本函数的语义:全局
+	// 钩子也会收到这条通知,按"已知且确有投影"(事件流投影在 codex_events.go
+	// 的 turn/plan/updated 分支,带 plan_steps)定性,不落入 UNKNOWN 灌诊断页。
 	case "thread/archived", "thread/unarchived", "thread/deleted",
 		"thread/reverted", "thread/closed", "thread/name/updated",
 		"thread/queue/changed", "thread/status/changed", "thread/started",
-		"skills/changed", "thread/plan/updated", "thread/goal/updated",
+		"skills/changed", "turn/plan/updated", "thread/goal/updated",
 		"thread/goal/cleared":
 		return runtime.KindKnownProjected
 	case "turn/diff/updated", "model/verification",

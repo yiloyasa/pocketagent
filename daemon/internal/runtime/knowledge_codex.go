@@ -39,7 +39,7 @@ var codexEventSummaries = map[string]string{
 	"codex\x1fthread/name/updated":        "Codex 更新了会话标题",
 	"codex\x1fthread/queue/changed":       "Codex 的任务排队发生了变化",
 	"codex\x1fthread/status/changed":      "Codex 的会话状态变化了(如空闲/运行中)",
-	"codex\x1fthread/plan/updated":        "Codex 更新了本会话的执行计划",
+	"codex\x1fturn/plan/updated":          "Codex 更新了本会话的执行计划",
 	"codex\x1fthread/goal/updated":        "Codex 更新了本会话的目标",
 	"codex\x1fthread/goal/cleared":        "Codex 清除了本会话的目标",
 	"codex\x1fskills/changed":             "Codex 的可用技能列表发生了变化",

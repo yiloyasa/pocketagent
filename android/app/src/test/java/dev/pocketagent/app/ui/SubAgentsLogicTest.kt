@@ -282,7 +282,6 @@ class SubAgentsLogicTest {
         assertEquals("pi", m.agentId)
         assertEquals(12, m.messageCount)
         assertEquals(111L, m.createdAtMs)
-        assertEquals(222L, m.updatedAtMs)
         assertTrue(m.lastTurnFailed)
         assertTrue(m.waitingApproval)
     }
