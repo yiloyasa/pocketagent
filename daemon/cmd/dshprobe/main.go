@@ -1320,7 +1320,7 @@ func orDash(s string) string {
 
 func main() {
 	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\dsh-p0-probe.md`, "证据报告输出路径")
-	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart;-all = 全部 8 项")
+	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart|configpersist;-all = 全部 8 项")
 	all := flag.Bool("all", false, "跑全部 8 项(默认,与空 -run 等价)")
 	flag.Parse()
 
@@ -1448,6 +1448,17 @@ func main() {
 		it := doNoKey(node, bin, base)
 		r.add(it)
 		r.setSummary(func(s *summary) { s.noKey = clip(it.note+" | "+it.conclusion, 300) })
+	case "configpersist":
+		// 原生设置透出轮(2026-09-25)新增:set_config_option 持久性实证。
+		// 单项独立运行(-run configpersist),证据另写一份报告文件,不覆写 P0 八项。
+		home := filepath.Join(base, "home-cfgp")
+		_ = os.MkdirAll(home, 0o755)
+		c := setupClient(r, clientOpts{node: node, bin: bin, dshHome: home, workDir: workDir, label: mode})
+		if c == nil {
+			break
+		}
+		defer c.close()
+		r.add(doConfigPersist(c, workDir))
 	default:
 		fmt.Printf("未知 -run %q\n", *run)
 		os.Exit(1)

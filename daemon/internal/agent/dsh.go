@@ -129,8 +129,14 @@ type DshProvider struct {
 	models    []pb.ModelInfo
 	modelsAt  time.Time
 	catMu     sync.Mutex
-	catalog   dshapp.ModelCatalog // 最近一次目录(切换模型时取原样编码串)
-	modelVals map[string]string   // "dsh/<slug>" → 原样双层编码串(探索目录时顺手登记)
+	catalog   dshapp.ModelCatalog   // 最近一次目录(切换模型时取原样编码串)
+	modelVals map[string]string     // "dsh/<slug>" → 原样双层编码串(探索目录时顺手登记)
+	rawOpts   []dshapp.ConfigOption // 最近一次完整原生目录(原生设置透出用;非仅模型面)
+	// nativeDefaults 原生设置的"新会话初始值"(设置页无线程上下文写入的目标;
+	// 探针实证 set_config_option 仅会话内生效不持久,新会话由 ensureSession 灌入。
+	// 进程内存态:daemon 重启后由手机设置页当前值重新写入 —— 与"仅新建对话生效"
+	// 的设置页语义一致,如实文档化)。
+	nativeDefaults map[string]string
 
 	// 桌面偏好快照(PrefsAware 子集:Model/Effort/HideReasoning)
 	prefsMu sync.Mutex
@@ -415,6 +421,12 @@ func (p *DshProvider) fetchModels() ([]pb.ModelInfo, dshapp.ModelCatalog, error)
 		}()
 		cat = dshapp.ParseModelCatalog(st.ConfigOptions)
 		out = dshModelsFromCatalog(cat)
+		// 完整原生目录顺手登记(原生设置透出的缓存与模型面同源刷新)。
+		if len(st.ConfigOptions) > 0 {
+			p.catMu.Lock()
+			p.setRawCatalog(st.ConfigOptions)
+			p.catMu.Unlock()
+		}
 		return nil
 	})
 	if err != nil {
@@ -473,6 +485,9 @@ func (p *DshProvider) refreshCatalogFromResume(opts []dshapp.ConfigOption) {
 	if len(opts) == 0 {
 		return
 	}
+	p.catMu.Lock()
+	p.setRawCatalog(opts)
+	p.catMu.Unlock()
 	p.setCatalog(dshapp.ParseModelCatalog(opts))
 }
 
@@ -728,7 +743,23 @@ func (p *DshProvider) ensureSession(ctx context.Context, req TurnRequest) (strin
 	// server 层轮次后落库;手机端据此展示外部会话引用(zcode 同款机制)。
 	req.Thread.ExternalSession = store.ExternalSessionRef{SessionID: st.SessionID, Cwd: req.Workspace}
 	log.Printf("[dsh] 新建会话 %s cwd=%s", st.SessionID, req.Workspace)
+	// 灌"新会话初始值"(设置页原生设置;探针实证 set_config_option 仅会话内生效
+	// 不持久,新会话在这里灌入 —— 与"更改默认对新建对话生效"的设置页语义对齐。
+	// 尽力而为:单项失败只落日志,不阻塞本轮;applyConfigOptions 随后照常覆盖
+	// model/effort 的显式偏好)。
+	p.applyNativeDefaults(ctx, st.SessionID)
 	return st.SessionID, nil
+}
+
+// applyNativeDefaults 把设置页记下的"新会话初始值"灌进一个刚建立的会话。
+// 稳定顺序写入(map 迭代无序);单项失败不中断(下一项照灌),失败如实落日志。
+func (p *DshProvider) applyNativeDefaults(ctx context.Context, sid string) {
+	defaults := p.nativeDefaultsSnapshot()
+	for _, id := range dshSortedDefaultIDs(defaults) {
+		if err := p.client.SetConfigOption(ctx, sid, id, defaults[id]); err != nil {
+			log.Printf("[dsh] 灌新会话初始值 %s=%s 失败(跳过): %v", id, defaults[id], err)
+		}
+	}
 }
 
 // remountSession daemon 重启后的重挂载:

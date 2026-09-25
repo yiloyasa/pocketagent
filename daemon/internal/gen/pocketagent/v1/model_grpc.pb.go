@@ -19,14 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ModelService_ListModels_FullMethodName            = "/pocketagent.v1.ModelService/ListModels"
-	ModelService_SetDefaultModel_FullMethodName       = "/pocketagent.v1.ModelService/SetDefaultModel"
-	ModelService_TestModel_FullMethodName             = "/pocketagent.v1.ModelService/TestModel"
-	ModelService_GetCodexSettings_FullMethodName      = "/pocketagent.v1.ModelService/GetCodexSettings"
-	ModelService_SetCodexSettings_FullMethodName      = "/pocketagent.v1.ModelService/SetCodexSettings"
-	ModelService_ListMcpServers_FullMethodName        = "/pocketagent.v1.ModelService/ListMcpServers"
-	ModelService_GetCodexUsage_FullMethodName         = "/pocketagent.v1.ModelService/GetCodexUsage"
-	ModelService_ListCodexCapabilities_FullMethodName = "/pocketagent.v1.ModelService/ListCodexCapabilities"
+	ModelService_ListModels_FullMethodName             = "/pocketagent.v1.ModelService/ListModels"
+	ModelService_SetDefaultModel_FullMethodName        = "/pocketagent.v1.ModelService/SetDefaultModel"
+	ModelService_TestModel_FullMethodName              = "/pocketagent.v1.ModelService/TestModel"
+	ModelService_GetCodexSettings_FullMethodName       = "/pocketagent.v1.ModelService/GetCodexSettings"
+	ModelService_SetCodexSettings_FullMethodName       = "/pocketagent.v1.ModelService/SetCodexSettings"
+	ModelService_ListMcpServers_FullMethodName         = "/pocketagent.v1.ModelService/ListMcpServers"
+	ModelService_GetCodexUsage_FullMethodName          = "/pocketagent.v1.ModelService/GetCodexUsage"
+	ModelService_ListCodexCapabilities_FullMethodName  = "/pocketagent.v1.ModelService/ListCodexCapabilities"
+	ModelService_ListAgentConfigOptions_FullMethodName = "/pocketagent.v1.ModelService/ListAgentConfigOptions"
 )
 
 // ModelServiceClient is the client API for ModelService service.
@@ -49,6 +50,12 @@ type ModelServiceClient interface {
 	GetCodexUsage(ctx context.Context, in *GetCodexUsageRequest, opts ...grpc.CallOption) (*CodexUsage, error)
 	// ---- 能力可见性(只读):这台电脑上这个 agent 到底有哪些技能/hooks/插件 ----
 	ListCodexCapabilities(ctx context.Context, in *ListCodexCapabilitiesRequest, opts ...grpc.CallOption) (*ListCodexCapabilitiesResponse, error)
+	// ---- 原生设置目录(透传):各家 agent 自己报告的会话级配置项 ----
+	// 【为什么是动态透传而不是静态名单】目录来自 agent 原生应答(dsh:session/new|resume
+	// 的 configOptions;pi:get_state 的状态键),daemon 不维护"哪家有哪些设置"的名单 ——
+	// 上游加一项,手机端自动出现,daemon 不用改。候选值原样透传(dsh model 的 value 是
+	// 双层 JSON 编码串,任何加工都是污染);原生没报的候选绝不伪造。
+	ListAgentConfigOptions(ctx context.Context, in *ListAgentConfigOptionsRequest, opts ...grpc.CallOption) (*ListAgentConfigOptionsResponse, error)
 }
 
 type modelServiceClient struct {
@@ -139,6 +146,16 @@ func (c *modelServiceClient) ListCodexCapabilities(ctx context.Context, in *List
 	return out, nil
 }
 
+func (c *modelServiceClient) ListAgentConfigOptions(ctx context.Context, in *ListAgentConfigOptionsRequest, opts ...grpc.CallOption) (*ListAgentConfigOptionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAgentConfigOptionsResponse)
+	err := c.cc.Invoke(ctx, ModelService_ListAgentConfigOptions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ModelServiceServer is the server API for ModelService service.
 // All implementations must embed UnimplementedModelServiceServer
 // for forward compatibility.
@@ -159,6 +176,12 @@ type ModelServiceServer interface {
 	GetCodexUsage(context.Context, *GetCodexUsageRequest) (*CodexUsage, error)
 	// ---- 能力可见性(只读):这台电脑上这个 agent 到底有哪些技能/hooks/插件 ----
 	ListCodexCapabilities(context.Context, *ListCodexCapabilitiesRequest) (*ListCodexCapabilitiesResponse, error)
+	// ---- 原生设置目录(透传):各家 agent 自己报告的会话级配置项 ----
+	// 【为什么是动态透传而不是静态名单】目录来自 agent 原生应答(dsh:session/new|resume
+	// 的 configOptions;pi:get_state 的状态键),daemon 不维护"哪家有哪些设置"的名单 ——
+	// 上游加一项,手机端自动出现,daemon 不用改。候选值原样透传(dsh model 的 value 是
+	// 双层 JSON 编码串,任何加工都是污染);原生没报的候选绝不伪造。
+	ListAgentConfigOptions(context.Context, *ListAgentConfigOptionsRequest) (*ListAgentConfigOptionsResponse, error)
 	mustEmbedUnimplementedModelServiceServer()
 }
 
@@ -192,6 +215,9 @@ func (UnimplementedModelServiceServer) GetCodexUsage(context.Context, *GetCodexU
 }
 func (UnimplementedModelServiceServer) ListCodexCapabilities(context.Context, *ListCodexCapabilitiesRequest) (*ListCodexCapabilitiesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListCodexCapabilities not implemented")
+}
+func (UnimplementedModelServiceServer) ListAgentConfigOptions(context.Context, *ListAgentConfigOptionsRequest) (*ListAgentConfigOptionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAgentConfigOptions not implemented")
 }
 func (UnimplementedModelServiceServer) mustEmbedUnimplementedModelServiceServer() {}
 func (UnimplementedModelServiceServer) testEmbeddedByValue()                      {}
@@ -358,6 +384,24 @@ func _ModelService_ListCodexCapabilities_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ModelService_ListAgentConfigOptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAgentConfigOptionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelServiceServer).ListAgentConfigOptions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ModelService_ListAgentConfigOptions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelServiceServer).ListAgentConfigOptions(ctx, req.(*ListAgentConfigOptionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ModelService_ServiceDesc is the grpc.ServiceDesc for ModelService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -396,6 +440,10 @@ var ModelService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListCodexCapabilities",
 			Handler:    _ModelService_ListCodexCapabilities_Handler,
+		},
+		{
+			MethodName: "ListAgentConfigOptions",
+			Handler:    _ModelService_ListAgentConfigOptions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -493,6 +493,14 @@ func (s *Server) setAgentSettings(ctx context.Context, req *pb.SetCodexSettingsR
 	if _, ok := s.cfg.Providers[id]; !ok {
 		return nil, errFailedPrecondition("Agent 不可用: " + id)
 	}
+	// 原生配置项写通道(dsh 等;与 native_mode 同一请求面的可选分支):两个都 set
+	// 才是一次写请求,写完返回该 agent 的设置快照(手机端随后重拉目录刷新 currentValue)。
+	if req.NativeConfigOptionId != nil && req.NativeConfigValue != nil {
+		return s.setAgentNativeConfigOption(ctx, id, req.GetNativeConfigOptionId(), req.GetNativeConfigValue(), req.GetThreadId())
+	}
+	if req.NativeConfigOptionId != nil || req.NativeConfigValue != nil {
+		return nil, errInvalidArg("原生配置项写入需要同时提供 option_id 与 value")
+	}
 	d := s.cfg.Store.AgentDefaults(id)
 	if req.Model != nil {
 		model := req.GetModel()
@@ -569,4 +577,37 @@ func (s *Server) setAgentSettings(ctx context.Context, req *pb.SetCodexSettingsR
 	}
 	s.broadcastPrefs(agent.DesktopPrefsFromStore(s.cfg.Store))
 	return s.nativeSettings(ctx, id, ""), nil
+}
+
+// setAgentNativeConfigOption 原生配置项写通道:SetCodexSettings 的可选分支
+// (native_config_option_id + native_config_value 都 set 时进入)。
+//
+// 【语义】optionID/value 由 provider 校验(NativeConfigOptions;目录外取值拒绝,
+// 禁止裸模型名)。thread_id 给了 → 当场写到那个会话;没给 → provider 按
+// "新会话初始值"落(dsh 探针实证:原生开关仅会话内生效不持久,与新会话创建时
+// 灌入的既有语义对齐)。
+func (s *Server) setAgentNativeConfigOption(ctx context.Context, agentID, optionID, value, threadID string) (*pb.CodexSettings, error) {
+	if strings.TrimSpace(optionID) == "" {
+		return nil, errInvalidArg("缺少 native_config_option_id")
+	}
+	provider, ok := s.cfg.Providers[agentID]
+	if !ok {
+		return nil, errFailedPrecondition("Agent 不可用: " + agentID)
+	}
+	src, ok := provider.(agent.NativeConfigOptions)
+	if !ok {
+		return nil, errFailedPrecondition("该 Agent 未提供原生设置写通道: " + agentID)
+	}
+	var thread *store.Thread
+	if tid := strings.TrimSpace(threadID); tid != "" {
+		t, ok := s.cfg.Store.Get(tid)
+		if !ok || threadAgentID(t) != agentID {
+			return nil, errInvalidArg("会话不属于所选 Agent")
+		}
+		thread = t
+	}
+	if err := src.SetNativeConfigOption(ctx, thread, optionID, value); err != nil {
+		return nil, errUnavailable(err.Error())
+	}
+	return s.nativeSettings(ctx, agentID, threadID), nil
 }

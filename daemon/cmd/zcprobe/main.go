@@ -202,6 +202,8 @@ func main() {
 	image := flag.Bool("image", false, "只跑图片附件实证(session/send attachments 两种形状各问一次颜色,见 image.go)")
 	// -model:0.16.9 模型/思考档同步实证(无 LLM 轮次,零费用,见 model.go)
 	model := flag.Bool("model", false, "只跑模型同步实证(setModel/setThoughtLevel 后的事件序列,见 model.go)")
+	// -settings:0.16.9 设置面只读实证(零写操作,零费用,见 settings.go)
+	settings := flag.Bool("settings", false, "只跑设置面只读实证(create/subscribe/resume 的 settings 键形状,见 settings.go)")
 	flag.Parse()
 
 	if _, err := os.Stat(nodeExe); err != nil {
@@ -235,6 +237,10 @@ func main() {
 		// 模型同步子模式(2026-09-24:0.16.9 settings.updated/session.modelUpdated
 		// 消失疑云的实证,见 model.go)
 		runModel(p, abs, res)
+	} else if *settings {
+		// 设置面只读子模式(2026-09-25 原生设置透出轮:0.16.9 settings 键形状实证,
+		// 零写操作,见 settings.go)
+		runSettings(p, abs, res)
 	} else {
 		// ---- 进程 1:主验证流程(步骤 1-6 + 同进程 resume)----
 		sid := runMain(p, abs, res)

@@ -76,6 +76,7 @@ type probe struct {
 	workDir    string // 子进程 cwd(决定 Pi 会话的工作区)
 	extFile    string // -e 临时审批扩展(可空)
 	noExt      bool   // --no-extensions:关掉本机 4 个扩展包做对照
+	agentDir   string // 非空时注入 PI_CODING_AGENT_DIR(native 探针的隔离 agent 目录)
 
 	cmd     *exec.Cmd
 	stdin   interface{ Write([]byte) (int, error) }
@@ -130,6 +131,19 @@ func hostnameOrLocal() string {
 	return h
 }
 
+// appendEnvKey 去 re-追加一个 env 键(同键先剔后追):Windows env 块对同键重复
+// 取值未定义,piapp/mcpsetup.go 的 envWithKey 同款纪律。
+func appendEnvKey(env []string, key, val string) []string {
+	out := env[:0:0]
+	prefix := key + "="
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
+			out = append(out, kv)
+		}
+	}
+	return append(out, prefix+val)
+}
+
 func (p *probe) record(line string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -157,6 +171,11 @@ func (p *probe) start() error {
 		cmd.Env = cleanEnv()
 	} else {
 		cmd.Env = os.Environ()
+	}
+	// agent 目录隔离(native 探针):追加而非替换,干净 env 里本就无此键;
+	// inherit 模式下用户可能已设 —— 用 envWithKey 式去重,防止 Windows env 块同键重复。
+	if p.agentDir != "" {
+		cmd.Env = appendEnvKey(cmd.Env, "PI_CODING_AGENT_DIR", p.agentDir)
 	}
 	hidewin.Apply(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -402,6 +421,12 @@ func main() {
 		fmt.Println("== Pi get_commands 斜杠命令探针开始 ==")
 		r.runCmdsMode()
 		fmt.Println("== 探针结束 ==")
+	case "native":
+		// 原生设置透出轮(2026-09-25):auto_compaction/steering_mode 的读形与
+		// 落盘语义实证。PI_CODING_AGENT_DIR 隔离,写副作用不碰用户 ~/.pi(红线)。
+		fmt.Println("== Pi 原生设置探针开始(隔离 agent 目录) ==")
+		r.runNativeMode()
+		fmt.Println("== 探针结束 ==")
 	default:
 		fmt.Println("== Pi P0 探针开始 ==")
 		r.runAll()
@@ -415,6 +440,8 @@ func main() {
 		title = "Pi S 级增量命令探针记录(export_html/compact/thinking_levels/follow_up/session_info_changed)"
 	case "cmds":
 		title = "Pi get_commands 斜杠命令探针记录"
+	case "native":
+		title = "Pi 原生设置探针记录(auto_compaction/steering_mode 读写语义,隔离 agent 目录)"
 	}
 	var b strings.Builder
 	b.WriteString("# " + title + "\n\n")

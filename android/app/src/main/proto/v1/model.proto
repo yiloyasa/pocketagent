@@ -30,6 +30,13 @@ service ModelService {
 
   // ---- 能力可见性(只读):这台电脑上这个 agent 到底有哪些技能/hooks/插件 ----
   rpc ListCodexCapabilities(ListCodexCapabilitiesRequest) returns (ListCodexCapabilitiesResponse);
+
+  // ---- 原生设置目录(透传):各家 agent 自己报告的会话级配置项 ----
+  // 【为什么是动态透传而不是静态名单】目录来自 agent 原生应答(dsh:session/new|resume
+  // 的 configOptions;pi:get_state 的状态键),daemon 不维护"哪家有哪些设置"的名单 ——
+  // 上游加一项,手机端自动出现,daemon 不用改。候选值原样透传(dsh model 的 value 是
+  // 双层 JSON 编码串,任何加工都是污染);原生没报的候选绝不伪造。
+  rpc ListAgentConfigOptions(ListAgentConfigOptionsRequest) returns (ListAgentConfigOptionsResponse);
 }
 
 message GetCodexUsageRequest {}
@@ -202,6 +209,54 @@ message SetCodexSettingsRequest {
   string agent_id = 10;
   optional string native_mode = 11;
   string thread_id = 12;
+  // ---- 原生配置项写通道(dsh 等;原生设置目录 ListAgentConfigOptions 的配套写)----
+  // 两个都 set 才是一次写请求:option_id 指项,value 是**原样**取值(候选叶子里的
+  // value 逐字节回传;dsh model 的双层编码串绝不能加工,裸模型名会被原生拒绝)。
+  // thread_id(字段 12)给了就当场写到那个会话;没给时按各 agent 自己的语义处理
+  // (dsh:记为"新会话初始值"—— 探针实证其 set_config_option 仅会话内生效、不持久)。
+  optional string native_config_option_id = 13;
+  optional string native_config_value = 14;
+}
+
+message ListAgentConfigOptionsRequest {
+  string agent_id = 1;  // 注册表校验,未知 agent 回 InvalidArgument(文案动态列举)
+  // 会话上下文:给了就以那个会话的实时 configOptions 为准(dsh 走 session/resume);
+  // 空 = "新会话初始值"视角(dsh 用一次性瞬态会话取样,取完即毁)。
+  string thread_id = 2;
+}
+
+// AgentConfigOptionLeaf 是一个候选叶子(dsh options 字段两种实测形状展平后统一到这;
+// group 非空 = 分组候选的组名,model 按 provider 分组时即 provider 名)。
+message AgentConfigOptionLeaf {
+  string value = 1;       // 原样(set_config_option 回传的就是它,编码串不加工)
+  string name = 2;        // 原生显示名
+  string description = 3; // 原生一句话说明(可空)
+  string group = 4;       // 分组名(扁平候选为空)
+}
+
+// AgentConfigOption 是「原生设置」分组里的一行。
+//
+// 【字段纪律】id/name/category/type/current_value 全部原生原文(dsh 应答原样;pi 的
+// get_state 键名即 id)。current_value 是字符串化的原值(原生编码串不加工;布尔按
+// JSON 字面量 true/false)。options 空表示原生没报候选 —— 手机端渲染当前值原文,
+// 绝不编造选项。writable=false 的行是只读事实呈现(daemon 不提供写;原因见 note)。
+message AgentConfigOption {
+  string id = 1;
+  string name = 2;
+  string category = 3;   // 原生分类(dsh 有;原生不报时留空)
+  string type = 4;       // 原生类型原文(select / …;原生不报时留空,不猜)
+  string current_value = 5;
+  repeated AgentConfigOptionLeaf options = 6;
+  bool writable = 7;     // 本通道是否提供写(探针实证为准)
+  string note = 8;       // 人话说明:生效范围/为何只读
+}
+
+message ListAgentConfigOptionsResponse {
+  repeated AgentConfigOption items = 1;
+  // 非空表示本次读取失败或部分失败;空列表 + 空 error = 该 agent 此刻无目录可示
+  // (如实,不伪造空成功之外的语义)。
+  string error = 2;
+  int64 sampled_at_unix_ms = 3;
 }
 
 message ListMcpServersRequest {}

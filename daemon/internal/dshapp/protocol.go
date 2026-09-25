@@ -228,10 +228,15 @@ func (c *Client) SessionClose(ctx context.Context, sessionID string) error {
 // 【红线:禁止裸模型名】value 必须原样回传目录(options[].value / currentValue)
 // 里的字符串 —— model 的 value 是双层 JSON 编码串(探针修正①),本层不做任何
 // 加工;校验交给 ValidModelValue,由调用方决定"非法即拒绝"。
+//
+// 【2026-09-25 探针修正③:参数名 configId】rc.3 的 zod 校验要求参数名是
+// configId;旧实现发 optionId 被 -32602 Invalid params 拒绝(意味着模型/强度
+// 切换在 rc.3 上整体失效),见 docs/verify/evidence/dsh-config-persist-probe.md。
+// 同探针实证:该改动**仅会话内生效、不持久**(close 后新会话回到原值)。
 func (c *Client) SetConfigOption(ctx context.Context, sessionID, optionID, value string) error {
 	_, err := c.CallCtx(ctx, "session/set_config_option", map[string]interface{}{
 		"sessionId": sessionID,
-		"optionId":  optionID, // 实测 optionId = "model" / "reasoning_effort"(id 字段)
+		"configId":  optionID, // rc.3 实测参数名(configId);取值 = "model" / "reasoning_effort"(id 字段)
 		"value":     value,
 	})
 	if err != nil {

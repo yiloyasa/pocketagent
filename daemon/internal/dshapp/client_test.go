@@ -85,14 +85,24 @@ func TestFakeDshHelperProcess(t *testing.T) {
 			out.WriteByte('\n')
 			respond(*m.ID, map[string]interface{}{"stopReason": "end_turn"})
 		case "session/set_config_option":
-			// 回显校验:value 必须原样是双层编码串(裸模型名直接回错)。
+			// rc.3 参数名契约(探针实测,configoptions_test.go):必须带 configId,
+			// 缺失按 zod 行为回 -32602。value 形状按 configId 分家(探针原帧):
+			// model 必须原样是双层编码串(裸模型名回错);reasoning_effort 是
+			// off/low/high/max 纯串 —— 对 effort 校验编码串是假子进程越权,会误红。
 			var p struct {
-				Value string `json:"value"`
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
 			}
 			_ = json.Unmarshal(m.Params, &p)
-			if _, _, ok := DecodeModelTuple(p.Value); !ok {
-				respondErr(*m.ID, -32602, "bare model value")
+			if p.ConfigID == "" {
+				respondErr(*m.ID, -32602, "Invalid params")
 				continue
+			}
+			if p.ConfigID == "model" {
+				if _, _, ok := DecodeModelTuple(p.Value); !ok {
+					respondErr(*m.ID, -32602, "bare model value")
+					continue
+				}
 			}
 			respond(*m.ID, map[string]interface{}{})
 		case "boom":

@@ -34,6 +34,12 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		if _, ok := provider.(agent.PrefsAware); ok {
 			caps = append(caps, "agent_settings:"+id)
 		}
+		// 原生设置目录透出(2026-09-25):谁实现了 NativeConfigOptions(有"目录型"
+		// 原生设置可示)谁就带这一位,手机端据此点亮 Agent 子页的「原生设置」分组;
+		// 旧 daemon 不带,新 APK 直接隐藏该入口,不摆假开关(规格 §21.3 同款纪律)。
+		if _, ok := provider.(agent.NativeConfigOptions); ok {
+			caps = append(caps, "agent_native_settings:"+id)
+		}
 		if _, ok := provider.(agent.TextGenerator); ok {
 			caps = append(caps, "text_generation:"+id)
 		}

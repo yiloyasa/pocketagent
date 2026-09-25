@@ -105,6 +105,7 @@ import pocketagent.v1.GetCodexSettingsRequest
 import pocketagent.v1.GetCodexUsageRequest
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostInfo
+import pocketagent.v1.ListAgentConfigOptionsRequest
 import pocketagent.v1.ListCodexCapabilitiesRequest
 import pocketagent.v1.ListMcpServersRequest
 import pocketagent.v1.ListModelsRequest
@@ -3416,6 +3417,10 @@ private fun webDataUsage(ctx: android.content.Context): Long {
 private fun AgentDefaultsSection(agentId: String, settings: CodexSettings?, models: List<ModelInfo>, writer: CodexWriter, openModels: () -> Unit) {
     val choices = models.filter { it.provider == agentId }
     if(agentId=="zcode") NativePermissionsSection(agentId, initial=settings)
+    // 「原生设置」分组(2026-09-25 原生设置透出轮):agent 原生报告的目录型配置项,
+    // 由 agent_native_settings:<id> 能力位点亮(旧 daemon / 未提供的家自动隐藏,
+    // 不摆假开关)。分组自带空态隐藏与错误呈现,Agent 默认模型/强度行保持不变。
+    NativeConfigOptionsSection(agentId)
     SectionBlock(icon = R.drawable.ic_lucide_cpu, title = agentDisplay(agentId)) {
         SplitButton(label = "默认模型", mainLabel = choices.find { it.id == settings?.model }?.displayName ?: "跟随 Agent 默认",
             onMainClick = openModels,
@@ -3429,6 +3434,115 @@ private fun AgentDefaultsSection(agentId: String, settings: CodexSettings?, mode
             }, options = levels.map { e -> SplitOption(e.label, selected=e.id==settings?.effort) { writer.copy(effort=e.id).commit() } })
         Text("${(levels.size-1).coerceAtLeast(0)} 个已报告档位 · 下次发送时应用", fontSize=12.sp, color=Pa.TextSecondary,
             modifier=Modifier.padding(vertical=10.dp))
+    }
+}
+
+/**
+ * 「原生设置」分组:agent 原生报告的目录型配置项(ListAgentConfigOptions 透传)。
+ *
+ * 【数据纪律(红线 2 的手机端面)】id/名称/当前值/候选全部原生原文 —— 候选列表只
+ * 渲染 daemon 透传的叶子,绝不本地补选项;当前值匹配不到候选时显示原文(不标
+ * "未知/错误",事实呈现)。writable=false 的行是只读事实(pi:原生写通道会持久
+ * 落桌面全局配置),只显示当前生效值 + 说明,不提供写。
+ * 【能力位门控】仅当 daemon 声明 agent_native_settings:<id> 时请求;目录为空且
+ * 无错误时整组隐藏(该 agent 此刻没有可示的原生设置,如实,不占位)。
+ */
+@Composable
+internal fun NativeConfigOptionsSection(agentId: String) {
+    val caps = AgentConnection.hostCapabilities.collectAsState().value
+    if (!caps.contains("agent_native_settings:$agentId")) return
+    val scope = rememberCoroutineScope()
+    var items by remember(agentId) { mutableStateOf<List<pocketagent.v1.AgentConfigOption>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var refresh by remember { mutableStateOf(0) }
+    var loaded by remember(agentId) { mutableStateOf(false) }
+    LaunchedEffect(agentId, refresh) {
+        busy = true
+        try {
+            val resp = withContext(Dispatchers.IO) {
+                AgentConnection.modelServiceSlow().listAgentConfigOptions(
+                    ListAgentConfigOptionsRequest.newBuilder().setAgentId(agentId).build())
+            }
+            items = resp.itemsList
+            error = resp.error.ifBlank { null }
+        } catch (e: Exception) {
+            // 整条读取失败(旧 daemon/断连):不渲染占位错误 —— 分组安静隐藏,
+            // 重进设置页自然重试;不把"读不到"渲染成"没有原生设置"。
+        } finally {
+            busy = false
+            loaded = true
+        }
+    }
+    if (!loaded) return
+    if (items.isEmpty() && error == null) return
+    // 所有可写行的生效范围说明(dsh:仅会话内生效)在组尾统一呈现一次,不逐行重复。
+    val sharedNote = items.firstOrNull { it.writable && it.note.isNotBlank() }?.note.orEmpty()
+    SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "原生设置") {
+        Spacer(Modifier.height(10.dp))
+        if (error != null) {
+            Text("暂时读不到原生设置：$error", fontSize = 11.5.sp, color = Pa.TextTertiary,
+                modifier = Modifier.padding(vertical = 6.dp))
+        }
+        items.forEachIndexed { index, row ->
+            val options = row.optionsList
+            if (row.writable && row.type == "select" && options.isNotEmpty()) {
+                // 当前值的显示名:匹配到候选叶子用原生名,匹配不到显示原文(事实呈现)。
+                val currentLabel = options.find { it.value == row.currentValue }?.name
+                    ?: row.currentValue.ifBlank { "未报告" }
+                SplitButton(
+                    label = row.name.ifBlank { row.id },
+                    mainLabel = if (busy) "同步中…" else currentLabel,
+                    onMainClick = { refresh++ },
+                    options = options.map { leaf ->
+                        SplitOption(
+                            title = leaf.name.ifBlank { leaf.value },
+                            desc = leaf.description,
+                            selected = leaf.value == row.currentValue,
+                        ) { selectNativeOption(scope, agentId, row.id, leaf.value) { refresh++ } }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+            } else {
+                // 只读行 / 无候选的可写行:当前值原文 + 说明,不提供"切换"控件
+                // (没有可核对的原生候选清单就不放行 —— 与 daemon 侧写校验同一纪律)。
+                SettingRow(
+                    title = row.name.ifBlank { row.id },
+                    desc = row.note,
+                    value = row.currentValue.ifBlank { "未报告" },
+                    divider = index != items.lastIndex,
+                )
+            }
+        }
+        if (sharedNote.isNotBlank()) {
+            Text(sharedNote, fontSize = 11.sp, color = Pa.TextTertiary,
+                modifier = Modifier.padding(vertical = 6.dp))
+        }
+    }
+}
+
+/** select 行的切换:写通道走 SetCodexSettings 的原生配置项分支,成功后刷新目录。 */
+private fun selectNativeOption(
+    scope: kotlinx.coroutines.CoroutineScope,
+    agentId: String,
+    optionId: String,
+    value: String,
+    onDone: () -> Unit,
+) {
+    scope.launch {
+        try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.modelServiceSlow().setCodexSettings(
+                    SetCodexSettingsRequest.newBuilder()
+                        .setAgentId(agentId)
+                        .setNativeConfigOptionId(optionId)
+                        .setNativeConfigValue(value)
+                        .build())
+            }
+        } catch (e: Exception) {
+            // 失败不做乐观更新:选中态由下一次刷新如实回读,绝不假装切成功。
+        }
+        onDone()
     }
 }
 
