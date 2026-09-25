@@ -1023,8 +1023,16 @@ func (p *DshProvider) handleSessionUpdate(raw json.RawMessage, sink Sink, st *ds
 			return
 		}
 		notices.recordAs(dshNoticeKind("session/update:usage_update"), "dsh", "session/update:usage_update", raw, sink)
-	case "plan", "available_commands_update":
-		// 透传进诊断视图(蓝本 §4.3:plan / available_commands 透传/忽略分支)
+	case "plan", "plan_update", "plan_removed":
+		// 【P2 计划卡】三个计划变体优先投影成 codex 同款计划帧(形状依据随包
+		// ACP SDK schema,见 dsh_plan.go 文件头);认不出/无可投影内容的形状
+		// 返回 false,仍按蓝本 §4.3 原样透传进诊断视图 —— 不猜、不静默丢弃。
+		if p.handleDshPlanUpdate(kind, raw, sink) {
+			return
+		}
+		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
+	case "available_commands_update":
+		// 透传进诊断视图(蓝本 §4.3:available_commands 忽略分支)
 		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
 	default:
 		// 探针修正⑤:未知变体原样透传进诊断视图,不猜(README §7 主线 A:

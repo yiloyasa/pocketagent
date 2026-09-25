@@ -170,7 +170,10 @@ func codexMethodNoticeKind(method string) string {
 //   - context_usage / tool_call 系列**正常情形已被投影**成 Usage / ToolCall 帧;
 //     走到留痕说明是已知路径上的意外(认不出的 token 字段 / unmarshal 失败 / 状态
 //     字段不认识)—— 标 PROJECTED,让诊断页把它与"真未知"分开;
-//   - plan / available_commands_update 只透传进诊断视图,没有正式事件 → PASSTHROUGH;
+//   - plan / plan_update / plan_removed 形状可投影时已直接发计划卡帧(成功路径
+//     与 tool_call 同款:投影成功不落台账,见 dsh_plan.go);走到留痕说明是已知
+//     路径上的意外(形状认不出/空计划),标 PASSTHROUGH 与"只透传"的旧口径一致;
+//   - available_commands_update 只透传进诊断视图,没有正式事件 → PASSTHROUGH;
 //   - 其余(未知变体、非 session/update 的方法) → UNKNOWN_NOTIFICATION。
 //
 // 【为什么未知变体不硬套 PASSTHROUGH】session/update 的变体是开放的:上游加一个新

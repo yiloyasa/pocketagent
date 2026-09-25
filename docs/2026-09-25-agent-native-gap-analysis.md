@@ -30,9 +30,38 @@
 ## 翻译词表口径订正
 词表实数 62 条（55 精确 + 7 dsh 前缀），此前文档写 70 有误；本轮后各家又新增（zcode +12、pi +9、codex +13），以 `daemon/internal/runtime/knowledge_*.go` 为准。
 
-## 总排序（本轮执行情况）
-1. ✅ ZCode 0.16.9 探针+回归排查（实证未断）
+## 总排序(本轮执行情况)
+1. ✅ ZCode 0.16.9 探针+回归排查(实证未断)
 2. ✅ pi 0.87.1 词表+usage 复测+clear_queue
 3. ✅ codex 0.156.1 探针 diff+词表+真删同步+rollback 迁移
-4. 🔶 dsh 探针补齐——**阻塞于 API key，待用户提供**；rc.3 已装
-5. 后续轮：各 agent 原生设置透出（pi auto-compaction/auto-retry、zcode permission.mode 等）→ 手机设置页/会话页呈现；会话管理增强（zcode session/subagents 等）
+4. 🔶 dsh 探针补齐——**阻塞于 API key,待用户提供**;rc.3 已装
+5. 后续轮:各 agent 原生设置透出(pi auto-compaction/auto-retry、zcode permission.mode 等)→ 手机设置页/会话页呈现;会话管理增强(zcode session/subagents 等)
+
+## 留观处置(P2 轮落地,2026-09-25 晚 · AD 代理)
+
+1. **ZCode session/subagents(P2)→ 已接**:bundle schema(iGt/W5i)+ 空态 A 级实测
+   (`docs/verify/evidence/zc-subagents-probe.md`);时序纪律实证——create 后立刻查报
+   -32004(会话未持久化),故取数点定在**轮次终局**。链路:zcodeapp.Subagents →
+   ZcodeProvider.SubagentsHandler(轮末异步)→ server 存根子线程(幂等/墓碑/状态映射,
+   waiting→WAITING_APPROVAL 按 TYa 语义)。真实委派轮的 running/ended 条目受本机
+   凭据阻塞(SSR gpt 401 / deepseek auth_failed,探针无 accounts 适配),生产同款
+   live 测试已就位:`go test -tags pa_live -run TestZcodeLiveSubagents ./internal/agent/`
+   (需 PA_LIVE_ZCODE=1 + 本机账户可用)。
+2. **codex thread/turns/list、thread/items/list、thread/search(留观)→ 评估完毕,维持留观**:
+   A 级实测(`docs/verify/evidence/codex-turnslist-probe.log`)——turns/list 只需
+   threadId,回 TurnsPage{data(带 items),nextCursor,backwardsCursor}(bundled schema
+   0.155.1 已有 unreferenced TurnsPage);items/list 需 threadId;**thread/search 需
+   `searchTerm` 且被 experimentalApi capability 门禁**(-32600)。daemon 的 thread/read
+   唯一消费方是子代理历史拉取(短线程),分页无收益;search 要开实验特性,不符合
+   "不碰实验面"纪律。工作量若强行做约 150-200 行(>100 行门槛),建议等"超长会话
+   手机端打开卡顿"或"桌面全量搜索"需求实化再动。
+3. **dsh plan 变体 → 已接(boundary 版)**:0.1.5-rc.3 的 dsh-acp 适配器 bundle 静态
+   检索**不发任何计划变体**(只发 6 种 sessionUpdate);计划形状取自随包 ACP SDK
+   schema(plan 稳定版 entries 三态;plan_update UNSTABLE items/markdown/file 三选一)。
+   dsh_plan.go 投影成 codex 同款计划卡帧(PlanSteps "status|text"),认不出的形状
+   原样透传。0.1.7 进 latest 后按既有计划重探即可,接线已兜住。
+4. **能力位对齐 → 已补**:GetHostInfo 新增 `steer:<id>`(=agent.Steerer:codex/pi;
+   zcode 实测不支持原生插话、dsh 无,缺位即声明)与 `queue_clear:<id>`
+   (=agent.QueueClearer:仅 pi)。既有 agent_settings/agent_native_settings/
+   text_generation/collab 位经真实四家 provider 构造器逐一回归钉死
+   (server/host_capability_bits_test.go)。手机端按位点亮入口的呈现接线归 UI 轮。

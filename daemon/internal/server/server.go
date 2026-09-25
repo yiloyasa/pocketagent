@@ -247,6 +247,10 @@ func New(cfg Config) *Server {
 		zp.TitleHandler = func(threadID, title string) {
 			applyZcodeTitle(cfg.Store, threadID, title)
 		}
+		// 【子代理原生事实】0.16.9 session/subagents:provider 在轮次终局拉到
+		// 原生子代理清单,这里接住落成存根子线程(幂等、失败只留痕),手机端
+		// 既有子代理卡管线按 parentThreadId 过滤即点亮(见 zcode_subagent_sync.go)。
+		zp.SubagentsHandler = srv.registerZcodeSubagentStubs
 	}
 	// Pi 标题同步:session_info_changed → 落库(与 zcode 同语义;实现见 thread.go)。
 	srv.wirePiTitleHandler()

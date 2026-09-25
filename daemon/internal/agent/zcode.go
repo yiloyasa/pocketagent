@@ -129,6 +129,11 @@ type ZcodeProvider struct {
 	// TitleHandler 标题同步钩子:zcode 自动命名会话时回调(server 层落库后
 	// 双端可见)。P0 阶段 server 尚未接线该钩子,字段先留好(与 codex 同名同语义)。
 	TitleHandler func(threadID, title string)
+
+	// SubagentsHandler 原生子代理清单钩子(0.16.9 session/subagents):轮次终局
+	// 拉到清单后回调,server 层据此登记/更新子代理存根线程(接线见
+	// server/zcode_subagent_sync.go)。nil = 未接线,轮次后不拉(探针/测试路径)。
+	SubagentsHandler func(threadID string, res zcodeapp.SubagentsResult)
 }
 
 // zcodeModelRef 记录一次模型选择所需的完整定位。
@@ -1990,6 +1995,11 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	// 竞争;goal 操作本身会驱动桌面端一轮确认 prompt,放在轮次外才安全)。
 	// 异步:不延迟本轮结果返回手机。
 	go p.applyPendingGoal(req.Thread.ID, sid)
+	// 【子代理原生事实】轮次终局拉一次原生子代理清单(0.16.9 session/subagents,
+	// 见 zcode_subagents.go):本轮委派的子代理此刻已有事实,server 层据此登记
+	// 存根,手机子代理卡从"tool.updated 结构推测"升级为原生清单。异步,失败
+	// 只留痕,绝不拖住本轮结果返回。
+	go p.fetchSubagentsForTurn(req.Thread.ID, sid)
 
 	mu.Lock()
 	defer mu.Unlock()

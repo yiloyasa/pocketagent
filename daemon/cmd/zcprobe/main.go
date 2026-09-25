@@ -204,6 +204,8 @@ func main() {
 	model := flag.Bool("model", false, "只跑模型同步实证(setModel/setThoughtLevel 后的事件序列,见 model.go)")
 	// -settings:0.16.9 设置面只读实证(零写操作,零费用,见 settings.go)
 	settings := flag.Bool("settings", false, "只跑设置面只读实证(create/subscribe/resume 的 settings 键形状,见 settings.go)")
+	// -subagents:0.16.9 session/subagents 清单实证(空态/缺参/轮内轮外/分页,见 subagents.go)
+	subagents := flag.Bool("subagents", false, "只跑 session/subagents 实证(空态/缺参/真实委派轮次/分页,见 subagents.go)")
 	flag.Parse()
 
 	if _, err := os.Stat(nodeExe); err != nil {
@@ -241,6 +243,10 @@ func main() {
 		// 设置面只读子模式(2026-09-25 原生设置透出轮:0.16.9 settings 键形状实证,
 		// 零写操作,见 settings.go)
 		runSettings(p, abs, res)
+	} else if *subagents {
+		// 子代理清单子模式(2026-09-25 P2:session/subagents 应答形状实证,
+		// 见 subagents.go)
+		runSubagents(p, abs, res)
 	} else {
 		// ---- 进程 1:主验证流程(步骤 1-6 + 同进程 resume)----
 		sid := runMain(p, abs, res)

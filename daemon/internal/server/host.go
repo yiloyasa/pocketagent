@@ -49,6 +49,22 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		if ca, ok := provider.(agent.CollabAware); ok && ca.CollabReady() {
 			caps = append(caps, "collab:"+id)
 		}
+		// 【P2 能力声明对齐】原生子代理委派的插话能力:codex 走原生 turn/steer,
+		// pi 走原生插队(pi.go Steer),zcode 实测不支持(session/send 在轮次中
+		// 被服务器 -32010 拒,zcode.go 文件头;server 层按排队语义兜底)。手机端
+		// 此前无从知道"发送即插话"在哪家是真插话 —— 缺位声明按接口事实补上。
+		// 旧 daemon 不带这一位,新 APK 据此区分"插话"与"排队"回执语义(呈现侧
+		// 接线归手机端)。
+		if _, ok := provider.(agent.Steerer); ok {
+			caps = append(caps, "steer:"+id)
+		}
+		// 【P2 能力声明对齐】上游排队输入的撤销能力:目前只有 pi 实现了原生
+		// clear_queue(agent.QueueClearer,pi 子进程内存队列);其余家的"队列"
+		// 是 daemon 自己的排队,清空走不到这里。声明该位,手机端"撤回排队
+		// 输入"入口只在真正可撤的 agent 上点亮(缺位=入口隐藏,不摆假按钮)。
+		if _, ok := provider.(agent.QueueClearer); ok {
+			caps = append(caps, "queue_clear:"+id)
+		}
 	}
 	sort.Strings(caps) // 稳定输出,便于测试与客户端缓存
 	caps = append(caps, "terminal", "fs", "git", "agent", "event_sequence")
