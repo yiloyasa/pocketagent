@@ -61,11 +61,20 @@ object PaGlassToken {
     /** 浮层打开时给被覆盖内容的压暗色（配合模糊做出"退后一层"的深度）。 */
     var Scrim by mutableStateOf(Color(0x66000000)); internal set
 
-    internal fun apply(dark: Boolean) {
-        if (dark) {
-            Tint = Color(0xE6151517); Highlight = Color(0x2EFFFFFF); Scrim = Color(0x66000000)
-        } else {
-            Tint = Color(0xF2FFFFFF); Highlight = Color(0x5CFFFFFF); Scrim = Color(0x33201E2C)
+    internal fun apply(dark: Boolean, hacker: Boolean = false) {
+        when {
+            // 【黑客终端】深绿玻璃:磷光绿世界的"烟玻璃"带绿相,不发灰;
+            // 发丝高光用绿光(#33FF66)且可见度调低(0x24)——CRT 暗房里高光只该"隐约透边",
+            // 沿用白系高光会在纯黑上刺眼;Scrim 加深(0x73)让浮层下的内容退得更远。
+            hacker -> {
+                Tint = Color(0xE60C160C); Highlight = Color(0x2433FF66); Scrim = Color(0x73000000)
+            }
+            dark -> {
+                Tint = Color(0xE6151517); Highlight = Color(0x2EFFFFFF); Scrim = Color(0x66000000)
+            }
+            else -> {
+                Tint = Color(0xF2FFFFFF); Highlight = Color(0x5CFFFFFF); Scrim = Color(0x33201E2C)
+            }
         }
     }
 }

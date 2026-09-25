@@ -875,6 +875,7 @@ fun SettingsScreen(
     }
     val themeLabel = listOf(
         "system" to "跟随系统", "light" to "浅色", "dark" to "深色",
+        "hacker" to "黑客终端",
     ).firstOrNull { it.first == AgentConnection.themeMode }?.second ?: "跟随系统"
     val uiScaleLabel = when {
         AgentConnection.uiTextScale < 0.95f -> "小"
@@ -1257,6 +1258,8 @@ private fun AppearancePage(
                 Triple("system", "跟随系统", "自动跟随系统深浅色"),
                 Triple("light", "浅色", "始终使用浅色界面"),
                 Triple("dark", "深色", "始终使用深色界面"),
+                // 黑客终端:绿色磷光/等宽/纯黑,效果落在主对话(PaHacker 消费契约)
+                Triple("hacker", "黑客终端", "绿色磷光 · 等宽 · 主对话终端风"),
             )
             val currentModeIdx = modeOptions
                 .indexOfFirst { it.first == AgentConnection.themeMode }

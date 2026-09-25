@@ -44,11 +44,31 @@ object Pa {
 
     var IsDark by mutableStateOf(true); private set
 
-    /** 应用深/浅两套色板(浅色 = 同一设计语言的反相:白底浅灰卡)。 */
-    internal fun apply(dark: Boolean) {
+    /**
+     * 应用色板。dark=深/浅两套(hacker 也恒为 true);hacker=黑客终端专用磷光绿板。
+     * 浅色 = 同一设计语言的反相(白底浅灰卡)。
+     */
+    internal fun apply(dark: Boolean, hacker: Boolean = false) {
         IsDark = dark
-        PaGlassToken.apply(dark)  // 玻璃材质随主题一起换肤,与实色同一时机生效
-        if (dark) {
+        // 玻璃材质随主题一起换肤,与实色同一时机生效;hacker 有自己的深绿玻璃
+        PaGlassToken.apply(dark = dark, hacker = hacker)
+        if (hacker) {
+            // 【黑客终端】设计意图:CRT 磷光屏的"纯黑底 + 发光绿字"。
+            //  - 层级仍走"海拔"模型,但整层压绿:卡片不是灰而是"暗屏上一块稍亮的磷光区";
+            //  - Accent 换终端绿 #00E676(Material Green A400,亮度足够在纯黑上发光),
+            //    用户气泡底 AccentDim 用极暗绿 #0D2B14——"按下的磷光余辉",不是蓝;
+            //  - 文字三档全部带绿相(#C9F7CD/#63A96B/#3D6B45),次级文字像"余辉衰减",
+            //    而不是中性灰——灰在纯绿世界里会显脏;
+            //  - IsDark 恒为 true:纯黑底没有"浅色版",浅色磷光屏不是这个母题。
+            Bg = Color(0xFF000000); Card = Color(0xFF0A120C); CardHigh = Color(0xFF101A12)
+            Hover = Color(0xFF182418); Accent = Color(0xFF00E676); AccentDim = Color(0xFF0D2B14)
+            TextPrimary = Color(0xFFC9F7CD); TextSecondary = Color(0xFF63A96B); TextTertiary = Color(0xFF3D6B45)
+            Separator = Color(0xFF1B2E1E); Green = Color(0xFF4ADE80); Red = Color(0xFFFF6B6B)
+            Yellow = Color(0xFFFFD60A)
+            // 小字号变体:在暗绿底上把三色整体提亮一档,保 WCAG AA(同 §1.1 审计纪律)
+            AccentText = Color(0xFF7DF0A0); GreenText = Color(0xFF5BE070); RedText = Color(0xFFFF8A80)
+            Mcp = Color(0xFFB584FF)
+        } else if (dark) {
             Bg = Color(0xFF000000); Card = Color(0xFF151517); CardHigh = Color(0xFF1F1F22)
             Hover = Color(0xFF2A2A2E); Accent = Color(0xFF4A9DFF); AccentDim = Color(0xFF1E3A5C)
             TextPrimary = Color(0xFFF2F2F4); TextSecondary = Color(0xFF98989F); TextTertiary = Color(0xFF5A5A60)
@@ -68,15 +88,16 @@ object Pa {
     }
 }
 
-/** 全局主题:根据设置(跟随系统/浅色/深色)应用配色。 */
+/** 全局主题:根据设置(跟随系统/浅色/深色/黑客终端)应用配色。 */
 @Composable
 fun PaTheme(content: @Composable () -> Unit) {
+    // hacker 恒走深色:纯黑磷光屏天生是暗色母题,不存在"浅色黑客终端"
     val dark = when (AgentTheme.mode) {
         "light" -> false
-        "dark" -> true
+        "dark", "hacker" -> true
         else -> isSystemInDarkTheme()
     }
-    Pa.apply(dark)
+    Pa.apply(dark, hacker = AgentTheme.mode == "hacker")
     val scheme = if (dark) darkColorScheme(
         primary = Pa.Accent, onPrimary = Color.White, background = Pa.Bg, onBackground = Pa.TextPrimary,
         surface = Pa.Card, onSurface = Pa.TextPrimary, surfaceVariant = Pa.CardHigh,
@@ -89,7 +110,7 @@ fun PaTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
-/** 显示模式状态("system"/"light"/"dark"),AgentConnection.init 时从偏好恢复。 */
+/** 显示模式状态("system"/"light"/"dark"/"hacker"),AgentConnection.init 时从偏好恢复。 */
 object AgentTheme {
     var mode by mutableStateOf("system")
 }
