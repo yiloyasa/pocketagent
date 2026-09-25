@@ -892,6 +892,41 @@ internal fun offlineSnapshotBanner(atMs: Long): String? {
     return "离线快照 · $hhmm"
 }
 
+// ---- 提示条方法名 → 人话(L2 真机挑刺;纯函数,可 JVM 单测)----
+
+/**
+ * RPC 方法名 → 人话标题。横幅标题不露出内部方法名;名单外的方法返回 null,
+ * 调用方把原文照抄(AUDIT §3.3:能透传就透传,不猜)。
+ */
+internal fun rpcMethodLabel(method: String): String? = when (method.trim()) {
+    "session/resume" -> "恢复会话"
+    "session/prompt" -> "发送消息"
+    "session/new" -> "新建会话"
+    else -> null
+}
+
+/**
+ * 错误原文拆 (人话标题, 正文)(纯函数,单测钉死 ChatMethodErrorCopyTest)。
+ *
+ * daemon 报错常把内部方法名放最前:"session/resume\n<id> 失败:"或
+ * "session/resume: 具体原因"。拆开后标题给人话,正文一字不动保持错误原文;
+ * 首段不是已知方法名 → 返回 null,调用方整条原文照抄,不做任何改写。
+ */
+internal fun humanizeMethodError(raw: String): Pair<String, String>? {
+    val text = raw.trim()
+    if (text.isEmpty()) return null
+    val nl = text.indexOf('\n')
+    val head = (if (nl >= 0) text.substring(0, nl) else text).trim()
+    val tail = if (nl >= 0) text.substring(nl + 1).trim() else ""
+    // 首行形如 "session/resume" 或 "session/resume: 具体原因"(中英文冒号都认)
+    val sep = head.indexOfFirst { it == ':' || it == '：' }
+    val method = (if (sep >= 0) head.substring(0, sep) else head).trim()
+    val inlineBody = if (sep >= 0) head.substring(sep + 1).trim() else ""
+    val label = rpcMethodLabel(method) ?: return null
+    val body = listOf(inlineBody, tail).filter { it.isNotBlank() }.joinToString("\n")
+    return label to body
+}
+
 /** 思考强度选项(id 与 codex turn/start 的 effort 取值一致)。 */
 data class EffortOption(val id: String, val label: String)
 
@@ -2170,6 +2205,10 @@ fun ChatScreen(
             if (noticeMsg != null) {
                 // 等待态用黄色(警示但非失败),彻底失败/加载失败用红色
                 val tone = if (waiting) Pa.Yellow else Pa.Red
+                // 【人话标题】daemon 报错常把内部方法名当首行("session/resume\n<id> 失败:"),
+                // 直接上屏像天书(L2 真机挑刺);标题换人话(恢复会话/发送消息/新建会话),
+                // 正文保持错误原文;没有方法名前缀时整条原文照抄(纯函数 humanizeMethodError)。
+                val split = humanizeMethodError(noticeMsg)
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -2187,12 +2226,23 @@ fun ChatScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(
-                        noticeMsg, Modifier.weight(1f),
-                        fontSize = 11.5.sp,
-                        color = if (!waiting && offlineSnapshot) Pa.Yellow else tone,
-                        maxLines = 2,
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            split?.first ?: noticeMsg,
+                            fontSize = 12.sp,
+                            color = if (!waiting && offlineSnapshot) Pa.Yellow else tone,
+                            // 拆不出方法名时整条原文照抄,保留原 2 行;拆出后标题一行
+                            maxLines = if (split == null) 2 else 1,
+                        )
+                        split?.second?.takeIf { it.isNotBlank() }?.let {
+                            Text(
+                                it,
+                                fontSize = 11.sp,
+                                color = if (!waiting && offlineSnapshot) Pa.Yellow else tone,
+                                maxLines = 2,
+                            )
+                        }
+                    }
                     // 自动恢复进行中不给"重试"—— 重复点只会打断它自己的重试节奏。
                     // 只有"彻底失败"和"页面加载失败"才需要用户推一把。
                     if (!waiting) {
@@ -2727,9 +2777,15 @@ fun ChatScreen(
                     }
                 }
                 Box(Modifier.fillMaxWidth().animateContentSize()) {
+                    // 【行数跟踪】展开编辑按钮只在文本占超过 2 行时出现 —— 输入区右上角
+                    // 常驻 ↗ 与工具行"+"一上一下两个浮点,短文本时像两个入口互相打架
+                    // (L2 真机挑刺);长文本才是它存在的时刻。行数取自真实排版
+                    // (TextLayoutResult.lineCount,含自动换行),不按字符数猜。
+                    var inputWrapLines by remember { mutableStateOf(1) }
                     BasicTextField(
                         value = input,
                         onValueChange = { input = it },
+                        onTextLayout = { inputWrapLines = it.lineCount },
                         modifier = Modifier
                             .fillMaxWidth()
                             // 【动画 ③】文本落定脉动:识别文本并入的一瞬整框 45%→100% 透明度
@@ -2768,6 +2824,9 @@ fun ChatScreen(
                     )
                     // 展开编辑:内容超过 EXPAND_HINT_THRESHOLD 时轻微提亮到 Pa.Accent,
                     // 保留原有"长文本可展开大窗"的提示语义;平时保持低调(TextTertiary)。
+                    // 【条件露出】文本 ≤2 行时整块不渲染(见上方 inputWrapLines)——
+                    // 只在真的需要大窗编辑时出现,输入区右上角不再常驻一个浮点。
+                    if (inputWrapLines > 2) {
                     Box(
                         Modifier
                             .align(Alignment.TopEnd)
@@ -2786,6 +2845,7 @@ fun ChatScreen(
                                 .size(15.dp),
                         )
                     }
+                    }
                 }
                 // [模型名全宽行] 当前生效的模型名**恒显且完整**:不截断、不限行数。
                 // 【为什么改恒显】上一版只在名字超过 14 字符时才补这一行,于是"长度没超、
@@ -2798,7 +2858,10 @@ fun ChatScreen(
                     // PA-REAL-0004:整行高度 ≥48dp(实测 37.8dp)。heightIn 在 padding 外层,
                     // 内容(verticalAlignment=CenterVertically)在 48dp 内居中,只是上下多留白。
                     .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
-                    .padding(horizontal=16.dp, vertical=8.dp), verticalAlignment=Alignment.CenterVertically) {
+                    // 【下移贴工具行】旧 padding(vertical=8)让模型名悬在输入区中段,与占位
+                    // 文字读成一团(L2 真机挑刺);收成 top=4/bottom=0 —— 与占位文字拉开
+                    // 4dp,视觉归入下方工具行一组(模型选择是"控件"不是提示文案)。
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp), verticalAlignment=Alignment.CenterVertically) {
                     // 运行中模型与强度确认:原是独立一行 tertiary 文案,合并进本行内联,
                     // 既保留"最近跑的是什么"的信息又不额外占一层堆叠。
                     val runningHint = if (st.runningEffort != null && st.runningModel.isNotBlank()) {
@@ -2808,7 +2871,10 @@ fun ChatScreen(
                     } else ""
                     val base = modelName + if (effortLabel != "默认") " · $effortLabel" else ""
                     Text(base + runningHint,
-                        modifier=Modifier.weight(1f), fontSize=12.sp, color=Pa.TextSecondary,
+                        modifier=Modifier.weight(1f),
+                        // 11sp:模型名是控件态的次级信息,与占位文字(15sp)拉开两级,
+                        // 不再和提示文案混读(L2 真机挑刺 #9)
+                        fontSize=11.sp, color=Pa.TextSecondary,
                         maxLines=2, overflow=TextOverflow.Ellipsis)
                     Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "选择模型", tint=Pa.TextSecondary,modifier=Modifier.requiredSize(18.dp))
                 }
@@ -2953,6 +3019,10 @@ fun ChatScreen(
                     val ctxCompacted = compactionPending(st.turnUsage, st.lastCompactedAt)
                     val ctxRatio =
                         if (ctxRingKnown) usageTotalTokens(ctxUsage).toFloat() / contextWindow.toFloat() else 0f
+                    // 【空值不渲染】窗口未知或还没有用量时报"—"的空环,悬在工具行中间
+                    // 像一个没有意义的"—"按钮(L2 真机挑刺);没有真值就整块不出,
+                    // 拿到窗口+用量(或已压缩)才回场 —— 宁可缺席,不摆占位符。
+                    if (ctxRingKnown || ctxCompacted) {
                     Box(
                         Modifier
                             // PA-REAL-0004 收尾:展示型控件的命中区 34→48dp;环视觉仍
@@ -2974,6 +3044,7 @@ fun ChatScreen(
                         )
                     }
                     Spacer(Modifier.width(2.dp))
+                    }
                     }
                     Spacer(Modifier.width(4.dp))
                     // 【P1-9 语音输入】麦克风:无权限先申请(RECORD_AUDIO),有权限启动

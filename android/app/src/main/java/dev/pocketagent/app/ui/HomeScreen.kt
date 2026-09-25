@@ -352,8 +352,10 @@ fun HomeScreen(
             }
 
             // ---- agent 板块:标题 + 直接铺背景的网格(无外层大卡) ----
+            // 【区块节拍】区块间距统一 20dp(网格 12dp + 本行 8dp):与「最近任务」
+            // 区块头同款节奏,板块与板块读得分得开,卡与卡仍守 12dp 统一卡距。
             item(span = { GridItemSpan(4) }) {
-                Column(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     // 区块头:标题在左、「管理」入口在右,直接放背景上(不再包卡)
                     Row(
                         Modifier.fillMaxWidth(),
@@ -404,21 +406,26 @@ fun HomeScreen(
             // 这里刻意**不做成可拨的开关** —— 它不是用户偏好,而是"电脑上接线完成
             // 与否"的事实回显;可拨 = 假可用(旧实现正是栽在这)。所以只读展示 +
             // 常显状态点,让"已接入几家、谁"一眼可见。
+            // 【区块节拍】与 Agents 板块同款:区块间 20dp。
             item(span = { GridItemSpan(4) }) {
-                Column(Modifier.fillMaxWidth()) {
-                    // 区块头(状态点 + 标题 + 副标):直接铺背景,不包卡
+                Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    // 区块头(标题行尾状态点 + 标题 + 副标):直接铺背景,不包卡。
+                    // 【状态点收进行内】旧版绿点悬在标题块左缘外,像贴错位置的孤点
+                    // (L2 真机挑刺);移到标题行末尾,与文案同一基线,不再占独立列。
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .background(
-                                    if (collabIds.isEmpty()) Pa.TextTertiary else Pa.Green,
-                                    CircleShape,
-                                ),
-                        )
-                        Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("多agent协同", fontSize = 16.sp, color = Pa.TextPrimary)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("多agent协同", fontSize = 16.sp, color = Pa.TextPrimary)
+                                Spacer(Modifier.width(6.dp))
+                                Box(
+                                    Modifier
+                                        .size(8.dp)
+                                        .background(
+                                            if (collabIds.isEmpty()) Pa.TextTertiary else Pa.Green,
+                                            CircleShape,
+                                        ),
+                                )
+                            }
                             Text(
                                 collabSubtitle(collabIds),
                                 fontSize = 11.sp,
@@ -443,13 +450,16 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
+                            // 图标 22dp:与「新建任务」/「电脑预览」行的 22dp 图标同一档
+                            // (旧 18dp 在这两张主入口卡上偏小,层级读起来比次级入口还弱)
+                            Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text("开始协同", fontSize = 13.5.sp, color = Pa.TextPrimary)
                                 Text(
                                     if (collabIds.isEmpty()) "当前没有可协同的 agent" else "一条指令派给多个 agent 并行",
-                                    fontSize = 11.sp, color = Pa.TextTertiary,
+                                    // 副文升 TextSecondary:入口卡的说明是正文信息,不是脚注
+                                    fontSize = 11.sp, color = Pa.TextSecondary,
                                 )
                             }
                             Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
@@ -463,14 +473,16 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
+                            // 图标 22dp:与「开始协同」同档(两卡是同组主入口,视觉重量应一致)
+                            Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text("协同角色", fontSize = 13.5.sp, color = Pa.TextPrimary)
                                 val roleCount = if (CollabRolesState.loadState == CollabRolesLoadState.READY) CollabRolesState.roles.size else null
                                 Text(
                                     if (roleCount == null) "点按管理岗位配置" else "已配置 $roleCount 个岗位",
-                                    fontSize = 11.sp, color = Pa.TextTertiary,
+                                    // 副文升 TextSecondary:同「开始协同」,入口卡说明不降级
+                                    fontSize = 11.sp, color = Pa.TextSecondary,
                                 )
                             }
                             Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
@@ -532,7 +544,9 @@ fun HomeScreen(
                     Text("新建任务", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
                     // 右侧 agent 名标签:跟随唯一选中源 AgentConnection.selectedAgent 实时显示
                     // (设置页「切换 Agent」/ 主页网格点选都写它),不再硬编码 "Codex"。
-                    Text(selectedAgentLabel(AgentConnection.selectedAgent), fontSize = 11.sp, color = Pa.TextTertiary)
+                    // 【加「当前:」前缀】裸放 "dsh"/"Pi" 像一行没有归属的杂字(L2 真机挑刺),
+                    // 前缀点明"新建的任务归谁",信息保留、语义自明;保持 11sp TextTertiary 不与标题抢层级。
+                    Text("当前: " + selectedAgentLabel(AgentConnection.selectedAgent), fontSize = 11.sp, color = Pa.TextTertiary)
                 }
             }
 
@@ -563,54 +577,65 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("最近任务", fontSize = 16.sp, color = Pa.TextPrimary)
-                    Text("全部 →", fontSize = 13.sp, color = Pa.TextSecondary)
+                    // 【假入口修复】「全部 →」长得像链接却没挂任何点击(L2 自查补挑刺);
+                    // 接到会话列表页(tab 1)= "看全部任务"的真出口,与「管理」同款行尾语言。
+                    Text(
+                        "全部 →",
+                        Modifier.pressable { onGoTab(1) }.padding(horizontal = 6.dp, vertical = 2.dp),
+                        fontSize = 13.sp, color = Pa.TextSecondary,
+                    )
                 }
             }
-            if (recent.isEmpty()) {
-                item(span = { GridItemSpan(4) }) {
-                    // 空状态:直接铺背景(无容器),靠留白与居中自成一块
-                    Column(
-                        Modifier.fillMaxWidth().padding(vertical = 36.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.TextTertiary, modifier = Modifier.size(36.dp))
-                        Text("连接电脑后,任务会出现在这里", Modifier.padding(top = 12.dp), fontSize = 13.sp, color = Pa.TextSecondary)
+                if (recent.isEmpty()) {
+                    item(span = { GridItemSpan(4) }) {
+                        // 空状态:直接铺背景(无容器),靠留白与居中自成一块。
+                        // 【36→24dp】36dp 超出区块间距上限(≤32dp),收进规格带。
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.TextTertiary, modifier = Modifier.size(36.dp))
+                            Text("连接电脑后,任务会出现在这里", Modifier.padding(top = 12.dp), fontSize = 13.sp, color = Pa.TextSecondary)
+                        }
                     }
-                }
-            } else {
-                // 最近任务同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
-                items(recent.filter { threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .pressable { onOpenThread(t.id) }
-                            .background(Pa.Card, RoundedCornerShape(16.dp))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Image(
-                            // 【agent 徽标】按线程归属 agent 选图(agent_id 缺省 = codex),
-                            // 复用 ThreadsScreen 同款映射:导入的 Pi/ZCode 会话不再错标 Codex。
-                            bitmap = agentBitmap(agentBadgeRes(t.agentId)),
-                            contentDescription = null,
-                            modifier = Modifier.size(26.dp),
-                            contentScale = ContentScale.Crop,
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                t.title.ifEmpty { "(未命名)" },
-                                fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                } else {
+                    // 最近任务同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
+                    items(recent.filter { threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable { onOpenThread(t.id) }
+                                .background(Pa.Card, RoundedCornerShape(16.dp))
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Image(
+                                // 【agent 徽标】按线程归属 agent 选图(agent_id 缺省 = codex),
+                                // 复用 ThreadsScreen 同款映射:导入的 Pi/ZCode 会话不再错标 Codex。
+                                bitmap = agentBitmap(agentBadgeRes(t.agentId)),
+                                contentDescription = null,
+                                modifier = Modifier.size(26.dp),
+                                contentScale = ContentScale.Crop,
                             )
-                            Text(
-                                "${t.messageCount} 条消息",
-                                fontSize = 11.sp, color = Pa.TextTertiary,
-                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    t.title.ifEmpty { "(未命名)" },
+                                    fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                                // 【加相对时间】ListThreads 的 Thread 只有消息计数与更新时刻,
+                                // 没有最后一条消息正文源 —— 预览要么多打一轮 getThread RPC
+                                // 要么造假;改用「N 条消息 · 相对时间」补时间维度(纯函数见
+                                // [threadRecentMeta],单测钉死)。
+                                Text(
+                                    threadRecentMeta(t.messageCount, t.updatedAtUnixMs, System.currentTimeMillis()),
+                                    fontSize = 11.sp, color = Pa.TextTertiary,
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
     }
 
@@ -968,6 +993,21 @@ internal fun collabSubtitle(agentIds: List<String>): String =
     } else {
         "已接入 " + agentIds.joinToString("、") + "（可派发子智能体）"
     }
+
+/**
+ * 最近任务卡的元信息行(纯函数,单测覆盖):「N 条消息 · 相对时间」。
+ *
+ * 【为什么不是最后一条消息预览】ListThreads 的 Thread 消息只有 message_count 与
+ * updated_at_unix_ms,数据层没有"最后一条消息正文"的源;要预览就得每张卡补一轮
+ * getThread RPC(列表页打不起)或拿标题造假 —— 取「条数 · 相对时间」补上时间维度,
+ * 时间一律走 daemon 落库的更新时刻,时钟倒挂(时间戳在未来)由 [relativeTimeLabel]
+ * 回落绝对日期,不出现"负 N 分钟前"。
+ */
+internal fun threadRecentMeta(messageCount: Int, updatedAtUnixMs: Long, nowMs: Long): String {
+    val count = "$messageCount 条消息"
+    val rel = relativeTimeLabel(updatedAtUnixMs, nowMs)
+    return if (rel.isBlank()) count else "$count · $rel"
+}
 
 // ---- agent 停用偏好生效链(管理 agent 抽屉 → 展示/创建入口;纯函数,单测覆盖 AgentDisablePreferenceTest)----
 

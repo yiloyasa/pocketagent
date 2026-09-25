@@ -57,6 +57,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import pocketagent.v1.CollabPolicy
+import pocketagent.v1.ControlPlane
 import pocketagent.v1.RuntimePolicy
 import pocketagent.v1.UnknownEventSummary
 
@@ -126,6 +127,17 @@ private fun RuntimeSectionBody() {
     }
 }
 
+/**
+ * 控制中心身份行 = 既有事实串(主机名 · 版本 · 运行时长)+ 系统标签。
+ * 【为什么系统并入这里】L2 真机挑刺:"windows · 数据目录:LOCALAPPDATA" 孤悬成行
+ * 且数据目录对用户没有决策价值;系统标签归入身份行(尾段),路径行整行删除。
+ */
+private fun controlPlaneIdentityLine(plane: ControlPlane, nowMs: Long): String =
+    listOfNotNull(
+        controlPlaneEntryDesc(plane, nowMs).takeIf { it.isNotBlank() },
+        plane.os.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+
 // ================================================================================
 // 控制中心(GetControlPlane):一页看全 daemon 全部可控域,就地切换。
 //
@@ -175,12 +187,52 @@ private fun ControlCenterSection(
     // 老 daemon:连入口都不摆(能力缺席的确定信号,不是失败)。
     if (unsupported) return
 
-    SectionBlock(icon = R.drawable.ic_lucide_server, title = "控制中心") {
-        // ---- 入口行:人话标题 + 身份事实(版本/主机名/运行时长) ----
+    // 【区块头自带「重新读取」】刷新入口原先孤悬在展开体底部(L2 真机挑刺:收起时
+    // 根本够不到,看着也像一行没归属的浮字),挪到区块标题行尾 —— 与主页「全部 →」
+    // 「管理」同款语言,收起/展开都可达。
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(start = 14.dp, top = 12.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_lucide_server), null,
+                tint = Pa.TextSecondary,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "控制中心",
+                Modifier.weight(1f),
+                fontSize = 13.sp,
+                letterSpacing = 1.4.sp,
+                color = Pa.TextSecondary,
+            )
+            Text(
+                "重新读取",
+                Modifier
+                    .pressable {
+                        writeError = null
+                        ControlPlaneState.refresh()
+                    }
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                fontSize = 13.sp,
+                color = Pa.Accent,
+            )
+        }
+        // 统一卡型:16dp 圆角 + Pa.Card 实色底,无边无影(SettingsScreen.paSettingsCard
+        // 是别文件 private,这里内联同款材质,不破坏统一卡铁律)。
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Pa.Card, RoundedCornerShape(16.dp))
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+        ) {
+        // ---- 入口行:人话标题 + 身份事实(版本/主机名/运行时长/系统) ----
         SettingRow(
             title = "电脑控制台",
             desc = when {
-                plane != null -> controlPlaneEntryDesc(plane, System.currentTimeMillis())
+                plane != null -> controlPlaneIdentityLine(plane, System.currentTimeMillis())
                 loadState == RuntimeLoadState.LOADING -> "读取中…"
                 else -> refreshError ?: "没读到电脑端的控制面"
             },
@@ -195,15 +247,8 @@ private fun ControlCenterSection(
             exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
         ) {
             Column(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
-                // 身份事实行(系统/数据目录标签):daemon 只给标签不给路径,原样透出。
-                plane?.let {
-                    Text(
-                        controlPlaneFactsLine(it),
-                        Modifier.padding(horizontal = 2.dp),
-                        fontSize = 11.sp,
-                        color = Pa.TextTertiary,
-                    )
-                }
+                // 【数据目录行删除】"windows · 数据目录:LOCALAPPDATA" 孤悬一行且对用户
+                // 无决策价值(L2 真机挑刺);系统标签并入上方身份行,路径类事实不再单独占行。
                 // ---- 启动恢复横幅:降级时始终可见(警告不折叠) ----
                 if (banner != null && banner.degraded) {
                     RecoveryBannerBlock(banner)
@@ -250,20 +295,10 @@ private fun ControlCenterSection(
                 writeError?.let {
                     SectionNote(it, Pa.Yellow)
                 }
-                // ---- 手动刷新 ----
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = {
-                        writeError = null
-                        ControlPlaneState.refresh()
-                    }) {
-                        Text("重新读取", fontSize = 13.sp, color = Pa.AccentText)
-                    }
-                }
             }
+        }
+        // 【收尾顺序】内层展开列 → AnimatedVisibility → 统一卡列 → 区块根列;
+        // 底部孤悬的「重新读取」行已删(挪到区块头,见上)。
         }
     }
 
@@ -278,7 +313,9 @@ private fun ControlCenterSection(
     }
 }
 
-/** 域行的状态圆点:0 灰 / 1 黄 / 2 红 —— 语义色只用在 8dp 小圆点上(小面积允许)。 */
+/**
+ * 域行的状态圆点:0 灰 / 1 黄 / 2 红 —— 语义色只用在 8dp 小圆点上(小面积允许)。
+ */
 @Composable
 private fun ControlStatusDot(kind: ControlDotKind) {
     val color = when (kind) {
@@ -292,6 +329,58 @@ private fun ControlStatusDot(kind: ControlDotKind) {
             .size(8.dp)
             .background(color, CircleShape),
     )
+}
+
+/**
+ * 控制中心域行(专用排版):title 15sp + summary 12sp + 行尾状态点/箭头。
+ *
+ * 【与通用 SettingRow 的差异】summary 在 weight(1f) 文字列内独占剩余宽,行尾
+ * 状态点是固定小圆点不参与挤压;行距收紧 2dp;字阶降一档 —— 三件事都来自
+ * L2 真机对长 summary 域行(资源预算)的挑刺。结构上仍守统一行型:无边无影,
+ * 分隔线 0.5dp Separator,点击整行 pressable(与设置页行同手感)。
+ */
+@Composable
+private fun ControlDomainHeaderRow(
+    title: String,
+    summary: String,
+    dotKind: ControlDotKind,
+    divider: Boolean,
+    chevron: Boolean,
+    onClick: (() -> Unit)?,
+) {
+    Column {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .then(if (onClick != null) Modifier.pressable(haptic = true) { onClick() } else Modifier)
+                .padding(vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 15.sp, color = Pa.TextPrimary, maxLines = 1)
+                // 行距收紧 2dp(通用行 top=2 → 0):summary 紧贴 title 成一块
+                Text(
+                    summary,
+                    Modifier.fillMaxWidth(),
+                    fontSize = 12.sp,
+                    color = Pa.TextTertiary,
+                    maxLines = 2,
+                )
+            }
+            ControlStatusDot(dotKind)
+            if (chevron) {
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    painterResource(R.drawable.ic_lucide_chevron_right), null,
+                    tint = Pa.TextTertiary,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+        if (divider) {
+            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+        }
+    }
 }
 
 /**
@@ -319,13 +408,18 @@ private fun ControlDomainBlock(
         CONTROL_DOMAIN_MEMORY -> memoryAgent?.let { { onOpenMemory(it) } }
         else -> if (domain.writable) onToggleExpand else null
     }
-    SettingRow(
+    // 【域行专用排版,不走通用 SettingRow】L2 真机挑刺(06-control-plane-full):
+    // summary 长文案被行尾状态点/箭头挤压、title 与 summary 行距偏松、字阶偏大。
+    // 收成专用行 —— title/summary 独占 weight(1f) 剩余宽(状态点是行尾固定小点,
+    // 不进文字流),行距收紧 2dp(通用行 top=2 → 0),字阶 title 15sp / summary 12sp,
+    // 与设置页通用行(16sp/13sp)拉开一档,控制中心内部层级更清楚。
+    ControlDomainHeaderRow(
         title = domain.title,
-        desc = domain.summary,
+        summary = domain.summary,
+        dotKind = domain.dotKind,
         divider = divider,
         chevron = onClick != null,
         onClick = onClick,
-        control = { ControlStatusDot(domain.dotKind) },
     )
     // memory 行点不动 = 只有合计项(还没有 Agent 接入);补一句事实说明为什么不跳。
     if (domain.id == CONTROL_DOMAIN_MEMORY && memoryAgent == null && domain.items.isNotEmpty()) {
