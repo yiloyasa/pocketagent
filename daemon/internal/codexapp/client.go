@@ -122,13 +122,35 @@ func LocateCodex() (string, error) {
 	return "", fmt.Errorf("未找到 codex(可用环境变量 CODEX_BIN 指定路径)")
 }
 
+// daemonScopeArgs 是 daemon 实例的 app-server 专属配置覆盖(弹窗治理专项,
+// 2026-09-25 用户红线反馈"电脑一直在弹窗")。全部经 `-c key=value` /
+// `--disable FEATURE` 传入 —— codex 只在**本进程内存**里覆写,绝不写用户的
+// ~/.codex/config.toml(0.156.1 实测:--disable X 等价于 -c features.X=false,
+// 覆写不落盘;帮助文本原文"Equivalent to `-c features.<name>=false`")。
+//
+//  1. `notify=[]` —— 关掉"回合结束执行外部程序"钩子。config.toml 的 notify 会让
+//     codex 在每轮 turn 结束时 spawn 一个外部 exe(本机装过 Codex 桌面版,该值指向
+//     桌面通知程序 codex-computer-use.exe —— 每轮结束往桌面弹通知的源头;桌面运行
+//     时目录升级后现值已指向不存在的 exe,变成每轮空拉起一次报错)。daemon 的轮
+//     次事件自有协议流推送手机,永远不需要桌面通知。
+//  2. `--disable apps` —— 关掉 ChatGPT Apps/插件 broker(codex-rs 的
+//     codex_apps_server_config,端点 https://chatgpt.com/backend-api/ps/mcp)。
+//     本机网络到不了 chatgpt.com,该 broker 的 rmcp transport worker 会以 20-30s
+//     周期永久重连、往 stderr 刷 "worker quit with fatal: Transport channel
+//     closed"(daemon.log [codex-stderr] 每 30s 刷屏的实锤源头)。daemon 不使用
+//     apps 能力,关掉零损失;0.156.1 实测:禁用后 initialize 与
+//     account/rateLimits/read 照常应答,stderr 不再出现 rmcp 报错。
+//
+// 回归钉子:start_args_test.go 以 fake 子进程捕获真实 argv 逐项断言。
+var daemonScopeArgs = []string{"-c", "notify=[]", "--disable", "apps"}
+
 // Start 拉起 codex app-server 子进程。
 func Start() (*Client, error) {
 	bin, err := LocateCodex()
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"app-server"}
+	args := append([]string{"app-server"}, daemonScopeArgs...)
 	// .cmd/.bat 不能被 CreateProcess 直接执行,要经 cmd /c
 	if len(bin) >= 4 && (bin[len(bin)-4:] == ".cmd" || bin[len(bin)-4:] == ".bat") {
 		args = append([]string{"/c", bin}, args...)

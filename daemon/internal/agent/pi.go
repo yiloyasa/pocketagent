@@ -81,6 +81,11 @@ type PiProvider struct {
 	modelsCache []pb.ModelInfo
 	modelsAt    time.Time
 
+	// fetchMu/fetch 模型探测的单飞状态(见 fetchModelsSingleFlight):并发调用
+	// 共享同一次一次性子进程探测,绝不重复拉起。
+	fetchMu sync.Mutex
+	fetch   *piModelsFetch
+
 	// guardPath 守护扩展文件(危险命令强制审批,见 piapp/guard.go)。
 	guardPath string
 
@@ -194,7 +199,50 @@ func (p *PiProvider) Models() []pb.ModelInfo {
 }
 
 // fetchModels 用一次性 --no-session 子进程拉 get_available_models。
+//
+// 【并发去重(2026-09-25 弹窗治理专项)】Models() 的 TTL 缓存挡不住"同一瞬间
+// 并发进来的一批调用"—— 手机端连发 ListModels 时,缓存判空与写回之间无互斥,
+// 实测一秒内拉起过 3 个一次性 pi 子进程(daemon.log 18:17:52-53)。单飞包裹:
+// 在飞期间的所有调用共享同一次探测结果,一个探测周期最多一个子进程。
 func (p *PiProvider) fetchModels() []pb.ModelInfo {
+	return p.fetchModelsSingleFlight(p.fetchModelsUncached)
+}
+
+// piModelsFetch 是一次模型探测的在飞状态(结果先写后关 done,等待方看到
+// done 关闭时结果必然可见)。
+type piModelsFetch struct {
+	done   chan struct{}
+	models []pb.ModelInfo
+}
+
+// fetchModelsSingleFlight 把 do 包装成并发去重:第一个调用者执行 do,在飞期间
+// 的其余调用者等待并共享其结果。测试注入 do 以钉住"N 个并发调用只跑 1 次"。
+func (p *PiProvider) fetchModelsSingleFlight(do func() []pb.ModelInfo) []pb.ModelInfo {
+	p.fetchMu.Lock()
+	if cur := p.fetch; cur != nil {
+		p.fetchMu.Unlock()
+		<-cur.done
+		return cur.models
+	}
+	f := &piModelsFetch{done: make(chan struct{})}
+	p.fetch = f
+	p.fetchMu.Unlock()
+
+	f.models = do()
+	close(f.done)
+
+	// 只清自己名下的在飞槽:若已有新调用换上了新的 f,不要误删别人的。
+	p.fetchMu.Lock()
+	if p.fetch == f {
+		p.fetch = nil
+	}
+	p.fetchMu.Unlock()
+	return f.models
+}
+
+// fetchModelsUncached 是模型探测的真实实现(无去重,经 fetchModelsSingleFlight
+// 调用;名字里 uncached 对齐 fetchUsageUncached 的既有命名)。
+func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 	c, err := piapp.Start(piapp.StartOptions{ExtraArgs: []string{"--no-session"}})
 	if err != nil {
 		log.Printf("[pi] 模型列表探测失败: %v", err)
@@ -243,6 +291,13 @@ func (p *PiProvider) fetchModels() []pb.ModelInfo {
 		if m.Name == "" {
 			out[len(out)-1].DisplayName = m.ID
 		}
+	}
+	// 【死因日志去冤案(2026-09-25 弹窗治理专项)】探测成功后 defer Close 会 Kill
+	// 子进程,daemon.log 随之出现"退出(Close 主动关闭) 退出码=1"—— 曾被误读成
+	// "0.87.1 rpc 拉起即退"挂进 AUDIT 适配债。这里留一行人话收尾,与退出行相邻,
+	// 后人不再重复排查(退出码 1 = TerminateProcess 的固定码,与崩溃无关)。
+	if len(out) > 0 {
+		log.Printf("[pi] 模型列表探测完成(%d 个模型):一次性子进程 %d 即将按设计关闭,其后的退出码=1 是 Kill 收尸码非崩溃", len(out), c.PID())
 	}
 	return out
 }

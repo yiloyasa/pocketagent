@@ -308,13 +308,18 @@ type StartOptions struct {
 	GuardExtension string   // -e 注入的守护扩展路径(危险命令审批);空 = 不注入
 }
 
-// Start 拉起 pi 子进程。直接 node 调 cli.js,不经 pi.ps1 垫片(省一层 shell,
-// 避免 PowerShell 执行策略干扰 —— 调研 §2)。
-func Start(opts StartOptions) (*Client, error) {
-	node, cli, err := LocatePi()
-	if err != nil {
-		return nil, err
-	}
+// buildRPCArgs 组装 `pi --mode rpc` 的启动参数(纯函数,单测钉死形状)。
+//
+// 固定形状:cli --mode rpc [--name N] [--extension E] [extra...]
+//
+// 【0.87.1 实测合法(2026-09-25 弹窗治理专项)】"cli --mode rpc --no-session" 在
+// 0.87.1 下完整可用:get_available_models 应答 success=true 且返回全量模型表
+// (探针留档:启动 30s+ 不退、stdin JSONL 协议正常)。此前 AUDIT 挂牌的"0.87.1
+// rpc 模式拉起即退"是误读 —— daemon.log 里的"拉起→1~9s 后退出(退出码=1)"
+// 全部是 fetchModels 一次性探测的正常 Close 收尸:Windows TerminateProcess 的
+// 退出码恒为 1,与崩溃无关(处置见 agent/pi.go fetchModelsUncached 的完成日志
+// 与并发去重)。
+func buildRPCArgs(cli string, opts StartOptions) []string {
 	args := []string{cli, "--mode", "rpc"}
 	if opts.Name != "" {
 		args = append(args, "--name", opts.Name)
@@ -323,6 +328,17 @@ func Start(opts StartOptions) (*Client, error) {
 		args = append(args, "--extension", opts.GuardExtension)
 	}
 	args = append(args, opts.ExtraArgs...)
+	return args
+}
+
+// Start 拉起 pi 子进程。直接 node 调 cli.js,不经 pi.ps1 垫片(省一层 shell,
+// 避免 PowerShell 执行策略干扰 —— 调研 §2)。
+func Start(opts StartOptions) (*Client, error) {
+	node, cli, err := LocatePi()
+	if err != nil {
+		return nil, err
+	}
+	args := buildRPCArgs(cli, opts)
 	cmd := exec.Command(node, args...)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
