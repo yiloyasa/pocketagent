@@ -85,11 +85,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -156,8 +153,8 @@ import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.component.rememberUndoState
 // VoiceEngineKind / pickVoiceEngine 定义在本文件尾部纯逻辑区(与状态机同处,JVM 单测共用)
 import dev.pocketagent.app.ui.theme.Pa
-import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.paGlass
+import dev.pocketagent.app.ui.theme.paPushBack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -187,6 +184,7 @@ import pocketagent.v1.GetThreadRequest
 import pocketagent.v1.ForkThreadRequest
 import pocketagent.v1.RollbackThreadRequest
 import pocketagent.v1.CompactThreadRequest
+import pocketagent.v1.ClearQueuedInputsRequest
 import pocketagent.v1.StartReviewRequest
 import pocketagent.v1.SetThreadGoalRequest
 import pocketagent.v1.ExportThreadHtmlRequest
@@ -925,6 +923,48 @@ internal fun humanizeMethodError(raw: String): Pair<String, String>? {
     val label = rpcMethodLabel(method) ?: return null
     val body = listOf(inlineBody, tail).filter { it.isNotBlank() }.joinToString("\n")
     return label to body
+}
+
+// ---- 撤回排队(pi 0.87.1 clear_queue 的手机端入口;纯函数集中在此,JVM 单测)----
+
+/**
+ * 「撤回排队」按钮的三重门控(纯函数,单测钉死 QueueClearGateTest):
+ *
+ * 1. agent==pi —— daemon 的 ClearQueuedInputs 只接 pi(非 pi 会话显式
+ *    FailedPrecondition,不会假装成功),UI 先拦一层,免得点了必败;
+ * 2. queuedCount>0 —— 没有排队就没有可撤回的东西,不给空按钮;
+ * 3. daemon 宣告 `queue_clear:pi` 能力位 —— 旧 daemon 没有这个 RPC,
+ *    能力位不在就绝不显示假入口(硬红线"无能力不显示假入口")。
+ *    大小写/空白不敏感,与 RuntimeStateLogic.runtimeControlCapable 同口径。
+ */
+internal fun queueClearVisible(agentId: String, queuedCount: Int, capabilities: List<String>): Boolean =
+    agentId.trim().equals("pi", ignoreCase = true) &&
+        queuedCount > 0 &&
+        capabilities.any { it.trim().equals("queue_clear:pi", ignoreCase = true) }
+
+/**
+ * 撤回成功的人话回执(纯函数)。条数口径与 pi 队列一致:
+ * steered=插队(本轮还没跑完就会消费的那批)、follow_up=排队(本轮结束后依次执行)。
+ * 两类全零如实说"本来就没有",不谎报撤回条数 —— pi 对空队列 clear 也返回成功。
+ */
+internal fun queueClearedNotice(steered: Int, followUp: Int): String {
+    val s = steered.coerceAtLeast(0)
+    val f = followUp.coerceAtLeast(0)
+    return when {
+        s + f <= 0 -> "队列里已经没有在排队的输入"
+        s > 0 && f > 0 -> "已撤回 ${s + f} 条（插队 $s、排队 $f）"
+        f > 0 -> "已撤回 $f 条排队输入"
+        else -> "已撤回 $s 条插队输入"
+    }
+}
+
+/**
+ * 撤回失败的人话壳(纯函数):错误原文一字不动带出来(daemon 的业务失败原因
+ * 本来就是中文人话,改写只会丢信息),只补一句"撤回排队失败"说明动作没成。
+ */
+internal fun queueClearFailureMessage(error: Throwable): String {
+    val raw = error.message?.ifBlank { null } ?: error::class.java.simpleName
+    return "撤回排队失败：$raw"
 }
 
 /** 思考强度选项(id 与 codex turn/start 的 effort 取值一致)。 */
@@ -1980,6 +2020,38 @@ fun ChatScreen(
         }
     }
 
+    /**
+     * 撤回排队输入(pi 0.87.1 clear_queue 的手机端入口,等价 pi TUI 里按 Esc):
+     * 清的是 pi 子进程内存里的原生排队(steer/followUp),不是 daemon 侧续跑队列。
+     *
+     * 【成功后两件事】
+     *  1. 人话回执:daemon 回的 steered/followUp 条数经 queueClearedNotice 如实报;
+     *  2. 刷新排队镜像:st.queuedCount 是手机侧对 daemon 排队的镜像(Queued 回执
+     *     +1/QueueFlushed -1),队列被撤后镜像必须同步归零 —— 否则本轮终局帧到达时
+     *     queuedCount>0 会让收尾逻辑一直等一条不会来的 QueueFlushed,轮次卡在"运行中";
+     *     时间线上还挂着「排队中」的气泡一并收掉(变回普通用户消息)。
+     * 【失败】错误原文透传(queueClearFailureMessage 只补人话壳),不猜不改写。
+     */
+    fun clearQueuedInputs() {
+        scope.launch {
+            try {
+                val resp = withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().clearQueuedInputs(
+                        ClearQueuedInputsRequest.newBuilder().setThreadId(threadId).build(),
+                    )
+                }
+                st.queuedCount = 0
+                clearDeliveryTags(st.items.toList(), queuedOnly = true)?.let { replaced ->
+                    st.items.clear()
+                    st.items.addAll(replaced)
+                }
+                Toast.makeText(ctx, queueClearedNotice(resp.steered, resp.followUp), Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, queueClearFailureMessage(e), Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     st.pendingApproval?.let { ap ->
         ApprovalSheet(
             action = ap,
@@ -2005,6 +2077,12 @@ fun ChatScreen(
             .fillMaxSize()
             .background(Pa.Bg)
             .statusBarsPadding()
+            // 【推背模糊】最近会话抽屉可见期间,被覆盖的会话内容整层后退
+            // (模糊+微缩+压暗)——抽屉是玻璃,透过玻璃看内容才是真磨砂。
+            // 可见性源就是 drawerCtrl.visible(0.1% 余量保退场动画播完),
+            // 与 HomeScreen/ThreadsScreen 的 overlayActive 同一口径:
+            // 模糊挂在被覆盖的内容层(整屏一次一层),不挂浮层自己,见 PaGlass.kt。
+            .paPushBack(drawerCtrl.visible)
             // 与其余页面统一:左边缘右滑也能唤出侧边栏
             .edgeSwipeToOpenDrawer(
                         onDragFraction = drawerCtrl::onDrag,
@@ -2322,6 +2400,15 @@ fun ChatScreen(
         // (打开会话加载历史时整套静默出现);SideEffect 在组合后登记当前数量,
         // 回滚缩容/加载更早前插都不满足"末尾追加",不会误触发。
         val prevItemCount = remember(threadId) { mutableStateOf<Int?>(null) }
+        // 「撤回排队」入口(pi 0.87.1 clear_queue):
+        // 【能力位数据源】hostCapabilities 共享快照(与主页网格/设置页同一真源),
+        // 门控纯函数 queueClearVisible 锁三重条件(agent==pi + 确有排队 + daemon
+        // 宣告 queue_clear:pi)—— 旧 daemon / 非 pi 会话 / 没有排队都不出按钮,
+        // 不显示点了必败的假入口。
+        val hostCaps = AgentConnection.hostCapabilities.collectAsState().value
+        val queueClearOn = queueClearVisible(threadAgentId, st.queuedCount, hostCaps)
+        // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
+        val lastQueuedIndex = st.items.indexOfLast { it.deliverState == DELIVERY_QUEUED }
         LazyColumn(
             Modifier.weight(1f).padding(horizontal = 16.dp),
             state = listState,
@@ -2417,6 +2504,20 @@ fun ChatScreen(
                                             fontSize = 10.sp,
                                             color = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
                                         )
+                                        // 「撤回排队」:只挂在最后一条排队消息的回执行上,
+                                        // 门控见上方 queueClearOn 的注释 —— 撤回是对
+                                        // 还没执行的输入做反悔,与"终止任务"同级的
+                                        // 干预动作,用红字让分量看得见。
+                                        if (queueClearOn && index == lastQueuedIndex) {
+                                            Text(
+                                                "撤回排队",
+                                                Modifier
+                                                    .pressable(haptic = true) { clearQueuedInputs() }
+                                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                                fontSize = 10.sp,
+                                                color = Pa.Red,
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -4067,10 +4168,6 @@ private fun ApprovalSheet(
     error: String?,
     onDecision: (Boolean, String) -> Unit,
 ) {
-    val state = rememberModalBottomSheetState(
-        skipPartiallyExpanded = true,
-        confirmValueChange = { it != androidx.compose.material3.SheetValue.Hidden },
-    )
     var expanded by remember(action.requestId) { mutableStateOf(false) }
     val name = action.action.name
     val isAsk = askIsAskAction(name)
@@ -4159,32 +4256,32 @@ private fun ApprovalSheet(
         onDecision(true, packAskAnswers(questions, picks, texts).toString())
     }
 
-    ModalBottomSheet(
+    PaSheet(
         onDismissRequest = { },
-        sheetState = state,
-        properties = ModalBottomSheetProperties(
-            shouldDismissOnBackPress = false,
-        ),
-        // 【本轮改版·只动视觉】底色对齐全 app 玻璃材质令牌(Tint);ModalBottomSheet
-        // 本体**保持不换**:审批是红线 UI,"不可下滑关闭 + 拦截返回键"是语义,
-        // PaSheet 封装不提供这两个开关,为保语义不替用户做决定,这里不换 PaSheet。
-        containerColor = PaGlassToken.Tint,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        // 【状态栏重叠的真因】material3 的 ModalBottomSheet 默认
-        // `contentWindowInsets = WindowInsets.safeDrawing.only(Bottom)` ——
-        // **只消费底部 insets,不管顶部**。命令一长,抽屉被撑到接近全屏时,
-        // 拖柄/"允许执行?"/命令卡就直接画到系统状态栏底下,和时钟电量叠在一起。
-        // 改成消费整块 safeDrawing(上下都管),抽屉顶部自动让开状态栏。
+        // 【红线语义·参数化后原样持有】三件事一字不动:
+        //  1) 不可下滑关闭 —— swipeDismissEnabled = false,PaSheet 内部代为构造
+        //     confirmValueChange 拒绝 Hidden 的 sheetState,下滑手势永远弹回;
+        //  2) 拦截返回键 —— interceptBackPress = true,内部代为构造
+        //     shouldDismissOnBackPress = false 的 properties;
+        //  3) 不替用户做决定 —— onDismissRequest 为空,系统关闭请求(点遮罩等)
+        //     一律忽略,卡片只能经"拒绝/允许/取消/提交"由用户亲手了结。
+        // 两个开关都是稳定布尔:SheetState/ModalBottomSheetProperties 在
+        // material3 1.3.0 是实验类,直接进公开签名会把 opt-in 扩散到全部
+        // PaSheet 调用点(编译实证九处全红),等义能力由封装以稳定类型承载。
+        // 这正是 PaSheet 参数化收敛的方向:语义由调用方显式声明(此前注释说要
+        // "保持不换 PaSheet",如今这些开关有了显式入参,换封装不再放弃任何语义)。
+        swipeDismissEnabled = false,
+        interceptBackPress = true,
+        // 【状态栏重叠的真因】material3 的 ModalBottomSheet 默认 insets
+        // 只消费底部、不管顶部;命令一长抽屉被撑到接近全屏时,拖柄/标题/
+        // 命令卡会直接画进状态栏。改传整块 safeDrawing(上下都管)让顶部
+        // 自动让开 —— 这笔历史修复在 PaSheet 上经 contentWindowInsets 续命。
         // 注意:本版本 material3 的 contentWindowInsets 是 `@Composable () -> WindowInsets`
         // 而不是直接取值 —— 少一层 `{ }` 会连锁报"@Composable invocations can only
         // happen from the context of a @Composable function"。
         contentWindowInsets = { WindowInsets.safeDrawing },
-        dragHandle = {
-            Box(
-                Modifier.padding(top = 10.dp).width(40.dp).height(4.dp)
-                    .background(Pa.Hover, CircleShape),
-            )
-        },
+        // 外层滚动保持 PaSheet 默认(开启):小屏/横屏上内容超限时"拒绝/允许"按钮
+        // 永远可达 —— sheet_overflow 巡检的滚动保证不因迁移回退。
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -4845,28 +4942,20 @@ private fun ExpandedInputSheet(
     onSend: () -> Unit,
     canSend: Boolean,
 ) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    PaSheet(
         onDismissRequest = onDismiss,
-        sheetState = state,
-        // 【本轮改版·只动视觉】底色对齐全 app 玻璃材质令牌;ModalBottomSheet 本体
-        // 保持不换:大窗编辑需要 safeDrawing insets(防顶部压状态栏的历史修复),
-        // PaSheet 封装没有 contentWindowInsets 参数,为不回退该修复保留原容器。
-        containerColor = PaGlassToken.Tint,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-        // 与审批抽屉同一套 insets 处理,避免顶部压到状态栏
+        // 【历史修复不回退】大窗编辑依赖整块 safeDrawing insets(顶部让开状态栏)。
+        // 此前这正是"不换 PaSheet"的唯一理由;参数化后经 contentWindowInsets
+        // 显式传入,修复语义原样保留。
         contentWindowInsets = { WindowInsets.safeDrawing },
-        dragHandle = {
-            Box(
-                Modifier.padding(top = 10.dp).width(40.dp).height(4.dp)
-                    .background(Pa.Hover, CircleShape),
-            )
-        },
+        scrollable = false, // 编辑列自身固定高度、文本框内自滚;外层再包滚动只会打架
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.82f)
+                // PaSheet 外层已给 82% 屏高上限(收敛前的 0.82f 直接顶满的是同一块
+                // 可用高度):填满外层上限即可,编辑区大小与迁移前一致。
+                .fillMaxHeight()
                 .padding(horizontal = 16.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
