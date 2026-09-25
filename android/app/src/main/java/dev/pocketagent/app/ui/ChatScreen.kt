@@ -153,6 +153,7 @@ import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.component.rememberUndoState
 // VoiceEngineKind / pickVoiceEngine 定义在本文件尾部纯逻辑区(与状态机同处,JVM 单测共用)
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
 import dev.pocketagent.app.ui.theme.paPushBack
 import kotlinx.coroutines.Dispatchers
@@ -2448,7 +2449,12 @@ fun ChatScreen(
                                 // 【本轮打磨】圆角 18→20(尾角 6→7)、内距 12/10→13/11:
                                 // 气泡读作更"饱满"的一块,同侧小尾角保留出向感(空间连续性);
                                 // 配色不动 —— 用户气泡 AccentDim、助手正文铺底的层级关系保持。
-                                .background(Pa.AccentDim, RoundedCornerShape(20.dp, 7.dp, 20.dp, 20.dp))
+                                // 黑客终端模式:圆角收 6dp 读"终端块"而非"气泡"(契约见 PaHacker)。
+                                .background(
+                                    Pa.AccentDim,
+                                    if (PaHacker.isHacker) RoundedCornerShape(6.dp)
+                                    else RoundedCornerShape(20.dp, 7.dp, 20.dp, 20.dp),
+                                )
                                 .padding(horizontal = 13.dp, vertical = 11.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
@@ -2482,6 +2488,8 @@ fun ChatScreen(
                                         item.text,
                                         color = Pa.TextPrimary,
                                         fontSize = (15 * uiScale).sp,
+                                        // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
+                                        fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
                                     )
                                 }
                             }

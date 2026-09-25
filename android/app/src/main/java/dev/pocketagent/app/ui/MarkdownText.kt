@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaHacker
 
 enum class MarkdownLineKind { PARAGRAPH, HEADING, BULLET, CODE }
 
@@ -238,6 +239,8 @@ fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float 
 private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
     Text(
         text = line.annotated(),
+        // 黑客终端模式:正文行整体等宽(代码块本来就是等宽,普通行随之统一)。
+        fontFamily = if (PaHacker.isHacker) FontFamily.Monospace else null,
         modifier = Modifier.fillMaxWidth(),
         color = Pa.TextPrimary,
         fontSize = (if (line.kind == MarkdownLineKind.HEADING) fontSize + 2 else fontSize).sp,
