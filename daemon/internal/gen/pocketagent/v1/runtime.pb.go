@@ -2548,6 +2548,325 @@ func (x *ClearThreadMemoryResponse) GetTotalBytes() int64 {
 	return 0
 }
 
+type GetControlPlaneRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetControlPlaneRequest) Reset() {
+	*x = GetControlPlaneRequest{}
+	mi := &file_v1_runtime_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetControlPlaneRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetControlPlaneRequest) ProtoMessage() {}
+
+func (x *GetControlPlaneRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetControlPlaneRequest.ProtoReflect.Descriptor instead.
+func (*GetControlPlaneRequest) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{36}
+}
+
+// ControlPlane 是 daemon 全部可控点的一次性快照。
+//
+// 【为什么是"域"的列表而不是大平铺】预算、协同、记忆……各有各的控制通道与
+// 展示形态;按域分组后,客户端一页按域渲染,新域上线只是多一个条目,不必改版面。
+// 【为什么全部人话由 daemon 给】summary/label/hint 与事件翻译(event_translate)
+// 同一条纪律:daemon 给中文人话、不编造,状态取不到就如实写"未检测到/未报告";
+// 客户端只按 id 匹配与排版,不做任何术语翻译。
+type ControlPlane struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 服务与身份。
+	DaemonVersion string `protobuf:"bytes,1,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
+	HostName      string `protobuf:"bytes,2,opt,name=host_name,json=hostName,proto3" json:"host_name,omitempty"`
+	Os            string `protobuf:"bytes,3,opt,name=os,proto3" json:"os,omitempty"`
+	// daemon 进程的启动时刻(unix 毫秒)。
+	// 【为什么给"时刻"不给"时长"]客户端拿当前时刻一减即可显示"已运行多久",
+	// 且不受快照往返延迟影响;时区与"多久前"的排版都留给客户端。
+	UptimeUnixMs int64 `protobuf:"varint,4,opt,name=uptime_unix_ms,json=uptimeUnixMs,proto3" json:"uptime_unix_ms,omitempty"`
+	// 各功能域状态与控制句柄(每域一个条目,客户端按 ControlDomain.id 呈现)。
+	Domains []*ControlDomain `protobuf:"bytes,5,rep,name=domains,proto3" json:"domains,omitempty"`
+	// 数据目录落在哪个标准位置(如 LOCALAPPDATA / 家目录/.pocketagentd)。
+	// 【为什么只给标签不给路径】绝对路径里的用户名属于敏感信息,诊断事实用不着它;
+	// 要看落盘位置时,各策略响应里的 policy_path 已有完整路径。
+	DataDirLabel  string `protobuf:"bytes,6,opt,name=data_dir_label,json=dataDirLabel,proto3" json:"data_dir_label,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ControlPlane) Reset() {
+	*x = ControlPlane{}
+	mi := &file_v1_runtime_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ControlPlane) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ControlPlane) ProtoMessage() {}
+
+func (x *ControlPlane) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ControlPlane.ProtoReflect.Descriptor instead.
+func (*ControlPlane) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ControlPlane) GetDaemonVersion() string {
+	if x != nil {
+		return x.DaemonVersion
+	}
+	return ""
+}
+
+func (x *ControlPlane) GetHostName() string {
+	if x != nil {
+		return x.HostName
+	}
+	return ""
+}
+
+func (x *ControlPlane) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *ControlPlane) GetUptimeUnixMs() int64 {
+	if x != nil {
+		return x.UptimeUnixMs
+	}
+	return 0
+}
+
+func (x *ControlPlane) GetDomains() []*ControlDomain {
+	if x != nil {
+		return x.Domains
+	}
+	return nil
+}
+
+func (x *ControlPlane) GetDataDirLabel() string {
+	if x != nil {
+		return x.DataDirLabel
+	}
+	return ""
+}
+
+// ControlDomain 是一个功能域的当前状态。
+type ControlDomain struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 域稳定键:budget / collab / agents / memory / dialysis / approvals /
+	// transports / resources。客户端按 id 匹配,不按 title(title 是给人看的)。
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// 人话标题(daemon 给,客户端不翻译)。
+	Title string `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	// 一句话当前状态(人话;如实描述,不编造)。
+	Summary string `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	// 该域是否有写通道。写仍走各自既有 RPC —— 这里只是让客户端知道"可改",
+	// 不必为每个域再实现一遍能力探测。
+	Writable bool `protobuf:"varint,4,opt,name=writable,proto3" json:"writable,omitempty"`
+	// 0=正常 1=有注意项 2=受限。如实映射:2 可能只是"未装配/取不到",
+	// 客户端把 summary 原文显示出来即可,不要自行把 2 渲染成"故障"。
+	StatusCode    int32          `protobuf:"varint,5,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
+	Items         []*ControlItem `protobuf:"bytes,6,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ControlDomain) Reset() {
+	*x = ControlDomain{}
+	mi := &file_v1_runtime_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ControlDomain) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ControlDomain) ProtoMessage() {}
+
+func (x *ControlDomain) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ControlDomain.ProtoReflect.Descriptor instead.
+func (*ControlDomain) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ControlDomain) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ControlDomain) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ControlDomain) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *ControlDomain) GetWritable() bool {
+	if x != nil {
+		return x.Writable
+	}
+	return false
+}
+
+func (x *ControlDomain) GetStatusCode() int32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+func (x *ControlDomain) GetItems() []*ControlItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+// ControlItem 是域内的一个可控点或事实点。
+type ControlItem struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 域内稳定键,如 budget.global.ram_event_buffer_bytes。
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// 人话名。
+	Label string `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	// 当前值(字符串化:数值/开关/原文)。
+	Current string `protobuf:"bytes,3,opt,name=current,proto3" json:"current,omitempty"`
+	// 呈现形态:toggle / select / number / info(只读事实)。
+	Kind string `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`
+	// select 型候选;其它 kind 为空。
+	Options []string `protobuf:"bytes,5,rep,name=options,proto3" json:"options,omitempty"`
+	// 一句说明(为什么有这个限制/改动影响什么)。
+	Hint          string `protobuf:"bytes,6,opt,name=hint,proto3" json:"hint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ControlItem) Reset() {
+	*x = ControlItem{}
+	mi := &file_v1_runtime_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ControlItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ControlItem) ProtoMessage() {}
+
+func (x *ControlItem) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_runtime_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ControlItem.ProtoReflect.Descriptor instead.
+func (*ControlItem) Descriptor() ([]byte, []int) {
+	return file_v1_runtime_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ControlItem) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ControlItem) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *ControlItem) GetCurrent() string {
+	if x != nil {
+		return x.Current
+	}
+	return ""
+}
+
+func (x *ControlItem) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ControlItem) GetOptions() []string {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+func (x *ControlItem) GetHint() string {
+	if x != nil {
+		return x.Hint
+	}
+	return ""
+}
+
 var File_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_v1_runtime_proto_rawDesc = "" +
@@ -2776,7 +3095,31 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\rtotal_threads\x18\x01 \x01(\x05R\ftotalThreads\x12#\n" +
 	"\rtotal_entries\x18\x02 \x01(\x05R\ftotalEntries\x12\x1f\n" +
 	"\vtotal_bytes\x18\x03 \x01(\x03R\n" +
-	"totalBytes2\xde\t\n" +
+	"totalBytes\"\x18\n" +
+	"\x16GetControlPlaneRequest\"\xe7\x01\n" +
+	"\fControlPlane\x12%\n" +
+	"\x0edaemon_version\x18\x01 \x01(\tR\rdaemonVersion\x12\x1b\n" +
+	"\thost_name\x18\x02 \x01(\tR\bhostName\x12\x0e\n" +
+	"\x02os\x18\x03 \x01(\tR\x02os\x12$\n" +
+	"\x0euptime_unix_ms\x18\x04 \x01(\x03R\fuptimeUnixMs\x127\n" +
+	"\adomains\x18\x05 \x03(\v2\x1d.pocketagent.v1.ControlDomainR\adomains\x12$\n" +
+	"\x0edata_dir_label\x18\x06 \x01(\tR\fdataDirLabel\"\xbf\x01\n" +
+	"\rControlDomain\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
+	"\asummary\x18\x03 \x01(\tR\asummary\x12\x1a\n" +
+	"\bwritable\x18\x04 \x01(\bR\bwritable\x12\x1f\n" +
+	"\vstatus_code\x18\x05 \x01(\x05R\n" +
+	"statusCode\x121\n" +
+	"\x05items\x18\x06 \x03(\v2\x1b.pocketagent.v1.ControlItemR\x05items\"\x8f\x01\n" +
+	"\vControlItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\x12\x18\n" +
+	"\acurrent\x18\x03 \x01(\tR\acurrent\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x18\n" +
+	"\aoptions\x18\x05 \x03(\tR\aoptions\x12\x12\n" +
+	"\x04hint\x18\x06 \x01(\tR\x04hint2\xb7\n" +
+	"\n" +
 	"\x0eRuntimeService\x12b\n" +
 	"\x10GetRuntimePolicy\x12'.pocketagent.v1.GetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
 	"\x10SetRuntimePolicy\x12'.pocketagent.v1.SetRuntimePolicyRequest\x1a%.pocketagent.v1.RuntimePolicyResponse\x12b\n" +
@@ -2789,7 +3132,8 @@ const file_v1_runtime_proto_rawDesc = "" +
 	"\x0fGetRuntimeState\x12&.pocketagent.v1.GetRuntimeStateRequest\x1a$.pocketagent.v1.RuntimeStateResponse\x12_\n" +
 	"\x0fGetAgentRuntime\x12&.pocketagent.v1.GetAgentRuntimeRequest\x1a$.pocketagent.v1.AgentRuntimeResponse\x12k\n" +
 	"\x12ListThreadMemories\x12).pocketagent.v1.ListThreadMemoriesRequest\x1a*.pocketagent.v1.ListThreadMemoriesResponse\x12h\n" +
-	"\x11ClearThreadMemory\x12(.pocketagent.v1.ClearThreadMemoryRequest\x1a).pocketagent.v1.ClearThreadMemoryResponseBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
+	"\x11ClearThreadMemory\x12(.pocketagent.v1.ClearThreadMemoryRequest\x1a).pocketagent.v1.ClearThreadMemoryResponse\x12W\n" +
+	"\x0fGetControlPlane\x12&.pocketagent.v1.GetControlPlaneRequest\x1a\x1c.pocketagent.v1.ControlPlaneBKP\x01ZGgithub.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1b\x06proto3"
 
 var (
 	file_v1_runtime_proto_rawDescOnce sync.Once
@@ -2803,7 +3147,7 @@ func file_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_v1_runtime_proto_rawDescData
 }
 
-var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
 var file_v1_runtime_proto_goTypes = []any{
 	(*GetRuntimePolicyRequest)(nil),         // 0: pocketagent.v1.GetRuntimePolicyRequest
 	(*SetRuntimePolicyRequest)(nil),         // 1: pocketagent.v1.SetRuntimePolicyRequest
@@ -2841,21 +3185,25 @@ var file_v1_runtime_proto_goTypes = []any{
 	(*ListThreadMemoriesResponse)(nil),      // 33: pocketagent.v1.ListThreadMemoriesResponse
 	(*ClearThreadMemoryRequest)(nil),        // 34: pocketagent.v1.ClearThreadMemoryRequest
 	(*ClearThreadMemoryResponse)(nil),       // 35: pocketagent.v1.ClearThreadMemoryResponse
-	nil,                                     // 36: pocketagent.v1.RuntimePolicy.AgentsEntry
-	nil,                                     // 37: pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	nil,                                     // 38: pocketagent.v1.RuntimePolicy.ThreadsEntry
-	nil,                                     // 39: pocketagent.v1.RuntimePolicy.CollabsEntry
-	nil,                                     // 40: pocketagent.v1.AgentMemoryUsage.KindsEntry
+	(*GetControlPlaneRequest)(nil),          // 36: pocketagent.v1.GetControlPlaneRequest
+	(*ControlPlane)(nil),                    // 37: pocketagent.v1.ControlPlane
+	(*ControlDomain)(nil),                   // 38: pocketagent.v1.ControlDomain
+	(*ControlItem)(nil),                     // 39: pocketagent.v1.ControlItem
+	nil,                                     // 40: pocketagent.v1.RuntimePolicy.AgentsEntry
+	nil,                                     // 41: pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	nil,                                     // 42: pocketagent.v1.RuntimePolicy.ThreadsEntry
+	nil,                                     // 43: pocketagent.v1.RuntimePolicy.CollabsEntry
+	nil,                                     // 44: pocketagent.v1.AgentMemoryUsage.KindsEntry
 }
 var file_v1_runtime_proto_depIdxs = []int32{
 	4,  // 0: pocketagent.v1.SetRuntimePolicyRequest.policy:type_name -> pocketagent.v1.RuntimePolicy
 	4,  // 1: pocketagent.v1.RuntimePolicyResponse.policy:type_name -> pocketagent.v1.RuntimePolicy
 	3,  // 2: pocketagent.v1.RuntimePolicyResponse.effective_global:type_name -> pocketagent.v1.RuntimeLimits
 	3,  // 3: pocketagent.v1.RuntimePolicy.global:type_name -> pocketagent.v1.RuntimeLimits
-	36, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
-	37, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
-	38, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
-	39, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
+	40, // 4: pocketagent.v1.RuntimePolicy.agents:type_name -> pocketagent.v1.RuntimePolicy.AgentsEntry
+	41, // 5: pocketagent.v1.RuntimePolicy.workspaces:type_name -> pocketagent.v1.RuntimePolicy.WorkspacesEntry
+	42, // 6: pocketagent.v1.RuntimePolicy.threads:type_name -> pocketagent.v1.RuntimePolicy.ThreadsEntry
+	43, // 7: pocketagent.v1.RuntimePolicy.collabs:type_name -> pocketagent.v1.RuntimePolicy.CollabsEntry
 	7,  // 8: pocketagent.v1.ResourceUsageResponse.metrics:type_name -> pocketagent.v1.ResourceMetric
 	9,  // 9: pocketagent.v1.ListUnknownEventsResponse.items:type_name -> pocketagent.v1.UnknownEventSummary
 	9,  // 10: pocketagent.v1.UnknownEventResponse.summary:type_name -> pocketagent.v1.UnknownEventSummary
@@ -2873,41 +3221,45 @@ var file_v1_runtime_proto_depIdxs = []int32{
 	28, // 22: pocketagent.v1.AgentRuntimeResponse.cache:type_name -> pocketagent.v1.AgentCacheUsage
 	29, // 23: pocketagent.v1.AgentRuntimeResponse.checkpoint:type_name -> pocketagent.v1.AgentCheckpointUsage
 	30, // 24: pocketagent.v1.AgentRuntimeResponse.recovery:type_name -> pocketagent.v1.AgentRecoveryState
-	40, // 25: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
+	44, // 25: pocketagent.v1.AgentMemoryUsage.kinds:type_name -> pocketagent.v1.AgentMemoryUsage.KindsEntry
 	32, // 26: pocketagent.v1.ListThreadMemoriesResponse.rows:type_name -> pocketagent.v1.ThreadMemoryRow
-	3,  // 27: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 28: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 29: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	3,  // 30: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
-	0,  // 31: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
-	1,  // 32: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
-	5,  // 33: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
-	8,  // 34: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
-	12, // 35: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
-	14, // 36: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
-	17, // 37: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
-	18, // 38: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
-	20, // 39: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
-	25, // 40: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
-	31, // 41: pocketagent.v1.RuntimeService.ListThreadMemories:input_type -> pocketagent.v1.ListThreadMemoriesRequest
-	34, // 42: pocketagent.v1.RuntimeService.ClearThreadMemory:input_type -> pocketagent.v1.ClearThreadMemoryRequest
-	2,  // 43: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	2,  // 44: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
-	6,  // 45: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
-	11, // 46: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
-	13, // 47: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
-	15, // 48: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
-	19, // 49: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	19, // 50: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
-	21, // 51: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
-	26, // 52: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
-	33, // 53: pocketagent.v1.RuntimeService.ListThreadMemories:output_type -> pocketagent.v1.ListThreadMemoriesResponse
-	35, // 54: pocketagent.v1.RuntimeService.ClearThreadMemory:output_type -> pocketagent.v1.ClearThreadMemoryResponse
-	43, // [43:55] is the sub-list for method output_type
-	31, // [31:43] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	38, // 27: pocketagent.v1.ControlPlane.domains:type_name -> pocketagent.v1.ControlDomain
+	39, // 28: pocketagent.v1.ControlDomain.items:type_name -> pocketagent.v1.ControlItem
+	3,  // 29: pocketagent.v1.RuntimePolicy.AgentsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 30: pocketagent.v1.RuntimePolicy.WorkspacesEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 31: pocketagent.v1.RuntimePolicy.ThreadsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	3,  // 32: pocketagent.v1.RuntimePolicy.CollabsEntry.value:type_name -> pocketagent.v1.RuntimeLimits
+	0,  // 33: pocketagent.v1.RuntimeService.GetRuntimePolicy:input_type -> pocketagent.v1.GetRuntimePolicyRequest
+	1,  // 34: pocketagent.v1.RuntimeService.SetRuntimePolicy:input_type -> pocketagent.v1.SetRuntimePolicyRequest
+	5,  // 35: pocketagent.v1.RuntimeService.GetResourceUsage:input_type -> pocketagent.v1.GetResourceUsageRequest
+	8,  // 36: pocketagent.v1.RuntimeService.ListUnknownEvents:input_type -> pocketagent.v1.ListUnknownEventsRequest
+	12, // 37: pocketagent.v1.RuntimeService.GetUnknownEvent:input_type -> pocketagent.v1.GetUnknownEventRequest
+	14, // 38: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:input_type -> pocketagent.v1.AcknowledgeUnknownEventRequest
+	17, // 39: pocketagent.v1.RuntimeService.GetCollabPolicy:input_type -> pocketagent.v1.GetCollabPolicyRequest
+	18, // 40: pocketagent.v1.RuntimeService.SetCollabPolicy:input_type -> pocketagent.v1.SetCollabPolicyRequest
+	20, // 41: pocketagent.v1.RuntimeService.GetRuntimeState:input_type -> pocketagent.v1.GetRuntimeStateRequest
+	25, // 42: pocketagent.v1.RuntimeService.GetAgentRuntime:input_type -> pocketagent.v1.GetAgentRuntimeRequest
+	31, // 43: pocketagent.v1.RuntimeService.ListThreadMemories:input_type -> pocketagent.v1.ListThreadMemoriesRequest
+	34, // 44: pocketagent.v1.RuntimeService.ClearThreadMemory:input_type -> pocketagent.v1.ClearThreadMemoryRequest
+	36, // 45: pocketagent.v1.RuntimeService.GetControlPlane:input_type -> pocketagent.v1.GetControlPlaneRequest
+	2,  // 46: pocketagent.v1.RuntimeService.GetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	2,  // 47: pocketagent.v1.RuntimeService.SetRuntimePolicy:output_type -> pocketagent.v1.RuntimePolicyResponse
+	6,  // 48: pocketagent.v1.RuntimeService.GetResourceUsage:output_type -> pocketagent.v1.ResourceUsageResponse
+	11, // 49: pocketagent.v1.RuntimeService.ListUnknownEvents:output_type -> pocketagent.v1.ListUnknownEventsResponse
+	13, // 50: pocketagent.v1.RuntimeService.GetUnknownEvent:output_type -> pocketagent.v1.UnknownEventResponse
+	15, // 51: pocketagent.v1.RuntimeService.AcknowledgeUnknownEvent:output_type -> pocketagent.v1.AcknowledgeUnknownEventResponse
+	19, // 52: pocketagent.v1.RuntimeService.GetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	19, // 53: pocketagent.v1.RuntimeService.SetCollabPolicy:output_type -> pocketagent.v1.CollabPolicyResponse
+	21, // 54: pocketagent.v1.RuntimeService.GetRuntimeState:output_type -> pocketagent.v1.RuntimeStateResponse
+	26, // 55: pocketagent.v1.RuntimeService.GetAgentRuntime:output_type -> pocketagent.v1.AgentRuntimeResponse
+	33, // 56: pocketagent.v1.RuntimeService.ListThreadMemories:output_type -> pocketagent.v1.ListThreadMemoriesResponse
+	35, // 57: pocketagent.v1.RuntimeService.ClearThreadMemory:output_type -> pocketagent.v1.ClearThreadMemoryResponse
+	37, // 58: pocketagent.v1.RuntimeService.GetControlPlane:output_type -> pocketagent.v1.ControlPlane
+	46, // [46:59] is the sub-list for method output_type
+	33, // [33:46] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_v1_runtime_proto_init() }
@@ -2923,7 +3275,7 @@ func file_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_runtime_proto_rawDesc), len(file_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   41,
+			NumMessages:   45,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

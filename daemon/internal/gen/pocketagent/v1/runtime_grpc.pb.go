@@ -31,6 +31,7 @@ const (
 	RuntimeService_GetAgentRuntime_FullMethodName         = "/pocketagent.v1.RuntimeService/GetAgentRuntime"
 	RuntimeService_ListThreadMemories_FullMethodName      = "/pocketagent.v1.RuntimeService/ListThreadMemories"
 	RuntimeService_ClearThreadMemory_FullMethodName       = "/pocketagent.v1.RuntimeService/ClearThreadMemory"
+	RuntimeService_GetControlPlane_FullMethodName         = "/pocketagent.v1.RuntimeService/GetControlPlane"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -87,6 +88,15 @@ type RuntimeServiceClient interface {
 	// 数据一个字节都不碰。会话不存在时回 NotFound —— "没清任何东西"必须让客户端
 	// 知道,不能谎报成功。
 	ClearThreadMemory(ctx context.Context, in *ClearThreadMemoryRequest, opts ...grpc.CallOption) (*ClearThreadMemoryResponse, error)
+	// 控制面总览(聚合读):一个 RPC 回来 daemon 全部可控域的当前状态与能力,
+	// 手机一个页面看全、就地改。
+	// 【它只是呈现,不是新的写通道】这里不落任何新配置文件:切换动作仍走各自
+	// 既有的 SetRuntimePolicy / SetCollabPolicy / SetCodexSettings /
+	// AcknowledgeUnknownEvent / ClearThreadMemory —— 各控制通道早已存在,本 RPC
+	// 补的是"一盘棋的总览",重写任何一条通道都只会制造第二份真值。
+	// 【单域降级】某个域的状态取不到时,该域单独降级为 status_code=2 并说明原因,
+	// 其余域照常返回 —— 总览页不该被一个域的故障掀翻。
+	GetControlPlane(ctx context.Context, in *GetControlPlaneRequest, opts ...grpc.CallOption) (*ControlPlane, error)
 }
 
 type runtimeServiceClient struct {
@@ -217,6 +227,16 @@ func (c *runtimeServiceClient) ClearThreadMemory(ctx context.Context, in *ClearT
 	return out, nil
 }
 
+func (c *runtimeServiceClient) GetControlPlane(ctx context.Context, in *GetControlPlaneRequest, opts ...grpc.CallOption) (*ControlPlane, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ControlPlane)
+	err := c.cc.Invoke(ctx, RuntimeService_GetControlPlane_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -271,6 +291,15 @@ type RuntimeServiceServer interface {
 	// 数据一个字节都不碰。会话不存在时回 NotFound —— "没清任何东西"必须让客户端
 	// 知道,不能谎报成功。
 	ClearThreadMemory(context.Context, *ClearThreadMemoryRequest) (*ClearThreadMemoryResponse, error)
+	// 控制面总览(聚合读):一个 RPC 回来 daemon 全部可控域的当前状态与能力,
+	// 手机一个页面看全、就地改。
+	// 【它只是呈现,不是新的写通道】这里不落任何新配置文件:切换动作仍走各自
+	// 既有的 SetRuntimePolicy / SetCollabPolicy / SetCodexSettings /
+	// AcknowledgeUnknownEvent / ClearThreadMemory —— 各控制通道早已存在,本 RPC
+	// 补的是"一盘棋的总览",重写任何一条通道都只会制造第二份真值。
+	// 【单域降级】某个域的状态取不到时,该域单独降级为 status_code=2 并说明原因,
+	// 其余域照常返回 —— 总览页不该被一个域的故障掀翻。
+	GetControlPlane(context.Context, *GetControlPlaneRequest) (*ControlPlane, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -316,6 +345,9 @@ func (UnimplementedRuntimeServiceServer) ListThreadMemories(context.Context, *Li
 }
 func (UnimplementedRuntimeServiceServer) ClearThreadMemory(context.Context, *ClearThreadMemoryRequest) (*ClearThreadMemoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearThreadMemory not implemented")
+}
+func (UnimplementedRuntimeServiceServer) GetControlPlane(context.Context, *GetControlPlaneRequest) (*ControlPlane, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetControlPlane not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -554,6 +586,24 @@ func _RuntimeService_ClearThreadMemory_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_GetControlPlane_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetControlPlaneRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).GetControlPlane(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_GetControlPlane_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).GetControlPlane(ctx, req.(*GetControlPlaneRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -608,6 +658,10 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearThreadMemory",
 			Handler:    _RuntimeService_ClearThreadMemory_Handler,
+		},
+		{
+			MethodName: "GetControlPlane",
+			Handler:    _RuntimeService_GetControlPlane_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

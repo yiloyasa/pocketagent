@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -111,6 +112,10 @@ private fun RuntimeSectionBody() {
     LaunchedEffect(Unit) {
         if (RuntimeControlState.overview == null) RuntimeControlState.load()
     }
+
+    // ---- 控制中心(顶部区段):一页看全 daemon 所有可控域,写动作走既有 RPC ----
+    // 排在「运行时」区段之上:它是"总览+就地切换",运行时区段是"逐块深查"。
+    ControlCenterSection(onOpenMemory = { memorySheetAgent = it })
 
     val summary = when {
         loadState == RuntimeLoadState.LOADING && overview == null -> "读取中…"
@@ -293,6 +298,345 @@ private fun RuntimeSectionBody() {
     memorySheetAgent?.let { agentId ->
         ThreadMemorySheet(agentId = agentId, onDismiss = { memorySheetAgent = null })
     }
+}
+
+// ================================================================================
+// 控制中心(GetControlPlane):一页看全 daemon 全部可控域,就地切换。
+//
+// 【为什么是"域行 + 就地展开"而不是二级页】设置页骨架是 LazyColumn + item,二级页
+// 脚手架是别处 file-private 的;域的量级(8 个)在折叠列表里一屏放得下,展开才看项,
+// 与「运行时」区段的折叠语言一致。
+//
+// 【降级】老 daemon(GetControlPlane 回 UNIMPLEMENTED)整个区段不渲染 —— 摆一个
+// 点了必然空着的"控制中心",比不摆更糟;状态层的 [ControlPlaneState.unsupported]
+// 记住这份版本事实。单域 status_code=2 时文案就是 daemon 的 summary 原文,红点只是
+// 小面积档位标记 —— 客户端不自行把 2 渲染成"故障"。
+//
+// 【写通道】toggle(collab 域)走既有 SetCollabPolicy、number(budget 域)走既有
+// SetRuntimePolicy,路由与参数由 ControlPlaneLogic 的纯函数钉死;agents 域可写但
+// 走 SetCodexSettings,本轮 TODO 未接,其 info 项一律只读呈现。写成功后回读
+// GetControlPlane,不做乐观改写 —— "看到的就是生效的"由 daemon 保证。
+// ================================================================================
+@Composable
+private fun ControlCenterSection(onOpenMemory: (String) -> Unit) {
+    val plane = ControlPlaneState.plane
+    val unsupported = ControlPlaneState.unsupported
+    val refreshError = ControlPlaneState.refreshError
+    val loadState = ControlPlaneState.loadState
+    val rows = controlDomainRows(plane)
+    var expanded by remember { mutableStateOf(false) }
+    var expandedDomain by remember { mutableStateOf<String?>(null) }
+    var editingNumber by remember { mutableStateOf<ControlItemRow?>(null) }
+    // 写动作失败原因(daemon 原文)。落在本区段内呈现,与刷新失败分开,用户才分得清
+    // "是没改成"还是"没读到"。
+    var writeError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // 首次进入拉一次;之后靠手动刷新与"写后回读"(与运行时区段同款纪律,不随滚动
+    // 重组反复打 RPC)。老 daemon 的 UNIMPLEMENTED 由状态层记成事实,这里据此隐身。
+    LaunchedEffect(Unit) {
+        if (ControlPlaneState.plane == null && !ControlPlaneState.unsupported) {
+            ControlPlaneState.refresh()
+        }
+    }
+
+    // 老 daemon:连入口都不摆(能力缺席的确定信号,不是失败)。
+    if (unsupported) return
+
+    SectionBlock(icon = R.drawable.ic_lucide_server, title = "控制中心") {
+        // ---- 入口行:人话标题 + 身份事实(版本/主机名/运行时长) ----
+        SettingRow(
+            title = "电脑控制台",
+            desc = when {
+                plane != null -> controlPlaneEntryDesc(plane, System.currentTimeMillis())
+                loadState == RuntimeLoadState.LOADING -> "读取中…"
+                else -> refreshError ?: "没读到电脑端的控制面"
+            },
+            chevron = true,
+            divider = expanded,
+            onClick = { expanded = !expanded },
+        )
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(PaMotion.sheet()) + fadeIn(PaMotion.sheet()),
+            exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
+        ) {
+            Column(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
+                // 身份事实行(系统/数据目录标签):daemon 只给标签不给路径,原样透出。
+                plane?.let {
+                    Text(
+                        controlPlaneFactsLine(it),
+                        Modifier.padding(horizontal = 2.dp),
+                        fontSize = 11.sp,
+                        color = Pa.TextTertiary,
+                    )
+                }
+                refreshError?.let {
+                    SectionNote(it, Pa.Yellow)
+                }
+                rows.forEachIndexed { i, domain ->
+                    ControlDomainBlock(
+                        domain = domain,
+                        expanded = expandedDomain == domain.id,
+                        divider = i < rows.lastIndex,
+                        onToggleExpand = {
+                            expandedDomain = if (expandedDomain == domain.id) null else domain.id
+                        },
+                        onOpenDialysis = { RuntimeControlState.dialysisSheetOpen = true },
+                        onOpenMemory = onOpenMemory,
+                        onEditNumber = { editingNumber = it },
+                        onToggle = { item, on ->
+                            scope.launch {
+                                ControlPlaneState.applyToggle(CONTROL_DOMAIN_COLLAB, item.id, on)
+                                    .onSuccess { writeError = null }
+                                    .onFailure { writeError = it.message }
+                            }
+                        },
+                    )
+                }
+                writeError?.let {
+                    SectionNote(it, Pa.Yellow)
+                }
+                // ---- 手动刷新 ----
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = {
+                        writeError = null
+                        ControlPlaneState.refresh()
+                    }) {
+                        Text("重新读取", fontSize = 13.sp, color = Pa.AccentText)
+                    }
+                }
+            }
+        }
+    }
+
+    editingNumber?.let { item ->
+        ControlNumberEditDialog(
+            item = item,
+            onDismiss = { editingNumber = null },
+            onResult = {
+                editingNumber = null
+            },
+        )
+    }
+}
+
+/** 域行的状态圆点:0 灰 / 1 黄 / 2 红 —— 语义色只用在 8dp 小圆点上(小面积允许)。 */
+@Composable
+private fun ControlStatusDot(kind: ControlDotKind) {
+    val color = when (kind) {
+        ControlDotKind.NORMAL -> Pa.TextTertiary
+        ControlDotKind.ATTENTION -> Pa.Yellow
+        ControlDotKind.LIMITED -> Pa.Red
+    }
+    Box(
+        Modifier
+            .padding(start = 8.dp)
+            .size(8.dp)
+            .background(color, CircleShape),
+    )
+}
+
+/**
+ * 一个功能域:行 = title + summary 原文 + 状态圆点;可写的域就地展开 items。
+ *
+ * 【两类整行直达的特例】dialysis 与 memory 的纵深内容(逐条处置/按会话清除)已经
+ * 在既有弹窗里,总览页整行点开弹窗即可,不重复摊一层 —— dialysis 弹窗状态在
+ * [RuntimeControlState] 共享,memory 弹窗需要具体 agentId(取第一个按 agent 的
+ * 记忆项),还没有 Agent 接入时禁用整行,不盲开一个空弹窗。
+ */
+@Composable
+private fun ControlDomainBlock(
+    domain: ControlDomainRow,
+    expanded: Boolean,
+    divider: Boolean,
+    onToggleExpand: () -> Unit,
+    onOpenDialysis: () -> Unit,
+    onOpenMemory: (String) -> Unit,
+    onEditNumber: (ControlItemRow) -> Unit,
+    onToggle: (ControlItemRow, Boolean) -> Unit,
+) {
+    val memoryAgent = if (domain.id == CONTROL_DOMAIN_MEMORY) memoryAgentTargetOf(domain.items) else null
+    val onClick: (() -> Unit)? = when (domain.id) {
+        CONTROL_DOMAIN_DIALYSIS -> onOpenDialysis
+        CONTROL_DOMAIN_MEMORY -> memoryAgent?.let { { onOpenMemory(it) } }
+        else -> if (domain.writable) onToggleExpand else null
+    }
+    SettingRow(
+        title = domain.title,
+        desc = domain.summary,
+        divider = divider,
+        chevron = onClick != null,
+        onClick = onClick,
+        control = { ControlStatusDot(domain.dotKind) },
+    )
+    // memory 行点不动 = 只有合计项(还没有 Agent 接入);补一句事实说明为什么不跳。
+    if (domain.id == CONTROL_DOMAIN_MEMORY && memoryAgent == null && domain.items.isNotEmpty()) {
+        Text(
+            "还没有已接入的 Agent,合计显示在上面的摘要里",
+            Modifier.padding(start = 2.dp, top = 2.dp),
+            fontSize = 11.sp,
+            color = Pa.TextTertiary,
+        )
+    }
+    AnimatedVisibility(
+        visible = expanded,
+        enter = expandVertically(PaMotion.sheet()) + fadeIn(PaMotion.sheet()),
+        exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
+    ) {
+        Column(Modifier.padding(bottom = 4.dp)) {
+            domain.items.forEachIndexed { i, item ->
+                ControlItemLine(
+                    item = item,
+                    enabled = ControlPlaneState.busyItemId == null,
+                    onEditNumber = onEditNumber,
+                    onToggle = onToggle,
+                )
+                if (i < domain.items.lastIndex) {
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 域内一项:toggle → Switch(现值认不出时走只读分支,显示原文不猜布尔);
+ * budget number → 点行弹小输入框;其余(info / 本轮未接写通道)只读 label + 现值原文。
+ * hint 一律 12sp TextSecondary 垫在项下 —— daemon 解释"改动影响什么"的话,照抄。
+ */
+@Composable
+private fun ControlItemLine(
+    item: ControlItemRow,
+    enabled: Boolean,
+    onEditNumber: (ControlItemRow) -> Unit,
+    onToggle: (ControlItemRow, Boolean) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        when {
+            item.action == ControlItemAction.COLLAB_TOGGLE && controlToggleOn(item.current) != null -> {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
+                    Switch(
+                        checked = controlToggleOn(item.current) == true,
+                        enabled = enabled,
+                        onCheckedChange = { on -> onToggle(item, on) },
+                    )
+                }
+            }
+            item.action == ControlItemAction.BUDGET_NUMBER -> {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable(haptic = true) { onEditNumber(item) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
+                    Text(item.current, fontSize = 13.sp, color = Pa.TextTertiary)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_chevron_right),
+                        contentDescription = null,
+                        tint = Pa.TextTertiary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+            else -> {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
+                    Text(
+                        item.current,
+                        fontSize = 13.sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        if (item.hint.isNotBlank()) {
+            Text(
+                item.hint,
+                Modifier.padding(top = 2.dp),
+                fontSize = 12.sp,
+                color = Pa.TextSecondary,
+            )
+        }
+    }
+}
+
+/**
+ * budget 数值编辑(既有预算编辑弹窗的同款风格,输入口径 MB/计数)。
+ *
+ * 【为什么自己写而不直接复用 BudgetEditDialog】那一个把键入值**原样**写进字段
+ * (MB 标签、字节存储),单位差 2^20 倍;控制中心这里在写路由里换算
+ * ([applyControlBudgetNumber] 字节键 ×1MB)。预填沿用 [budgetInputValue] 的
+ * 光标纪律(在末尾,防"预填 3 敲 4 得 43");现值在框上方照原文显示 —— 预填不上
+ * (KB/B/非整数 MB)时用户有原文可对。
+ */
+@Composable
+private fun ControlNumberEditDialog(
+    item: ControlItemRow,
+    onDismiss: () -> Unit,
+    onResult: () -> Unit,
+) {
+    val isCount = item.id == "budget.global.max_parallel_turns"
+    val unit = if (isCount) "路" else "MB"
+    var text by remember { mutableStateOf(budgetInputValue(controlNumberPrefill(item.current))) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Pa.CardHigh,
+        title = { Text(item.label, fontSize = 16.sp, color = Pa.TextPrimary) },
+        text = {
+            Column {
+                Text("当前:${item.current}", fontSize = 12.5.sp, color = Pa.TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    // 只保留数字;光标位置由 TextFieldValue 自带(见 [budgetInputValue])。
+                    onValueChange = { v -> text = v.copy(text = v.text.filter { c -> c.isDigit() }) },
+                    singleLine = true,
+                    label = { Text("新上限($unit)", fontSize = 13.sp) },
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error!!, fontSize = 12.sp, color = Pa.RedText)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val n = text.text.toLongOrNull()
+                if (n == null) {
+                    error = "请填一个非负整数"
+                    return@TextButton
+                }
+                scope.launch {
+                    ControlPlaneState.applyNumber(CONTROL_DOMAIN_BUDGET, item.id, n)
+                        .onSuccess { onResult() }
+                        .onFailure { error = it.message }
+                }
+            }) { Text("保存", color = Pa.AccentText) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = Pa.TextSecondary) }
+        },
+    )
 }
 
 /** 恢复横幅:降级摘要 + **逐条**"哪句没跑到"(只报条数等于没说)。 */
@@ -524,7 +868,12 @@ private fun BudgetEditDialog(
                     return@TextButton
                 }
                 scope.launch {
-                    val err = saveRuntimeEdit(row.key, n)
+                    // 字节类键的输入单位是 MB,必须换算成字节再写(与控制中心
+                    // applyControlBudgetNumber 同一口径)。修复存量 bug:旧实现
+                    // 把「8 MB」的 8 原样写成 8 字节 —— 与窗口显示的现值差一百万
+                    // 倍,而字节字段小值=把该类资源预算砍到几乎为零。
+                    val scaled = if (unit == "MB") n shl 20 else n
+                    val err = saveRuntimeEdit(row.key, scaled)
                     if (err != null) error = err else onResult(null)
                 }
             }) { Text("保存", color = Pa.AccentText) }

@@ -56,6 +56,15 @@ service RuntimeService {
   // 数据一个字节都不碰。会话不存在时回 NotFound —— "没清任何东西"必须让客户端
   // 知道,不能谎报成功。
   rpc ClearThreadMemory(ClearThreadMemoryRequest) returns (ClearThreadMemoryResponse);
+  // 控制面总览(聚合读):一个 RPC 回来 daemon 全部可控域的当前状态与能力,
+  // 手机一个页面看全、就地改。
+  // 【它只是呈现,不是新的写通道】这里不落任何新配置文件:切换动作仍走各自
+  // 既有的 SetRuntimePolicy / SetCollabPolicy / SetCodexSettings /
+  // AcknowledgeUnknownEvent / ClearThreadMemory —— 各控制通道早已存在,本 RPC
+  // 补的是"一盘棋的总览",重写任何一条通道都只会制造第二份真值。
+  // 【单域降级】某个域的状态取不到时,该域单独降级为 status_code=2 并说明原因,
+  // 其余域照常返回 —— 总览页不该被一个域的故障掀翻。
+  rpc GetControlPlane(GetControlPlaneRequest) returns (ControlPlane);
 }
 
 message GetRuntimePolicyRequest {}
@@ -390,4 +399,66 @@ message ClearThreadMemoryResponse {
   int32 total_threads = 1;
   int32 total_entries = 2;
   int64 total_bytes = 3;
+}
+
+// ---- 控制面总览(聚合读)------------------------------------------------------
+
+message GetControlPlaneRequest {}
+
+// ControlPlane 是 daemon 全部可控点的一次性快照。
+//
+// 【为什么是"域"的列表而不是大平铺】预算、协同、记忆……各有各的控制通道与
+// 展示形态;按域分组后,客户端一页按域渲染,新域上线只是多一个条目,不必改版面。
+// 【为什么全部人话由 daemon 给】summary/label/hint 与事件翻译(event_translate)
+// 同一条纪律:daemon 给中文人话、不编造,状态取不到就如实写"未检测到/未报告";
+// 客户端只按 id 匹配与排版,不做任何术语翻译。
+message ControlPlane {
+  // 服务与身份。
+  string daemon_version = 1;
+  string host_name = 2;
+  string os = 3;
+  // daemon 进程的启动时刻(unix 毫秒)。
+  // 【为什么给"时刻"不给"时长"]客户端拿当前时刻一减即可显示"已运行多久",
+  // 且不受快照往返延迟影响;时区与"多久前"的排版都留给客户端。
+  int64 uptime_unix_ms = 4;
+  // 各功能域状态与控制句柄(每域一个条目,客户端按 ControlDomain.id 呈现)。
+  repeated ControlDomain domains = 5;
+  // 数据目录落在哪个标准位置(如 LOCALAPPDATA / 家目录/.pocketagentd)。
+  // 【为什么只给标签不给路径】绝对路径里的用户名属于敏感信息,诊断事实用不着它;
+  // 要看落盘位置时,各策略响应里的 policy_path 已有完整路径。
+  string data_dir_label = 6;
+}
+
+// ControlDomain 是一个功能域的当前状态。
+message ControlDomain {
+  // 域稳定键:budget / collab / agents / memory / dialysis / approvals /
+  // transports / resources。客户端按 id 匹配,不按 title(title 是给人看的)。
+  string id = 1;
+  // 人话标题(daemon 给,客户端不翻译)。
+  string title = 2;
+  // 一句话当前状态(人话;如实描述,不编造)。
+  string summary = 3;
+  // 该域是否有写通道。写仍走各自既有 RPC —— 这里只是让客户端知道"可改",
+  // 不必为每个域再实现一遍能力探测。
+  bool writable = 4;
+  // 0=正常 1=有注意项 2=受限。如实映射:2 可能只是"未装配/取不到",
+  // 客户端把 summary 原文显示出来即可,不要自行把 2 渲染成"故障"。
+  int32 status_code = 5;
+  repeated ControlItem items = 6;
+}
+
+// ControlItem 是域内的一个可控点或事实点。
+message ControlItem {
+  // 域内稳定键,如 budget.global.ram_event_buffer_bytes。
+  string id = 1;
+  // 人话名。
+  string label = 2;
+  // 当前值(字符串化:数值/开关/原文)。
+  string current = 3;
+  // 呈现形态:toggle / select / number / info(只读事实)。
+  string kind = 4;
+  // select 型候选;其它 kind 为空。
+  repeated string options = 5;
+  // 一句说明(为什么有这个限制/改动影响什么)。
+  string hint = 6;
 }

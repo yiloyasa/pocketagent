@@ -853,6 +853,36 @@ object RuntimeControlState {
         }
     }
 
+    /**
+     * 控制中心写协同开关前的快照保障:协同策略响应缺席(还没走到「运行时」区段的
+     * 读取,或上次读取失败)时先 Get 一次。读到的响应**写回共享真值 [collab]** ——
+     * 两个界面仍共用同一份数,谁写的都算数。返回失败原因,null = 快照就绪。
+     */
+    suspend fun ensureCollabSnapshot(): String? {
+        if (collab != null) return null
+        return try {
+            collab = withContext(Dispatchers.IO) {
+                AgentConnection.runtimeService().getCollabPolicy(GetCollabPolicyRequest.getDefaultInstance())
+            }
+            null
+        } catch (e: Exception) {
+            extractRpcMessage(e)
+        }
+    }
+
+    /** 控制中心写预算数值前的快照保障(与 [ensureCollabSnapshot] 同款理由)。 */
+    suspend fun ensureBudgetSnapshot(): String? {
+        if (budget != null) return null
+        return try {
+            budget = withContext(Dispatchers.IO) {
+                AgentConnection.runtimeService().getRuntimePolicy(GetRuntimePolicyRequest.getDefaultInstance())
+            }
+            null
+        } catch (e: Exception) {
+            extractRpcMessage(e)
+        }
+    }
+
     /** 确认一条未知事件;成功用 daemon 落库后的真值替换本地行(避免回显 stale 状态)。 */
     suspend fun acknowledge(eventId: String, action: String, note: String): String? = try {
         val item = withContext(Dispatchers.IO) {
@@ -937,8 +967,11 @@ object RuntimeControlState {
     /**
      * 异常 → 可透传原文:优先 daemon 设的 Status.description(干净人话,去掉 gRPC
      * 状态码前缀);空白退回 message;再空白退回类名(可核查的真实信息)。
+     *
+     * 【internal 而非 private】控制中心(ControlPlaneLogic)的失败呈现必须与本层
+     * 同一条规则 —— daemon 的 description 原文优先,不各写一份"差不多"的提取逻辑。
      */
-    private fun extractRpcMessage(e: Throwable): String {
+    internal fun extractRpcMessage(e: Throwable): String {
         val desc = Status.fromThrowable(e).description
         if (!desc.isNullOrBlank()) return desc
         return e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName

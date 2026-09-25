@@ -119,6 +119,11 @@ type Server struct {
 	// W9:启动期对每个已注册 provider 跑的运行时形态申报核验(规格 §10)。
 	// 启动时生成、之后只读 —— 它反映的是"接入形态",不随运行变化。
 	contractReports []rtruntime.ContractReport
+	// startedAt 是本 daemon 的启动时刻(控制面总览 GetControlPlane 的 uptime 挂点)。
+	// 【为什么挂在 New 而不是 main】New 是所有装配路径(生产 main、全部测试)的
+	// 必经点,在这里取时刻,测试与生产同源;与进程真正启动的差只有毫秒级初始化,
+	// 对"已运行多久"的展示毫无影响。
+	startedAt time.Time
 }
 
 func New(cfg Config) *Server {
@@ -144,6 +149,7 @@ func New(cfg Config) *Server {
 		budgetPolicy:   cfg.BudgetPolicy,
 		runtimeBackend: cfg.RuntimeBackend,
 		collabPolicy:   cfg.CollabPolicy,
+		startedAt:      time.Now(),
 	}
 	// 启动报告:上次退出时还没轮到执行的排队输入 —— 醒目汇总 + 逐条明细,然后
 	// 清空台账。刻意不自动重发(重放原始 prompt 会重复执行副作用,规格 §8.3),
