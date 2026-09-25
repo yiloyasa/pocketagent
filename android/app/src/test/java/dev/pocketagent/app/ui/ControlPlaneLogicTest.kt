@@ -8,6 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pocketagent.v1.CollabPolicy
+import pocketagent.v1.SetCodexSettingsRequest
 import pocketagent.v1.ControlDomain
 import pocketagent.v1.ControlItem
 import pocketagent.v1.ControlPlane
@@ -78,6 +79,16 @@ class ControlPlaneLogicTest {
                     ControlItem.newBuilder()
                         .setId("agents.codex.session").setLabel("Codex · 会话形态")
                         .setCurrent("原生自管").setKind("info")
+                )
+                .addItems(
+                    // 桌面偏好项的契约形态(proto ControlItem:kind=select,options=候选,
+                    // 由 daemon 给)—— 客户端路由必须按这份形态就绪:daemon 何时透出,
+                    // 控制中心何时亮编辑入口,客户端不自带一份本地词表。
+                    ControlItem.newBuilder()
+                        .setId("agents.codex.approval_policy").setLabel("Codex · 审批策略")
+                        .setCurrent("on-request").setKind("select")
+                        .addOptions("untrusted").addOptions("on-request").addOptions("never")
+                        .setHint("Agent 要执行敏感操作时先问你到什么程度")
                 )
         )
         .addDomains(
@@ -161,33 +172,75 @@ class ControlPlaneLogicTest {
     }
 
     @Test
-    fun `写通道路由_只对接_collab_toggle_与_budget_number_其余一律只读`() {
+    fun `写通道路由_collab_toggle_两域数值_agents桌面偏好_接通的才给写动作`() {
         val rows = controlDomainRows(plane())
         val budget = rows[0].items
         val collab = rows[1].items
+        val agents = rows[2].items
 
         assertEquals(ControlItemAction.BUDGET_NUMBER, budget[0].action)
         assertEquals(ControlItemAction.BUDGET_NUMBER, budget[1].action)
         assertEquals(ControlItemAction.COLLAB_TOGGLE, collab[0].action)
         assertEquals(ControlItemAction.COLLAB_TOGGLE, collab[1].action)
-        // collab 的 number(成员上限)本轮不接写通道:只读呈现,不给假编辑入口。
-        assertEquals(ControlItemAction.READ_ONLY, collab[2].action)
-        // agents 域可写但走 SetCodexSettings(本轮 TODO):info 项一律只读。
-        assertEquals(ControlItemAction.READ_ONLY, rows[2].items[0].action)
-        // 只读域(writable=false)与 select/别的 kind 也不给写动作。
+        // collab 的数值(扇出成员上限)与 budget 数值同轮接通:走既有 SetCollabPolicy
+        // (成员上限属协同策略树,与预算两套落盘两套 CAS,写错对象=改了不生效)。
+        assertEquals(ControlItemAction.COLLAB_NUMBER, collab[2].action)
+        // agents 域的桌面偏好 select(候选由 daemon 给)路由到既有 SetCodexSettings。
+        assertEquals(ControlItemAction.AGENTS_SELECT, agents[1].action)
+        // agents 域的事实项(会话形态)仍只读 —— 它们没有写语义。
+        assertEquals(ControlItemAction.READ_ONLY, agents[0].action)
+        // 只读域(writable=false)与别的 kind 也不给写动作。
         assertEquals(ControlItemAction.READ_ONLY, rows[5].items[0].action)
-        val selectOnly = ControlDomain.newBuilder()
-            .setId("collab").setTitle("多 Agent 协同").setWritable(true)
+        // 候选缺席的 select:没有可选值的编辑入口是假入口,仍按只读呈现。
+        val noOptions = ControlDomain.newBuilder()
+            .setId("agents").setTitle("Agent 接入").setWritable(true)
             .addItems(
                 ControlItem.newBuilder()
-                    .setId("collab.未来的下拉项").setLabel("某策略").setCurrent("甲").setKind("select")
+                    .setId("agents.codex.sandbox").setLabel("Codex · 沙箱")
+                    .setCurrent("workspace-write").setKind("select")
             )
             .build()
         assertEquals(
             ControlItemAction.READ_ONLY,
-            controlDomainRows(ControlPlane.newBuilder().addDomains(selectOnly).build())
+            controlDomainRows(ControlPlane.newBuilder().addDomains(noOptions).build())
                 .single().items.single().action,
         )
+        // agents 路由只认 SetCodexSettings 的键词表:collab 域冒出的 select、agents 域里
+        // 词表外的键,都没有对应写字段 —— 只读呈现,不摆假编辑入口。
+        val unroutable = ControlPlane.newBuilder()
+            .addDomains(
+                ControlDomain.newBuilder()
+                    .setId("collab").setTitle("多 Agent 协同").setWritable(true)
+                    .addItems(
+                        ControlItem.newBuilder()
+                            .setId("collab.未来的下拉项").setLabel("某策略")
+                            .setCurrent("甲").setKind("select").addOptions("甲").addOptions("乙")
+                    )
+            )
+            .addDomains(
+                ControlDomain.newBuilder()
+                    .setId("agents").setTitle("Agent 接入").setWritable(true)
+                    .addItems(
+                        ControlItem.newBuilder()
+                            .setId("agents.codex.native_mode").setLabel("Codex · 原生形态")
+                            .setCurrent("x").setKind("select").addOptions("x").addOptions("y")
+                    )
+            )
+            .build()
+        val unroutableRows = controlDomainRows(unroutable)
+        assertEquals(ControlItemAction.READ_ONLY, unroutableRows[0].items.single().action)
+        assertEquals(ControlItemAction.READ_ONLY, unroutableRows[1].items.single().action)
+    }
+
+    @Test
+    fun `行模型带_domainId_与_options_写路由参数不靠调用方再猜`() {
+        val rows = controlDomainRows(plane())
+        assertEquals("budget", rows[0].items[0].domainId)
+        assertEquals("collab", rows[1].items[2].domainId)
+        assertEquals("agents", rows[2].items[1].domainId)
+        assertEquals(listOf("untrusted", "on-request", "never"), rows[2].items[1].options)
+        // 事实项没有候选:空列表,不为它编一份词表。
+        assertEquals(emptyList<String>(), rows[2].items[0].options)
     }
 
     // ---- toggle 现值与写路由 ----------------------------------------------------
@@ -366,5 +419,139 @@ class ControlPlaneLogicTest {
                     .single().items
             )
         )
+    }
+
+    // ---- agents 域:桌面偏好 → SetCodexSettings 路由 ------------------------------
+
+    @Test
+    fun `agents_路由拆解_设置键从最右一段拆_agentId_原样带出`() {
+        assertEquals(ControlAgentsTarget("codex", "approval_policy"), controlAgentsTarget("agents.codex.approval_policy"))
+        assertEquals(ControlAgentsTarget("zcode", "model"), controlAgentsTarget("agents.zcode.model"))
+        // agentId 本身含点号也不怕:设置键永远从最右一段拆(键词表钉死,不与 id 形状互相猜)。
+        assertEquals(ControlAgentsTarget("a.b", "effort"), controlAgentsTarget("agents.a.b.effort"))
+        // 键不在词表 / 不是 agents 前缀 / 缺 agentId:一律不路由 —— 路由表外放行就是静默丢改动。
+        assertNull(controlAgentsTarget("collab.max_parallel_members"))
+        assertNull(controlAgentsTarget("budget.global.ram_working_bytes"))
+        assertNull(controlAgentsTarget("agents..sandbox"))
+        assertNull(controlAgentsTarget("agents.codex"))
+        // bool 键(隐藏推理/粘贴爆破)没有 select-with-options 的写契约:select 的候选是
+        // 字符串,把"开/关"猜成 true/false 就是造一份假账 —— 保持只读,等它的呈现契约。
+        assertNull(controlAgentsTarget("agents.codex.hide_agent_reasoning"))
+        assertNull(controlAgentsTarget("agents.codex.disable_paste_burst"))
+    }
+
+    private fun agentsReqOf(key: String, value: String): SetCodexSettingsRequest {
+        val b = SetCodexSettingsRequest.newBuilder()
+        assertTrue("key=$key 应有写通道", applyControlAgentsSetting(b, key, value))
+        return b.build()
+    }
+
+    @Test
+    fun `agents_写路由_六键各写各的字段且恰好一个_presence_纪律`() {
+        // 与 RuntimeSectionLogicTest 的 collab 三开关同款纪律:映射错位在界面上完全看不出来。
+        val cases = linkedMapOf(
+            "approval_policy" to Pair("never") { r: SetCodexSettingsRequest -> r.hasApprovalPolicy() && r.approvalPolicy == "never" },
+            "sandbox" to Pair("workspace-write") { r: SetCodexSettingsRequest -> r.hasSandbox() && r.sandbox == "workspace-write" },
+            "model" to Pair("codex/gpt-5.1") { r: SetCodexSettingsRequest -> r.hasModel() && r.model == "codex/gpt-5.1" },
+            "effort" to Pair("high") { r: SetCodexSettingsRequest -> r.hasEffort() && r.effort == "high" },
+            "model_verbosity" to Pair("low") { r: SetCodexSettingsRequest -> r.hasModelVerbosity() && r.modelVerbosity == "low" },
+            "model_reasoning_summary" to Pair("concise") { r: SetCodexSettingsRequest -> r.hasModelReasoningSummary() && r.modelReasoningSummary == "concise" },
+        )
+        cases.forEach { (key, case) ->
+            val (value, hit) = case
+            val r = agentsReqOf(key, value)
+            val presence = listOf(
+                r.hasApprovalPolicy(), r.hasSandbox(), r.hasModel(), r.hasEffort(),
+                r.hasModelVerbosity(), r.hasModelReasoningSummary(),
+            )
+            assertEquals("key=$key 应恰好 set 一个字段(缺席=不改,presence 是请求的唯一语义)", 1, presence.count { it })
+            assertTrue("key=$key 写错了字段或值被加工", hit(r))
+        }
+    }
+
+    @Test
+    fun `agents_写路由_空串是跟随桌面的合法取值_必须显式set而不是缺席`() {
+        // proto 钉死的教训:默认模型"跟随桌面"写的是空串 —— 缺席=不改,用户就永远
+        // 回不到"跟随桌面"。六个字符串键一律显式 set,空串照写。
+        val r = agentsReqOf("model", "")
+        assertTrue(r.hasModel())
+        assertEquals("", r.model)
+        val r2 = agentsReqOf("approval_policy", "")
+        assertTrue(r2.hasApprovalPolicy())
+        assertEquals("", r2.approvalPolicy)
+    }
+
+    @Test
+    fun `agents_写路由_词表外的键拒绝_避免静默丢改动`() {
+        val b = SetCodexSettingsRequest.newBuilder()
+        assertFalse(applyControlAgentsSetting(b, "native_mode", "x"))
+        assertFalse(applyControlAgentsSetting(b, "hide_agent_reasoning", "true"))
+        assertFalse(applyControlAgentsSetting(b, "没听过的键", "x"))
+        // 一个字段都没动:拒写的请求必须原样空着,不能带半个脏字段出去。
+        assertEquals(0, b.build().serializedSize)
+    }
+
+    @Test
+    fun `agents_值域校验_只放行_daemon_候选内的值_拒绝给原因`() {
+        val options = listOf("untrusted", "on-request", "never")
+        assertNull(controlAgentsOptionInvalid("on-request", options))
+        // 枚举写错档的脏值,客户端先拦下并给一句原因(daemon 原文之外不编词)。
+        val bad = controlAgentsOptionInvalid("yolo", options)
+        assertTrue(bad != null && bad.isNotBlank())
+        // 候选缺席(空列表):没有任何可写值,写什么都是拒。
+        assertTrue(controlAgentsOptionInvalid("never", emptyList()) != null)
+        // 空串必须真的在候选里才算数:候选没给"跟随桌面"就不许空提交。
+        assertTrue(controlAgentsOptionInvalid("", options) != null)
+        val withFollow = listOf("", "untrusted")
+        assertNull(controlAgentsOptionInvalid("", withFollow))
+    }
+
+    // ---- collab 域:数值(扇出成员上限)→ SetCollabPolicy 路由 ----------------------
+
+    @Test
+    fun `collab_number_写路由_成员上限进协同策略_其余键拒绝`() {
+        val base = CollabPolicy.newBuilder().setCollaborationEnabled(true).setMaxParallelMembers(2).build()
+        val b = base.toBuilder()
+        assertTrue(applyControlCollabNumber(b, "collab.max_parallel_members", 5))
+        val p = b.build()
+        assertEquals(5, p.maxParallelMembers)
+        // 其余项原样带回 —— "提交完整策略"最容易丢的部分。
+        assertTrue(p.collaborationEnabled)
+        // 0 是合法取值(daemon 语义:0=不限),必须显式落字段,不是"清掉"。
+        val b0 = base.toBuilder()
+        assertTrue(applyControlCollabNumber(b0, "collab.max_parallel_members", 0))
+        val p0 = b0.build()
+        assertEquals(0, p0.maxParallelMembers)
+        assertTrue(p0.hasMaxParallelMembers())
+        // 预算键不属于协同树(两套落盘与 CAS),越域拒绝;collab 的开关也不是数值通道。
+        val empty = CollabPolicy.newBuilder()
+        assertFalse(applyControlCollabNumber(empty, "budget.global.ram_working_bytes", 1))
+        assertFalse(applyControlCollabNumber(empty, "collab.collaboration_enabled", 1))
+        assertEquals(0, empty.build().serializedSize)
+    }
+
+    // ---- 数值输入框的单位与域行展开判定 ---------------------------------------------
+
+    @Test
+    fun `数值单位_并行轮次路_成员家_字节键MB_单位错就是口径错`() {
+        assertEquals("路", controlNumberUnit("budget.global.max_parallel_turns"))
+        assertEquals("家", controlNumberUnit("collab.max_parallel_members"))
+        assertEquals("MB", controlNumberUnit("budget.global.ram_working_bytes"))
+        assertEquals("MB", controlNumberUnit("budget.global.disk_cache_bytes"))
+    }
+
+    @Test
+    fun `域行展开判定_域内有接通写通道的项才可展开`() {
+        val rows = controlDomainRows(plane())
+        // budget / collab / agents(含偏好项)都有接通的写通道,可展开。
+        assertTrue(controlDomainExpandable(rows[0].items))
+        assertTrue(controlDomainExpandable(rows[1].items))
+        assertTrue(controlDomainExpandable(rows[2].items))
+        // 纯事实的 memory 与只读 transports:一项写通道都没有,不摆展开箭头 ——
+        // agents 域的事实项已由上方形态卡带出,展开体只剩只读行时是假编辑入口。
+        assertFalse(controlDomainExpandable(rows[3].items))
+        assertFalse(controlDomainExpandable(rows[5].items))
+        // panic 降级域连 items 都没有:不可展开。
+        assertFalse(controlDomainExpandable(emptyList()))
     }
 }

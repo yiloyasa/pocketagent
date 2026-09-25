@@ -25,19 +25,23 @@ import pocketagent.v1.RuntimePolicy
  * 把老 daemon 的 UNIMPLEMENTED 渲染成故障。映射抽成纯函数,这些钉子在 `test` 阶段
  * 就被钉死(ControlPlaneLogicTest),不必依赖真机与 daemon。
  *
- * 【写通道刻意不新增】ControlItem 只是呈现;toggle 走既有 SetCollabPolicy、budget
- * 数值走既有 SetRuntimePolicy(完整策略 + CAS,纪律在 [RuntimeControlState] 的
- * save* 里)。给总览另配一套写路径 = 给同一份状态造第二份真值。本轮只对接两类:
- * collab 域的 toggle 与 budget 域的 number;agents 域的 SetCodexSettings 路由
- * 留 TODO(见 [controlItemRow]),其余一律只读呈现 —— 没接通的写通道绝不摆入口。
+ * 【写通道刻意不新增】ControlItem 只是呈现;toggle 走既有 SetCollabPolicy、
+ * budget 数值走既有 SetRuntimePolicy(完整策略 + CAS,纪律在 [RuntimeControlState]
+ * 的 save* 里),collab 数值走既有 SetCollabPolicy,agents 桌面偏好走既有
+ * SetCodexSettings。给总览另配一套写路径 = 给同一份状态造第二份真值。
+ * 接通的通道之外一律只读呈现 —— 没接通的写通道绝不摆入口。
  */
 
 // ---- 域 id(daemon 契约钉死的稳定键,客户端按 id 匹配、不按 title) --------------
 
 const val CONTROL_DOMAIN_BUDGET = "budget"
 const val CONTROL_DOMAIN_COLLAB = "collab"
+const val CONTROL_DOMAIN_AGENTS = "agents"
 const val CONTROL_DOMAIN_MEMORY = "memory"
 const val CONTROL_DOMAIN_DIALYSIS = "dialysis"
+
+/** collab 域的扇出成员上限项(daemon 钉死的稳定 id;数值写通道走既有 SetCollabPolicy)。 */
+const val COLLAB_MEMBERS_ID = "collab.max_parallel_members"
 
 // ---- 展示模型 ------------------------------------------------------------------
 
@@ -45,19 +49,24 @@ const val CONTROL_DOMAIN_DIALYSIS = "dialysis"
 enum class ControlDotKind { NORMAL, ATTENTION, LIMITED }
 
 /**
- * 一项的写动作。**本轮真正对接的只有 COLLAB_TOGGLE 与 BUDGET_NUMBER**;
- * 其余(含未来可能出现的 select)一律 READ_ONLY —— 没接通的写通道不摆入口。
+ * 一项的写动作。已接通的写通道:collab 的 toggle、budget/collab 的数值、
+ * agents 的桌面偏好 select(候选由 daemon 给);其余一律 READ_ONLY ——
+ * 没接通的写通道不摆入口。
  */
-enum class ControlItemAction { COLLAB_TOGGLE, BUDGET_NUMBER, READ_ONLY }
+enum class ControlItemAction { COLLAB_TOGGLE, COLLAB_NUMBER, BUDGET_NUMBER, AGENTS_SELECT, READ_ONLY }
 
 /** 域内一项的展示模型(字段全部照 daemon 原文带出,不翻译不改写)。 */
 data class ControlItemRow(
+    /** 所属域 id:写动作路由要用的参数,由 [controlDomainRows] 填,不让调用方再猜。 */
+    val domainId: String = "",
     val id: String,
     val label: String,
     val current: String,
     /** 照 proto 原文:toggle / select / number / info;出现新值照抄,渲染为只读。 */
     val kind: String,
     val hint: String,
+    /** select 型候选(proto ControlItem.options 照抄);非 select 项为空。 */
+    val options: List<String> = emptyList(),
     val action: ControlItemAction,
 )
 
@@ -113,27 +122,127 @@ private val COLLAB_TOGGLE_IDS = setOf(
 )
 
 /**
+ * agents 域 item id 里的设置键词表 = CodexSettings 的**字符串**字段(proto model.proto
+ * 的 key 词表)。bool 键(hide_agent_reasoning / disable_paste_burst)刻意不在表内:
+ * select 的候选是字符串,把"开/关"猜成 true/false 就是造一份假账 —— 它们的写呈现
+ * 契约(开关形态)没落地前保持只读。
+ */
+private val AGENTS_SETTING_KEYS = setOf(
+    "approval_policy",
+    "sandbox",
+    "model",
+    "effort",
+    "model_verbosity",
+    "model_reasoning_summary",
+)
+
+/** agents 域一条桌面偏好的写目标:SetCodexSettingsRequest 的 agent_id + 设置键。 */
+data class ControlAgentsTarget(val agentId: String, val key: String)
+
+/**
+ * agents 域 item id → 写目标:"agents.codex.approval_policy" → (codex, approval_policy)。
+ * 设置键**从最右一段拆**(键词表钉死,agentId 本身含点号也不怕);null = 不在路由表内
+ * (只读)—— 路由表外放行就是静默丢改动。
+ */
+fun controlAgentsTarget(itemId: String): ControlAgentsTarget? {
+    if (!itemId.startsWith("agents.")) return null
+    val rest = itemId.removePrefix("agents.")
+    val key = rest.substringAfterLast('.', "")
+    if (key !in AGENTS_SETTING_KEYS) return null
+    val agentId = rest.substringBeforeLast('.', "")
+    if (agentId.isBlank()) return null
+    return ControlAgentsTarget(agentId, key)
+}
+
+/**
+ * agents 域桌面偏好的**值域校验**:写入值必须在 daemon 给的候选(options)里。
+ * 返回 null = 放行;非 null = 拒绝原因(UI 原样显示)。枚举写错档的脏值在客户端
+ * 先拦下 —— daemon 还没见过的取值,放过去就是让它替我们兜底。
+ */
+fun controlAgentsOptionInvalid(value: String, options: List<String>): String? = when {
+    options.isEmpty() -> "此项目前没有可用的候选值"
+    value !in options -> "所选值不在此项提供的候选里"
+    else -> null
+}
+
+/**
+ * agents 域一条桌面偏好 → SetCodexSettingsRequest。**presence 纪律**(proto 钉死):
+ * 恰好 set 被改的那一个字段,值照调用方原样 —— 空串是"跟随桌面"的合法取值,必须
+ * 显式 set 而不是缺席(缺席=不改,用户就永远回不到"跟随桌面")。
+ * 返回 false = 词表外,拒绝写。
+ */
+fun applyControlAgentsSetting(b: pocketagent.v1.SetCodexSettingsRequest.Builder, key: String, value: String): Boolean {
+    if (key !in AGENTS_SETTING_KEYS) return false
+    when (key) {
+        "approval_policy" -> b.setApprovalPolicy(value)
+        "sandbox" -> b.setSandbox(value)
+        "model" -> b.setModel(value)
+        "effort" -> b.setEffort(value)
+        "model_verbosity" -> b.setModelVerbosity(value)
+        "model_reasoning_summary" -> b.setModelReasoningSummary(value)
+    }
+    return true
+}
+
+/**
+ * 控制中心 collab 数值 → CollabPolicy.Builder。成员上限是**计数语义**(0=不限,不是
+ * 清掉),不做 MB 换算;单字段写复用既有 [applyCollabEdit]。返回 false = 路由表外
+ * (预算键/开关键都不是这条通道),拒绝写。
+ */
+fun applyControlCollabNumber(b: CollabPolicy.Builder, itemId: String, value: Long): Boolean {
+    if (itemId != COLLAB_MEMBERS_ID) return false
+    applyCollabEdit(b, "max_parallel_members", value)
+    return true
+}
+
+/**
+ * 控制中心数值输入框的单位口径:**计数键给计数单位,字节键给 MB** —— 单位错就是
+ * 口径错(把"3 家"当"3 MB"存,值差 2^20 倍;把 MB 键标成"家",存储口径立即失真)。
+ */
+fun controlNumberUnit(itemId: String): String = when (itemId) {
+    "budget.global.max_parallel_turns" -> "路"
+    COLLAB_MEMBERS_ID -> "家"
+    else -> "MB"
+}
+
+/**
+ * 域行是否可展开:**域内至少有一项接通了写通道**(动态判定)。daemon 的 writable 是
+ * 域级声明("有通道"),但客户端只对**接通的**通道摆入口 —— 全只读的域(纯事实项,
+ * 或通道尚未接通)不摆展开箭头,免得展开体里一行可写项都没有,像给了个假编辑区。
+ */
+fun controlDomainExpandable(items: List<ControlItemRow>): Boolean =
+    items.any { it.action != ControlItemAction.READ_ONLY }
+
+/**
  * 一项的写动作判定。路由表与 daemon/internal/server/control_plane.go 的取值形态
- * 一一对应:collab 的三个 toggle、budget.global 的七个 number;其余(agents 的
- * SetCodexSettings、collab 的 number、select/未来新 kind)本轮一律只读。
+ * 一一对应:collab 的三个 toggle、collab/budget 的 number、agents 的桌面偏好
+ * select;其余(agents 的事实项、select 无候选/词表外、未来新 kind)一律只读 ——
+ * 没接通的写通道绝不摆入口。
  */
 fun controlItemAction(domainId: String, item: ControlItem): ControlItemAction = when {
     domainId == CONTROL_DOMAIN_COLLAB && item.kind == "toggle" && item.id in COLLAB_TOGGLE_IDS ->
         ControlItemAction.COLLAB_TOGGLE
+    domainId == CONTROL_DOMAIN_COLLAB && item.kind == "number" && item.id == COLLAB_MEMBERS_ID ->
+        ControlItemAction.COLLAB_NUMBER
     domainId == CONTROL_DOMAIN_BUDGET && item.kind == "number" && controlBudgetKey(item.id) != null ->
         ControlItemAction.BUDGET_NUMBER
-    // TODO(控制中心下一轮):agents 域声明了写通道(每 agent 桌面偏好与原生设置,
-    //  走既有 SetCodexSettings/ListAgentConfigOptions)。路由按 "agents.<agentId>.<键>"
-    //  拆 agentId 与设置键再映射;本轮先声明未实现 —— 只读呈现,不摆假的编辑入口。
+    // agents 域的桌面偏好(每 agent 桌面审批/沙箱等枚举)走既有 SetCodexSettings:
+    // 路由按 "agents.<agentId>.<键>" 拆 agentId 与设置键;候选(options)必须由
+    // daemon 给齐 —— 没有可选值的编辑入口是假入口,仍按只读呈现。
+    domainId == CONTROL_DOMAIN_AGENTS && item.kind == "select" &&
+        controlAgentsTarget(item.id) != null && item.optionsCount > 0 ->
+        ControlItemAction.AGENTS_SELECT
     else -> ControlItemAction.READ_ONLY
 }
 
 private fun controlItemRow(domainId: String, item: ControlItem): ControlItemRow = ControlItemRow(
+    domainId = domainId,
     id = item.id,
     label = item.label,
     current = item.current,
     kind = item.kind,
     hint = item.hint,
+    options = item.optionsList,
     action = controlItemAction(domainId, item),
 )
 
@@ -360,21 +469,58 @@ object ControlPlaneState {
     }
 
     /**
-     * 改一个 budget 数值。**路由:既有 SetRuntimePolicy(完整策略 + CAS)**;入参
-     * MB(字节键)/原值(计数键),换算在 [applyControlBudgetNumber]。成功后回读
+     * 改一个数值。**路由:各自域的既有 Set RPC(完整策略 + CAS)** —— budget 走
+     * SetRuntimePolicy、collab 走 SetCollabPolicy(成员上限属协同策略树,两套落盘
+     * 两套 CAS,写错对象=改了不生效);入参 MB(字节键)/原值(计数键),换算在
+     * [applyControlBudgetNumber] / [applyControlCollabNumber]。成功后回读
      * GetControlPlane,不做乐观改写。
      */
     suspend fun applyNumber(domainId: String, itemId: String, newValue: Long): Result<Unit> {
         busyItemId = itemId
         try {
-            if (domainId != CONTROL_DOMAIN_BUDGET) {
-                return Result.failure(IllegalStateException("该项暂不支持在控制中心编辑"))
+            when (domainId) {
+                CONTROL_DOMAIN_BUDGET -> {
+                    // 预算快照同理:CAS 需要 revision,缺席先 Get(与 GetRuntimePolicy 同款读法)。
+                    RuntimeControlState.ensureBudgetSnapshot()?.let { return Result.failure(IllegalStateException(it)) }
+                    val err = RuntimeControlState.saveBudget { b ->
+                        check(applyControlBudgetNumber(b, itemId, newValue)) { "预算项没有对应的写通道:$itemId" }
+                    }
+                    if (err != null) return Result.failure(IllegalStateException(err))
+                }
+                CONTROL_DOMAIN_COLLAB -> {
+                    // 协同快照缺席先 Get(与 applyToggle 同款理由):CAS 需要 revision。
+                    RuntimeControlState.ensureCollabSnapshot()?.let { return Result.failure(IllegalStateException(it)) }
+                    val err = RuntimeControlState.saveCollabPolicy { b ->
+                        check(applyControlCollabNumber(b, itemId, newValue)) { "协同数值没有对应的写通道:$itemId" }
+                    }
+                    if (err != null) return Result.failure(IllegalStateException(err))
+                }
+                else -> return Result.failure(IllegalStateException("该项暂不支持在控制中心编辑"))
             }
-            // 预算快照同理:CAS 需要 revision,缺席先 Get(与 GetRuntimePolicy 同款读法)。
-            RuntimeControlState.ensureBudgetSnapshot()?.let { return Result.failure(IllegalStateException(it)) }
-            val err = RuntimeControlState.saveBudget { b ->
-                check(applyControlBudgetNumber(b, itemId, newValue)) { "预算项没有对应的写通道:$itemId" }
+            refreshSuspend()
+            return Result.success(Unit)
+        } finally {
+            busyItemId = null
+        }
+    }
+
+    /**
+     * 切一个 agents 桌面偏好(select)。**路由:既有 SetCodexSettings**;键→字段的
+     * 映射在 [applyControlAgentsSetting],值域以 daemon 给的 options 为准
+     * ([controlAgentsOptionInvalid])。成功后回读 GetControlPlane,不做乐观改写。
+     */
+    suspend fun applySelect(domainId: String, itemId: String, newValue: String, options: List<String>): Result<Unit> {
+        busyItemId = itemId
+        try {
+            if (domainId != CONTROL_DOMAIN_AGENTS) {
+                return Result.failure(IllegalStateException("该项暂不支持在控制中心切换"))
             }
+            val target = controlAgentsTarget(itemId)
+                ?: return Result.failure(IllegalStateException("该项没有对应的写通道:$itemId"))
+            // 值域校验放在路由之后、写之前:枚举写错档的脏值在客户端先拦下并给原因,
+            // 不放过去让 daemon 替我们兜底。
+            controlAgentsOptionInvalid(newValue, options)?.let { return Result.failure(IllegalStateException(it)) }
+            val err = RuntimeControlState.saveCodexSetting(target.agentId, target.key, newValue)
             if (err != null) return Result.failure(IllegalStateException(err))
             refreshSuspend()
             return Result.success(Unit)

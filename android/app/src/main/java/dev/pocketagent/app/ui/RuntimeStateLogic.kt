@@ -38,6 +38,7 @@ import pocketagent.v1.RuntimeContractReport
 import pocketagent.v1.RuntimeLimits
 import pocketagent.v1.RuntimePolicyResponse
 import pocketagent.v1.RuntimeStateResponse
+import pocketagent.v1.SetCodexSettingsRequest
 import pocketagent.v1.SetCollabPolicyRequest
 import pocketagent.v1.SetRuntimePolicyRequest
 import pocketagent.v1.UnknownEventResponse
@@ -881,6 +882,31 @@ object RuntimeControlState {
         } catch (e: Exception) {
             extractRpcMessage(e)
         }
+    }
+
+    /**
+     * 控制中心写一条 agents 桌面偏好。**路由:既有 SetCodexSettings(单键补丁,
+     * presence 纪律)** —— 请求里只 set 被改的那一项,其余字段缺席 = daemon 不改该项
+     * (proto 钉死的语义);值照调用方原样,空串是"跟随桌面"的合法取值不是缺席。
+     * 键→字段的映射与词表在 [applyControlAgentsSetting](纯函数,ControlPlaneLogicTest 钉死)。
+     *
+     * 【为什么成功后要双写本地】与设置页 writeCodex 同一条纪律:model/effort 还要进
+     * AgentConnection.saveAgentDefaults(新会话的初始模型/强度从那里读)—— 控制中心
+     * 改了模型而侧栏/新会话还按旧值开,就是"两边各写各的"事故。返回 null = 成功,
+     * 失败返回 daemon 原文(与 saveBudget 同款签名)。
+     */
+    suspend fun saveCodexSetting(agentId: String, key: String, value: String): String? = try {
+        val req = SetCodexSettingsRequest.newBuilder().setAgentId(agentId)
+        check(applyControlAgentsSetting(req, key, value)) { "桌面偏好没有对应的写通道:$key" }
+        val returned = withContext(Dispatchers.IO) {
+            AgentConnection.modelService().setCodexSettings(req.build())
+        }
+        if (key == "model" || key == "effort") {
+            AgentConnection.saveAgentDefaults(agentId, returned.model, returned.effort)
+        }
+        null
+    } catch (e: Exception) {
+        extractRpcMessage(e)
     }
 
     /** 确认一条未知事件;成功用 daemon 落库后的真值替换本地行(避免回显 stale 状态)。 */
