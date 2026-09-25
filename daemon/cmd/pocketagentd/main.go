@@ -26,6 +26,7 @@ import (
 	"github.com/pocketagent/daemon/internal/dshapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/hostenv"
+	"github.com/pocketagent/daemon/internal/jobobject"
 	"github.com/pocketagent/daemon/internal/mdns"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -354,6 +355,17 @@ func main() {
 			mdnsReg = reg
 			log.Printf("mDNS 自动发现已启用: _pocketagent._tcp 端口 %d 主机 %s", port, srv.DisplayName())
 		}
+	}
+
+	// Job Object 兜底(用户红线「结束时不应残留任务和后台进程」):把自己与
+	// 之后拉起的全部子进程绑进 Kill-on-Close Job —— daemon 无论怎么死
+	// (优雅退出/taskkill /F/崩溃),内核保证 codex/dsh/pi 子进程一起带走,
+	// 热部署不再残留孤儿。必须在任何 agent 子进程拉起之前绑定(见包注释);
+	// 绑定失败只记日志不阻塞启动 —— 兜底层缺席时退回优雅退出+手动收尸。
+	if _, err := jobobject.Assign(); err != nil {
+		log.Printf("WARNING: Job Object 绑定失败(退出时可能残留 agent 子进程,不影响其他功能): %v", err)
+	} else {
+		log.Printf("Job Object 已绑定:本进程退出时全部 agent 子进程随之终止")
 	}
 
 	// 优雅退出:Ctrl+C / kill 时先注销 mDNS(发 GOODBYE,局域网内缓存立刻过期),
