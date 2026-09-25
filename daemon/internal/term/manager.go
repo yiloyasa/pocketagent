@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	pty "github.com/aymanbagabas/go-pty"
@@ -204,6 +205,18 @@ func (m *Manager) Open(sessionID, cwd, shell string, cols, rows int, env map[str
 	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	if runtime.GOOS == "windows" {
+		// 【禁弹前台】ConPTY 会话本身需要一个 conhost,但那是伪终端的"后台
+		// 显示面",不是桌面上的前台窗口。go-pty 会把 SysProcAttr.CreationFlags
+		// 原样并入 CreateProcess(见其 cmd_windows.go),所以 CREATE_NO_WINDOW
+		// 在这里是有效通路 —— 不加的话,手机开终端时用户桌面会闪 pwsh 窗
+		// (与 hidewin 包治理的探活闪窗同一性质)。注意 go-pty 自己拼
+		// StartupInfo,不读 HideWindow 字段,所以只能走 CreationFlags;
+		// 且它的 p.Command() 在 start() 内部才初始化 SysProcAttr,这里
+		// 必须自己先建,否则空指针(go-pty start 会尊重已存在的实例)。
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		cmd.SysProcAttr.CreationFlags |= 0x08000000 // CREATE_NO_WINDOW
 	}
 	// Windows:CreateProcess 默认继承父进程的"忽略 Ctrl+C"标志,若 shell
 	// 继承了它,后续 Ctrl+C 广播会被 conhost 跳过(见 ctrl.go 陷阱 1)。
