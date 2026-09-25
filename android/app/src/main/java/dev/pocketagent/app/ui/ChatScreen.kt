@@ -139,6 +139,17 @@ import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.TerminalFont
+import dev.pocketagent.app.ui.component.TerminalBlockKind
+import dev.pocketagent.app.ui.component.TerminalFootnote
+import dev.pocketagent.app.ui.component.TerminalOutputBlock
+import dev.pocketagent.app.ui.component.TerminalToolBlock
+import dev.pocketagent.app.ui.component.TerminalUserBlock
+import dev.pocketagent.app.ui.component.TmuxStatusLine
+import dev.pocketagent.app.ui.component.composerShowsPrompt
+import dev.pocketagent.app.ui.component.formatTurnFootnote
+import dev.pocketagent.app.ui.component.terminalBlockKind
+import dev.pocketagent.app.ui.component.terminalScanlines
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.UsageCache
 import dev.pocketagent.app.ui.component.UsageSnapshot
@@ -1627,6 +1638,23 @@ fun ChatScreen(
     val contextWindow = reportedWindow
     val windowIsFallback = reportedWindow <= 0
 
+    // 【生效模型名】在输入栏前统一计算,供"输入框上方全宽行"、tmux 状态条与
+    // "工具行模型 chip"复用。
+    // 修复 2b:displayName 可能为空串(daemon 返回的模型未带展示名),空串不能触发
+    // `?:` 兜底,必须用 takeIf { isNotBlank() } 先判空,再回退到生效模型 id 去掉
+    // agent 前缀的裸名(modelBareName:"pi/glm-5.3" → "glm-5.3")或"跟随桌面"。
+    // 这样无论模型列表是否加载完,当前模型名都非空、完整可读。
+    // 一律用 model/list 返回的 displayName,不硬编码任何模型名。
+    // 【兜底键用 effectiveModelId 而非 selectedModel】生效链会落到 daemon
+    // 落库的 Thread.ModelID(pi 会话真实模型),芯片显示跟真实跑的一致。
+    val modelDisplayName = effectiveModel?.displayName?.takeIf { it.isNotBlank() }
+    val modelName = modelDisplayName
+        ?: if (effectiveModelId.isEmpty()) "跟随桌面"
+        else modelBareName(effectiveModelId)
+    // 内置档没有的取值(pi 动态档位 off/minimal/max 及未来新增)回
+    // effortLabelOf 的中文标签,模型 chip 上不至于露出英文原 id。
+    val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: st.runningEffort.orEmpty())
+
     // ---- 上下文窗口卡:断网缓存 + 自动刷新 ----
     // ① 每次收到用量更新(含从缓存回填的首帧)都写一份"最后一次已知用量"到本地:
     //    断网/自动断网后,卡片仍能照常显示这些数字,并标出是什么时候的。
@@ -2461,9 +2489,15 @@ fun ChatScreen(
         // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
         val lastQueuedIndex = st.items.indexOfLast { it.deliverState == DELIVERY_QUEUED }
         LazyColumn(
-            Modifier.weight(1f).padding(horizontal = 16.dp),
+            Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp)
+                // 黑客终端模式:CRT 扫描线(2dp 周期暗线,alpha 4%,只碰绘制层);
+                // 叠在内容之上,常规主题零影响(见 TerminalBlocks.terminalScanlines)。
+                .then(if (PaHacker.isHacker) Modifier.terminalScanlines() else Modifier),
             state = listState,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            // 黑客终端模式:块间留白 22dp(Warp 口径:留白>分割线);常规主题 14dp 不动
+            verticalArrangement = Arrangement.spacedBy(if (PaHacker.isHacker) 22.dp else 14.dp),
             contentPadding = PaddingValues(vertical = 12.dp),
         ) {
             // 【F-D 加载更早】历史被截断时在时间线顶部给出的增量入口;离线快照
@@ -2491,7 +2525,65 @@ fun ChatScreen(
                     index == st.items.lastIndex &&
                     st.items.size > prevCount
                 MessageEnterAnimation(arm = enterArm) {
-                    when (item.role) {
+                    if (PaHacker.isHacker) {
+                    // 黑客终端模式:主对话读作"终端会话"——四类 Block(输入/输出/工具/脚注),
+                    // 映射走纯函数 terminalBlockKind(JVM 单测钉住);无终端形态的 item
+                    // (thinking/codex_event)保持既有渲染,plan/usage 照旧不进时间线。
+                    when (terminalBlockKind(item)) {
+                        TerminalBlockKind.USER -> TerminalUserBlock(
+                            item, uiScale,
+                            // 「撤回排队」入口与常规主题同一门控:只挂最后一条排队消息
+                            queueClearOn = queueClearOn && index == lastQueuedIndex,
+                            onClearQueued = { clearQueuedInputs() },
+                            attachmentsContent = if (item.attachments.isEmpty()) null else { {
+                                item.attachments.chunked(2).forEach { rowAttachments ->
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        rowAttachments.forEach { attachment ->
+                                            AttachmentCard(
+                                                attachment = attachment,
+                                                preview = remember(
+                                                    attachment.name,
+                                                    attachment.previewData?.contentHashCode(),
+                                                ) {
+                                                    loadAttachmentPreview(ctx, attachment)
+                                                },
+                                                modifier = Modifier.weight(1f),
+                                                onClick = { openAttachment(attachment) },
+                                            )
+                                        }
+                                        if (rowAttachments.size == 1) {
+                                            Spacer(Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            } },
+                        )
+                        TerminalBlockKind.TOOL -> TerminalToolBlock(item, uiScale)
+                        TerminalBlockKind.OUTPUT -> TerminalOutputBlock(
+                            item.text, uiScale,
+                            onOpenUrl = onOpenBrowser,
+                        )
+                        TerminalBlockKind.KEEP_EXISTING -> when (item.role) {
+                            "thinking" -> if (AgentConnection.showThinking) {
+                                ThinkingCard(item.text, thinkScale, streaming = false)
+                            } else Unit
+                            "codex_event" -> item.codexEvent?.let { ev ->
+                                CodexEventCard(
+                                    event = ev,
+                                    uiScale = uiScale,
+                                    guardianOverridden = st.guardianOverridden.contains(ev.reviewId),
+                                    onApproveGuardian = { approveGuardian(it) },
+                                    onOpenSettings = onOpenSettings,
+                                )
+                            }
+                            else -> Unit
+                        }
+                        TerminalBlockKind.SKIP -> Unit
+                    }
+                    } else when (item.role) {
                     "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         Column(
                             Modifier
@@ -2659,6 +2751,15 @@ fun ChatScreen(
             // 这里不再重复渲染,否则同一步骤会出现两份。
             if (st.streaming) {
                 item(key = "streaming-bubble") {
+                    if (PaHacker.isHacker) {
+                    // 黑客终端模式:流式输出块(块尾 braille 转轮,80ms/帧);
+                    // 等首 token 时正文为空,TerminalOutputBlock 只渲染转轮本身。
+                    TerminalOutputBlock(
+                        st.streamText, uiScale,
+                        onOpenUrl = onOpenBrowser,
+                        streaming = true,
+                    )
+                    } else {
                     // 【流式两相切换】等首 token(三点) → 正文流式:AnimatedContent +
                     // spring 过渡(淡入+轻微上移,可打断)。AnimatedContent 自带尺寸
                     // 过渡,相位切换时高度不跳变;正文帧间更新不重播转场(同一 targetState)。
@@ -2700,11 +2801,39 @@ fun ChatScreen(
                             }
                         }
                     }
+                    }
+                }
+            }
+            // 黑客终端模式:回合脚注(④)—— 轮次终局后挂在列表末尾右对齐。
+            // 【不造数据】只在"有真实终局知识"时出现:运行中/恢复中绝不显示;
+            // 有失败信息给 ✗,有真实 token 用量给 ✓ N tok,什么都没有只给 ✓。
+            if (PaHacker.isHacker && !st.running && !st.recovering && st.recoveryError == null &&
+                (st.turnUsage != null || st.errorMessage != null)
+            ) {
+                item(key = "turn-footnote") {
+                    TerminalFootnote(
+                        formatTurnFootnote(
+                            success = st.errorMessage == null,
+                            elapsedMs = 0.0, // 回合时长无现成数据,不编造
+                            outputTokens = st.turnUsage?.outputTokens ?: 0,
+                        ),
+                    )
                 }
             }
         }
         // 组合完成后登记本帧条目数(下一帧据此判定"是否末尾追加了新消息")
         SideEffect { prevItemCount.value = st.items.size }
+
+        // ---- tmux 式状态条(黑客终端模式):输入条上方的"贴底仪表" ----
+        // 左段 [0:pa] + 会话标题;右段 连接状态 ● + 当前模型名 + HH:MM。
+        // 数据全部取现成状态(connState/threadTitle/modelName/设备时钟),不造。
+        if (PaHacker.isHacker) {
+            TmuxStatusLine(
+                title = threadTitle,
+                connState = connSt,
+                modelName = modelName,
+            )
+        }
 
         // ---- 输入区(对标图五):附件行 + 双行胶囊 [输入 / + 审批 模型·强度 发送] ----
         Column(
@@ -2795,21 +2924,8 @@ fun ChatScreen(
                 }
             }
 
-            // 【生效模型名】在输入栏前统一计算,供"输入框上方全宽行"与"工具行模型 chip"复用。
-            // 修复 2b:displayName 可能为空串(daemon 返回的模型未带展示名),空串不能触发
-            // `?:` 兜底,必须用 takeIf { isNotBlank() } 先判空,再回退到生效模型 id 去掉
-            // agent 前缀的裸名(modelBareName:"pi/glm-5.3" → "glm-5.3")或"跟随桌面"。
-            // 这样无论模型列表是否加载完,当前模型名都非空、完整可读。
-            // 一律用 model/list 返回的 displayName,不硬编码任何模型名。
-            // 【兜底键用 effectiveModelId 而非 selectedModel】生效链会落到 daemon
-            // 落库的 Thread.ModelID(pi 会话真实模型),芯片显示跟真实跑的一致。
-            val modelDisplayName = effectiveModel?.displayName?.takeIf { it.isNotBlank() }
-            val modelName = modelDisplayName
-                ?: if (effectiveModelId.isEmpty()) "跟随桌面"
-                else modelBareName(effectiveModelId)
-            // 内置档没有的取值(pi 动态档位 off/minimal/max 及未来新增)回
-            // effortLabelOf 的中文标签,模型 chip 上不至于露出英文原 id。
-            val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: st.runningEffort.orEmpty())
+            // 【生效模型名】已上提到函数作用域(effectiveModel 声明处):
+            // hacker 模式的 tmux 状态条在输入栏上方,与本栏共用同一个 modelName。
 
             var approvalMenu by remember { mutableStateOf(false) }
             // 【聚焦辉光】输入框聚焦/失焦经 spring 淡入淡出 1dp Accent 描边:
@@ -2953,7 +3069,12 @@ fun ChatScreen(
                             // 右侧预留 30dp:保证右上角图标不会压住光标 / 末尾文字
                             .padding(start = 18.dp, end = 30.dp, top = 12.dp, bottom = 12.dp)
                             .heightIn(min = 24.dp),
-                        textStyle = TextStyle(fontSize = 15.sp, color = Pa.TextPrimary),
+                        // 黑客终端模式:输入框字体等宽(JetBrains Mono,见 TerminalFont)
+                        textStyle = TextStyle(
+                            fontSize = 15.sp,
+                            color = Pa.TextPrimary,
+                            fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
+                        ),
                         // 聚焦态喂给外层胶囊的辉光描边(见上方 inputFocused)
                         interactionSource = inputInteraction,
                         cursorBrush = SolidColor(Pa.Accent),
@@ -2962,22 +3083,39 @@ fun ChatScreen(
                         // 只在离线快照态停用 —— 离线发不出去,别让用户白打一段话。
                         enabled = true,
                         decorationBox = { inner ->
-                            Box {
-                                if (input.isEmpty()) {
+                            // 黑客终端模式:输入非空时行首渲染 `❯ ` 提示符装饰(Pa.Accent);
+                            // 空输入显示 hint,不显示 ❯(见 composerShowsPrompt 纯函数)。
+                            Row(verticalAlignment = Alignment.Top) {
+                                if (PaHacker.isHacker && composerShowsPrompt(input)) {
                                     Text(
-                                        when {
-                                            offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
-                                            // 【P1-9】听写进行中:placeholder 提示。仅 LISTENING 态展示,
-                                            // 点击停止后状态机立即回 IDLE、占位符随之切回常规文案;
-                                            // 停止听写后,已开始的转写结果仍会经结果回调落入输入框,
-                                            // 如后续引入"转写中"独立状态,可再补停止后的兜底提示。
-                                            voiceUi.listening -> "语音输入中…"
-                                            else -> "随心输入,发给电脑上的 agent…"
-                                        },
-                                        fontSize = 15.sp, color = Pa.TextTertiary,
+                                        "❯ ",
+                                        color = Pa.Accent,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = TerminalFont.chatFont,
                                     )
                                 }
-                                inner()
+                                Box {
+                                    if (input.isEmpty()) {
+                                        Text(
+                                            when {
+                                                offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
+                                                // 【P1-9】听写进行中:placeholder 提示。仅 LISTENING 态展示,
+                                                // 点击停止后状态机立即回 IDLE、占位符随之切回常规文案;
+                                                // 停止听写后,已开始的转写结果仍会经结果回调落入输入框,
+                                                // 如后续引入"转写中"独立状态,可再补停止后的兜底提示。
+                                                voiceUi.listening -> "语音输入中…"
+                                                // 黑客终端模式:hint 改为指令口吻(规格文案)
+                                                PaHacker.isHacker -> "输入指令…"
+                                                else -> "随心输入,发给电脑上的 agent…"
+                                            },
+                                            fontSize = 15.sp,
+                                            color = Pa.TextTertiary,
+                                            fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
+                                        )
+                                    }
+                                    inner()
+                                }
                             }
                         },
                     )

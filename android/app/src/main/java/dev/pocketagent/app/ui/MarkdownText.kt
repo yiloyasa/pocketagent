@@ -26,6 +26,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaHacker
 
@@ -238,7 +239,9 @@ private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
     Text(
         text = line.annotated(),
         // 黑客终端模式:正文行整体等宽(代码块本来就是等宽,普通行随之统一)。
-        fontFamily = if (PaHacker.isHacker) FontFamily.Monospace else null,
+        // 字体走 TerminalFont.chatFont(JetBrains Mono,下载落库 res/font);
+        // 资源缺失的回退是 theme 层的 PaHacker.mono(系统等宽)。
+        fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
         modifier = Modifier.fillMaxWidth(),
         color = Pa.TextPrimary,
         fontSize = (if (line.kind == MarkdownLineKind.HEADING) fontSize + 2 else fontSize).sp,
