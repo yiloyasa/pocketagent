@@ -86,7 +86,9 @@ func (p *DshProvider) ConfigOptionsCatalog(ctx context.Context, t *store.Thread)
 	}
 	var opts []dshapp.ConfigOption
 	err := p.withClientCtx(ctx, dshInitBudget, func(ctx context.Context, c dshClient) error {
-		st, err := c.SessionResume(ctx, sid)
+		// cwd 按 rc.3 契约带上(缺失时 resume 被 -32602 拒;落库没记 cwd 的老
+		// 线程传空串,由 resume 走原参形态并如实失败,不在设置页路径上猜目录)。
+		st, err := c.SessionResume(ctx, sid, t.ExternalSession.Cwd)
 		if err != nil {
 			return fmt.Errorf("session/resume %s: %w", sid, err)
 		}

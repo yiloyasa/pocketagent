@@ -72,6 +72,7 @@ type fakeDshClient struct {
 
 	newCalls   []string // cwd 记录
 	resumeHits []string
+	resumeCwds []string // 与 resumeHits 一一对应:rc.3 契约要求 resume 带 cwd 的回归钉
 	closeHits  []string
 	setCalls   []setConfigCall
 	responds   []respondCall
@@ -102,10 +103,11 @@ func (f *fakeDshClient) SessionList(context.Context) ([]dshapp.SessionListEntry,
 	defer f.mu.Unlock()
 	return f.list, f.listErr
 }
-func (f *fakeDshClient) SessionResume(_ context.Context, sid string) (*dshapp.SessionState, error) {
+func (f *fakeDshClient) SessionResume(_ context.Context, sid, cwd string) (*dshapp.SessionState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resumeHits = append(f.resumeHits, sid)
+	f.resumeCwds = append(f.resumeCwds, cwd)
 	if f.resumeErr != nil {
 		return nil, f.resumeErr
 	}
@@ -171,6 +173,7 @@ func (f *fakeDshClient) Close() {
 type fakeSnapshot struct {
 	newCalls   []string
 	resumeHits []string
+	resumeCwds []string
 	closeHits  []string
 	cancelHits []string
 	setCalls   []setConfigCall
@@ -183,6 +186,7 @@ func (f *fakeDshClient) snapshot() fakeSnapshot {
 	return fakeSnapshot{
 		newCalls:   append([]string(nil), f.newCalls...),
 		resumeHits: append([]string(nil), f.resumeHits...),
+		resumeCwds: append([]string(nil), f.resumeCwds...),
 		closeHits:  append([]string(nil), f.closeHits...),
 		cancelHits: append([]string(nil), f.cancelHits...),
 		setCalls:   append([]setConfigCall(nil), f.setCalls...),

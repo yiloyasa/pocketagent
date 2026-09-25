@@ -69,6 +69,21 @@ func TestFakeDshHelperProcess(t *testing.T) {
 			respond(*m.ID, json.RawMessage(probeHandshakeJSON))
 		case "session/new":
 			respond(*m.ID, map[string]interface{}{"sessionId": "fake-sess-1", "configOptions": json.RawMessage(probeConfigOptionsJSON)})
+		case "session/resume":
+			// rc.3 契约(升级兼容探针 docs/verify/evidence/dsh-resume-compat-probe.md
+			// 实测,与 set_config_option 的 rc.3 钉子同口径):params 必须带 cwd,
+			// 缺失按 zod 行为回 -32602(data 指明 cwd required —— A1 帧);应答
+			// 不回显 sessionId,只有 configOptions(A2 帧全文 2073 字节无该键)。
+			var p struct {
+				SessionID string `json:"sessionId"`
+				Cwd       string `json:"cwd"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			if p.Cwd == "" {
+				respondErr(*m.ID, -32602, "Invalid params")
+				continue
+			}
+			respond(*m.ID, map[string]interface{}{"configOptions": json.RawMessage(probeConfigOptionsJSON)})
 		case "session/prompt":
 			// 先发一条 session/update 通知,再回终局(验证通知+应答混流分帧)。
 			notif, _ := json.Marshal(map[string]interface{}{

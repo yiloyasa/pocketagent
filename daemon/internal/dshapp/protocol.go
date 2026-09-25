@@ -206,12 +206,45 @@ type SessionListEntry struct {
 
 // session/resume:恢复持久化会话(log 恢复,不重放旧 update —— 探针第 6 项实测
 // 重放=0 帧)。应答带 configOptions(探针修正②),调用方据此刷新模型缓存。
-func (c *Client) SessionResume(ctx context.Context, sessionID string) (*SessionState, error) {
-	raw, err := c.CallCtx(ctx, "session/resume", map[string]interface{}{"sessionId": sessionID})
+//
+// 【2026-09-25 升级兼容探针(docs/verify/evidence/dsh-resume-compat-probe.md)】
+// rc.3 的 resume 参数 zod 校验**要求 cwd 在场**:单发 {sessionId} 被 -32602
+// "Invalid params" 拒绝,data 指明 cwd expected string received undefined ——
+// 这就是"dsh 0.1.5-rc.2→rc.3 升级后旧会话发不出消息"的真因(daemon 现行发法
+// 恰好只有 sessionId)。补 cwd 后 rc.2 时代的旧会话(同 sessionId、v3 日志)
+// 直接恢复成功;rc.2 对多出的 cwd 也接受(P0 探针第 6 项即带 cwd 实测通过)。
+// cwd 传空串则回退单参(不伪造目录 —— 调用方拿不出 cwd 时宁可失败走降级)。
+//
+// 【应答形状实测】rc.3 的 resume 应答**不再回显 sessionId**(顶层只有
+// configOptions;探针 A2 帧全文 2073 字节无 sessionId 键)。探针 A3 实测
+// "session is already active: <旧id>"、恢复后对原 id session/prompt 被受理
+// (报 no API key 凭证错误而非会话不存在)—— 恢复后的会话仍以**原 id** 寻址,
+// 故应答缺 sessionId 时回填请求参数里的 sessionID:这不是猜,是同一 id 的
+// 双重实测。rc.2 应答回显同 id,兼容两种形状。
+func (c *Client) SessionResume(ctx context.Context, sessionID, cwd string) (*SessionState, error) {
+	params := map[string]interface{}{"sessionId": sessionID}
+	if cwd != "" {
+		params["cwd"] = cwd // rc.3 zod 必填;rc.2 接受(探针证据见上)
+	}
+	raw, err := c.CallCtx(ctx, "session/resume", params)
 	if err != nil {
 		return nil, fmt.Errorf("session/resume: %w", err)
 	}
-	return parseSessionState(raw, "session/resume")
+	return parseResumeState(raw, sessionID)
+}
+
+// parseResumeState 解析 session/resume 应答:与 session/new 不同,rc.3 不回显
+// sessionId(探针实测,证据见 SessionResume 注释),恢复后的会话以请求里的
+// 原 id 寻址 → 应答缺 sessionId 时回填请求参数,解析坏帧仍显式报错。
+func parseResumeState(raw json.RawMessage, requested string) (*SessionState, error) {
+	st := &SessionState{}
+	if err := json.Unmarshal(raw, st); err != nil {
+		return nil, fmt.Errorf("session/resume 应答无法解析: %w", err)
+	}
+	if st.SessionID == "" {
+		st.SessionID = requested
+	}
+	return st, nil
 }
 
 // SessionClose 静默取消+排空+落盘+销毁该会话(DeleteThread 收尾)。

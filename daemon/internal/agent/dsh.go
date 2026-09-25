@@ -78,7 +78,9 @@ type dshClient interface {
 	Initialize(ctx context.Context) (*dshapp.InitializeResult, error)
 	SessionNew(ctx context.Context, cwd string) (*dshapp.SessionState, error)
 	SessionList(ctx context.Context) ([]dshapp.SessionListEntry, error)
-	SessionResume(ctx context.Context, sessionID string) (*dshapp.SessionState, error)
+	// SessionResume 的 cwd:rc.3 zod 必填(dsh-resume-compat-probe.md 实测),
+	// 缺它旧会话一律 -32602 "Invalid params" —— 升级后"会话发不出消息"的真因。
+	SessionResume(ctx context.Context, sessionID, cwd string) (*dshapp.SessionState, error)
 	SessionClose(ctx context.Context, sessionID string) error
 	SetConfigOption(ctx context.Context, sessionID, optionID, value string) error
 	Prompt(ctx context.Context, sessionID string, blocks []map[string]interface{}) (json.RawMessage, error)
@@ -727,6 +729,14 @@ func (p *DshProvider) ensureSession(ctx context.Context, req TurnRequest) (strin
 	if ext := req.Thread.ExternalSession; ext.SessionID != "" {
 		sid, catOpts, err := p.remountSession(ctx, ext)
 		if err != nil {
+			// 一次性降级(唯一出口):会话确实在列、resume 仍被 agent 拒绝(-32602)
+			// = "agent 升级导致旧会话不可恢复"而非网络抖动/数据错位。此时若只是
+			// 如实报错,手机端重试永远重放同一路径,这个会话从此发不出任何消息、
+			// 用户没有出路(真机实锤,l2-20260925/RESULT.md 适配债 1)。
+			var re *dshRemountError
+			if errors.As(err, &re) && re.downgradeable {
+				return p.rebuildSessionAfterUpgrade(ctx, req, ext, gen, err)
+			}
 			// 显式报错,不静默新开 —— "不 resume 就静默吞请求"的三方共同教训,
 			// 以及蓝本 §4.3:不在列 → 显式报错。
 			return "", err
@@ -735,12 +745,19 @@ func (p *DshProvider) ensureSession(ctx context.Context, req TurnRequest) (strin
 		p.refreshCatalogFromResume(catOpts) // 探针修正②
 		return sid, nil
 	}
+	return p.createSession(ctx, req, gen)
+}
+
+// createSession session/new 新建并登记:threadMap 写入 + ExternalSession 写回
+// (server 层轮次后落库,手机端据此展示外部会话引用;zcode 同款机制)+ 灌"新
+// 会话初始值"。ensureSession 的"无 ExternalSession"常规新建分支与升级降级
+// 重建共用,保证两条路的登记语义完全一致。
+func (p *DshProvider) createSession(ctx context.Context, req TurnRequest, gen int) (string, error) {
 	st, err := p.client.SessionNew(ctx, req.Workspace)
 	if err != nil {
 		return "", fmt.Errorf("session/new: %w", err)
 	}
 	p.setDshThreadRef(req.Thread.ID, threadRef{id: st.SessionID, gen: gen})
-	// server 层轮次后落库;手机端据此展示外部会话引用(zcode 同款机制)。
 	req.Thread.ExternalSession = store.ExternalSessionRef{SessionID: st.SessionID, Cwd: req.Workspace}
 	log.Printf("[dsh] 新建会话 %s cwd=%s", st.SessionID, req.Workspace)
 	// 灌"新会话初始值"(设置页原生设置;探针实证 set_config_option 仅会话内生效
@@ -749,6 +766,27 @@ func (p *DshProvider) ensureSession(ctx context.Context, req TurnRequest) (strin
 	// model/effort 的显式偏好)。
 	p.applyNativeDefaults(ctx, st.SessionID)
 	return st.SessionID, nil
+}
+
+// rebuildSessionAfterUpgrade 一次性降级:原会话因 agent 升级不可恢复(resume
+// 被拒且 list 确认在列)→ 自动 session/new 新开会话,ExternalSessionRef 写回
+// 新 sessionId(store 落库由 server 层轮次后完成,与常规新建同机制),后续轮次
+// 稳定在新会话上。三条纪律:
+//   - 只在用户主动发消息的路径发生(唯一调用链 ensureSession ← Run):发消息 =
+//     明确要继续用这个会话,降级才是用户意志;后台/探测路径绝不自动触发;
+//   - 前提是 remountSession 已判定 downgradeable(list 在列 + resume -32602,
+//     dsh-resume-compat-probe.md 实测形态):数据错位(list 里根本没有)永远
+//     显式拒绝,绝不降级 —— 那不是升级问题,静默新开会把错位掩盖掉;
+//   - 绝不伪造旧上下文:新会话就是新会话,日志写明原委与原 sessionId(用户仍可
+//     在桌面端找回旧记录),手机端不再看到"resume 失败且重试必败"的死路。
+func (p *DshProvider) rebuildSessionAfterUpgrade(ctx context.Context, req TurnRequest, old store.ExternalSessionRef, gen int, cause error) (string, error) {
+	sid, err := p.createSession(ctx, req, gen)
+	if err != nil {
+		// 降级也失败:两个失败都如实说出,不吞任何一个。
+		return "", fmt.Errorf("dsh 原会话 %s 不可恢复(%v),自动重建新会话又失败: %w", old.SessionID, cause, err)
+	}
+	log.Printf("[dsh] 原会话 %s 因 agent 升级不可恢复(resume 被拒:%v),已自动重建新会话 %s 替换;旧上下文不再延续,本轮起在新会话继续对话", old.SessionID, cause, sid)
+	return sid, nil
 }
 
 // applyNativeDefaults 把设置页记下的"新会话初始值"灌进一个刚建立的会话。
@@ -766,42 +804,81 @@ func (p *DshProvider) applyNativeDefaults(ctx context.Context, sid string) {
 //  1. 能力门控:sessionCapabilities.resume/list 不在场 → 显式报错(§5.2,不猜);
 //  2. session/list 校验在列(探针修正④:按 sessionId+cwd 双因子;无 title 可比);
 //  3. 在列才 session/resume(log 恢复不重放旧 update,正好避免手机端重复帧)。
+//
+// 【cwd 传递(rc.3 升级兼容,dsh-resume-compat-probe.md 实测)】rc.3 的 resume
+// zod 必填 cwd:优先用落库的 ext.Cwd,缺失时用 list 校验命中的那条目里的 cwd
+// (同一次校验顺手取得,不再多猜一个目录)。
+//
+// 【降级分类】返回 *dshRemountError:downgradeable=true 仅当"list 校验确认会话
+// 在列、resume 仍报 -32602"—— 列表里有它说明数据没错位,是 agent 侧不认这份数据
+// (升级格式断裂);此时由调用方(ensureSession,用户发消息路径)决定一次性重建。
+// list 不在列(数据错位)、list 调用失败、能力缺席等一律 false:维持显式拒绝,
+// 不静默新开("不 resume 就静默吞请求"的三方共同教训)。
 func (p *DshProvider) remountSession(ctx context.Context, ext store.ExternalSessionRef) (string, []dshapp.ConfigOption, error) {
 	if p.caps != nil && !p.caps.CanResume() {
-		return "", nil, fmt.Errorf("dsh %s 不支持会话恢复(sessionCapabilities.resume 不在场),无法重挂载会话 %s", p.caps.AgentInfo.Version, ext.SessionID)
+		return "", nil, &dshRemountError{fmt.Errorf("dsh %s 不支持会话恢复(sessionCapabilities.resume 不在场),无法重挂载会话 %s", p.caps.AgentInfo.Version, ext.SessionID), false}
 	}
+	resumeCwd := ext.Cwd
 	if p.caps != nil && p.caps.CanList() {
 		entries, err := p.client.SessionList(ctx)
 		if err != nil {
-			return "", nil, fmt.Errorf("重挂载前 session/list 校验失败: %w", err)
+			return "", nil, &dshRemountError{fmt.Errorf("重挂载前 session/list 校验失败: %w", err), false}
 		}
-		if !dshSessionListed(entries, ext) {
-			return "", nil, fmt.Errorf("dsh 会话 %s 不在可恢复列表中(session/list 校验未通过),不静默新开会话;如需继续请删除该会话后重建", ext.SessionID)
+		entry, listed := dshSessionEntry(entries, ext)
+		if !listed {
+			return "", nil, &dshRemountError{fmt.Errorf("dsh 会话 %s 不在可恢复列表中(session/list 校验未通过),不静默新开会话;如需继续请删除该会话后重建", ext.SessionID), false}
+		}
+		if resumeCwd == "" {
+			resumeCwd = entry.Cwd
 		}
 	}
-	st, err := p.client.SessionResume(ctx, ext.SessionID)
+	st, err := p.client.SessionResume(ctx, ext.SessionID, resumeCwd)
 	if err != nil {
-		return "", nil, fmt.Errorf("session/resume %s 失败: %w", ext.SessionID, err)
+		// 降级条件(唯一形态):会话在列 + resume 报 -32602。实测依据:rc.3 对
+		// "参数不合规"与"会话不可恢复"都报 -32602(dsh-resume-compat-probe.md
+		// A1/B 两帧)——参数问题已由 cwd 补参治本,走到这里的 -32602 就是
+		// "agent 拒绝恢复这份数据"(如未来日志格式再断裂),属升级兼容问题。
+		var re *dshapp.RPCError
+		downgradeable := errors.As(err, &re) && re.Code == -32602
+		return "", nil, &dshRemountError{fmt.Errorf("session/resume %s 失败: %w", ext.SessionID, err), downgradeable}
 	}
 	log.Printf("[dsh] 已重挂载会话 %s", ext.SessionID)
 	return st.SessionID, st.ConfigOptions, nil
 }
 
-// dshSessionListed 按 sessionId+cwd 双因子比对(探针修正④:list 无 title);
-// 一侧 cwd 缺失退化为单因子;Windows 路径大小写不敏感。
-func dshSessionListed(entries []dshapp.SessionListEntry, ext store.ExternalSessionRef) bool {
+// dshRemountError 重挂载失败的分类载体:downgradeable 报告是否满足一次性降级
+// 条件(见 remountSession 注释),ensureSession 据此决定重建;错误原文原样携带,
+// 不降级时手机端看到的仍是显式报错原文。
+type dshRemountError struct {
+	err          error
+	downgradeable bool
+}
+
+func (e *dshRemountError) Error() string { return e.err.Error() }
+func (e *dshRemountError) Unwrap() error { return e.err }
+
+// dshSessionEntry 按 sessionId+cwd 双因子找 list 条目(探针修正④:list 无
+// title);一侧 cwd 缺失退化为单因子;Windows 路径大小写不敏感。找到返回该条目
+// (resume 的 cwd 兜底来源),找不到 ok=false。
+func dshSessionEntry(entries []dshapp.SessionListEntry, ext store.ExternalSessionRef) (dshapp.SessionListEntry, bool) {
 	for _, e := range entries {
 		if e.SessionID != ext.SessionID {
 			continue
 		}
 		if ext.Cwd == "" || e.Cwd == "" {
-			return true
+			return e, true
 		}
 		if strings.EqualFold(filepath.Clean(e.Cwd), filepath.Clean(ext.Cwd)) {
-			return true
+			return e, true
 		}
 	}
-	return false
+	return dshapp.SessionListEntry{}, false
+}
+
+// dshSessionListed 双因子在列判定(dshSessionEntry 的谓词形态;既有回归钉用)。
+func dshSessionListed(entries []dshapp.SessionListEntry, ext store.ExternalSessionRef) bool {
+	_, ok := dshSessionEntry(entries, ext)
+	return ok
 }
 
 func (p *DshProvider) setDshThreadRef(id string, ref threadRef) {

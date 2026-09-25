@@ -1320,8 +1320,11 @@ func orDash(s string) string {
 
 func main() {
 	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\dsh-p0-probe.md`, "证据报告输出路径")
-	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart|configpersist;-all = 全部 8 项")
+	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart|configpersist|resumecompat;-all = 全部 8 项")
 	all := flag.Bool("all", false, "跑全部 8 项(默认,与空 -run 等价)")
+	// resumecompat 专用:真实 DSH_HOME 的只读来源(空 = 自动探测迁移后数据目录
+	// %LOCALAPPDATA%\PocketAgent\data\dsh-home,回退 ~/.pocketagentd/dsh-home)。
+	compatHome := flag.String("compat-home", "", "resumecompat:要复制的真实 DSH_HOME(只读源,副本进临时目录)")
 	flag.Parse()
 
 	node, bin := locateNode(), locateBin()
@@ -1459,6 +1462,10 @@ func main() {
 		}
 		defer c.close()
 		r.add(doConfigPersist(c, workDir))
+	case "resumecompat":
+		// 升级兼容轮(2026-09-25)新增:rc.3 对 rc.2 旧 sessionId 的失败形态实证。
+		// 真实 DSH_HOME 只读(先整树复制进临时目录,探针结束删除)。
+		r.add(runResumeCompat(node, bin, *compatHome))
 	default:
 		fmt.Printf("未知 -run %q\n", *run)
 		os.Exit(1)
