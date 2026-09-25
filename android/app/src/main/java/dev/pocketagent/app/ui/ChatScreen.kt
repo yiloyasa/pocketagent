@@ -69,6 +69,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -95,7 +96,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -106,8 +109,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -139,6 +144,9 @@ import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.DeliveryStatusBadge
+import dev.pocketagent.app.ui.component.deliveryRetryable
+import dev.pocketagent.app.ui.component.deliveryVisual
 import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.component.TerminalBlockKind
 import dev.pocketagent.app.ui.component.TerminalFootnote
@@ -719,16 +727,74 @@ internal fun looksLikeSubagentDelegation(args: String): Boolean {
         args.contains("\"parentToolCallId\"")
 }
 
+// ---- P0-4 常规模式工具卡折叠(纯函数,JVM 单测钉死,见 ToolCardCollapseTest)----
+
+/** 文件类工具:折叠行摘要取目标文件名(路径太长,文件名一眼可辨)。 */
+private val ToolCardFileTools = setOf("read", "write", "edit", "multiedit", "notebookedit")
+
+/**
+ * 工具卡默认展开判定(纯函数)。折叠一行是默认态;三类例外按优先级:
+ * 红线卡(审批/反问类工具,折叠会藏住"正在等你拍板"的语义)> 全局「展开工具详情」
+ * 设置(用户明说要看)> 子代理委派卡(委派内容必须可见,否则只剩一张"完成"空卡,
+ * 识别依据见 [looksLikeSubagentDelegation])。
+ */
+internal fun toolCardDefaultExpanded(
+    userPrefersExpanded: Boolean,
+    isSubagent: Boolean,
+    isRedLine: Boolean,
+): Boolean = isRedLine || userPrefersExpanded || isSubagent
+
+/**
+ * 折叠行的工具名摘要(纯函数):Bash 类取命令首行,文件类取目标文件名,
+ * 其余工具返回空串(折叠行只显示工具名)。JSON 解析失败一律空串回退 ——
+ * 摘要只求一眼可辨、绝不编造;超长截断保留完整语义的首段。
+ */
+internal fun toolCallHeadline(toolName: String, toolArgs: String, maxLen: Int = 32): String {
+    if (toolArgs.isBlank()) return ""
+    val obj = runCatching { JSONObject(toolArgs) }.getOrNull() ?: return ""
+    val lower = toolName.trim().lowercase()
+    val raw = when {
+        lower == "bash" || lower == "shell" || lower == "terminal" -> obj.optString("command")
+        lower in ToolCardFileTools -> obj.optString("file_path")
+        else -> return ""
+    }
+    val line = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+    if (line.isEmpty()) return ""
+    val headline = if (lower in ToolCardFileTools) {
+        line.substringAfterLast('/').substringAfterLast('\\')
+    } else {
+        line
+    }
+    return if (headline.length <= maxLen) headline else headline.take(maxLen) + "…"
+}
+
 @Composable
 private fun ToolCallCard(item: ChatItem, scale: Float) {
-    // 运行中默认展开(看得到正在干什么),结束后默认收起。
-    // 子代理委派(情况 B:ZCode 不透出内部对话)额外默认展开 —— 否则用户只看到
-    // 一个"完成"空卡,看不到它承担了什么任务、产出了什么;展开后即完整露出
-    // 入参与结果(识别依据见 looksLikeSubagentDelegation,不写死工具名)。
+    // P0-4:常规工具卡默认折叠一行(▸ 工具名+摘要 · 状态/耗时),点击展开全量参数/输出。
+    // 默认展开判定走纯函数 toolCardDefaultExpanded(红线卡 > 全局设置 > 子代理委派,
+    // 优先级理由见该函数注释);折叠状态 rememberSaveable 按消息 id(toolId)留档 ——
+    // 滑出屏幕再滚回来不丢、不闪(普通 remember 会被 LazyColumn 回收重置)。
     val isSubagent = looksLikeSubagentDelegation(item.toolArgs)
-    var expanded by remember(item.toolId, AgentConnection.toolDetailsExpanded) {
-        mutableStateOf(AgentConnection.toolDetailsExpanded || isSubagent)
+    var expanded by rememberSaveable(item.toolId, AgentConnection.toolDetailsExpanded) {
+        mutableStateOf(
+            toolCardDefaultExpanded(
+                userPrefersExpanded = AgentConnection.toolDetailsExpanded,
+                isSubagent = isSubagent,
+                // 红线语义:审批/反问类工具卡绝不折叠 —— 等用户拍板的东西不能藏
+                isRedLine = askIsAskAction(item.toolName),
+            ),
+        )
     }
+    // 折叠行的"一眼摘要"(Bash 命令首行/文件名):参数长时只在这里露一个抓手,
+    // 全文展开再看(纯函数 toolCallHeadline,解析失败回退空串只显工具名)。
+    val headline = remember(item.toolName, item.toolArgs) {
+        toolCallHeadline(item.toolName, item.toolArgs)
+    }
+    // ▸/▾ 折叠指示:有箭头才有"可以点开"的暗示(折叠态横指,展开态转向下)
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        label = "toolCardChevron",
+    )
     val statusColor = when (item.toolStatus) {
         "failure" -> Pa.Red
         "success" -> Pa.Green
@@ -744,16 +810,40 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
             Modifier.fillMaxWidth().pressable(haptic = true) { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                painterResource(AppR.drawable.ic_lucide_chevron_right),
+                null,
+                tint = Pa.TextTertiary,
+                modifier = Modifier
+                    .size(12.dp)
+                    .graphicsLayer { rotationZ = chevronRotation },
+            )
+            Spacer(Modifier.width(6.dp))
             Box(Modifier.size(8.dp).background(statusColor, CircleShape))
             Spacer(Modifier.width(8.dp))
-            Text(
-                item.toolName.ifBlank { "工具" },
-                Modifier.weight(1f),
-                fontSize = (13 * scale).sp,
-                color = Pa.TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // 名字与摘要共享剩余宽度(各占一半封顶,超长省略号),
+            // 耗时/状态恒贴右缘 —— 与 hacker 终端工具块同一排布(两路径一张皮)。
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    item.toolName.ifBlank { "工具" },
+                    Modifier.weight(1f, fill = false),
+                    fontSize = (13 * scale).sp,
+                    color = Pa.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (headline.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        headline,
+                        Modifier.weight(1f, fill = false),
+                        fontSize = (11 * scale).sp,
+                        color = Pa.TextTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             if (item.toolElapsedMs > 0) {
                 Text(
                     String.format(java.util.Locale.US, "%.1fs", item.toolElapsedMs / 1000.0),
@@ -871,6 +961,79 @@ internal fun pickContextWindow(live: Long, modelDeclared: Int, agentDefaultDecla
     if (modelDeclared > 0) return modelDeclared.toLong()
     if (agentDefaultDeclared > 0) return agentDefaultDeclared.toLong()
     return 0L
+}
+
+// ---- P0-1 流式滚动锚定(纯函数,JVM 单测钉死,见 ChatScrollAnchorTest)----
+//
+// 【为什么要有这套判定】旧实现是"新 token 一到就 scrollToItem(末尾)",用户上滑
+// 阅读历史会被拽回底部(对标 ChatGPT/Claude 的标准策略:距底才跟随,离底出胶囊)。
+// 判定全部抽成纯函数;状态(跟随/未读)留在 ChatScreen 的列表容器层 —— 常规气泡与
+// hacker 终端块共用同一条 LazyColumn,锚定逻辑放这一层,两条渲染路径天然一致。
+
+/** 跟随阈值(px):距底部 ≤100px 视为"贴底",恢复跟随;超过即"离底"。 */
+internal const val SCROLL_FOLLOW_THRESHOLD_PX = 100
+
+/** 流式正文按多少字符记 1 个"新内容块"(与跟随 effect 的重启节奏同源,可测可算)。 */
+internal const val STREAM_BLOCK_CHARS = 24
+
+/**
+ * 当前滚动位置距底部的像素(纯函数)。
+ *
+ * 最后一项不在可视区(用户翻到了中间)→ 距底"无限远"(Int.MAX_VALUE);
+ * 最后一项完全可见 → 视口底缘到该项底缘的剩余距离(≤0 按 0,半屏长项贴底就是 0)。
+ * 无内容/无可见项 → 0(空列表无所谓跟随,判定恒真,新消息来了就滚)。
+ */
+internal fun distanceFromBottomPx(
+    totalItems: Int,
+    lastVisibleIndex: Int,
+    lastVisibleEnd: Int,
+    viewportEndOffset: Int,
+): Int {
+    if (totalItems <= 0 || lastVisibleIndex < 0) return 0
+    if (lastVisibleIndex < totalItems - 1) return Int.MAX_VALUE
+    return (viewportEndOffset - lastVisibleEnd).coerceAtLeast(0)
+}
+
+/** 距底 ≤100px = 贴底(用户手动滚回这个范围内就恢复跟随)。 */
+internal fun shouldFollowDistance(distanceFromBottomPx: Int): Boolean =
+    distanceFromBottomPx <= SCROLL_FOLLOW_THRESHOLD_PX
+
+/**
+ * 新内容到达时是否自动回底:本来就在跟随(流式中持续钉底),**或**用户其实仍在
+ * 距底 100px 内(没真正离开,只是内容短、列表没滚动)。真离底(上滑阅读)→ 不拽,
+ * 交给「↓ N 条新内容」胶囊。
+ */
+internal fun shouldAutoScroll(distanceFromBottomPx: Int, wasFollowing: Boolean): Boolean =
+    wasFollowing || shouldFollowDistance(distanceFromBottomPx)
+
+/** 流式文本长度 → 块序号(每 STREAM_BLOCK_CHARS 个字符 1 块;负数防御按 0)。 */
+internal fun streamBlockIndex(textLength: Int): Int =
+    textLength.coerceAtLeast(0) / STREAM_BLOCK_CHARS
+
+/**
+ * 未读新块累计(纯函数):跟随中恒 0(用户看得见,没有"未读");离底期间每新增
+ * 1 条完整消息 +1、流式正文每多 1 块 +1 —— 胶囊上的 N 就是它,不造数。
+ */
+internal fun accumulateUnreadBlocks(
+    wasFollowing: Boolean,
+    currentUnread: Int,
+    newItemBlocks: Int,
+    newStreamBlocks: Int,
+): Int {
+    if (wasFollowing) return 0
+    return currentUnread + newItemBlocks.coerceAtLeast(0) + newStreamBlocks.coerceAtLeast(0)
+}
+
+/** LazyListState → 距底像素(组合层取数,判定交给纯函数 distanceFromBottomPx)。 */
+private fun distanceFromBottomOfList(state: LazyListState): Int {
+    val info = state.layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull()
+    return distanceFromBottomPx(
+        totalItems = info.totalItemsCount,
+        lastVisibleIndex = last?.index ?: -1,
+        lastVisibleEnd = (last?.offset ?: 0) + (last?.size ?: 0),
+        viewportEndOffset = info.viewportEndOffset,
+    )
 }
 
 /** 审批策略选项(与 codex approvalPolicy 对齐)。 */
@@ -1816,9 +1979,72 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(st.items.size, st.streamText.length / 24) {
+    // ---- P0-1 流式滚动锚定(对标 ChatGPT/Claude:距底才跟随,离底出胶囊)----
+    // 【为什么放列表容器层】常规气泡与 hacker 终端块共用同一条 LazyColumn,跟随/
+    // 未读/胶囊只在容器层做一次,两条渲染路径天然一致;判定全走纯函数
+    // (shouldAutoScroll / accumulateUnreadBlocks 等,JVM 单测钉死)。
+    var followBottom by remember(threadId) { mutableStateOf(true) }
+    // 离底期间累计的未读新块数(胶囊上的 N;回到底部即清零)
+    var unreadBlocks by remember(threadId) { mutableStateOf(0) }
+    // 程序滚动标记:不是 UI 状态(不参与重组),只用来让"距底观测"忽略我们自己
+    // 发起的 scrollToItem —— 否则跟随滚动进行中的中间位置会被误判成"用户滚走了"。
+    val programmaticScroll = remember(threadId) { AtomicBoolean(false) }
+    // 上次"新内容到达"effect 记到的位置基线(差值 = 本次新增,喂给未读计数)
+    var arriveItemCount by remember(threadId) { mutableStateOf(0) }
+    var arriveStreamBlocks by remember(threadId) { mutableStateOf(0) }
+    val haptic = LocalHapticFeedback.current
+    val reduceMotion = rememberReduceMotion()
+
+    // 距底观测:跟随状态只由"当前列表位置"裁定 —— 用户上滑出 100px 即解除跟随;
+    // 手动滚回距底 100px 内即恢复跟随并清未读。程序滚动(带标记)不参与裁定。
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            distanceFromBottomPx(
+                totalItems = info.totalItemsCount,
+                lastVisibleIndex = last?.index ?: -1,
+                lastVisibleEnd = (last?.offset ?: 0) + (last?.size ?: 0),
+                viewportEndOffset = info.viewportEndOffset,
+            )
+        }.collect { distance ->
+            if (programmaticScroll.get()) return@collect
+            val nowFollowing = shouldFollowDistance(distance)
+            // 从"离底"被用户亲手滚回"贴底":一次轻触觉确认跟随已恢复(可选,跟减弱动效)
+            if (nowFollowing && !followBottom && !reduceMotion) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            followBottom = nowFollowing
+            if (nowFollowing) unreadBlocks = 0
+        }
+    }
+
+    // 新内容到达:仅当"本来在跟随"(或用户其实仍在距底 100px 内)才自动回底;
+    // 真离底(上滑阅读)绝不拽动,只累加未读块数交给「↓ N 条新内容」胶囊。
+    LaunchedEffect(st.items.size, st.streamText.length / STREAM_BLOCK_CHARS, st.streaming) {
+        val wasFollowing = followBottom
+        val itemBlocks = (st.items.size - arriveItemCount).coerceAtLeast(0)
+        val streamBlocks = (streamBlockIndex(st.streamText.length) - arriveStreamBlocks).coerceAtLeast(0)
+        arriveItemCount = st.items.size
+        arriveStreamBlocks = streamBlockIndex(st.streamText.length)
+        unreadBlocks = accumulateUnreadBlocks(wasFollowing, unreadBlocks, itemBlocks, streamBlocks)
         val total = st.items.size + if (st.streaming) 1 else 0
-        if (total > 0) listState.scrollToItem(total - 1)
+        // 用户手势进行中(drag/fling,且非我们的程序滚动)绝不抢滚动:同一帧里
+        // "上滑"与"新内容到达"撞车时,以用户为准 —— 下一帧距底观测会解除跟随,
+        // 之后的新块进未读计数,交给胶囊。
+        val userScrolling = listState.isScrollInProgress && !programmaticScroll.get()
+        if (total > 0 && !userScrolling &&
+            shouldAutoScroll(distanceFromBottomOfList(listState), wasFollowing)
+        ) {
+            programmaticScroll.set(true)
+            try {
+                listState.scrollToItem(total - 1)
+                // 重申跟随:程序回底不是"用户离底",距底观测被标记挡住看不到这帧
+                followBottom = true
+            } finally {
+                programmaticScroll.set(false)
+            }
+        }
     }
 
     var threadTitle by remember { mutableStateOf("任务") }
@@ -1984,6 +2210,25 @@ fun ChatScreen(
             Toast.makeText(ctx, steerSubmitNotice(agentCapableOf("steer", threadAgentId, hostCaps)), Toast.LENGTH_SHORT).show()
         }
         return true
+    }
+
+    /**
+     * 「未送达」消息的整条重发(P0-2 失败级的重试入口,点的是整条消息气泡)。
+     *
+     * 复用既有发送语义 TurnSession.send(运行中=再走插话/排队,空闲=开新轮),
+     * 不另造一条发送路径;成功后把失败气泡从时间线收掉 —— 同一句话在屏上只留
+     * 一种形态(WhatsApp 口径:重试成功,红!气泡原位消失,新气泡带自己的
+     * 投递状态),避免重发后出现两条一模一样的话。失败(仍离线等)什么都不动:
+     * 气泡和红!标留着,下次再点。判定可重试走纯函数 deliveryRetryable。
+     */
+    fun retryDelivery(item: ChatItem) {
+        if (!deliveryRetryable(item.deliverState) || offlineSnapshot) return
+        if (!TurnSession.send(threadId, item.text, item.attachments)) return
+        // 按内容+状态定位失败气泡(TurnSession.send 刚追加的新气泡是 pending,不会误中)
+        val idx = st.items.indexOfFirst {
+            it.deliverState == DELIVERY_OVERFLOW && it.text == item.text && it.attachments.size == item.attachments.size
+        }
+        if (idx >= 0) st.items.removeAt(idx)
     }
 
     /**
@@ -2488,9 +2733,12 @@ fun ChatScreen(
         val queueClearOn = queueClearVisible(threadAgentId, st.queuedCount, hostCaps)
         // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
         val lastQueuedIndex = st.items.indexOfLast { it.deliverState == DELIVERY_QUEUED }
+        // 消息列表容器(Box):列表本体 + P0-1 的「↓ N 条新内容」悬浮胶囊同层,
+        // 常规气泡与 hacker 终端块共用(锚定状态与胶囊都只此一份)。
+        Box(Modifier.weight(1f)) {
         LazyColumn(
             Modifier
-                .weight(1f)
+                .fillMaxSize()
                 .padding(horizontal = 16.dp)
                 // 黑客终端模式:CRT 扫描线(2dp 周期暗线,alpha 4%,只碰绘制层);
                 // 叠在内容之上,常规主题零影响(见 TerminalBlocks.terminalScanlines)。
@@ -2535,6 +2783,9 @@ fun ChatScreen(
                             // 「撤回排队」入口与常规主题同一门控:只挂最后一条排队消息
                             queueClearOn = queueClearOn && index == lastQueuedIndex,
                             onClearQueued = { clearQueuedInputs() },
+                            // P0-2:daemon 拒收(overflow)时整条 Block 可点击重发,
+                            // 与常规气泡同一 retryDelivery(失败级才武装,见组件内判定)
+                            onRetryDelivery = { retryDelivery(item) },
                             attachmentsContent = if (item.attachments.isEmpty()) null else { {
                                 item.attachments.chunked(2).forEach { rowAttachments ->
                                     Row(
@@ -2588,6 +2839,14 @@ fun ChatScreen(
                         Column(
                             Modifier
                                 .widthIn(max = 300.dp)
+                                // P0-2 失败级(队列满拒收)整条气泡可点击重发 —— 重试入口
+                                // 挂在消息本体上(判定见 deliveryRetryable,动作见 retryDelivery);
+                                // 其余投递状态点了没有可重试的东西,不武装点击。
+                                .then(
+                                    if (deliveryRetryable(item.deliverState) && !offlineSnapshot) {
+                                        Modifier.pressable(haptic = true) { retryDelivery(item) }
+                                    } else Modifier
+                                )
                                 // 【本轮打磨】圆角 18→20(尾角 6→7)、内距 12/10→13/11:
                                 // 气泡读作更"饱满"的一块,同侧小尾角保留出向感(空间连续性);
                                 // 配色不动 —— 用户气泡 AccentDim、助手正文铺底的层级关系保持。
@@ -2635,25 +2894,16 @@ fun ChatScreen(
                                     )
                                 }
                             }
-                            // P1-4:运行中发消息的投递标签 —— 发送中 → 已插入运行中任务 /
-                            // 排队中(第N位)/ 队列已满未送达。QueueFlushed 后标签被
-                            // TurnSession 收掉,这条消息自动变回普通用户消息样式。
+                            // P0-2:运行中发消息的投递徽标 —— 时钟(发送中/排队中·第N位)→
+                            // 单勾(已提交)→ 红!(队列满拒收,整条气泡可点击重发)。
+                            // 映射与组件走 ui/component/DeliveryBadge(hacker 终端块共用同一套);
+                            // QueueFlushed 后标签被 TurnSession 收掉,这条消息自动变回普通用户消息。
                             if (item.deliverState.isNotEmpty()) {
-                                val label = deliveryLabel(item.deliverState, item.queuePos)
-                                if (label.isNotEmpty()) {
+                                val visual = deliveryVisual(item.deliverState, item.queuePos)
+                                if (visual.label.isNotEmpty()) {
                                     Spacer(Modifier.height(2.dp))
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            painterResource(AppR.drawable.ic_lucide_list_checks), null,
-                                            tint = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
-                                            modifier = Modifier.size(11.dp),
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            label,
-                                            fontSize = 10.sp,
-                                            color = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
-                                        )
+                                        DeliveryStatusBadge(item.deliverState, item.queuePos)
                                         // 「撤回排队」:只挂在最后一条排队消息的回执行上,
                                         // 门控见上方 queueClearOn 的注释 —— 撤回是对
                                         // 还没执行的输入做反悔,与"终止任务"同级的
@@ -2817,6 +3067,49 @@ fun ChatScreen(
                             elapsedMs = 0.0, // 回合时长无现成数据,不编造
                             outputTokens = st.turnUsage?.outputTokens ?: 0,
                         ),
+                    )
+                }
+            }
+        }
+            // P0-1「↓ N 条新内容」胶囊:仅在用户离底且确有未读新块时浮现(Pa.Accent 底)。
+            // 点击平滑滚回底部、恢复跟随并清零未读(轻触觉由 pressable 自带)——
+            // 流式输出从此不再把上滑阅读历史的用户拽回来。
+            // 【全限定名】这里在 Column 作用域内,ColumnScope.AnimatedVisibility 扩展
+            // 会抢走隐式接收者解析;盒子层要的是顶层函数,写全限定名绕开歧义。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = unreadBlocks > 0 && !followBottom,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = 12.dp),
+                enter = fadeIn(PaMotion.emphasized()) +
+                    slideInVertically(PaMotion.emphasized()) { it / 2 },
+                exit = fadeOut(PaMotion.standard()),
+                label = "unreadPill",
+            ) {
+                Row(
+                    Modifier
+                        .pressable(haptic = true) {
+                            scope.launch {
+                                followBottom = true
+                                unreadBlocks = 0
+                                val total = st.items.size + if (st.streaming) 1 else 0
+                                if (total > 0) listState.animateScrollToItem(total - 1)
+                            }
+                        }
+                        .background(Pa.Accent, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(AppR.drawable.ic_lucide_chevron_down), null,
+                        tint = Pa.Bg, modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "${unreadBlocks.coerceAtLeast(1)} 条新内容",
+                        color = Pa.Bg,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
             }

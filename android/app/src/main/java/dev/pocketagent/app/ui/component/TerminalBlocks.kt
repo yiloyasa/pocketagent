@@ -40,11 +40,9 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.ChatItem
-import dev.pocketagent.app.ui.DELIVERY_OVERFLOW
 import dev.pocketagent.app.ui.MarkdownText
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
-import dev.pocketagent.app.ui.deliveryLabel
 import dev.pocketagent.app.ui.looksLikeSubagentDelegation
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaHacker
@@ -188,7 +186,10 @@ internal fun terminalBodyLineHeight(uiScale: Float) = terminalBodyFontSize(uiSca
 /**
  * ① 用户输入 Block:`❯ 正文` —— ❯ bold Pa.Accent,正文 bold Pa.TextPrimary;
  * 无气泡无卡片背景(与普通聊天的根本区别);多行时 ❯ 只在首行。
- * 附件网格与投递状态标签沿用常规主题的既有语义(渲染在正文上方/下方)。
+ * 附件网格与投递状态标签沿用常规主题的既有语义(渲染在正文上方/下方);
+ * 投递标签 P0-2 起与常规主题共用 [DeliveryStatusBadge] 同一映射与组件
+ * (两路径一张皮,防分叉)。daemon 拒收(overflow)时整条 Block 可点击重发,
+ * 语义与常规气泡一致,由调用方经 [onRetryDelivery] 挂接。
  */
 @Composable
 internal fun TerminalUserBlock(
@@ -197,8 +198,15 @@ internal fun TerminalUserBlock(
     queueClearOn: Boolean,
     onClearQueued: () -> Unit,
     attachmentsContent: (@Composable () -> Unit)? = null,
+    onRetryDelivery: (() -> Unit)? = null,
 ) {
-    Column(Modifier.fillMaxWidth()) {
+    // 失败级(队列满拒收)才武装整条点击重发;其余状态点击没有可重试的东西
+    val retryArmed = onRetryDelivery != null && deliveryRetryable(item.deliverState)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .then(if (retryArmed) Modifier.pressable(haptic = true) { onRetryDelivery!!() } else Modifier),
+    ) {
         if (attachmentsContent != null) {
             attachmentsContent()
             Spacer(Modifier.height(6.dp))
@@ -220,26 +228,15 @@ internal fun TerminalUserBlock(
                 )
             }
         }
-        // P1-4 投递状态标签:与常规主题同一套语义(pending/steered/queued/overflow),
-        // 复用同一纯函数 deliveryLabel(TurnDelivery.kt)防两处分叉;仅外观归入终端块。
+        // P0-2 投递状态徽标:与常规主题同一套语义(pending/steered/queued/overflow)
+        // 共用同一映射 deliveryVisual 与同一组件 DeliveryStatusBadge(两路径一张皮);
+        // 仅外观归入终端块(mono=等宽字体)。
         if (item.deliverState.isNotEmpty()) {
-            val label = deliveryLabel(item.deliverState, item.queuePos)
-            if (label.isNotEmpty()) {
+            val visual = deliveryVisual(item.deliverState, item.queuePos)
+            if (visual.label.isNotEmpty()) {
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "·",
-                        color = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
-                        fontSize = 10.sp,
-                        fontFamily = TerminalFont.chatFont,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        label,
-                        fontSize = 10.sp,
-                        color = if (item.deliverState == DELIVERY_OVERFLOW) Pa.Red else Pa.AccentText,
-                        fontFamily = TerminalFont.chatFont,
-                    )
+                    DeliveryStatusBadge(item.deliverState, item.queuePos, mono = true)
                     if (queueClearOn) {
                         Text(
                             "撤回排队",

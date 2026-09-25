@@ -1,6 +1,12 @@
 package dev.pocketagent.app.ui
 
 import android.widget.Toast
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -42,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ColorMatrixColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -52,6 +59,7 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.paPushBack
@@ -64,6 +72,7 @@ import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostInfo
 import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.Thread as PThread
+import pocketagent.v1.ThreadStatus
 
 /** 首页 agent 清单:iconRes 为官方品牌图标,method 展示连接方式(对标图三)。 */
 data class AgentInfo(
@@ -197,9 +206,12 @@ fun agentBitmap(res: Int): androidx.compose.ui.graphics.ImageBitmap {
 fun grayscale() = ColorMatrixColorFilter(ColorMatrix().apply { setToSaturation(0f) })
 
 /**
- * 主页 —— 按用户草图重排:
- * [Pa 图标=菜单(左上)] [设置(右上)] → 连接状态卡 → agents 板块 →
- * 多agent协同(开关:关=只显示在用 agent,开=显示已加入协同的 agents)→ 最近任务。
+ * 主页 —— 按用户草图 + UX 深审 P0-3 的 GitHub Mobile 范式重排
+ * (需要我处理的事 > 正在运行的事 > 新建 > 实体网格 > 历史):
+ * [Pa 图标=菜单(左上)] [设置(右上)] → 连接状态卡 →
+ * 待你处理(条件渲染:有待审批的会话卡置顶) → 运行中(条件渲染:RUNNING 会话横条) →
+ * 新建任务/电脑预览 → agents 板块(磁贴带「运行中」小徽章) → 最近任务 →
+ * 多agent协同(开关语义:关=只显示在用 agent,开=显示已加入协同的 agents)。
  */
 @Composable
 fun HomeScreen(
@@ -294,6 +306,13 @@ fun HomeScreen(
     val disabledAgents = AgentConnection.disabledAgents
     val visibleAgents = remember(agents, disabledAgents) { filterAgents(agents, disabledAgents) }
 
+    // 【P0-3 注意力三分】待审批 / 运行中 / 其余,数据就是本页现有的 listThreads
+    // 应答(daemon 每条 Thread 都带 status 与 pending_approvals 快照,零新增 RPC);
+    // 刷新节奏与最近任务同源(reloadKey / 重连 epoch),不做额外轮询。
+    val attention = remember(recent, disabledAgents) { partitionHomeAttention(recent, disabledAgents) }
+    // agent 磁贴「运行中」小徽章:该 agent 名下有运行中会话(已剔除停用)就点亮
+    val runningAgentIds = remember(attention) { agentIdsOfRunning(attention.running) }
+
     // 【推背模糊】任一浮层(侧边栏/管理面板/引导弹窗/新建任务)激活时,主页内容根
     // 模糊+缩放+压暗 —— 浮层是玻璃,透过玻璃看内容才是真磨砂。模糊挂在被覆盖的
     // 内容层上(整屏一次一层),不在浮层自己身上,性能纪律见 PaGlass.kt。
@@ -349,6 +368,68 @@ fun HomeScreen(
                 }
             }
 
+            // ---- 待你处理(P0-3 首位,条件渲染):有待审批的会话卡置顶 ----
+            // 【为什么排第一】出事的东西最优先(GitHub Mobile 范式):审批卡在等用户,
+            // 埋在网格/历史里就是"agent 停摆等人却不知道"。无待审批 → 整区不渲染,
+            // 不摆"一切正常"的空壳。
+            if (attention.pendingApproval.isNotEmpty()) {
+                item(span = { GridItemSpan(4) }) {
+                    PendingAttentionSection(threads = attention.pendingApproval, onOpenThread = onOpenThread)
+                }
+            }
+
+            // ---- 运行中(P0-3 第二位,条件渲染):RUNNING 会话横条 ----
+            // 与待审批互斥归组(挂着审批的会话只出现在上面,不重复占运行位);
+            // 无运行中 → 整区不渲染。
+            if (attention.running.isNotEmpty()) {
+                item(span = { GridItemSpan(4) }) {
+                    RunningAttentionSection(threads = attention.running, onOpenThread = onOpenThread)
+                }
+            }
+
+            // 新建任务入口:按"需要我处理 > 运行中 > 新建 > 实体网格"的节拍,
+            // 排在两个注意区之后、agent 网格之前(P0-3 审计口径)。
+            // 独立小行(统一卡:单层 Pa.Card·16dp 圆角)
+            item(span = { GridItemSpan(4) }) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { showNewThread = true }
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(painterResource(R.drawable.ic_lucide_plus), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("新建任务", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
+                    // 右侧 agent 名标签:跟随唯一选中源 AgentConnection.selectedAgent 实时显示
+                    // (设置页「切换 Agent」/ 主页网格点选都写它),不再硬编码 "Codex"。
+                    // 【加「当前:」前缀】裸放 "dsh"/"Pi" 像一行没有归属的杂字(L2 真机挑刺),
+                    // 前缀点明"新建的任务归谁",信息保留、语义自明;保持 11sp TextTertiary 不与标题抢层级。
+                    Text("当前: " + selectedAgentLabel(AgentConnection.selectedAgent), fontSize = 11.sp, color = Pa.TextTertiary)
+                }
+            }
+
+            // ---- 电脑预览:浏览器里一键看电脑上正跑着的 dev server(P2)----
+            // 复用既有 onOpenBrowser 入口打开内置浏览器,浏览器顶栏的"电脑预览"
+            // 按钮列出 daemon 探到的端口(3000/5173/8000…),点一项直接加载。
+            // 与「新建任务」同组入口行,跟随其上移,不拆散。
+            item(span = { GridItemSpan(4) }) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { onOpenBrowser() }
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("电脑预览", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
+                    Text("dev server", fontSize = 11.sp, color = Pa.TextTertiary)
+                }
+            }
+
             // ---- agent 板块:标题 + 直接铺背景的网格(无外层大卡) ----
             // 【区块节拍】区块间距统一 20dp(网格 12dp + 本行 8dp):与「最近任务」
             // 区块头同款节奏,板块与板块读得分得开,卡与卡仍守 12dp 统一卡距。
@@ -377,7 +458,9 @@ fun HomeScreen(
                         visibleAgents.chunked(4).forEach { rowAgents ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                                 rowAgents.forEach { a ->
-                                    AgentTile(a) {
+                                    // 「运行中」小徽章(P1-1):该 agent 名下有运行中会话时,
+                                    // 磁贴右上角脉冲绿点 —— 状态语义与「运行中」区同源同色
+                                    AgentTile(a, runningBadge = a.id in runningAgentIds) {
                                         if (a.available) {
                                             // 选中 agent = 切换后端,不再自动跳进终端页。
                                             // 终端只在用户主动点【终端】时打开,平时保持
@@ -399,7 +482,78 @@ fun HomeScreen(
                 }
             }
 
+            // ---- 最近任务 ----
+            item(span = { GridItemSpan(4) }) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("最近任务", fontSize = 16.sp, color = Pa.TextPrimary)
+                    // 【假入口修复】「全部 →」长得像链接却没挂任何点击(L2 自查补挑刺);
+                    // 接到会话列表页(tab 1)= "看全部任务"的真出口,与「管理」同款行尾语言。
+                    Text(
+                        "全部 →",
+                        Modifier.pressable { onGoTab(1) }.padding(horizontal = 6.dp, vertical = 2.dp),
+                        fontSize = 13.sp, color = Pa.TextSecondary,
+                    )
+                }
+            }
+                if (recent.isEmpty()) {
+                    item(span = { GridItemSpan(4) }) {
+                        // 空状态:直接铺背景(无容器),靠留白与居中自成一块。
+                        // 【36→24dp】36dp 超出区块间距上限(≤32dp),收进规格带。
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.TextTertiary, modifier = Modifier.size(36.dp))
+                            Text("连接电脑后,任务会出现在这里", Modifier.padding(top = 12.dp), fontSize = 13.sp, color = Pa.TextSecondary)
+                        }
+                    }
+                } else {
+                    // 最近任务同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
+                    items(recent.filter { threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable { onOpenThread(t.id) }
+                                .background(Pa.Card, RoundedCornerShape(16.dp))
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Image(
+                                // 【agent 徽标】按线程归属 agent 选图(agent_id 缺省 = codex),
+                                // 复用 ThreadsScreen 同款映射:导入的 Pi/ZCode 会话不再错标 Codex。
+                                bitmap = agentBitmap(agentBadgeRes(t.agentId)),
+                                contentDescription = null,
+                                modifier = Modifier.size(26.dp),
+                                contentScale = ContentScale.Crop,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    t.title.ifEmpty { "(未命名)" },
+                                    fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                                // 【加相对时间】ListThreads 的 Thread 只有消息计数与更新时刻,
+                                // 没有最后一条消息正文源 —— 预览要么多打一轮 getThread RPC
+                                // 要么造假;改用「N 条消息 · 相对时间」补时间维度(纯函数见
+                                // [threadRecentMeta],单测钉死)。
+                                Text(
+                                    threadRecentMeta(t.messageCount, t.updatedAtUnixMs, System.currentTimeMillis()),
+                                    fontSize = 11.sp, color = Pa.TextTertiary,
+                                )
+                            }
+                        }
+                    }
+                }
+
             // ---- 多agent协同:真实状态(不再是"开发中"假开关) ----
+            // 【P0-3 重排说明】区块整体后移到「最近任务」之后:范式是"要我处理的 >
+            // 运行中的 > 新建 > 实体网格 > 历史",协同入口不属于注意区;块内结构
+            // 与视觉维持现状(风格统一已达标,本轮不动)。
             // 状态完全由 daemon 的接线事实驱动:capabilities 里的 collab:<id>。
             // 这里刻意**不做成可拨的开关** —— 它不是用户偏好,而是"电脑上接线完成
             // 与否"的事实回显;可拨 = 假可用(旧实现正是栽在这)。所以只读展示 +
@@ -526,114 +680,6 @@ fun HomeScreen(
                     }
                 }
             }
-
-            // 新建任务入口并入 agent 板块行尾?保持独立小行(统一卡:单层 Pa.Card·16dp 圆角)
-            item(span = { GridItemSpan(4) }) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable { showNewThread = true }
-                        .background(Pa.Card, RoundedCornerShape(16.dp))
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(painterResource(R.drawable.ic_lucide_plus), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("新建任务", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
-                    // 右侧 agent 名标签:跟随唯一选中源 AgentConnection.selectedAgent 实时显示
-                    // (设置页「切换 Agent」/ 主页网格点选都写它),不再硬编码 "Codex"。
-                    // 【加「当前:」前缀】裸放 "dsh"/"Pi" 像一行没有归属的杂字(L2 真机挑刺),
-                    // 前缀点明"新建的任务归谁",信息保留、语义自明;保持 11sp TextTertiary 不与标题抢层级。
-                    Text("当前: " + selectedAgentLabel(AgentConnection.selectedAgent), fontSize = 11.sp, color = Pa.TextTertiary)
-                }
-            }
-
-            // ---- 电脑预览:浏览器里一键看电脑上正跑着的 dev server(P2)----
-            // 复用既有 onOpenBrowser 入口打开内置浏览器,浏览器顶栏的"电脑预览"
-            // 按钮列出 daemon 探到的端口(3000/5173/8000…),点一项直接加载。
-            item(span = { GridItemSpan(4) }) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable { onOpenBrowser() }
-                        .background(Pa.Card, RoundedCornerShape(16.dp))
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(painterResource(R.drawable.ic_lucide_monitor), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("电脑预览", Modifier.weight(1f), fontSize = 15.sp, color = Pa.TextPrimary)
-                    Text("dev server", fontSize = 11.sp, color = Pa.TextTertiary)
-                }
-            }
-
-            // ---- 最近任务 ----
-            item(span = { GridItemSpan(4) }) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("最近任务", fontSize = 16.sp, color = Pa.TextPrimary)
-                    // 【假入口修复】「全部 →」长得像链接却没挂任何点击(L2 自查补挑刺);
-                    // 接到会话列表页(tab 1)= "看全部任务"的真出口,与「管理」同款行尾语言。
-                    Text(
-                        "全部 →",
-                        Modifier.pressable { onGoTab(1) }.padding(horizontal = 6.dp, vertical = 2.dp),
-                        fontSize = 13.sp, color = Pa.TextSecondary,
-                    )
-                }
-            }
-                if (recent.isEmpty()) {
-                    item(span = { GridItemSpan(4) }) {
-                        // 空状态:直接铺背景(无容器),靠留白与居中自成一块。
-                        // 【36→24dp】36dp 超出区块间距上限(≤32dp),收进规格带。
-                        Column(
-                            Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Icon(painterResource(R.drawable.ic_lucide_list_checks), null, tint = Pa.TextTertiary, modifier = Modifier.size(36.dp))
-                            Text("连接电脑后,任务会出现在这里", Modifier.padding(top = 12.dp), fontSize = 13.sp, color = Pa.TextSecondary)
-                        }
-                    }
-                } else {
-                    // 最近任务同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
-                    items(recent.filter { threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressable { onOpenThread(t.id) }
-                                .background(Pa.Card, RoundedCornerShape(16.dp))
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Image(
-                                // 【agent 徽标】按线程归属 agent 选图(agent_id 缺省 = codex),
-                                // 复用 ThreadsScreen 同款映射:导入的 Pi/ZCode 会话不再错标 Codex。
-                                bitmap = agentBitmap(agentBadgeRes(t.agentId)),
-                                contentDescription = null,
-                                modifier = Modifier.size(26.dp),
-                                contentScale = ContentScale.Crop,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    t.title.ifEmpty { "(未命名)" },
-                                    fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                )
-                                // 【加相对时间】ListThreads 的 Thread 只有消息计数与更新时刻,
-                                // 没有最后一条消息正文源 —— 预览要么多打一轮 getThread RPC
-                                // 要么造假;改用「N 条消息 · 相对时间」补时间维度(纯函数见
-                                // [threadRecentMeta],单测钉死)。
-                                Text(
-                                    threadRecentMeta(t.messageCount, t.updatedAtUnixMs, System.currentTimeMillis()),
-                                    fontSize = 11.sp, color = Pa.TextTertiary,
-                                )
-                            }
-                        }
-                    }
-                }
         }
     }
 
@@ -711,22 +757,31 @@ fun HomeScreen(
     }
 }
 
-/** agent 磁贴:官方品牌图标,可用=全彩+白名+连接方式;不可用=暗态。 */
+/**
+ * agent 磁贴:官方品牌图标,可用=全彩+白名+连接方式;不可用=暗态。
+ * [runningBadge]:该 agent 名下有运行中会话时,磁贴右上角脉冲绿点(P1-1,
+ * 数据与「运行中」区同源)。协同行复用本磁贴时不传,维持现状不加徽章。
+ */
 @Composable
-fun AgentTile(a: AgentInfo, onClick: () -> Unit) {
+fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) {
     Column(
         Modifier.pressable { onClick() }.width(72.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(
-            bitmap = agentBitmap(a.iconRes),
-            contentDescription = a.name,
-            modifier = Modifier
-                .size(56.dp)
-                .then(if (a.available) Modifier else Modifier.alpha(0.22f)),
-            contentScale = ContentScale.Crop,
-            colorFilter = if (a.available) null else grayscale(),
-        )
+        Box {
+            Image(
+                bitmap = agentBitmap(a.iconRes),
+                contentDescription = a.name,
+                modifier = Modifier
+                    .size(56.dp)
+                    .then(if (a.available) Modifier else Modifier.alpha(0.22f)),
+                contentScale = ContentScale.Crop,
+                colorFilter = if (a.available) null else grayscale(),
+            )
+            if (runningBadge) {
+                PulseDot(Pa.Green, Modifier.align(Alignment.TopEnd))
+            }
+        }
         Text(
             a.name,
             Modifier.padding(top = 6.dp),
@@ -813,6 +868,139 @@ private fun GuideBlock(title: String, body: String) {
     ) {
         Text(title, fontSize = 12.sp, color = Pa.TextSecondary)
         Text(body, fontSize = 13.sp, color = Pa.TextPrimary, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+/**
+ * 脉冲状态点:注意区语义色的小面积视觉载体(运行中=脉冲绿点,待审批=静态红点)。
+ * 系统减弱动效开启时退化为静态点,与全 app 动效纪律一致(TaskCenter/PaSkeleton 同款)。
+ */
+@Composable
+private fun PulseDot(color: Color, modifier: Modifier = Modifier, pulse: Boolean = true) {
+    val reduceMotion = rememberReduceMotion()
+    if (pulse && !reduceMotion) {
+        val transition = rememberInfiniteTransition(label = "pulseDot")
+        val alpha by transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.35f,
+            animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Reverse),
+            label = "pulseAlpha",
+        )
+        Box(modifier.size(8.dp).graphicsLayer { this.alpha = alpha }.background(color, CircleShape))
+    } else {
+        Box(modifier.size(8.dp).background(color, CircleShape))
+    }
+}
+
+/** 注意区区块头:标题 + 行尾语义状态点(与「多agent协同」头同款语言)。 */
+@Composable
+private fun AttentionSectionHeader(title: String, dotColor: Color, dotPulse: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 16.sp, color = Pa.TextPrimary)
+        Spacer(Modifier.width(6.dp))
+        PulseDot(dotColor, pulse = dotPulse)
+    }
+}
+
+/**
+ * 「待你处理」区(P0-3 首位):有待审批请求的会话卡。
+ * 条件渲染由调用方保证(空列表整区不出现);点卡 = 既有 onOpenThread 进会话,
+ * 打开后既有管线(ChatScreen 的 st.pendingApproval → ApprovalSheet)把审批卡
+ * 直接送上前,不新建路由。
+ */
+@Composable
+private fun PendingAttentionSection(threads: List<PThread>, onOpenThread: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        AttentionSectionHeader("待你处理", Pa.Red, dotPulse = false)
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            threads.take(4).forEach { t ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { onOpenThread(t.id) }
+                        // 统一卡型:单层 Pa.Card·16dp 圆角·无边无影,与全页同语言
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PulseDot(Pa.Red, pulse = false)
+                    Spacer(Modifier.width(10.dp))
+                    Image(
+                        bitmap = agentBitmap(agentBadgeRes(t.agentId)),
+                        contentDescription = null,
+                        modifier = Modifier.size(26.dp),
+                        contentScale = ContentScale.Crop,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            t.title.ifEmpty { "(未命名)" },
+                            fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            pendingApprovalMeta(t.pendingApprovalsCount),
+                            fontSize = 11.sp, color = Pa.TextSecondary,
+                        )
+                    }
+                    // 「待你处理」徽章:小面积语义色(红 10% 底 + 红字),不做大色块
+                    Text(
+                        "待你处理",
+                        Modifier
+                            .background(Pa.Red.copy(alpha = 0.10f), RoundedCornerShape(50))
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                        fontSize = 10.5.sp, color = Pa.Red,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 「运行中」区(P0-3 第二位):status==RUNNING 的会话横条(脉冲绿点+标题+最近活动)。
+ * 条件渲染同上;点条 = 既有 onOpenThread 进对话。
+ */
+@Composable
+private fun RunningAttentionSection(threads: List<PThread>, onOpenThread: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        AttentionSectionHeader("运行中", Pa.Green, dotPulse = true)
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            threads.take(4).forEach { t ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { onOpenThread(t.id) }
+                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PulseDot(Pa.Green)
+                    Spacer(Modifier.width(10.dp))
+                    Image(
+                        bitmap = agentBitmap(agentBadgeRes(t.agentId)),
+                        contentDescription = null,
+                        modifier = Modifier.size(26.dp),
+                        contentScale = ContentScale.Crop,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            t.title.ifEmpty { "(未命名)" },
+                            fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            runningMetaLabel(t.updatedAtUnixMs, System.currentTimeMillis()),
+                            fontSize = 11.sp, color = Pa.TextTertiary,
+                        )
+                    }
+                    Text("运行中", fontSize = 11.sp, color = Pa.Green)
+                }
+            }
+        }
     }
 }
 
@@ -1005,6 +1193,79 @@ internal fun threadRecentMeta(messageCount: Int, updatedAtUnixMs: Long, nowMs: L
     val count = "$messageCount 条消息"
     val rel = relativeTimeLabel(updatedAtUnixMs, nowMs)
     return if (rel.isBlank()) count else "$count · $rel"
+}
+
+// ---- 主页注意力三分(P0-3 + P1-1:需要我处理的事 > 正在运行的事 > 其余;纯函数,单测覆盖 HomeAttentionSectionsTest)----
+
+/**
+ * 会话三分结果:待审批 / 运行中 / 其余。
+ *
+ * 【数据源即 ListThreads】daemon 的 threadToPB 对每条会话都带 status
+ * (ThreadStatus.RUNNING / WAITING_APPROVAL)与 pending_approvals 快照,
+ * 主页现有的 listThreads 应答里就有,不新增任何 RPC。
+ */
+internal data class HomeAttentionGroups(
+    val pendingApproval: List<PThread>,
+    val running: List<PThread>,
+    val rest: List<PThread>,
+)
+
+/**
+ * 会话三分(纯函数):待审批组、运行中组、其余组。
+ *
+ * 【归组规则】
+ *  - 待审批:pending_approvals 非空 **或** status==WAITING_APPROVAL —— 后者覆盖
+ *    外部 agent(zcode 子会话 waiting 语义)只有状态、没有审批对象的情况;
+ *  - 运行中:status==RUNNING,且**不与待审批重复**(一回事话同时挂着审批与
+ *    running 状态时归待审批组,等待用户的是它,不该再占一条运行位);
+ *  - 其余:除开两组的剩余(主页「最近任务」仍走它自己的既有过滤,本组为
+ *    三分完备性而返回,渲染暂不消费)。
+ *
+ * 【先减损再归组】归档(status==ARCHIVED)、子代理存根(parentThreadId 非空,
+ * 与 ThreadsScreen 主列表同口径)、已停用 agent 的会话,三种都不进任何组 ——
+ * 停用偏好「停用后不再显示」对注意区同样生效,不给出戏的例外。
+ *
+ * 【组内排序】updatedAtUnixMs 倒序:最需要被看到的(刚出事的)排最前。
+ */
+internal fun partitionHomeAttention(threads: List<PThread>, disabledAgents: Set<String>): HomeAttentionGroups {
+    val eligible = threads.filter {
+        it.parentThreadId.isBlank() &&
+            it.status != ThreadStatus.THREAD_STATUS_ARCHIVED &&
+            threadAgentIdOf(it.agentId) !in disabledAgents
+    }
+    val pending = eligible.filter {
+        it.pendingApprovalsCount > 0 || it.status == ThreadStatus.THREAD_STATUS_WAITING_APPROVAL
+    }.toSet()
+    val running = eligible.filter { it !in pending && it.status == ThreadStatus.THREAD_STATUS_RUNNING }.toSet()
+    val byRecency = compareByDescending<PThread> { it.updatedAtUnixMs }
+    return HomeAttentionGroups(
+        pendingApproval = pending.sortedWith(byRecency),
+        running = running.sortedWith(byRecency),
+        rest = (eligible - pending - running).sortedWith(byRecency),
+    )
+}
+
+/** 运行中会话的归属 agent 集合(纯函数):agent 磁贴「运行中」小徽章的数据源。 */
+internal fun agentIdsOfRunning(running: List<PThread>): Set<String> =
+    running.map { threadAgentIdOf(it.agentId) }.toSet()
+
+/**
+ * 待审批卡元信息(纯函数):有审批对象=报数;
+ * 只有 WAITING_APPROVAL 状态、没有审批对象(外部 agent 的 waiting 语义)=直说在等。
+ */
+internal fun pendingApprovalMeta(pendingCount: Int): String =
+    if (pendingCount > 0) "$pendingCount 个审批待处理" else "等待你的处理"
+
+/**
+ * 运行中条元信息(纯函数):「最近活动 · 相对时间」。
+ *
+ * 【为什么不是时长】ListThreads 的 Thread 没有"本轮开始时刻"字段
+ * (TurnStarted 推送帧也不带时间戳,且只推给已打开的会话),拿 updatedAt
+ * 冒充开始时刻就是造假 —— 降级为"最近活动"相对时间,数据全真。
+ */
+internal fun runningMetaLabel(updatedAtUnixMs: Long, nowMs: Long): String {
+    val rel = relativeTimeLabel(updatedAtUnixMs, nowMs)
+    return if (rel.isBlank()) "运行中" else "最近活动 · $rel"
 }
 
 // ---- agent 停用偏好生效链(管理 agent 抽屉 → 展示/创建入口;纯函数,单测覆盖 AgentDisablePreferenceTest)----
