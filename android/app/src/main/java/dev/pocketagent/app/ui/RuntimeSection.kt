@@ -98,14 +98,9 @@ private fun RuntimeSectionBody() {
     val unknownPending = RuntimeControlState.unknownEvents.count { it.processingStatus == "NEW" }
     val unknownNote = unknownLedgerNote(RuntimeControlState.unknownTotal, RuntimeControlState.unknownDropped)
 
-    var expanded by remember { mutableStateOf(false) }
-    var editingBudget by remember { mutableStateOf<BudgetRow?>(null) }
-    var expandedAgent by remember { mutableStateOf<String?>(null) }
     // 内存详情/管理弹窗挂在哪张形态卡上(agent id)。提升到区段级:AgentRuntimeDetail
     // 的展开体在卡片折叠时会被移出组合,行级 remember 存不住跨折叠的弹窗状态。
     var memorySheetAgent by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
 
     // 首次进入拉一次。之后靠手动刷新 —— 用户改预算/策略后本地已有 daemon 回传的真值,
     // 不必每次滚动重组都打一轮 RPC。
@@ -115,181 +110,12 @@ private fun RuntimeSectionBody() {
 
     // ---- 控制中心(顶部区段):一页看全 daemon 所有可控域,写动作走既有 RPC ----
     // 排在「运行时」区段之上:它是"总览+就地切换",运行时区段是"逐块深查"。
-    ControlCenterSection(onOpenMemory = { memorySheetAgent = it })
-
-    val summary = when {
-        loadState == RuntimeLoadState.LOADING && overview == null -> "读取中…"
-        overview == null -> sectionErrors[RuntimeControlState.SECTION_STATE] ?: "没读到电脑端的状态"
-        else -> buildString {
-            append(overview.stateLabel)
-            if (RuntimeControlState.unknownTotal > 0) append(" · ${RuntimeControlState.unknownTotal} 条新事件")
-        }
-    }
-
-    SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "运行时") {
-        // ---- 启动恢复横幅:降级时始终可见(警告不折叠) ----
-        if (banner != null && banner.degraded) {
-            RecoveryBannerBlock(banner)
-        }
-
-        SettingRow(
-            title = "运行时控制面",
-            value = summary,
-            chevron = true,
-            divider = expanded,
-            onClick = { expanded = !expanded },
-        )
-
-        if (expanded) {
-            // ---- 分块失败:逐块说清哪一块没读到,不整页清空 ----
-            if (sectionErrors.isNotEmpty()) {
-                SectionNote(
-                    text = sectionErrors.entries.joinToString(";") { "${sectionLabel(it.key)}: ${it.value}" },
-                    color = Pa.Yellow,
-                )
-            }
-
-            // ---- 本机总览 ----
-            if (overview != null) {
-                SettingRow(
-                    title = "本机",
-                    desc = overview.dataDir,
-                    value = "v${overview.version}",
-                    divider = true,
-                )
-                SettingRow(
-                    title = "策略代数",
-                    value = "预算 ${overview.budgetRevision} · 协同 ${overview.collabRevision}",
-                    // 消息透析入口行常驻(0 条也显示弱化徽标),所以下面永远还有一行。
-                    divider = true,
-                )
-            }
-
-            // ---- 每 agent 形态卡 ----
-            cards.forEach { card ->
-                val open = expandedAgent == card.agentId
-                SettingRow(
-                    title = card.title,
-                    desc = card.versionLine,
-                    value = card.note ?: if (card.ok) "契约达标" else "${card.issues.size} 项未交代",
-                    chevron = true,
-                    divider = true,
-                    onClick = { expandedAgent = if (open) null else card.agentId },
-                )
-                if (open) {
-                    AgentRuntimeDetail(card, onOpenMemory = { memorySheetAgent = card.agentId })
-                }
-            }
-
-            // ---- 预算(可改) ----
-            if (budgets.isNotEmpty()) {
-                SubHeader("预算(点任意一项可改)")
-                budgets.forEachIndexed { i, row ->
-                    SettingRow(
-                        title = row.label,
-                        value = row.value,
-                        chevron = true,
-                        divider = i < budgets.lastIndex,
-                        onClick = { editingBudget = row },
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-            }
-
-            // ---- 消息透析(入口行;列表与详情收进弹窗,不再摊在设置页里) ----
-            SettingRow(
-                title = "消息透析",
-                desc = when {
-                    unknownCount == 0 -> "最近没有需要透析的消息"
-                    else -> unknownNote ?: "共 $unknownCount 条"
-                },
-                chevron = true,
-                divider = collabs.isNotEmpty(),
-                control = {
-                    if (unknownPending > 0) {
-                        Text(
-                            "$unknownPending",
-                            Modifier
-                                .background(Pa.Red, RoundedCornerShape(50))
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
-                            fontSize = 11.sp,
-                            color = androidx.compose.ui.graphics.Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    } else {
-                        // 0 条时弱化:只给一个灰色数字,不抢视觉。
-                        Text("0", fontSize = 12.sp, color = Pa.TextTertiary)
-                    }
-                },
-                onClick = { RuntimeControlState.dialysisSheetOpen = true },
-            )
-
-            // ---- 协同策略(可改) ----
-            if (collabs.isNotEmpty()) {
-                SubHeader("协同策略")
-                collabs.forEachIndexed { i, row ->
-                    if (row.key == "max_parallel_members") {
-                        SettingRow(
-                            title = row.label,
-                            value = row.value,
-                            chevron = true,
-                            divider = i < collabs.lastIndex,
-                            onClick = { editingBudget = BudgetRow(row.key, row.label, row.value) },
-                        )
-                    } else {
-                        SettingRow(
-                            title = row.label,
-                            divider = i < collabs.lastIndex,
-                            control = {
-                                Switch(
-                                    checked = row.value == "开启",
-                                    enabled = busy == null,
-                                    onCheckedChange = { on ->
-                                        busy = row.key
-                                        scope.launch {
-                                            RuntimeControlState.saveCollabPolicy { b ->
-                                                when (row.key) {
-                                                    "collaboration_enabled" -> b.setCollaborationEnabled(on)
-                                                    "native_delegate_enabled" -> b.setNativeDelegateEnabled(on)
-                                                    "fanout_enabled" -> b.setFanoutEnabled(on)
-                                                }
-                                            }?.let { err ->
-                                                sectionErrorPing(RuntimeControlState.SECTION_COLLAB, err)
-                                            }
-                                            busy = null
-                                        }
-                                    },
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-
-            // ---- 手动刷新 ----
-            Spacer(Modifier.height(4.dp))
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = { RuntimeControlState.load() }) {
-                    Text("重新读取", fontSize = 13.sp, color = Pa.AccentText)
-                }
-            }
-        }
-    }
-
-    editingBudget?.let { row ->
-        BudgetEditDialog(
-            row = row,
-            onDismiss = { editingBudget = null },
-            onResult = { err ->
-                editingBudget = null
-                if (err != null) sectionErrorPing(RuntimeControlState.SECTION_BUDGET, err)
-            },
-        )
-    }
+    ControlCenterSection(
+        onOpenMemory = { memorySheetAgent = it },
+        banner = banner,
+        cards = cards,
+        sectionErrors = sectionErrors.mapKeys { sectionLabel(it.key) },
+    )
 
     if (RuntimeControlState.dialysisSheetOpen) {
         UnknownEventSheet(onDismiss = { RuntimeControlState.dialysisSheetOpen = false })
@@ -318,7 +144,12 @@ private fun RuntimeSectionBody() {
 // GetControlPlane,不做乐观改写 —— "看到的就是生效的"由 daemon 保证。
 // ================================================================================
 @Composable
-private fun ControlCenterSection(onOpenMemory: (String) -> Unit) {
+private fun ControlCenterSection(
+    onOpenMemory: (String) -> Unit,
+    banner: RecoveryBanner?,
+    cards: List<AgentContractCard>,
+    sectionErrors: Map<String, String>,
+) {
     val plane = ControlPlaneState.plane
     val unsupported = ControlPlaneState.unsupported
     val refreshError = ControlPlaneState.refreshError
@@ -326,6 +157,7 @@ private fun ControlCenterSection(onOpenMemory: (String) -> Unit) {
     val rows = controlDomainRows(plane)
     var expanded by remember { mutableStateOf(false) }
     var expandedDomain by remember { mutableStateOf<String?>(null) }
+    var expandedAgent by remember { mutableStateOf<String?>(null) }
     var editingNumber by remember { mutableStateOf<ControlItemRow?>(null) }
     // 写动作失败原因(daemon 原文)。落在本区段内呈现,与刷新失败分开,用户才分得清
     // "是没改成"还是"没读到"。
@@ -372,8 +204,28 @@ private fun ControlCenterSection(onOpenMemory: (String) -> Unit) {
                         color = Pa.TextTertiary,
                     )
                 }
-                refreshError?.let {
-                    SectionNote(it, Pa.Yellow)
+                // ---- 启动恢复横幅:降级时始终可见(警告不折叠) ----
+                if (banner != null && banner.degraded) {
+                    RecoveryBannerBlock(banner)
+                }
+                // ---- 分块读取失败:逐块说清,不整页清空 ----
+                sectionErrors.forEach { (k, v) ->
+                    SectionNote("$k: $v", Pa.Yellow)
+                }
+                // ---- 每 agent 形态卡(运行时合同核验结果,总览域行只给计数) ----
+                cards.forEach { card ->
+                    val open = expandedAgent == card.agentId
+                    SettingRow(
+                        title = card.title,
+                        desc = card.versionLine,
+                        value = card.note ?: if (card.ok) "契约达标" else "${card.issues.size} 项未交代",
+                        chevron = true,
+                        divider = true,
+                        onClick = { expandedAgent = if (open) null else card.agentId },
+                    )
+                    if (open) {
+                        AgentRuntimeDetail(card) { onOpenMemory(card.agentId) }
+                    }
                 }
                 rows.forEachIndexed { i, domain ->
                     ControlDomainBlock(
