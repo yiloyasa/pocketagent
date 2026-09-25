@@ -35,6 +35,12 @@ type seqProvider struct {
 	release chan struct{}
 	// steer 非空时 provider 实现 Steerer(模拟 codex)
 	steer func(threadID string, blocks []pb.ContentBlock) (bool, string, error)
+	// followUp 非空时 provider 的 FollowUp 投递成功(模拟 pi 原生 followUp 队列);
+	// nil = 投递失败(返回 false),server 应回落 daemon 内存队列 —— 与 Steer
+	// 字段同款"方法总在、语义由字段定"的打桩模式。
+	followUp func(ctx context.Context, threadID string, blocks []pb.ContentBlock) (bool, error)
+	// followUps 是 FollowUp 被调用次数的打桩计数(受 mu 保护,与 runs 同锁)。
+	followUps int
 }
 
 func (p *seqProvider) ID() string             { return p.id }

@@ -74,9 +74,16 @@ type PiProvider struct {
 	running    map[string]bool            // threadID → 有轮次在跑(同线程防重入)
 	runningCtx map[string]context.Context // threadID → 当前轮的 Run ctx(P2-2:重入守卫判断"旧轮已被打断"用)
 
-	// steerMu 保护 active(可插话的线程集合;Run 登记/收尾清除,与 codex_steer 同模式)。
+	// steerMu 保护 active/settled/fuSeen(可插话目标、终局标记与原生队列水位;
+	// Run 登记/收尾清除,投递与对账路径并发读写,与 codex_steer 同模式)。
 	steerMu sync.Mutex
 	active  map[string]bool
+	// settled[threadID] 本轮是否已见过 agent_settled(FollowUp 的守卫:settled 后
+	// pi 已空闲,prompt 会立即执行成新轮次而非排队 —— 那不是 followUp 语义)。
+	settled map[string]bool
+	// fuSeen[threadID] 原生 followUp 队列的上一水位(queue_update 事件对账用,
+	// 见 pi_followup.go reconcileNativeQueue;跨 Run 存续,队列本体在 pi 进程内存)。
+	fuSeen map[string]int
 
 	modelsCache []pb.ModelInfo
 	modelsAt    time.Time
@@ -99,6 +106,10 @@ type PiProvider struct {
 	prefsMu sync.Mutex
 	prefs   DesktopPrefs
 
+	// remount 只读路径(设置目录)的按需重挂载钩子(单测注入假读取器,不拉真
+	// 子进程;nil = 生产路径走 ensureMounted。与 dsh 的 newClient 注入同模式)。
+	remount func(t *store.Thread) (stateReader, error)
+
 	// TitleHandler 标题同步钩子:Pi 会话名变化时回调(server 落库,双端一致)。
 	// P1 只在挂载时把 thread.Title 写给 Pi(set_session_name),回调预留。
 	TitleHandler func(threadID, title string)
@@ -111,6 +122,8 @@ func NewPiProvider() *PiProvider {
 		running:    map[string]bool{},
 		runningCtx: map[string]context.Context{},
 		active:     map[string]bool{},
+		settled:    map[string]bool{},
+		fuSeen:     map[string]int{},
 		cursors:    map[string]string{},
 	}
 	if dir := os.TempDir(); dir != "" {
@@ -385,6 +398,7 @@ func (p *PiProvider) DropThread(threadID string) {
 	delete(p.clients, threadID)
 	delete(p.cursors, threadID)
 	p.mu.Unlock()
+	p.forgetNativeQueue(threadID) // 水位/终局标记随子进程一起回收(原生队列随进程消亡)
 	if c != nil {
 		c.Close()
 		log.Printf("[pi] 已回收线程 %s 的子进程与游标", threadID)
@@ -681,14 +695,18 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		p.mu.Unlock()
 	}()
 
-	// 登记"可插话"目标(Steer 用);轮次收尾清除 —— 迟到的 steer 不能插进
-	// 早已结束的轮次(与 codex_steer 的 turnActive 守卫同语义)。
+	// 登记"可插话"目标(Steer 用)并清"已终局"标记(FollowUp 的守卫位:每个新
+	// Run 都是新一轮,上一轮的 settled 不再适用);轮次收尾统一清除 —— 迟到的
+	// steer/followUp 不能投进早已结束的轮次(与 codex_steer 的 turnActive 守卫
+	// 同语义)。
 	p.steerMu.Lock()
 	p.active[t.ID] = true
+	p.settled[t.ID] = false
 	p.steerMu.Unlock()
 	defer func() {
 		p.steerMu.Lock()
 		delete(p.active, t.ID)
+		delete(p.settled, t.ID)
 		p.steerMu.Unlock()
 	}()
 
@@ -850,7 +868,22 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			}
 		case "agent_settled":
 			// 真终局:settled 之后不再有自动续跑(实测 §11#5)。
+			// 【顺带钉终局标记】FollowUp 据此拒投:settled 后 pi 已空闲,再投
+			// prompt 会立即执行成新轮次,不是 followUp 语义(见 FollowUp 守卫)。
+			p.steerMu.Lock()
+			p.settled[t.ID] = true
+			p.steerMu.Unlock()
 			runCancel(errSettled)
+		case "queue_update":
+			// 原生队列对账(入队 → Queued 出队 → QueueFlushed,手机排队计数
+			// 继续正确);随后的状态卡照旧投影 —— 两条信息面各司其职,回执链
+			// 管计数、状态卡管"插队 N 条 · 排队 M 条"的现场感。
+			for _, frame := range p.reconcileNativeQueue(t.ID, ev.Raw) {
+				sink(frame)
+			}
+			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
+			}
 		case "compaction_start", "compaction_end":
 			// 维护压缩闸门(中程用量推送据此暂停,见下方 ticker),再按原路径
 			// 映射成 CONTEXT_COMPACTED 状态事件上屏。
@@ -893,12 +926,11 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	}()
 
 	// ---- 发 prompt ----
+	// 【走 Prompt 封装】行为与原内联 params 零分叉(behavior 为空 = 不带
+	// streamingBehavior 字段);封装是 followUp 原生投递(pi_followup.go)与
+	// 首轮 prompt 的同一传输口,字段形状只有一份真相。
 	message, images := blocksToPrompt(req.InputBlocks)
-	params := map[string]any{"message": message}
-	if len(images) > 0 {
-		params["images"] = images
-	}
-	if _, err := c.CallCtx(runCtx, "prompt", params, piCallBudget); err != nil {
+	if err := c.Prompt(runCtx, message, images, ""); err != nil {
 		// success:false = prompt 在受理前被拒(流式中未带 streamingBehavior、模型不可用…)
 		// 受理后的失败走事件流(不会以第二条 response 出现 —— 文档明说)。
 		return partialText(&mu, &textBuf), nil, &piError{code: "PI_PROMPT_REJECTED", msg: err.Error()}
@@ -971,6 +1003,21 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		abortStart := time.Now()
 		actx, acancel := context.WithTimeout(context.Background(), piSettleWait)
 		_, _ = c.CallCtx(actx, "abort", nil, piSettleWait)
+		// 【撤回已预投递的 followUp】pi 的 abort 只是停止本轮续跑,原生队列里
+		// 的条目会**留在队列**(下一条 prompt 的运行周期把它带出来执行 —— 证据
+		// §3)。"终止任务"的语义是连排队的也不跑,与 server 清 daemon 队列
+		// (rt.stop)对齐,这里补一次 clear_queue;对账水位随之归零,若 pi 还
+		// 会为清空发 queue_update,出队帧会把手机的排队计数一并收掉。失败只记
+		// 日志:残留条目由 ClearQueuedInputs(用户显式撤回)或下轮清空兜底。
+		if _, _, cerr := clearQueueOn(actx, c); cerr != nil {
+			log.Printf("[pi] 中止后清理原生排队失败(残留由显式撤回兜底) thread=%s: %v", t.ID, cerr)
+		} else {
+			// 清理成功 = 队列必空:水位直接归零,不依赖随后那条 queue_update
+			// 是否赶在事件泵收尾前到达(赶到了也只是零增量对账)。
+			p.steerMu.Lock()
+			p.fuSeen[t.ID] = 0
+			p.steerMu.Unlock()
+		}
 		acancel()
 		log.Printf("[pi] 用户中止轮次 thread=%s(abort 收尾 %s)", t.ID, time.Since(abortStart).Round(time.Millisecond))
 	} else {

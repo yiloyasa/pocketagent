@@ -9,8 +9,11 @@
 //     即 ~/.pi)—— 按红线 1(绝不写用户桌面配置),本 Provider **不提供写**,
 //     只做只读事实呈现。
 //
-// 【为什么走 aliveClient 而不是 clientFor】只读呈现不该有"看一眼就拉起一个
-// pi 子进程"的副作用:没有活跃会话时如实返回空目录(手机端整组隐藏)。
+// 【会话域点亮】get_state 需要活跃会话才有"该会话"的值:有活客户端直接读;
+// 线程已绑定落盘会话但本进程没有活客户端(daemon 重启后从未跑轮)时按需重挂载
+// 后读(与 Rename/CompactThread 的"低频动作按需起子进程"同口径);线程从未在
+// 电脑上落地(无 SessionFile)→ 空目录(UI 已有空态隐藏),绝不为看一眼凭空
+// 拉起子进程。
 package agent
 
 import (
@@ -27,10 +30,16 @@ var _ NativeConfigOptions = (*PiProvider)(nil)
 // piNativeNote 只读行的人话说明(事实陈述,不用"未知/错误"字样)。
 const piNativeNote = "由 Pi 桌面端设置管理:原生写通道会把修改持久写入电脑端 Pi 的全局配置,本通道只读呈现当前生效值。"
 
+// stateReader 目录读取对 piapp.Client 的窄接口(单测打桩,不依赖子进程;
+// piapp.Client 的 GetState 签名天然满足,生产零适配)。
+type stateReader interface {
+	GetState(ctx context.Context) (map[string]any, error)
+}
+
 // ConfigOptionsCatalog 实现 agent.NativeConfigOptions(只读)。
 //
-// 数据源 = 活跃 pi 会话的 get_state(piNativeState);没有活跃会话时返回空目录
-// (nil, nil —— "现在没有可示的原生状态"是事实,不是错误)。
+// 数据源 = 该线程活跃 pi 会话的 get_state(piNativeState);没有活跃会话且无法
+// 建立时返回空目录(nil, nil —— "现在没有可示的原生状态"是事实,不是错误)。
 func (p *PiProvider) ConfigOptionsCatalog(ctx context.Context, t *store.Thread) ([]NativeConfigOption, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -39,11 +48,35 @@ func (p *PiProvider) ConfigOptionsCatalog(ctx context.Context, t *store.Thread) 
 	if t != nil {
 		tid = t.ID
 	}
-	c := p.aliveClient(tid)
-	if c == nil {
+	if c := p.aliveClient(tid); c != nil {
+		return piCatalogFrom(ctx, c)
+	}
+	// 没有活客户端:只有"线程已绑定落盘会话"才值得按需重挂载(把绑定会话重新
+	// 变成活跃会话);否则空目录。remount 钩子非 nil = 单测注入,绕过真子进程。
+	if t == nil || t.ExternalSession.SessionFile == "" {
 		return nil, nil
 	}
-	st, err := c.GetState(ctx)
+	var src stateReader
+	if p.remount != nil {
+		got, err := p.remount(t)
+		if err != nil {
+			return nil, fmt.Errorf("重挂载 Pi 会话失败: %w", err)
+		}
+		src = got
+	} else {
+		nc, err := p.ensureMounted(t)
+		if err != nil {
+			return nil, err
+		}
+		src = nc
+	}
+	return piCatalogFrom(ctx, src)
+}
+
+// piCatalogFrom 从 get_state 读取器取样成目录行(读取失败如实报错,不回落空
+// 目录冒充"没有设置"—— RPC 层把错误落 resp.Error,"读不到 ≠ 没有值")。
+func piCatalogFrom(ctx context.Context, src stateReader) ([]NativeConfigOption, error) {
+	st, err := src.GetState(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get_state: %w", err)
 	}

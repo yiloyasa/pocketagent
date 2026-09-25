@@ -1,8 +1,11 @@
 // turn_queue.go —— P1-4「运行中继续发消息」的 server 层:插话分派 + 内存队列 + 续跑。
 //
-// 【两条路径】手机在轮次 running 时又发了一条 TurnInput(走同一条 StartTurn 流):
+// 【三条路径】手机在轮次 running 时又发了一条 TurnInput(走同一条 StartTurn 流):
 //  1. provider 支持 Steerer(codex)→ turn/steer 原生插入,Steered 帧回执;
-//  2. 插不进(轮次未开始/上游拒绝)或 provider 不支持(echo / OpenAI 兼容)
+//  2. provider 支持 FollowUpper(pi)→ prompt+streamingBehavior:"followUp"
+//     预投递进 pi 原生队列,当前轮 settled 前自动续跑;排队回执由 pi 的
+//     queue_update 事件链映射(provider 侧对账,Queued/QueueFlushed 各归其位);
+//  3. 两条原生路径都走不通或 provider 不支持(echo / OpenAI 兼容)
 //     → 入内存队列,Queued 帧回执(第几位);当前轮次终局后由 StartTurn 的
 //     续跑循环逐条取出执行,每条发 QueueFlushed + Started。
 //
@@ -120,10 +123,13 @@ func (q *turnInputQueue) Clear(threadID string) []string {
 // provider(排队输入可能换模型 → 换 provider),而读手 goroutine 在同时收帧。
 // 两边都只经它读写,避免数据竞争。
 type turnRuntime struct {
-	mu      sync.Mutex
-	closed  bool
-	turnID  string
-	steerer agent.Steerer // nil = 当前 provider 不支持插话
+	mu     sync.Mutex
+	closed bool
+	turnID string
+	// steerer / followUpper 当前 provider 的可选扩展能力(nil = 不支持,探测
+	// 随 rt.update 在每次换轮/换 provider 时刷新)。
+	steerer     agent.Steerer
+	followUpper agent.FollowUpper
 }
 
 // Admission and the final empty-queue check share one lock. Otherwise a reader
@@ -165,6 +171,8 @@ func (r *turnRuntime) update(turnID string, provider agent.Provider) {
 	r.turnID = turnID
 	st, _ := provider.(agent.Steerer)
 	r.steerer = st
+	fu, _ := provider.(agent.FollowUpper)
+	r.followUpper = fu
 }
 
 func (r *turnRuntime) current() (string, agent.Steerer) {
@@ -173,15 +181,32 @@ func (r *turnRuntime) current() (string, agent.Steerer) {
 	return r.turnID, r.steerer
 }
 
+// followUpperOf 读当前 provider 的 FollowUpper 能力(nil = 不支持原生排队)。
+func (r *turnRuntime) followUpperOf() agent.FollowUpper {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.followUpper
+}
+
 // steerCallBudget server 层给单次 steer 的上界(provider 内部还有默认兜底,
 // 这里统一再收一次口:读手 goroutine 里排队等待不能没边)。
 const steerCallBudget = 15 * time.Second
 
+// followUpCallBudget server 层给单次 followUp 预投递的上界(与 steerCallBudget
+// 同口径:读手 goroutine 里的等待必须有边;pi 侧受理本就毫秒级)。
+const followUpCallBudget = 15 * time.Second
+
 // handleMidTurnInput 处理「轮次 running 时收到的 TurnInput」帧(读手 goroutine 调用)。
 //
-// 顺序:先试 codex 原生插入(Steered 回执),插不进转排队(Queued 回执,
-// position=0 表示队列满拒收)。任何路径都不丢输入、也不阻塞读手
-// (读手阻塞 = 审批/取消帧全部堵住,是 P0 级故障)。
+// 顺序(原生队列优先,daemon 队列降级为兜底):
+//  1. codex 原生插入(Steered 回执)—— 插进**当前**轮次;
+//  2. pi 原生 followUp 预投递(FollowUpper 可选能力)—— 当前轮**结束后**由 pi
+//     在同一 settled 周期内自动续跑,输入不进 daemon 队列;投递成功的排队回执
+//     由 pi 的 queue_update 事件链映射(provider 侧对账),本函数不发 Queued;
+//  3. 两条原生路径都走不通 → 入 daemon 内存队列(Queued 回执,position=0 表示
+//     队列满拒收)。
+//
+// 任何路径都不丢输入、也不阻塞读手(读手阻塞 = 审批/取消帧全部堵住,P0 级故障)。
 func (s *Server) handleMidTurnInput(t *store.Thread, in *pb.TurnInput, rt *turnRuntime, sink agent.Sink) {
 	if in == nil {
 		return
@@ -209,10 +234,28 @@ func (s *Server) handleMidTurnInput(t *store.Thread, in *pb.TurnInput, rt *turnR
 			return
 		}
 		// 插不进不是错误:轮次可能还没被 codex 接收(turn/started 未到)、
-		// 或上游明确拒绝(expectedTurnId 不匹配)。排队兜底,输入不丢。
-		log.Printf("[turn] steer 不可用,转排队 %s: %v", t.ID, err)
+		// 或上游明确拒绝(expectedTurnId 不匹配)。转 2),输入不丢。
+		log.Printf("[turn] steer 不可用,尝试原生 followUp/转排队 %s: %v", t.ID, err)
 	}
-	// 2) 排队:当前轮次终局后由续跑循环逐条执行
+	// 2) pi 原生 followUp 预投递:投进 pi 自己的队列,当前轮终局后由 pi 接着跑。
+	//    【为什么先投递后(不)入队,而不是"入队再摘除"】投递是带预算的 RPC
+	//    (毫秒级但无上限保证),绝不能塞进 rt.mu 临界区;先入队再摘除会在
+	//    两步之间被续跑循环的 rt.next 抢走 → 同一条输入 daemon 跑一遍、pi 又
+	//    跑一遍。所以成功路径等价于"从 daemon 队列摘除该条":它从未入队,
+	//    也不进 turn 台账(台账只覆盖 daemon 队列;原生队列条目的丢失可见性
+	//    由手机断流恢复兜底 —— 与"绝不自动重发"的既有取舍一致)。
+	if fu := rt.followUpperOf(); fu != nil {
+		fctx, fcancel := context.WithTimeout(context.Background(), followUpCallBudget)
+		delivered, ferr := fu.FollowUp(fctx, t.ID, blocks)
+		fcancel()
+		if delivered {
+			log.Printf("[turn] 运行中输入已预投递 pi 原生 followUp 队列 %s(排队回执随 queue_update 事件补发)", t.ID)
+			return
+		}
+		// 投不进不是错误:轮次间隙/上游拒收/旧版 pi。排队兜底,输入不丢。
+		log.Printf("[turn] followUp 预投递不可用,转排队 %s: %v", t.ID, ferr)
+	}
+	// 3) 排队:当前轮次终局后由续跑循环逐条执行
 	item := queuedInput{
 		id:      randomID("qin"),
 		blocks:  blocks,
