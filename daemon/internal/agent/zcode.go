@@ -121,6 +121,11 @@ type ZcodeProvider struct {
 	goalMu       sync.Mutex
 	pendingGoals map[string]string
 
+	// sessionSource 原生会话适配器(zcode_session.go)的客户端源:生产为 nil,
+	// 走 withClientCtx 的真子进程;单测与契约套件注入假客户端,不拉真子进程
+	// (与 pi 的 sessionFor 钩子同模式,014db16 先例)。
+	sessionSource func(ctx context.Context) (zcodeSessionClient, error)
+
 	// prefsMu 保护桌面偏好内存态(ApplyPrefs 与事件/轮次路径并发读写)。
 	// 【红线】只存内存,绝不写用户桌面端配置。
 	prefsMu sync.Mutex
@@ -576,13 +581,18 @@ func (p *ZcodeProvider) contextWindowFor(threadID string) int64 {
 // 返回 (sessionId, 是否新建, 本次应答快照原文, 错误)。快照原文供图片输入的
 // 能力门控读取 inputFormat.supportsImage(含 current 模型定位);threadMap 命中
 // (无新鲜快照)时返回 nil,门控退回 refByModel 缓存位判定。
+//
+// 【P3 拆分】重挂载与新建两个分支的函数体原样搬进了 zcode_session.go 的
+// resumeZcodeSession/createZcodeSession(Run 链与原生会话适配器共用的唯一实现);
+// 本函数保留的是 Run 链自己的决策:同代短路、"resume 失败改开新会话"的降级、
+// 账号同步错误直通、subscribe(轮次内状态机的事)。
 func (p *ZcodeProvider) ensureSession(ctx context.Context, req TurnRequest) (string, bool, json.RawMessage, error) {
 	gen := int(p.gen.Load())
 	if ref, hit := p.zcodeThreadRefFor(req.Thread.ID); hit && ref.gen == gen {
 		return ref.id, false, nil, nil
 	}
 	if sid := req.Thread.ExternalSession.SessionID; sid != "" {
-		raw, err := p.client.CallCtx(ctx, "session/resume", map[string]interface{}{"sessionId": sid})
+		raw, err := p.resumeZcodeSession(ctx, p.client, req.Thread.ID, sid, gen)
 		if err != nil {
 			var accountErr *zcodeapp.AccountSyncError
 			if errors.As(err, &accountErr) {
@@ -590,34 +600,14 @@ func (p *ZcodeProvider) ensureSession(ctx context.Context, req TurnRequest) (str
 			}
 			log.Printf("[zcode] session/resume %s 失败(改开新会话): %v", sid, err)
 		} else {
-			log.Printf("[zcode] 已重挂载会话 %s", sid)
-			p.recordProjection(req.Thread.ID, raw)
-			p.setZcodeThreadRef(req.Thread.ID, threadRef{id: sid, gen: gen})
 			return sid, false, raw, p.subscribe(ctx, req.Thread.ID, sid)
 		}
 	}
-	raw, err := p.client.CallCtx(ctx, "session/create", map[string]interface{}{
-		"workspace": zcodeWorkspace(req.Workspace),
-		"mode":      "build", // 红线:显式 build
-	})
+	sid, created, raw, err := p.createZcodeSession(ctx, p.client, req.Thread, req.Workspace, gen)
 	if err != nil {
-		return "", false, nil, fmt.Errorf("session/create: %w", err)
+		return "", false, nil, err
 	}
-	var cr struct {
-		Session struct {
-			SessionID string `json:"sessionId"`
-		} `json:"session"`
-	}
-	if json.Unmarshal(raw, &cr) != nil || cr.Session.SessionID == "" {
-		return "", false, nil, fmt.Errorf("session/create 应答无法解析: %s", clip(string(raw), 300))
-	}
-	sid := cr.Session.SessionID
-	p.recordProjection(req.Thread.ID, raw)
-	p.setZcodeThreadRef(req.Thread.ID, threadRef{id: sid, gen: gen})
-	// server 层会在轮次后落库(Pi 同款机制);手机端据此展示外部会话引用。
-	req.Thread.ExternalSession = store.ExternalSessionRef{SessionID: sid, Cwd: req.Workspace}
-	log.Printf("[zcode] 新建会话 %s(workspace=%s)", sid, req.Workspace)
-	return sid, true, raw, p.subscribe(ctx, req.Thread.ID, sid)
+	return sid, created, raw, p.subscribe(ctx, req.Thread.ID, sid)
 }
 
 // subscribe 订阅事件流。【实测】deliveryKind 必填(desktop-continuous),

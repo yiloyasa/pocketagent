@@ -37,10 +37,22 @@ func providerRuntimeCases() []Provider {
 			},
 		}, nil
 	}
+	// zcode 自 P3 起同款收编(见 zcode_session.go):注入假客户端源(sessionSource
+	// 钩子,等价 pi 的 sessionFor / dsh 的 newClient),Open 走 session/create、
+	// Resume 走 session/resume 重挂载,不拉真子进程。
+	zcode := NewZcodeProvider()
+	zcode.sessionSource = func(context.Context) (zcodeSessionClient, error) {
+		return newFakeZcodeSessionClient("sess-contract"), nil
+	}
+	// codex 自 P3 起同款收编(见 codex_session.go):注入假 JSON-RPC 调用源
+	// (sessionCall 钩子,与 callThreadResume 的 call 形参同一注入基建),
+	// thread/start + thread/resume 全走假调用。
+	codex := NewCodexProvider()
+	codex.sessionCall = newFakeCodexSessionCalls().call
 	return []Provider{
-		NewCodexProvider(),
+		codex,
 		pi,
-		NewZcodeProvider(),
+		zcode,
 		dsh,
 		// 无稳定原生 session 的那一类：daemon 侧 conversation memory 必须顶上
 		// （规格 §7 对 OpenAI Compatible 的要求）。
@@ -203,9 +215,58 @@ func TestDshDeliversNativeSessionAfterAdoption(t *testing.T) {
 	}
 }
 
+// TestZcodeDeliversNativeSessionAfterAdoption 钉 P3 收编的注入事实:zcode 实现
+// 了 NativeSessionFactory(D5),openSharedRuntime 必须注入其原生适配器 —— 不再
+// 是 nil。与 pi/dsh 同款:对"早退放行"的补集只认 zcode 必须非 nil,且交付物
+// 就是 zcodeSession。
+func TestZcodeDeliversNativeSessionAfterAdoption(t *testing.T) {
+	p := NewZcodeProvider()
+	p.sessionSource = func(context.Context) (zcodeSessionClient, error) {
+		return newFakeZcodeSessionClient("sess-native-zcode"), nil
+	}
+	rt, err := p.OpenRuntime(context.Background(), &store.Thread{ID: "th-zcode-native"})
+	if err != nil {
+		t.Fatalf("OpenRuntime 失败: %v", err)
+	}
+	if rt.NativeSession == nil {
+		t.Fatal("zcode 收编后 NativeSession 必须非 nil(设计稿 P3:不再是 nil)")
+	}
+	if _, ok := rt.NativeSession.(*zcodeSession); !ok {
+		t.Fatalf("应注入 zcodeSession 适配器, 实得 %T", rt.NativeSession)
+	}
+	if got := rt.NativeSession.Source(); got != p.Descriptor().SessionModel {
+		t.Fatalf("NativeSession.Source()=%q 与 descriptor.SessionModel=%q 不一致", got, p.Descriptor().SessionModel)
+	}
+}
+
+// TestCodexDeliversNativeSessionAfterAdoption 钉 P3 收编的注入事实:codex 实现
+// 了 NativeSessionFactory(D5),openSharedRuntime 必须注入其原生适配器 —— 不再
+// 是 nil。与 pi/dsh/zcode 同款:对"早退放行"的补集只认 codex 必须非 nil,且
+// 交付物就是 codexSession。
+func TestCodexDeliversNativeSessionAfterAdoption(t *testing.T) {
+	p := NewCodexProvider()
+	p.sessionCall = newFakeCodexSessionCalls().call
+	rt, err := p.OpenRuntime(context.Background(), &store.Thread{ID: "th-codex-native"})
+	if err != nil {
+		t.Fatalf("OpenRuntime 失败: %v", err)
+	}
+	if rt.NativeSession == nil {
+		t.Fatal("codex 收编后 NativeSession 必须非 nil(设计稿 P3:不再是 nil)")
+	}
+	if _, ok := rt.NativeSession.(*codexSession); !ok {
+		t.Fatalf("应注入 codexSession 适配器, 实得 %T", rt.NativeSession)
+	}
+	if got := rt.NativeSession.Source(); got != p.Descriptor().SessionModel {
+		t.Fatalf("NativeSession.Source()=%q 与 descriptor.SessionModel=%q 不一致", got, p.Descriptor().SessionModel)
+	}
+}
+
 // TestProvidersWithoutFactoryKeepNativeSessionNil 钉 D5 的另一半:未实现
-// NativeSessionFactory 的家维持 nil —— 六家增量收编互不牵连,收编 pi/dsh 不得
-// 顺手给别家塞替身(替身会被 VerifyRuntime 判 source-mismatch)。
+// NativeSessionFactory 的家维持 nil —— 六家增量收编互不牵连,任何一家的收编
+// 都不得顺手给别家塞替身(替身会被 VerifyRuntime 判 source-mismatch)。
+// 【P3 后现状】HYBRID 四家(codex/pi/zcode/dsh)已全部收编,SourceDaemon 的家
+// (OpenAI 兼容/echo)本就被上面的早退放行豁免 —— 本条当前零实例,但作为
+// 门禁保留:未来新家接入若声明 HYBRID 却未实现工厂,仍被此钉住。
 func TestProvidersWithoutFactoryKeepNativeSessionNil(t *testing.T) {
 	for _, p := range providerRuntimeCases() {
 		participant, ok := p.(runtime.Participant)
@@ -218,7 +279,7 @@ func TestProvidersWithoutFactoryKeepNativeSessionNil(t *testing.T) {
 			continue
 		}
 		if _, ok := p.(NativeSessionFactory); ok {
-			continue // 已收编的家(pi/dsh)不在本条断言范围
+			continue // 已收编的家(pi/dsh/zcode/codex)不在本条断言范围
 		}
 		t.Run(p.ID(), func(t *testing.T) {
 			rt, err := participant.OpenRuntime(context.Background(), &store.Thread{ID: "th-nil-" + p.ID()})

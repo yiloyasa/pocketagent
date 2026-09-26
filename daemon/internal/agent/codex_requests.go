@@ -309,6 +309,10 @@ func ApprovalReason(call *pb.ToolCallBlock) string {
 		return "MCP 服务需要你确认"
 	case "write_file":
 		return "agent 请求写入文件"
+	case unknownRequestCallName:
+		// 【辅线 B】未知反向请求的通用确认卡:外层 Reason 与卡内 reason 键同文案,
+		// 手机审批卡两处都如实说"未识别的操作",不冒充任何已知动作类型。
+		return "agent 请求执行一个未识别的操作"
 	}
 	return "agent 请求执行操作"
 }

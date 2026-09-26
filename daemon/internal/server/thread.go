@@ -1326,6 +1326,19 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 	// 直接进来，不经过 StartTurn 的那两行，于是子线程只剩 assistant 侧记忆。
 	s.recordTurnMemory(provider, t, "user", turnID, inputBlocks)
 
+	// 【P2 memory 分层·四层上下文组装的接线点（本轮交付组装函数，注入待接）】
+	// 设计稿 D4/spec §7：daemon 家（memory.daemon：echo/OpenAI 兼容）的每轮请求前，
+	// 应把 assembleTurnContext（turn_memory_context.go）的四层产物——元数据 → 已保存
+	// 记忆（summary 槽）→ 早期摘要（conversation 槽 Digest）→ 近期消息（尾部窗口）——
+	// 作为上下文前缀注入。此处（用户侧记忆写入之后、provider.Run 之前）就是注入位：
+	//   前缀 := assembleTurnContext(daemonTurnContextMeta(...), savedRows, digest, msgs, 预算)
+	// 未接的原因：注入要过 agent 包——要么 agent.TurnRequest 增加前缀字段，要么
+	// openai_compat.go:135 的 oaMessage 组装处回读 daemon 组装结果（req.Thread.Messages
+	// 是它唯一的历史来源），两者都在 agent/**（本轮冻结：并行代理在改 agent 家文件，
+	// 且 daemon 不重写轮次循环的红线要求注入点在 provider 边界内显式成形，而不是靠
+	// server 偷改 Thread）。接线时预算取 s.effectiveLimits(...) 的 DiskConversationBytes，
+	// saved/digest/messages 三层从 runtimeBackend.Memory() 按 key 读取（读法照
+	// recordTurnMemory 的分档判据，非 daemon 家一律不注入）。
 	// 每轮独立的取消函数:CancelTurn RPC / 重入打断拿到的是"当前这一轮"的;
 	// 父 ctx(手机取消帧)被取消时会连带取消这里的子 ctx。
 	// 【先取 Err 再 cancel】cancel 之后再查 runCtx.Err() 永远非 nil,
@@ -1445,6 +1458,9 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 	// 绝不能挤占回复的可见时延（设计稿 §6 风险 1），失败只记日志、不改本轮返回值。
 	// 放在两分支合流处而非各自落库点之后，失败无 partial 的轮次也能被水位检查覆盖。
 	s.afterTurnMemoryHousekeeping(provider, t)
+	// 【P3 memory 分层】闲时整理的时钟锚点：轮次收尾即"刚忙完"，此后空闲计时归零；
+	// 同时惰性启动闲时整理循环（首个轮次才起，见 memory_housekeeping.go）。
+	s.noteTurnSettled()
 	if runErr != nil {
 		return "", userStopped, &turnRunError{err: runErr}
 	}

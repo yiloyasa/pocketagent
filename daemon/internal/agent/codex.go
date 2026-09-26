@@ -70,6 +70,10 @@ type CodexProvider struct {
 	threadMap map[string]threadRef
 	threadMu  sync.Mutex
 	gen       atomic.Int32 // codex 子进程代号,每次(重)启 +1
+	// sessionCall 原生会话适配器(codex_session.go)的 JSON-RPC 调用源:生产为
+	// nil,走 p.client.Call(withClient 先保证子进程就绪);单测与契约套件注入
+	// 假调用,不拉真子进程(与 pi 的 sessionFor 钩子同模式,014db16 先例)。
+	sessionCall func(method string, params interface{}) (json.RawMessage, error)
 	// 常驻目标(codex 的 thread/goal/set)。codex 只认"已被 app-server 加载"的线程,
 	// 所以线程还没跑过第一轮(或子进程刚重启还没 resume)时先暂存,等 Run() 拿到
 	// codex threadId 后补发。见 codex_goal.go。
@@ -919,38 +923,14 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		}
 	}
 	if codexTID == "" {
-		startParams := map[string]interface{}{"cwd": req.Workspace}
-		if req.Ephemeral {
-			startParams["ephemeral"] = true
-		}
-		if len(cfgOverride) > 0 {
-			startParams["config"] = cfgOverride
-		}
-		// 与 turn/start 一样打日志:让"回答详略/思考摘要真的带上了"可被外部核验。
-		log.Printf("[codex] thread/start cwd=%s config=%v", req.Workspace, cfgOverride)
-		raw, err := p.client.Call("thread/start", startParams)
-		// 【反问卡】注意:此处不再做"带 features 覆盖失败→摘除重试"的护栏。
-		// 该护栏是为"注入 under-development 特性"特设的逃生舱,现在已不再注入
-		// (见 askUserInputSupported 注释),无 features 键可摘,删干净以免留下死分支。
+		// 【P3 拆分】thread/start 调用与 threadId 三级回退解析原样搬进了
+		// codex_session.go 的 startCodexThread(Run 链与原生会话适配器共用的唯一
+		// 实现);本函数保留的是 Run 链自己的编排:同代短路、resume 失败"改开
+		// 新线程"的降级、同代缓存登记、引用写回、目标暂存补发。
+		var err error
+		codexTID, err = startCodexThread(req.Workspace, req.Ephemeral, cfgOverride, p.client.Call)
 		if err != nil {
-			return nil, nil, fmt.Errorf("thread/start: %w", err)
-		}
-		var res struct {
-			ThreadId string `json:"threadId"`
-			Thread   struct {
-				Id string `json:"id"`
-			} `json:"thread"`
-			Id string `json:"id"`
-		}
-		if json.Unmarshal(raw, &res) != nil || (res.ThreadId == "" && res.Thread.Id == "" && res.Id == "") {
-			return nil, nil, fmt.Errorf("thread/start 应答无法解析: %s", clip(string(raw), 300))
-		}
-		codexTID = res.ThreadId
-		if codexTID == "" {
-			codexTID = res.Thread.Id
-		}
-		if codexTID == "" {
-			codexTID = res.Id
+			return nil, nil, err
 		}
 		p.setCodexThreadRef(req.Thread.ID, threadRef{id: codexTID, gen: gen})
 		req.Thread.CodexThreadID = codexTID // server 层会在轮次后落库
@@ -1275,6 +1255,14 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		// 报文形状去回答另一种请求,对方只能按协议错误处理(token 刷新就是这么被打死的)。
 		switch kind {
 		case reqUnsupported, reqUnknown:
+			// 【辅线 B】开关 ON 时,未知反向请求先弹手机通用确认卡(复用 requestApproval
+			// 的 approve/deny 回路,确认卡经既有审批卡通道渲染):允许 → 已回空对象 {}
+			// + 台账 KNOWN_PASSTHROUGH,true=请求已终结;等待中桌面端已解决 → 双方都
+			// 不再应答。拒绝/超时/通道缺失/开关关 → false,落到下面的既有安全拒绝
+			// 路径,-32601 + 台账与 OFF 态走同一段代码(台账口径逐字节一致)。
+			if kind == reqUnknown && p.consumeCodexUnknownRequest(c, id, method, req.Thread.ID, params, ctx, sink, approve, &approvalWaiting) {
+				return
+			}
 			msg := unsupportedRequestMessage(method)
 			if kind == reqUnknown {
 				msg = "PocketAgent 未实现该反向请求: " + method

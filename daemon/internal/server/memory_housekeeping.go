@@ -20,6 +20,8 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -194,4 +196,185 @@ func (s *Server) memoryBudgetUnderPressure(agentID string, t *store.Thread, kind
 		}
 	}
 	return false // 从未记过账 = 无从谈压力
+}
+
+// ---------- P3：闲时整理（memory 分层设计稿 §4 P3）----------
+//
+// 【为什么触发源从"轮末"再长出一个"闲时"】轮末钩子（上方 afterTurnMemoryHousekeeping）
+// 只看得到"刚跑过轮的会话"；一个跑了很多轮、之后再也不用的会话，最后一轮的收敛之后
+// 就没人管它了——直到用户回来。闲时整理把同一套收敛动作挪到 ticker 上：daemon 空闲
+// （无在飞轮次且距上次轮次收尾超过阈值）时，挑超阈幅度最大的一个会话收敛一次。
+//
+// 【为什么一次只收一个】单锁 Backend 按"单 daemon、少量 thread"设计，闲时一口气
+// 收敛全部会话等于把后台活干成了前台停顿（设计稿 D1 对锁纪律的顾虑在此依然成立）；
+// 每个 tick 收最超阈的一个，剩下的下个 tick 继续——闲时最不缺的就是 tick。
+//
+// 【复用而非另写】收敛动作 = afterTurnMemoryHousekeeping 本体：同参数、同幂等闸门、
+// 同摘要行登记、同 checkpoint 纪律。闲时只是触发源不同，行为必须与轮末逐字相同——
+// 否则"收敛"就有了两套语义，完整性判据要防两个方向。
+//
+// 【配置开关】包级原子变量即开关（任务明确"选简单的不加 proto 字段"）：测试收紧
+// 周期、运维要停就翻 enabled。必须原子：整理 goroutine（可能来自任何一个尚存活
+// 的测试 server）与改配置的 goroutine 并发读写，普通变量在 -race 下就是数据竞争
+// ——实测正是被 race 检测揪出来的。量级是待校准的初始值，与 memorySlotThresholds 同地位。
+
+var (
+	// idleMemorySweepEnabledNanos 闲时整理总开关（0=关，1=开）。
+	idleMemorySweepEnabledFlag atomic.Bool
+	// idleMemoryIdleAfterNanos 空闲多久才动手（纳秒；无在飞轮次且距上次轮次收尾超过它）。
+	idleMemoryIdleAfterNanos atomic.Int64
+	// idleMemorySweepTickNanos 整理循环的检查周期（纳秒）。周期 < 阈值：检查是便宜的
+	// （两次原子读），动手才贵——宁可多查几次，不要错过空闲窗口。
+	idleMemorySweepTickNanos atomic.Int64
+)
+
+func init() {
+	idleMemorySweepEnabledFlag.Store(true)
+	idleMemoryIdleAfterNanos.Store(int64(10 * time.Minute))
+	idleMemorySweepTickNanos.Store(int64(5 * time.Minute))
+}
+
+// idleMemoryIdleAfter / idleMemorySweepTick 配置读取（原子快照，见上）。
+func idleMemoryIdleAfter() time.Duration { return time.Duration(idleMemoryIdleAfterNanos.Load()) }
+func idleMemorySweepTick() time.Duration { return time.Duration(idleMemorySweepTickNanos.Load()) }
+
+// noteTurnSettled 轮次收尾时盖闲时钟，并惰性启动整理循环（首个轮次才起 goroutine：
+// 只当控制面用、从不跑轮次的 daemon 不为整理付一个常驻 goroutine）。
+func (s *Server) noteTurnSettled() {
+	if s == nil {
+		return
+	}
+	s.lastTurnSettledAt.Store(time.Now().UnixNano())
+	if idleMemorySweepEnabledFlag.Load() {
+		s.ensureIdleMemorySweep()
+	}
+}
+
+// ensureIdleMemorySweep 启动闲时整理循环（进程内仅一次）。
+func (s *Server) ensureIdleMemorySweep() {
+	s.idleSweepOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.idleSweepStop = cancel
+		go func() {
+			// 周期在启动那刻取原子快照：运行中改配置不重塑已存在的 ticker
+			//（重塑=另一条并发写路径，没必要）；改完对下一个启动的循环生效。
+			ticker := time.NewTicker(idleMemorySweepTick())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					s.idleMemorySweep()
+				}
+			}
+		}()
+	})
+}
+
+// stopIdleMemorySweep 停掉整理循环（测试清理用；生产 daemon 与进程同寿命）。
+func (s *Server) stopIdleMemorySweep() {
+	if s != nil && s.idleSweepStop != nil {
+		s.idleSweepStop()
+	}
+}
+
+// idleForMemoryHousekeeping 报告 daemon 此刻是否够"闲"：无在飞轮次，且距上次
+// 轮次收尾超过阈值。零值时间戳按"不闲"处理——宁可不动，不可误动。
+func (s *Server) idleForMemoryHousekeeping(now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	if s.activeTurns != nil && len(s.activeTurns.IDs()) > 0 {
+		return false // 有在飞轮次：不闲
+	}
+	last := s.lastTurnSettledAt.Load()
+	if last == 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, last)) >= idleMemoryIdleAfter()
+}
+
+// idleMemorySweep 闲时整理的一次检查：够闲、且有超阈会话时，收敛最超阈的那个。
+func (s *Server) idleMemorySweep() {
+	if s == nil || s.runtimeBackend == nil || !idleMemorySweepEnabledFlag.Load() {
+		return
+	}
+	if !s.idleForMemoryHousekeeping(time.Now()) {
+		return
+	}
+	provider, t := s.largestOverThresholdMemoryThread()
+	if t == nil {
+		return // 没有超阈会话：这次检查到此为止（便宜的那部分）
+	}
+	log.Printf("[memory] %s 闲时整理开始: thread=%s（空闲超过 %s，取超阈最大的会话）",
+		provider.ID(), t.ID, idleMemoryIdleAfter())
+	// 与轮末同一钩子、同一参数、同一幂等闸门——见文件头「复用而非另写」。
+	s.afterTurnMemoryHousekeeping(provider, t)
+}
+
+// largestOverThresholdMemoryThread 扫描全部会话，找出「超阈幅度最大」的那个
+// daemon/hybrid 家会话。没有超阈者返回 (nil, nil)。
+//
+// 【为什么从 store 扫而不是从记忆槽扫】记忆槽按 (agent, thread) 存，重启后未触碰
+// 的槽不进内存（hydrate 惰性装载），内存里枚举不到；store 的会话清单才是"有哪些
+// 会话"的事实源，槽的 Load 自带 hydrate，扫到即装载，与轮次路径同一入口。
+//
+// 【超阈幅度的口径】字节阈值溢出按字节计、条数阈值溢出按条计——两者不是同一量纲，
+// 但这里只用于"谁最超"的相对比较（选出最大者），不做绝对值运算，混用无害且确定。
+func (s *Server) largestOverThresholdMemoryThread() (agent.Provider, *store.Thread) {
+	if s == nil || s.runtimeBackend == nil || s.cfg.Store == nil {
+		return nil, nil
+	}
+	ctx := context.Background()
+	var (
+		bestProvider agent.Provider
+		bestThread   *store.Thread
+		bestOver     int64
+	)
+	for _, t := range s.cfg.Store.List(true) {
+		p, ok := s.cfg.Providers[threadAgentID(t)]
+		if !ok || p == nil {
+			continue
+		}
+		var kind runtime.MemoryKind
+		switch memoryModelOf(p) {
+		case runtime.MemoryDaemon:
+			kind = runtime.MemoryConversation
+		case runtime.MemoryHybrid:
+			kind = runtime.MemoryArtifact
+		default:
+			continue // native 家与未申报者没有 daemon 侧业务槽（summary 槽由钩子顺带收）
+		}
+		snap, err := s.runtimeBackend.Memory().Load(ctx, runtime.MemoryKey{
+			AgentID: p.ID(), ThreadID: t.ID, Kind: kind,
+		})
+		if err != nil {
+			log.Printf("[memory] %s 闲时整理读槽失败（跳过该会话）: thread=%s kind=%s err=%v",
+				p.ID(), t.ID, kind, err)
+			continue
+		}
+		over := memorySlotOverage(snap, memorySlotThresholds[kind])
+		// 同幅取字典序小的 thread：map 遍历无序，不钉死平局同一批会话两次扫描会换人。
+		if over > bestOver || (over > 0 && over == bestOver && bestThread != nil && t.ID < bestThread.ID) {
+			bestProvider, bestThread, bestOver = p, t, over
+		}
+	}
+	return bestProvider, bestThread
+}
+
+// memorySlotOverage 计算一个槽超出其收敛水位的幅度（见 largestOverThresholdMemoryThread
+// 的口径说明）。未越线返回 0。
+func memorySlotOverage(snap *runtime.MemorySnapshot, th memorySlotThreshold) int64 {
+	if snap == nil {
+		return 0
+	}
+	var over int64
+	if th.MaxBytes > 0 && snap.Bytes > th.MaxBytes {
+		over += snap.Bytes - th.MaxBytes
+	}
+	if n := int64(len(snap.Items)) - int64(th.MaxItems); n > 0 {
+		over += n
+	}
+	return over
 }

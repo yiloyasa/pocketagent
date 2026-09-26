@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
@@ -68,7 +69,7 @@ func newTurnMemoryServerWithPolicy(t *testing.T, p agent.Provider, policy runtim
 		RuntimeBackend: runtime.NewFileBackend(dir),
 		BudgetPolicy:   policy,
 	})
-	t.Cleanup(func() { _ = srv.events.Close() })
+	t.Cleanup(func() { _ = srv.events.Close(); srv.stopIdleMemorySweep() })
 	thID := memoryTestThreadID(p)
 	if err := fs.Create(&store.Thread{ID: thID, Title: "记忆收敛", Workspace: t.TempDir()}); err != nil {
 		t.Fatalf("建线程失败: %v", err)
@@ -312,3 +313,212 @@ func TestClearThreadMemoryReleasesBudgetLeases(t *testing.T) {
 		}
 	}
 }
+
+// ---------- P3：闲时整理 ----------
+
+// newIdleSweepServer 造一个带两个 daemon 家 provider 的测试 server，各自有一条
+// 归属明确的线程（AgentID 必填：闲时扫描按 threadAgentID→Providers 反查，不像
+// runSimpleTurn 走旧库兼容路径）。返回 (server, 两个线程, 置旧闲时钟的快捷方式)。
+func newIdleSweepServer(t *testing.T) (*Server, *store.Thread, *store.Thread) {
+	t.Helper()
+	fs, err := store.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("建 store 失败: %v", err)
+	}
+	p1 := &memShapeProvider{id: "idle1", model: runtime.MemoryDaemon, reply: "回答正文"}
+	p2 := &memShapeProvider{id: "idle2", model: runtime.MemoryDaemon, reply: "回答正文"}
+	srv := New(Config{
+		Store:          fs,
+		Providers:      map[string]agent.Provider{p1.ID(): p1, p2.ID(): p2},
+		RuntimeBackend: runtime.NewFileBackend(t.TempDir()),
+	})
+	t.Cleanup(func() { _ = srv.events.Close() })
+	mk := func(id, agentID string) *store.Thread {
+		th := &store.Thread{ID: id, AgentID: agentID, Title: "闲时整理", Workspace: t.TempDir()}
+		if err := fs.Create(th); err != nil {
+			t.Fatalf("建线程失败: %v", err)
+		}
+		got, ok := fs.Get(id)
+		if !ok {
+			t.Fatal("线程丢了")
+		}
+		return got
+	}
+	th1, th2 := mk("th-idle-1", p1.ID()), mk("th-idle-2", p2.ID())
+	return srv, th1, th2
+}
+
+// makeIdle 让该 server 看起来已空闲超过阈值（把闲时钟拨到阈值之前）。
+func makeIdle(srv *Server) {
+	srv.lastTurnSettledAt.Store(time.Now().Add(-idleMemoryIdleAfter() - time.Minute).UnixNano())
+}
+
+// TestIdleSweepCompactsLargestOverThresholdThread：闲时触发钉——
+// 空闲超阈值后，一次 sweep 只收「超阈幅度最大」的那一个会话，且走的是 P1 同一钩子
+// （同参数、同幂等闸门、同摘要行登记）。
+func TestIdleSweepCompactsLargestOverThresholdThread(t *testing.T) {
+	srv, th1, th2 := newIdleSweepServer(t)
+	p1 := srv.cfg.Providers[threadAgentID(th1)]
+	p2 := srv.cfg.Providers[threadAgentID(th2)]
+	// th1 超阈 1 条，th2 超阈 60 条：sweep 必须选 th2。
+	key1 := runtime.MemoryKey{AgentID: p1.ID(), ThreadID: th1.ID, Kind: runtime.MemoryConversation}
+	key2 := runtime.MemoryKey{AgentID: p2.ID(), ThreadID: th2.ID, Kind: runtime.MemoryConversation}
+	seedConversation(t, srv, key1, 201)
+	seedConversation(t, srv, key2, 260)
+	makeIdle(srv)
+
+	srv.idleMemorySweep()
+
+	after1 := mustLoadMemory(t, srv, key1)
+	if len(after1.Items) != 201 || !after1.Covered.Empty() {
+		t.Fatalf("超阈较小者不该被这次 sweep 收敛（一次只会话），实得 items=%d covered=%+v",
+			len(after1.Items), after1.Covered)
+	}
+	after2 := mustLoadMemory(t, srv, key2)
+	if len(after2.Items) != compactKeepRecentItems || after2.Covered.Empty() || after2.Digest == "" {
+		t.Fatalf("超阈最大者应被收敛到轮末同参数（保留 %d 条、Covered/Digest 非空），实得 items=%d covered=%+v",
+			compactKeepRecentItems, len(after2.Items), after2.Covered)
+	}
+	// 复用 P1 钩子的凭据：摘要行登记进了 summary 槽（同一登记链路）。
+	summary2 := mustLoadMemory(t, srv, runtime.MemoryKey{AgentID: p2.ID(), ThreadID: th2.ID, Kind: runtime.MemorySummary})
+	if len(summary2.Items) == 0 {
+		t.Fatal("闲时收敛应与轮末一样把摘要行登记进 summary 槽（复用 P1 的证据）")
+	}
+}
+
+// TestIdleSweepSkipsWhenBusyOrRecent：闲时判定的两道闸——有在飞轮次、或距上次轮次
+// 收尾还没到阈值，超阈也不动（闲时整理绝不与轮次抢时机）。
+func TestIdleSweepSkipsWhenBusyOrRecent(t *testing.T) {
+	srv, _, th2 := newIdleSweepServer(t)
+	p2 := srv.cfg.Providers[threadAgentID(th2)]
+	key2 := runtime.MemoryKey{AgentID: p2.ID(), ThreadID: th2.ID, Kind: runtime.MemoryConversation}
+	seedConversation(t, srv, key2, 201)
+
+	// 闸 1：有在飞轮次（哪怕闲时钟已旧）。
+	makeIdle(srv)
+	lease, err := srv.activeTurns.acquire(context.Background(), th2.ID, func() {})
+	if err != nil {
+		t.Fatalf("占轮次租约失败: %v", err)
+	}
+	srv.idleMemorySweep()
+	srv.activeTurns.Clear(th2.ID, lease)
+	if got := mustLoadMemory(t, srv, key2); len(got.Items) != 201 || !got.Covered.Empty() {
+		t.Fatalf("有在飞轮次时 sweep 必须不动: items=%d covered=%+v", len(got.Items), got.Covered)
+	}
+
+	// 闸 2：距上次轮次收尾未到阈值（刚忙完）。
+	srv.lastTurnSettledAt.Store(time.Now().UnixNano())
+	srv.idleMemorySweep()
+	if got := mustLoadMemory(t, srv, key2); len(got.Items) != 201 || !got.Covered.Empty() {
+		t.Fatalf("未到空闲阈值时 sweep 必须不动: items=%d covered=%+v", len(got.Items), got.Covered)
+	}
+}
+
+// TestIdleSweepTickerFires：ticker 接线钉——首个轮次惰性启动的整理循环，在
+// 空闲超阈值后会真的触发 sweep（轮询等待，避免裸 sleep 的时序脆断）。
+func TestIdleSweepTickerFires(t *testing.T) {
+	srv, _, th2 := newIdleSweepServer(t)
+	p2 := srv.cfg.Providers[threadAgentID(th2)]
+	key2 := runtime.MemoryKey{AgentID: p2.ID(), ThreadID: th2.ID, Kind: runtime.MemoryConversation}
+	seedConversation(t, srv, key2, 201)
+	makeIdle(srv)
+
+	// 收紧 ticker 周期（包级原子配置=任务说的"选简单的不加 proto 字段"的开关位；
+	// 用完即还原，否则后面所有测试的整理循环都按 10ms 空转）。
+	oldTick := idleMemorySweepTickNanos.Load()
+	idleMemorySweepTickNanos.Store(int64(10 * time.Millisecond))
+	t.Cleanup(func() {
+		idleMemorySweepTickNanos.Store(oldTick)
+		srv.stopIdleMemorySweep()
+	})
+
+	srv.ensureIdleMemorySweep()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		snap := mustLoadMemory(t, srv, key2)
+		if !snap.Covered.Empty() {
+			break // 收敛已发生
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("2s 内 ticker 没有触发闲时收敛（整理循环没接线？）")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// ---------- P3：artifact 独立登记 ----------
+
+// TestTurnRegistersLargeToolResultArtifact：artifact 登记钉——
+// hybrid 家的消息里出现超过阈值的大块 tool_result 时，除既有的轮次索引行外，
+// 每块产物独立登记一行（Meta[entry]=artifact，spec §6.3 在 daemon 侧可得的范围：
+// id / 来源轮次 / 字节 / 形状指纹；正文仍只在原生侧，daemon 不留第二份）。
+func TestTurnRegistersLargeToolResultArtifact(t *testing.T) {
+	p := &memShapeProvider{id: "art1", model: runtime.MemoryHybrid, reply: "回答正文"}
+	srv, th := newTurnMemoryServerWithPolicy(t, p, runtime.BudgetPolicy{})
+	big := strings.Repeat("X", artifactEntryMinBytes+100)
+	blocks := append(memoryProseBlocks("问题正文"), pb.ContentBlock{
+		Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultBlock{
+			CallId: "call-9", Ok: true, Output: big,
+		}},
+	})
+
+	srv.recordTurnMemory(p, th, "assistant", "turn-77", blocks)
+
+	key := runtime.MemoryKey{AgentID: p.ID(), ThreadID: th.ID, Kind: runtime.MemoryArtifact}
+	snap := mustLoadMemory(t, srv, key)
+	if len(snap.Items) != 2 {
+		t.Fatalf("应有索引行 + 产物行两条，实得 %d 条: %+v", len(snap.Items), snap.Items)
+	}
+	var art *runtime.MemoryItem
+	for i := range snap.Items {
+		if snap.Items[i].Meta[metaEntryKind] == entryArtifact {
+			art = &snap.Items[i]
+		}
+	}
+	if art == nil {
+		t.Fatalf("找不到 entry=artifact 的独立产物行: %+v", snap.Items)
+	}
+	if art.Meta[metaTurnID] != "turn-77" {
+		t.Fatalf("产物行应带来源轮次，实得 meta=%v", art.Meta)
+	}
+	if got := art.Meta[metaBytes]; got != itoaLen(len(big)) {
+		t.Fatalf("产物行应带字节（实得 %s，want %d）", got, len(big))
+	}
+	if art.Meta[metaArtifactID] == "" || art.Meta[metaSHA256] == "" {
+		t.Fatalf("产物行应带 artifact_id 与形状指纹，实得 meta=%v", art.Meta)
+	}
+	// 确定论：同一产物两次登记得到同一 id（内容指纹派生，重复产物可对账）。
+	_, meta2, ok := artifactEntryRow("turn-78", &pb.ContentBlock{
+		Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultBlock{CallId: "call-x", Output: big}},
+	})
+	if !ok || meta2[metaArtifactID] != art.Meta[metaArtifactID] {
+		t.Fatalf("同一产物应派生同一 artifact_id: %s vs %s", meta2[metaArtifactID], art.Meta[metaArtifactID])
+	}
+	// 正文红线：产物行不得携带工具输出正文（daemon 不留第二份正文）。
+	if strings.Contains(string(art.Payload), strings.Repeat("X", 64)) {
+		t.Fatalf("产物行不得携带正文（hybrid 正文只在原生侧）: %q", art.Payload)
+	}
+}
+
+// TestSmallToolResultSkipsArtifactRow：小输出不值得独立成行（索引行已有形状指纹）。
+func TestSmallToolResultSkipsArtifactRow(t *testing.T) {
+	p := &memShapeProvider{id: "art2", model: runtime.MemoryHybrid, reply: "回答正文"}
+	srv, th := newTurnMemoryServerWithPolicy(t, p, runtime.BudgetPolicy{})
+	blocks := append(memoryProseBlocks("问题正文"), pb.ContentBlock{
+		Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultBlock{
+			CallId: "call-1", Ok: true, Output: "tiny",
+		}},
+	})
+
+	srv.recordTurnMemory(p, th, "assistant", "turn-1", blocks)
+
+	snap := mustLoadMemory(t, srv, runtime.MemoryKey{AgentID: p.ID(), ThreadID: th.ID, Kind: runtime.MemoryArtifact})
+	for _, it := range snap.Items {
+		if it.Meta[metaEntryKind] == entryArtifact {
+			t.Fatalf("小输出不该独立登记产物行: meta=%v", it.Meta)
+		}
+	}
+}
+
+// itoaLen 测试专用十进制（避免为断言引 strconv 到处跑）。
+func itoaLen(n int) string { return fmt.Sprintf("%d", n) }

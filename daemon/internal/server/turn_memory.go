@@ -60,6 +60,13 @@ const (
 	metaBytes      = "bytes"      // 该条消息的块字节合计
 	metaSHA256     = "sha256"     // 内容形状指纹（不含正文）
 	entryTurnIndex = "turn_index" // metaEntryKind 的取值：轮次索引
+	entryArtifact  = "artifact"   // metaEntryKind 的取值：独立产物登记（P3）
+	// metaArtifactID 独立产物行的 id（内容指纹派生，见 artifactEntryRow）。
+	// 【为什么独立于 metaSHA256 还要一个 id】指纹描述"内容长什么样"，id 是
+	// "这条产物叫什么"——同一产物重复出现时 id 相同（可对账），指纹则承担
+	// "没存正文也知道存的是什么形状"的对账职责。取值当前同源（同一哈希），
+	// 分开命名是为了将来 id 策略（如原生 artifact_id 透传）可换而指纹不换。
+	metaArtifactID = "artifact_id"
 )
 
 // recordTurnMemory 把一条**已落库**的轮次消息登记进统一 Runtime 的语义记忆。
@@ -100,20 +107,22 @@ func (s *Server) recordTurnMemory(provider agent.Provider, t *store.Thread, role
 		}
 	case runtime.MemoryHybrid:
 		key = runtime.MemoryKey{AgentID: provider.ID(), ThreadID: t.ID, Kind: runtime.MemoryArtifact}
-		payload, meta, ok := turnIndexEntry(turnID, role, blocks)
-		if !ok {
-			return
+		recorded := false
+		// 轮次索引（既有）：一条一行描述整条消息的形状。
+		if payload, meta, ok := turnIndexEntry(turnID, role, blocks); ok {
+			if s.appendHybridMemoryEntry(provider, t, key, role, payload, meta) {
+				recorded = true
+			}
 		}
-		// 【预算接线】索引是可选资源：硬限先拒账、写入就不发生。门卫必须在 Append
-		// **之前**——放在写入之后，槽里会留下账上不存在的条目，"拒掉"就成了空话。
-		// （门卫记账成功而 Append 失败的相反窗口存在，代价是账面多计一条，日志已出声。）
-		if !s.memoryBudgetAdmit(provider.ID(), t, runtime.MemoryArtifact, int64(len(payload))) {
-			return
+		// 【P3 独立产物登记】大块工具输出每块一行，与索引行并列在 artifact 槽，
+		// 靠 Meta[entry]=artifact 与 turn_index 区分（turn_memory.go 头注预留的迁移
+		// 标记在此启用）。候选甄别见 artifactEntryRow。
+		for _, item := range artifactIndexEntries(turnID, role, blocks) {
+			if s.appendHybridMemoryEntry(provider, t, key, role, item.Payload, item.Meta) {
+				recorded = true
+			}
 		}
-		if _, err := s.runtimeBackend.Memory().Append(ctx, key, runtime.MemoryItem{
-			Kind: runtime.MemoryArtifact, Role: role, Payload: payload, Meta: meta,
-		}); err != nil {
-			log.Printf("[runtime] %s 轮次索引写入失败: thread=%s role=%s err=%v", provider.ID(), t.ID, role, err)
+		if !recorded {
 			return
 		}
 	default:
@@ -325,6 +334,99 @@ func turnIndexEntry(turnID, role string, blocks []pb.ContentBlock) ([]byte, map[
 		metaBlocks:    blocksDesc,
 		metaBytes:     strconv.Itoa(totalBytes),
 		metaSHA256:    entry.SHA256,
+	}
+	return payload, meta, true
+}
+
+// appendHybridMemoryEntry 往 hybrid 家的 artifact 槽写一行（索引行与产物行共用）。
+// 返回是否真的写入。
+//
+// 【预算门卫在 Append 之前】（原索引行的既有纪律，两行共用后纪律不变）：索引与产物
+// 都是可选资源，硬限先拒账、写入就不发生——放在写入之后，槽里会留下账上不存在的
+// 条目，"拒掉"就成了空话。（门卫记账成功而 Append 失败的相反窗口存在，代价是账面
+// 多计一条，日志已出声。）
+func (s *Server) appendHybridMemoryEntry(provider agent.Provider, t *store.Thread, key runtime.MemoryKey, role string, payload []byte, meta map[string]string) bool {
+	if !s.memoryBudgetAdmit(provider.ID(), t, runtime.MemoryArtifact, int64(len(payload))) {
+		return false
+	}
+	ctx := context.Background()
+	if _, err := s.runtimeBackend.Memory().Append(ctx, key, runtime.MemoryItem{
+		Kind: runtime.MemoryArtifact, Role: role, Payload: payload, Meta: meta,
+	}); err != nil {
+		log.Printf("[runtime] %s artifact 槽写入失败: thread=%s role=%s err=%v", provider.ID(), t.ID, role, err)
+		return false
+	}
+	return true
+}
+
+// artifactEntryMinBytes 工具输出多大才值得从索引行升格为独立产物行
+// （设计稿 P3「超过阈值的 tool_result」）。
+//
+// 【待校准】与 memorySlotThresholds 同地位的初始值：4KB 约为一屏日志——比它小的
+// 输出在轮次索引行里已有形状指纹，独立成行只是清单噪音；真被 agents 翻找的大产物
+// （构建日志、diff、转储）通常远超此线。以变量形式放包级，接配置覆盖时改这里。
+var artifactEntryMinBytes = 4096
+
+// artifactIndexEntries 扫描一条消息的内容块，把够格的大块工具产物各造成一行
+// 独立登记条目（顺序 = 块顺序，决定论）。
+func artifactIndexEntries(turnID, role string, blocks []pb.ContentBlock) []runtime.MemoryItem {
+	var out []runtime.MemoryItem
+	// 【vet】按下标取址遍历，避免 range 复制 pb 消息（内嵌 MessageState 含锁）。
+	for i := range blocks {
+		payload, meta, ok := artifactEntryRow(turnID, &blocks[i])
+		if !ok {
+			continue
+		}
+		out = append(out, runtime.MemoryItem{
+			Kind: runtime.MemoryArtifact, Role: role, Payload: payload, Meta: meta,
+		})
+	}
+	return out
+}
+
+// artifactEntryRow 把一个工具产物块造成 spec §6.3 ArtifactMemory 在 daemon 侧
+// 可得字段的登记行：artifact_id / turn_id / kind / size / hash（thread 与 agent 由
+// MemoryKey 承载；path 与 retention 是原生侧事实，daemon 不猜，缺省不入——
+// 猜了就是同一事实两个副本）。
+//
+// 【为什么只登记不存正文】hybrid 家正文在原生侧（descriptor.go 的枚举注释），产物行
+// 载荷只装元数据 JSON——与 turnIndexEntry 同款"不写正文"红线，否则 daemon 就有了
+// 第二份正文，原生侧一变即分叉。id 与指纹同源（内容 sha256 前 16 hex）：id 稳定
+// 意味着重复产物天然可对账（同 id 两行 = 同一产物出现了两次）。
+//
+// 返回 (载荷, Meta, 是否够格)。
+func artifactEntryRow(turnID string, b *pb.ContentBlock) ([]byte, map[string]string, bool) {
+	tr := b.GetToolResult()
+	if tr == nil || len(tr.Output) < artifactEntryMinBytes {
+		return nil, nil, false
+	}
+	sum := sha256.Sum256([]byte(tr.Output))
+	fp := hex.EncodeToString(sum[:8])
+	row := struct {
+		ArtifactID string `json:"artifact_id"`
+		TurnID     string `json:"turn_id"`
+		Kind       string `json:"kind"`
+		CallID     string `json:"call_id,omitempty"`
+		Bytes      int    `json:"bytes"`
+		SHA256     string `json:"sha256"`
+	}{
+		ArtifactID: "tool-" + fp,
+		TurnID:     turnID,
+		Kind:       "tool_result",
+		CallID:     tr.CallId,
+		Bytes:      len(tr.Output),
+		SHA256:     fp,
+	}
+	payload, err := json.Marshal(row)
+	if err != nil {
+		return nil, nil, false
+	}
+	meta := map[string]string{
+		metaEntryKind:  entryArtifact,
+		metaArtifactID: row.ArtifactID,
+		metaTurnID:     turnID,
+		metaBytes:      strconv.Itoa(row.Bytes),
+		metaSHA256:     fp,
 	}
 	return payload, meta, true
 }

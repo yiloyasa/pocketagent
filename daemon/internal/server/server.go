@@ -57,6 +57,11 @@ type Config struct {
 	// RuntimeBackend 是进程共享的运行时后端(记忆/缓存/checkpoint/资源记账,W6 起由
 	// agent 包持有同一实例)。为 nil 时不记账 —— 测试与极简构造路径照常跑,强制点跳过。
 	RuntimeBackend *rtruntime.Backend
+	// MemorySummarizer 是可选的语义摘要器(P2,memory 分层设计稿 §4)。非 nil 且
+	// RuntimeBackend 就位时,New 装配期注入进程共享后端,Compact 从此用语义摘要
+	// (失败自动回退结构摘要);缺省 nil = 全部走结构摘要,P1 行为零分叉。
+	// 实现自带超时与重试(契约见 runtime.Summarizer),daemon 不替它兜底。
+	MemorySummarizer rtruntime.Summarizer
 	// CollabPolicy 是启动时装载的协同策略(W10,规格 §11)。零值 = 全部走内置默认
 	// (与既有行为一致:全开、扇出不限)。运行中可经 RuntimeService 热替换。
 	CollabPolicy rtruntime.CollabPolicy
@@ -124,6 +129,13 @@ type Server struct {
 	// 必经点,在这里取时刻,测试与生产同源;与进程真正启动的差只有毫秒级初始化,
 	// 对"已运行多久"的展示毫无影响。
 	startedAt time.Time
+	// P3 闲时整理(memory 分层设计稿 §4):lastTurnSettledAt 是最近一次轮次收尾时刻
+	// (unix nano,闲时判定的锚点,New 时置为启动时刻——启动即算"刚忙过");后两者是
+	// 整理循环的惰性启动(首个轮次才起 goroutine)与停止开关。状态与实现见
+	// memory_housekeeping.go。
+	lastTurnSettledAt atomic.Int64
+	idleSweepOnce     sync.Once
+	idleSweepStop     context.CancelFunc
 }
 
 func New(cfg Config) *Server {
@@ -150,6 +162,15 @@ func New(cfg Config) *Server {
 		runtimeBackend: cfg.RuntimeBackend,
 		collabPolicy:   cfg.CollabPolicy,
 		startedAt:      time.Now(),
+	}
+	// P3:闲时钟起点 = 启动时刻。没有它,零值时间戳会把"空闲了多久"算成五十五年,
+	// daemon 一启动就会挨一记不该有的整理。
+	srv.lastTurnSettledAt.Store(time.Now().UnixNano())
+	// P2:语义摘要器装配注入。后端是进程共享实例,New 一次注入全进程生效;nil 缺省
+	// 静默跳过(结构摘要,与 P1 行为零分叉)。放在装配期而不是首个 Compact 前,是让
+	// "有没有语义摘要"在启动那一刻就定死,不随运行期状态漂移。
+	if cfg.RuntimeBackend != nil && cfg.MemorySummarizer != nil {
+		cfg.RuntimeBackend.SetSummarizer(cfg.MemorySummarizer)
 	}
 	// 启动报告:上次退出时还没轮到执行的排队输入 —— 醒目汇总 + 逐条明细,然后
 	// 清空台账。刻意不自动重发(重放原始 prompt 会重复执行副作用,规格 §8.3),

@@ -331,12 +331,13 @@ func openSharedRuntime(p runtime.Participant, th *store.Thread) (*runtime.AgentR
 		log.Printf("[resource] WARNING: 账本刷盘失败（记账性质，不影响轮次）: %v", err)
 	}
 	// 共享默认后端交付的 DaemonSession 只对"会话事实在 daemon 侧"的家成立。
-	// 对声明 NATIVE/HYBRID 的家:P1 起按 D5 工厂断言注入(设计稿 §3-D5)——
-	// provider 实现了 NativeSessionFactory(pi 见 pi_session.go,dsh 见
-	// dsh_session.go)就交付其原生适配器,替换 FullRuntime 预置的 DAEMON 替身;
-	// 没实现的家(codex/zcode,截至 P2)仍置 nil —— 塞一个 Source=DAEMON 的替身
-	// 会构成 source-mismatch 违约(声明 HYBRID 却交付 DAEMON),置 nil 才是诚实
-	// 表达。类型断言探测让六家增量收编互不牵连:没有实现的家行为零变化,契约
+	// 对声明 NATIVE/HYBRID 的家:按 D5 工厂断言注入(设计稿 §3-D5)——
+	// provider 实现了 NativeSessionFactory 就交付其原生适配器,替换 FullRuntime
+	// 预置的 DAEMON 替身(pi 见 pi_session.go P1,dsh 见 dsh_session.go P2,
+	// zcode/codex 见 zcode_session.go/codex_session.go P3 —— HYBRID 四家至此
+	// 全部收编);没实现的家仍置 nil —— 塞一个 Source=DAEMON 的替身会构成
+	// source-mismatch 违约(声明 HYBRID 却交付 DAEMON),置 nil 才是诚实表达。
+	// 类型断言探测让六家增量收编互不牵连:没有实现的家行为零变化,契约
 	// 套件对 nil 家的跳过逻辑(contract_suite.go 会话两用例)原样成立。
 	if desc.SessionModel != runtime.SourceDaemon {
 		if f, ok := p.(NativeSessionFactory); ok {

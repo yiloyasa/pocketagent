@@ -918,7 +918,16 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			// 自身 abort 的回执(无应答体),无需处理
 		default:
 			if ev.Type == "extension_ui_request" {
-				return // dialog 已由 handler 处理,fire-and-forget 忽略(实测 26 次 setStatus 噪声)
+				// 【辅线 B】未知 method 的 UI 反向请求:开关 ON 时弹通用确认卡征求
+				// 用户(允许→回写 {};拒绝/超时→回写原生兜底拒绝 cancelled)。
+				// 必须异步:consume 跑在事件泵上,同步等手机会把整条事件管道堵住
+				// (与 piapp dispatch 对 dialog 的 go 出去同理);已知 dialog 由上方
+				// UIRequestHandler 专线处理、已知 fire-and-forget 无应答通道,两者
+				// 在 consumePiUnknownUIRequest 里原样放行,维持静默忽略
+				// (实测 26 次 setStatus 噪声)。
+				frame := append(json.RawMessage(nil), ev.Raw...)
+				go p.consumePiUnknownUIRequest(c, frame, t.ID, runCtx, approve)
+				return
 			}
 			if piLedgerOnlyEvent(ev.Type) {
 				// 0.87.1 噪音治理:轮次骨架事件只落台账、不推 sink(理由见

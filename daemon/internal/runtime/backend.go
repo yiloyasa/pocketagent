@@ -63,6 +63,9 @@ type Backend struct {
 	// 没有它，每个入口都只能靠"内存态空不空"决定要不要读盘 —— 而没落盘过的 key
 	// 内存态恒空，会导致每次操作都探一次磁盘。reset() 清空它（模拟新进程）。
 	hydrated map[string]bool
+	// summarizer 是可选的语义摘要器（P2，SetSummarizer 注入；缺省 nil = 结构摘要，
+	// P1 行为零分叉）。只有 Compact 读它；见 summarizer.go 的实现者契约。
+	summarizer Summarizer
 
 	// ---- 落盘态（重启后仍在）----
 	durable     map[string][]byte // checkpoint key -> 内容
@@ -400,7 +403,12 @@ func (m *memMemory) Compact(ctx context.Context, key MemoryKey, policy CompactPo
 		rng = rng.Extend(it.Sequence)
 	}
 	b.covered[ks] = rng
-	if d := structuralDigest(compacted); d != "" {
+	// P2：摘要产物选择（设计稿 D2 的降级链）。语义摘要器非 nil 且调用成功时用语义
+	// 摘要（带可审计首行）；失败/空白/未注入回退结构摘要——任何一路失败都不阻断
+	// 压缩本身，Covered 记账先于摘要生成，丢数据的判定不依赖摘要内容。
+	// 【锁内调用】本方法持 b.mu，而 Summarize 可能是模型调用：实现者契约（summarizer.go）
+	// 要求其自带超时且绝不回调本 Backend；违反契约的死锁是注入方的责任，本包不防御。
+	if d := b.compactDigestLocked(key, compacted); d != "" {
 		if prev := b.digest[ks]; prev != "" {
 			b.digest[ks] = prev + "\n" + d
 		} else {
@@ -410,6 +418,20 @@ func (m *memMemory) Compact(ctx context.Context, key MemoryKey, policy CompactPo
 	b.items[ks] = append([]MemoryItem(nil), all[cut:]...)
 	b.version[ks]++
 	return b.snapshotLocked(key), nil
+}
+
+// compactDigestLocked 为本次被压缩的那批项生成摘要正文（b.mu 持有时调用）：
+// 语义摘要器可用且成功 → 带审计首行的语义摘要；否则结构摘要（P1 行为）。
+func (b *Backend) compactDigestLocked(key MemoryKey, compacted []MemoryItem) string {
+	if s := b.summarizer; s != nil {
+		// 空白正文与 error 同罪：审计首行包着一段空白，等于谎报"语义摘要生成过"。
+		if text, err := s.Summarize(context.Background(), key.String(), compacted); err == nil && strings.TrimSpace(text) != "" {
+			return semanticDigestLine(compacted[0].Sequence, compacted[len(compacted)-1].Sequence, key.AgentID, text)
+		}
+		// 失败/空白：静默回退结构摘要。这里没有"更好的日志点"——Compact 的调用方
+		// （轮末钩子/闲时整理）已在失败不阻断的纪律下运行，摘要降级不值得告警。
+	}
+	return structuralDigest(compacted)
 }
 
 // structuralDigest 生成**结构摘要**（条数 + seq 范围 + 角色分布）。

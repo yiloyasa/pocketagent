@@ -61,7 +61,8 @@ func newTurnMemoryServer(t *testing.T, provider agent.Provider) (*Server, string
 		Providers:      map[string]agent.Provider{provider.ID(): provider},
 		RuntimeBackend: runtime.NewFileBackend(dir),
 	})
-	t.Cleanup(func() { _ = srv.events.Close() })
+	// 跑过轮次的 server 会惰性启动闲时整理循环（P3），测试收尾一并停掉。
+	t.Cleanup(func() { _ = srv.events.Close(); srv.stopIdleMemorySweep() })
 	thID := "th-mem-" + provider.ID()
 	if err := fs.Create(&store.Thread{ID: thID, Title: "记忆接线", Workspace: t.TempDir()}); err != nil {
 		t.Fatalf("建线程失败: %v", err)
