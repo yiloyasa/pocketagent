@@ -139,6 +139,17 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		if _, ok := provider.(piShapedExporter); ok {
 			caps = append(caps, "export_html:"+id)
 		}
+		// 【能力对齐收尾 2026-09-27】图片附件输入:此前图片能力埋在各 provider 的
+		// Run 行为里无法接口断言(EB 审计遗留),手机端"发图片"入口无位可查,只能
+		// 全量显示 —— dsh 会话里发图必败(promptCapabilities.image 实测 false,
+		// provider 侧如实报错)。按 agent.ImageInputter 断言逐家如实声明:谁家
+		// Run 的图片代码路径真实存在谁带位(codex/pi/zcode ✓、dsh ✗,逐家证据见
+		// agent/image_input_capability.go 文件头),缺位=入口隐藏,不摆假按钮。
+		// 同 CollabAware 先例:断言通过还要调方法 —— 支持与否是实现自行声明的值,
+		// 不是"实现了就算支持"。
+		if ii, ok := provider.(agent.ImageInputter); ok && ii.SupportsImageInput() {
+			caps = append(caps, "image_input:"+id)
+		}
 	}
 	sort.Strings(caps) // 稳定输出,便于测试与客户端缓存
 	caps = append(caps, "terminal", "fs", "git", "agent", "event_sequence")

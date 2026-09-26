@@ -15,6 +15,9 @@ package server
 //   - fork/rollback/review:<id> = codex 专属(ForkThread / RollbackThread /
 //                     StartReview 路由只落 codexProvider;pi/zcode/dsh 缺位);
 //   - export_html:<id> = pi 专属(ExportThreadHtml 路由只认 pi 的 ExportHTML);
+//   - image_input:<id> = agent.ImageInputter(手机图片附件真正进入模型输入;
+//                     codex/pi/zcode 的 Run 真实携带图片,dsh 当前路由不收图
+//                     → 缺位=手机端"发图片"入口隐藏);
 //   - agent_settings / agent_native_settings / text_generation 既有位一并
 //     对表,防止将来接口增减时声明悄悄失真。
 
@@ -91,6 +94,18 @@ func TestGetHostInfoCapabilityBitsAlignedWithControllers(t *testing.T) {
 		if caps["export_html:"+id] {
 			t.Fatalf("%s 不实现 ExportHTML,不得虚报 export_html 位", id)
 		}
+	}
+	// image_input:图片附件能否真正进入模型输入 —— codex(turn/start LocalImage)/
+	// pi(prompt+steer 携带 base64 图)/zcode(session/send attachments)三家
+	// Run 有真实图片路径(逐家证据见 agent/image_input_capability.go);dsh 的
+	// promptCapabilities.image 实测 false,Run 侧直接报错,不得虚报。
+	for _, id := range []string{"codex", "pi", "zcode"} {
+		if !caps["image_input:"+id] {
+			t.Fatalf("%s 的 Run 已处理图片附件,应声明 image_input 位, caps=%v", id, resp.Capabilities)
+		}
+	}
+	if caps["image_input:dsh"] {
+		t.Fatal("dsh 当前路由不支持图片输入(Run 门控报错),不得虚报 image_input 位")
 	}
 	// 既有位对表:四家都消费桌面偏好;原生设置目录只有 pi/dsh;提示词优化
 	// 只有 codex/pi/zcode。

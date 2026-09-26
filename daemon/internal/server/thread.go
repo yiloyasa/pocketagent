@@ -623,6 +623,18 @@ func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest
 		}
 		return &pb.Empty{}, nil
 	}
+	// dsh 路径:没有可路由的原生压缩 —— DshProvider 无任何 Compact 方法
+	// (dsh_*.go 仅 autoCompactionEnabled 配置项,与「压缩上下文」RPC 无关)。
+	// 【EB 门控审计修复】此前 dsh 会话会掉进下面的 codex 兜底:codexProvider
+	// 断言不上时报"电脑上没有可用的 codex"(dsh 用户一脸懵);断言上了也只会
+	// 撞"先发一条消息"的误导提示(dsh 线程永远不会有 CodexThreadID),病态场景
+	// (旧库/未来改动让 dsh 线程带上 codexTID)甚至会真把压缩指令发给 codex。
+	// 按 ClearQueuedInputs / SetThreadGoal 先例显式 FailedPrecondition,不静默
+	// 换人、不给误导提示;能力位侧 compact:dsh 本就缺位(host_capability_bits_test
+	// 对表),这里是路由侧的兜底自洽。
+	if threadAgentID(t) == "dsh" {
+		return nil, errFailedPrecondition("该 agent 不支持会话压缩")
+	}
 	// codex 路径(原有):真实压缩落到 codex 的 thread/compact/start,由桌面端
 	// agent 真正执行。手动压缩入口(手机端可后续接),与自动压缩共用同一条 codex 通道。
 	p := s.codexProvider()
