@@ -35,7 +35,11 @@ type HostServiceClient interface {
 	// 配对码换长期 token
 	Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error)
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
-	// 主机状态推送(daemon 侧工作区变化、模型就绪、更新可用等)
+	// 主机状态推送。当前唯一生产事件是 turn_finished(后台轮次完成,推送场景);
+	// 早期规划的 workspace_changed/model_ready/update_available 三分支自基线起
+	// 就无 daemon 生产点、app 零消费(2026-09-26 审计 R6/S2 双端 grep 实证),已删。
+	// 重引入主机态事件时另起新字段号 —— 旧号已 reserved,复用会让持有旧契约的
+	// 对端把新事件错解成旧消息类型。
 	WatchEvents(ctx context.Context, in *WatchEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[HostEvent], error)
 	// P2:列出本机正在运行的 dev server(daemon 拨常见端口,1s/端口,整扫 ≤8s,
 	// 结果缓存 60s —— 手机手动刷新才重扫)。对齐原作 BrowserService.ListDevServers。
@@ -118,7 +122,11 @@ type HostServiceServer interface {
 	// 配对码换长期 token
 	Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error)
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
-	// 主机状态推送(daemon 侧工作区变化、模型就绪、更新可用等)
+	// 主机状态推送。当前唯一生产事件是 turn_finished(后台轮次完成,推送场景);
+	// 早期规划的 workspace_changed/model_ready/update_available 三分支自基线起
+	// 就无 daemon 生产点、app 零消费(2026-09-26 审计 R6/S2 双端 grep 实证),已删。
+	// 重引入主机态事件时另起新字段号 —— 旧号已 reserved,复用会让持有旧契约的
+	// 对端把新事件错解成旧消息类型。
 	WatchEvents(*WatchEventsRequest, grpc.ServerStreamingServer[HostEvent]) error
 	// P2:列出本机正在运行的 dev server(daemon 拨常见端口,1s/端口,整扫 ≤8s,
 	// 结果缓存 60s —— 手机手动刷新才重扫)。对齐原作 BrowserService.ListDevServers。

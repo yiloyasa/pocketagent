@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pocketagent/daemon/internal/dshapp"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
@@ -22,11 +23,25 @@ func providerRuntimeCases() []Provider {
 	// 客户端,引用接力全靠 thread.ExternalSession,钉的正是"按落库引用重挂载"。
 	pi := NewPiProvider()
 	pi.sessionFor = newFakePiSessionSource()
+	// dsh 自 P2 起同款收编(见 dsh_session.go):注入假客户端(与 dsh_test.go 的
+	// fakeDshClient 同一基建),Open 走 session/new、Resume 走 list+resume 重挂载。
+	// caps 必须在场:withClientCtx 的握手完成日志会读能力快照(探针夹具=实测形状)。
+	dsh := NewDshProvider()
+	dsh.newClient = func() (dshClient, error) {
+		return &fakeDshClient{
+			caps:     probeCaps(),
+			newState: &dshapp.SessionState{SessionID: "s-contract"},
+			list:     []dshapp.SessionListEntry{{SessionID: "s-contract"}},
+			resumeBy: map[string]*dshapp.SessionState{
+				"s-contract": {SessionID: "s-contract"},
+			},
+		}, nil
+	}
 	return []Provider{
 		NewCodexProvider(),
 		pi,
 		NewZcodeProvider(),
-		NewDshProvider(),
+		dsh,
 		// 无稳定原生 session 的那一类：daemon 侧 conversation memory 必须顶上
 		// （规格 §7 对 OpenAI Compatible 的要求）。
 		NewOpenAICompatible("openai-compat", "OpenAI 兼容", "http://127.0.0.1:1/v1", "unused-key", nil),
@@ -164,8 +179,32 @@ func TestPiDeliversNativeSessionAfterAdoption(t *testing.T) {
 	}
 }
 
+// TestDshDeliversNativeSessionAfterAdoption 钉 P2 收编的注入事实:dsh 实现了
+// NativeSessionFactory(D5),openSharedRuntime 必须注入其原生适配器 —— 不再是
+// nil。与 TestPiDeliversNativeSessionAfterAdoption 同款:对"早退放行"的补集
+// 只认 dsh 必须非 nil,且交付物就是 dshSession。
+func TestDshDeliversNativeSessionAfterAdoption(t *testing.T) {
+	p := NewDshProvider()
+	p.newClient = func() (dshClient, error) {
+		return &fakeDshClient{newState: &dshapp.SessionState{SessionID: "s-native"}}, nil
+	}
+	rt, err := p.OpenRuntime(context.Background(), &store.Thread{ID: "th-dsh-native"})
+	if err != nil {
+		t.Fatalf("OpenRuntime 失败: %v", err)
+	}
+	if rt.NativeSession == nil {
+		t.Fatal("dsh 收编后 NativeSession 必须非 nil(设计稿 P2:不再是 nil)")
+	}
+	if _, ok := rt.NativeSession.(*dshSession); !ok {
+		t.Fatalf("应注入 dshSession 适配器, 实得 %T", rt.NativeSession)
+	}
+	if got := rt.NativeSession.Source(); got != p.Descriptor().SessionModel {
+		t.Fatalf("NativeSession.Source()=%q 与 descriptor.SessionModel=%q 不一致", got, p.Descriptor().SessionModel)
+	}
+}
+
 // TestProvidersWithoutFactoryKeepNativeSessionNil 钉 D5 的另一半:未实现
-// NativeSessionFactory 的家维持 nil —— 六家增量收编互不牵连,收编 pi 不得
+// NativeSessionFactory 的家维持 nil —— 六家增量收编互不牵连,收编 pi/dsh 不得
 // 顺手给别家塞替身(替身会被 VerifyRuntime 判 source-mismatch)。
 func TestProvidersWithoutFactoryKeepNativeSessionNil(t *testing.T) {
 	for _, p := range providerRuntimeCases() {
@@ -179,7 +218,7 @@ func TestProvidersWithoutFactoryKeepNativeSessionNil(t *testing.T) {
 			continue
 		}
 		if _, ok := p.(NativeSessionFactory); ok {
-			continue // 已收编的家(pi)不在本条断言范围
+			continue // 已收编的家(pi/dsh)不在本条断言范围
 		}
 		t.Run(p.ID(), func(t *testing.T) {
 			rt, err := participant.OpenRuntime(context.Background(), &store.Thread{ID: "th-nil-" + p.ID()})

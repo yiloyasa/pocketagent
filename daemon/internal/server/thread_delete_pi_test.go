@@ -4,8 +4,9 @@ package server
 //
 // 【背景】pi 一个子进程就是一个会话;修复前 DeleteThread 只清 codex rollout 与
 // zcode session,piapp.Client 留在 provider 的 clients 里,node 子进程一直空转
-// 到 daemon 重启(进程+游标泄漏)。现在 DeleteThread 对 pi 线程调 DropThread
-// (经最小接口 piThreadDropper 探测,生产由 *agent.PiProvider 实现)。
+// 到 daemon 重启(进程+游标泄漏)。真删除路径现经 nativeSessionDeleter(P2 删除
+// 接口化)调 *agent.PiProvider.DeleteNativeSession(内含 DropThread);
+// LocalOnly 移除路径仍经最小接口 piThreadDropper 调 DropThread(见 thread.go)。
 
 import (
 	"sync"
@@ -17,6 +18,8 @@ import (
 )
 
 // piDropStub 记录 DropThread 调用的 provider 桩(复用 PiProviderStub 的接口实现)。
+// P2 删除接口化后,真删除路径经 nativeSessionDeleter 进来:桩的 DeleteNativeSession
+// 与生产 *agent.PiProvider 同构 —— 先 DropThread(回收子进程),文件删除在桩里省略。
 type piDropStub struct {
 	PiProviderStub
 	mu    sync.Mutex
@@ -27,6 +30,11 @@ func (s *piDropStub) DropThread(threadID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.drops = append(s.drops, threadID)
+}
+
+func (s *piDropStub) DeleteNativeSession(t *store.Thread) error {
+	s.DropThread(t.ID)
+	return nil
 }
 
 func (s *piDropStub) dropCount() int {

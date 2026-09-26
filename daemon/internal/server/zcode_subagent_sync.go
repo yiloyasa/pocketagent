@@ -21,6 +21,7 @@ package server
 import (
 	"log"
 	"strings"
+	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/store"
@@ -81,6 +82,11 @@ func (s *Server) upsertZcodeSubagentStub(parent *store.Thread, e *zcodeapp.Subag
 	if st := zcodeSubagentStubStatus(*e); t.Status != st {
 		t.Status = st
 		changed = true
+		// 首次观察到 RUNNING:记存根的轮次起点(清单没有子代理的真实开始
+		// 时刻,以首次登记为准 —— 与"存根是尽力而为的投影"同口径)。
+		if st == pb.ThreadStatus_THREAD_STATUS_RUNNING && t.TurnStartedUnixMs == 0 {
+			t.TurnStartedUnixMs = time.Now().UnixMilli()
+		}
 	}
 	// 失败终态落 last_turn_error,成功/取消清空 —— 手机卡据此显示失败态。
 	if lt := zcodeSubagentLastError(*e); t.LastTurnError != lt {

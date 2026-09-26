@@ -2847,8 +2847,14 @@ type Thread struct {
 	// 落库;codex 原生子线程在 thread/started 通知(带 parentThreadId)到达时以
 	// 轻量存根登记落库。
 	ParentThreadId string `protobuf:"bytes,22,opt,name=parent_thread_id,json=parentThreadId,proto3" json:"parent_thread_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ---- 轮次开始时刻(只增:23)----
+	// 当前 RUNNING 段的开始时刻。手机端对运行中会话显示"运行 N 分钟",
+	// 不再退化为"最近活动·相对时间"。optional 显式缺席 = 未知:旧 daemon
+	// 不带、尚未开轮的会话不带;daemon 重启后仍处于 RUNNING 的会话由 daemon
+	// 记**重启时刻**(真实开始不可追溯,仅作展示锚点)。
+	TurnStartedUnixMs *int64 `protobuf:"varint,23,opt,name=turn_started_unix_ms,json=turnStartedUnixMs,proto3,oneof" json:"turn_started_unix_ms,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Thread) Reset() {
@@ -3033,6 +3039,13 @@ func (x *Thread) GetParentThreadId() string {
 		return x.ParentThreadId
 	}
 	return ""
+}
+
+func (x *Thread) GetTurnStartedUnixMs() int64 {
+	if x != nil && x.TurnStartedUnixMs != nil {
+		return *x.TurnStartedUnixMs
+	}
+	return 0
 }
 
 // CodexGoalDetail codex 线程目标态(thread/goal/get 应答的归一)。
@@ -5660,7 +5673,7 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\rThreadMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x124\n" +
 	"\x06blocks\x18\x02 \x03(\v2\x1c.pocketagent.v1.ContentBlockR\x06blocks\x12+\n" +
-	"\x12created_at_unix_ms\x18\x03 \x01(\x03R\x0fcreatedAtUnixMs\"\x9f\a\n" +
+	"\x12created_at_unix_ms\x18\x03 \x01(\x03R\x0fcreatedAtUnixMs\"\xee\a\n" +
 	"\x06Thread\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x1c\n" +
@@ -5686,7 +5699,9 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x06effort\x18\x13 \x01(\tR\x06effort\x12&\n" +
 	"\x0flast_turn_error\x18\x14 \x01(\tR\rlastTurnError\x12L\n" +
 	"\x11pending_approvals\x18\x15 \x03(\v2\x1f.pocketagent.v1.ApprovalRequestR\x10pendingApprovals\x12(\n" +
-	"\x10parent_thread_id\x18\x16 \x01(\tR\x0eparentThreadId\"\xb7\x01\n" +
+	"\x10parent_thread_id\x18\x16 \x01(\tR\x0eparentThreadId\x124\n" +
+	"\x14turn_started_unix_ms\x18\x17 \x01(\x03H\x00R\x11turnStartedUnixMs\x88\x01\x01B\x17\n" +
+	"\x15_turn_started_unix_ms\"\xb7\x01\n" +
 	"\x0fCodexGoalDetail\x12\x1c\n" +
 	"\tobjective\x18\x01 \x01(\tR\tobjective\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +
@@ -6191,6 +6206,7 @@ func file_v1_thread_proto_init() {
 		return
 	}
 	file_v1_common_proto_init()
+	file_v1_thread_proto_msgTypes[45].OneofWrappers = []any{}
 	file_v1_thread_proto_msgTypes[57].OneofWrappers = []any{
 		(*TurnClientMessage_Input)(nil),
 		(*TurnClientMessage_Supplement)(nil),

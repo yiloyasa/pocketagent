@@ -56,6 +56,15 @@ func (s *Server) threadToPB(t *store.Thread) *pb.Thread {
 		// 归档只有一个事实来源(Status),这里只是把它翻译成布尔量,
 		// 免得手机端要同时判断 status==ARCHIVED 和 archived 两个字段。
 		Archived: t.Status == pb.ThreadStatus_THREAD_STATUS_ARCHIVED,
+		// 轮次开始时刻:运行中会话手机端显示"运行 N 分钟"。0 → 缺席(optional,
+		// 显式缺席) —— 旧 daemon/尚未开轮的会话不带,手机端回退旧展示。
+		TurnStartedUnixMs: func() *int64 {
+			if t.TurnStartedUnixMs == 0 {
+				return nil
+			}
+			v := t.TurnStartedUnixMs
+			return &v
+		}(),
 	}
 	if approvals, ok := s.approvalSessions.Load(t.ID); ok {
 		out.PendingApprovals = approvals.(*turnApprovals).snapshot()
@@ -349,51 +358,22 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 		log.Printf("[thread] 删除会话 %s:发现僵尸 RUNNING(无在飞租约),已复位为 IDLE", t.ID)
 	}
 	id := threadAgentID(t)
-	// 【原生侧删除:尽力而为,失败不阻塞本地删除】
-	// 以前任何一步原生删除失败都直接 return error,于是"电脑上的文件动不了"
-	// 被放大成"用户永远删不掉这个会话"。用户点删除的本意是"让它从手机上消失",
-	// 而电脑侧残留可以在"未导入的电脑会话"列表里重新露面、再由用户处置 ——
-	// 比"点了没反应"诚实且可用。因此这里一律:失败只记日志(含原因与残留提示),
-	// 继续往下删本地。唯一会真正阻塞的条件是"会话正在运行"(见上方租约判定)。
+	// 【原生侧删除:接口断言探测,零名单 + 尽力而为,失败不阻塞本地删除】
+	// 四家 HYBRID provider 各自实现 nativeSessionDeleter(agent 侧集中接线,
+	// runtime_descriptors.go),这里只做类型断言 —— 以前按名字分支的 switch
+	// (codex/zcode/pi)是静态名单,且漏了 dsh(dsh 删线程只删本地,
+	// sessionCapabilities.close 白白在场,设计稿 §6.2 审计发现);名单制还逼着
+	// 每加一家就得回来改这里。以前任何一步原生删除失败都直接 return error,于是
+	// "电脑上的文件动不了"被放大成"用户永远删不掉这个会话"。用户点删除的本意是
+	// "让它从手机上消失",而电脑侧残留可以在"未导入的电脑会话"列表里重新露面、
+	// 再由用户处置 —— 比"点了没反应"诚实且可用。因此这里一律:失败只记日志
+	// (错误原文含原生 id 与原因),继续往下删本地。唯一会真正阻塞的条件是
+	// "会话正在运行"(见上方租约判定)。
 	if !req.LocalOnly {
-		switch id {
-		case "codex":
-			if t.CodexThreadID != "" {
-				if err := agent.DeleteCodexSession(t.CodexThreadID); err != nil {
-					log.Printf("[thread] 删除会话 %s:电脑上的 codex 会话未清掉(codex=%s),仅删本地: %v",
-						t.ID, t.CodexThreadID, err)
-				}
-				// 【thread/delete 真删同步】文件删除只抽落盘痕迹,app-server/桌面端
-				// 握着的线程索引可能仍把它当活会话报回来;协议层的 thread/delete
-				// 才是权威删除(codex 删完自己会广播 thread/deleted,双端一致)。
-				// 同样尽力而为:失败只留日志,不阻塞本地删除与墓碑 —— 墓碑已是
-				// 防复活的权威。抽最小接口同 piThreadDropper,单测可注 fake。
-				if p, ok := s.cfg.Providers[id].(codexThreadDeleter); ok {
-					if err := p.DeleteCodexThread(t.CodexThreadID); err != nil {
-						log.Printf("[thread] 删除会话 %s:codex thread/delete 未成功(codex=%s),本地删除与墓碑不受影响: %v",
-							t.ID, t.CodexThreadID, err)
-					}
-				}
-			}
-		case "zcode":
-			if t.ExternalSession.SessionID != "" {
-				if p, ok := s.cfg.Providers[id].(zcodeSessionCloser); ok {
-					if err := p.CloseSession(t.ExternalSession.SessionID); err != nil {
-						log.Printf("[thread] 删除会话 %s:电脑上的 zcode 会话未关闭(session=%s),仅删本地: %v",
-							t.ID, t.ExternalSession.SessionID, err)
-					}
-				} else {
-					// ZCode 当前不可用(未装/子进程起不来):同样不该拦用户删本地。
-					log.Printf("[thread] 删除会话 %s:ZCode 当前不可用,跳过原生关闭,仅删本地", t.ID)
-				}
-			}
-		case "pi":
-			if p, ok := s.cfg.Providers[id].(piThreadDropper); ok {
-				p.DropThread(t.ID)
-			}
-			if err := agent.DeletePiSession(t.ExternalSession.SessionFile, t.ExternalSession.SessionID); err != nil {
-				log.Printf("[thread] 删除会话 %s:电脑上的 pi 会话未清掉(session=%s),仅删本地: %v",
-					t.ID, t.ExternalSession.SessionID, err)
+		if d, ok := s.cfg.Providers[id].(nativeSessionDeleter); ok {
+			if err := d.DeleteNativeSession(t); err != nil {
+				log.Printf("[thread] 删除会话 %s:电脑上的原生会话未清掉,仅删本地(残留可在\"未导入的电脑会话\"里再处置): %v",
+					t.ID, err)
 			}
 		}
 	} else {
@@ -566,7 +546,8 @@ type piThreadCompactor interface {
 }
 
 // piThreadDropper pi 侧删除回收能力(P2-1:DropThread = Close 子进程 + 清
-// clients/cursors,DeleteThread 时同步调用;抽最小接口同上,单测可注 fake)。
+// clients/cursors;LocalOnly 移除路径同步调用 —— 真删除路径已并入
+// *agent.PiProvider.DeleteNativeSession,见 nativeSessionDeleter)。
 type piThreadDropper interface {
 	DropThread(threadID string)
 }
@@ -578,13 +559,6 @@ type piQueueClearer interface {
 	ClearQueue(ctx context.Context, threadID string) (steered, followUp int, err error)
 }
 
-// codexThreadDeleter codex 侧协议真删能力的最小接口(生产由 *agent.CodexProvider
-// 实现 —— thread/delete;抽接口同 piThreadDropper:单测可注 fake,不依赖真
-// 子进程)。失败不阻塞本地删除:墓碑已是防复活的权威。
-type codexThreadDeleter interface {
-	DeleteCodexThread(threadID string) error
-}
-
 // titlePusher 重命名下发能力的最小接口(生产由 *agent.PiProvider 实现 ——
 // set_session_name;codex 走专用通道 SetCodexThreadName,不经本接口)。
 // RenameThread 用它探测"新标题能不能传到子进程侧":不能的(zcode)本地钉住
@@ -593,10 +567,10 @@ type titlePusher interface {
 	Rename(t *store.Thread, title string) error
 }
 
-// zcodeGoalPusher / zcodeCompacter / zcodeSessionCloser zcode 侧控制面能力的
-// 最小接口(生产由 *agent.ZcodeProvider 实现;抽接口同上,单测可注 fake):
-// SetGoal = session/goal 下发,CompactSession = session/compact,CloseSession =
-// session/close(真删除语义,DeleteThread 时同步)。
+// zcodeGoalPusher / zcodeCompacter zcode 侧控制面能力的最小接口(生产由
+// *agent.ZcodeProvider 实现;抽接口同上,单测可注 fake):
+// SetGoal = session/goal 下发,CompactSession = session/compact。
+// (zcodeSessionCloser 已删:session/close 真删并入 nativeSessionDeleter。)
 type (
 	zcodeGoalPusher interface {
 		SetGoal(threadID, goal string) error
@@ -604,10 +578,16 @@ type (
 	zcodeCompacter interface {
 		CompactSession(sessionID string) error
 	}
-	zcodeSessionCloser interface {
-		CloseSession(sessionID string) error
-	}
 )
+
+// nativeSessionDeleter 原生侧删除能力的可选接口(D3,零名单):四家 HYBRID
+// provider(codex/pi/zcode/dsh)各自实现"把这个 thread 的原生会话从电脑上清掉"
+// (实现集中在 agent/runtime_descriptors.go,可注 fake 单测);没实现的家
+// (daemon 侧会话的 echo/OpenAI 兼容)沉默缺席 —— 删除只发生在本地。DeleteThread
+// 经类型断言探测,不按 agent 名字分支(README §7:静态名单是债;AUDIT §3.3)。
+type nativeSessionDeleter interface {
+	DeleteNativeSession(t *store.Thread) error
+}
 
 func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest) (*pb.Empty, error) {
 	t, ok := s.cfg.Store.Get(req.ThreadId)
@@ -1143,6 +1123,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	userBlocks := derefBlocks(input.Blocks)
 	t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: userBlocks, CreatedAt: time.Now().UnixMilli()})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+	t.TurnStartedUnixMs = time.Now().UnixMilli() // 轮次开始时刻:手机端"运行 N 分钟"数据源
 	// P2-4:启动轮的输入落库属"尽力而为"(流已开,错误无法回传给手机),
 	// 但失败必须留痕 —— 否则磁盘异常期间整轮历史静默丢失。
 	logStoreUpdateErr("turn-start", t.ID, s.cfg.Store.Update(t))
@@ -1195,6 +1176,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		}}})
 		t.Messages = append(t.Messages, store.StoredMessage{Role: "user", Blocks: next.blocks, CreatedAt: time.Now().UnixMilli()})
 		t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+		t.TurnStartedUnixMs = time.Now().UnixMilli() // 新一轮重新起算(与 Started 帧同点)
 		logStoreUpdateErr("queued-turn-start", t.ID, s.cfg.Store.Update(t))
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
 			TurnId: turnID, ModelId: t.ModelID,

@@ -74,7 +74,13 @@ type Thread struct {
 	Status           pb.ThreadStatus `json:"status"`
 	CreatedAt        int64           `json:"created_at"`
 	UpdatedAt        int64           `json:"updated_at"`
-	Messages         []StoredMessage `json:"messages"`
+	// 当前 RUNNING 段的开始时刻(Unix 毫秒):在 Status 转 RUNNING 的各赋值点记
+	// now,手机端对运行中会话显示"运行 N 分钟"(此前只能退化为"最近活动·相对
+	// 时间")。0 = 未知(旧库记录/尚未开过轮,透出时缺席)。daemon 重启后仍处于
+	// RUNNING 的会话由启动恢复回路改记**重启时刻** —— 重启无法追溯真实开始时刻
+	// (上一进程的轮次随进程终止,见 server.go 启动恢复回路)。
+	TurnStartedUnixMs int64           `json:"turn_started_unix_ms,omitempty"`
+	Messages          []StoredMessage `json:"messages"`
 	Usage            pb.Usage        `json:"usage"`
 }
 
@@ -425,7 +431,8 @@ func cloneThread(t *Thread) *Thread {
 		ExternalSession: t.ExternalSession, Effort: t.Effort, SectionID: t.SectionID,
 		TitlePinned: t.TitlePinned, ParentThreadID: t.ParentThreadID,
 		Status: t.Status, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
-		generation: t.generation,
+		TurnStartedUnixMs: t.TurnStartedUnixMs,
+		generation:        t.generation,
 	}
 	if t.SettingsSnapshot != nil {
 		cp := *t.SettingsSnapshot
@@ -497,6 +504,7 @@ func mergeThread(current, base, value *Thread) (*Thread, error) {
 	mergeValue(&out.ParentThreadID, base.ParentThreadID, value.ParentThreadID)
 	mergeValue(&out.Status, base.Status, value.Status)
 	mergeValue(&out.CreatedAt, base.CreatedAt, value.CreatedAt)
+	mergeValue(&out.TurnStartedUnixMs, base.TurnStartedUnixMs, value.TurnStartedUnixMs)
 	if !reflect.DeepEqual(base.SettingsSnapshot, value.SettingsSnapshot) {
 		if value.SettingsSnapshot == nil {
 			out.SettingsSnapshot = nil

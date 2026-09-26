@@ -160,7 +160,9 @@ func zcodeLaunchSpec(node, cjs string, _ StartOptions) (string, []string) {
 
 // ---- 子进程环境修补(2026-09-19 根因修复)----
 //
-// 【死因实录】生产 daemon 由 计划任务→watchdog_hidden.vbs(WMI)→paguard 链拉起,
+// 【死因实录】生产 daemon 由计划任务(每分钟)直跑 paguard.exe(windowsgui 子系统,
+// 物理无窗口)拉起 —— 6077295 起绕开 wscript 层,watchdog.bat/vbs 已删(63a57ec);
+// 旧链「计划任务→watchdog_hidden.vbs(WMI)→paguard」已不复存在(别照它排查)。
 // 进程环境里【没有】ZCode 桌面端给子进程注入的这对变量:
 //
 //	ZCODE_BUILTIN_PROVIDER_CONFIG_FILE(内置 provider 配置,路径含版本号与

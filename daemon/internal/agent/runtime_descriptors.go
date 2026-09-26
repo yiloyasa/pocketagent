@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -242,6 +243,70 @@ func (p *OpenAICompatible) OpenRuntime(_ context.Context, th *store.Thread) (*ru
 	return openSharedRuntime(p, th)
 }
 
+// ---- 原生删除接线(D3:server 侧 DeleteThread 的可选接口,零名单)-----------
+
+// nativeSessionDeleter 的四家实现集中于此(同 Participant 实现的集中纪律:
+// provider 协议文件零改动,"契约接线"与"协议实现"分开审阅)。server.DeleteThread
+// 只做这个接口的类型断言,不按 agent 名字分支 —— thread.go 上曾有的 name-switch
+// (只列 codex/zcode/pi,dsh 缺席)是静态名单债,已由本接口消掉(设计稿 §3-D3)。
+// 失败语义由 server 统一:原生删除失败只留日志,不阻塞本地删除与墓碑(墓碑是
+// 防复活的权威);各实现把"电脑上还剩什么"写进错误原文,便于日志对账。
+
+// DeleteNativeSession(codex)删 rollout 文件 + thread/delete 协议真删。
+// 两步照旧全跑:文件删除失败不跳过 thread/delete —— 前者抽落盘痕迹,后者才是
+// app-server/桌面端线程索引的权威删除(codex 删完广播 thread/deleted,双端一致)。
+// 两步失败经 errors.Join 合并上抛,server 一条日志看到全部原因。
+func (p *CodexProvider) DeleteNativeSession(t *store.Thread) error {
+	if t == nil || t.CodexThreadID == "" {
+		return nil // 引用未落库 = 电脑上没有可删的 codex 会话
+	}
+	var errs []error
+	if err := DeleteCodexSession(t.CodexThreadID); err != nil {
+		errs = append(errs, fmt.Errorf("codex 会话 %s 的 rollout 未清掉: %w", t.CodexThreadID, err))
+	}
+	if err := p.DeleteCodexThread(t.CodexThreadID); err != nil {
+		errs = append(errs, fmt.Errorf("codex thread/delete 未成功(codex=%s): %w", t.CodexThreadID, err))
+	}
+	return errors.Join(errs...)
+}
+
+// DeleteNativeSession(pi)回收子进程/游标 + 删除会话文件。pi 一个子进程就是
+// 一个会话,不回收会进程泄漏(P2-1);文件删除沿用既有 DeletePiSession 的
+// "精确匹配 + 防误删"纪律(路径必须在 sessions 目录内、文件头 id 一致)。
+func (p *PiProvider) DeleteNativeSession(t *store.Thread) error {
+	if t == nil {
+		return nil
+	}
+	p.DropThread(t.ID)
+	if err := DeletePiSession(t.ExternalSession.SessionFile, t.ExternalSession.SessionID); err != nil {
+		return fmt.Errorf("pi 会话 %s 未清掉: %w", t.ExternalSession.SessionID, err)
+	}
+	return nil
+}
+
+// DeleteNativeSession(zcode)session/close 真删(真删除语义,控制面探针实证)。
+func (p *ZcodeProvider) DeleteNativeSession(t *store.Thread) error {
+	if t == nil || t.ExternalSession.SessionID == "" {
+		return nil
+	}
+	if err := p.CloseSession(t.ExternalSession.SessionID); err != nil {
+		return fmt.Errorf("zcode 会话 %s 未关闭: %w", t.ExternalSession.SessionID, err)
+	}
+	return nil
+}
+
+// DeleteNativeSession(dsh)session/close 真删,带 capability 门控
+// (sessionCapabilities.close 不在场则显式报错,见 dsh_session.go)。
+func (p *DshProvider) DeleteNativeSession(t *store.Thread) error {
+	if t == nil || t.ExternalSession.SessionID == "" {
+		return nil
+	}
+	if err := p.DeleteDshSession(t.ExternalSession.SessionID); err != nil {
+		return fmt.Errorf("dsh 会话 %s 未删除: %w", t.ExternalSession.SessionID, err)
+	}
+	return nil
+}
+
 // openSharedRuntime 用共享默认后端交付四个入口 + daemon 侧会话适配器。
 //
 // 【为什么现在就用默认实现而不是等原生实现】规格 §13 P0.5 的目标是"所有 agent
@@ -267,12 +332,12 @@ func openSharedRuntime(p runtime.Participant, th *store.Thread) (*runtime.AgentR
 	}
 	// 共享默认后端交付的 DaemonSession 只对"会话事实在 daemon 侧"的家成立。
 	// 对声明 NATIVE/HYBRID 的家:P1 起按 D5 工厂断言注入(设计稿 §3-D5)——
-	// provider 实现了 NativeSessionFactory(当前仅 pi,见 pi_session.go)就交付
-	// 其原生适配器,替换 FullRuntime 预置的 DAEMON 替身;没实现的家(codex/
-	// zcode/dsh,截至 P1)仍置 nil —— 塞一个 Source=DAEMON 的替身会构成
-	// source-mismatch 违约(声明 HYBRID 却交付 DAEMON),置 nil 才是诚实表达。
-	// 类型断言探测让六家增量收编互不牵连:没有实现的家行为零变化,契约套件对
-	// nil 家的跳过逻辑(contract_suite.go 会话两用例)原样成立。
+	// provider 实现了 NativeSessionFactory(pi 见 pi_session.go,dsh 见
+	// dsh_session.go)就交付其原生适配器,替换 FullRuntime 预置的 DAEMON 替身;
+	// 没实现的家(codex/zcode,截至 P2)仍置 nil —— 塞一个 Source=DAEMON 的替身
+	// 会构成 source-mismatch 违约(声明 HYBRID 却交付 DAEMON),置 nil 才是诚实
+	// 表达。类型断言探测让六家增量收编互不牵连:没有实现的家行为零变化,契约
+	// 套件对 nil 家的跳过逻辑(contract_suite.go 会话两用例)原样成立。
 	if desc.SessionModel != runtime.SourceDaemon {
 		if f, ok := p.(NativeSessionFactory); ok {
 			ns, err := f.NativeSessionFor(th)

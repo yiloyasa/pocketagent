@@ -993,7 +993,12 @@ private fun RunningAttentionSection(threads: List<PThread>, onOpenThread: (Strin
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                         Text(
-                            runningMetaLabel(t.updatedAtUnixMs, System.currentTimeMillis()),
+                            runningMetaLabel(
+                                // 起点缺席(旧 daemon/未知)传 null,回退"最近活动"展示
+                                if (t.hasTurnStartedUnixMs()) t.turnStartedUnixMs else null,
+                                t.updatedAtUnixMs,
+                                System.currentTimeMillis(),
+                            ),
                             fontSize = 11.sp, color = Pa.TextTertiary,
                         )
                     }
@@ -1257,13 +1262,26 @@ internal fun pendingApprovalMeta(pendingCount: Int): String =
     if (pendingCount > 0) "$pendingCount 个审批待处理" else "等待你的处理"
 
 /**
- * 运行中条元信息(纯函数):「最近活动 · 相对时间」。
+ * 运行中条元信息(纯函数):有真实起点 → 「运行 N 分钟」;缺席 → 「最近活动 · 相对时间」。
  *
- * 【为什么不是时长】ListThreads 的 Thread 没有"本轮开始时刻"字段
- * (TurnStarted 推送帧也不带时间戳,且只推给已打开的会话),拿 updatedAt
- * 冒充开始时刻就是造假 —— 降级为"最近活动"相对时间,数据全真。
+ * 【时长从哪来】daemon 的 Thread.turn_started_unix_ms(2026-09-26 补齐:Status 转
+ * RUNNING 时记 now;重启后仍 RUNNING 的会话记重启时刻 —— 真实开始不可追溯)。
+ * 此前协议没有该字段,拿 updatedAt 冒充开始时刻就是造假,故降级为"最近活动"
+ * 相对时间;现在字段缺席(旧 daemon/未知)时仍走旧展示,数据全真。
  */
-internal fun runningMetaLabel(updatedAtUnixMs: Long, nowMs: Long): String {
+internal fun runningMetaLabel(
+    turnStartedUnixMs: Long?,
+    updatedAtUnixMs: Long,
+    nowMs: Long,
+): String {
+    if (turnStartedUnixMs != null && turnStartedUnixMs > 0L) {
+        val minutes = (nowMs - turnStartedUnixMs).coerceAtLeast(0L) / 60_000L
+        return when {
+            minutes < 1L -> "运行不到 1 分钟"
+            minutes < 60L -> "运行 $minutes 分钟"
+            else -> "运行 ${minutes / 60L} 小时 ${minutes % 60L} 分"
+        }
+    }
     val rel = relativeTimeLabel(updatedAtUnixMs, nowMs)
     return if (rel.isBlank()) "运行中" else "最近活动 · $rel"
 }

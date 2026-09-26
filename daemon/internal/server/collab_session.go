@@ -186,6 +186,7 @@ func (s *Server) runCollabMember(threadID, task, sessionID string) {
 		CreatedAt: time.Now().UnixMilli(),
 	})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+	t.TurnStartedUnixMs = time.Now().UnixMilli() // 轮次开始时刻:与 StartTurn 同口径
 	logStoreUpdateErr("collab-member-start", t.ID, s.cfg.Store.Update(t))
 	taskBlocks := t.Messages[len(t.Messages)-1].Blocks
 

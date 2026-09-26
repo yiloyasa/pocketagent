@@ -256,11 +256,9 @@ func New(cfg Config) *Server {
 	srv.wirePiTitleHandler()
 	// Resolve legacy RUNNING records before list synchronization can hide their
 	// terminal error. This consults native journals only, never launches a turn.
-	for _, thread := range cfg.Store.List(true) {
-		if thread.Status == pb.ThreadStatus_THREAD_STATUS_RUNNING {
-			srv.recoverNativeResult(context.Background(), thread)
-		}
-	}
+	// 【轮次起点】仍处于 RUNNING 的会话由 backfillRestartedRunningStamp 回填
+	// 重启时刻 —— 真实开始时刻不可追溯(见该方法注释)。
+	srv.backfillRestartedRunningStamp(time.Now())
 	return srv
 }
 

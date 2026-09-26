@@ -477,6 +477,12 @@ message Thread {
   // 落库;codex 原生子线程在 thread/started 通知(带 parentThreadId)到达时以
   // 轻量存根登记落库。
   string parent_thread_id = 22;
+  // ---- 轮次开始时刻(只增:23)----
+  // 当前 RUNNING 段的开始时刻。手机端对运行中会话显示"运行 N 分钟",
+  // 不再退化为"最近活动·相对时间"。optional 显式缺席 = 未知:旧 daemon
+  // 不带、尚未开轮的会话不带;daemon 重启后仍处于 RUNNING 的会话由 daemon
+  // 记**重启时刻**(真实开始不可追溯,仅作展示锚点)。
+  optional int64 turn_started_unix_ms = 23;
 }
 
 // CodexGoalDetail codex 线程目标态(thread/goal/get 应答的归一)。

@@ -14,7 +14,11 @@ service HostService {
   // 配对码换长期 token
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
   rpc Ping(PingRequest) returns (PingResponse);
-  // 主机状态推送(daemon 侧工作区变化、模型就绪、更新可用等)
+  // 主机状态推送。当前唯一生产事件是 turn_finished(后台轮次完成,推送场景);
+  // 早期规划的 workspace_changed/model_ready/update_available 三分支自基线起
+  // 就无 daemon 生产点、app 零消费(2026-09-26 审计 R6/S2 双端 grep 实证),已删。
+  // 重引入主机态事件时另起新字段号 —— 旧号已 reserved,复用会让持有旧契约的
+  // 对端把新事件错解成旧消息类型。
   rpc WatchEvents(WatchEventsRequest) returns (stream HostEvent);
   // P2:列出本机正在运行的 dev server(daemon 拨常见端口,1s/端口,整扫 ≤8s,
   // 结果缓存 60s —— 手机手动刷新才重扫)。对齐原作 BrowserService.ListDevServers。
@@ -90,10 +94,14 @@ message WatchEventsRequest {
 
 message HostEvent {
   int64 timestamp_unix_ms = 1;
+  // 字段号 2/3/4 曾是 workspace_changed/model_ready/update_available 三个 oneof
+  // 分支:契约初始规划的主机态事件,但自基线(a1e3699)起 daemon 就从未生产、app
+  // 从未消费,唯一生产者只发 turn_finished(event_sequence.go emitTurnFinished);
+  // 设计规范(superpowers/specs)亦无「预留事件位」条款,2026-09-26 按审计 R6 删除。
+  // reserved 双保险:旧号/旧名不复用,防旧对端把新语义错解成已删消息类型。
+  reserved 2, 3, 4;
+  reserved "workspace_changed", "model_ready", "update_available";
   oneof event {
-    WorkspaceChanged workspace_changed = 2;
-    ModelReady model_ready = 3;
-    UpdateAvailable update_available = 4;
     TurnFinishedNotification turn_finished = 5; // 后台 turn 完成(推送场景)
   }
   // P1-5:全局单调事件序号(daemon events.jsonl),与 TurnServerMessage.sequence
@@ -101,9 +109,6 @@ message HostEvent {
   int64 sequence = 6;
 }
 
-message WorkspaceChanged { repeated string workspaces = 1; }
-message ModelReady { repeated string model_ids = 1; }
-message UpdateAvailable { string version = 1; string notes_url = 2; }
 message TurnFinishedNotification {
   string thread_id = 1;
   string summary = 2; // 一句话结果摘要,可直接进通知栏

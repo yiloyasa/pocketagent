@@ -1,12 +1,12 @@
 // codex_thread_delete_sync_test.go —— thread/delete 真删同步的 server 侧单测。
 //
-// 【钉什么】DeleteThread 的 codex 原生删除现在有两步:删 rollout 文件
-// (DeleteCodexSession,既有行为)+ 调 thread/delete(provider 协议真删,
-// 2026-09 P2 补上)。钉死三条语义:
-//  1. 调用发出:真删除(local_only=false)必须向 provider 发出 thread/delete;
-//  2. 失败仍返回本地成功:thread/delete 失败(协议错误/子进程不在)只留日志,
+// 【钉什么】DeleteThread 的 codex 原生删除(删 rollout 文件 + 调 thread/delete
+// 协议真删)已收进 nativeSessionDeleter 可选接口(P2 删除接口化,零名单):
+// server 只做类型断言,不按 agent 名字分支。钉死三条语义:
+//  1. 调用发出:真删除(local_only=false)必须向 provider 发出原生删除;
+//  2. 失败仍返回本地成功:原生删除失败(文件没有/协议错误/子进程不在)只留日志,
 //     本地删除与墓碑照常完成 —— 墓碑已是防复活的权威,原生失败不得卡住用户;
-//  3. 移除(local_only=true)绝不发 thread/delete:那是可恢复的隐藏,不是真删。
+//  3. 移除(local_only=true)绝不发原生删除:那是可恢复的隐藏,不是真删。
 package server
 
 import (
@@ -19,8 +19,9 @@ import (
 	"github.com/pocketagent/daemon/internal/store"
 )
 
-// fakeCodexDeleter 测试替身:注册进 Providers["codex"],记录 thread/delete
-// 调用并按配置返回成功/失败(不碰任何真子进程)。
+// fakeCodexDeleter 测试替身:注册进 Providers["codex"],记录原生删除调用并按
+// 配置返回成功/失败(不碰任何真子进程)。实现 nativeSessionDeleter 的形态与
+// 生产 *agent.CodexProvider 一致(DeleteNativeSession 从 thread 取原生 id)。
 type fakeCodexDeleter struct {
 	calls []string
 	err   error
@@ -34,8 +35,8 @@ func (f *fakeCodexDeleter) Models() []pb.ModelInfo {
 func (f *fakeCodexDeleter) Run(ctx context.Context, req agent.TurnRequest, sink agent.Sink, approve agent.ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	return nil, nil, errors.New("替身不执行轮次")
 }
-func (f *fakeCodexDeleter) DeleteCodexThread(threadID string) error {
-	f.calls = append(f.calls, threadID)
+func (f *fakeCodexDeleter) DeleteNativeSession(t *store.Thread) error {
+	f.calls = append(f.calls, t.CodexThreadID)
 	return f.err
 }
 

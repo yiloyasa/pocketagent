@@ -4,12 +4,13 @@ daemon 鉴权版换血预备脚本（T-30 / 批次8）—— 只写序列,默认
 
 背景（README §5 / §9 / §13 + 主模型裁决）:
   当前生产 daemon = 旧无鉴权版,由计划任务 PocketAgentDaemonGuard(每分钟)
-  → wscript watchdog_hidden.vbs → WMI 派生 paguard.exe 托管;paguard 进程内
-  探测 127.0.0.1:7246,down 才以 CREATE_NO_WINDOW 拉起 daemon(paguard 支持
-  -check-only / -kill <winpid>)。换血口诀 = 杀 daemon → 覆盖 exe → 等 paguard
-  自动拉起(计划任务每分钟一圈,脚本最长等 70s)。新二进制默认自动生成配对码
-  写 ~/.pocketagentd/pair-code.txt、启动日志含版本字段;换血后手机需重新配对
-  (由主模型用 adb 驱动,本脚本只打印引导)。
+  直跑 daemon/paguard.exe 托管(2026-09-25 6077295 起 action 绕开 wscript;
+  watchdog.bat/vbs 已删,63a57ec —— 旧「wscript vbs→WMI 派生」链不复存在);
+  paguard 进程内探测 127.0.0.1:7246,down 才以 CREATE_NO_WINDOW 拉起 daemon
+  (paguard 支持 -check-only / -kill <winpid>)。换血口诀 = 杀 daemon → 覆盖
+  exe → 等 paguard 自动拉起(计划任务每分钟一圈,脚本最长等 70s)。新二进制
+  默认自动生成配对码写 ~/.pocketagentd/pair-code.txt、启动日志含版本字段;
+  换血后手机需重新配对(由主模型用 adb 驱动,本脚本只打印引导)。
 
 子命令:
     python tools/ops/_pa_deploy_night.py build       # 版本烙印构建(dry-run 只打印命令)
@@ -272,11 +273,11 @@ def cmd_preflight(args):
             print("     [!] TCP 通但 psutil 拿不到 pid——多半要管理员权限;换血时给 --daemon-pid。")
     # 2. 旧 daemon 进程定位方式说明(静态)
     print("  2) 旧 daemon 进程定位方式说明:")
-    print("     - 常规链路: 计划任务 PocketAgentDaemonGuard(每分钟)→ wscript")
-    print("       watchdog_hidden.vbs → WMI Win32_Process.Create 派生 paguard.exe")
-    print("       (daemon/ 目录,无任何参数,vbs 传 -pair-code 与否=不传)→ paguard")
-    print("       探测 7246,down 才 CREATE_NO_WINDOW 拉起 pocketagentd.exe")
-    print("       -addr 0.0.0.0:7246 -workspace <仓库根>(见 daemon/cmd/paguard/main.go)。")
+    print("     - 常规链路: 计划任务 PocketAgentDaemonGuard(每分钟)直跑")
+    print("       daemon/paguard.exe(2026-09-25 6077295 起绕开 wscript,")
+    print("       watchdog.bat/vbs 已删 63a57ec),paguard 探测 7246,down 才")
+    print("       CREATE_NO_WINDOW 拉起 pocketagentd.exe -addr 0.0.0.0:7246")
+    print("       -workspace <仓库根>(见 daemon/cmd/paguard/main.go)。")
     print("     - 杀进程: paguard.exe -kill <winpid>(TerminateProcess,GUI 子系统无窗口);")
     print("       本脚本不调 tasklist/netstat/schtasks/cmd/powershell(红线)。")
     # 3. paguard 链路活性(用 watchdog.log 时间戳旁证,不查 schtasks)

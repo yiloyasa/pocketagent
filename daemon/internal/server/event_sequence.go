@@ -311,14 +311,10 @@ func (s *Server) emitHostEvent(ev *pb.HostEvent) {
 }
 
 // hostEventType 主机事件的类型名(host.<type>)。
+// 2026-09-26:workspace_changed/model_ready/update_available 三分支随契约删除
+// (自基线起就无生产点、app 零消费,审计 R6/S2),此处分支一并移除。
 func hostEventType(ev *pb.HostEvent) string {
 	switch ev.Event.(type) {
-	case *pb.HostEvent_WorkspaceChanged:
-		return "workspace_changed"
-	case *pb.HostEvent_ModelReady:
-		return "model_ready"
-	case *pb.HostEvent_UpdateAvailable:
-		return "update_available"
 	case *pb.HostEvent_TurnFinished:
 		return "turn_finished"
 	default:

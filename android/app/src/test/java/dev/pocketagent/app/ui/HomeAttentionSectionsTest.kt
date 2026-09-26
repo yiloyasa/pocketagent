@@ -134,10 +134,17 @@ class HomeAttentionSectionsTest {
     }
 
     @Test
-    fun `运行中元信息_有更新时刻报最近活动_无时刻回落运行中`() {
+    fun `运行中元信息_有真实起点报运行时长_缺席回落最近活动`() {
         val now = 10_000_000L
-        assertEquals("最近活动 · 刚刚", runningMetaLabel(now - 30_000L, now))
-        assertEquals("最近活动 · 5 分钟前", runningMetaLabel(now - 5 * 60_000L, now))
-        assertEquals("运行中", runningMetaLabel(0L, now))
+        // 有起点(daemon 2026-09-26 起透出 turn_started_unix_ms):按时长报
+        assertEquals("运行不到 1 分钟", runningMetaLabel(now - 30_000L, now, now))
+        assertEquals("运行 5 分钟", runningMetaLabel(now - 5 * 60_000L, now, now))
+        assertEquals("运行 1 小时 5 分", runningMetaLabel(now - 65 * 60_000L, now, now))
+        // 起点在未来(时钟偏差/重启边界):钳到 0,不报负时长
+        assertEquals("运行不到 1 分钟", runningMetaLabel(now + 30_000L, now, now))
+        // 缺席(旧 daemon/未知):回退"最近活动"相对时间,数据全真
+        assertEquals("最近活动 · 刚刚", runningMetaLabel(null, now - 30_000L, now))
+        assertEquals("最近活动 · 5 分钟前", runningMetaLabel(null, now - 5 * 60_000L, now))
+        assertEquals("运行中", runningMetaLabel(null, 0L, now))
     }
 }

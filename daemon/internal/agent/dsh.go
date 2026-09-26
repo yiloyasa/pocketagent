@@ -745,21 +745,26 @@ func (p *DshProvider) ensureSession(ctx context.Context, req TurnRequest) (strin
 		p.refreshCatalogFromResume(catOpts) // 探针修正②
 		return sid, nil
 	}
-	return p.createSession(ctx, req, gen)
+	return p.createSession(ctx, req.Thread, req.Workspace, gen)
 }
 
 // createSession session/new 新建并登记:threadMap 写入 + ExternalSession 写回
 // (server 层轮次后落库,手机端据此展示外部会话引用;zcode 同款机制)+ 灌"新
 // 会话初始值"。ensureSession 的"无 ExternalSession"常规新建分支与升级降级
 // 重建共用,保证两条路的登记语义完全一致。
-func (p *DshProvider) createSession(ctx context.Context, req TurnRequest, gen int) (string, error) {
-	st, err := p.client.SessionNew(ctx, req.Workspace)
+//
+// 【参数为什么是 (thread, workspace) 而非 TurnRequest】原生会话适配器
+// (dsh_session.go)的 Open 也要走这条唯一的新建路径,而适配器合同手里只有
+// thread(pi_session.go 的 mount 参数收窄同款手法):把"实际用到的两个事实"
+// 收窄成参数,函数体零逻辑改动 —— 不为适配器另写一份 session/new。
+func (p *DshProvider) createSession(ctx context.Context, th *store.Thread, workspace string, gen int) (string, error) {
+	st, err := p.client.SessionNew(ctx, workspace)
 	if err != nil {
 		return "", fmt.Errorf("session/new: %w", err)
 	}
-	p.setDshThreadRef(req.Thread.ID, threadRef{id: st.SessionID, gen: gen})
-	req.Thread.ExternalSession = store.ExternalSessionRef{SessionID: st.SessionID, Cwd: req.Workspace}
-	log.Printf("[dsh] 新建会话 %s cwd=%s", st.SessionID, req.Workspace)
+	p.setDshThreadRef(th.ID, threadRef{id: st.SessionID, gen: gen})
+	th.ExternalSession = store.ExternalSessionRef{SessionID: st.SessionID, Cwd: workspace}
+	log.Printf("[dsh] 新建会话 %s cwd=%s", st.SessionID, workspace)
 	// 灌"新会话初始值"(设置页原生设置;探针实证 set_config_option 仅会话内生效
 	// 不持久,新会话在这里灌入 —— 与"更改默认对新建对话生效"的设置页语义对齐。
 	// 尽力而为:单项失败只落日志,不阻塞本轮;applyConfigOptions 随后照常覆盖
@@ -780,7 +785,7 @@ func (p *DshProvider) createSession(ctx context.Context, req TurnRequest, gen in
 //   - 绝不伪造旧上下文:新会话就是新会话,日志写明原委与原 sessionId(用户仍可
 //     在桌面端找回旧记录),手机端不再看到"resume 失败且重试必败"的死路。
 func (p *DshProvider) rebuildSessionAfterUpgrade(ctx context.Context, req TurnRequest, old store.ExternalSessionRef, gen int, cause error) (string, error) {
-	sid, err := p.createSession(ctx, req, gen)
+	sid, err := p.createSession(ctx, req.Thread, req.Workspace, gen)
 	if err != nil {
 		// 降级也失败:两个失败都如实说出,不吞任何一个。
 		return "", fmt.Errorf("dsh 原会话 %s 不可恢复(%v),自动重建新会话又失败: %w", old.SessionID, cause, err)

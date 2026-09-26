@@ -391,6 +391,7 @@ func (e *collabEngine) delegate(ctx context.Context, agentID, task string, opts 
 		CreatedAt: time.Now().UnixMilli(),
 	})
 	t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
+	t.TurnStartedUnixMs = time.Now().UnixMilli() // 轮次开始时刻:与 StartTurn 同口径
 	// 与 StartTurn 同纪律:启动轮落库尽力而为,失败必须留痕 —— 否则磁盘
 	// 异常期间整轮历史静默丢失。
 	logStoreUpdateErr("delegate-turn-start", t.ID, s.cfg.Store.Update(t))
