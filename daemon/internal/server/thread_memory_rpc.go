@@ -85,6 +85,9 @@ func (s *Server) ClearThreadMemory(_ context.Context, req *pb.ClearThreadMemoryR
 		// "清过了"，从此不再怀疑那个会话为什么还在老样子。
 		return nil, errNotFound("会话 " + threadID + " 在 " + agentID + " 名下没有 PocketAgent 侧记忆")
 	}
+	// 预算联动：记忆清零，记忆租约同步退出活跃集合——残留的租约会让诊断页
+	// 显示"没有记忆却有压力"（账必须跟得上事实；下一轮写入会重新起账）。
+	s.releaseThreadMemoryLeases(agentID, threadID)
 	return &pb.ClearThreadMemoryResponse{
 		TotalThreads: int32(totals.Threads),
 		TotalEntries: int32(totals.Entries),

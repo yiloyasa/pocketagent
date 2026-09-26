@@ -1458,6 +1458,11 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 		}
 		s.emitTurnFinished(t.ID, summary)
 	}
+	// 【P1 memory 分层】轮末记忆收敛（设计稿 §4 P1）：调用点在两处 assistant 落库点
+	// （上方 if/else 两个分支）的下游、终局帧与主机事件交付之后——收敛是加法运维，
+	// 绝不能挤占回复的可见时延（设计稿 §6 风险 1），失败只记日志、不改本轮返回值。
+	// 放在两分支合流处而非各自落库点之后，失败无 partial 的轮次也能被水位检查覆盖。
+	s.afterTurnMemoryHousekeeping(provider, t)
 	if runErr != nil {
 		return "", userStopped, &turnRunError{err: runErr}
 	}

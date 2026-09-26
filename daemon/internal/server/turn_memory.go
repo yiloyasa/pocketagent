@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -86,6 +87,11 @@ func (s *Server) recordTurnMemory(provider agent.Provider, t *store.Thread, role
 			// 而"这家记了 N 条"是用户在判断它有没有用上记忆的唯一依据）。
 			return
 		}
+		// 【预算接线】原文是必需资源：门卫不会因额度拒绝它（越限照写、压力如实上报），
+		// 统一走门卫是为了让两条分支的"先记账后写入"形状一眼对齐。
+		if !s.memoryBudgetAdmit(provider.ID(), t, runtime.MemoryConversation, int64(len(text))) {
+			return
+		}
 		if _, err := s.runtimeBackend.Memory().Append(ctx, key, runtime.MemoryItem{
 			Kind: runtime.MemoryConversation, Role: role, Payload: []byte(text),
 		}); err != nil {
@@ -96,6 +102,12 @@ func (s *Server) recordTurnMemory(provider agent.Provider, t *store.Thread, role
 		key = runtime.MemoryKey{AgentID: provider.ID(), ThreadID: t.ID, Kind: runtime.MemoryArtifact}
 		payload, meta, ok := turnIndexEntry(turnID, role, blocks)
 		if !ok {
+			return
+		}
+		// 【预算接线】索引是可选资源：硬限先拒账、写入就不发生。门卫必须在 Append
+		// **之前**——放在写入之后，槽里会留下账上不存在的条目，"拒掉"就成了空话。
+		// （门卫记账成功而 Append 失败的相反窗口存在，代价是账面多计一条，日志已出声。）
+		if !s.memoryBudgetAdmit(provider.ID(), t, runtime.MemoryArtifact, int64(len(payload))) {
 			return
 		}
 		if _, err := s.runtimeBackend.Memory().Append(ctx, key, runtime.MemoryItem{
@@ -113,6 +125,102 @@ func (s *Server) recordTurnMemory(provider agent.Provider, t *store.Thread, role
 	// 失败只记日志 —— 轮次已经跑完，不该因为落盘失败回滚用户已经看到的结果。
 	if err := s.runtimeBackend.Memory().Checkpoint(ctx, key); err != nil {
 		log.Printf("[runtime] %s 记忆 checkpoint 失败: thread=%s kind=%s err=%v", provider.ID(), t.ID, key.Kind, err)
+	}
+}
+
+// memoryLeaseID 记忆租约的确定性 id。租约按 thread 生命周期一条（设计稿 P1）：
+// 该会话第一个记忆写入 Acquire，其后每笔 Charge——不靠 server 持有状态，
+// 幂等 id 让"建过没有"由记账层自己回答（ErrLeaseExists）。
+func memoryLeaseID(agentID string, threadID string, kind runtime.MemoryKind) string {
+	return "memory:" + agentID + ":" + threadID + ":" + string(kind)
+}
+
+// memoryBudgetAdmit 把一次记忆写入的字节数记进 ResourceLedger（预算接线，设计稿 P1）。
+// 返回 false = 硬限拒绝了这条**可选**写入，调用方必须跳过 Append。
+//
+// 【可选/必需照搬既有语义】backend.go 的 Acquire/Charge 早已定义："硬上限只拒绝可选
+// 资源，必需资源允许越限记账，由 Usage 如实反映压力"。本函数只是把 memory 写入接上
+// 那套语义，不新发明预算机制：conversation 原文 = 必需（Optional=false，越限照写）；
+// artifact 索引 = 可选（Optional=true，硬限拒新不删旧——删除永远不是记账层的职权）。
+//
+// 【额度映射】策略模型对每类资源只给一个数（规格 §6.5 基线形态，见 openTurnLease 的
+// 同款取舍），这里把它当**硬限**（额度 = "拒绝新增可选资源"的那条线），软限取其半。
+// 两线必须分离：soft == hard 时 ClassifyPressure 在额度处直接判 hard，Usage 永远不会
+// 出现 OverSoft，"软限触发收敛"就永远没有触发点。取半是待校准的初始值，与
+// memorySlotThresholds 的阈值表同地位。
+//
+// 【记账失败不拦写入】与 openTurnLease 同一纪律：记账是诊断增强，除"硬限拒绝可选写"
+// 这条契约行为外，任何记账故障都放行并留日志。
+func (s *Server) memoryBudgetAdmit(agentID string, t *store.Thread, kind runtime.MemoryKind, bytes int64) bool {
+	if s.runtimeBackend == nil || t == nil || bytes <= 0 {
+		return true
+	}
+	var resKind runtime.ResourceKind
+	var optional bool
+	switch kind {
+	case runtime.MemoryConversation:
+		resKind, optional = runtime.ResConversation, false
+	case runtime.MemoryArtifact:
+		resKind, optional = runtime.ResArtifactDisk, true
+	default:
+		// summary 槽是收敛自己的产物：入账会让"压缩响应"反过来推高压力账，
+		// 形成"收敛→记账→压力→再收敛"的自激；它的量由自己的阈值兜底，不入账。
+		return true
+	}
+	limits := s.effectiveLimits(agentID, t.Workspace, t.ID, "")
+	quota := derefInt64(limits.DiskConversationBytes)
+	if resKind == runtime.ResArtifactDisk {
+		quota = derefInt64(limits.DiskArtifactBytes)
+	}
+	leaseID := memoryLeaseID(agentID, t.ID, kind)
+	ctx := context.Background()
+	_, err := s.runtimeBackend.Resources().Acquire(ctx, runtime.LeaseRequest{
+		LeaseID:       leaseID,
+		OwnerScope:    runtime.ScopeThread(t.ID),
+		Kind:          resKind,
+		ReservedBytes: bytes,
+		SoftLimit:     quota / 2,
+		HardLimit:     quota,
+		// 软限触达的处置就是压缩——即 memory_housekeeping.go 轮末钩子的动作，
+		// SpillPolicy 在租约上把这个契约显式记下来（诊断页可见，不只靠约定）。
+		SpillPolicy: runtime.SpillCompact,
+		Optional:    optional,
+	})
+	switch {
+	case err == nil:
+		// 新租约：ReservedBytes 即首笔记账。
+	case errors.Is(err, runtime.ErrLeaseExists):
+		if _, cerr := s.runtimeBackend.Resources().Charge(ctx, leaseID, bytes); cerr != nil {
+			if errors.Is(cerr, runtime.ErrOverHardLimit) {
+				log.Printf("[runtime] %s 记忆写入被硬上限拒绝（可选资源，不删旧账）: thread=%s kind=%s hard=%d",
+					agentID, t.ID, kind, quota)
+				return false
+			}
+			log.Printf("[runtime] %s 记忆记账失败（写入照常）: thread=%s kind=%s err=%v", agentID, t.ID, kind, cerr)
+		}
+	case errors.Is(err, runtime.ErrOverHardLimit):
+		log.Printf("[runtime] %s 记忆写入被硬上限拒绝（可选资源）: thread=%s kind=%s hard=%d",
+			agentID, t.ID, kind, quota)
+		return false
+	default:
+		log.Printf("[runtime] %s 记忆租约申请失败（写入照常）: thread=%s kind=%s err=%v", agentID, t.ID, kind, err)
+	}
+	return true
+}
+
+// releaseThreadMemoryLeases 释放该会话名下的记忆租约（清空会话记忆时调用）。
+// 记忆清了账也得清：残留的活跃租约会让诊断页显示"没有记忆却有压力"——预算联动
+// 的账必须跟得上事实。没有租约（该会话从未写过）按 ErrLeaseNotFound 忽略，
+// "没有可放的账"不是错误。
+func (s *Server) releaseThreadMemoryLeases(agentID, threadID string) {
+	if s.runtimeBackend == nil {
+		return
+	}
+	ctx := context.Background()
+	for _, kind := range []runtime.MemoryKind{runtime.MemoryConversation, runtime.MemoryArtifact} {
+		if err := s.runtimeBackend.Resources().Release(ctx, memoryLeaseID(agentID, threadID, kind)); err != nil && !errors.Is(err, runtime.ErrLeaseNotFound) {
+			log.Printf("[runtime] %s 记忆租约释放失败: thread=%s kind=%s err=%v", agentID, threadID, kind, err)
+		}
 	}
 }
 
