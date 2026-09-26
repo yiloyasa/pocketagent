@@ -144,6 +144,9 @@ import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.PaHaptics
+import dev.pocketagent.app.ui.component.ConnectionBanner
+import androidx.compose.ui.platform.LocalView
 import dev.pocketagent.app.ui.component.DeliveryStatusBadge
 import dev.pocketagent.app.ui.component.deliveryRetryable
 import dev.pocketagent.app.ui.component.deliveryVisual
@@ -1313,6 +1316,31 @@ fun ChatScreen(
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
     val st = remember(threadId) { TurnSession.state(threadId) }
     var input by st::draft
+    // 语义触觉(审计 P1-5)的宿主 view:PaHaptics 统一入口以 view 取 context 并兜底
+    val hapticView = LocalView.current
+
+    // ---- 语义触觉:任务完成(P1-5)----
+    // 【为什么在视图层监听而不是改 TurnSession】终局收尾散在状态机多处(实时流/
+    // 回放/恢复),视图层只认" running→false 且 turnTerminal 且无错误"这一个
+    // 用户可感的终态,一处监听覆盖全部收尾路径,不碰状态机(禁改纪律)。
+    // errorMessage==null = COMPLETED 帧(ok=true);FAILED 帧不响"完成"触觉。
+    var wasTurnRunning by remember(threadId) { mutableStateOf(false) }
+    LaunchedEffect(st.running, st.turnTerminal, st.errorMessage) {
+        if (wasTurnRunning && !st.running && st.turnTerminal && st.errorMessage == null) {
+            PaHaptics.success(hapticView)
+        }
+        wasTurnRunning = st.running
+    }
+
+    // ---- 语义触觉:审批到达(P1-5)----
+    // pendingApproval 从无到有的瞬间是"任务停下来了,等你"—— warning 一下;
+    // 从一张卡换到另一张(同卡更新)不重复响,只在"没有→有"边界触发。
+    var hadPendingApproval by remember(threadId) { mutableStateOf(false) }
+    LaunchedEffect(st.pendingApproval) {
+        val now = st.pendingApproval != null
+        if (now && !hadPendingApproval) PaHaptics.warning(hapticView)
+        hadPendingApproval = now
+    }
 
     // ---- 提示词优化(实验功能,开关在 设置-外观与阅读,默认关)----
     // 可见性/在飞状态走纯逻辑状态机(PromptOptimizeLogic.kt,JVM 单测钉行为);
@@ -2382,6 +2410,9 @@ fun ChatScreen(
             action = ap,
             error = st.approvalError,
             onDecision = { approved, note ->
+                // 语义触觉(P1-5):审批提交 = 轻击确认 —— 手指离开屏幕的瞬间就有
+                // "已交出去了"的物理回执,不等网络往返。
+                PaHaptics.confirm(hapticView)
                 TurnSession.answerApproval(threadId, ap.requestId, approved, note)
             },
         )
@@ -2490,6 +2521,11 @@ fun ChatScreen(
             )
             Spacer(Modifier.width(14.dp))
         }
+
+        // ---- 断连全局横幅(P1-2):daemon 断连时与主页/会话列表同一条状态 ----
+        // 只在 connState==down 时出现(见组件注释的 checking 纪律),重连成功自动消失;
+        // 手动重试走本页既有 reloadToken 重载链(横幅自己不实现重连)。
+        ConnectionBanner(onRetry = { reloadToken++ })
 
         // ---- 会话目标(桌面只读回显,只增):有则显示一行,无则不占位 ----
         // 数据来自 GetThread 的 goal_detail(电脑端 thread/goal/get 现读),

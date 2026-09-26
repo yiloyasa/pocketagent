@@ -61,6 +61,9 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.ConnectionBanner
+import dev.pocketagent.app.ui.component.ThreadStatusBadge
+import dev.pocketagent.app.ui.component.threadStatusBadge
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.paPushBack
 import androidx.core.graphics.drawable.toBitmap
@@ -347,6 +350,13 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            // ---- 断连全局横幅(P1-2):与会话页/会话列表同一条断连状态 ----
+            // 只在 connState==down 时渲染(组件内部判定),重连成功自动消失;
+            // 手动重试走本页既有 reloadKey 重载链(横幅自己不实现重连)。
+            item(span = { GridItemSpan(4) }) {
+                ConnectionBanner(onRetry = { reloadKey++ })
+            }
+
             // 连接卡(点按重试)
             item(span = { GridItemSpan(4) }) {
                 ConnectionCardCompact(host = host, onRetry = { reloadKey++ })
@@ -514,6 +524,9 @@ fun HomeScreen(
                 } else {
                     // 最近任务同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
                     items(recent.filter { threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent }.take(6), key = { it.id }, span = { GridItemSpan(4) }) { t ->
+                        // 会话三态徽章(P1-1):与 ThreadsScreen 会话卡同一纯函数,
+                        // 同一会话在主页与列表长出同一种状态(运行中/待你处理/中断)。
+                        val badge = threadStatusBadge(t.status, t.pendingApprovalsCount, t.lastTurnError)
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -545,7 +558,17 @@ fun HomeScreen(
                                     threadRecentMeta(t.messageCount, t.updatedAtUnixMs, System.currentTimeMillis()),
                                     fontSize = 11.sp, color = Pa.TextTertiary,
                                 )
+                                // 中断摘要(P1-1 Failed 徽章的"最后错误摘要"):一行缩略,
+                                // 让"这单为什么停了"不用点进会话就能看到;正常态无此行。
+                                badge?.detail?.let { summary ->
+                                    Text(
+                                        summary,
+                                        fontSize = 10.5.sp, color = Pa.RedText, maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
+                            badge?.let { ThreadStatusBadge(it) }
                         }
                     }
                 }

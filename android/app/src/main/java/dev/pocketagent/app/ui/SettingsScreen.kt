@@ -348,6 +348,76 @@ private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(16.dp)): M
 private fun Modifier.paExpandable(reduceMotion: Boolean): Modifier =
     this.animateContentSize(if (reduceMotion) snap<IntSize>() else PaMotion.emphasized())
 
+// ---- 设置搜索(审计 P1-3 子项;纯数据+纯函数集中在此,JVM 单测) ----
+
+/**
+ * 设置搜索索引的一条:一行设置(一级导航行或二级页的代表性分区)的人话入口。
+ *
+ * 【为什么是静态索引】设置行的 title/desc 散在数千行 Composable 里,没有可枚举的
+ * 结构;搜索的目标是"帮用户找到东西在哪个分区",所以索引只收 **分区级** 条目
+ * (一级行 + 二级页代表分区),不逐开关收录 —— 逐开关索引会随 UI 演进腐烂,
+ * 分区级索引改版时才需要跟着改。
+ *
+ * @property target 命中后的落点(subPage id);null = 该行不可跳转,仅展示归属。
+ */
+internal data class SettingsSearchEntry(
+    val title: String,
+    val desc: String,
+    val group: String,
+    val target: String? = null,
+)
+
+/**
+ * 设置搜索索引(静态,字符串与各分区行的 title/desc 同源 —— 改分区文案时
+ * 这里一并改)。覆盖:一级导航行、Agent 与模型/外观/Daemon/用户数据各页的
+ * 代表分区、运行时控制台与关于组。
+ */
+internal fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
+    SettingsSearchEntry("外观与阅读", "显示模式 · 主题 · 字号", "通用", "appearance"),
+    SettingsSearchEntry("Daemon 桥接与输入", "连接策略 · 全局对话显示 · 语音 · 实验功能", "通用", "daemon"),
+    SettingsSearchEntry("用户数据管理", "连接 · 配对 · 下载内容 · 存储占用", "通用", "userdata"),
+    SettingsSearchEntry("Agent 与模型", "切换 Agent · 权限 · 模型 · MCP", "Agent", "agent"),
+    SettingsSearchEntry("电脑控制台", "预算 · 运行时形态 · 记忆透析", "运行时"),
+    SettingsSearchEntry("版本", "版本号 · 电脑系统信息", "关于"),
+    SettingsSearchEntry("显示模式", "跟随系统 · 浅色 · 深色 · 黑客终端", "外观与阅读", "appearance"),
+    SettingsSearchEntry("字号", "界面文字缩放 · 思考文字缩放", "外观与阅读", "appearance"),
+    SettingsSearchEntry("语音识别", "SenseVoice · App 内置模型", "Daemon 桥接与输入", "daemon"),
+    SettingsSearchEntry("切换 Agent", "Codex · Pi · ZCode", "Agent 与模型", "agent"),
+    SettingsSearchEntry("审批策略", "仅信任 · 按需询问 · 完全访问", "Agent 与模型", "agent"),
+    SettingsSearchEntry("沙箱模式", "读写权限 · 网络访问", "Agent 与模型", "agent"),
+    SettingsSearchEntry("模型与思考", "默认模型 · 思考强度 · 可用模型", "Agent 与模型", "agent"),
+    SettingsSearchEntry("技能与插件", "能力 · 技能 · 插件列表", "Agent 与模型", "agent"),
+    SettingsSearchEntry("MCP 服务器", "集成 · 服务器状态", "Agent 与模型", "agent"),
+    SettingsSearchEntry("下载内容", "文件 · 网页 · 快照缓存", "用户数据管理", "userdata"),
+    SettingsSearchEntry("存储占用", "清理缓存 · 浏览器数据 · 会话快照", "用户数据管理", "userdata"),
+)
+
+/**
+ * 设置搜索过滤(纯函数):空/空白查询 = 不进入搜索模式(返回空列表,页面照常
+ * 渲染分组);非空对 title+desc 大小写不敏感匹配。
+ */
+internal fun filterSettingsEntries(
+    query: String,
+    entries: List<SettingsSearchEntry>,
+): List<SettingsSearchEntry> {
+    val q = query.trim()
+    if (q.isEmpty()) return emptyList()
+    return entries.filter {
+        it.title.contains(q, ignoreCase = true) || it.desc.contains(q, ignoreCase = true)
+    }
+}
+
+/**
+ * 命中区间(纯函数,给标题高亮用):title 命中返回区间,否则 null(命中发生在
+ * desc 时标题不高亮,展示层用组名点明归属);空查询恒 null。
+ */
+internal fun matchRange(title: String, query: String): IntRange? {
+    val q = query.trim()
+    if (q.isEmpty()) return null
+    val idx = title.indexOf(q, ignoreCase = true)
+    return if (idx < 0) null else idx until (idx + q.length)
+}
+
 /**
  * 设置页(重做版:一级导航、二级编辑)。
  *
@@ -761,6 +831,8 @@ fun SettingsScreen(
 
     // ---------------- 二级页路由(不引入导航组件,设置页自洽) ----------------
     var subPage by remember { mutableStateOf<String?>(if (openUserData) "userdata" else null) }
+    // 设置搜索(审计 P1-3 子项):非空 = 搜索模式,分组列表让位给过滤后的命中行
+    var settingsQuery by remember { mutableStateOf("") }
 
     // 二级页"只记一层"的返回目标:记下该二级页是被哪一层打开的(本题只需一层,不引入完整
     // 导航栈)。从首页进入的二级页保持 null,行为不变;项 3a 的"查看全部技能与插件"由
@@ -950,6 +1022,53 @@ fun SettingsScreen(
                 }
             }
 
+            // ---------- 设置搜索框(P1-3 子项) ----------
+            // 简洁实现:顶层一个搜索框 + 过滤后的命中行;不建跨页路由,命中行的
+            // 点击只落在一级页本来就暴露的 subPage 上(与点对应导航行同一条路)。
+            item(key = "search") {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .paSettingsCard()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_search), null,
+                        tint = Pa.TextTertiary, modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = settingsQuery,
+                        onValueChange = { settingsQuery = it },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 14.sp, color = Pa.TextPrimary,
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Pa.Accent),
+                        modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                        decorationBox = { inner ->
+                            Box {
+                                if (settingsQuery.isEmpty()) {
+                                    Text("搜索设置…", fontSize = 14.sp, color = Pa.TextTertiary)
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                    if (settingsQuery.isNotEmpty()) {
+                        Icon(
+                            painterResource(R.drawable.ic_lucide_x), "清除搜索",
+                            tint = Pa.TextTertiary,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .pressable(haptic = true) { settingsQuery = "" },
+                        )
+                    }
+                }
+            }
+
+            if (settingsQuery.isBlank()) {
             // ---------- 电脑连接卡(点进去 = 用户数据管理;唯一卡型:16dp/无边) ----------
             item(key = "hero") {
                 Row(
@@ -1073,6 +1192,95 @@ fun SettingsScreen(
                             icon = R.drawable.ic_lucide_monitor,
                             value = listOfNotNull(host?.os, host?.arch).joinToString("/").ifBlank { "—" },
                         )
+                    }
+                }
+            }
+            } else {
+                // 搜索模式:分组列表让位给过滤后的命中行。行尾标归属组,
+                // 点击只落在一级页本来就暴露的 subPage 上(无 target 的仅展示归属)。
+                // 【命中高亮】SettingRow 的 title 只收纯文本,高亮需要 AnnotatedString,
+                // 所以命中行自绘(行型与 SettingRow 对齐:同字号/同分隔线,不算第二种卡)。
+                val hits = filterSettingsEntries(settingsQuery, settingsSearchIndex())
+                item(key = "search-results") {
+                    Column {
+                        GroupLabel(R.drawable.ic_lucide_search, "搜索结果")
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .paSettingsCard()
+                                .padding(horizontal = 16.dp),
+                        ) {
+                            if (hits.isEmpty()) {
+                                Text(
+                                    // 空态直说"没有匹配",不显示"未知设置"(禁词纪律)
+                                    "没有匹配「${settingsQuery.trim()}」的设置",
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 14.dp),
+                                    fontSize = 13.sp,
+                                    color = Pa.TextTertiary,
+                                )
+                            } else {
+                                hits.forEachIndexed { i, entry ->
+                                    val range = matchRange(entry.title, settingsQuery)
+                                    Column {
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .then(
+                                                    if (entry.target != null) {
+                                                        Modifier.pressable(haptic = true) { subPage = entry.target!! }
+                                                    } else Modifier
+                                                )
+                                                .padding(vertical = 11.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Icon(
+                                                painterResource(R.drawable.ic_lucide_sliders), null,
+                                                tint = Pa.TextSecondary, modifier = Modifier.size(17.dp),
+                                            )
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(
+                                                    androidx.compose.ui.text.buildAnnotatedString {
+                                                        append(entry.title)
+                                                        range?.let { r ->
+                                                            addStyle(
+                                                                androidx.compose.ui.text.SpanStyle(
+                                                                    color = Pa.Accent,
+                                                                    fontWeight = FontWeight.SemiBold,
+                                                                ),
+                                                                r.first, r.last + 1,
+                                                            )
+                                                        }
+                                                    },
+                                                    fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1,
+                                                )
+                                                if (entry.desc.isNotEmpty()) {
+                                                    Text(
+                                                        entry.desc,
+                                                        Modifier.padding(top = 2.dp),
+                                                        fontSize = 13.sp, color = Pa.TextTertiary, maxLines = 2,
+                                                    )
+                                                }
+                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(entry.group, fontSize = 14.5.sp, color = Pa.TextTertiary, maxLines = 1)
+                                            if (entry.target != null) {
+                                                Spacer(Modifier.width(6.dp))
+                                                Icon(
+                                                    painterResource(R.drawable.ic_lucide_chevron_right), null,
+                                                    tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
+                                                )
+                                            }
+                                        }
+                                        if (i < hits.lastIndex) {
+                                            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

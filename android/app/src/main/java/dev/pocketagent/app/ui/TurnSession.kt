@@ -233,6 +233,17 @@ object TurnSession {
         return out
     }
 
+    /**
+     * 全部会话排队输入总数的只读快照(断连全局横幅的数据源,审计 P1-2)。
+     *
+     * 【为什么必须是全局】断连横幅挂在三屏(Chat/Home/Threads)共用,而后两者
+     * 没有单会话的 State 引用;断连时用户最怕"我发的消息丢了",排队数必须跨屏
+     * 一直可见。与 [runningThreadIds] 同一口径:ConcurrentHashMap 弱一致遍历、
+     * 按需拉快照、不改任何状态 —— **只读,不触碰排队计数的增减逻辑**。
+     * ([st.queuedCount] 是 Compose 状态,在组合期读取即自动订阅其变化。)
+     */
+    fun totalQueuedInputs(): Int = states.values.sumOf { it.queuedCount }
+
     /** 全部轮次都结束(没有任何线程在跑)才停保活服务。 */
     private fun maybeStopKeepAlive() {
         if (states.values.none { it.running || it.recovering }) {

@@ -72,6 +72,10 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.ConnectionBanner
+import dev.pocketagent.app.ui.component.ThreadStatusBadge
+import dev.pocketagent.app.ui.component.lastTurnErrorSummary
+import dev.pocketagent.app.ui.component.threadStatusBadge
 import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
@@ -805,6 +809,14 @@ fun ThreadsScreen(
                 onRetry = { retry() },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             )
+            // ---- 断连全局横幅(P1-2):与会话页/主页同一条断连状态 ----
+            // 只在 connState==down 时渲染(组件内部判定),重连成功自动消失;
+            // 手动重试走本页既有 retry()(先自愈半死通道再拉列表,自带防抖)。
+            ConnectionBanner(
+                onRetry = { retry() },
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+
             loadError?.let { message ->
                 Row(
                     Modifier
@@ -1672,6 +1684,9 @@ private fun ThreadCard(
                 keyboardActions = KeyboardActions(onDone = { onRenameCommit() }),
             )
         } else {
+            // 会话三态徽章(P1-1):与主页最近任务卡同一纯函数+同一组件,
+            // 同一会话在两处必须长出同一种状态(运行中脉冲/待你处理红点/中断红!)。
+            val badge = threadStatusBadge(t.status, t.pendingApprovalsCount, t.lastTurnError)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 【agent 徽标】按会话归属 agent 选图(agent_id 缺省 = codex):
                 // 多 agent 之后列表里混着不同 agent 的会话,一眼可辨。
@@ -1697,6 +1712,7 @@ private fun ThreadCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                badge?.let { ThreadStatusBadge(it) }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
@@ -1719,6 +1735,18 @@ private fun ThreadCard(
                     maxLines = 1,
                 )
             }
+        }
+        // 中断摘要(P1-1 Failed 徽章的"最后错误摘要"):标题行放不下,单起一行缩略,
+        // "这单为什么停了"不用点进会话就能看到;正常态无此行(不摆空壳)。
+        if (t.status == ThreadStatus.THREAD_STATUS_IDLE && t.lastTurnError.isNotBlank()) {
+            Text(
+                lastTurnErrorSummary(t.lastTurnError),
+                Modifier.fillMaxWidth().padding(top = 3.dp),
+                fontSize = 10.5.sp,
+                color = Pa.RedText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
