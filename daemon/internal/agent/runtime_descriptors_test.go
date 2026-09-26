@@ -16,9 +16,15 @@ import (
 // 不承载任何能力语义；写成字符串数组会被 pa_audit 的 roster linter 记成名单债
 // （AUDIT §3.3「白名单只许减、不许增」）。
 func providerRuntimeCases() []Provider {
+	// pi 自 P1 起交付原生会话适配器(见 pi_session.go):契约套件的会话两用例
+	// 对它从"跳过"变"必须通过"。会话用例不能拉真 pi 子进程,这里注入假挂载源
+	// (与 pi_session_test.go 的 fakeMountClient 同款)—— 每次挂载都是新"代"
+	// 客户端,引用接力全靠 thread.ExternalSession,钉的正是"按落库引用重挂载"。
+	pi := NewPiProvider()
+	pi.sessionFor = newFakePiSessionSource()
 	return []Provider{
 		NewCodexProvider(),
-		NewPiProvider(),
+		pi,
 		NewZcodeProvider(),
 		NewDshProvider(),
 		// 无稳定原生 session 的那一类：daemon 侧 conversation memory 必须顶上
@@ -131,6 +137,57 @@ func TestNativeProvidersHonorDeclaredSessionSource(t *testing.T) {
 			}
 			if got := rt.NativeSession.Source(); got != desc.SessionModel {
 				t.Fatalf("NativeSession.Source()=%q 与 descriptor.SessionModel=%q 不一致", got, desc.SessionModel)
+			}
+		})
+	}
+}
+
+// TestPiDeliversNativeSessionAfterAdoption 钉 P1 收编的注入事实:pi 实现了
+// NativeSessionFactory(D5),openSharedRuntime 必须注入其原生适配器 ——
+// 不再是 nil。它是 TestNativeProvidersHonorDeclaredSessionSource 对 nil 的
+// "早退放行"的补集:那条允许任何家 nil,这条只认 pi 必须非 nil。
+func TestPiDeliversNativeSessionAfterAdoption(t *testing.T) {
+	p := NewPiProvider()
+	injectFakeSessionSource(p)
+	rt, err := p.OpenRuntime(context.Background(), &store.Thread{ID: "th-pi-native"})
+	if err != nil {
+		t.Fatalf("OpenRuntime 失败: %v", err)
+	}
+	if rt.NativeSession == nil {
+		t.Fatal("pi 收编后 NativeSession 必须非 nil(设计稿 P1:不再是 nil)")
+	}
+	if _, ok := rt.NativeSession.(*piSession); !ok {
+		t.Fatalf("应注入 piSession 适配器, 实得 %T", rt.NativeSession)
+	}
+	if got := rt.NativeSession.Source(); got != p.Descriptor().SessionModel {
+		t.Fatalf("NativeSession.Source()=%q 与 descriptor.SessionModel=%q 不一致", got, p.Descriptor().SessionModel)
+	}
+}
+
+// TestProvidersWithoutFactoryKeepNativeSessionNil 钉 D5 的另一半:未实现
+// NativeSessionFactory 的家维持 nil —— 六家增量收编互不牵连,收编 pi 不得
+// 顺手给别家塞替身(替身会被 VerifyRuntime 判 source-mismatch)。
+func TestProvidersWithoutFactoryKeepNativeSessionNil(t *testing.T) {
+	for _, p := range providerRuntimeCases() {
+		participant, ok := p.(runtime.Participant)
+		if !ok {
+			t.Fatalf("%s 未实现 runtime.Participant", p.ID())
+		}
+		// daemon 侧会话的家(OpenAI 兼容)不在 D5 的 nil 面:memSession
+		// (Source=DAEMON)本就是它的诚实交付,与 FullRuntime 预置一致。
+		if participant.Descriptor().SessionModel == runtime.SourceDaemon {
+			continue
+		}
+		if _, ok := p.(NativeSessionFactory); ok {
+			continue // 已收编的家(pi)不在本条断言范围
+		}
+		t.Run(p.ID(), func(t *testing.T) {
+			rt, err := participant.OpenRuntime(context.Background(), &store.Thread{ID: "th-nil-" + p.ID()})
+			if err != nil {
+				t.Fatalf("OpenRuntime 失败: %v", err)
+			}
+			if rt.NativeSession != nil {
+				t.Fatalf("%s 未实现工厂,NativeSession 应保持 nil(诚实表达未交付), 实得 %T", p.ID(), rt.NativeSession)
 			}
 		})
 	}

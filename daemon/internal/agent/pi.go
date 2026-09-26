@@ -110,6 +110,11 @@ type PiProvider struct {
 	// 子进程;nil = 生产路径走 ensureMounted。与 dsh 的 newClient 注入同模式)。
 	remount func(t *store.Thread) (stateReader, error)
 
+	// sessionFor 原生会话适配器(pi_session.go)的挂载客户端源:生产为 nil,走
+	// clientFor(冷启/复用真子进程);单测与契约套件注入假客户端,不拉真子进程
+	// (与上方 remount 钩子、clearQueueOn 的窄接口打桩同模式)。
+	sessionFor func(t *store.Thread) (piMountClient, error)
+
 	// TitleHandler 标题同步钩子:Pi 会话名变化时回调(server 落库,双端一致)。
 	// P1 只在挂载时把 thread.Title 写给 Pi(set_session_name),回调预留。
 	TitleHandler func(threadID, title string)
@@ -405,8 +410,24 @@ func (p *PiProvider) DropThread(threadID string) {
 	}
 }
 
+// piMountClient 是 mount 握手对 piapp.Client 的窄接口(单测打桩,不依赖子进程;
+// piapp.Client 的方法集天然满足,生产零适配 —— 与 sendSessionName 的
+// sessionNameSetter、advanceEntryCursor 的 entriesFetcher 同款模式)。抽它出来
+// 是为了让原生会话适配器(pi_session.go)复用 mount 时可用假客户端钉握手行为,
+// 而不是在适配器里第二实现握手。
+type piMountClient interface {
+	SessionFile() string
+	SessionID() string
+	GetState(ctx context.Context) (map[string]any, error)
+	SwitchSession(ctx context.Context, sessionFile string) error
+	Call(typ string, params map[string]any, timeout time.Duration) (json.RawMessage, error)
+}
+
+// 生产零适配的编译期保证:真客户端的方法集必须天然满足窄接口。
+var _ piMountClient = (*piapp.Client)(nil)
+
 // mount 完成会话挂载:重挂载(switch+校验)或新建(get_state 回填)。
-func (p *PiProvider) mount(ctx context.Context, t *store.Thread, c *piapp.Client) error {
+func (p *PiProvider) mount(ctx context.Context, t *store.Thread, c piMountClient) error {
 	want := t.ExternalSession.SessionFile
 	if want != "" {
 		if cur := c.SessionFile(); cur != "" && strings.EqualFold(filepath.Clean(cur), filepath.Clean(want)) {
