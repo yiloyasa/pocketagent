@@ -32,7 +32,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pocketagent/daemon/internal/dshapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -274,16 +273,10 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 	raw, err := c.Call("get_available_models", nil, 8*time.Second)
 	if err != nil {
 		log.Printf("[pi] get_available_models 不可用(0.99.1 实测超时),回退实证候选: %v", err)
-		// DeepSeek 两档为实帧实证可用(A 轮实测跑通真实 LLM);key 不在
-		// 白名单凭据文件时不列(宁缺毋假,不摆选了必错的项)。
-		if len(dshapp.LoadCredentialEnv("")) > 0 {
-			return []pb.ModelInfo{
-				{Id: "deepseek/deepseek-chat", Provider: "pi", DisplayName: "DeepSeek Chat",
-					Available: true},
-				{Id: "deepseek/deepseek-reasoner", Provider: "pi", DisplayName: "DeepSeek Reasoner",
-					Available: true, SupportsThinking: true,
-					AvailableEfforts: []string{"low", "medium", "high"}},
-			}
+		// 回退到 pi 自维护的模型目录文件(~/.pi/agent/models-store.json,只读):
+		// 通用用户的 pi 都有它,内容=各 provider 的真实全量目录,选择不再受限。
+		if fb := piModelsStoreFallback(); len(fb) > 0 {
+			return fb
 		}
 		return nil
 	}
@@ -331,6 +324,58 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 	// 后人不再重复排查(退出码 1 = TerminateProcess 的固定码,与崩溃无关)。
 	if len(out) > 0 {
 		log.Printf("[pi] 模型列表探测完成(%d 个模型):一次性子进程 %d 即将按设计关闭,其后的退出码=1 是 Kill 收尸码非崩溃", len(out), c.PID())
+	}
+	return out
+}
+
+// piModelsStoreFallback 读 pi 自维护的模型目录文件并解析为候选列表。
+// 【只读红线】绝不写 ~/.pi 的任何内容;文件缺失/损坏 = 返回空(如实)。
+func piModelsStoreFallback() []pb.ModelInfo {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "models-store.json"))
+	if err != nil {
+		return nil
+	}
+	var store map[string]struct {
+		Models map[string]struct {
+			Name             string                     `json:"name"`
+			Reasoning        bool                       `json:"reasoning"`
+			Input            []string                   `json:"input"`
+			ContextWindow    int64                      `json:"contextWindow"`
+			ThinkingLevelMap map[string]json.RawMessage `json:"thinkingLevelMap"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(raw, &store) != nil {
+		return nil
+	}
+	var out []pb.ModelInfo
+	for prov, pv := range store {
+		for id, m := range pv.Models {
+			mi := pb.ModelInfo{
+				Id:               prov + "/" + id,
+				Provider:         "pi",
+				DisplayName:      m.Name,
+				Available:        true,
+				ContextWindow:    int32(m.ContextWindow),
+				SupportsThinking: m.Reasoning,
+				AvailableEfforts: piModelThinkingLevels(m.Reasoning, m.ThinkingLevelMap),
+				SupportsImages: func() bool {
+					for _, in := range m.Input {
+						if in == "image" {
+							return true
+						}
+					}
+					return false
+				}(),
+			}
+			if mi.DisplayName == "" {
+				mi.DisplayName = id
+			}
+			out = append(out, mi)
+		}
 	}
 	return out
 }
