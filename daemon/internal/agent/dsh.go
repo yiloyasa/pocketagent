@@ -21,6 +21,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -493,6 +494,25 @@ func (p *DshProvider) refreshCatalogFromResume(opts []dshapp.ConfigOption) {
 	p.setCatalog(dshapp.ParseModelCatalog(opts))
 }
 
+// refreshCatalogFromConfigOptionUpdate 解析 0.2.0-rc.2 的 config_option_update 帧
+// (bundle 实证:{"sessionUpdate":"config_option_update","configOptions":[…]},
+// 与 session/new|resume 应答的 configOptions 同构),刷新原生目录缓存。
+// 返回 true = 已消费(调用方不必再透传);configOptions 缺失/为空/解析失败返回
+// false,交回调用方走诊断透传 —— 不猜形状。
+func (p *DshProvider) refreshCatalogFromConfigOptionUpdate(raw json.RawMessage) bool {
+	var u struct {
+		ConfigOptions []dshapp.ConfigOption `json:"configOptions"`
+	}
+	if json.Unmarshal(raw, &u) != nil || len(u.ConfigOptions) == 0 {
+		return false
+	}
+	p.catMu.Lock()
+	p.setRawCatalog(u.ConfigOptions)
+	p.catMu.Unlock()
+	p.setCatalog(dshapp.ParseModelCatalog(u.ConfigOptions))
+	return true
+}
+
 // ---- Run:一轮 ----
 
 func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
@@ -506,19 +526,41 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 		return nil, nil, err
 	}
 
-	// 1) 输入收集:文本零裁剪(硬约定);图片按能力协商如实报错(R4)。
+	// 1) 输入收集:文本零裁剪(硬约定);图片按能力协商(R4)—— 0.2.0 起该位
+	//    动态判定(bundle:supportsAcpImagePrompts,按模型 inputModalities),未
+	//    广播时如实报错;已广播时构造 ACP 图片块,绝不静默丢图。
 	var userText strings.Builder
-	hasImage := false
+	var images []*pb.ImageBlock
 	for i := range req.InputBlocks {
 		switch t := req.InputBlocks[i].Block.(type) {
 		case *pb.ContentBlock_Text:
 			userText.WriteString(t.Text.Text)
 		case *pb.ContentBlock_Image:
-			hasImage = true
+			images = append(images, t.Image)
 		}
 	}
-	if hasImage && (p.caps == nil || !p.caps.SupportsImageInput()) {
-		return nil, nil, errors.New("dsh 当前路由不支持图片输入(promptCapabilities.image=false),请改用文本输入")
+	imageOK := p.caps != nil && p.caps.SupportsImageInput()
+	if len(images) > 0 && !imageOK {
+		return nil, nil, errors.New("dsh 当前路由不支持图片输入(promptCapabilities.image 未广播),请改用文本输入")
+	}
+	// 图片块形状(bundle 实证,dsh-acp decodeImage):{type:"image", data:canonical
+	// base64, mimeType:image/png|jpeg|webp|gif};mediaType 白名单外原样透传,由
+	// dsh 准入层拒绝(-32602),daemon 不代为裁剪。本机路由实测 image=false(proto020
+	// 探针:未广播时收图报 "inline image prompts were not advertised"),此分支
+	// 平时不走;能力翻真的部署上自动生效,无需改代码。
+	var promptBlocks []map[string]interface{}
+	if text := userText.String(); text != "" || len(images) == 0 {
+		promptBlocks = append(promptBlocks, map[string]interface{}{"type": "text", "text": text})
+	}
+	for _, img := range images {
+		if img == nil {
+			continue
+		}
+		promptBlocks = append(promptBlocks, map[string]interface{}{
+			"type":     "image",
+			"data":     base64.StdEncoding.EncodeToString(img.GetData()),
+			"mimeType": img.GetMediaType(),
+		})
 	}
 
 	// 2) 会话就绪:同代内存缓存 → ExternalSession 重挂载(list 校验+resume)→ 新建
@@ -591,7 +633,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 
 	// 5) 发起本轮。prompt 的应答在轮次终局才回来(stopReason),过程走 update 通知,
 	// 传输层不设 120s 兜底(见 dshapp.PromptCtx);超时归下面的看门狗。
-	blocks := []map[string]interface{}{{"type": "text", "text": userText.String()}}
+	blocks := promptBlocks
 	type promptOutcome struct {
 		raw json.RawMessage
 		err error
@@ -810,15 +852,27 @@ func (p *DshProvider) applyNativeDefaults(ctx context.Context, sid string) {
 //  2. session/list 校验在列(探针修正④:按 sessionId+cwd 双因子;无 title 可比);
 //  3. 在列才 session/resume(log 恢复不重放旧 update,正好避免手机端重复帧)。
 //
-// 【cwd 传递(rc.3 升级兼容,dsh-resume-compat-probe.md 实测)】rc.3 的 resume
-// zod 必填 cwd:优先用落库的 ext.Cwd,缺失时用 list 校验命中的那条目里的 cwd
-// (同一次校验顺手取得,不再多猜一个目录)。
+// 【cwd 传递(rc.3 起必填,0.2.0-rc.2 复证延续)】resume 的 zod 要求 cwd 在场
+// (proto020 实测缺 cwd 报 -32602 带 data:{cwd:{_errors:["expected string,
+// received undefined"]}}),且 0.2.0 起与持久头做同源比对(bundle:
+// sameDirectory(persisted.cwd, params.cwd),realpath 语义)。取值优先级:
+// list 校验命中的条目 cwd(= dsh 持久头 cwd 本身,与比对对象同源)→ 落库的
+// ext.Cwd。条目缺失时用 ext.Cwd,两者皆缺传空串由 resume 如实失败(不猜目录)。
 //
-// 【降级分类】返回 *dshRemountError:downgradeable=true 仅当"list 校验确认会话
-// 在列、resume 仍报 -32602"—— 列表里有它说明数据没错位,是 agent 侧不认这份数据
-// (升级格式断裂);此时由调用方(ensureSession,用户发消息路径)决定一次性重建。
-// list 不在列(数据错位)、list 调用失败、能力缺席等一律 false:维持显式拒绝,
-// 不静默新开("不 resume 就静默吞请求"的三方共同教训)。
+// 【降级分类(0.2.0-rc.2 按 message 细分,proto020/resumecompat 实测帧)】resume
+// 的失败全部是 -32602,但 message 可区分三类,处置不同:
+//   - "session is already active: <id>" → 会话已在当前子进程桥内活跃,原 id 可
+//     寻址(resumecompat A3 与 proto020 双实证:恢复/活跃态下 prompt 均被受理)
+//     → 按重挂载成功处理,不报错不重建;
+//   - "session is not resumable: <id>" → 持久头缺席/subagent 会话,数据错位,
+//     downgradeable=false 显式拒绝(静默重建会掩盖错位);
+//   - "session cwd does not match: <cwd>"(bundle 代码路径唯一,live 时序未单独
+//     捕获)→ daemon 侧 cwd 数据问题,downgradeable=false(上面 cwd 取值已从
+//     源头消除该类,真发生即数据异常,显式报错);
+//   - 其余 -32602(如 rc.3 时代的裸 "Invalid params")→ 维持升级断裂语义
+//     downgradeable=true,由 ensureSession(用户发消息路径)决定一次性重建。
+//     0.2.0-rc.2 复证:部署 dsh-home 57 条 rc.2/rc.3 时代旧会话全部在列且带
+//     cwd 可恢复(resumecompat)—— 该降级路径保留,但预期极少触发。
 func (p *DshProvider) remountSession(ctx context.Context, ext store.ExternalSessionRef) (string, []dshapp.ConfigOption, error) {
 	if p.caps != nil && !p.caps.CanResume() {
 		return "", nil, &dshRemountError{fmt.Errorf("dsh %s 不支持会话恢复(sessionCapabilities.resume 不在场),无法重挂载会话 %s", p.caps.AgentInfo.Version, ext.SessionID), false}
@@ -833,19 +887,27 @@ func (p *DshProvider) remountSession(ctx context.Context, ext store.ExternalSess
 		if !listed {
 			return "", nil, &dshRemountError{fmt.Errorf("dsh 会话 %s 不在可恢复列表中(session/list 校验未通过),不静默新开会话;如需继续请删除该会话后重建", ext.SessionID), false}
 		}
-		if resumeCwd == "" {
-			resumeCwd = entry.Cwd
+		if entry.Cwd != "" {
+			resumeCwd = entry.Cwd // dsh 持久头 cwd,与 resume 的同源比对对象一致
 		}
 	}
 	st, err := p.client.SessionResume(ctx, ext.SessionID, resumeCwd)
 	if err != nil {
-		// 降级条件(唯一形态):会话在列 + resume 报 -32602。实测依据:rc.3 对
-		// "参数不合规"与"会话不可恢复"都报 -32602(dsh-resume-compat-probe.md
-		// A1/B 两帧)——参数问题已由 cwd 补参治本,走到这里的 -32602 就是
-		// "agent 拒绝恢复这份数据"(如未来日志格式再断裂),属升级兼容问题。
 		var re *dshapp.RPCError
-		downgradeable := errors.As(err, &re) && re.Code == -32602
-		return "", nil, &dshRemountError{fmt.Errorf("session/resume %s 失败: %w", ext.SessionID, err), downgradeable}
+		if errors.As(err, &re) && re.Code == -32602 {
+			// 0.2.0-rc.2 失败语义按 message 细分(见函数头),处置见各分支。
+			switch {
+			case strings.Contains(re.Message, "session is already active"):
+				log.Printf("[dsh] 会话 %s 已在本子进程内活跃(already active),按重挂载成功处理", ext.SessionID)
+				return ext.SessionID, nil, nil
+			case strings.Contains(re.Message, "session is not resumable"):
+				return "", nil, &dshRemountError{fmt.Errorf("session/resume %s 失败: %w(dsh 判定该会话不可恢复:持久记录缺席或非顶层会话)", ext.SessionID, err), false}
+			case strings.Contains(re.Message, "cwd does not match"):
+				return "", nil, &dshRemountError{fmt.Errorf("session/resume %s 失败: %w(cwd 与 dsh 持久记录不一致,属数据异常不降级)", ext.SessionID, err), false}
+			}
+			return "", nil, &dshRemountError{fmt.Errorf("session/resume %s 失败: %w", ext.SessionID, err), true}
+		}
+		return "", nil, &dshRemountError{fmt.Errorf("session/resume %s 失败: %w", ext.SessionID, err), false}
 	}
 	log.Printf("[dsh] 已重挂载会话 %s", ext.SessionID)
 	return st.SessionID, st.ConfigOptions, nil
@@ -855,7 +917,7 @@ func (p *DshProvider) remountSession(ctx context.Context, ext store.ExternalSess
 // 条件(见 remountSession 注释),ensureSession 据此决定重建;错误原文原样携带,
 // 不降级时手机端看到的仍是显式报错原文。
 type dshRemountError struct {
-	err          error
+	err           error
 	downgradeable bool
 }
 
@@ -1028,6 +1090,15 @@ func (p *DshProvider) handleSessionUpdate(raw json.RawMessage, sink Sink, st *ds
 			return
 		}
 		notices.recordAs(dshNoticeKind("session/update:usage_update"), "dsh", "session/update:usage_update", raw, sink)
+	case "config_option_update":
+		// 0.2.0-rc.2 复证(dsh-acp bundle topologyChanged + proto020 探针同形状):
+		// 桌面端模型目录变化时携带完整 configOptions(与 session/new|resume 应答
+		// 同构)。此前落 default 变 UNKNOWN 每次必脏台账 —— 现在刷新原生目录缓存
+		// (原生设置透出与模型切换的编码串来源),解析失败仍走诊断透传,不猜。
+		if p.refreshCatalogFromConfigOptionUpdate(raw) {
+			return
+		}
+		notices.recordAs(dshNoticeKind("session/update:config_option_update"), "dsh", "session/update:config_option_update", raw, sink)
 	case "plan", "plan_update", "plan_removed":
 		// 【P2 计划卡】三个计划变体优先投影成 codex 同款计划帧(形状依据随包
 		// ACP SDK schema,见 dsh_plan.go 文件头);认不出/无可投影内容的形状
@@ -1083,16 +1154,51 @@ func dshUpdateText(raw json.RawMessage) string {
 // dshToolCallUpdate 是 tool_call/tool_call_update 体(只声明用得到的字段;
 // 状态枚举按蓝本 pending/running/in_progress/finished 与 ACP
 // pending/in_progress/completed/failed 的并集做归一,未知状态进诊断不猜)。
+// 【0.2.0-rc.2 形状(bundle:dsh-acp toolCallUpdate/toolResultUpdate)】
+//   - tool_call: title=工具名、kind 恒 "other"、status="in_progress"、rawInput=参数;
+//   - tool_call_update: status ∈ completed|failed,content 条目是 ACP
+//     ToolCallContent 嵌套包裹 {type:"content", content:{type:"text",text}}。
 type dshToolCallUpdate struct {
-	ToolCallID string          `json:"toolCallId"`
-	Title      string          `json:"title"`
-	Kind       string          `json:"kind"`
-	Status     string          `json:"status"`
-	RawInput   json.RawMessage `json:"rawInput"`
-	Content    []struct {
+	ToolCallID string            `json:"toolCallId"`
+	Title      string            `json:"title"`
+	Kind       string            `json:"kind"`
+	Status     string            `json:"status"`
+	RawInput   json.RawMessage   `json:"rawInput"`
+	Content    []json.RawMessage `json:"content"`
+}
+
+// dshContentText 解一条 tool_call content 条目里的文本,认不出返回 ok=false:
+//   - 0.2.0 实测形状(bundle):{type:"content", content:{type:"text",text}} 嵌套
+//     包裹 —— 旧解析只读条目顶层 text,0.2.0 起工具结果会被静默读空,必须解包;
+//   - ACP 旧扁平形状 {type:"text",text} 兼容保留(rc.3 及更早);
+//   - 其余类型(diff/terminal 等)没有工具卡文本承载位,如实跳过不猜。
+func dshContentText(item json.RawMessage) (string, bool) {
+	var head struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
-	} `json:"content"`
+	}
+	if json.Unmarshal(item, &head) != nil {
+		return "", false
+	}
+	if head.Type == "content" {
+		var inner struct {
+			Content struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(item, &inner) != nil {
+			return "", false
+		}
+		if inner.Content.Type != "" && inner.Content.Type != "text" {
+			return "", false
+		}
+		return inner.Content.Text, true
+	}
+	if head.Type != "" && head.Type != "text" {
+		return "", false
+	}
+	return head.Text, true
 }
 
 // dshToolPhase 状态归一:pending→STARTED,进行中→UPDATE,终态→FINISHED。
@@ -1125,7 +1231,12 @@ func (p *DshProvider) handleDshToolUpdate(kind string, raw json.RawMessage, sink
 		return
 	}
 	tu := &pb.ToolCallUpdate{Phase: phase}
-	name := u.Kind
+	// 【0.2.0-rc.2】title 即工具名(bundle:title=event.data.name),kind 恒 "other"
+	// —— 名称优先取 title;title 缺失回落 kind,再缺失用通用名。
+	name := u.Title
+	if name == "" {
+		name = u.Kind
+	}
 	if name == "" {
 		name = "tool"
 	}
@@ -1139,8 +1250,8 @@ func (p *DshProvider) handleDshToolUpdate(kind string, raw json.RawMessage, sink
 	if phase == pb.ToolCallUpdate_FINISHED {
 		var sb strings.Builder
 		for _, c := range u.Content {
-			if c.Type == "" || c.Type == "text" {
-				sb.WriteString(c.Text)
+			if text, ok := dshContentText(c); ok {
+				sb.WriteString(text)
 			}
 		}
 		ok := strings.EqualFold(u.Status, "completed") || strings.EqualFold(u.Status, "finished")

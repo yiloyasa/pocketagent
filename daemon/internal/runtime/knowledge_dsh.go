@@ -11,8 +11,10 @@ var knownEventPrefixes = []struct {
 	{"dsh", "session/update:agent_thought_chunk", "dsh 正在输出思考过程"},
 	{"dsh", "session/update:user_message_chunk", "dsh 回显了用户消息片段"},
 	{"dsh", "session/update:context_usage", "dsh 报告了上下文用量(daemon 已投影为用量帧)"},
+	{"dsh", "session/update:usage_update", "dsh 报告了上下文窗口占用(daemon 已投影为用量帧)"},
+	{"dsh", "session/update:config_option_update", "dsh 更新了配置目录(daemon 已刷新原生设置缓存)"},
 	{"dsh", "session/update:tool_call", "dsh 更新了工具调用状态(daemon 已投影为工具卡片)"},
-	{"dsh", "session/update:plan", "dsh 更新了任务计划(daemon 只透传留痕)"},
+	{"dsh", "session/update:plan", "dsh 更新了任务计划(daemon 已投影为计划卡)"},
 	{"dsh", "session/update:available_commands_update", "dsh 更新了可用命令列表(daemon 只透传留痕)"},
 }
 

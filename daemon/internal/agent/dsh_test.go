@@ -290,10 +290,12 @@ func TestDshRunHappyPathNewSession(t *testing.T) {
 			env, _ = json.Marshal(map[string]interface{}{
 				"sessionId": sid,
 				"update": map[string]interface{}{
+					// 0.2.0-rc.2 实发形状(bundle:dsh-acp toolCallUpdate):
+					// title=工具名、kind 恒 "other"。
 					"sessionUpdate": "tool_call",
 					"toolCallId":    "t1",
 					"title":         "读取文件",
-					"kind":          "read",
+					"kind":          "other",
 					"status":        "completed",
 					"content":       []map[string]interface{}{{"type": "text", "text": "1+1=2"}},
 				},
@@ -323,7 +325,8 @@ func TestDshRunHappyPathNewSession(t *testing.T) {
 		}
 		if tc := ev.GetToolCall(); tc != nil {
 			gotTool = true
-			if tc.Phase != pb.ToolCallUpdate_FINISHED || !tc.Result.Ok || tc.Call.Name != "read" {
+			// 0.2.0-rc.2:工具名取 title(title=工具名,kind 恒 "other",bundle 实证)。
+			if tc.Phase != pb.ToolCallUpdate_FINISHED || !tc.Result.Ok || tc.Call.Name != "读取文件" {
 				t.Fatalf("工具卡状态机不符: %+v %+v", tc.Phase, tc.Result)
 			}
 		}

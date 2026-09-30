@@ -91,8 +91,12 @@ func (r *InitializeResult) CanClose() bool {
 	return len(r.AgentCapabilities.SessionCapabilities.Close) > 0
 }
 
-// SupportsImageInput 报告 promptCapabilities.image(当前路由实测 false;打开后
-// 图片输入自动放行,能力协商驱动,无版本二分判断)。
+// SupportsImageInput 报告 promptCapabilities.image。能力协商驱动,无版本二分
+// 判断:0.2.0-rc.2 起该位改为动态判定(bundle:dsh-acp supportsAcpImagePrompts
+// —— 按部署附件服务与所选模型 inputModalities 是否含 "image" 现场解析,任何
+// 缺席/失败如实为 false;proto020 探针实测本机路由 false,未广播时收图块被
+// 准入层以 "inline image prompts were not advertised" 拒绝)。位翻真的部署上
+// 图片输入自动放行。
 func (r *InitializeResult) SupportsImageInput() bool {
 	return r.AgentCapabilities.PromptCapabilities.Image
 }
@@ -205,7 +209,8 @@ type SessionListEntry struct {
 }
 
 // session/resume:恢复持久化会话(log 恢复,不重放旧 update —— 探针第 6 项实测
-// 重放=0 帧)。应答带 configOptions(探针修正②),调用方据此刷新模型缓存。
+// 重放=0 帧;0.2.0-rc.2 复证不变,跨进程 kill→list→resume 重放仍 0 帧)。
+// 应答带 configOptions(探针修正②),调用方据此刷新模型缓存。
 //
 // 【2026-09-25 升级兼容探针(docs/verify/evidence/dsh-resume-compat-probe.md)】
 // rc.3 的 resume 参数 zod 校验**要求 cwd 在场**:单发 {sessionId} 被 -32602
@@ -214,6 +219,14 @@ type SessionListEntry struct {
 // 恰好只有 sessionId)。补 cwd 后 rc.2 时代的旧会话(同 sessionId、v3 日志)
 // 直接恢复成功;rc.2 对多出的 cwd 也接受(P0 探针第 6 项即带 cwd 实测通过)。
 // cwd 传空串则回退单参(不伪造目录 —— 调用方拿不出 cwd 时宁可失败走降级)。
+//
+// 【2026-09-30 0.2.0-rc.2 复证(proto020/resumecompat 探针)】行为延续:cwd 仍
+// 必填(缺 cwd 的 -32602 现在带 zod data:{cwd:{_errors:[…]}});应答仍不回显
+// sessionId;部署 home 的 57 条 rc.2/rc.3 时代旧会话全部在列且带 cwd 可恢复。
+// 失败 message 细分(均 -32602,agent/dsh.go remountSession 据此分类):
+// "session is already active: <id>"(已在当前桥内活跃)/"session is not
+// resumable: <id>"(持久头缺席)/"session cwd does not match: <cwd>"(bundle,
+// 0.2.0 起与持久头做 realpath 同源比对)。
 //
 // 【应答形状实测】rc.3 的 resume 应答**不再回显 sessionId**(顶层只有
 // configOptions;探针 A2 帧全文 2073 字节无 sessionId 键)。探针 A3 实测
@@ -537,6 +550,7 @@ func PermissionOutcomeCancelled() map[string]interface{} {
 // 探针实测:code=-32603、无 data 字段、message="Internal error: turn failed:
 // llm-deepseek: no API key for provider route ..."。前缀会随上游措辞漂移,
 // 按 "no API key" 子串判(内层 llm 错误的稳定词),有 data 的错误不归此类。
+// 【2026-09-30 0.2.0-rc.2 复证(proto020 探针)】形状不变,归一化继续成立。
 func IsMissingCredential(err error) bool {
 	var re *RPCError
 	if !errors.As(err, &re) {

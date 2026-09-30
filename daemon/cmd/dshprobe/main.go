@@ -1320,7 +1320,7 @@ func orDash(s string) string {
 
 func main() {
 	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\dsh-p0-probe.md`, "证据报告输出路径")
-	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart|configpersist|resumecompat;-all = 全部 8 项")
+	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart|configpersist|resumecompat|proto020;-all = 全部 8 项")
 	all := flag.Bool("all", false, "跑全部 8 项(默认,与空 -run 等价)")
 	// resumecompat 专用:真实 DSH_HOME 的只读来源(空 = 自动探测迁移后数据目录
 	// %LOCALAPPDATA%\PocketAgent\data\dsh-home,回退 ~/.pocketagentd/dsh-home)。
@@ -1466,6 +1466,17 @@ func main() {
 		// 升级兼容轮(2026-09-25)新增:rc.3 对 rc.2 旧 sessionId 的失败形态实证。
 		// 真实 DSH_HOME 只读(先整树复制进临时目录,探针结束删除)。
 		r.add(runResumeCompat(node, bin, *compatHome))
+	case "proto020":
+		// 0.2.0-rc.2 重探轮(2026-09-30)新增:无 key 可验的新形状专项
+		// (image 准入/configOptions 新档/list 参数/resume 失败语义细化/并发 prompt)。
+		home := filepath.Join(base, "home-p020")
+		_ = os.MkdirAll(home, 0o755)
+		c := setupClient(r, clientOpts{node: node, bin: bin, dshHome: home, workDir: workDir, label: mode})
+		if c == nil {
+			break
+		}
+		defer c.close()
+		r.add(doProto020(c, workDir))
 	default:
 		fmt.Printf("未知 -run %q\n", *run)
 		os.Exit(1)
