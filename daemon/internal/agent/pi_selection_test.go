@@ -37,7 +37,7 @@ func TestPiSelectionRejectsClampedAndFailedSettings(t *testing.T) {
 		{"low", "low", "set_thinking_level"},
 	} {
 		f := &selectionFake{level: tc.actual, fail: tc.fail}
-		_, _, err := configurePiSelection(context.Background(), f, "pi/zai/glm-5.3", tc.effort)
+		_, _, _, err := configurePiSelection(context.Background(), f, "pi/zai/glm-5.3", tc.effort)
 		if err == nil {
 			t.Fatalf("silently accepted %+v; calls=%v", tc, f.calls)
 		}
@@ -49,7 +49,7 @@ func TestPiSelectionRejectsClampedAndFailedSettings(t *testing.T) {
 
 func TestPiSelectionConfirmsRequestedLow(t *testing.T) {
 	f := &selectionFake{level: "low"}
-	model, effort, err := configurePiSelection(context.Background(), f, "pi/zai/glm-5.3", "low")
+	model, effort, _, err := configurePiSelection(context.Background(), f, "pi/zai/glm-5.3", "low")
 	if err != nil || model != "pi/zai/glm-5.3" || effort != "low" {
 		t.Fatalf("model=%s effort=%s error=%v", model, effort, err)
 	}

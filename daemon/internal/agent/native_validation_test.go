@@ -40,18 +40,18 @@ func TestNativePiModelSelection(t *testing.T) {
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
-	model, effort, err := configurePiSelection(ctx, c, selected, "high")
+	model, effort, _, err := configurePiSelection(ctx, c, selected, "high")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("NATIVE_CONFIRMED model=%s effort=%s", model, effort)
-	if _, _, err := configurePiSelection(ctx, c, selected, "low"); err == nil {
+	if _, _, _, err := configurePiSelection(ctx, c, selected, "low"); err == nil {
 		t.Fatal("GLM-5.2 low must be rejected")
 	} else {
 		t.Logf("UNSUPPORTED_REJECTED: %v", err)
 	}
 	next := strings.TrimSuffix(selected, "glm-5.2") + "glm-5.3"
-	model, effort, err = configurePiSelection(ctx, c, next, "low")
+	model, effort, _, err = configurePiSelection(ctx, c, next, "low")
 	if err != nil || model != next || effort != "low" {
 		t.Fatalf("glm-5.3 low: model=%s effort=%s err=%v", model, effort, err)
 	}
