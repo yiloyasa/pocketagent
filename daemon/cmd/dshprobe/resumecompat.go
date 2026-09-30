@@ -6,8 +6,10 @@
 // (rc.2 时代落在 DSH_HOME/sessions 下的 session.v3.jsonl.zstd)无法被 rc.3 恢复,
 // 手机上这个会话从此发不出消息(真机实锤,见 l2-20260925/RESULT.md 适配债 1)。
 // 修复降级前必须钉死"失败形态"的地面真值:
-//   a) 旧 sessionId 在 rc.3 的 session/list 中到底在不在列?
-//   b) 在列时 session/resume 报什么(code/message)?不在列时报什么?
+//
+//	a) 旧 sessionId 在 rc.3 的 session/list 中到底在不在列?
+//	b) 在列时 session/resume 报什么(code/message)?不在列时报什么?
+//
 // 降级条件以此为准 —— "list 里根本没有的 sessionID"是数据错位(必须继续显式
 // 拒绝,不降级);"list 在列但 resume 报 -32602"才是升级兼容问题(降级新开)。
 //

@@ -920,9 +920,12 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			if cev, ok := MapStatusEvent(ev.Type, ev.Raw); ok {
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
 			}
-		case "abort":
-			// 自身 abort 的回执(无应答体),无需处理
 		default:
+			// 【abort 为什么无专案分支】pi 0.99.1 事件全集已无 abort 事件
+			// (2026-09-30 piprobe 实证),原"自身 abort 回执,无需处理"的
+			// no-op 分支已删;若回滚到会发 abort 帧的旧 pi,落此处经
+			// piEventNoticeKind 仍归 KNOWN_PASSTHROUGH,只落台账、不推屏、
+			// 不淹诊断页(词表兜底见 runtime/knowledge_pi.go)。
 			if ev.Type == "extension_ui_request" {
 				// 【辅线 B】未知 method 的 UI 反向请求:开关 ON 时弹通用确认卡征求
 				// 用户(允许→回写 {};拒绝/超时→回写原生兜底拒绝 cancelled)。

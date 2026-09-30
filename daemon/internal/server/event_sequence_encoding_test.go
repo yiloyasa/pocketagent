@@ -18,8 +18,8 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
-	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/eventstore"
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/store"
 )
 

@@ -2,9 +2,10 @@
 //
 // 【目的】原生设置透出轮(2026-09-25)的前置实证:session/set_config_option 改
 // reasoning_effort 之后,这个值
-//   a) 本会话内是否生效(configOptions 的 currentValue 是否变化);
-//   b) 是否被 dsh 持久化 —— 新开的 session/new 是否带着改后的值(即:手机设置页
-//      的切换要不要绑定具体会话,还是可以像桌面端一样"改默认")。
+//
+//	a) 本会话内是否生效(configOptions 的 currentValue 是否变化);
+//	b) 是否被 dsh 持久化 —— 新开的 session/new 是否带着改后的值(即:手机设置页
+//	   的切换要不要绑定具体会话,还是可以像桌面端一样"改默认")。
 //
 // 结论直接决定 DshProvider.SetNativeConfigOption 的写语义,以及手机端「原生设置」
 // 分组的副文案(持久 = 写默认;不持久 = 明确说按会话生效)。全程不跑 LLM 轮次

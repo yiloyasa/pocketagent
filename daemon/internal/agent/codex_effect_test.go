@@ -118,7 +118,7 @@ func runFakeCodexAppServer() int {
 	respondErr := func(id int64, code int, msg string) {
 		raw, _ := json.Marshal(map[string]interface{}{
 			"jsonrpc": "2.0", "id": id,
-			"error":   map[string]interface{}{"code": code, "message": msg},
+			"error": map[string]interface{}{"code": code, "message": msg},
 		})
 		mu.Lock()
 		defer mu.Unlock()

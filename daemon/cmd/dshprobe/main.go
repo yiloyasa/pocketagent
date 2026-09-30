@@ -221,7 +221,7 @@ func (c *client) readLoop() {
 					if h := c.getHandler(); h != nil {
 						go h(m) // 回写走 stdin,不能堵 readLoop
 					} else {
-						_ = c.sendErr(m.idString(), -32601, "dshprobe: no handler for "+m.Method)
+						_ = c.respondRaw(m.ID, map[string]any{"code": -32601, "message": "dshprobe: no handler for " + m.Method})
 					}
 				case m.Method != "":
 					c.pushNote(m)
@@ -328,6 +328,13 @@ func (c *client) call(method string, params any, timeout time.Duration) (json.Ra
 
 func (c *client) respond(id string, result any) error {
 	return c.send(rpcMsg{JSONRPC: "2.0", ID: json.RawMessage(strconv.Quote(id)), Result: mustJSON(result)})
+}
+
+// respondRaw 应答服务端反向请求:JSON-RPC 要求应答 id 与请求 id 逐字节同型。
+// dsh 实测(live 验证轮 2026-09-30)反向请求带数字 id(id:0),重引号成字符串
+// 会让对端匹配不上挂起请求、审批永不resolve、prompt 挂死 —— 必须原样回显。
+func (c *client) respondRaw(id json.RawMessage, result any) error {
+	return c.send(rpcMsg{JSONRPC: "2.0", ID: id, Result: mustJSON(result)})
 }
 
 func (c *client) notesFrom(idx int) []noteRec {
@@ -729,7 +736,7 @@ func doPermissionRound(c *client, sid, promptText, mode string) (frames []string
 				pick = p.Options[len(p.Options)-1].OptionID
 			}
 		}
-		_ = c.respond(req.idString(), map[string]any{
+		_ = c.respondRaw(req.ID, map[string]any{
 			"outcome": map[string]any{"outcome": "selected", "optionId": pick},
 		})
 		reqCh <- fmt.Sprintf("收到 session/request_permission:sessionId=%q requestKind=%q options=%v toolCall=%s → 自动%s optionId=%q(outcome={outcome:\"selected\",optionId})",
@@ -1320,7 +1327,7 @@ func orDash(s string) string {
 
 func main() {
 	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\dsh-p0-probe.md`, "证据报告输出路径")
-	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|cancel|resume|no-key|coldstart|configpersist|resumecompat|proto020;-all = 全部 8 项")
+	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|permwrite|cancel|resume|no-key|coldstart|configpersist|resumecompat|proto020;-all = 全部 8 项")
 	all := flag.Bool("all", false, "跑全部 8 项(默认,与空 -run 等价)")
 	// resumecompat 专用:真实 DSH_HOME 的只读来源(空 = 自动探测迁移后数据目录
 	// %LOCALAPPDATA%\PocketAgent\data\dsh-home,回退 ~/.pocketagentd/dsh-home)。
@@ -1466,6 +1473,23 @@ func main() {
 		// 升级兼容轮(2026-09-25)新增:rc.3 对 rc.2 旧 sessionId 的失败形态实证。
 		// 真实 DSH_HOME 只读(先整树复制进临时目录,探针结束删除)。
 		r.add(runResumeCompat(node, bin, *compatHome))
+	case "permwrite":
+		// dsh live 验证轮(2026-09-30)新增:真实审批回路专项。P0 第 4 项的 echo
+		// 提示构不成反向请求(无文件副作用的命令被基座默认权限面直接放行),
+		// 用"工作目录外写文件 → 沙箱拒绝 → escalation"诱导真实 request_permission。
+		home := filepath.Join(base, "home-permw")
+		_ = os.MkdirAll(home, 0o755)
+		c := setupClient(r, clientOpts{node: node, bin: bin, dshHome: home, workDir: workDir, label: mode})
+		if c == nil {
+			break
+		}
+		defer c.close()
+		sid, _ := doSessionNew(c, workDir)
+		if sid == "" {
+			r.add(item{name: mode, status: "失败", note: "无 sessionId"})
+			break
+		}
+		r.add(doPermissionWrite(c, sid, workDir))
 	case "proto020":
 		// 0.2.0-rc.2 重探轮(2026-09-30)新增:无 key 可验的新形状专项
 		// (image 准入/configOptions 新档/list 参数/resume 失败语义细化/并发 prompt)。

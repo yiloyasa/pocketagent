@@ -7,6 +7,7 @@
 //     get_available_models 应答 success=true 且返回全量模型表;
 //   - daemon.log 的"拉起→1~9s 后退出码=1"全部是 fetchModels 一次性探测的
 //     正常 Close 收尸(Windows TerminateProcess 退出码恒 1),不是崩溃。
+//
 // 所以本文件不"修参数",而是**钉死参数**:今后任何改动 rpc 启动形状的提交,
 // 若未重新探针实证,在这里先失败。
 //

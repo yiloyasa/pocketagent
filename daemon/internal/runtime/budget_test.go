@@ -8,7 +8,7 @@ import (
 )
 
 func i64p(v int64) *int64 { return &v }
-func intp(v int) *int    { return &v }
+func intp(v int) *int     { return &v }
 
 // TestEffectiveOverridesBySpecificity 钉住逐级覆盖的顺序：
 // global → agent → workspace → thread → collab，越具体越优先（规格 §6.5）。

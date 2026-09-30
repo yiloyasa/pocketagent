@@ -2,11 +2,11 @@
 //
 // 【目的】原生设置透出轮(2026-09-25)的前置实证。bundle 静态分析(chunk-OJP47DM6.js)
 // 已给出三个疑点,本探针用真实子进程逐项落地:
-//   1. get_state 应答是否带 autoCompactionEnabled / steeringMode(只读呈现的数据源);
-//   2. set_auto_compaction / set_auto_retry / set_steering_mode 的写语义 —— bundle
-//      显示三者都经 settingsManager 改 globalSettings 并 save() 落盘到
-//      <agentDir>/settings.json(用户桌面全局配置),本探针实证之;
-//   3. autoRetryEnabled 是否有可读面(get_state 无此键)。
+//  1. get_state 应答是否带 autoCompactionEnabled / steeringMode(只读呈现的数据源);
+//  2. set_auto_compaction / set_auto_retry / set_steering_mode 的写语义 —— bundle
+//     显示三者都经 settingsManager 改 globalSettings 并 save() 落盘到
+//     <agentDir>/settings.json(用户桌面全局配置),本探针实证之;
+//  3. autoRetryEnabled 是否有可读面(get_state 无此键)。
 //
 // 【红线防写】全程 PI_CODING_AGENT_DIR=<临时目录> 隔离:探针里的 set_* 落盘只落
 // 临时目录,绝不触碰用户 ~/.pi。结论直接决定 PiProvider 的写通道取舍 —— 若落盘

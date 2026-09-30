@@ -33,8 +33,8 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
-	"github.com/pocketagent/daemon/internal/hostenv"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/version"
 )

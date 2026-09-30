@@ -55,7 +55,7 @@ type piSession struct {
 // 编译期钉死:适配器满足统一合同;PiProvider 实现可选工厂(D5)。
 var (
 	_ runtime.NativeSessionAdapter = (*piSession)(nil)
-	_ NativeSessionFactory          = (*PiProvider)(nil)
+	_ NativeSessionFactory         = (*PiProvider)(nil)
 )
 
 // NativeSessionFor 实现 NativeSessionFactory(D5 工厂)。适配器无状态,每 thread

@@ -81,7 +81,7 @@ type Thread struct {
 	// (上一进程的轮次随进程终止,见 server.go 启动恢复回路)。
 	TurnStartedUnixMs int64           `json:"turn_started_unix_ms,omitempty"`
 	Messages          []StoredMessage `json:"messages"`
-	Usage            pb.Usage        `json:"usage"`
+	Usage             pb.Usage        `json:"usage"`
 }
 
 // ExternalSessionRef 指向外部 agent 自己管理的会话事实来源(Pi/ZCode 通用)。

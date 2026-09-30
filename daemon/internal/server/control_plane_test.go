@@ -222,7 +222,8 @@ func TestControlPlaneCollabMirrorsCollabPolicy(t *testing.T) {
 	}
 	if got := findItem(t, collab, "collab.max_parallel_members").GetCurrent(); got != "2" {
 		t.Fatalf("扇出成员上限不同源: 控制面 %q vs 策略页 %d", got, pol.GetEffective().GetMaxParallelMembers())
-	}}
+	}
+}
 
 // TestBuildControlDomainDegradesOnPanic 覆盖验收点 ⑤:任何一个域的组装 panic
 // 都只降级它自己 —— 总览页是聚合读,一个域的故障不该把整页掀翻。
@@ -556,7 +557,7 @@ func TestControlPlaneAgentsSelectsSkipWithoutCandidates(t *testing.T) {
 
 	// 模型列表正常 + 托管策略读不到 → 只摆 model/effort,approval/sandbox 缺席。
 	srv2 := newAgentsPrefsTestServer(t, map[string]agent.Provider{"codex": &codexPrefsStub{
-		models:         []pb.ModelInfo{{Id: "gpt-5.1", AvailableEfforts: []string{"low"}}},
+		models:          []pb.ModelInfo{{Id: "gpt-5.1", AvailableEfforts: []string{"low"}}},
 		requirementsErr: errors.New("codex 未响应"),
 	}})
 	cp2, err := srv2.GetControlPlane(context.Background(), &pb.GetControlPlaneRequest{})

@@ -56,9 +56,9 @@ func FlattenOptionLeaves(raw json.RawMessage) []OptionLeaf {
 	}
 	// 形状②:分组候选数组(实测 model:group=provider 名,叶子在二级 options)。
 	var grouped []struct {
-		Group       string `json:"group"`
-		Name        string `json:"name"`
-		Options     []struct {
+		Group   string `json:"group"`
+		Name    string `json:"name"`
+		Options []struct {
 			Value       string `json:"value"`
 			Name        string `json:"name"`
 			Description string `json:"description"`

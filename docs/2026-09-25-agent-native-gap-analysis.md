@@ -35,6 +35,7 @@
 - 0.1.7 在 next 通道（明示 breaking），**等进 latest 再统一重探**：plan_update 变体、image 能力可能翻真、权限模式/Auto review、archive 管理。现有 `session/update:plan` 前缀透传恰好兜住 plan_update。
 - P3 不收：Agent Team、定时任务、浏览器后端（桌面概念，ACP 未暴露）。
 - 2026-09-30 已重探 0.2.0-rc.2（依赖 419 包大换血）：ACP 9 方法不变；resume cwd 必填延续且旧会话 57/57 可恢复；breaking 点全部落在解析层并已适配（tool_call_update 嵌套 content/title 即工具名/config_option_update 刷新/messageId 新字段）；证据见 docs/verify/evidence/2026-09-30/。
+- 2026-09-30 **live 验证轮**（key 就绪，上文「4/8 受阻」全部关闭）：update 全集 live 帧——实测变体 agent_message_chunk/agent_thought_chunk/usage_update/tool_call/tool_call_update，assistant 文本 1 帧到齐（块级粒度复确认），usage_update={used:int,size:int} 整数与 dshUsageUpdateFromUsedSize 一致，update 体新增只读字段 messageId 不碍解析；permission allow/reject **真实审批双路**——echo 不弹卡（基座 cordis.patch.yml 默认 DSH_PERMISSION_MODE??workspace-write + approval ask，无文件副作用命令直接放行，session/request_permission 唯一发射链=沙箱拒绝→escalation），permwrite 专项以「工作目录外写文件」诱导：allow 路命令真实执行（文件落盘）、reject 路文件不在 + tool_call_update status=failed + 模型不绕行，请求形状 {sessionId,toolCall:{toolCallId},options:[allow-once/reject-once]}+数字 id、应答 outcome:{outcome:"selected",optionId} 双向被受理，与 dshapp.ParseRequestPermission/PermissionOutcomeSelected 逐字段一致；cancel：stopReason=cancelled 实帧（cancel 后 6ms）；image 翻真复验定案**等上游**：promptCapabilities.image=false 实帧，带图 prompt 准入层 -32602 "inline image prompts were not advertised" 拒绝，翻真时 SupportsImageInput() 动态放行、daemon 无需改码；resume 上下文保持 live 复测通过：跨进程 kill→list 在列→resume 成功→追问引用旧内容，重放 0 帧。解析层一致、**生产零改动**；探针侧修反向请求应答 id 回显 bug（字符串 id→原样回显数字 id，否则对端匹配不上挂起请求）并新增 permwrite 专项（cmd/dshprobe/dshpermwrite.go）。证据（live 轮留档，不入库）：%TEMP%\dshlive_update-granularity.md、dshlive_permwrite.md、dshlive_cancel.md、dshlive_proto020.md、dshlive_resume.md。
 
 ## 翻译词表口径订正
 词表实数 62 条（55 精确 + 7 dsh 前缀），此前文档写 70 有误；本轮后各家又新增（zcode +12、pi +9、codex +13），以 `daemon/internal/runtime/knowledge_*.go` 为准。
@@ -43,7 +44,7 @@
 1. ✅ ZCode 0.16.9 探针+回归排查(实证未断)
 2. ✅ pi 0.87.1 词表+usage 复测+clear_queue
 3. ✅ codex 0.156.1 探针 diff+词表+真删同步+rollback 迁移
-4. 🔶 dsh 探针补齐——**阻塞于 API key,待用户提供**;rc.3 已装
+4. ✅ dsh 探针补齐（2026-09-30 live 验证轮 key 就绪后全部关闭；实测明细见 DSH 节「live 验证轮」行）
 5. 后续轮:各 agent 原生设置透出(pi auto-compaction/auto-retry、zcode permission.mode 等)→ 手机设置页/会话页呈现;会话管理增强(zcode session/subagents 等)
 
 ## 留观处置(P2 轮落地,2026-09-25 晚 · AD 代理)

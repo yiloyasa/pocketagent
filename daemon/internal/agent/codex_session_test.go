@@ -33,11 +33,11 @@ type fakeCodexSessionCall struct {
 // fakeCodexSessionCalls call 注入的替身:记录调用,按方法给应答。单 goroutine
 // 使用(适配器契约:仅轮次 goroutine 调用),无需加锁。
 type fakeCodexSessionCalls struct {
-	startRes   string        // thread/start 应答原文(缺省 {"threadId":"fake-tid-<n>"})
-	resumeErr  error         // thread/resume 注入错(模拟重挂载失败)
-	startErr   error         // thread/start 注入错(模拟新建失败)
-	counter    int           // fake threadId 计数(模拟 codex 每次新建都给新 id)
-	calls      []fakeCodexSessionCall
+	startRes  string // thread/start 应答原文(缺省 {"threadId":"fake-tid-<n>"})
+	resumeErr error  // thread/resume 注入错(模拟重挂载失败)
+	startErr  error  // thread/start 注入错(模拟新建失败)
+	counter   int    // fake threadId 计数(模拟 codex 每次新建都给新 id)
+	calls     []fakeCodexSessionCall
 }
 
 func newFakeCodexSessionCalls() *fakeCodexSessionCalls { return &fakeCodexSessionCalls{} }

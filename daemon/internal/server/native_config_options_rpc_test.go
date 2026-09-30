@@ -136,9 +136,9 @@ func TestSetAgentNativeConfigOptionRoute(t *testing.T) {
 	srv := newNativeOptionsServer(t, prov)
 
 	if _, err := srv.SetCodexSettings(context.Background(), &pb.SetCodexSettingsRequest{
-		AgentId:               "dsh",
-		NativeConfigOptionId:  &[]string{"reasoning_effort"}[0],
-		NativeConfigValue:     &[]string{"low"}[0],
+		AgentId:              "dsh",
+		NativeConfigOptionId: &[]string{"reasoning_effort"}[0],
+		NativeConfigValue:    &[]string{"low"}[0],
 	}); err != nil {
 		t.Fatalf("原生配置项写入应成功: %v", err)
 	}

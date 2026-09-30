@@ -361,7 +361,7 @@ func TestRuntimePolicyCarriesUnknownRequestPassthrough(t *testing.T) {
 	// 当成"未设置",用户显式关掉的事实必须留得住)。
 	off := false
 	if _, err := srv.SetRuntimePolicy(ctx, &pb.SetRuntimePolicyRequest{
-		Policy:        &pb.RuntimePolicy{UnknownRequestPassthrough: &off},
+		Policy:           &pb.RuntimePolicy{UnknownRequestPassthrough: &off},
 		ExpectedRevision: after.GetRevision(),
 	}); err != nil {
 		t.Fatalf("SetRuntimePolicy(false) 失败: %v", err)

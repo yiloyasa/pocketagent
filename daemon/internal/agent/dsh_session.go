@@ -58,7 +58,7 @@ type dshSession struct {
 // 编译期钉死:适配器满足统一合同;DshProvider 实现可选工厂(D5)。
 var (
 	_ runtime.NativeSessionAdapter = (*dshSession)(nil)
-	_ NativeSessionFactory          = (*DshProvider)(nil)
+	_ NativeSessionFactory         = (*DshProvider)(nil)
 )
 
 // NativeSessionFor 实现 NativeSessionFactory(D5 工厂)。适配器无状态,每 thread
