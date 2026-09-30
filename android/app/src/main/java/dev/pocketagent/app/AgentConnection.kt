@@ -26,6 +26,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import pocketagent.v1.AuthorizeRequest
 import pocketagent.v1.GetPairingInfoRequest
+import pocketagent.v1.GetRuntimeStateRequest
 import pocketagent.v1.ChallengeAnswer
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostEvent
@@ -1296,6 +1297,7 @@ object AgentConnection {
         probeScope?.launch {
             var wasDown = false
             var retryDelayMs = 1000L
+            var probeCount = 0L
             while (true) {
                 val ok = try {
                     val info = hostService()
@@ -1327,6 +1329,22 @@ object AgentConnection {
                     // P0-2:上一轮出现过 AUTH 类失败(token 失效)时,趁连接已恢复
                     // 用挑战应答无感续期一次;失败不影响当前连接(纯增益路径)。
                     maybeRenewAfterAuthError()
+                    // 【配对健康检查(2026-09-30)】GetHostInfo 免鉴权,探活"成功"不
+                    // 代表 token 仍有效(吊销/换血后业务 RPC 才会 UNAUTH)。低频
+                    // (每 10 轮 ≈80s)用最轻的需鉴权 RPC 验一次;USB 候选下失效
+                    // 即触发自动配对 —— 物理插线场景免手输恢复。
+                    probeCount++
+                    if (address == USB_ADDR && probeCount % 10 == 1L) {
+                        try {
+                            runtimeService().getRuntimeState(
+                                GetRuntimeStateRequest.getDefaultInstance())
+                        } catch (he: Exception) {
+                            if (he.isAuthDenied() && maybeAutoPairViaUsb()) {
+                                connectionEpoch.value += 1
+                                return@launch
+                            }
+                        }
+                    }
                     markConnected(address)
                     if (wasDown) {
                         // 断→通:通知全部页面刷新(host 状态/会话列表/连接卡)
