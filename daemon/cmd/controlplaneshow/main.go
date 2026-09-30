@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +40,9 @@ func main() {
 	dataDir := flag.String("data-dir", "", "daemon 数据目录(缺省 %LOCALAPPDATA%\\PocketAgent\\data)")
 	var sets setList
 	flag.Var(&sets, "set", "开关:collab|delegate|fanout|unknownRequests=on|off(可重复)")
+	htmlOut := flag.String("html", "", "把控制面板渲染成 HTML 文件(路径;-watch 配合即常驻面板)")
+	openBrowser := flag.Bool("open", false, "生成 HTML 后用默认浏览器打开")
+	watch := flag.Bool("watch", false, "每 5 秒重新拉取并覆盖 HTML")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -114,6 +118,30 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "GetControlPlane 失败(旧 daemon 没有此 RPC?):", err)
 		os.Exit(1)
+	}
+
+	if *htmlOut != "" {
+		writeHTMLPanel(*htmlOut, cp)
+		if !*watch {
+			fmt.Println("✓ 控制面板已生成:", *htmlOut)
+		}
+		if *openBrowser {
+			// rundll32 走系统默认浏览器(GUI 链路,无控制台窗口)
+			exec.Command("rundll32", "url.dll,FileProtocolHandler", *htmlOut).Start()
+		}
+	}
+	if *watch {
+		fmt.Println("面板常驻刷新中(每 5 秒)… Ctrl+C 退出")
+		for {
+			time.Sleep(5 * time.Second)
+			fresh, err := rt.GetControlPlane(context.Background(), &pb.GetControlPlaneRequest{})
+			if err == nil {
+				writeHTMLPanel(*htmlOut, fresh)
+			}
+		}
+	}
+	if *htmlOut != "" {
+		return
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
