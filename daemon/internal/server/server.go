@@ -42,6 +42,9 @@ type Config struct {
 	Store     *store.FileStore
 	Providers map[string]agent.Provider
 	Terminals *term.Manager
+	// OneShotPairCodes 一次性配对码(2026-09-30):main 的 -pair-once 生成;
+	// registry 内 15 分钟 TTL、成功配对即作废。空 = 无一次性码。
+	OneShotPairCodes []string
 	// PairCode 是生效配对码。【PA-REAL-0001 修复后】正常启动路径(main)保证
 	// 非空:未显式给 -pair-code 时自动生成并持久化。为空=异常配置,拦截器
 	// fail closed,不再有"空码即关闭鉴权"的旧语义。
@@ -182,6 +185,10 @@ func New(cfg Config) *Server {
 	// 这里只新增一行汇总。
 	srv.recoveryReport = buildRecoveryReport(cfg.DataDir, cfg.Store, srv.devices, pendingQueueInputs)
 	log.Printf("[recovery] %s", srv.recoveryReport.LogLine())
+	// 一次性配对码(2026-09-30):-pair-once 生成的短时码登记进设备表。
+	for _, c := range cfg.OneShotPairCodes {
+		srv.AddOneShotPairCode(c, 15*time.Minute)
+	}
 	// W9:运行时形态核验(规格 §10)。只做零成本的**声明层**校验 —— 实现层要先
 	// OpenRuntime,而那可能起子进程,不该在启动/诊断路径被触发。不达标者打日志出声,
 	// 并经 GetRuntimeState 送到手机。
@@ -429,3 +436,12 @@ func platformInfo() (string, string, string) {
 var counter int64
 
 func hostCounter() int64 { counter++; return counter }
+
+// AddOneShotPairCode 登记一枚一次性配对码(ttl 内有效,成功配对即作废)。
+// 面向"当面给一台新设备短时码"的分发场景;运行期也可经此追加(运维通道)。
+func (s *Server) AddOneShotPairCode(code string, ttl time.Duration) {
+	if s == nil || s.devices == nil || code == "" {
+		return
+	}
+	s.devices.AddOneShotPairCode(code, ttl)
+}

@@ -55,7 +55,7 @@ func main() {
 	// 【PA-REAL-0001 修复】为空不再等于关闭鉴权:不传=自动生成 8 位随机码并
 	// 持久化到 <data>/pair-code.txt,启动日志会打印,手机首次连接时输入。
 	pairCode := flag.String("pair-code", "", "配对码(鉴权默认开启);不传=自动生成并持久化到 <数据目录>/pair-code.txt")
-	// 【PA-REAL-0001 修复】显式降级旗标:完全跳过鉴权,但仅允许本机回环连接
+	pairOnce := flag.Bool("pair-once", false, "额外生成一枚一次性配对码(15 分钟有效,成功配对即作废;持久码不受影响)")	// 【PA-REAL-0001 修复】显式降级旗标:完全跳过鉴权,但仅允许本机回环连接
 	// (127.0.0.1/::1),局域网/远程一律被拒。应急排障用,平时不要开。
 	insecureNoAuth := flag.Bool("insecure-no-auth", false, "应急:关闭配对码鉴权,仅允许本机回环连接;局域网连接会被拒绝")
 	workspace := flag.String("workspace", cwd(), "默认工作区")
@@ -278,11 +278,27 @@ func main() {
 		log.Printf("终端空闲回收已启用: 无 reader 闲置 %s 自动关闭会话", *termIdle)
 	}
 
+	// 一次性配对码(2026-09-30):-pair-once 时额外生成一枚短时码,日志醒目输出。
+	// 面向分发场景:当面给新设备一个 15 分钟码,成功配对即作废;持久码不变。
+	var oneShotCodes []string
+	if *pairOnce {
+		if c, err := generatePairCode(); err == nil {
+			oneShotCodes = append(oneShotCodes, c)
+			log.Printf("============================================================")
+			log.Printf("一次性配对码: %s", c)
+			log.Printf("15 分钟内有效,成功配对即作废;持久配对码(%s)不受影响。", pairCodeValue)
+			log.Printf("============================================================")
+		} else {
+			log.Printf("WARNING: 一次性配对码生成失败:%v(不影响持久配对码)", err)
+		}
+	}
+
 	srv := server.New(server.Config{
 		Store:          st,
 		Providers:      providers,
 		Terminals:      tm,
 		PairCode:       pairCodeValue,
+		OneShotPairCodes: oneShotCodes,
 		InsecureNoAuth: *insecureNoAuth,
 		Workspace:      *workspace,
 		DataDir:        *dataDir,

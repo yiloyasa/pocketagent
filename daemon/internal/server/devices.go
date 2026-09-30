@@ -53,7 +53,11 @@ type deviceRegistry struct {
 	path        string // devices.json 路径;空 = 仅内存(单测用)
 	pairCode    string // 原始配对码(注册新设备时比对用)
 	legacyToken string // 旧单 token 的期望值(= sha256("pair-code:"+配对码) 的 hex),兼容存量手机
-	devices     map[string]*deviceRecord
+	// 一次性配对码(2026-09-30):码 → 过期 Unix 秒。15 分钟 TTL、成功配对即作废,
+	// 面向"把码当面给一台新设备"的分发场景;持久配对码不受影响。
+	oneShotMu    sync.Mutex
+	oneShotCodes map[string]int64
+	devices      map[string]*deviceRecord
 	challenges  map[string]*pendingChallenge
 	nowFunc     func() time.Time // 可注入时钟(单测用过期路径)
 	randomFunc  func([]byte) (int, error)
@@ -63,13 +67,14 @@ type deviceRegistry struct {
 
 func newDeviceRegistry(dataDir, pairCode string) *deviceRegistry {
 	r := &deviceRegistry{
-		path:        "",
-		pairCode:    pairCode,
-		legacyToken: legacyTokenHash(pairCode),
-		devices:     map[string]*deviceRecord{},
-		challenges:  map[string]*pendingChallenge{},
-		nowFunc:     time.Now,
-		randomFunc:  rand.Read,
+		path:         "",
+		pairCode:     pairCode,
+		legacyToken:  legacyTokenHash(pairCode),
+		devices:      map[string]*deviceRecord{},
+		challenges:   map[string]*pendingChallenge{},
+		oneShotCodes: map[string]int64{},
+		nowFunc:      time.Now,
+		randomFunc:   rand.Read,
 	}
 	if dataDir != "" {
 		r.path = filepath.Join(dataDir, "devices.json")
@@ -244,6 +249,33 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// AddOneShotPairCode 登记一枚一次性配对码:ttl 内可作配对码使用,成功配对即
+// 作废。面向"当面给一台新设备一个短时码"的分发场景;持久配对码主链路不受影响。
+func (r *deviceRegistry) AddOneShotPairCode(code string, ttl time.Duration) {
+	if code == "" {
+		return
+	}
+	r.oneShotMu.Lock()
+	defer r.oneShotMu.Unlock()
+	if r.oneShotCodes == nil {
+		r.oneShotCodes = make(map[string]int64)
+	}
+	r.oneShotCodes[code] = r.nowFunc().Add(ttl).Unix()
+}
+
+// consumeOneShotLocked 消费一枚一次性码:存在且未过期则删除并返回 true。
+// 调用方必须已持有 r.mu(RegisterByPairCode 的锁内路径)。
+func (r *deviceRegistry) consumeOneShotLocked(code string) bool {
+	r.oneShotMu.Lock()
+	defer r.oneShotMu.Unlock()
+	exp, ok := r.oneShotCodes[code]
+	if !ok || r.nowFunc().Unix() > exp {
+		return false
+	}
+	delete(r.oneShotCodes, code)
+	return true
+}
+
 // RegisterByPairCode 校验配对码并注册设备,返回该设备专属的新 token。
 // 已存在的 device_id 允许重新配对(换机重装后公钥会变,以最新一次为准)。
 func (r *deviceRegistry) RegisterByPairCode(pairCode, deviceID, name, pubKey string) (string, error) {
@@ -256,7 +288,7 @@ func (r *deviceRegistry) RegisterByPairCode(pairCode, deviceID, name, pubKey str
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if subtle.ConstantTimeCompare([]byte(pairCode), []byte(r.pairCode)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(pairCode), []byte(r.pairCode)) != 1 && !r.consumeOneShotLocked(pairCode) {
 		return "", errPermissionDenied("配对码错误")
 	}
 	now := r.nowFunc().Unix()
