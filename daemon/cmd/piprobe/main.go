@@ -420,6 +420,10 @@ func main() {
 	case "m99":
 		fmt.Println("== Pi 0.99.1 协议新面探针开始 ==")
 		r.runM99Mode()
+	case "models":
+		fmt.Println("== Pi get_available_models 探针开始 ==")
+		modelsProbe()
+		fmt.Println("== 探针结束 ==")
 		fmt.Println("== 探针结束 ==")
 	case "cmds":
 		fmt.Println("== Pi get_commands 斜杠命令探针开始 ==")

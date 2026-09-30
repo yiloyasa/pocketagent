@@ -27,6 +27,7 @@
 package piapp
 
 import (
+	"github.com/pocketagent/daemon/internal/dshapp"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -350,6 +351,10 @@ func Start(opts StartOptions) (*Client, error) {
 	if e := CollabEnvInjection(); e != "" {
 		cmd.Env = append(cmd.Env, e)
 	}
+	// 【凭据注入(2026-10-01)】pi 的 BYOK provider(deepseek 等)从 daemon 数据目录
+	// 的白名单凭据文件取 key —— 与 dsh 完全同一机制、同一白名单、同一份数据;
+	// 文件缺失/无匹配键 = 静默零注入,行为与现状完全一致。
+	cmd.Env = append(cmd.Env, dshapp.LoadCredentialEnv("")...)
 	hidewin.Apply(cmd) // 控制台程序:不隐藏会在用户桌面闪黑窗(与 codexapp 同款)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

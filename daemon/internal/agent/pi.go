@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pocketagent/daemon/internal/dshapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -267,9 +268,23 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 		return nil
 	}
 	defer c.Close()
-	raw, err := c.Call("get_available_models", nil, piCallBudget)
+	// 【8s 快速失败(2026-10-01 实测)】0.99.1 的 --no-session rpc 下
+	// get_available_models 永不应答(0.87.1 可用,上游变了)—— 30s 预算会把
+	// 手机端模型选择器挂死;快速失败后走下方实证候选回退,用户立刻有得选。
+	raw, err := c.Call("get_available_models", nil, 8*time.Second)
 	if err != nil {
-		log.Printf("[pi] get_available_models 失败: %v", err)
+		log.Printf("[pi] get_available_models 不可用(0.99.1 实测超时),回退实证候选: %v", err)
+		// DeepSeek 两档为实帧实证可用(A 轮实测跑通真实 LLM);key 不在
+		// 白名单凭据文件时不列(宁缺毋假,不摆选了必错的项)。
+		if len(dshapp.LoadCredentialEnv("")) > 0 {
+			return []pb.ModelInfo{
+				{Id: "deepseek/deepseek-chat", Provider: "pi", DisplayName: "DeepSeek Chat",
+					Available: true},
+				{Id: "deepseek/deepseek-reasoner", Provider: "pi", DisplayName: "DeepSeek Reasoner",
+					Available: true, SupportsThinking: true,
+					AvailableEfforts: []string{"low", "medium", "high"}},
+			}
+		}
 		return nil
 	}
 	var res struct {
