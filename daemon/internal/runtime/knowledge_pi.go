@@ -30,4 +30,7 @@ var piEventSummaries = map[string]string{
 	"pi\x1fsummarization_retry_attempt_start": "pi 正在重试上下文摘要",
 	"pi\x1fsummarization_retry_finished":      "pi 的上下文摘要重试结束了",
 	"pi\x1fextension_error":                   "pi 的一个扩展出了错(通常不影响主流程,重复出现再排查)",
+	// ---- 0.99.1 增补(2026-09-30 探针实证 + 随包 docs/json.md 事件全集)----
+	"pi\x1fbash_execution_update":  "pi 的 bash 命令正在流式回传输出(仅 RPC bash 命令会触发)",
+	"pi\x1fthinking_level_changed": "pi 切换了思考强度",
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/pocketagent/daemon/internal/store"
 )
@@ -116,8 +117,24 @@ func piNativeStateRows(state map[string]any) []NativeConfigOption {
 			Note:         piNativeNote,
 		})
 	}
-	// autoRetryEnabled:0.87.1 get_state 不带此键(探针实证)—— 即便上游哪天加了,
-	// 走上面的同款事实呈现;这里不做任何猜测性行。
+	// sessionName:0.99.1 get_state 新增键(0.87.1 无;pi-0991 探针实证)。会话
+	// 显示名 —— daemon 的 Rename(手机端改名)本就双向同步它,这里只读呈现当前
+	// 值,与写通道无关。原生 unset 时整个键缺席(pi 不发 null),缺席即无行。
+	if v, ok := state["sessionName"]; ok {
+		if s := strings.TrimSpace(fmt.Sprint(v)); s != "" {
+			rows = append(rows, NativeConfigOption{
+				ID:           "sessionName",
+				Name:         "会话显示名(Pi 侧)",
+				CurrentValue: s,
+				Writable:     false,
+				Note:         "由手机端重命名或 Pi 桌面端管理,双端自动同步;此处只读呈现当前值。",
+			})
+		}
+	}
+	// autoRetryEnabled:0.87.1/0.99.1 get_state 均不带此键(两轮探针实证)——
+	// 即便上游哪天加了,走上面的同款事实呈现;这里不做任何猜测性行。
+	// followUpMode:0.87.1 起在场上,但属队列内部模式且非本轮新增,维持不呈现
+	// (0.87.1 轮的既有取舍,不在本轮擅自变更)。
 	return rows
 }
 

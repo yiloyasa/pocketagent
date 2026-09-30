@@ -408,7 +408,7 @@ type result struct {
 
 func main() {
 	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\pi-p0-probe.md`, "报告输出路径")
-	mode := flag.String("mode", "p0", "p0 = 全量 P0 探针;s = S 级增量命令探针(export_html/compact/thinking_levels/follow_up/session_info_changed);cmds = get_commands 斜杠命令探针")
+	mode := flag.String("mode", "p0", "p0 = 全量 P0 探针;s = S 级增量命令探针(export_html/compact/thinking_levels/follow_up/session_info_changed);cmds = get_commands 斜杠命令探针;m99 = 0.99.1 协议新面探针(new_session/cycle_*/bash/abort_*/disposition/follow_up_mode)")
 	flag.Parse()
 
 	r := &runner{}
@@ -416,6 +416,10 @@ func main() {
 	case "s":
 		fmt.Println("== Pi S 级增量命令探针开始 ==")
 		r.runSMode()
+		fmt.Println("== 探针结束 ==")
+	case "m99":
+		fmt.Println("== Pi 0.99.1 协议新面探针开始 ==")
+		r.runM99Mode()
 		fmt.Println("== 探针结束 ==")
 	case "cmds":
 		fmt.Println("== Pi get_commands 斜杠命令探针开始 ==")

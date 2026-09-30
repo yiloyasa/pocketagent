@@ -617,19 +617,25 @@ func (p *PiProvider) setThinkingLevel(ctx context.Context, c *piapp.Client, leve
 // 【为什么这里再包一层,而不直接扩 piNoticeKind】piNoticeKind 驻
 // native_notifications.go,该文件本轮归 zcode 适配线所有(约定互不踩文件);
 // 于是两份词表分工:**0.85.1 及以前的老事件**分档以那边为准,**0.86/0.87 新增
-// 事件**以这里为准。判据与那边同款:事件在 pi 0.87.1 真实存在(本轮探针抓到
+// 事件**以这里为准。判据与那边同款:事件在 pi 真实存在(0.87.1 探针抓到
 // turn_start/turn_end/message_start/message_end,其余在 bundle 里有 emit 点,
 // 证据 docs/verify/evidence/pi-087-usage-probe.log),daemon 只是没把它投影成
 // TurnServerMessage —— 是取舍,不是"没见过",不能记成 UNKNOWN 淹没诊断页。
 // 【extension_error 为什么也归已知】它带 extensionPath/event/error,留痕本身
 // 就是诊断价值;Run 路径另有 MapStatusEvent 把它投影成 ERROR 卡,双路不冲突
 // (本函数只服务 GlobalHandler/兜底留痕这两条记录路径)。
+// 【0.99.1 增补(2026-09-30 探针实证 pi-0991-*.md + 随包 docs/json.md)】
+//   - bash_execution_update:RPC bash 命令(留观未接)的流式输出块,id 关联命令;
+//     daemon 不发 bash RPC,真出现也只可能来自桌面端同进程操作 —— 留痕归已知。
+//   - thinking_level_changed:0.87.1 起就有(遗漏收编),Run 路径已消费
+//     (InvalidateModels + Started 投影),此前 GlobalHandler/兜底路径却落 UNKNOWN;
+//     0.99.1 事件全集复核后补归。
 func piEventNoticeKind(eventType string) string {
 	switch eventType {
 	case "turn_start", "turn_end", "message_start", "message_end",
 		"entry_appended", "summarization_retry_scheduled",
 		"summarization_retry_attempt_start", "summarization_retry_finished",
-		"extension_error":
+		"extension_error", "bash_execution_update", "thinking_level_changed":
 		return runtime.KindKnownPassthrough
 	}
 	return piNoticeKind(eventType)

@@ -291,34 +291,72 @@ func MapStatusEvent(evType string, raw json.RawMessage) (*pb.CodexEvent, bool) {
 		ev.Message = "正在压缩上下文(" + e.Reason + "),期间输出可能停顿,不是卡死。"
 		return ev, true
 	case "compaction_end":
+		// 【0.99.1 形状(docs/json.md + 探针)】end 帧带 reason/result?/aborted/
+		// willRetry/errorMessage?:aborted=true = 压缩被中止(result 缺席);
+		// errorMessage 非空 = 压缩失败;willRetry=true = 溢出恢复成功、即将重试
+		// 当前任务(压缩本身已成功)。旧实现一律报"已压缩",0.99.1 语义下会把
+		// 中止/失败冒充成功 —— 按四态如实呈现。
+		var e struct {
+			Aborted      bool   `json:"aborted"`
+			WillRetry    bool   `json:"willRetry"`
+			ErrorMessage string `json:"errorMessage"`
+		}
+		_ = json.Unmarshal(raw, &e)
 		ev.Kind = pb.CodexEvent_CONTEXT_COMPACTED
-		ev.Code = "completed"
-		ev.Title = "上下文已压缩"
-		ev.Message = "上下文压缩完成,继续执行。"
+		switch {
+		case e.Aborted:
+			ev.Code = "aborted"
+			ev.Title = "上下文压缩已中止"
+			ev.Message = "压缩被中止,本轮继续执行,上下文未变。"
+		case e.ErrorMessage != "":
+			ev.Code = "failed"
+			ev.Title = "上下文压缩失败"
+			ev.Message = "压缩失败:" + e.ErrorMessage + "(上下文未变,本轮继续执行。)"
+		default:
+			ev.Code = "completed"
+			ev.Title = "上下文已压缩"
+			if e.WillRetry {
+				ev.Message = "上下文压缩完成(溢出恢复),即将重试刚才的任务。"
+			} else {
+				ev.Message = "上下文压缩完成,继续执行。"
+			}
+		}
 		return ev, true
 	case "auto_retry_start":
+		// 【0.99.1 新字段 delayMs】docs/json.md:auto_retry_start 带 delayMs
+		// (重试前的等待毫秒数);>0 时人话里带"约 N 秒后",手机端不再把
+		// 重试间隔误读成卡死。attempt/maxAttempts/errorMessage 沿用 0.87.1。
 		var e struct {
 			Attempt      int    `json:"attempt"`
 			MaxAttempts  int    `json:"maxAttempts"`
+			DelayMs      int    `json:"delayMs"`
 			ErrorMessage string `json:"errorMessage"`
 		}
 		_ = json.Unmarshal(raw, &e)
 		ev.Kind = pb.CodexEvent_RETRY_STARTED
 		ev.Code = "auto_retry"
 		ev.Title = fmt.Sprintf("重试中(第 %d/%d 次)", e.Attempt, e.MaxAttempts)
+		if e.DelayMs > 0 {
+			ev.Title += fmt.Sprintf(" 约 %d 秒后", (e.DelayMs+999)/1000)
+		}
 		ev.Message = e.ErrorMessage
 		ev.WillRetry = true
 		ev.Attempt = int32(e.Attempt)
 		return ev, true
 	case "auto_retry_end":
+		// 【0.99.1 新字段 attempt】成功/失败都带本次重试序号(>0 时进标题)。
 		var e struct {
 			Success    bool   `json:"success"`
+			Attempt    int    `json:"attempt"`
 			FinalError string `json:"finalError"`
 		}
 		_ = json.Unmarshal(raw, &e)
 		ev.Kind = pb.CodexEvent_RETRY_STOPPED
 		ev.Code = "auto_retry"
 		ev.Title = "重试结束"
+		if e.Attempt > 0 {
+			ev.Title = fmt.Sprintf("重试结束(第 %d 次)", e.Attempt)
+		}
 		if e.Success {
 			ev.Message = "重试成功,继续执行。"
 		} else {
