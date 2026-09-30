@@ -88,8 +88,8 @@ import pocketagent.v1.ReadFileRequest
 @Composable
 fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     // 编辑式浅色 M3 色板只包本页子树(chrome 编辑式;WebView 内容区跟页面自身)
-    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
-        EditorialLightSystemBars()
+    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
+        EditorialSystemBars()
         BrowserScreenBody(initialUrl, onBack)
     }
 }

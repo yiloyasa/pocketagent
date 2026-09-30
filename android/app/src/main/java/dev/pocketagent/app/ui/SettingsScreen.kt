@@ -122,12 +122,25 @@ import pocketagent.v1.RateLimitWindow
 import pocketagent.v1.SetCodexSettingsRequest
 
 /**
- * 编辑式页面的 M3 色板:恒为浅色盘(编辑式令牌 → MaterialTheme.colorScheme),
- * 供页内的 M3 组件(Switch / OutlinedTextField / RadioButton / AlertDialog /
- * TextButton / EmptyState)自动落编辑式色 —— 否则深色显示模式下这些组件仍按
- * PaTheme 深色盘出字,在浅画布上不可读。只包编辑式页面的子树,不动全局 PaTheme。
+ * 编辑式页面的 M3 色板:按当前色盘(浅/深/黑客)取编辑式令牌 → MaterialTheme
+ * colorScheme,供页内的 M3 组件(Switch / OutlinedTextField / RadioButton /
+ * AlertDialog / TextButton / EmptyState)跟随显示模式 —— 读的是 PaEditorial
+ * 可变槽位,组合期取值,换盘自动重组。只包编辑式页面的子树,不动全局 PaTheme。
  */
-internal fun paEditorialLightScheme() = androidx.compose.material3.lightColorScheme(
+internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.material3.darkColorScheme(
+
+    primary = PaEditorial.Primary,
+    onPrimary = Color.White,
+    background = PaEditorial.Canvas,
+    onBackground = PaEditorial.Ink,
+    surface = PaEditorial.Surface,
+    onSurface = PaEditorial.Ink,
+    surfaceVariant = PaEditorial.Raised,
+    onSurfaceVariant = PaEditorial.Muted,
+    outline = PaEditorial.Hairline,
+    error = PaEditorial.Denied,
+) else androidx.compose.material3.lightColorScheme(
+
     primary = PaEditorial.Primary,
     onPrimary = Color.White,
     background = PaEditorial.Canvas,
@@ -141,24 +154,21 @@ internal fun paEditorialLightScheme() = androidx.compose.material3.lightColorSch
 )
 
 /**
- * 编辑式页面的系统栏图标适配:编辑式画布恒为浅色(不随显示模式换肤),
- * 深色显示模式下系统栏若仍用浅色图标,浅底上就看不见。本助手在页面存续期
- * 把状态栏/导航栏图标置为深色,离开时恢复 Pa 主题的全局判定 ——
+ * 编辑式页面的系统栏图标适配:按当前盘 IsDark 决定图标深浅(浅盘→深色图标,
+ * 深/黑客盘→浅色图标),键控 IsDark,切换显示模式即重挂 ——
  * MainActivity 的全局挂接不动,只作用于编辑式页面。
  */
 @Composable
-internal fun EditorialLightSystemBars() {
+internal fun EditorialSystemBars() {
     val view = androidx.compose.ui.platform.LocalView.current
     val context = androidx.compose.ui.platform.LocalContext.current
-    androidx.compose.runtime.DisposableEffect(view, context) {
+    // 键控当前盘:浅色盘→深色图标;深色/黑客盘→浅色图标;切换显示模式即重挂。
+    androidx.compose.runtime.DisposableEffect(PaEditorial.IsDark) {
         val window = (context as? android.app.Activity)?.window
         val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, view) }
-        controller?.isAppearanceLightStatusBars = true
-        controller?.isAppearanceLightNavigationBars = true
-        onDispose {
-            controller?.isAppearanceLightStatusBars = !Pa.IsDark
-            controller?.isAppearanceLightNavigationBars = !Pa.IsDark
-        }
+        controller?.isAppearanceLightStatusBars = !PaEditorial.IsDark
+        controller?.isAppearanceLightNavigationBars = !PaEditorial.IsDark
+        onDispose { }
     }
 }
 
@@ -491,7 +501,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
-    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
+    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
         SettingsScreenBody(onBack, openUserData, onOpenBrowser, modifier)
     }
 }
@@ -1024,7 +1034,7 @@ private fun SettingsScreenBody(
     // ---------------- 一级页 ----------------
     // 编辑式骨架(README:状态栏 → 顶部导航 → 主机状态 → 内容);系统栏图标
     // 跟编辑式浅色画布走(深色显示模式下内容区也是浅的,图标必须用深色)。
-    EditorialLightSystemBars()
+    EditorialSystemBars()
     // 【推背模糊】玻璃浮层(审批预览 PaSheet)打开时,设置内容自身模糊+缩小+压暗——
     // 透过玻璃看过去才是真磨砂(PaGlass 职责分离:模糊在内容层,不在浮层上)。
     PaScreenScaffold(

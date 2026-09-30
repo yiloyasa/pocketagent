@@ -54,6 +54,7 @@ import dev.pocketagent.app.ui.component.ThreadPins
 import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.component.ThreadUsageStore
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaTheme
 import androidx.core.view.WindowCompat
 
@@ -79,7 +80,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             PaTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Pa.Bg) {
+                Surface(modifier = Modifier.fillMaxSize(), color = PaEditorial.Canvas) {
                     var showSplash by remember { mutableStateOf(true) }
                     if (showSplash) {
                         Splash(onDone = { showSplash = false })
@@ -149,11 +150,11 @@ private fun RootNav() {
 
     SideEffect {
         val window = (context as? ComponentActivity)?.window ?: return@SideEffect
-        window.statusBarColor = Pa.Bg.toArgb()
-        window.navigationBarColor = Pa.Bg.toArgb()
+        window.statusBarColor = PaEditorial.Canvas.toArgb()
+        window.navigationBarColor = PaEditorial.Canvas.toArgb()
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = !Pa.IsDark
-            isAppearanceLightNavigationBars = !Pa.IsDark
+            isAppearanceLightStatusBars = !PaEditorial.IsDark
+            isAppearanceLightNavigationBars = !PaEditorial.IsDark
         }
     }
 

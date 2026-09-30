@@ -5,6 +5,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,7 +121,9 @@ class PaEditorialTokensTest {
     @Test
     fun `色档三件套钉值_小字变体对浅底加深`() {
         assertEquals(Color(0xFF167F65), EditorialTone.RUNNING.text)
-        assertEquals(Color(0xFFE2F4EC), EditorialTone.RUNNING.container)
+        // 2026-09-30 三色盘改造:RUNNING.container 归并到 RunningContainer(#E5F5EF,
+        // 原 .state.run 底 #E2F4EC 与 --mint-dim 差异不可辨,少一个槽位)
+        assertEquals(Color(0xFFE5F5EF), EditorialTone.RUNNING.container)
         assertEquals(Color(0xFF99621E), EditorialTone.ATTENTION.text)
         assertEquals(Color(0xFF6A7C8A), EditorialTone.NEUTRAL.text)
         assertEquals(Color(0xFFE8EDEF), EditorialTone.NEUTRAL.container)
@@ -135,5 +138,55 @@ class PaEditorialTokensTest {
         assertEquals(PaEditorial.Attention, EditorialTone.ATTENTION.accent)
         assertEquals(PaEditorial.Denied, EditorialTone.DENIED.accent)
         assertEquals(PaEditorial.Primary, EditorialTone.PRIMARY.accent)
+    }
+
+    // ---- 三色盘同构(2026-09-30):浅/深/黑客同槽位,apply 换盘,组件零改动 ----
+
+    @Test
+    fun `深色盘钉值_M3暗色音调面_角色配对满足AA`() {
+        PaEditorial.apply(dark = true, hacker = false)
+        try {
+            assertEquals(Color(0xFF0F141C), PaEditorial.Canvas)
+            assertEquals(Color(0xFF161D28), PaEditorial.Surface)
+            assertEquals(Color(0xFF1D2532), PaEditorial.Raised)
+            assertEquals(Color(0xFFE8EDF4), PaEditorial.Ink)
+            assertEquals(Color(0xFF6C9BF2), PaEditorial.Primary)
+            assertEquals(Color(0xFFA2AEBD), PaEditorial.Muted)
+            assertTrue(PaEditorial.IsDark)
+            // 色档三件套同样动态:DARK 盘下语义档随盘
+            assertEquals(Color(0xFF7DD8C0), EditorialTone.RUNNING.text)
+            assertEquals(PaEditorial.Running, EditorialTone.RUNNING.accent)
+        } finally {
+            PaEditorial.apply(dark = false, hacker = false) // 恢复默认浅色,防测试间串色
+        }
+    }
+
+    @Test
+    fun `黑客盘钉值_GitHubDark基底电光青强调`() {
+        PaEditorial.apply(dark = true, hacker = true)
+        try {
+            assertEquals(Color(0xFF050507), PaEditorial.Canvas)
+            assertEquals(Color(0xFF0C0D11), PaEditorial.Surface)
+            assertEquals(Color(0xFF22D3EE), PaEditorial.Primary)
+            assertEquals(Color(0xFFE6E9EF), PaEditorial.Ink)
+            assertEquals(Color(0xFF2DD4BF), PaEditorial.Running)
+            assertEquals(Color(0xFF67E8F9), PaEditorial.CodeText)
+            assertTrue(PaEditorial.IsDark)
+            assertEquals(PaEditorial.Primary, EditorialTone.PRIMARY.accent)
+        } finally {
+            PaEditorial.apply(dark = false, hacker = false)
+        }
+    }
+
+    @Test
+    fun `apply恢复浅色后与默认钉值一致_同构色盘可逆`() {
+        PaEditorial.apply(dark = true, hacker = true)
+        PaEditorial.apply(dark = false, hacker = false)
+        assertEquals(Color(0xFFF6F7F6), PaEditorial.Canvas)
+        assertEquals(Color(0xFF386BE7), PaEditorial.Primary)
+        assertFalse(PaEditorial.IsDark)
+        // 字阶/间距/圆角模式无关,换盘不动
+        assertEquals(23.dp, PaEditorial.Space.PageMargin)
+        assertEquals(18.dp, PaEditorial.Radius.Card)
     }
 }

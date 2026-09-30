@@ -75,8 +75,8 @@ import pocketagent.v1.ListDirectoryRequest
 @Composable
 fun TerminalScreen(onBack: () -> Unit = {}) {
     // 编辑式浅色 M3 色板只包本页子树(chrome 编辑式;xterm 内容区在 WebView 内保持石墨深色)
-    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
-        EditorialLightSystemBars()
+    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
+        EditorialSystemBars()
         TerminalScreenBody(onBack)
     }
 }

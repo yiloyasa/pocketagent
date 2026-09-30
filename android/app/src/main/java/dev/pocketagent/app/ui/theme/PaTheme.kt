@@ -102,6 +102,9 @@ fun PaTheme(content: @Composable () -> Unit) {
         else -> isSystemInDarkTheme()
     }
     Pa.apply(dark, hacker = AgentTheme.mode == "hacker")
+    // 编辑式三色盘与 Pa 同步换肤:全部 editorial.* 消费点(700+ 处直取 + 44 处
+    // 组合局部)随本调用零改动响应 显示模式(浅色/深色/黑客终端)。
+    PaEditorial.apply(dark, hacker = AgentTheme.mode == "hacker")
     val scheme = if (dark) darkColorScheme(
         primary = Pa.Accent, onPrimary = Color.White, background = Pa.Bg, onBackground = Pa.TextPrimary,
         surface = Pa.Card, onSurface = Pa.TextPrimary, surfaceVariant = Pa.CardHigh,

@@ -90,8 +90,8 @@ fun FilesScreen(
     onGoTab: (Int) -> Unit = {},
 ) {
     // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
-    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
-        EditorialLightSystemBars()
+    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
+        EditorialSystemBars()
         FilesScreenBody(
             initialPath, currentTab, onOpenTerminal, onOpenSettings,
             onOpenTaskCenter, onOpenBrowser, onBackToHome, onGoTab,
