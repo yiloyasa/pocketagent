@@ -47,6 +47,13 @@ const (
 	toolNamePerms      = "permissions"
 	toolNameAskUser    = "request_user_input"
 	toolNameAskMcp     = "mcp_elicitation"
+	// toolNameWriteStdin 0.159.2 起的第三种命令类审批:item/commandExecution/
+	// requestApproval 的 params.kind = "writeStdin"(schema CommandExecutionApprovalKind,
+	// 活体实测 kind="command" 见 0.159.2 活体轮探针)。它不是"执行新命令",
+	// 而是请求**向已运行的终端写入 stdin**(配套 item/commandExecution/
+	// terminalInteraction 通知)。手机端按 name 渲染,未知 name 走通用卡,
+	// 卡内 JSON 如实带 kind/reason —— 绝不冒充 shell 命令执行。
+	toolNameWriteStdin = "write_stdin"
 )
 
 // classifyCodexRequest 把方法名映射成处理类别(精确匹配,不做子串判断)。
@@ -110,10 +117,13 @@ func approvalDecision(method string, allow bool) string {
 
 // commandApprovalParams 同时覆盖 v2 的 item/commandExecution/requestApproval
 // 与旧版 execCommandApproval(v2 用 itemId,旧版用 callId)。
+// Kind 是 0.159.2 新增字段:"command"(默认,老服务端不带)= 审批一条新命令;
+// "writeStdin" = 请求向运行中的终端写入输入(schema 有 default,解析不到不报错)。
 type commandApprovalParams struct {
 	ApprovalId string          `json:"approvalId"`
 	CallId     string          `json:"callId"`
 	ItemId     string          `json:"itemId"`
+	Kind       string          `json:"kind"`
 	Command    json.RawMessage `json:"command"` // 新版字符串 / 旧版数组,都兼容
 	Cwd        string          `json:"cwd"`
 	Reason     string          `json:"reason"`
@@ -189,10 +199,24 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 		if id == "" {
 			id = a.ApprovalId
 		}
+		// 0.159.2 kind=writeStdin:向已运行终端写入 stdin 的审批,与"执行新命令"
+		// 是两种动作,卡片如实分开 —— 用户该知道他批准的是"写输入",不是跑命令。
+		// 应答形状两种 kind 相同(accept/decline,Response schema 未变),无需分叉。
+		if a.Kind == "writeStdin" {
+			return &pb.ToolCallBlock{
+				Id:   id,
+				Name: toolNameWriteStdin,
+				JsonArgs: mustJSON(map[string]interface{}{
+					"kind":   a.Kind,
+					"reason": a.Reason,
+				}),
+			}
+		}
 		return &pb.ToolCallBlock{
 			Id:   id,
 			Name: toolNameShell,
 			JsonArgs: mustJSON(map[string]interface{}{
+				"kind":    a.Kind,
 				"command": approvalCommand(a.Command),
 				"cwd":     a.Cwd,
 				"reason":  a.Reason,
@@ -299,6 +323,8 @@ func ApprovalReason(call *pb.ToolCallBlock) string {
 	switch call.GetName() {
 	case toolNameShell:
 		return "agent 请求执行命令"
+	case toolNameWriteStdin:
+		return "agent 请求向运行中的命令写入输入"
 	case toolNameFileChange, toolNamePatch:
 		return "agent 请求修改文件"
 	case toolNamePerms:

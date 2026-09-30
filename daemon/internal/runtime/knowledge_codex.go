@@ -8,14 +8,29 @@
 // 其中 configWarning 在 0.156.1 握手窗口实测到真实帧(本机 config.toml 有
 // 被忽略的设置项),词表文案与实测语义对齐。
 //
+// 【0.159.2 收编批】(2026-09-30,证据:codexplanprobe/codexsurfaceprobe/
+// codexliveturnprobe 活体实测 + `codex app-server generate-json-schema` 重导出
+// diff;快照已刷新至 0.159.2)。通知面 75 → 85(零消失),新增 8 条里只收编
+// 2 + 1 条:authRecovery 两连(模型服务登录态自动恢复,能解释"轮次莫名失败")
+// 与 item/commandExecution/terminalInteraction(0.159.2 起有配套的 writeStdin
+// 审批卡,见 codex_requests.go,从"已知但未登记"补登)。其余新通知不动:
+// thread/realtime/item/*(语音实时,桌面面)、account/gatewayOAuth/changed
+// (桌面 OAuth 网关,配套请求同样不收)、mcpServer/event/stream/notification
+// (桌面 MCP 流,留观)、thread/attachment/updated(daemon 无附件特性;
+// 真到来会如实落 UNKNOWN 透析,不冒充已知)。
+//
 // 【明确不收清单】——桌面产品面通知,手机端没有消费方,别再翻一遍了:
-// thread/realtime/*(语音实时会话)、app/*(桌面应用管理)、fs/changed
+// thread/realtime/*(语音实时会话,0.159.2 起含 item/started|transcript/delta|
+// item/completed 三条正式 schema 通知)、app/*(桌面应用管理)、fs/changed
 // (桌面文件监视)、remoteControl/*(远程控制)、externalAgentConfig/*(桌面
 // 导入)、fuzzyFileSearch/*(桌面模糊搜索)、windowsSandbox/*(Windows 沙箱
-// 安装向导)、windows/worldWritableWarning、project/changed。
-// 0.156.1 新增的请求面方法(userVerification/*、project/*、memory/*、
-// environment/*、account/bedrock/*、process/spawn、mock/experimentalMethod、
-// server/diagnostics 等)同属桌面/探针面,同样不收;完整 diff 见上述证据日志。
+// 安装向导)、windows/worldWritableWarning、project/changed、
+// account/gatewayOAuth/*(桌面 OAuth 网关)。
+// 0.156.1/0.159.2 新增的请求面方法(gatewayOAuth/*、userVerification/*、
+// project/*、memory/*、environment/*、account/bedrock/*、process/spawn、
+// mock/experimentalMethod、server/diagnostics、thread/attachment/*、
+// plugin/reconcile 等)同属桌面/探针面,同样不收;完整 diff 见
+// docs/2026-09-30-agent-capability-matrix.md 的 codex 0.159.2 适配记录。
 package runtime
 
 var codexEventSummaries = map[string]string{
@@ -62,4 +77,9 @@ var codexEventSummaries = map[string]string{
 	"codex\x1fprocess/exited":                  "Codex 拉起的一个后台进程退出了",
 	"codex\x1fhook/started":                    "Codex 开始执行一个生命周期钩子",
 	"codex\x1fhook/completed":                  "Codex 执行完一个生命周期钩子",
+
+	// ---- 0.159.2 收编批(证据与不收清单见文件头注释)----
+	"codex\x1fmodelProvider/authRecoveryStarted":         "模型服务的登录状态出了问题,Codex 正在自动恢复",
+	"codex\x1fmodelProvider/authRecoveryCompleted":       "模型服务登录状态的自动恢复已完成",
+	"codex\x1fitem/commandExecution/terminalInteraction": "有一条命令在等终端输入(比如密码或确认提示)",
 }

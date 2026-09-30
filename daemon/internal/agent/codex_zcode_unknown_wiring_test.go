@@ -56,6 +56,26 @@ func TestCodexGlobalNoticeKindClassification(t *testing.T) {
 			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PASSTHROUGH(0.156.1 收编批,只留痕不投影)", m, got)
 		}
 	}
+	// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
+	// 通知面 75 → 85;authRecovery 两连是关键通知(解释轮次失败),留痕不投影;
+	// terminalInteraction 有事件流投影(0.159.2 起配套 writeStdin 审批卡),
+	// 从漏登的 UNKNOWN 补为 PROJECTED。
+	for _, m := range []string{
+		"modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
+	} {
+		if got := codexGlobalNoticeKind(m); got != runtime.KindKnownPassthrough {
+			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PASSTHROUGH(0.159.2 收编批,只留痕不投影)", m, got)
+		}
+	}
+	if got := codexGlobalNoticeKind("item/commandExecution/terminalInteraction"); got != runtime.KindKnownProjected {
+		t.Errorf("codexGlobalNoticeKind(terminalInteraction) = %q, want PROJECTED(事件流有投影,见 codex_events.go)", got)
+	}
+	// 幻影方法回归钉(codexplanprobe 两轮定案:0.156.1/0.159.2 二进制均不命中、
+	// 运行时 unknown variant,真实投影走 turn/plan/updated):词表与分类表
+	// 都不得再挂 thread/plan/updated,挂了就是给不存在的帧发"已知"身份证。
+	if got := codexGlobalNoticeKind("thread/plan/updated"); got != runtime.KindUnknownNotification {
+		t.Errorf("codexGlobalNoticeKind(thread/plan/updated) = %q, want UNKNOWN(幻影方法,真实方法名是 turn/plan/updated)", got)
+	}
 	// 上游升级后真发来的怪东西必须保持 UNKNOWN;空 method 同样如实记未知。
 	for _, m := range []string{"brand/new/notice", "item/guardian/v2", ""} {
 		if got := codexGlobalNoticeKind(m); got != runtime.KindUnknownNotification {

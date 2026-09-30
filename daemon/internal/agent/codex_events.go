@@ -389,10 +389,13 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 		}
 	case "item/commandExecution/terminalInteraction":
 		// 命令运行中输出了交互提示(sudo 密码、y/n 确认等)。
-		// 【诚实边界】当前 codex 协议(v2 schema 全量核对)只有这条通知,
-		// **没有**配套的"向运行中命令写 stdin"的方法 —— command/exec/write 只
-		// 适用于独立的 command/exec 会话,对 thread 内的 commandExecution 无效。
-		// 所以这里只做"可见状态 + 明确指引",绝不伪造一个写不进去的输入框。
+		// 【诚实边界 · 0.159.2 更新】此前核对 v2 schema 的结论是"只有这条通知、
+		// 没有配套的写 stdin 方法"。0.159.2 起这条已有配套:item/commandExecution/
+		// requestApproval 会带 params.kind="writeStdin" 的审批请求(schema
+		// CommandExecutionApprovalKind;accept 应答即放行写入,应答形状未变,
+		// 见 codex_requests.go 的 writeStdin 审批卡)。所以指引文案从"只能在
+		// 电脑上完成"改为"若弹出写入输入审批卡可批准";但这里**绝不主动伪造**
+		// 一个输入通道 —— 写入动作只属于 codex 的审批回路。
 		var n struct {
 			ItemId string `json:"itemId"`
 			Stdin  string `json:"stdin"`
@@ -402,7 +405,7 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 		event.Code = n.ItemId
 		event.Title = "命令在等终端输入"
 		event.Message = fmt.Sprintf(
-			"命令输出了交互提示:%s。当前 codex 协议不支持向运行中的命令写入输入,请在电脑上完成该交互(输密码 / 确认),或在手机上终止任务后改用免交互方式重试。",
+			"命令输出了交互提示:%s。若随后弹出「向命令写入输入」的审批卡,批准后 codex 会把输入写进该命令;没有审批卡时请在电脑上完成该交互,或在手机上终止任务后改用免交互方式重试。",
 			n.Stdin,
 		)
 	default:

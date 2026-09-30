@@ -566,7 +566,12 @@ func codexGlobalNoticeKind(method string) string {
 		"thread/reverted", "thread/closed", "thread/name/updated",
 		"thread/queue/changed", "thread/status/changed", "thread/started",
 		"skills/changed", "turn/plan/updated", "thread/goal/updated",
-		"thread/goal/cleared":
+		"thread/goal/cleared",
+		// 0.159.2 补登:命令在等终端输入 —— 事件流有投影(codex_events.go 的
+		// terminalInteraction 分支,带指引文案),此前漏登记被当 UNKNOWN 计数;
+		// 0.159.2 起它还常有配套的 writeStdin 审批卡(codex_requests.go),
+		// 出现频率会上升,更不该灌 UNKNOWN。
+		"item/commandExecution/terminalInteraction":
 		return runtime.KindKnownProjected
 	case "turn/diff/updated", "model/verification",
 		// 0.156.1 收编批(docs/verify/evidence/codex-0156-probe.log;词表在
@@ -580,7 +585,11 @@ func codexGlobalNoticeKind(method string) string {
 		"item/reasoning/summaryPartAdded", "turn/moderationMetadata",
 		"account/updated", "account/login/completed",
 		"mcpServer/oauthLogin/completed", "process/exited",
-		"hook/started", "hook/completed":
+		"hook/started", "hook/completed",
+		// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
+		// 模型服务登录态自动恢复两连 —— 它解释"轮次莫名失败",属关键通知,
+		// daemon 无专属投影,留痕 + 词表人话。
+		"modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted":
 		return runtime.KindKnownPassthrough
 	default:
 		return runtime.KindUnknownNotification

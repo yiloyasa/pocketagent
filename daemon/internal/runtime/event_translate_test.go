@@ -39,6 +39,12 @@ func TestKnownMethodsTranslateToPlainLanguage(t *testing.T) {
 		{"codex", "item/completed:summary", KindKnownPassthrough, "摘要", "透传"},
 		{"codex", "thread/name/updated", KindKnownProjected, "标题", "投影"},
 		{"codex", "turn/diff/updated", KindKnownPassthrough, "改动", "透传"},
+		// codex 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
+		// authRecovery 两连(模型服务登录态自动恢复)与 terminalInteraction
+		// (命令等终端输入;0.159.2 起配套 writeStdin 审批卡)。
+		{"codex", "modelProvider/authRecoveryStarted", KindKnownPassthrough, "恢复", "透传"},
+		{"codex", "modelProvider/authRecoveryCompleted", KindKnownPassthrough, "恢复", "透传"},
+		{"codex", "item/commandExecution/terminalInteraction", KindKnownProjected, "输入", "投影"},
 		// pi。
 		{"pi", "message_update", KindKnownPassthrough, "消息", "透传"},
 		{"pi", "session_info_changed", KindKnownPassthrough, "会话", "透传"},
