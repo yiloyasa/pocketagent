@@ -47,15 +47,17 @@ import androidx.core.view.WindowCompat
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
-import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 启动动效(优化版):
- *   1) 背景跟随当前主题(深色主题下不再闪一块白,消除"闪屏"感);
+ * 启动动效(编辑式版):
+ *   1) 背景固定走编辑式冷白画布 #F6F7F6(PaEditorial.Canvas;编辑式令牌是固定
+ *      浅色盘,不随 AgentTheme.mode 换肤 —— 启动即新设计的第一屏);
  *   2) 字标先淡入并轻微放大"立住",再逐字打出品牌名,节奏均匀;
- *   3) 到 "agent" 时蓝色光晕柔和扩散,底部一条进度线同步展开;
+ *   3) 到 "agent" 时主色光晕柔和扩散,底部一条进度线同步展开(主色 #386BE7
+ *      只用于这一处品牌时刻,不铺满画面);
  *   4) 收尾整屏淡出交接主页,全程无跳变。
  */
 private val PaFont = FontFamily(Font(R.font.poppins_bold))
@@ -75,17 +77,19 @@ fun Splash(onDone: () -> Unit) {
     // 减弱动效:字标/进度线瞬时到位,整体短驻留后直接交接主页(不播任何位移/缩放)
     val reduceMotion = rememberReduceMotion()
 
-    // 跟随主题取色:浅色主题近白、深色主题近黑,避免启动瞬间的色彩跳变
-    val bg = Pa.Bg
-    val ink = Pa.TextPrimary
+    // 编辑式固定浅色盘:画布冷白、字标深墨、强调主色(README §视觉系统)
+    val bg = PaEditorial.Canvas
+    val ink = PaEditorial.Ink
+    val accent = PaEditorial.Primary
 
     SideEffect {
         val window = (context as? Activity)?.window ?: return@SideEffect
         window.statusBarColor = bg.toArgb()
         window.navigationBarColor = bg.toArgb()
+        // 浅色画布上用深色系统图标(固定 true,不随显示模式摇摆)
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = !Pa.IsDark
-            isAppearanceLightNavigationBars = !Pa.IsDark
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
         }
     }
 
@@ -137,7 +141,7 @@ fun Splash(onDone: () -> Unit) {
                 .background(bg),
             contentAlignment = Alignment.Center,
         ) {
-            // 蓝色光晕:在 "agent" 区域柔和扩散
+            // 主色光晕:在 "agent" 区域柔和扩散
             Box(
                 Modifier
                     .size(240.dp)
@@ -145,8 +149,8 @@ fun Splash(onDone: () -> Unit) {
                     .background(
                         Brush.radialGradient(
                             colors = listOf(
-                                Pa.Accent.copy(alpha = 0.45f),
-                                Pa.Accent.copy(alpha = 0.14f),
+                                accent.copy(alpha = 0.45f),
+                                accent.copy(alpha = 0.14f),
                                 Color.Transparent,
                             ),
                         ),
@@ -165,13 +169,13 @@ fun Splash(onDone: () -> Unit) {
                     buildAnnotatedString {
                         FULL.take(typed).forEachIndexed { index, c ->
                             withStyle(
-                                SpanStyle(color = if (index < 7) ink else Pa.Accent),
+                                SpanStyle(color = if (index < 7) ink else accent),
                             ) {
                                 append(c.toString())
                             }
                         }
                         if (typed < FULL.length) {
-                            withStyle(SpanStyle(color = Pa.Accent.copy(alpha = 0.65f))) {
+                            withStyle(SpanStyle(color = accent.copy(alpha = 0.65f))) {
                                 append("▍")
                             }
                         }
@@ -181,18 +185,18 @@ fun Splash(onDone: () -> Unit) {
                     fontSize = 34.sp,
                 )
                 Spacer(Modifier.height(16.dp))
-                // 进度线:随打字节奏展开,停留时收满
+                // 进度线:随打字节奏展开,停留时收满(底槽 = 细线令牌)
                 Box(
                     Modifier
                         .width(150.dp)
                         .height(3.dp)
-                        .background(Pa.Hover, RoundedCornerShape(50)),
+                        .background(PaEditorial.Hairline, RoundedCornerShape(50)),
                 ) {
                     Box(
                         Modifier
                             .fillMaxWidth(sweep.value.coerceIn(0f, 1f))
                             .fillMaxHeight()
-                            .background(Pa.Accent, RoundedCornerShape(50)),
+                            .background(accent, RoundedCornerShape(50)),
                     )
                 }
             }

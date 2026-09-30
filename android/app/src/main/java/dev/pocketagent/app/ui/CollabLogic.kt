@@ -1,22 +1,20 @@
 package dev.pocketagent.app.ui
 
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.theme.EditorialTone
 
 /**
  * 协同页纯函数层:
  *  - 可参与协同的 agent 清单(动态,不写死);
  *  - agent 多选切换;
  *  - 每 agent 的角色绑定;
- *  - 单个 agent 派发相位 → 卡片文案;
+ *  - 单个 agent 派发相位 → 四词状态(设计稿 10);
  *  - 空态/加载态人话文案。
  *
  * 【为什么独立成层】这些规则最容易被"顺手改个条件"悄悄反转且零报错,
  * 只能等用户看到错乱的选中态/角色绑定才暴露。集中成纯函数至少让它们**可被**断言,
- * 不再依赖真机/daemon。
- *
- * ⚠ 本文件当前**没有**对应单测:原注释指向的 CollabScreenLogicTest 并不存在
- * (2026-09-23 W11c 核验:test 目录下没有任何用例引用这里的函数)。留这句话是为了
- * 不让下一个人再去找一个不存在的文件 —— 要么补测试,要么别再声称"单测钉死"。
+ * 不再依赖真机/daemon(相位四词映射见 [collabPhaseStatus],单测
+ * CollabPhaseStatusTest 钉死;此前本文件无任何测试,2026-09-30 编辑式升级补齐)。
  */
 
 /**
@@ -70,6 +68,26 @@ fun bindCollabRole(binding: Map<String, String>, agentId: String, roleId: String
 
 /** 单个 agent 在协同页中的派发相位(客户端真实可知的态,绝不编造 agent 回复)。 */
 enum class CollabAgentPhase { IDLE, ACK, RUNNING, DONE, ERROR }
+
+/**
+ * 派发相位 → 四词状态(纯函数,单测钉死 CollabPhaseStatusTest;设计稿 10 的口径):
+ *  - ACK(已收到指令)/ RUNNING(daemon 已受理、执行中)→ 「正在执行」
+ *    (README:接受/运行中都表述为正在执行;受理即起飞,结果另说);
+ *  - DONE → 「已完成」;ERROR → 「未完成」(措辞禁「失败」「错误」,四词纪律);
+ *  - IDLE(还没派发)→ null:无事实不摆空壳徽章(与 editorialStatusOrNull 同纪律)。
+ *
+ * 一位成员失败不拖垮其余 —— 相位按成员独立判定,本函数绝不读全局状态。
+ */
+fun collabPhaseStatus(phase: CollabAgentPhase): EditorialStatus? = when (phase) {
+    CollabAgentPhase.IDLE -> null
+    CollabAgentPhase.ACK, CollabAgentPhase.RUNNING -> EditorialStatus.RUNNING
+    CollabAgentPhase.DONE -> EditorialStatus.COMPLETED
+    CollabAgentPhase.ERROR -> EditorialStatus.NOT_COMPLETED
+}
+
+/** 派发相位的语义色档(徽章/进度行共用;IDLE = 中性灰,不是"运行中"的绿)。 */
+fun collabPhaseTone(phase: CollabAgentPhase): EditorialTone =
+    collabPhaseStatus(phase)?.tone ?: EditorialTone.GREY
 
 /**
  * 卡片相位文案(纯函数):只描述客户端真实态与"等待 daemon"的诚实态,

@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,6 +39,8 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -120,7 +123,9 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text(
                 "选择文件夹", Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                fontSize = 17.sp, color = Pa.TextPrimary,
+                fontSize = 17.sp, lineHeight = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaEditorial.Ink,
             )
             // 路径栏:上级 + 当前位置
             Row(
@@ -131,19 +136,19 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                     IconActionButton(
                         R.drawable.ic_lucide_chevron_left, "上级",
                         { goUpOneLevel() },
-                        bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+                        bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp,
                     )
                     Spacer(Modifier.width(10.dp))
                 }
                 Text(
                     if (showRoots) "此电脑" else path,
                     Modifier.weight(1f),
-                    fontSize = 12.sp, color = Pa.TextTertiary,
+                    fontSize = 12.sp, color = PaEditorial.Muted,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 if (loading) {
                     Spacer(Modifier.width(8.dp))
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Pa.Accent)
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = PaEditorial.Primary)
                 }
             }
 
@@ -153,16 +158,17 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                         Modifier
                             .fillMaxWidth()
                             .pressable { if (e.isDir) loadDir(e.path.ifEmpty { joinPath(path, e.name) }) }
-                            .background(Pa.Card, RoundedCornerShape(12.dp))
+                            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
                             .padding(horizontal = 12.dp, vertical = 11.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
                             painterResource(R.drawable.ic_lucide_folder), null,
-                            tint = Pa.Accent, modifier = Modifier.size(18.dp),
+                            tint = PaEditorial.Running, modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.width(10.dp))
-                        Text(e.name, fontSize = 14.sp, color = Pa.TextPrimary, maxLines = 1)
+                        Text(e.name, fontSize = 14.sp, color = PaEditorial.Ink, maxLines = 1)
                     }
                     Spacer(Modifier.height(6.dp))
                 }
@@ -179,14 +185,14 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                             onPick(path)
                         }
                     }
-                    .background(if (showRoots) Pa.Hover else Pa.Accent, RoundedCornerShape(14.dp))
-                    .padding(vertical = 13.dp),
+                    .background(if (showRoots) PaEditorial.Raised else PaEditorial.Graphite, RoundedCornerShape(14.dp))
+                    .padding(vertical = 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (showRoots) "先进入一个文件夹" else "选择此文件夹",
                     fontSize = 15.sp,
-                    color = if (showRoots) Pa.TextTertiary else Color.White,
+                    color = if (showRoots) PaEditorial.Muted else Color.White,
                     fontWeight = FontWeight.SemiBold,
                 )
             }

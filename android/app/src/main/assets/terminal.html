@@ -16,7 +16,9 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #000;
+      /* 石墨(编辑式 GraphiteCode #1A2430):内容区保持深色终端,
+         与 app 的石墨代码箱/侧边栏同一深色层,不再是纯黑孤岛 */
+      background: #1a2430;
       position: fixed;
       left: 0;
       top: 0;
@@ -50,8 +52,9 @@
     #terminal .xterm-viewport { scrollbar-width: none; }
     #terminal .xterm-viewport::-webkit-scrollbar { display: none; }
     /* ---- 【P1-7 终端辅助键栏】两行按键条,位于终端区上方(WebView 顶部,
-       即 Compose 头部之下)。配色跟随页面纯黑主题:近黑底 + #e7eaf0 前景,
-       粘滞 Ctrl 用光标色 #72b7ff 点亮,按下态整体提亮。 ---- */
+       即 Compose 头部之下)。配色对齐编辑式石墨层(GraphiteDrawer #1B2634 /
+       OnGraphiteHairline #364655 / CodeText #D5E6F8);粘滞 Ctrl 用编辑式主色
+       #386BE7 点亮(主色只给当前操作),按下态整体提亮。 ---- */
     body.kb-off #keybar { display: none; }
     #keybar {
       position: absolute;
@@ -60,8 +63,8 @@
       right: 0;
       z-index: 10;
       padding: 4px 4px 2px;
-      background: #0b0d12;
-      border-bottom: 1px solid #1c2230;
+      background: #1b2634;
+      border-bottom: 1px solid #364655;
       user-select: none;
       -webkit-user-select: none;
       -webkit-tap-highlight-color: transparent;
@@ -71,18 +74,19 @@
     .kb-row + .kb-row { margin-top: 4px; }
     .kb-key {
       flex: 1;
-      height: 40px; /* 触控目标:两行各 40px,整栏高 91px(4+40+4+40+2+1 边框) */
+      height: 44px; /* 触控目标:两行各 44px(README 主要点击区 ≥44px),
+                       整栏高 99px(4+44+4+44+2+1 边框) */
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #161a23;
-      color: #e7eaf0;
-      border: 1px solid #232a3a;
+      background: #243140;
+      color: #d5e6f8;
+      border: 1px solid #364655;
       border-radius: 8px;
       font: 600 13px/1 Menlo, Consolas, "DejaVu Sans Mono", monospace;
     }
-    .kb-key.kb-down { background: #26304a; border-color: #3d4a6b; } /* 按下反馈 */
-    .kb-key.kb-sticky { background: #72b7ff; border-color: #72b7ff; color: #0b0d12; } /* Ctrl 粘滞点亮 */
+    .kb-key.kb-down { background: #31435a; border-color: #46596f; } /* 按下反馈 */
+    .kb-key.kb-sticky { background: #386be7; border-color: #386be7; color: #ffffff; } /* Ctrl 粘滞点亮 */
     /* 键栏隐藏后的恢复浮钮:半透明小钮贴页面右上角,只在隐藏态出现 */
     #kbShow {
       display: none;
@@ -91,12 +95,12 @@
       right: 4px;
       z-index: 11;
       width: 44px;
-      height: 30px;
+      height: 44px;
       align-items: center;
       justify-content: center;
-      background: rgba(22, 26, 35, 0.72);
-      color: #e7eaf0;
-      border: 1px solid #232a3a;
+      background: rgba(36, 49, 64, 0.85);
+      color: #d5e6f8;
+      border: 1px solid #364655;
       border-radius: 8px;
       font: 600 14px/1 Menlo, Consolas, monospace;
       user-select: none;
@@ -156,10 +160,12 @@
         fontSize: 13,
         fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", monospace',
         theme: {
-          background: '#000000',
-          foreground: '#e7eaf0',
-          cursor: '#72b7ff',
-          selectionBackground: '#264f78',
+          /* 石墨终端(编辑式 GraphiteCode #1A2430):内容区保持深色 xterm,
+             前景取代码色 CodeText #D5E6F8,光标用编辑式主色(当前操作) */
+          background: '#1a2430',
+          foreground: '#d5e6f8',
+          cursor: '#386be7',
+          selectionBackground: '#2a4a73',
         },
         scrollback: 5000,
         convertEol: false,

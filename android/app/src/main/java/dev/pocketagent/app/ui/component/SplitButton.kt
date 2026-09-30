@@ -39,6 +39,7 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * Split button 的一个下拉选项。
@@ -86,7 +87,8 @@ fun SplitButton(
                 // 【heightIn 而不是 height】主按钮的 caption 要显示"当前生效值"(如模型名),
                 // 固定高度会让两行 caption 被裁掉。给最小高度、允许按需长高。
                 .heightIn(min = buttonHeight)
-                .background(Pa.Card, corner),
+                .background(PaEditorial.Surface, corner)
+                .border(1.dp, PaEditorial.Hairline, corner),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // ---- 主按钮区:执行默认操作 ----
@@ -104,7 +106,7 @@ fun SplitButton(
                     Text(
                         label,
                         fontSize = if (compact) 12.5.sp else 15.sp,
-                        color = Pa.TextPrimary,
+                        color = PaEditorial.Ink,
                         maxLines = 1,
                     )
                     if (caption != null && !compact) {
@@ -113,7 +115,7 @@ fun SplitButton(
                         Text(
                             caption,
                             fontSize = 13.5.sp,
-                            color = Pa.TextSecondary,
+                            color = PaEditorial.Muted,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -124,7 +126,7 @@ fun SplitButton(
                     Text(
                         mainLabel,
                         fontSize = if (compact) 10.5.sp else 13.sp,
-                        color = Pa.Accent,
+                        color = PaEditorial.Primary,
                         fontWeight = FontWeight.Medium,
                     )
                 }
@@ -133,7 +135,7 @@ fun SplitButton(
                 Modifier
                     .width(1.dp)
                     .height(if (compact) 16.dp else 24.dp)
-                    .background(Pa.Separator),
+                    .background(PaEditorial.Hairline),
             )
             // ---- 下拉触发区 ----
             Box(
@@ -145,7 +147,7 @@ fun SplitButton(
                 Icon(
                     painterResource(R.drawable.ic_lucide_chevron_right),
                     contentDescription = "更多选项",
-                    tint = Pa.TextSecondary,
+                    tint = PaEditorial.Muted,
                     // 入口箭头放大一档:13/16dp 在深色底上偏小(用户反馈"图标过小")。
                     modifier = Modifier.size(if (compact) 15.dp else 18.dp).rotate(chevron),
                 )
@@ -165,8 +167,8 @@ fun SplitButton(
                         .widthIn(min = if (compact) 140.dp else 176.dp, max = 300.dp)
                         .heightIn(max = 288.dp)
                         .verticalScroll(rememberScrollState())
-                        .background(Pa.CardHigh, RoundedCornerShape(14.dp))
-                        .border(1.dp, Pa.Separator, RoundedCornerShape(14.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(14.dp))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
                         .padding(vertical = 5.dp),
                 ) {
                     options.forEachIndexed { i, opt ->
@@ -176,7 +178,7 @@ fun SplitButton(
                                     .fillMaxWidth()
                                     .padding(horizontal = 10.dp)
                                     .height(1.dp)
-                                    .background(Pa.Separator),
+                                    .background(PaEditorial.Hairline),
                             )
                         }
                         Row(
@@ -194,7 +196,7 @@ fun SplitButton(
                                 Text(
                                     opt.title,
                                     fontSize = 14.5.sp,
-                                    color = if (opt.selected) Pa.Accent else Pa.TextPrimary,
+                                    color = if (opt.selected) PaEditorial.Primary else PaEditorial.Ink,
                                     fontWeight = if (opt.selected) FontWeight.Medium else FontWeight.Normal,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
@@ -204,7 +206,7 @@ fun SplitButton(
                                     Text(
                                         opt.desc,
                                         fontSize = 12.5.sp,
-                                        color = Pa.TextTertiary,
+                                        color = PaEditorial.Muted,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -215,7 +217,7 @@ fun SplitButton(
                                 Icon(
                                     painterResource(R.drawable.ic_lucide_check),
                                     contentDescription = null,
-                                    tint = Pa.Accent,
+                                    tint = PaEditorial.Primary,
                                     modifier = Modifier.size(18.dp),
                                 )
                             }

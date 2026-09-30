@@ -7,6 +7,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,9 @@ import dev.pocketagent.app.ui.component.WebDownloadBridge
 import dev.pocketagent.app.ui.component.WebNavPolicy
 import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.component.PaNavIconButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,6 +87,16 @@ import pocketagent.v1.ReadFileRequest
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
+    // 编辑式浅色 M3 色板只包本页子树(chrome 编辑式;WebView 内容区跟页面自身)
+    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
+        EditorialLightSystemBars()
+        BrowserScreenBody(initialUrl, onBack)
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var input by remember { mutableStateOf(stripPcMeta(initialUrl)) }
@@ -404,34 +418,40 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Pa.Bg)
+            .background(PaEditorial.Canvas)
             .statusBarsPadding(),
     ) {
-        // ---------- 顶栏:返回 + 地址栏 + 刷新 ----------
+        // ---------- 顶栏:返回 + 地址栏 + 刷新(编辑式 chrome;网页本体不在此列) ----------
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 8.dp),
+                .padding(start = PaEditorial.Space.NavGutter, end = 14.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
+            PaNavIconButton(
+                onClick = onBack,
+                contentDescription = "返回",
+                iconRes = R.drawable.ic_lucide_chevron_left,
+                plain = true,
+            )
             Spacer(Modifier.width(10.dp))
             Box(
                 Modifier
                     .weight(1f)
-                    .background(Pa.Card, RoundedCornerShape(14.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
                     .padding(horizontal = 12.dp, vertical = 11.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (input.isEmpty()) {
-                    Text("输入网址,或粘贴电脑上的文件路径", fontSize = 13.sp, color = Pa.TextTertiary)
+                    Text("输入网址,或粘贴电脑上的文件路径", fontSize = 13.sp, color = PaEditorial.Muted)
                 }
                 BasicTextField(
                     value = input,
                     onValueChange = { input = it },
                     singleLine = true,
-                    textStyle = TextStyle(color = Pa.TextPrimary, fontSize = 13.sp),
-                    cursorBrush = SolidColor(Pa.Accent),
+                    textStyle = TextStyle(color = PaEditorial.Ink, fontSize = 13.sp),
+                    cursorBrush = SolidColor(PaEditorial.Primary),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Uri,
                         imeAction = ImeAction.Go,
@@ -441,26 +461,33 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 )
             }
             Spacer(Modifier.width(10.dp))
-            IconActionButton(R.drawable.ic_lucide_refresh_cw, "刷新", {
-                val t = input.trim()
-                when {
-                    t.startsWith("content://") -> openLocalUri(t)
-                    else -> {
-                        val pc = toPcPath(t)
-                        if (pc != null) openPcFile(pc) else webRef?.reload()
+            Spacer(Modifier.width(8.dp))
+            PaNavIconButton(
+                onClick = {
+                    val t = input.trim()
+                    when {
+                        t.startsWith("content://") -> openLocalUri(t)
+                        else -> {
+                            val pc = toPcPath(t)
+                            if (pc != null) openPcFile(pc) else webRef?.reload()
+                        }
                     }
-                }
-            }, bg = Pa.Card)
+                },
+                contentDescription = "刷新",
+                iconRes = R.drawable.ic_lucide_refresh_cw,
+            )
             Spacer(Modifier.width(8.dp))
             // 【电脑预览入口】问 daemon 要本机 dev server 清单,点开即预览(P2)。
             // 首次展开自动扫一次;之后再展开沿用结果,面板里有"重新扫描"。
-            IconActionButton(
-                R.drawable.ic_lucide_monitor, "电脑预览",
-                {
+            // active = 当前面板展开(主色浅底 + 主色图:主色只用于当前操作)。
+            PaNavIconButton(
+                onClick = {
                     showServers = !showServers
                     if (showServers && servers.isEmpty() && !scanning) refreshDevServers()
                 },
-                bg = if (showServers) Pa.AccentDim else Pa.Card,
+                contentDescription = "电脑预览",
+                iconRes = R.drawable.ic_lucide_monitor,
+                active = showServers,
             )
         }
 
@@ -479,20 +506,20 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 },
                 Modifier.weight(1f),
                 fontSize = 11.sp,
-                color = Pa.TextTertiary,
+                color = PaEditorial.Muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (canGoBack) {
                 IconActionButton(R.drawable.ic_lucide_chevron_left, "后退", {
                     webRef?.goBack()
-                }, bg = Pa.Card, size = 34.dp, iconSize = 16.dp)
+                }, bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp)
                 Spacer(Modifier.width(8.dp))
             }
             if (canGoForward) {
                 IconActionButton(R.drawable.ic_lucide_chevron_right, "前进", {
                     webRef?.goForward()
-                }, bg = Pa.Card, size = 34.dp, iconSize = 16.dp)
+                }, bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp)
                 Spacer(Modifier.width(8.dp))
             }
             // 【下载入口】浏览电脑上的文件时给一个明确的"存到手机"按钮。
@@ -505,7 +532,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         PaDownloader.downloadFromPc(pcPath, pageTitle)
                         android.widget.Toast.makeText(ctx, "已开始下载到手机", android.widget.Toast.LENGTH_SHORT).show()
                     },
-                    bg = Pa.Accent, tint = androidx.compose.ui.graphics.Color.White,
+                    bg = PaEditorial.Primary, tint = androidx.compose.ui.graphics.Color.White,
                     size = 34.dp, iconSize = 16.dp,
                 )
                 Spacer(Modifier.width(8.dp))
@@ -514,7 +541,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                 IconActionButton(
                     R.drawable.ic_lucide_share_2, "分享",
                     { PaDownloader.shareLocalFile(ctx, localUri, pageTitle) },
-                    bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+                    bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp,
                 )
                 Spacer(Modifier.width(8.dp))
             }
@@ -550,7 +577,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         }
                     }
                 },
-                bg = Pa.Card, size = 34.dp, iconSize = 16.dp,
+                bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp,
             )
             Spacer(Modifier.width(8.dp))
             IconActionButton(R.drawable.ic_lucide_globe, "用系统浏览器打开", {
@@ -562,22 +589,22 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         ),
                     )
                 }
-            }, bg = Pa.Card, size = 34.dp, iconSize = 16.dp)
+            }, bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp)
         }
 
-        // 进度细线
+        // 进度细线(编辑式:细线轨道 + 主色填充,只在进行中显示)
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(2.dp)
-                .background(Pa.Card),
+                .background(PaEditorial.Hairline),
         ) {
             if (progress in 0.01f..0.99f) {
                 Box(
                     Modifier
                         .fillMaxWidth(progress)
                         .height(2.dp)
-                        .background(Pa.Accent),
+                        .background(PaEditorial.Primary),
                 )
             }
         }
@@ -588,10 +615,11 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp)
                     .heightIn(max = 240.dp)
                     .verticalScroll(rememberScrollState())
-                    .background(Pa.Card, RoundedCornerShape(14.dp)),
+                    .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp)),
             ) {
                 Row(
                     Modifier
@@ -599,12 +627,12 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                         .padding(start = 14.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("电脑上的 dev server", Modifier.weight(1f), fontSize = 13.sp, color = Pa.TextPrimary)
+                    Text("电脑上的 dev server", Modifier.weight(1f), fontSize = 13.sp, color = PaEditorial.Ink)
                     if (scanning) {
-                        Text("扫描中…", fontSize = 11.sp, color = Pa.TextTertiary)
+                        Text("扫描中…", fontSize = 11.sp, color = PaEditorial.Muted)
                     } else {
                         Text(
-                            "重新扫描", fontSize = 11.sp, color = Pa.Accent,
+                            "重新扫描", fontSize = 11.sp, color = PaEditorial.Primary,
                             modifier = Modifier.clickable { refreshDevServers() },
                         )
                     }
@@ -613,12 +641,12 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     scanning && servers.isEmpty() -> Text(
                         "正在拨 3000/5173/8000/8080 等常见端口…",
                         Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        fontSize = 11.sp, color = Pa.TextTertiary,
+                        fontSize = 11.sp, color = PaEditorial.Muted,
                     )
                     servers.isEmpty() -> Text(
                         scanHint ?: "没有正在运行的 dev server",
                         Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        fontSize = 11.sp, color = Pa.TextTertiary,
+                        fontSize = 11.sp, color = PaEditorial.Muted,
                     )
                     else -> servers.forEach { s ->
                         Row(
@@ -628,24 +656,24 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                                 .padding(horizontal = 14.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(":${s.port}", fontSize = 13.sp, color = Pa.Accent)
+                            Text(":${s.port}", fontSize = 13.sp, color = PaEditorial.Primary)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     s.title.ifBlank {
                                         s.serverHeader.ifBlank { "HTTP 服务" }
                                     },
-                                    fontSize = 12.5.sp, color = Pa.TextPrimary,
+                                    fontSize = 12.5.sp, color = PaEditorial.Ink,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
                                 if (s.serverHeader.isNotBlank()) {
                                     Text(
-                                        s.serverHeader, fontSize = 10.sp, color = Pa.TextTertiary,
+                                        s.serverHeader, fontSize = 10.sp, color = PaEditorial.Muted,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
-                            Text("打开 →", fontSize = 11.sp, color = Pa.TextSecondary)
+                            Text("打开 →", fontSize = 11.sp, color = PaEditorial.Muted)
                         }
                     }
                 }
@@ -653,7 +681,7 @@ fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
                     Text(
                         "手机与电脑需在同一网络(WiFi / Tailscale)",
                         Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
-                        fontSize = 10.sp, color = Pa.TextTertiary,
+                        fontSize = 10.sp, color = PaEditorial.Muted,
                     )
                 }
             }
@@ -1045,8 +1073,9 @@ private fun pal(): Pal = if (Pa.IsDark) Pal(
     bg = "#0b0b0d", fg = "#e6e6e6", heading = "#ffffff",
     muted = "#b9b9c0", subtle = "#9a9aa2", card = "#17171a", hint = "#7a7a82",
 ) else Pal(
-    bg = "#ffffff", fg = "#1c1c1e", heading = "#111113",
-    muted = "#5f5f68", subtle = "#75757e", card = "#f4f4f6", hint = "#8e8e96",
+    // 浅色档 = 编辑式令牌(冷白画布/深墨正文/次级灰/瓷白卡),与迁移后的 chrome 同体系
+    bg = "#f6f7f6", fg = "#19222d", heading = "#19222d",
+    muted = "#697788", subtle = "#98a3ae", card = "#ffffff", hint = "#697788",
 )
 
 /** 起始页:不再是一张白纸。 */
@@ -1060,7 +1089,7 @@ private fun startPage(): String {
           会话里 agent 生成的网页、报告、图片都在这台电脑上,可以直接在 App 内打开。
         </div>
         <div style="margin-top:18px;background:${p.card};border-radius:14px;padding:14px">
-          <div style="color:#4c8dff;font-weight:600;font-size:13px">怎么用</div>
+          <div style="color:#386be7;font-weight:600;font-size:13px">怎么用</div>
           <div style="margin-top:8px;color:${p.muted};font-size:12.5px">
             · 在会话里点那条文件路径,自动在这里打开<br>
             · 也可以把路径粘到上面的地址栏,例如
@@ -1079,7 +1108,7 @@ private fun errorPage(target: String, reason: String): String {
     return """
     <body style="margin:0;background:${p.bg};color:${p.fg};font:14px/1.7 system-ui,-apple-system,sans-serif">
       <div style="padding:22px 18px">
-        <div style="color:#ff6b6b;font-size:17px;font-weight:600">打不开这个页面</div>
+        <div style="color:#c94f4d;font-size:17px;font-weight:600">打不开这个页面</div>
         <div style="margin-top:10px;color:${p.muted};font-size:13px">${escapeHtml(reason)}</div>
         <div style="margin-top:14px;background:${p.card};border-radius:12px;padding:12px;
                     font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:${p.subtle}">
@@ -1114,7 +1143,7 @@ private fun binaryPage(name: String, size: Long, canDownload: Boolean): String {
         "font-size:14px;font-weight:600;text-decoration:none;margin:0 10px 10px 0"
     val buttons = buildString {
         if (canDownload) {
-            append("<a style=\"" + btn + ";background:#4a9dff;color:#ffffff\" " +
+            append("<a style=\"" + btn + ";background:#386be7;color:#ffffff\" " +
                 "href=\"pa-action://download\">下载到手机</a>")
         }
         append("<a style=\"" + btn + ";background:${p.card};color:${p.fg}\" " +

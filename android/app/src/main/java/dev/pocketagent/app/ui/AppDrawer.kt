@@ -13,6 +13,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,8 +43,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -61,23 +62,54 @@ import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
-import dev.pocketagent.app.ui.component.PaBadge
 import dev.pocketagent.app.ui.component.TaskCenter
-import dev.pocketagent.app.ui.theme.Pa
-import dev.pocketagent.app.ui.theme.PaGlassToken
-import dev.pocketagent.app.ui.theme.paGlass
+import dev.pocketagent.app.ui.component.PaHostLink
+import dev.pocketagent.app.ui.component.hostStatusTone
+import dev.pocketagent.app.ui.component.hostStatusWord
+import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.delay
 
-/** 侧边栏主导航项。 */
+/**
+ * 编辑式侧边栏的石墨层取值(docs/design premium.css「The navigation rail is a
+ * deliberately dark layer」块;PaEditorial 收口了底色/细线/文字档,下面几个是
+ * 抽屉专属的层次色,不进令牌层 —— 有缺陷报基座,不改令牌文件)。
+ */
+private object DrawerSkin {
+    /** .drawer 右缘细线 #384959。 */
+    val Edge = Color(0xFF384959)
+    /** .drawer-head .logo 底 #3b5772(品牌方块)。 */
+    val Logo = Color(0xFF3B5772)
+    /** .drawer-head small 的薄荷绿 #91d8c2(已连接副文)。 */
+    val HeadOk = Color(0xFF91D8C2)
+    /** .drawer-section 分区标签 #8da0b0。 */
+    val Section = Color(0xFF8DA0B0)
+    /** .drawer-link 文字 #bac9d7。 */
+    val Link = Color(0xFFBAC9D7)
+    /** .drawer.collapsed .drawer-link #becbd8(rail 态图标)。 */
+    val RailIcon = Color(0xFFBECBD8)
+    /** .drawer-link.active 底 #31475e / 字 #f5faff(当前项高亮)。 */
+    val ActiveBg = Color(0xFF31475E)
+    val ActiveText = Color(0xFFF5FAFF)
+    /** .drawer-link .badge 底 #9d6038(琥珀家族,任务角标)。 */
+    val Badge = Color(0xFF9D6038)
+    /** .drawer-head .icon-button #a9bed2。 */
+    val HeadIcon = Color(0xFFA9BED2)
+}
+
+/** 侧边栏主导航项(rail 与展开态共用同一份:同序/同图标/同角标 —— README §侧边栏)。 */
 private data class DrawerEntry(
     val icon: Int,
     val title: String,
-    val desc: String,
+    /** 无障碍/长按提示名(rail 态没有文字,名称不能省)。 */
     val tab: Int,
 )
 
 /**
- * 全局侧边栏 —— 底部导航栏移除后的唯一主导航。
+ * 全局侧边栏 —— 底部导航栏移除后的唯一主导航(编辑式石墨层)。
+ *
+ * 【视觉】premium.css .drawer:实心石墨 #1B2634(PaEditorial.GraphiteDrawer)+
+ * 右缘 1dp 细线,不再是玻璃半透明 —— 侧边栏是"刻意与画布区分的深色层",
+ * 层次而非满屏深色(README §视觉系统)。遮罩走 PaEditorial.Scrim。
  *
  * 【滑出方向】面板贴左边缘,必须从**左侧**滑入(初始偏移 `-it`,整块先移到屏幕外),
  * 之前写成 `it / 3`(正值)会让面板从右侧"倒着"挤进来 —— 这就是"从相反方向弹出"的根因。
@@ -85,7 +117,8 @@ private data class DrawerEntry(
  * 【退场】调用方仍是 `if (showDrawer) AppDrawer(...)`,组件一旦被摘掉就来不及播退场动画。
  * 所以这里自己管一个 `closing` 标志:关闭请求先把 targetState 置 false 播完退场,
  * 等 currentState 也归位后才回调 `onClose()` 让调用方卸载 —— 无需改任何调用点。
- * 顺带把"点了导航项要跳的页"挂到退场结束之后再执行,视觉上就是"先收抽屉、再换页"。
+ * 顺带把"点了导航项要跳的页"挂到退场结束之后再执行,视觉上就是"先收抽屉、再换页"
+ * (README:选择页面先收抽屉再导航)。
  */
 @Composable
 fun AppDrawer(
@@ -100,8 +133,10 @@ fun AppDrawer(
     onOpenOnboarding: () -> Unit = {},
     /** 传了就显示"新建对话"主操作(聊天页用;其余页面各有自己的新建入口)。 */
     onNewThread: (() -> Unit)? = null,
-    /** 传了就显示"网页"快捷磁贴(内置浏览器)。 */
+    /** 传了就显示"网页"快捷入口(内置浏览器)。 */
     onOpenBrowser: (() -> Unit)? = null,
+    /** 传了就显示"多 Agent 协同"导航项(首页在设备确实支持协同时才传,无能力不显示假入口)。 */
+    onOpenCollab: (() -> Unit)? = null,
     /**
      * 跟手进度(0..1)。传了就用它驱动遮罩与面板位移,不再播入场动画 ——
      * 手指在哪面板就在哪,松手由调用方吸附。
@@ -132,7 +167,7 @@ fun AppDrawer(
         }
     }
 
-    // 返回键优先关侧边栏(修复"按返回直接退回桌面")
+    // 返回键优先关侧边栏(README 回退层级:抽屉 → 关闭抽屉;修复"按返回直接退回桌面")
     BackHandler(enabled = true) { requestClose() }
 
     val shown = visibleState.targetState || visibleState.currentState
@@ -150,12 +185,12 @@ fun AppDrawer(
     val collapsed = AgentConnection.drawerCollapsed
 
     // 遮罩:铺满整个屏幕(全屏点击区),淡入淡出。
-    // 【压暗色统一走 PaGlassToken.Scrim】与 paPushBack 的压暗同源 —— 浮层之下
-    // "退后一层"的深度感全 app 一个口径,不再各处手写黑色透明度。
+    // 【遮罩取编辑式值】PaEditorial.Scrim(#101722A9)= premium.css .modal-scrim,
+    // 与石墨抽屉同一套冷色层次;不再走玻璃令牌的黑色遮罩。
     Box(
         Modifier
             .fillMaxSize()
-            .background(PaGlassToken.Scrim.copy(alpha = PaGlassToken.Scrim.alpha * scrimAlpha))
+            .background(PaEditorial.Scrim.copy(alpha = PaEditorial.Scrim.alpha * scrimAlpha))
             // scaleDown=1f:遮罩本身不做缩放,只当点击区
             .pressable(scaleDown = 1f) { requestClose() },
     ) {
@@ -210,6 +245,7 @@ fun AppDrawer(
                 onOpenSettings = { requestClose { onOpenSettings() } },
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
                 onOpenOnboarding = { requestClose { onOpenOnboarding() } },
+                onOpenCollab = onOpenCollab?.let { cb -> { requestClose { cb() } } },
                 onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
                 onNewThread = onNewThread,
                 onOpenBrowser = onOpenBrowser,
@@ -222,10 +258,12 @@ fun AppDrawer(
 /**
  * 面板本体 —— 与遮罩解耦,方便单独调样式。
  *
- * 【双模式】collapsed=false 展开:品牌头 + 快捷磁贴 + 导航分组 + 底部元信息;
+ * 【双模式】collapsed=false 展开:品牌头 + 导航分组 + 底部元信息;
  * collapsed=true 收起:76dp 窄 rail,仅图标垂直排列,点图标直接跳转,
  * 长按图标浮出文字提示(Android 无悬停,长按为等价交互)。
  * 宽度切换由外层 animateDpAsState 驱动,内容用 Crossfade 淡切,偏好已持久化。
+ * 展开与收起是**同一份导航清单**(DrawerNavEntries):顺序、图标、当前项高亮、
+ * 任务角标完全一致(README §侧边栏与回退)。
  */
 @Composable
 private fun DrawerPanel(
@@ -239,34 +277,31 @@ private fun DrawerPanel(
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
     onOpenOnboarding: () -> Unit = {},
+    onOpenCollab: (() -> Unit)? = null,
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
     onOpenBrowser: (() -> Unit)? = null,
     onClose: () -> Unit,
 ) {
-    val connState = AgentConnection.connState.value
-    val transport = AgentConnection.connTransport.value
-    val connected = connState == "ok"
-
-    val entries = listOf(
-        DrawerEntry(R.drawable.ic_lucide_monitor, "主页", "agent 与最近任务", 0),
-        DrawerEntry(R.drawable.ic_lucide_message_square, "会话", "全部任务会话", 1),
-        DrawerEntry(R.drawable.ic_lucide_folder, "文件", "浏览电脑文件", 2),
-        DrawerEntry(R.drawable.ic_lucide_git_branch, "Git", "工作区版本管理", 3),
-    )
+    // 主导航(工作空间组):设计 06 的顺序,任务中心带未读角标;
+    // Git 是既有 tab 零回归保留;协同仅在有回调(=设备支持)时出现。
+    val navEntries = buildList {
+        add(DrawerEntry(R.drawable.ic_lucide_monitor, "主页", 0))
+        add(DrawerEntry(R.drawable.ic_lucide_message_square, "会话", 1))
+        add(DrawerEntry(R.drawable.ic_lucide_list_checks, "任务中心", 4))
+        add(DrawerEntry(R.drawable.ic_lucide_folder, "文件", 2))
+        add(DrawerEntry(R.drawable.ic_lucide_git_branch, "Git", 3))
+    }
+    val connLink = homeHostLink(AgentConnection.connState.value)
 
     Column(
         modifier
             .fillMaxHeight()
-            // 【玻璃面板】磨砂观感的招牌场景:面板半透明,被覆盖的主内容由调用方
-            // paPushBack 做模糊+缩放,透过面板就是真磨砂。发丝线关(上下缘贴屏幕边,
-            // 玻璃的边界靠屏幕边不靠亮边);投影给一档,面板"浮"在内容之上。
-            .paGlass(
-                RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp),
-                hairline = false,
-                shadowElevation = 10.dp,
-            )
-            .clip(RoundedCornerShape(topEnd = 26.dp, bottomEnd = 26.dp))
+            // 【石墨实心层】premium.css .drawer:背景 #1b2634 + 右缘 1dp #384959,
+            // 上下缘贴屏幕边(边界靠屏幕边不靠圆角);投影给一档,面板"浮"在内容之上。
+            .background(PaEditorial.GraphiteDrawer)
+            .border(width = 1.dp, color = DrawerSkin.Edge)
+            .shadow(elevation = 10.dp)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -280,10 +315,13 @@ private fun DrawerPanel(
                 RailContent(
                     currentTab = currentTab,
                     unread = unread,
+                    navEntries = navEntries,
                     onGoTab = onGoTab,
                     onOpenTerminal = onOpenTerminal,
                     onOpenSettings = onOpenSettings,
                     onOpenTaskCenter = onOpenTaskCenter,
+                    onOpenOnboarding = onOpenOnboarding,
+                    onOpenCollab = onOpenCollab,
                     onToggleCollapsed = onToggleCollapsed,
                     onNewThread = onNewThread,
                     onOpenBrowser = onOpenBrowser,
@@ -295,137 +333,137 @@ private fun DrawerPanel(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 18.dp),
                 ) {
-            Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(10.dp))
 
-            // ---------- 品牌头(收敛版:小 logo + 名称 + 连接胶囊一行放下) ----------
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(40.dp)
-                        .background(Pa.AccentDim, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Image(
-                        bitmap = agentBitmap(R.mipmap.ic_launcher),
-                        contentDescription = null,
-                        modifier = Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)),
-                        contentScale = ContentScale.Crop,
+                    // ---------- 品牌头:logo 方块 + 名称 + 主机连接一行放下 ----------
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(40.dp)
+                                .background(DrawerSkin.Logo, RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Image(
+                                bitmap = agentBitmap(R.mipmap.ic_launcher),
+                                contentDescription = null,
+                                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)),
+                                contentScale = ContentScale.Crop,
+                            )
+                        }
+                        Spacer(Modifier.width(11.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "PocketAgent",
+                                fontSize = 16.sp,
+                                color = PaEditorial.OnGraphite,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            DrawerHostStatus(hostTitle = hostTitle, link = connLink)
+                        }
+                        IconActionButton(
+                            R.drawable.ic_lucide_chevron_left, "收起为图标栏", onToggleCollapsed,
+                            bg = Color.Transparent, size = 34.dp, iconSize = 17.dp,
+                            tint = DrawerSkin.HeadIcon,
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        IconActionButton(
+                            R.drawable.ic_lucide_x, "关闭", onClose,
+                            bg = Color.Transparent, size = 34.dp, iconSize = 17.dp,
+                            tint = DrawerSkin.HeadIcon,
+                        )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+                    // 头部细线(premium.css .drawer-head border #364655)
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.OnGraphiteHairline))
+
+                    // ---------- 新建对话(仅聊天页传入了该回调) ----------
+                    if (onNewThread != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pressable(haptic = true) { onNewThread() }
+                                .background(PaEditorial.Primary, RoundedCornerShape(14.dp))
+                                .padding(vertical = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_plus), null,
+                                tint = PaEditorial.OnGraphite, modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "新建对话", fontSize = 14.sp,
+                                color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+
+                    // ---------- 工作空间(主导航;任务中心带未读角标) ----------
+                    DrawerGroupLabel("工作空间")
+                    navEntries.forEach { e ->
+                        DrawerItem(
+                            icon = e.icon,
+                            title = e.title,
+                            selected = e.tab == currentTab,
+                            badge = if (e.tab == 4) unread else 0,
+                            onClick = { onGoTab(e.tab) },
+                        )
+                    }
+                    if (onOpenCollab != null) {
+                        DrawerItem(
+                            icon = R.drawable.ic_lucide_share_2,
+                            title = "多 Agent 协同",
+                            selected = false,
+                            badge = 0,
+                            onClick = onOpenCollab,
+                        )
+                    }
+
+                    // ---------- 更多:工具与本机入口 ----------
+                    DrawerGroupLabel("更多")
+                    DrawerItem(
+                        icon = R.drawable.ic_lucide_square_terminal,
+                        title = "终端",
+                        selected = false,
+                        badge = 0,
+                        onClick = onOpenTerminal,
                     )
-                }
-                Spacer(Modifier.width(11.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "PocketAgent",
-                        fontSize = 16.sp,
-                        color = Pa.TextPrimary,
-                        fontWeight = FontWeight.SemiBold,
+                    if (onOpenBrowser != null) {
+                        DrawerItem(
+                            icon = R.drawable.ic_lucide_globe,
+                            title = "网页",
+                            selected = false,
+                            badge = 0,
+                            onClick = onOpenBrowser,
+                        )
+                    }
+                    DrawerItem(
+                        icon = R.drawable.ic_lucide_settings,
+                        title = "设置",
+                        selected = false,
+                        badge = 0,
+                        onClick = onOpenSettings,
                     )
-                    Spacer(Modifier.height(2.dp))
-                    ConnectionPill(connected = connected, label = hostTitle, transport = transport)
-                }
-                IconActionButton(
-                    R.drawable.ic_lucide_chevron_left, "收起为图标栏", onToggleCollapsed,
-                    bg = Color.Transparent, size = 34.dp, iconSize = 17.dp,
-                )
-                Spacer(Modifier.width(2.dp))
-                IconActionButton(
-                    R.drawable.ic_lucide_x, "关闭", onClose,
-                    bg = Color.Transparent, size = 34.dp, iconSize = 17.dp,
-                )
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // ---------- 新建对话(仅聊天页传入了该回调) ----------
-            if (onNewThread != null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable(haptic = true) { onNewThread() }
-                        .background(Pa.Accent, RoundedCornerShape(14.dp))
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painterResource(R.drawable.ic_lucide_plus), null,
-                        tint = Color.White, modifier = Modifier.size(16.dp),
+                    DrawerItem(
+                        icon = R.drawable.ic_lucide_sparkles,
+                        title = "新手教程",
+                        selected = false,
+                        badge = 0,
+                        onClick = onOpenOnboarding,
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text("新建对话", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(Modifier.height(12.dp))
-            }
 
-            // ---------- 快捷磁贴:终端 / 任务中心(带未读角标) ----------
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                QuickTile(
-                    icon = R.drawable.ic_lucide_square_terminal,
-                    title = "终端",
-                    hint = "真实 PTY",
-                    modifier = Modifier.weight(1f),
-                    onClick = onOpenTerminal,
-                )
-                QuickTile(
-                    icon = R.drawable.ic_lucide_list_checks,
-                    title = "任务中心",
-                    hint = if (unread > 0) "$unread 条未处理" else "运行与下载",
-                    badge = unread,
-                    modifier = Modifier.weight(1f),
-                    onClick = onOpenTaskCenter,
-                )
-            }
-            if (onOpenBrowser != null) {
-                Spacer(Modifier.height(10.dp))
-                QuickTile(
-                    icon = R.drawable.ic_lucide_globe,
-                    title = "网页",
-                    hint = "内置浏览器",
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = onOpenBrowser,
-                )
-            }
-
-            // ---------- 导航 ----------
-            DrawerGroupLabel("导航")
-            entries.forEach { e ->
-                DrawerItem(
-                    icon = e.icon,
-                    title = e.title,
-                    desc = e.desc,
-                    selected = e.tab == currentTab,
-                    onClick = { onGoTab(e.tab) },
-                )
-            }
-
-            // ---------- 更多 ----------
-            DrawerGroupLabel("更多")
-            DrawerItem(
-                icon = R.drawable.ic_lucide_settings,
-                title = "设置",
-                desc = "连接 / 外观 / 权限",
-                selected = false,
-                onClick = onOpenSettings,
-            )
-            DrawerItem(
-                icon = R.drawable.ic_lucide_sparkles,
-                title = "新手教程",
-                desc = "快速回顾使用流程",
-                selected = false,
-                onClick = onOpenOnboarding,
-            )
-
-            Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(14.dp))
                 } // 展开滚动内容
             } // Crossfade 双模式
         }
 
         // ---------- 底部元信息(仅展开态;rail 态空间有限留白) ----------
         if (!collapsed) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.OnGraphiteHairline))
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -437,36 +475,58 @@ private fun DrawerPanel(
                     model.takeIf { it.isNotEmpty() } ?: "跟随桌面配置",
                     Modifier.weight(1f),
                     fontSize = 10.5.sp,
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.OnGraphiteSubtle,
                     maxLines = 1,
                 )
-                Text("v${BuildConfig.VERSION_NAME}", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                Text("v${BuildConfig.VERSION_NAME}", fontSize = 10.5.sp, color = PaEditorial.OnGraphiteSubtle)
             }
         }
     }
 }
 
 /**
- * 收起态窄 rail:仅图标垂直排列。点图标直接执行跳转;长按浮出文字提示。
+ * 品牌头下的主机连接行:状态点(连接三态语义色)+ 状态词(hostStatusWord,
+ * 四类共享组件的同一套词),展开态专有 —— "我在连哪台电脑"一眼可见。
+ */
+@Composable
+private fun DrawerHostStatus(hostTitle: String, link: PaHostLink) {
+    val dot = hostStatusTone(link).accent
+    val text = when (link) {
+        PaHostLink.CONNECTED -> "$hostTitle · ${hostStatusWord(link)}"
+        PaHostLink.CONNECTING -> hostStatusWord(link) // 正在建立连接…
+        PaHostLink.OFFLINE -> if (hostTitle == "未连接电脑") hostTitle else "$hostTitle · ${hostStatusWord(link)}"
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(6.dp).background(dot, CircleShape))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text,
+            fontSize = 10.sp,
+            color = if (link == PaHostLink.CONNECTED) DrawerSkin.HeadOk else PaEditorial.OnGraphiteSubtle,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 收起态窄 rail:仅图标垂直排列,与展开态共用 [navEntries](同序/同图标/同高亮/同角标)。
+ * 点图标直接执行跳转;长按浮出文字提示(≈桌面 hover tooltip),1.5s 后自动消失。
  */
 @Composable
 private fun RailContent(
     currentTab: Int,
     unread: Int,
+    navEntries: List<DrawerEntry>,
     onGoTab: (Int) -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
+    onOpenOnboarding: () -> Unit,
+    onOpenCollab: (() -> Unit)?,
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
     onOpenBrowser: (() -> Unit)? = null,
 ) {
-    val entries = listOf(
-        DrawerEntry(R.drawable.ic_lucide_monitor, "主页", "agent 与最近任务", 0),
-        DrawerEntry(R.drawable.ic_lucide_message_square, "会话", "全部任务会话", 1),
-        DrawerEntry(R.drawable.ic_lucide_folder, "文件", "浏览电脑文件", 2),
-        DrawerEntry(R.drawable.ic_lucide_git_branch, "Git", "工作区版本管理", 3),
-    )
     Column(
         Modifier
             .fillMaxSize()
@@ -494,26 +554,36 @@ private fun RailContent(
             RailIcon(R.drawable.ic_lucide_plus, "新建对话", onClick = onNewThread)
             Spacer(Modifier.height(8.dp))
         }
+        // 主导航:与展开态同一份清单、同一顺序、同一角标(任务中心)
+        navEntries.forEach { e ->
+            RailIcon(
+                e.icon, e.title,
+                selected = e.tab == currentTab,
+                badge = if (e.tab == 4) unread else 0,
+            ) { onGoTab(e.tab) }
+            Spacer(Modifier.height(8.dp))
+        }
+        if (onOpenCollab != null) {
+            RailIcon(R.drawable.ic_lucide_share_2, "多 Agent 协同", onClick = onOpenCollab)
+            Spacer(Modifier.height(8.dp))
+        }
+        RailDivider()
+        RailIcon(R.drawable.ic_lucide_square_terminal, "终端", onClick = onOpenTerminal)
+        Spacer(Modifier.height(8.dp))
         if (onOpenBrowser != null) {
             RailIcon(R.drawable.ic_lucide_globe, "网页", onClick = onOpenBrowser)
             Spacer(Modifier.height(8.dp))
         }
-        RailIcon(R.drawable.ic_lucide_square_terminal, "终端", onClick = onOpenTerminal)
-        Spacer(Modifier.height(8.dp))
-        RailIcon(R.drawable.ic_lucide_list_checks, "任务中心", badge = unread, onClick = onOpenTaskCenter)
-        RailDivider()
-        entries.forEach { e ->
-            RailIcon(e.icon, e.title, selected = e.tab == currentTab) { onGoTab(e.tab) }
-        }
-        RailDivider()
         RailIcon(R.drawable.ic_lucide_settings, "设置", onClick = onOpenSettings)
+        Spacer(Modifier.height(8.dp))
+        RailIcon(R.drawable.ic_lucide_sparkles, "新手教程", onClick = onOpenOnboarding)
         Spacer(Modifier.weight(1f))
         RailIcon(R.drawable.ic_lucide_chevron_right, "展开", onClick = onToggleCollapsed)
         Spacer(Modifier.height(12.dp))
     }
 }
 
-/** rail 分隔细线。 */
+/** rail 分隔细线(石墨面上的 #364655)。 */
 @Composable
 private fun RailDivider() {
     Box(
@@ -521,13 +591,13 @@ private fun RailDivider() {
             .padding(vertical = 8.dp)
             .width(30.dp)
             .height(1.dp)
-            .background(Pa.Separator),
+            .background(PaEditorial.OnGraphiteHairline),
     )
 }
 
 /**
- * rail 图标钮:44dp 圆角方块;选中态 AccentDim 底 + Accent 图标;
- * 长按在右侧浮出文字提示(≈桌面 hover tooltip),1.5s 后自动消失。
+ * rail 图标钮:44dp 圆角方块(≥44dp 点击区);选中态 .drawer-link.active 同款
+ * #31475e 底 + 近白图标;长按在右侧浮出文字提示。
  */
 @Composable
 private fun RailIcon(
@@ -549,20 +619,18 @@ private fun RailIcon(
             Modifier
                 .size(44.dp)
                 .pressableLong(onClick = onClick, onLongPress = { showTip = true })
-                .background(if (selected) Pa.AccentDim else Color.Transparent, RoundedCornerShape(13.dp)),
+                .background(
+                    if (selected) DrawerSkin.ActiveBg else Color.Transparent,
+                    RoundedCornerShape(13.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            PaBadge(count = badge) {
-                Box(
-                    Modifier.size(26.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painterResource(iconRes), label,
-                        tint = if (selected) Pa.Accent else Pa.TextSecondary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+            DrawerBadge(count = badge) {
+                Icon(
+                    painterResource(iconRes), label,
+                    tint = if (selected) DrawerSkin.ActiveText else DrawerSkin.RailIcon,
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
         if (showTip) {
@@ -571,9 +639,9 @@ private fun RailIcon(
                 Text(
                     label,
                     Modifier
-                        .background(Pa.TextPrimary, RoundedCornerShape(8.dp))
+                        .background(PaEditorial.OnGraphite, RoundedCornerShape(8.dp))
                         .padding(horizontal = 10.dp, vertical = 5.dp),
-                    color = Pa.Bg,
+                    color = PaEditorial.GraphiteDrawer,
                     fontSize = 11.sp,
                     maxLines = 1,
                 )
@@ -582,157 +650,100 @@ private fun RailIcon(
     }
 }
 
-/**
- * 连接态胶囊:小圆点 + 文案。放在品牌头下方,让"我在连哪台电脑"一眼可见。
- * 已连接用绿点 + transport,未连接用灰点,错误用红点。
- */
-@Composable
-private fun ConnectionPill(connected: Boolean, label: String, transport: String) {
-    val state = AgentConnection.connState.value
-    val dot = when {
-        state == "ok" -> Pa.Green
-        state == "down" -> Pa.Red
-        else -> Pa.TextTertiary
-    }
-    val text = when {
-        connected && transport.isNotEmpty() -> "已连接 · $transport"
-        connected -> "已连接 · $label"
-        state == "down" -> "未连接 · 自动重连中"
-        else -> label
-    }
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Pa.Card)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(6.dp).background(dot, CircleShape))
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text,
-            fontSize = 10.sp,
-            color = Pa.TextSecondary,
-            maxLines = 1,
-        )
-    }
-}
-
-/** 快捷磁贴:图标 + 标题 + 小字,右上可挂角标。 */
-@Composable
-private fun QuickTile(
-    icon: Int,
-    title: String,
-    hint: String,
-    modifier: Modifier = Modifier,
-    badge: Int = 0,
-    onClick: () -> Unit,
-) {
-    Column(
-        modifier
-            .pressable(haptic = true) { onClick() }
-            .background(Pa.CardHigh, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // 角标锚在 26dp 的图标框上(直接锚 17dp 小图标会被角标盖掉大半)
-            PaBadge(count = badge) {
-                Box(
-                    Modifier.size(26.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painterResource(icon), null,
-                        tint = Pa.Accent, modifier = Modifier.size(17.dp),
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(9.dp))
-        Text(title, fontSize = 13.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
-        Text(hint, fontSize = 10.sp, color = Pa.TextTertiary, maxLines = 1)
-    }
-}
-
-/** 分组小标题:字号小、加字距,让"导航/更多"读作分区标签而不是一行普通文字。 */
+/** 分组小标题:字号小、加字距(.drawer-section #8da0b0),分区标签的"轻层级"靠它。 */
 @Composable
 private fun DrawerGroupLabel(text: String) {
     Text(
         text,
         Modifier.padding(start = 12.dp, top = 20.dp, bottom = 8.dp),
         fontSize = 10.5.sp,
-        color = Pa.TextTertiary,
+        color = DrawerSkin.Section,
         fontWeight = FontWeight.Medium,
-        letterSpacing = 1.4.sp, // 中文字距拉开一档,分区标签的"轻层级"靠它
+        letterSpacing = 1.4.sp, // 中文字距拉开一档
     )
 }
 
 /**
- * 导航行:左侧图标块 + 标题/描述 + 右侧选中圆点。
- * 选中态:左侧一条 3dp 的高亮竖条(位置锚定感强于纯色块)+ 蓝底图标 + 蓝字。
+ * 导航行:.drawer-link 语言 —— 46dp 最小高度、12dp 圆角、图标 + 单行文字;
+ * 选中态 #31475e 底 + #f5faff 字(当前页高亮);任务中心行尾挂未读角标。
  */
 @Composable
 private fun DrawerItem(
     icon: Int,
     title: String,
-    desc: String,
     selected: Boolean,
+    badge: Int,
     onClick: () -> Unit,
 ) {
-    // 选中态高亮(spring 令牌,可打断:快速连续切换不跳帧)
-    val highlight by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = PaMotion.standard(),
-        label = "drawerSelected",
-    )
-    Box(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
-        // 选中竖条:贴着面板左边缘,随选中态渐显
-        Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .width(3.dp)
-                .height(20.dp)
-                .alpha(highlight)
-                .background(Pa.Accent, RoundedCornerShape(50)),
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .pressable(haptic = true) { onClick() }
-                .background(
-                    if (selected) Pa.Hover else Color.Transparent,
-                    RoundedCornerShape(14.dp),
-                )
-                .padding(start = 13.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .background(if (selected) Pa.AccentDim else Pa.CardHigh, RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painterResource(icon), null,
-                    tint = if (selected) Pa.Accent else Pa.TextSecondary,
-                    modifier = Modifier.size(17.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    title, fontSize = 14.5.sp,
-                    color = if (selected) Pa.Accent else Pa.TextPrimary,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                )
-                Text(desc, fontSize = 10.5.sp, color = Pa.TextTertiary)
-            }
-            Box(
-                Modifier
-                    .size(6.dp)
-                    .alpha(highlight)
-                    .background(Pa.Accent, CircleShape),
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp)
+            .pressable(haptic = true) { onClick() }
+            .background(
+                if (selected) DrawerSkin.ActiveBg else Color.Transparent,
+                RoundedCornerShape(12.dp),
             )
+            .padding(start = 11.dp, end = 11.dp)
+            .height(46.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painterResource(icon), null,
+            tint = if (selected) DrawerSkin.ActiveText else DrawerSkin.Link,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            title,
+            Modifier.weight(1f),
+            fontSize = 13.sp,
+            color = if (selected) DrawerSkin.ActiveText else DrawerSkin.Link,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
+        if (badge > 0) {
+            DrawerBadgeText(count = badge)
         }
+    }
+}
+
+/** 角标锚点(rail 图标用):有角标时叠在图标右上。 */
+@Composable
+private fun DrawerBadge(count: Int, content: @Composable () -> Unit) {
+    if (count > 0) {
+        Box(contentAlignment = Alignment.TopEnd) {
+            Box(Modifier.padding(top = 2.dp, end = 2.dp)) { content() }
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .background(DrawerSkin.Badge, RoundedCornerShape(7.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+            ) {
+                Text(
+                    if (count > 99) "99+" else count.toString(),
+                    fontSize = 9.sp, lineHeight = 11.sp,
+                    color = PaEditorial.OnGraphite, fontWeight = FontWeight(650),
+                )
+            }
+        }
+    } else {
+        content()
+    }
+}
+
+/** 行尾文字角标(展开态导航行用;.drawer-link .badge #9d6038 白字)。 */
+@Composable
+private fun DrawerBadgeText(count: Int) {
+    Box(
+        Modifier
+            .background(DrawerSkin.Badge, RoundedCornerShape(7.dp))
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+    ) {
+        Text(
+            if (count > 99) "99+" else count.toString(),
+            fontSize = 10.sp, lineHeight = 12.sp,
+            color = PaEditorial.OnGraphite, fontWeight = FontWeight(650),
+        )
     }
 }

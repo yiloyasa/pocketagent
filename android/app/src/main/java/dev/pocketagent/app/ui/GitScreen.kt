@@ -2,6 +2,7 @@ package dev.pocketagent.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,9 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.component.PaNavIconButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -104,6 +108,27 @@ fun GitScreen(
     onOpenTaskCenter: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
     /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
+    onBackToHome: () -> Unit = {},
+    onGoTab: (Int) -> Unit = {},
+) {
+    // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
+    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
+        EditorialLightSystemBars()
+        GitScreenBody(
+            workspacePath, currentTab, onOpenTerminal, onOpenSettings,
+            onOpenTaskCenter, onOpenBrowser, onBackToHome, onGoTab,
+        )
+    }
+}
+
+@Composable
+private fun GitScreenBody(
+    workspacePath: String?,
+    currentTab: Int = 3,
+    onOpenTerminal: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onOpenTaskCenter: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
     onBackToHome: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
@@ -276,7 +301,7 @@ fun GitScreen(
 
     // 左边缘右滑也能唤出侧边栏(问题 7)
     Column(
-        Modifier.fillMaxSize().background(Pa.Bg)
+        Modifier.fillMaxSize().background(PaEditorial.Canvas)
             .edgeSwipeToOpenDrawer(
                         onDragFraction = drawerCtrl::onDrag,
                         onRelease = drawerCtrl::onRelease,
@@ -287,28 +312,40 @@ fun GitScreen(
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(start = PaEditorial.Space.NavGutter, end = 14.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
+            PaNavIconButton(
+                onClick = { drawerCtrl.open() },
+                contentDescription = "菜单",
+                iconRes = AppR.drawable.ic_lucide_menu,
+            )
             Spacer(Modifier.width(12.dp))
             Text(
                 "Git" + (status?.branch?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
                 Modifier.weight(1f),
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = Pa.TextPrimary,
+                style = PaEditorial.Type.Title,
+                color = PaEditorial.Ink,
+                maxLines = 1,
             )
             if (busy) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Pa.Accent)
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = PaEditorial.Primary)
                 Spacer(Modifier.width(12.dp))
             }
-            IconActionButton(AppR.drawable.ic_lucide_folder, "切换仓库", {
-                repoInput = repo
-                showRepoPicker = true
-            }, bg = Pa.Card)
-            Spacer(Modifier.width(10.dp))
-            IconActionButton(AppR.drawable.ic_lucide_refresh_cw, "刷新", { refresh() }, bg = Pa.Card)
+            PaNavIconButton(
+                onClick = {
+                    repoInput = repo
+                    showRepoPicker = true
+                },
+                contentDescription = "切换仓库",
+                iconRes = AppR.drawable.ic_lucide_folder,
+            )
+            Spacer(Modifier.width(8.dp))
+            PaNavIconButton(
+                onClick = { refresh() },
+                contentDescription = "刷新",
+                iconRes = AppR.drawable.ic_lucide_refresh_cw,
+            )
         }
 
         // 当前仓库路径:一眼看到"在检查电脑上的哪个目录"
@@ -319,7 +356,7 @@ fun GitScreen(
                 .padding(start = 16.dp, end = 16.dp, top = 2.dp),
             fontSize = 10.5.sp,
             fontFamily = FontFamily.Monospace,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -341,7 +378,7 @@ fun GitScreen(
                     "新建分支",
                     Modifier.pressable { newBranch = ""; showCreateBranch = true },
                     fontSize = 12.sp,
-                    color = Pa.Accent,
+                    color = PaEditorial.Primary,
                 )
             }
         }
@@ -359,10 +396,11 @@ fun GitScreen(
                     it.removePrefix("INVALID_ARGUMENT: ").removePrefix("INTERNAL: "),
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
                         .padding(12.dp),
-                    color = Pa.Red,
+                    color = EditorialTone.DENIED.text,
                     fontSize = 12.5.sp,
+                    lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -383,14 +421,15 @@ fun GitScreen(
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .background(Pa.Card, RoundedCornerShape(14.dp))
+                            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
                             .padding(14.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             androidx.compose.material3.Icon(
                                 painterResource(AppR.drawable.ic_lucide_git_branch),
                                 null,
-                                tint = Pa.Accent,
+                                tint = PaEditorial.Primary,
                                 modifier = Modifier.size(16.dp),
                             )
                             Spacer(Modifier.width(8.dp))
@@ -398,21 +437,21 @@ fun GitScreen(
                                 st.branch.ifEmpty { "(detached)" },
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Pa.TextPrimary,
+                                color = PaEditorial.Ink,
                             )
                             if (st.upstream.isNotEmpty()) {
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     (if (st.ahead) "↑" else "") + (if (st.behind) "↓" else "") + " " + st.upstream,
                                     fontSize = 11.sp,
-                                    color = Pa.TextSecondary,
+                                    color = PaEditorial.Muted,
                                 )
                             }
                             Spacer(Modifier.weight(1f))
                             Text(
                                 "${st.changesList.size} 个变更",
                                 fontSize = 11.sp,
-                                color = Pa.TextTertiary,
+                                color = PaEditorial.Muted,
                             )
                         }
                         if (st.changesList.isNotEmpty()) {
@@ -421,7 +460,7 @@ fun GitScreen(
                                 onClick = { showCommit = true },
                                 enabled = !busy,
                                 modifier = Modifier.align(Alignment.End),
-                            ) { Text("提交全部", color = Pa.Accent, fontSize = 13.sp) }
+                            ) { Text("提交全部", color = PaEditorial.Primary, fontSize = 13.sp) }
                         }
                     }
                     Spacer(Modifier.height(10.dp))
@@ -434,7 +473,7 @@ fun GitScreen(
                                     "工作区干净,没有待提交的改动",
                                     Modifier.padding(vertical = 20.dp),
                                     fontSize = 13.sp,
-                                    color = Pa.TextSecondary,
+                                    color = PaEditorial.Muted,
                                 )
                             } else {
                                 LazyColumn(
@@ -451,7 +490,7 @@ fun GitScreen(
                                                     "stage",
                                                     if (staged) "取消暂存" else "暂存",
                                                     AppR.drawable.ic_lucide_check,
-                                                    Pa.AccentText,
+                                                    PaEditorial.Primary,
                                                 ),
                                                 SwipeAction(
                                                     "discard", "丢弃",
@@ -465,7 +504,7 @@ fun GitScreen(
                                                     "discard" -> pendingDiscard = c.path
                                                 }
                                             },
-                                            rowBackground = Pa.Card,
+                                            rowBackground = PaEditorial.Surface,
                                             onClick = {
                                                 if (openKey.value == c.path) {
                                                     openKey.value = null
@@ -489,7 +528,7 @@ fun GitScreen(
                                     "没有提交历史(仓库还没有 commit)",
                                     Modifier.padding(vertical = 20.dp),
                                     fontSize = 13.sp,
-                                    color = Pa.TextSecondary,
+                                    color = PaEditorial.Muted,
                                 )
                             } else {
                                 LazyColumn(
@@ -511,7 +550,7 @@ fun GitScreen(
                                     "没有读到分支信息",
                                     Modifier.padding(vertical = 20.dp),
                                     fontSize = 13.sp,
-                                    color = Pa.TextSecondary,
+                                    color = PaEditorial.Muted,
                                 )
                             } else {
                                 LazyColumn(
@@ -533,18 +572,34 @@ fun GitScreen(
         }
     }
 
-    // diff 查看器:行级染色(+绿 / -红 / @@ 蓝),不再是"一大坨灰字"
+    // diff 查看器:行级染色(+绿 / -红 / @@ 蓝)。内容区保持代码深色底
+    // (石墨代码箱,与侧边栏/代码预览同一纪律);弹窗 chrome 瓷白编辑式。
     diff?.let { d ->
         AlertDialog(
             onDismissRequest = { diff = null },
-            title = { Text(diffTitle, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            text = {
-                DiffView(
-                    text = d,
-                    modifier = Modifier.height(440.dp).fillMaxWidth(),
+            containerColor = PaEditorial.Surface,
+            title = {
+                Text(
+                    diffTitle,
+                    fontSize = 14.sp, lineHeight = 20.sp,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    color = PaEditorial.Ink,
                 )
             },
-            confirmButton = { TextButton(onClick = { diff = null }) { Text("关闭") } },
+            text = {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                ) {
+                    DiffView(
+                        text = d,
+                        modifier = Modifier.height(440.dp).fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { diff = null }) { Text("关闭", color = PaEditorial.Primary) } },
         )
     }
 
@@ -557,7 +612,7 @@ fun GitScreen(
                 Text(
                     "将撤销 $path 上未暂存的修改,此操作不可恢复。",
                     fontSize = 12.5.sp,
-                    color = Pa.TextSecondary,
+                    color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
@@ -576,7 +631,7 @@ fun GitScreen(
                             error = "丢弃失败:${e.message}"
                         }
                     }
-                }) { Text("丢弃", color = Pa.Red) }
+                }) { Text("丢弃", color = EditorialTone.DENIED.text, fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDiscard = null }) { Text("取消") }
@@ -593,7 +648,7 @@ fun GitScreen(
                 Text(
                     "工作区有未提交改动时,git 会拒绝切换,可先提交或丢弃。",
                     fontSize = 12.5.sp,
-                    color = Pa.TextSecondary,
+                    color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
@@ -611,7 +666,7 @@ fun GitScreen(
                             error = "切换分支失败:${e.message}"
                         }
                     }
-                }) { Text("切换", color = Pa.Accent) }
+                }) { Text("切换", color = PaEditorial.Primary) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingCheckout = null }) { Text("取消") }
@@ -652,7 +707,7 @@ fun GitScreen(
                             }
                         }
                     },
-                ) { Text("创建", color = Pa.Accent) }
+                ) { Text("创建", color = PaEditorial.Primary) }
             },
             dismissButton = {
                 TextButton(onClick = { showCreateBranch = false }) { Text("取消") }
@@ -738,10 +793,21 @@ private fun GitTab(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .pressable(haptic = true) { onClick() }
-            .background(if (selected) Pa.Accent else Pa.Card, RoundedCornerShape(50))
+            .background(
+                if (selected) PaEditorial.PrimaryContainer else Color.Transparent,
+                RoundedCornerShape(50),
+            )
+            .then(
+                if (selected) Modifier else Modifier.border(1.dp, PaEditorial.Hairline, RoundedCornerShape(50)),
+            )
             .padding(horizontal = 14.dp, vertical = 7.dp),
     ) {
-        Text(label, fontSize = 12.sp, color = if (selected) Color.White else Pa.TextSecondary)
+        Text(
+            label,
+            fontSize = 12.sp, lineHeight = 17.sp,
+            fontWeight = if (selected) FontWeight(650) else FontWeight.Medium,
+            color = if (selected) PaEditorial.Primary else PaEditorial.Muted,
+        )
     }
 }
 
@@ -776,7 +842,8 @@ private fun ChangeRow(c: GitFileChange) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(12.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -784,7 +851,7 @@ private fun ChangeRow(c: GitFileChange) {
                 Modifier
                     .size(20.dp)
                     .background(
-                        if (staged) Pa.Accent.copy(alpha = 0.18f) else Pa.Hover,
+                        if (staged) PaEditorial.PrimaryContainer else PaEditorial.Raised,
                         RoundedCornerShape(6.dp),
                     ),
                 contentAlignment = Alignment.Center,
@@ -794,7 +861,7 @@ private fun ChangeRow(c: GitFileChange) {
                     // 其余保持工作区优先的单字母 + 中文在下方说明行里。
                     if (untracked) "新" else (c.worktreeStatus.ifEmpty { c.stagedStatus }).take(2).ifEmpty { "?" },
                     fontSize = 10.sp,
-                    color = if (staged) Pa.Accent else Pa.TextSecondary,
+                    color = if (staged) PaEditorial.Primary else PaEditorial.Muted,
                 )
             }
             Spacer(Modifier.width(9.dp))
@@ -803,12 +870,12 @@ private fun ChangeRow(c: GitFileChange) {
                 Modifier.weight(1f),
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
-                color = Pa.TextPrimary,
+                color = PaEditorial.Ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (staged) {
-                Text("已暂存", fontSize = 10.sp, color = Pa.Accent)
+                Text("已暂存", fontSize = 10.sp, color = EditorialTone.RUNNING.text, fontWeight = FontWeight(650))
             }
         }
         if (dirPart.isNotEmpty()) {
@@ -817,7 +884,7 @@ private fun ChangeRow(c: GitFileChange) {
                 Modifier.padding(top = 2.dp, start = 29.dp),
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
-                color = Pa.TextTertiary,
+                color = PaEditorial.Muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -831,7 +898,7 @@ private fun ChangeRow(c: GitFileChange) {
             },
             Modifier.padding(top = 3.dp, start = 29.dp),
             fontSize = 10.sp,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
             maxLines = 1,
         )
     }
@@ -843,14 +910,15 @@ private fun CommitRow(c: GitCommitInfo, onClick: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(12.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
             .pressable(haptic = true) { onClick() }
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(
             c.message.lineSequence().firstOrNull().orEmpty().ifEmpty { "(无提交信息)" },
             fontSize = 13.sp,
-            color = Pa.TextPrimary,
+            color = PaEditorial.Ink,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -864,7 +932,7 @@ private fun CommitRow(c: GitCommitInfo, onClick: () -> Unit) {
                 .filter { it.isNotEmpty() }
                 .joinToString(" · "),
             fontSize = 10.sp,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -877,7 +945,8 @@ private fun BranchRow(b: GitBranch, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(12.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
             .pressable(haptic = true) { onClick() }
             .padding(horizontal = 12.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -885,7 +954,7 @@ private fun BranchRow(b: GitBranch, onClick: () -> Unit) {
         androidx.compose.material3.Icon(
             painterResource(AppR.drawable.ic_lucide_git_branch),
             null,
-            tint = if (b.isCurrent) Pa.Accent else Pa.TextTertiary,
+            tint = if (b.isCurrent) PaEditorial.Primary else PaEditorial.Muted,
             modifier = Modifier.size(14.dp),
         )
         Spacer(Modifier.width(9.dp))
@@ -893,14 +962,14 @@ private fun BranchRow(b: GitBranch, onClick: () -> Unit) {
             b.name,
             Modifier.weight(1f),
             fontSize = 13.sp,
-            color = if (b.isCurrent) Pa.Accent else Pa.TextPrimary,
+            color = if (b.isCurrent) PaEditorial.Primary else PaEditorial.Ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
             if (b.isCurrent) "当前" else if (b.isRemote) "远端" else "切换",
             fontSize = 10.5.sp,
-            color = if (b.isCurrent) Pa.Accent else Pa.TextTertiary,
+            color = if (b.isCurrent) PaEditorial.Primary else PaEditorial.Muted,
         )
     }
 }
@@ -913,19 +982,20 @@ private fun BranchRow(b: GitBranch, onClick: () -> Unit) {
 private fun DiffView(text: String, modifier: Modifier = Modifier) {
     val lines = remember(text) { text.split("\n") }
     if (lines.isEmpty() || text.isBlank()) {
-        Text("(无差异内容)", fontSize = 12.sp, color = Pa.TextTertiary, modifier = modifier)
+        Text("(无差异内容)", fontSize = 12.sp, color = PaEditorial.OnGraphiteSubtle, modifier = modifier)
         return
     }
     LazyColumn(modifier = modifier) {
         items(lines.size) { i ->
             val line = lines[i]
+            // 深色代码箱上的行色:文件头灰 / @@ 亮蓝 / + 薄荷绿 / - 浅珊瑚 / 正文代码色
             val color = when {
                 line.startsWith("diff --git") || line.startsWith("index ") ||
-                    line.startsWith("--- ") || line.startsWith("+++ ") -> Pa.TextTertiary
-                line.startsWith("@@") -> Pa.Accent
-                line.startsWith("+") -> Pa.Green
-                line.startsWith("-") -> Pa.Red
-                else -> Pa.TextSecondary
+                    line.startsWith("--- ") || line.startsWith("+++ ") -> PaEditorial.OnGraphiteSubtle
+                line.startsWith("@@") -> Color(0xFF7FA7F0)
+                line.startsWith("+") -> Color(0xFF5FD4AE)
+                line.startsWith("-") -> Color(0xFFF2A09E)
+                else -> PaEditorial.CodeText
             }
             Text(
                 line.ifEmpty { " " },

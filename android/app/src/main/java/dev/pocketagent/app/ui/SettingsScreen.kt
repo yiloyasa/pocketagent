@@ -78,7 +78,11 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
+import dev.pocketagent.app.ui.component.PaHostChip
+import dev.pocketagent.app.ui.component.PaHostLink
+import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaPaths
+import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.SenseVoiceModelManager
@@ -90,6 +94,8 @@ import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
 import dev.pocketagent.app.ui.theme.AgentTheme
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.theme.paPushBack
 import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
@@ -114,6 +120,47 @@ import pocketagent.v1.McpServerStatus
 import pocketagent.v1.ModelInfo
 import pocketagent.v1.RateLimitWindow
 import pocketagent.v1.SetCodexSettingsRequest
+
+/**
+ * 编辑式页面的 M3 色板:恒为浅色盘(编辑式令牌 → MaterialTheme.colorScheme),
+ * 供页内的 M3 组件(Switch / OutlinedTextField / RadioButton / AlertDialog /
+ * TextButton / EmptyState)自动落编辑式色 —— 否则深色显示模式下这些组件仍按
+ * PaTheme 深色盘出字,在浅画布上不可读。只包编辑式页面的子树,不动全局 PaTheme。
+ */
+internal fun paEditorialLightScheme() = androidx.compose.material3.lightColorScheme(
+    primary = PaEditorial.Primary,
+    onPrimary = Color.White,
+    background = PaEditorial.Canvas,
+    onBackground = PaEditorial.Ink,
+    surface = PaEditorial.Surface,
+    onSurface = PaEditorial.Ink,
+    surfaceVariant = PaEditorial.Raised,
+    onSurfaceVariant = PaEditorial.Muted,
+    outline = PaEditorial.Hairline,
+    error = PaEditorial.Denied,
+)
+
+/**
+ * 编辑式页面的系统栏图标适配:编辑式画布恒为浅色(不随显示模式换肤),
+ * 深色显示模式下系统栏若仍用浅色图标,浅底上就看不见。本助手在页面存续期
+ * 把状态栏/导航栏图标置为深色,离开时恢复 Pa 主题的全局判定 ——
+ * MainActivity 的全局挂接不动,只作用于编辑式页面。
+ */
+@Composable
+internal fun EditorialLightSystemBars() {
+    val view = androidx.compose.ui.platform.LocalView.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.DisposableEffect(view, context) {
+        val window = (context as? android.app.Activity)?.window
+        val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, view) }
+        controller?.isAppearanceLightStatusBars = true
+        controller?.isAppearanceLightNavigationBars = true
+        onDispose {
+            controller?.isAppearanceLightStatusBars = !Pa.IsDark
+            controller?.isAppearanceLightNavigationBars = !Pa.IsDark
+        }
+    }
+}
 
 /**
  * agent id → 展示名映射(**仅展示用途,非能力名单** —— P1-6 动态化边界)。
@@ -181,15 +228,15 @@ private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
     if (usage == null) {
         Text(
             if (loading) "正在读取…" else "未获取到用量信息",
-            fontSize = 12.sp, color = Pa.TextTertiary,
+            fontSize = 12.sp, color = PaEditorial.Muted,
             modifier = Modifier.padding(vertical = 12.dp),
         )
         return
     }
     if (usage.error.isNotBlank()) {
-        Text("暂时读不到额度", fontSize = 12.5.sp, color = Pa.TextPrimary)
+        Text("暂时读不到额度", fontSize = 12.5.sp, color = PaEditorial.Ink)
         Spacer(Modifier.height(4.dp))
-        Text(usage.error, fontSize = 11.sp, color = Pa.TextTertiary)
+        Text(usage.error, fontSize = 11.sp, color = PaEditorial.Muted)
         return
     }
 
@@ -198,11 +245,11 @@ private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
             usage.planType.ifBlank { "未报告套餐" },
             Modifier.weight(1f),
             fontSize = 13.sp,
-            color = Pa.TextPrimary,
+            color = PaEditorial.Ink,
             fontWeight = FontWeight.Medium,
         )
         if (usage.spendControlReached) {
-            StatusChip("已达上限", Pa.Red)
+            StatusChip("已达上限", EditorialTone.DENIED.text)
         }
     }
     Spacer(Modifier.height(10.dp))
@@ -223,14 +270,14 @@ private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
     }
     if (extras.isNotEmpty()) {
         Spacer(Modifier.height(9.dp))
-        Text(extras.joinToString(" · "), fontSize = 11.sp, color = Pa.TextTertiary)
+        Text(extras.joinToString(" · "), fontSize = 11.sp, color = PaEditorial.Muted)
     }
     if (usage.hasCredits || usage.creditBalance.isNotBlank()) {
         Spacer(Modifier.height(4.dp))
         Text(
             if (usage.unlimitedCredits) "额度不限量" else "剩余额度 ${usage.creditBalance}",
             fontSize = 11.sp,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
         )
     }
 }
@@ -248,9 +295,9 @@ private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
 
     val pct = usedPercentClamped(window)
     val barColor = when (usageLevelColorPercent(pct)) {
-        2 -> Pa.Red
-        1 -> Pa.Yellow
-        else -> Pa.Green
+        2 -> PaEditorial.Denied
+        1 -> EditorialTone.ATTENTION.accent
+        else -> PaEditorial.Running
     }
     val reset = resetCountdownLabel(window.resetsAtUnixS, System.currentTimeMillis())
 
@@ -260,7 +307,7 @@ private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
                 rateLimitWindowLabel(window.windowDurationMins, fallbackLabel),
                 Modifier.weight(1f),
                 fontSize = 12.sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
             Text("$pct%", fontSize = 12.sp, color = barColor, fontWeight = FontWeight.Medium)
         }
@@ -269,7 +316,7 @@ private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
             Modifier
                 .fillMaxWidth()
                 .height(6.dp)
-                .background(Pa.Bg, RoundedCornerShape(50)),
+                .background(PaEditorial.Canvas, RoundedCornerShape(50)),
         ) {
             Box(
                 Modifier
@@ -280,7 +327,7 @@ private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
         }
         if (reset.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
-            Text(reset, fontSize = 10.5.sp, color = Pa.TextTertiary)
+            Text(reset, fontSize = 10.5.sp, color = PaEditorial.Muted)
         }
     }
 }
@@ -303,14 +350,14 @@ private fun ManagedPolicyNote(text: String) {
         Icon(
             painterResource(R.drawable.ic_lucide_shield),
             null,
-            tint = Pa.Yellow,
+            tint = EditorialTone.ATTENTION.accent,
             modifier = Modifier.size(13.dp).padding(top = 1.dp),
         )
         Spacer(Modifier.width(7.dp))
         Text(
             text,
             fontSize = 11.sp,
-            color = Pa.TextSecondary,
+            color = PaEditorial.Muted,
             modifier = Modifier.weight(1f),
         )
     }
@@ -328,14 +375,17 @@ private fun agentIcon(id: String): Int? = agentBrandIcon(id)
 private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
 
 /**
- * 全 app 唯一卡型(统一卡片语言):16dp 圆角 + Pa.Card 实色底,无边框、无发丝边、无阴影。
+ * 全 app 唯一卡型(编辑式统一卡语言):18dp 圆角 + 瓷白实色底 + 1dp 细线描边
+ * (premium.css .status-card/.card;无阴影堆叠,层级靠留白与细线)。
  *
  * 【为什么收敛到一个函数】此前玻璃/实色/发丝边/阴影混用,用户裁定「层级很脏」——
- * 乱的不是卡片本身,是卡型不统一。现在设置页所有分区卡(含 hero)只此一种材质;
- * 卡内禁止任何带底色子容器,行首图标裸放;行间分隔统一 0.5dp Separator 细线。
+ * 乱的不是卡片本身,是卡型不统一。现在设置页所有分区卡只此一种材质;
+ * 行间分隔统一 1dp Hairline 细线。
  */
-private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(16.dp)): Modifier = composed {
-    this.background(Pa.Card, shape)
+private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(18.dp)): Modifier = composed {
+    this
+        .background(PaEditorial.Surface, shape)
+        .border(1.dp, PaEditorial.Hairline, shape)
 }
 
 /**
@@ -433,6 +483,21 @@ internal fun matchRange(title: String, query: String): IntRange? {
  */
 @Composable
 fun SettingsScreen(
+    onBack: () -> Unit,
+    /** 任务中心点下载卡片进来时直达「用户数据管理」二级页。 */
+    openUserData: Boolean = false,
+    /** 用内置浏览器查看已下载的网页/文本(由 MainActivity 提供导航)。 */
+    onOpenBrowser: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
+    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
+        SettingsScreenBody(onBack, openUserData, onOpenBrowser, modifier)
+    }
+}
+
+@Composable
+private fun SettingsScreenBody(
     onBack: () -> Unit,
     /** 任务中心点下载卡片进来时直达「用户数据管理」二级页。 */
     openUserData: Boolean = false,
@@ -957,32 +1022,57 @@ fun SettingsScreen(
     }
 
     // ---------------- 一级页 ----------------
+    // 编辑式骨架(README:状态栏 → 顶部导航 → 主机状态 → 内容);系统栏图标
+    // 跟编辑式浅色画布走(深色显示模式下内容区也是浅的,图标必须用深色)。
+    EditorialLightSystemBars()
     // 【推背模糊】玻璃浮层(审批预览 PaSheet)打开时,设置内容自身模糊+缩小+压暗——
     // 透过玻璃看过去才是真磨砂(PaGlass 职责分离:模糊在内容层,不在浮层上)。
-    Column(
-        modifier
+    PaScreenScaffold(
+        title = "设置",
+        modifier = modifier
             .fillMaxSize()
-            .background(Pa.Bg)
-            .statusBarsPadding()
             .paPushBack(showApprovalPreview || RuntimeControlState.dialysisSheetOpen),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-            Column(Modifier.fillMaxWidth().padding(start = 10.dp)) {
-                Text("设置", fontSize = 26.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+        leading = {
+            PaNavIconButton(
+                onClick = onBack,
+                contentDescription = "返回",
+                iconRes = R.drawable.ic_lucide_chevron_left,
+                plain = true,
+            )
+        },
+        hostStatus = {
+            // 当前主机(PaHostChip 唯一事实源):点进去 = 用户数据管理(原 hero 行为)。
+            Column {
+                Text(
+                    "当前连接",
+                    Modifier.padding(start = 2.dp, bottom = 8.dp),
+                    fontSize = 11.sp, lineHeight = 16.sp,
+                    letterSpacing = 1.2.sp, fontWeight = FontWeight(650),
+                    color = PaEditorial.Muted,
+                )
+                PaHostChip(
+                    hostName = host?.displayName?.ifBlank { "我的电脑" } ?: "我的电脑",
+                    link = when (connStateTop) {
+                        "ok" -> PaHostLink.CONNECTED
+                        "down" -> PaHostLink.OFFLINE
+                        else -> PaHostLink.CONNECTING
+                    },
+                    channelLabel = listOfNotNull(
+                        connTransportTop.ifBlank { "直连" },
+                        host?.os?.takeIf { it.isNotBlank() },
+                    ).joinToString(" · "),
+                    onClick = { subPage = "userdata" },
+                )
             }
-        }
-
+        },
+    ) {
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .navigationBarsPadding(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             item(key = "banner") {
                 Column {
@@ -990,21 +1080,21 @@ fun SettingsScreen(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                                .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
                                 painterResource(R.drawable.ic_lucide_triangle_alert), null,
-                                tint = Pa.RedText, modifier = Modifier.size(15.dp),
+                                tint = EditorialTone.DENIED.text, modifier = Modifier.size(15.dp),
                             )
                             Spacer(Modifier.width(9.dp))
-                            Text(message, Modifier.weight(1f), fontSize = 12.sp, color = Pa.RedText)
+                            Text(message, Modifier.weight(1f), fontSize = 12.sp, color = EditorialTone.DENIED.text)
                             TextButton(onClick = {
                                 settingsError = null
                                 AgentConnection.connectionEpoch.value += 1
                             }) {
-                                Text("重试", color = Pa.Accent)
+                                Text("重试", color = PaEditorial.Primary)
                             }
                         }
                     }
@@ -1014,9 +1104,9 @@ fun SettingsScreen(
                             Modifier.fillMaxWidth().padding(horizontal = 6.dp),
                             fontSize = 12.sp,
                             color = when {
-                                message.contains("失败") -> Pa.RedText
-                                message.contains("保存中") || message.contains("未生效") -> Pa.Accent
-                                else -> Pa.GreenText
+                                message.contains("失败") -> EditorialTone.DENIED.text
+                                message.contains("保存中") || message.contains("未生效") -> PaEditorial.Primary
+                                else -> EditorialTone.RUNNING.text
                             },
                         )
                     }
@@ -1036,7 +1126,7 @@ fun SettingsScreen(
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_lucide_search), null,
-                        tint = Pa.TextTertiary, modifier = Modifier.size(16.dp),
+                        tint = PaEditorial.Subtle, modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(10.dp))
                     androidx.compose.foundation.text.BasicTextField(
@@ -1044,14 +1134,14 @@ fun SettingsScreen(
                         onValueChange = { settingsQuery = it },
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 14.sp, color = Pa.TextPrimary,
+                            fontSize = 14.sp, color = PaEditorial.Ink,
                         ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Pa.Accent),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(PaEditorial.Primary),
                         modifier = Modifier.weight(1f).padding(vertical = 10.dp),
                         decorationBox = { inner ->
                             Box {
                                 if (settingsQuery.isEmpty()) {
-                                    Text("搜索设置…", fontSize = 14.sp, color = Pa.TextTertiary)
+                                    Text("搜索设置…", fontSize = 14.sp, color = PaEditorial.Muted)
                                 }
                                 inner()
                             }
@@ -1060,7 +1150,7 @@ fun SettingsScreen(
                     if (settingsQuery.isNotEmpty()) {
                         Icon(
                             painterResource(R.drawable.ic_lucide_x), "清除搜索",
-                            tint = Pa.TextTertiary,
+                            tint = PaEditorial.Subtle,
                             modifier = Modifier
                                 .size(16.dp)
                                 .pressable(haptic = true) { settingsQuery = "" },
@@ -1070,48 +1160,7 @@ fun SettingsScreen(
             }
 
             if (settingsQuery.isBlank()) {
-            // ---------- 电脑连接卡(点进去 = 用户数据管理;唯一卡型:16dp/无边) ----------
-            item(key = "hero") {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable(haptic = true) { subPage = "userdata" }
-                        .paSettingsCard()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 行首图标裸放(不套 chip 底):连接状态用颜色表达
-                    Icon(
-                        painterResource(R.drawable.ic_lucide_monitor), null,
-                        tint = if (connStateTop == "ok") Pa.Accent else Pa.TextSecondary,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            host?.displayName?.ifBlank { "我的电脑" } ?: "我的电脑",
-                            fontSize = 15.5.sp,
-                            color = Pa.TextPrimary,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            connSummary +
-                                (host?.os?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                            Modifier.padding(top = 2.dp),
-                            fontSize = 11.5.sp,
-                            color = Pa.TextTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Icon(
-                        painterResource(R.drawable.ic_lucide_chevron_right), null,
-                        tint = Pa.TextTertiary, modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
+            // 当前主机卡已上移到骨架的 hostStatus 槽(PaHostChip,点进去 = 用户数据管理)。
 
             // ---------- 通用 ----------
             item(key = "general") {
@@ -1125,18 +1174,21 @@ fun SettingsScreen(
                     ) {
                         SettingRow(
                             title = "外观与阅读",
-                            icon = R.drawable.ic_lucide_monitor,
+                            desc = "主题 · 文字尺寸 · 动效",
+                            icon = R.drawable.ic_lucide_settings,
+                            iconBox = true,
                             value = themeLabel + " · " + uiScaleLabel,
                             chevron = true,
                             divider = true,
                             onClick = { subPage = "appearance" },
                         )
                         SettingRow(title = "Daemon 桥接与输入", desc = "连接策略 · 全局对话显示 · 语音 · 实验功能",
-                            icon = R.drawable.ic_lucide_server, chevron = true, divider = true, onClick = { subPage = "daemon" })
+                            icon = R.drawable.ic_lucide_server, iconBox = true, chevron = true, divider = true, onClick = { subPage = "daemon" })
                         SettingRow(
                             title = "用户数据管理",
-                            desc = "连接 · 下载内容",
-                            icon = R.drawable.ic_lucide_server,
+                            desc = "连接 · 配对 · 下载内容",
+                            icon = R.drawable.ic_lucide_folder,
+                            iconBox = true,
                             value = connSummary,
                             chevron = true,
                             onClick = { subPage = "userdata" },
@@ -1159,6 +1211,7 @@ fun SettingsScreen(
                             title = "Agent 与模型",
                             desc = "切换 Agent · 权限 · 模型 · MCP",
                             icon = R.drawable.ic_lucide_cpu,
+                            iconBox = true,
                             value = agentDisplay(runningAgent),
                             chevron = true,
                             onClick = { subPage = "agent" },
@@ -1185,12 +1238,14 @@ fun SettingsScreen(
                         SettingRow(
                             title = "版本",
                             icon = R.drawable.ic_lucide_info,
+                            iconBox = true,
                             value = "v${BuildConfig.VERSION_NAME}",
                             divider = true,
                         )
                         SettingRow(
                             title = "电脑",
                             icon = R.drawable.ic_lucide_monitor,
+                            iconBox = true,
                             value = listOfNotNull(host?.os, host?.arch).joinToString("/").ifBlank { "—" },
                         )
                     }
@@ -1219,7 +1274,7 @@ fun SettingsScreen(
                                         .fillMaxWidth()
                                         .padding(vertical = 14.dp),
                                     fontSize = 13.sp,
-                                    color = Pa.TextTertiary,
+                                    color = PaEditorial.Muted,
                                 )
                             } else {
                                 hits.forEachIndexed { i, entry ->
@@ -1238,7 +1293,7 @@ fun SettingsScreen(
                                         ) {
                                             Icon(
                                                 painterResource(R.drawable.ic_lucide_sliders), null,
-                                                tint = Pa.TextSecondary, modifier = Modifier.size(17.dp),
+                                                tint = PaEditorial.Muted, modifier = Modifier.size(17.dp),
                                             )
                                             Spacer(Modifier.width(12.dp))
                                             Column(Modifier.weight(1f)) {
@@ -1248,35 +1303,35 @@ fun SettingsScreen(
                                                         range?.let { r ->
                                                             addStyle(
                                                                 androidx.compose.ui.text.SpanStyle(
-                                                                    color = Pa.Accent,
+                                                                    color = PaEditorial.Primary,
                                                                     fontWeight = FontWeight.SemiBold,
                                                                 ),
                                                                 r.first, r.last + 1,
                                                             )
                                                         }
                                                     },
-                                                    fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1,
+                                                    fontSize = 16.sp, color = PaEditorial.Ink, maxLines = 1,
                                                 )
                                                 if (entry.desc.isNotEmpty()) {
                                                     Text(
                                                         entry.desc,
                                                         Modifier.padding(top = 2.dp),
-                                                        fontSize = 13.sp, color = Pa.TextTertiary, maxLines = 2,
+                                                        fontSize = 13.sp, color = PaEditorial.Muted, maxLines = 2,
                                                     )
                                                 }
                                             }
                                             Spacer(Modifier.width(8.dp))
-                                            Text(entry.group, fontSize = 14.5.sp, color = Pa.TextTertiary, maxLines = 1)
+                                            Text(entry.group, fontSize = 14.5.sp, color = PaEditorial.Muted, maxLines = 1)
                                             if (entry.target != null) {
                                                 Spacer(Modifier.width(6.dp))
                                                 Icon(
                                                     painterResource(R.drawable.ic_lucide_chevron_right), null,
-                                                    tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
+                                                    tint = PaEditorial.Subtle, modifier = Modifier.size(15.dp),
                                                 )
                                             }
                                         }
                                         if (i < hits.lastIndex) {
-                                            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+                                            Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
                                         }
                                     }
                                 }
@@ -1308,30 +1363,32 @@ fun SettingsScreen(
     }
 }
 
-/** 卡片外的分区标题(iOS 分组表语言):13sp/TextSecondary/字距 1.4sp,小图标裸放。 */
+/** 卡片外的分区标题(编辑式稿 03:11sp/Muted/字距加宽,小图标裸放)。 */
 @Composable
 private fun GroupLabel(icon: Int, title: String) {
     Row(
-        Modifier.padding(start = 14.dp, top = 12.dp, bottom = 8.dp),
+        Modifier.padding(start = 2.dp, top = 16.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(icon), null,
-            tint = Pa.TextSecondary,
-            modifier = Modifier.size(15.dp),
+            tint = PaEditorial.Muted,
+            modifier = Modifier.size(14.dp),
         )
         Spacer(Modifier.width(7.dp))
         Text(
             title,
-            fontSize = 13.sp,
-            letterSpacing = 1.4.sp,
-            color = Pa.TextSecondary,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            letterSpacing = 1.2.sp,
+            fontWeight = FontWeight(650),
+            color = PaEditorial.Muted,
         )
     }
 }
 
 /**
- * 二级页骨架:返回 + 标题 + 内容。
+ * 二级页骨架(编辑式统一骨架):PaScreenScaffold(返回裸钮 + 25/32 标题 + 23dp 边距)。
  *
  * [scrollable] = true(默认):外层 Column 提供 verticalScroll,内容用普通 Column 堆。
  * [scrollable] = false:**内容自己负责滚动**(内容内含 LazyColumn)。
@@ -1345,35 +1402,34 @@ private fun SubPageScaffold(
     scrollable: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(Pa.Bg)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-            Spacer(Modifier.width(10.dp))
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Pa.TextPrimary)
-        }
+    PaScreenScaffold(
+        title = title,
+        leading = {
+            PaNavIconButton(
+                onClick = onBack,
+                contentDescription = "返回",
+                iconRes = R.drawable.ic_lucide_chevron_left,
+                plain = true,
+            )
+        },
+    ) {
         if (scrollable) {
             Column(
                 Modifier
-                    .weight(1f)
                     .fillMaxWidth()
+                    .weight(1f)
                     .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                    .padding(top = 4.dp, bottom = 12.dp),
                 content = content,
             )
         } else {
             Column(
                 Modifier
-                    .weight(1f)
                     .fillMaxWidth()
+                    .weight(1f)
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                    .padding(top = 4.dp, bottom = 12.dp),
                 content = content,
             )
         }
@@ -1427,7 +1483,7 @@ private fun AppearancePage(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 fontSize = (13 * AgentConnection.uiTextScale).sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
             Spacer(Modifier.height(8.dp))
 
@@ -1521,7 +1577,7 @@ private fun CapabilityRowItem(c: CodexCapability, divider: Boolean) {
         divider = divider,
         control = {
             if (!c.enabled) {
-                Text("已停用", fontSize = 11.sp, color = Pa.TextTertiary)
+                Text("已停用", fontSize = 11.sp, color = PaEditorial.Muted)
             }
         },
     )
@@ -1539,9 +1595,9 @@ private fun SettingStateLine(key: String, states: Map<String, String>) {
     val info = states[key]?.let { settingStateInfo(it) }
     if (info != null && info.level != "ok") {
         val color = when (info.level) {
-            "error" -> Pa.RedText
-            "warn" -> Pa.Accent
-            else -> Pa.TextTertiary
+            "error" -> EditorialTone.DENIED.text
+            "warn" -> PaEditorial.Primary
+            else -> PaEditorial.Muted
         }
         Row(
             Modifier.fillMaxWidth().padding(bottom = 6.dp),
@@ -1564,7 +1620,7 @@ private fun SettingStateLine(key: String, states: Map<String, String>) {
 private fun DesktopEchoLine(settings: CodexSettings?, key: String) {
     val line = DesktopEchoLogic.desktopEchoLine(settings, key) ?: return
     Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-        Text(line, fontSize = 11.sp, color = Pa.TextTertiary)
+        Text(line, fontSize = 11.sp, color = PaEditorial.Muted)
     }
 }
 
@@ -1595,19 +1651,19 @@ private fun CapabilitiesPage(
                 Box(
                     Modifier.fillMaxWidth().padding(vertical = 40.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("正在读取…", fontSize = 13.sp, color = Pa.TextTertiary) }
+                ) { Text("正在读取…", fontSize = 13.sp, color = PaEditorial.Muted) }
             }
 
             error != null -> Column(Modifier.fillMaxWidth().padding(vertical = 24.dp)) {
-                Text("暂时读不到能力列表", fontSize = 14.sp, color = Pa.RedText)
+                Text("暂时读不到能力列表", fontSize = 14.sp, color = EditorialTone.DENIED.text)
                 Spacer(Modifier.height(6.dp))
-                Text(error, fontSize = 11.sp, color = Pa.TextTertiary)
+                Text(error, fontSize = 11.sp, color = PaEditorial.Muted)
             }
 
             capabilities.isEmpty() -> Box(
                 Modifier.fillMaxWidth().padding(vertical = 40.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text("这台电脑上的 Codex 未报告任何技能、hooks 或插件", fontSize = 13.sp, color = Pa.TextTertiary) }
+            ) { Text("这台电脑上的 Codex 未报告任何技能、hooks 或插件", fontSize = 13.sp, color = PaEditorial.Muted) }
 
             else -> {
                 val filtered = filterCapabilities(capabilities, query)
@@ -1623,7 +1679,7 @@ private fun CapabilitiesPage(
                     Box(
                         Modifier.fillMaxWidth().padding(vertical = 30.dp),
                         contentAlignment = Alignment.Center,
-                    ) { Text("没有匹配「$query」的技能、hooks 或插件", fontSize = 12.sp, color = Pa.TextTertiary) }
+                    ) { Text("没有匹配「$query」的技能、hooks 或插件", fontSize = 12.sp, color = PaEditorial.Muted) }
                 } else {
                     LazyColumn(
                         Modifier.fillMaxWidth().weight(1f),
@@ -1634,7 +1690,7 @@ private fun CapabilitiesPage(
                                 Text(
                                     capabilityKindLabel(kind) + " · " + list.size,
                                     fontSize = 11.sp,
-                                    color = Pa.TextTertiary,
+                                    color = PaEditorial.Muted,
                                     modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                                 )
                             }
@@ -1733,7 +1789,7 @@ private fun AgentPage(
     onOpenCapabilities: () -> Unit,
 ) {
     SubPageScaffold(title = "Agent 与模型", onBack = onBack) {
-        TextButton(onClick=onRetrySettings) { Text("刷新 Agent 状态和模型",color=Pa.Accent) }
+        TextButton(onClick=onRetrySettings) { Text("刷新 Agent 状态和模型",color=PaEditorial.Primary) }
         SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "切换 Agent") {
             Spacer(Modifier.height(10.dp))
             // T-DSH 问题 A:可用性一律读共享 capabilities 快照(AgentConnection
@@ -1777,12 +1833,12 @@ private fun AgentPage(
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_lucide_triangle_alert), null,
-                        tint = Pa.Accent, modifier = Modifier.size(15.dp),
+                        tint = PaEditorial.Primary, modifier = Modifier.size(15.dp),
                     )
                     Spacer(Modifier.width(9.dp))
-                    Text(note, Modifier.weight(1f), fontSize = 11.5.sp, color = Pa.TextSecondary)
+                    Text(note, Modifier.weight(1f), fontSize = 11.5.sp, color = PaEditorial.Muted)
                     TextButton(onClick = onRetrySettings) {
-                        Text("重试", color = Pa.Accent, fontSize = 12.sp)
+                        Text("重试", color = PaEditorial.Primary, fontSize = 12.sp)
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -1811,7 +1867,7 @@ private fun AgentPage(
                 Text(
                     "更改默认对新建对话生效,已有对话保持原设置",
                     fontSize = 11.sp,
-                    color = Pa.TextSecondary,
+                    color = PaEditorial.Muted,
                     modifier = Modifier.padding(bottom = 4.dp),
                 )
                 SettingRow(
@@ -1823,8 +1879,8 @@ private fun AgentPage(
                             checked = applyToExistingThreads,
                             onCheckedChange = onToggleApplyToAll,
                             colors = SwitchDefaults.colors(
-                                checkedTrackColor = Pa.Accent,
-                                uncheckedTrackColor = Pa.Hover,
+                                checkedTrackColor = PaEditorial.Primary,
+                                uncheckedTrackColor = PaEditorial.Raised,
                                 uncheckedBorderColor = Color.Transparent,
                             ),
                         )
@@ -1838,7 +1894,7 @@ private fun AgentPage(
                     Text(
                         line,
                         fontSize = 11.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Muted,
                         modifier = Modifier.padding(bottom = 6.dp),
                     )
                 }
@@ -1846,7 +1902,7 @@ private fun AgentPage(
                     Text(
                         "电脑端当前值暂时读不到:${settings.desktopEchoError}",
                         fontSize = 11.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Muted,
                         modifier = Modifier.padding(bottom = 6.dp),
                     )
                 }
@@ -1969,7 +2025,7 @@ private fun AgentPage(
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("预览审批弹窗", fontSize = 13.5.sp, color = Pa.AccentText)
+                    Text("预览审批弹窗", fontSize = 13.5.sp, color = PaEditorial.Primary)
                 }
                 Spacer(Modifier.height(6.dp))
             }
@@ -2035,7 +2091,7 @@ private fun AgentPage(
                     Text(
                         capsBadges.joinToString(" · "),
                         fontSize = 10.5.sp,
-                        color = Pa.TextSecondary,
+                        color = PaEditorial.Muted,
                         modifier = Modifier.padding(bottom = 6.dp),
                     )
                 }
@@ -2085,7 +2141,7 @@ private fun AgentPage(
                 // 不会改写用户桌面 codex 的 config.toml。
                 Text(
                     "以下参数仅控制 Codex 生成方式；所有 Agent 的思考/工具显示在 Daemon 设置中统一管理。",
-                    fontSize = 11.sp, color = Pa.TextTertiary,
+                    fontSize = 11.sp, color = PaEditorial.Muted,
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
 
@@ -2177,7 +2233,7 @@ private fun AgentPage(
                     desc = "已内置:粘贴的长文本原样完整送达电脑端,不做任何裁剪",
                     divider = false,
                     control = {
-                        Text("已内置", fontSize = 11.sp, color = Pa.Green)
+                        Text("已内置", fontSize = 11.sp, color = EditorialTone.RUNNING.text)
                     },
                 )
                 Spacer(Modifier.height(6.dp))
@@ -2206,7 +2262,7 @@ private fun AgentPage(
                     }
                     Text(
                         emptyText,
-                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        fontSize = 12.sp, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
@@ -2234,7 +2290,7 @@ private fun AgentPage(
                             mcpError != null -> "暂时读不到 MCP 列表：$mcpError"
                             else -> "这台电脑未配置 MCP 服务器"
                         },
-                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        fontSize = 12.sp, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
@@ -2257,7 +2313,7 @@ private fun AgentPage(
                                 val ok = m.status == "ready" && m.error.isBlank()
                                 StatusChip(
                                     text = if (ok) "就绪" else if (m.error.isNotBlank()) "失败" else m.status,
-                                    color = if (ok) Pa.Green else Pa.Red,
+                                    color = if (ok) EditorialTone.RUNNING.text else EditorialTone.DENIED.text,
                                 )
                             },
                         )
@@ -2279,7 +2335,7 @@ private fun AgentPage(
                     Text(
                         "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
                             "可先在上方「切换 Agent」里回到 Codex。",
-                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        fontSize = 12.sp, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 }
@@ -2356,7 +2412,7 @@ private fun PiStatusSection(settings: CodexSettings?, modelChoices: List<ModelIn
         Spacer(Modifier.height(6.dp))
         Text(
             "会话内可单独覆盖模型与强度;以上默认值随设置页更新。",
-            fontSize = 11.sp, color = Pa.TextTertiary,
+            fontSize = 11.sp, color = PaEditorial.Muted,
             modifier = Modifier.padding(bottom = 6.dp),
         )
     }
@@ -2404,7 +2460,7 @@ private fun ZCodeStatusSection(
         Spacer(Modifier.height(6.dp))
         Text(
             "会话的模型与思考档位在会话内切换;额度展示下一批接入。",
-            fontSize = 11.sp, color = Pa.TextTertiary,
+            fontSize = 11.sp, color = PaEditorial.Muted,
             modifier = Modifier.padding(bottom = 6.dp),
         )
     }
@@ -2456,7 +2512,7 @@ private fun SettingsTextField(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val borderColor by animateColorAsState(
-        targetValue = if (focused) Pa.Accent.copy(alpha = 0.55f) else Pa.Separator,
+        targetValue = if (focused) PaEditorial.Primary.copy(alpha = 0.55f) else PaEditorial.Hairline,
         animationSpec = PaMotion.standard(),
         label = "settingsFieldBorder",
     )
@@ -2465,7 +2521,7 @@ private fun SettingsTextField(
             label,
             Modifier.padding(start = 3.dp, bottom = 6.dp),
             fontSize = 10.5.sp,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
         )
         Box(
             Modifier
@@ -2475,14 +2531,14 @@ private fun SettingsTextField(
             contentAlignment = Alignment.CenterStart,
         ) {
             if (value.isEmpty()) {
-                Text("—", fontSize = 13.5.sp, color = Pa.TextTertiary)
+                Text("—", fontSize = 13.5.sp, color = PaEditorial.Muted)
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = TextStyle(color = Pa.TextPrimary, fontSize = 13.5.sp),
-                cursorBrush = SolidColor(Pa.Accent),
+                textStyle = TextStyle(color = PaEditorial.Ink, fontSize = 13.5.sp),
+                cursorBrush = SolidColor(PaEditorial.Primary),
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
                 modifier = Modifier.fillMaxWidth(),
@@ -2509,7 +2565,7 @@ private fun ModelPickerDialog(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Pa.CardHigh, RoundedCornerShape(22.dp))
+                .background(PaEditorial.Surface, RoundedCornerShape(23.dp))
                 .padding(20.dp),
         ) {
             Row(
@@ -2517,7 +2573,7 @@ private fun ModelPickerDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("选择默认模型", fontSize = 17.sp, color = Pa.TextPrimary)
+                Text("选择默认模型", fontSize = 17.sp, color = PaEditorial.Ink)
                 IconActionButton(
                     R.drawable.ic_lucide_x, "关闭", onDismiss,
                     bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
@@ -2540,7 +2596,7 @@ private fun ModelPickerDialog(
                 if (models.isEmpty()) {
                     Text(
                         "未获取到模型列表(请检查连接后重试)",
-                        fontSize = 12.sp, color = Pa.TextTertiary,
+                        fontSize = 12.sp, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                 }
@@ -2578,7 +2634,7 @@ private fun ModelChoiceRow(
             .fillMaxWidth()
             .pressable(haptic = true) { onClick() }
             .background(
-                if (selected) Pa.Hover else Color.Transparent,
+                if (selected) PaEditorial.Raised else Color.Transparent,
                 RoundedCornerShape(12.dp),
             )
             .padding(horizontal = 10.dp, vertical = 11.dp),
@@ -2601,17 +2657,17 @@ private fun ModelChoiceRow(
             Text(
                 title,
                 fontSize = 15.sp,
-                color = if (selected) Pa.Accent else Pa.TextPrimary,
+                color = if (selected) PaEditorial.Primary else PaEditorial.Ink,
             )
             if (subtitle.isNotEmpty()) {
-                Text(subtitle, fontSize = 10.5.sp, color = Pa.TextTertiary)
+                Text(subtitle, fontSize = 10.5.sp, color = PaEditorial.Muted)
             }
         }
         if (selected) {
             Spacer(Modifier.width(8.dp))
             Icon(
                 painterResource(R.drawable.ic_lucide_check), null,
-                tint = Pa.Accent, modifier = Modifier.size(20.dp),
+                tint = PaEditorial.Primary, modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -2639,11 +2695,11 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("允许执行?", Modifier.weight(1f), fontSize = 19.sp, color = Pa.TextPrimary)
+                Text("允许执行?", Modifier.weight(1f), fontSize = 19.sp, color = PaEditorial.Ink)
                 Text(
                     if (expanded) "收起" else "展开",
                     fontSize = 11.sp,
-                    color = Pa.AccentText,
+                    color = PaEditorial.Primary,
                 )
                 IconActionButton(
                     if (expanded) R.drawable.ic_lucide_chevron_left else R.drawable.ic_lucide_chevron_right,
@@ -2656,18 +2712,19 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
             }
             Text(
                 "agent 请求执行以下命令(这是示例,不会真的执行)",
-                fontSize = 13.sp, color = Pa.TextSecondary,
+                fontSize = 13.sp, color = PaEditorial.Muted,
                 modifier = Modifier.padding(top = 4.dp),
             )
             if (expanded) {
                 Text(
                     "{\"command\": \"Remove-Item C:\\\\project\\\\old-build -Recurse\", \"cwd\": \"C:\\\\project\"}",
                     fontSize = 12.sp,
-                    color = Pa.TextPrimary,
+                    color = PaEditorial.CodeText,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Pa.Bg, RoundedCornerShape(12.dp))
+                        // 命令原文:石墨代码箱(侧边栏/代码预览保留石墨深色的纪律)
+                        .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
                         .padding(12.dp)
                         .padding(vertical = 4.dp),
                 )
@@ -2676,24 +2733,26 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                 "怎么用:点【允许】= 电脑上真实执行这条命令;点【拒绝】= 不执行," +
                     "agent 会继续对话并说明;放着不管 = 任务结束前自动拒绝。" +
                     "断网收不到弹窗时,daemon 会自动拒绝并让 agent 继续作答,不会卡死任务。",
-                fontSize = 12.sp, color = Pa.TextTertiary,
+                fontSize = 12.sp, color = PaEditorial.Muted,
                 modifier = Modifier.padding(vertical = 10.dp),
             )
             Row(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+                // 拒绝:浅珊瑚底 + 加深珊瑚字;允许:石墨主操作(主色只给当前操作)
                 Box(
                     Modifier
                         .weight(1f)
                         .pressable { onDismiss() }
-                        .background(Pa.Hover, RoundedCornerShape(14.dp))
+                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(14.dp))
+                        .border(1.dp, Color(0xFFE9CFCA), RoundedCornerShape(14.dp))
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("拒绝(示例)", fontSize = 15.sp, color = Pa.TextPrimary) }
+                ) { Text("拒绝(示例)", fontSize = 15.sp, color = EditorialTone.DENIED.text) }
                 Spacer(Modifier.width(12.dp))
                 Box(
                     Modifier
                         .weight(1f)
                         .pressable { onDismiss() }
-                        .background(Pa.Accent, RoundedCornerShape(14.dp))
+                        .background(PaEditorial.Graphite, RoundedCornerShape(14.dp))
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) { Text("允许(示例)", fontSize = 15.sp, color = Color.White, fontWeight = FontWeight.SemiBold) }
@@ -2725,7 +2784,12 @@ fun SectionBlock(
     }
 }
 
-/** 设置行:左标题,右控件,行间细分隔线(desc 仅用于展示"数据",不再写解释文案)。 */
+/**
+ * 设置行(编辑式稿 03 行语言):左标题(Ink)/副行(Muted),右控件,行间 1dp 细线。
+ *
+ * [iconBox] = true 时行首图标放进 42dp 抬升面方格(13dp 圆角,与 PaHostChip 同款)
+ * —— 一级导航行用(截图 03 的行项目形态);二级页内默认 false,图标裸放保持轻。
+ */
 @Composable
 fun SettingRow(
     title: String,
@@ -2734,9 +2798,11 @@ fun SettingRow(
     /** 行首小图标(参考主流设置页:每行一个线性图标,便于扫读)。 */
     icon: Int? = null,
     /** 图标着色。传 null 表示原样显示(用于 Agent 品牌 PNG,不能被染成灰色)。 */
-    iconTint: Color? = Pa.TextSecondary,
+    iconTint: Color? = PaEditorial.Muted,
     /** 图标尺寸;品牌图标比 17dp 的线性图标大一档才协调。 */
     iconSize: androidx.compose.ui.unit.Dp = 17.dp,
+    /** 一级导航行的图标方格形态(42dp 抬升面)。 */
+    iconBox: Boolean = false,
     /** 右侧"当前值"文字(如 深色 / 简体中文 / v0.1.0),点击行时一眼看到现状。 */
     value: String? = null,
     /** 行尾 chevron,表示"点进去还有内容"。 */
@@ -2757,21 +2823,42 @@ fun SettingRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (icon != null) {
-                Icon(
-                    painterResource(icon), null,
-                    tint = iconTint ?: Color.Unspecified,
-                    modifier = Modifier.size(iconSize),
-                )
+                if (iconBox) {
+                    Box(
+                        Modifier
+                            .size(42.dp)
+                            .background(PaEditorial.Raised, RoundedCornerShape(13.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painterResource(icon), null,
+                            tint = iconTint ?: Color.Unspecified,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else {
+                    Icon(
+                        painterResource(icon), null,
+                        tint = iconTint ?: Color.Unspecified,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 16.sp, color = Pa.TextPrimary, maxLines = 1)
+                Text(
+                    title,
+                    fontSize = 15.sp, lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = PaEditorial.Ink,
+                    maxLines = 1,
+                )
                 if (desc.isNotEmpty()) {
                     Text(
                         desc,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 13.sp,
-                        color = Pa.TextTertiary,
+                        fontSize = 12.5.sp, lineHeight = 17.sp,
+                        color = PaEditorial.Muted,
                         maxLines = 2,
                     )
                 }
@@ -2780,8 +2867,8 @@ fun SettingRow(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     value,
-                    fontSize = 14.5.sp,
-                    color = Pa.TextTertiary,
+                    fontSize = 13.sp,
+                    color = PaEditorial.Muted,
                     maxLines = 1,
                 )
             }
@@ -2790,14 +2877,14 @@ fun SettingRow(
                 Spacer(Modifier.width(6.dp))
                 Icon(
                     painterResource(R.drawable.ic_lucide_chevron_right), null,
-                    tint = Pa.TextTertiary,
-                    modifier = Modifier.size(15.dp),
+                    tint = PaEditorial.Subtle,
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
         if (divider) {
-            // 行间分隔统一 0.5dp Separator 细线(统一卡片语言:全页行分隔二选一,选细线)
-            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+            // 行间分隔统一 1dp 细线(编辑式:留白 + 细线分层)
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
         }
     }
 }
@@ -2892,9 +2979,9 @@ private fun UserDataPage(
                         .size(8.dp)
                         .background(
                             when (connState) {
-                                "ok" -> Pa.Green
-                                "down" -> Pa.Red
-                                else -> Pa.TextTertiary
+                                "ok" -> PaEditorial.Running
+                                "down" -> PaEditorial.Denied
+                                else -> PaEditorial.Muted
                             },
                             CircleShape,
                         ),
@@ -2908,14 +2995,14 @@ private fun UserDataPage(
                             else -> "检查中…"
                         },
                         fontSize = 13.5.sp,
-                        color = Pa.TextPrimary,
+                        color = PaEditorial.Ink,
                     )
                     Text(
                         // 【不截断】原先 maxLines=1 + Ellipsis 会把长地址再裁一次,
                         // 用户根本抄不全。地址是"可操作信息",必须完整可读。
                         if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
                         fontSize = 10.5.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Muted,
                     )
                 }
             }
@@ -2931,7 +3018,7 @@ private fun UserDataPage(
                     "尚未发现可用地址。插上 USB 后在电脑上执行 adb reverse tcp:7246 tcp:7246," +
                         "或让手机与电脑处于同一局域网 / Tailscale。",
                     Modifier.padding(top = 4.dp, bottom = 8.dp),
-                    fontSize = 11.sp, color = Pa.TextTertiary,
+                    fontSize = 11.sp, color = PaEditorial.Muted,
                 )
             } else {
                 endpoints.forEach { ep ->
@@ -2951,7 +3038,7 @@ private fun UserDataPage(
                         Box(
                             Modifier
                                 .size(7.dp)
-                                .background(if (ep.active) Pa.Green else Pa.TextTertiary, CircleShape),
+                                .background(if (ep.active) PaEditorial.Running else PaEditorial.Muted, CircleShape),
                         )
                         Spacer(Modifier.width(9.dp))
                         Column(Modifier.weight(1f)) {
@@ -2959,7 +3046,7 @@ private fun UserDataPage(
                                 Text(
                                     ep.label,
                                     fontSize = 12.5.sp,
-                                    color = Pa.TextPrimary,
+                                    color = PaEditorial.Ink,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 if (ep.active) {
@@ -2967,8 +3054,8 @@ private fun UserDataPage(
                                     // 状态用纯色文字表达(统一卡语言:去底色 pill)
                                     Text(
                                         "使用中",
-                                        fontSize = 9.5.sp,
-                                        color = Pa.Accent,
+                                        fontSize = 10.sp,
+                                        color = EditorialTone.RUNNING.text,
                                     )
                                 }
                             }
@@ -2977,19 +3064,19 @@ private fun UserDataPage(
                                 ep.addr,
                                 Modifier.padding(top = 2.dp),
                                 fontSize = 12.sp,
-                                color = Pa.TextSecondary,
+                                color = PaEditorial.Muted,
                             )
                             if (ep.detail.isNotBlank()) {
                                 Text(
                                     ep.detail,
                                     Modifier.padding(top = 1.dp),
                                     fontSize = 10.sp,
-                                    color = Pa.TextTertiary,
+                                    color = PaEditorial.Muted,
                                 )
                             }
                         }
                         Spacer(Modifier.width(8.dp))
-                        Text("复制", fontSize = 11.5.sp, color = Pa.Accent)
+                        Text("复制", fontSize = 11.5.sp, color = PaEditorial.Primary)
                     }
                 }
                 Spacer(Modifier.height(4.dp))
@@ -3010,14 +3097,14 @@ private fun UserDataPage(
                         Text(
                             "已锁定主机指纹",
                             fontSize = 12.5.sp,
-                            color = Pa.TextPrimary,
+                            color = PaEditorial.Ink,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             lockedPin.take(16) + "…(SHA-256,首次连接时锁定)",
                             Modifier.padding(top = 2.dp),
                             fontSize = 10.5.sp,
-                            color = Pa.TextTertiary,
+                            color = PaEditorial.Muted,
                         )
                     }
                     Text(
@@ -3027,7 +3114,7 @@ private fun UserDataPage(
                             Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
                         },
                         fontSize = 11.5.sp,
-                        color = Pa.Red,
+                        color = PaEditorial.Denied,
                     )
                 }
             }
@@ -3042,7 +3129,7 @@ private fun UserDataPage(
                         .fillMaxWidth()
                         .padding(vertical = 6.dp),
                     fontSize = 11.sp,
-                    color = Pa.Red,
+                    color = PaEditorial.Denied,
                 )
                 Spacer(Modifier.height(6.dp))
             }
@@ -3054,7 +3141,7 @@ private fun UserDataPage(
                         .padding(vertical = 6.dp),
                     fontSize = 11.sp,
                     // 【不省略】失败地址同样必须完整可读,方便用户排查。
-                    color = Pa.Red,
+                    color = PaEditorial.Denied,
                 )
                 Spacer(Modifier.height(6.dp))
             }
@@ -3103,7 +3190,7 @@ private fun UserDataPage(
                     "还没有下载内容。在会话右上角「导出对话」或左上角菜单的任务中心里下载后,会出现在这里。",
                     Modifier.padding(vertical = 14.dp),
                     fontSize = 11.5.sp,
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Muted,
                 )
             } else {
                 downloads.forEach { d ->
@@ -3126,7 +3213,7 @@ private fun UserDataPage(
                                             d.title.ifEmpty { "(未命名文件)" },
                                             Modifier.weight(1f, fill = false),
                                             fontSize = 13.sp,
-                                            color = Pa.TextPrimary,
+                                            color = PaEditorial.Ink,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
@@ -3146,7 +3233,7 @@ private fun UserDataPage(
                                         ).filter { it.isNotEmpty() }.joinToString("  ·  "),
                                         Modifier.padding(top = 2.dp),
                                         fontSize = 10.5.sp,
-                                        color = Pa.TextTertiary,
+                                        color = PaEditorial.Muted,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -3154,7 +3241,7 @@ private fun UserDataPage(
                                         Text(
                                             d.detail,
                                             fontSize = 9.5.sp,
-                                            color = Pa.TextTertiary,
+                                            color = PaEditorial.Muted,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
@@ -3188,7 +3275,7 @@ private fun UserDataPage(
                                     Text(
                                         if (d.localUri.isEmpty()) "文件位置无法获取" else "文件已被删除",
                                         Modifier.padding(end = 6.dp),
-                                        fontSize = 10.5.sp, color = Pa.Red,
+                                        fontSize = 10.5.sp, color = EditorialTone.DENIED.text,
                                     )
                                 }
                             }
@@ -3206,11 +3293,11 @@ private fun UserDataPage(
                                     ).show()
                                 },
                                 bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                tint = Pa.TextTertiary,
+                                tint = PaEditorial.Subtle,
                             )
                         }
                         // 行间分隔:0.5dp 细线(统一卡片语言)
-                        Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
                     }
                 }
             }
@@ -3337,14 +3424,14 @@ private fun CacheSection(
                     Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(row.key, fontSize = 13.sp, color = Pa.TextSecondary)
+                    Text(row.key, fontSize = 13.sp, color = PaEditorial.Muted)
                     if (CacheCleanupLogic.riskOf(row.kind) == CacheCleanupLogic.Risk.RISKY) {
-                        Text(" · 清理需确认", fontSize = 11.sp, color = Pa.Red)
+                        Text(" · 清理需确认", fontSize = 11.sp, color = EditorialTone.DENIED.text)
                     }
                     Spacer(Modifier.weight(1f))
                     // 占用 + 条目数(条目数未统计时只显示占用,不摆 0)
                     val entryNote = if (row.entries > 0) " / ${row.entries} 项" else ""
-                    Text(sizeText(row.bytes) + entryNote, fontSize = 13.sp, color = Pa.TextPrimary)
+                    Text(sizeText(row.bytes) + entryNote, fontSize = 13.sp, color = PaEditorial.Ink)
                 }
             }
             // 小计:只汇总本 App 管理的可清理项,不含下载文件本体(那属于用户内容)
@@ -3352,9 +3439,9 @@ private fun CacheSection(
                 Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("本机可清理缓存合计", fontSize = 13.sp, color = Pa.TextPrimary)
+                Text("本机可清理缓存合计", fontSize = 13.sp, color = PaEditorial.Ink)
                 Spacer(Modifier.weight(1f))
-                Text(sizeText(managedTotal), fontSize = 13.5.sp, color = Pa.TextPrimary)
+                Text(sizeText(managedTotal), fontSize = 13.5.sp, color = PaEditorial.Ink)
             }
         }
 
@@ -3466,61 +3553,61 @@ private fun CacheSection(
                     " + 预览缓存 ${sizeText(previewBytes)} + 临时文件 ${sizeText(tempBytes)}" +
                     " + 其余 cacheDir 内容;与系统「存储占用 → 缓存」同口径,可对照。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "用户数据 ${sizeText(userBytes)} = 会话快照 ${sizeText(snapshotBytes)}" +
                     " + 轮次检查点 ${sizeText(checkpointBytes)} + 设置与登录凭证;" +
                     "清理项只动前两者,不碰登录凭证。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "下载 ${if (downloadUnknown) "占用无法获取" else sizeText(downloadBytes)} · $downloadCount 个文件" +
                     " · 任务条目 $taskCount 条;文件本体在系统下载目录,只能在上方列表逐条删除。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "网页快照 ${sizeText(urlSnapBytes)} = 断网时可回看的网页内容(pa_offline/pa_url 分区);" +
                     "与上面几项口径互不重叠,「清空网页快照缓存」只清它。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "轮次检查点 ${sizeText(checkpointBytes)} = 未完成轮次的断点续跑副本" +
                     "(filesDir/turn-checkpoints 分区,最多保留 ${dev.pocketagent.app.ui.component.TurnCheckpointStore.MAX_CHECKPOINTS} 个);" +
                     "「清空轮次检查点」只清它,已完成会话不受影响。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "清理临时与失效缓存:删崩溃残留的临时文件与「文件已被删除」的下载条目;" +
                     "不碰预览缓存、不碰登录状态,可随时清。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "清空预览缓存:释放 ${sizeText(previewBytes)};纯临时内容,清了随时可再生,不影响离线历史。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "清空会话快照(需二次确认):释放 ${sizeText(snapshotBytes)};" +
                     "后果:快照是「最近 N 轮」的本地副本,清掉后离线时看不到这段历史,需联网从电脑重拉;" +
                     "不影响登录与电脑端。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "清理浏览器数据:清掉内置浏览器的 HTTP 缓存 / Cookie / 网页存储;" +
                     "后果:浏览器里登录过的网站需重新登录;不影响电脑端与 App 设置。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
             Text(
                 "清空已完成的任务条目:只清任务中心记录列表,不删已下载文件,也不减上方「下载」占用。",
-                fontSize = 10.5.sp, color = Pa.TextTertiary,
+                fontSize = 10.5.sp, color = PaEditorial.Muted,
             )
         }
     }
@@ -3528,11 +3615,11 @@ private fun CacheSection(
     if (confirmClearTasks) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmClearTasks = false },
-            title = { Text("清空任务条目?", color = Pa.TextPrimary) },
+            title = { Text("清空任务条目?", color = PaEditorial.Ink) },
             text = {
                 Text(
                     "只移除任务中心的记录,已下载到手机的文件不受影响。此操作不可撤销。",
-                    color = Pa.TextSecondary, fontSize = 13.sp,
+                    color = PaEditorial.Muted, fontSize = 13.sp,
                 )
             },
             confirmButton = {
@@ -3541,14 +3628,14 @@ private fun CacheSection(
                     confirmClearTasks = false
                     reload()
                     toastMsg = "已清空已完成的条目"
-                }) { Text("清空", color = Pa.Red) }
+                }) { Text("清空", color = PaEditorial.Denied) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmClearTasks = false }) {
-                    Text("取消", color = Pa.TextSecondary)
+                    Text("取消", color = PaEditorial.Muted)
                 }
             },
-            containerColor = Pa.CardHigh,
+            containerColor = PaEditorial.Surface,
         )
     }
 
@@ -3556,12 +3643,12 @@ private fun CacheSection(
     if (confirmClearSnap) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmClearSnap = false },
-            title = { Text("清空会话快照?", color = Pa.TextPrimary) },
+            title = { Text("清空会话快照?", color = PaEditorial.Ink) },
             text = {
                 Text(
                     "会话快照是「最近 N 轮」的本地副本,断网时用来回看历史。清空后需要重新从电脑拉取," +
                         "离线时将看不到这段历史;联网后会自动重建,不影响电脑端记录与登录。此操作不可撤销。",
-                    color = Pa.TextSecondary, fontSize = 13.sp,
+                    color = PaEditorial.Muted, fontSize = 13.sp,
                 )
             },
             confirmButton = {
@@ -3574,14 +3661,14 @@ private fun CacheSection(
                             toastMsg = "已释放 ${sizeText(freed)}"
                         }
                     }
-                }) { Text("清空", color = Pa.Red) }
+                }) { Text("清空", color = PaEditorial.Denied) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmClearSnap = false }) {
-                    Text("取消", color = Pa.TextSecondary)
+                    Text("取消", color = PaEditorial.Muted)
                 }
             },
-            containerColor = Pa.CardHigh,
+            containerColor = PaEditorial.Surface,
         )
     }
 }
@@ -3590,8 +3677,8 @@ private fun CacheSection(
 @Composable
 private fun StatCell2(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-        Text(value, fontSize = 13.5.sp, color = Pa.TextPrimary)
-        Text(label, Modifier.padding(top = 2.dp), fontSize = 11.5.sp, color = Pa.TextTertiary)
+        Text(value, fontSize = 13.5.sp, color = PaEditorial.Ink)
+        Text(label, Modifier.padding(top = 2.dp), fontSize = 11.5.sp, color = PaEditorial.Muted)
     }
 }
 
@@ -3611,12 +3698,12 @@ private fun CacheActionRow(
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, color = if (danger) Pa.Red else Pa.TextPrimary)
-            Text(desc, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = Pa.TextTertiary)
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (danger) EditorialTone.DENIED.text else PaEditorial.Ink)
+            Text(desc, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = PaEditorial.Muted)
         }
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
-            tint = Pa.TextTertiary, modifier = Modifier.size(15.dp),
+            tint = PaEditorial.Subtle, modifier = Modifier.size(15.dp),
         )
     }
 }
@@ -3639,9 +3726,9 @@ private fun CollapsibleDetail(content: @Composable () -> Unit) {
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("详情", fontSize = 11.sp, color = Pa.TextTertiary)
+            Text("详情", fontSize = 11.sp, color = PaEditorial.Muted)
             Spacer(Modifier.weight(1f))
-            Text(if (expanded) "▾" else "▸", fontSize = 12.sp, color = Pa.TextTertiary)
+            Text(if (expanded) "▾" else "▸", fontSize = 12.sp, color = PaEditorial.Muted)
         }
         if (expanded) {
             content()
@@ -3685,7 +3772,7 @@ private fun AgentDefaultsSection(agentId: String, settings: CodexSettings?, mode
                 val index = levels.indexOfFirst { it.id == settings?.effort }
                 writer.copy(effort=levels[(index+1)%levels.size].id).commit()
             }, options = levels.map { e -> SplitOption(e.label, selected=e.id==settings?.effort) { writer.copy(effort=e.id).commit() } })
-        Text("${(levels.size-1).coerceAtLeast(0)} 个已报告档位 · 下次发送时应用", fontSize=12.sp, color=Pa.TextSecondary,
+        Text("${(levels.size-1).coerceAtLeast(0)} 个已报告档位 · 下次发送时应用", fontSize=12.sp, color=PaEditorial.Muted,
             modifier=Modifier.padding(vertical=10.dp))
     }
 }
@@ -3734,7 +3821,7 @@ internal fun NativeConfigOptionsSection(agentId: String) {
     SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "原生设置") {
         Spacer(Modifier.height(10.dp))
         if (error != null) {
-            Text("暂时读不到原生设置：$error", fontSize = 11.5.sp, color = Pa.TextTertiary,
+            Text("暂时读不到原生设置：$error", fontSize = 11.5.sp, color = PaEditorial.Muted,
                 modifier = Modifier.padding(vertical = 6.dp))
         }
         items.forEachIndexed { index, row ->
@@ -3768,7 +3855,7 @@ internal fun NativeConfigOptionsSection(agentId: String) {
             }
         }
         if (sharedNote.isNotBlank()) {
-            Text(sharedNote, fontSize = 11.sp, color = Pa.TextTertiary,
+            Text(sharedNote, fontSize = 11.sp, color = PaEditorial.Muted,
                 modifier = Modifier.padding(vertical = 6.dp))
         }
     }
@@ -3804,7 +3891,7 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer:
     SubPageScaffold(title = "Daemon 桥接与输入", onBack = onBack) {
         SectionBlock(icon = R.drawable.ic_lucide_server, title = "连接策略") {
             Text("USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",
-                fontSize = 13.sp, color = Pa.TextSecondary, modifier = Modifier.padding(vertical=12.dp))
+                fontSize = 13.sp, color = PaEditorial.Muted, modifier = Modifier.padding(vertical=12.dp))
         }
         SectionBlock(icon = R.drawable.ic_lucide_brain, title = "全局对话显示") {
             Spacer(Modifier.height(10.dp))
@@ -3967,7 +4054,7 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer:
             Text(
                 "有系统识别服务时可直接使用；否则使用 App 内置 SenseVoice。录音权限被拒绝时只请求权限，不提供外部模型下载入口。",
                 fontSize = 11.sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
             Spacer(Modifier.height(6.dp))
         }
@@ -4008,8 +4095,8 @@ internal fun NativePermissionsSection(agentId: String, threadId: String = "", in
                 if(threadId.isBlank()) add(SplitOption("跟随原生默认",selected=native?.nativeMode.isNullOrEmpty()) { select("") })
                 options.forEach { value -> add(SplitOption(nativeModeLabel(value), desc=value,selected=native?.nativeMode==value) { select(value) }) }
             })
-        Text(error ?: native?.nativePermissionsNote.orEmpty(),fontSize=11.sp,color=Pa.TextSecondary,modifier=Modifier.padding(vertical=8.dp))
-        if(threadId.isBlank()) Text("默认值用于新建会话；已有会话在对话的更多菜单中调整。",fontSize=11.sp,color=Pa.TextTertiary)
+        Text(error ?: native?.nativePermissionsNote.orEmpty(),fontSize=11.sp,color=PaEditorial.Muted,modifier=Modifier.padding(vertical=8.dp))
+        if(threadId.isBlank()) Text("默认值用于新建会话；已有会话在对话的更多菜单中调整。",fontSize=11.sp,color=PaEditorial.Muted)
     }
 }
 internal fun nativeModeLabel(mode: String): String = when(mode) {

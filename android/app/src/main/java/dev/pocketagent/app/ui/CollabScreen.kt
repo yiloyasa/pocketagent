@@ -1,28 +1,30 @@
 package dev.pocketagent.app.ui
 
 import androidx.compose.foundation.Image
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,44 +37,47 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
-import dev.pocketagent.app.ui.anim.IconActionButton
-import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaNavIconButton
+import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaSheet
-import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.component.PaStatusBadge
+import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.editorial
 import dev.pocketagent.app.ui.theme.paPushBack
 
 /**
- * 协同页(专属):一条指令扇出给多个对等 agent 并行协作。
+ * 协同页(设计稿 10 · 编辑式):一条指令扇出给多个对等 agent 并行协作。
  *
  * 【为什么是独立页、且视觉与普通会话明显不同】
  * 普通会话是"手机 ↔ 单一 agent"的 1:1 对话流(ChatScreen);协同会话是
- * "一条指令 + N 个对等 agent 各自回报"的编排台。两者形态本质不同,所以这里:
- *  1. 顶部有**绿色调专属横幅** + 分支图标 + "协同模式"徽标(普通会话没有这层身份);
- *  2. 下方是**按 agent 分列的状态卡**(不是混在一起的对话流);
- *  3. 共享一条指令输入,但回报区是每个 agent 独立的卡片。
- * 这三点让"这是协同会话,不是普通聊天"一眼可辨。
+ * "一条指令 + N 个对等 agent 各自回报"的编排台。所以这里:
+ *  1. 顶部有**石墨重点面**的说明卡(README:有明确主次关系的内容进面板)+ 分支图标;
+ *  2. 下方是**按 agent 分行**的进度列表(每人一行:身份 + 四词状态徽章),不是混在一起的对话流;
+ *  3. 共享一条指令输入,结果按成员分别回报。
  *
  * 【并行对等,不是父子委派】这里没有任何"父 agent 派发子智能体"的概念;
- * 被选中的 agent 是平级协作者,各自收到同一条指令独立执行。daemon 侧
- * 的扇出能力由主代理并行实现,本页只负责编排与展示(数据来源走既有 RPC + 本地状态)。
+ * 被选中的 agent 是平级协作者,各自收到同一条指令独立执行。参与者只列能力支持的
+ * agent(CollabAware 门控,现有 [collabCapableAgents] 口径);一位失败不拖垮其余。
  */
 @Composable
 fun CollabScreen(
     onBack: () -> Unit,
     onOpenCollabRoles: () -> Unit,
 ) {
-    val ctx = LocalContext.current
+    val ed = MaterialTheme.editorial
     val caps = AgentConnection.hostCapabilities.collectAsState().value
     val agents = remember(caps) { buildAgents(caps) }
     val collabIds = remember(caps) { resolveCollabAgentIds(caps) }
@@ -87,6 +92,8 @@ fun CollabScreen(
     val selected = CollabState.selected
     val roleBinding = CollabState.roleBinding
     val phases = CollabState.phases
+    val memberErrors = CollabState.memberErrors
+    val dispatchError = CollabState.dispatchError
     val lastInstruction = CollabState.lastInstruction
 
     var cmd by remember { mutableStateOf("") }
@@ -96,67 +103,268 @@ fun CollabScreen(
     val selectedAgents = capable.filter { it.id in selected }
     val canSend = selected.isNotEmpty() && cmd.isNotBlank()
 
-    // 【推背模糊】角色选择浮层(PaSheet,玻璃材质)打开时,本页内容模糊+缩小+压暗,
-    // 透过玻璃看过去才是真磨砂(PaGlass 的职责分离:模糊在内容层,不在浮层上)。
-    Column(Modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding().paPushBack(roleFor != null)) {
-        // ---- 顶部横幅:协同身份(一眼可辨)----
-        CollabHeader(onBack = onBack, agentCount = selected.size)
-
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // ---- 选 agent(多选)----
-            item { AgentSelector(capable = capable, selected = selected, onToggle = CollabState::toggle) }
-
-            if (selectedAgents.isEmpty()) {
-                item {
-                    Text(CollabCopy.EMPTY_NO_SELECTION, fontSize = 12.5.sp, color = Pa.TextTertiary)
-                }
-            }
-
-            // ---- 每个已选 agent:品牌图标 + 角色配置 + 派发相位卡 ----
-            items(selectedAgents, key = { it.id }) { agent ->
-                val roleId = roleBinding[agent.id]
-                val roleName = roleId?.let { rid ->
-                    CollabRolesState.roles.firstOrNull { r -> r.id == rid }?.let { collabRoleDisplayName(it) }
-                }
-                CollabAgentCard(
-                    agent = agent,
-                    roleName = roleName,
-                    phase = phases[agent.id] ?: CollabAgentPhase.IDLE,
-                    onConfigRole = { roleFor = agent.id },
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(ed.Canvas)
+            .paPushBack(roleFor != null),
+    ) {
+        PaScreenScaffold(
+            title = "多 Agent 协同",
+            leading = {
+                PaNavIconButton(
+                    onClick = onBack,
+                    contentDescription = "返回",
+                    iconRes = R.drawable.ic_lucide_chevron_left,
+                    plain = true,
                 )
-            }
-
-            // ---- 已发指令回显 + 诚实等待说明(扁平行,不做底色块) ----
-            if (lastInstruction != null) {
+            },
+            // 唯一次操作:角色管理(设计稿 10 右上齿轮;弹层里的"管理协同角色"入口保留)
+            trailing = {
+                PaNavIconButton(
+                    onClick = onOpenCollabRoles,
+                    contentDescription = "协同角色设置",
+                    iconRes = R.drawable.ic_lucide_settings,
+                )
+            },
+        ) {
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 16.dp),
+            ) {
+                // ---- 说明卡(石墨重点面):协同身份,一眼可辨 ----
                 item {
-                    Column {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(ed.Graphite, RoundedCornerShape(PaEditorial.Radius.Card))
+                            .padding(16.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(PaEditorial.Space.IconBox)
+                                .background(PaEditorial.OnGraphiteHairline, RoundedCornerShape(13.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_git_branch), null,
+                                tint = PaEditorial.OnGraphite, modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "一条任务,多个视角。",
+                            style = PaEditorial.Type.Heading,
+                            color = PaEditorial.OnGraphite,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "把同一指令并行交给选中的 Agent;每位参与者分别回报,不混为一条对话。",
+                            fontSize = 13.sp, lineHeight = 21.sp,
+                            color = PaEditorial.OnGraphiteMuted,
+                        )
+                    }
+                }
+
+                // ---- 参与协同(多选;只列能力支持的 agent,CollabAware 门控) ----
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("参与协同", style = PaEditorial.Type.Heading, color = ed.Ink)
+                        Spacer(Modifier.weight(1f))
+                        if (selected.isNotEmpty()) {
+                            Text("${selected.size} 位已选", fontSize = 12.sp, color = ed.Muted)
+                        }
+                    }
+                    Text(
+                        "只显示电脑端当前接入协同、且能力支持的 agent",
+                        fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (capable.isEmpty()) {
+                        // 诚实空态:daemon 没报任何可协同 agent,不显示假入口
+                        EmptyState(
+                            R.drawable.ic_lucide_git_branch,
+                            "暂无可协同的 agent",
+                            "电脑端启用协作能力后,这里会列出可选项",
+                        )
+                    } else {
                         Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            capable.forEach { a ->
+                                CollabAgentChip(a = a, on = a.id in selected, onClick = { CollabState.toggle(a.id) })
+                            }
+                        }
+                    }
+                    if (selectedAgents.isEmpty() && capable.isNotEmpty()) {
+                        Text(
+                            CollabCopy.EMPTY_NO_SELECTION,
+                            Modifier.padding(top = 8.dp),
+                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                        )
+                    }
+                }
+
+                // ---- 分工与状态:逐 agent 一行(身份 + 四词状态徽章) ----
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("分工与状态", style = PaEditorial.Type.Heading, color = ed.Ink)
+                        Spacer(Modifier.weight(1f))
+                        Row(
+                            Modifier
+                                .pressable { onOpenCollabRoles() }
+                                .padding(horizontal = 4.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Accent, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(lastInstruction!!, fontSize = 13.sp, color = Pa.TextPrimary)
+                            Text("配置角色", fontSize = 13.sp, color = PaEditorial.Primary)
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_chevron_right), null,
+                                tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
+                            )
                         }
-                        Spacer(Modifier.height(4.dp))
-                        Text(CollabCopy.WAITING_DAEMON, fontSize = 11.5.sp, color = Pa.TextTertiary)
+                    }
+                }
+
+                if (selectedAgents.isEmpty()) {
+                    item {
+                        Text(
+                            "先在上面勾选这次一起干活的 agent,他们的执行进度会逐个出现在这里",
+                            Modifier.padding(vertical = 8.dp),
+                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                        )
+                    }
+                } else {
+                    items(selectedAgents, key = { it.id }) { agent ->
+                        val roleId = roleBinding[agent.id]
+                        val roleName = roleId?.let { rid ->
+                            CollabRolesState.roles.firstOrNull { r -> r.id == rid }?.let { collabRoleDisplayName(it) }
+                        }
+                        val phase = phases[agent.id] ?: CollabAgentPhase.IDLE
+                        CollabAgentRow(
+                            agent = agent,
+                            roleName = roleName,
+                            phase = phase,
+                            memberError = memberErrors[agent.id],
+                            onConfigRole = { roleFor = agent.id },
+                        )
+                        HorizontalHairlineEd()
+                    }
+                }
+
+                // ---- 整体派发失败(连 RPC 都没通):如实给原因,不粉饰 ----
+                dispatchError?.let { err ->
+                    item {
+                        Text(
+                            err,
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                                .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                .padding(12.dp),
+                            fontSize = 12.sp, lineHeight = 17.sp,
+                            color = EditorialTone.DENIED.text,
+                        )
+                    }
+                }
+
+                // ---- 已发指令回显 + 诚实等待说明(扁平行,不做底色块) ----
+                if (lastInstruction != null) {
+                    item {
+                        Column(Modifier.padding(top = 12.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_lucide_git_branch), null,
+                                    tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    lastInstruction!!,
+                                    fontSize = 13.sp, lineHeight = 21.sp, color = ed.Ink,
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                CollabCopy.WAITING_DAEMON,
+                                fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // ---- 底部指令输入(共享一条指令)----
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
-            CommandInput(
-                cmd = cmd,
-                onCmdChange = { cmd = it },
-                canSend = canSend,
-                onSend = { if (canSend) { CollabState.dispatch(cmd); cmd = "" } },
-            )
+            // ---- 底部:共同指令输入 + 派发(主操作按钮走石墨重点面白字,
+            //      与审批弹窗"仅本次允许"同一形态;主色只给"当前操作"类元素) ----
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .heightIn(min = PaEditorial.Space.TouchMin)
+                        .background(ed.Surface, RoundedCornerShape(13.dp))
+                        .border(1.dp, ed.Hairline, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        if (cmd.isEmpty()) {
+                            Text(
+                                "描述需要协同完成的任务…",
+                                fontSize = 14.sp, lineHeight = 21.sp, color = ed.Subtle,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        BasicTextField(
+                            value = cmd,
+                            onValueChange = { cmd = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = TextStyle(fontSize = 14.sp, lineHeight = 21.sp, color = ed.Ink),
+                            cursorBrush = SolidColor(PaEditorial.Primary),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(
+                                onSend = { if (canSend) { CollabState.dispatch(cmd); cmd = "" } },
+                            ),
+                        )
+                    }
+                }
+                // 派发按钮(当前操作):可用 = 石墨底白字;不可用 = 抬升面灰字,不可点
+                Row(
+                    Modifier
+                        .heightIn(min = PaEditorial.Space.TouchMin)
+                        .pressable(enabled = canSend) {
+                            if (canSend) { CollabState.dispatch(cmd); cmd = "" }
+                        }
+                        .background(
+                            if (canSend) ed.Graphite else ed.Raised,
+                            RoundedCornerShape(13.dp),
+                        )
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "派发",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight(650),
+                        color = if (canSend) PaEditorial.OnGraphite else ed.Subtle,
+                    )
+                }
+            }
         }
     }
 
@@ -172,81 +380,32 @@ fun CollabScreen(
     }
 }
 
-/** 顶部横幅:分支图标 + 协同徽标,铺在 Bg 上(页面头部不是卡,统一卡语言下去底)。 */
+/** 细分隔线(协同页逐 agent 行之间)。 */
 @Composable
-private fun CollabHeader(onBack: () -> Unit, agentCount: Int) {
-    Column(
-        Modifier.fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-            Spacer(Modifier.width(10.dp))
-            Icon(painterResource(R.drawable.ic_lucide_git_branch), null, tint = Pa.Green, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("多 Agent 协同", fontSize = 18.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.weight(1f))
-            // 协同中徽标:纯色文字(统一卡语言:去底色 pill)
-            Text("协同模式", fontSize = 11.sp, color = Pa.GreenText)
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            if (agentCount == 0) "勾选 agent,一条指令同时派给它们并行协作"
-            else "已选 $agentCount 个 agent · 一条指令扇出并行执行",
-            fontSize = 12.sp, color = Pa.TextSecondary,
-        )
-    }
-}
-
-/** 选 agent 区:多选芯片,只显示 daemon 动态上报的可协同 agent。 */
-@Composable
-private fun AgentSelector(
-    capable: List<AgentInfo>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Text("参与这次协作的 agent（多选）", fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(4.dp))
-        Text("只显示电脑端当前接入协同的 agent", fontSize = 11.5.sp, color = Pa.TextSecondary)
-        Spacer(Modifier.height(10.dp))
-        if (capable.isEmpty()) {
-            // 诚实空态:daemon 没报任何可协同 agent,不显示假入口
-            EmptyState(
-                R.drawable.ic_lucide_git_branch,
-                "暂无可协同的 agent",
-                "电脑端启用协作能力后,这里会列出可选项",
-            )
-        } else {
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                capable.forEach { a ->
-                    CollabAgentChip(a = a, on = a.id in selected, onClick = { onToggle(a.id) })
-                }
-            }
-        }
-    }
+private fun HorizontalHairlineEd() {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .height(1.dp)
+            .background(MaterialTheme.editorial.Hairline),
+    )
 }
 
 /**
- * 单个 agent 多选芯片:品牌图标 + 名称。
- * 【统一卡语言】底色一律 Pa.Card(唯一卡型);选中态只用 1.5dp Accent 描边 +
- * 文字颜色表达,不再换底色(信息层级靠颜色,不靠第二种底)。
+ * 单个 agent 多选芯片(设计稿 10):选中 = 薄荷浅底 + 绿描边(运行语义色,不是
+ * 装饰 —— "已加入这次协同"就是这台手机的当前操作对象);未选中 = 瓷白 + 细线。
  */
 @Composable
 private fun CollabAgentChip(a: AgentInfo, on: Boolean, onClick: () -> Unit) {
-    // 选中描边色 spring 过渡:点选瞬间描边"流"成品牌色,与按压缩放叠出跟手感
-    val borderColor by animateColorAsState(
-        targetValue = if (on) Pa.Accent else Pa.Separator,
-        animationSpec = PaMotion.standard(),
-        label = "collabChipBorder",
-    )
+    val ed = MaterialTheme.editorial
+    val borderColor = if (on) EditorialTone.RUNNING.accent else ed.Hairline
     Column(
-        Modifier.pressable { onClick() }.width(84.dp)
-            .background(Pa.Card, RoundedCornerShape(16.dp))
-            .border(if (on) 1.5.dp else 0.5.dp, borderColor, RoundedCornerShape(16.dp))
+        Modifier
+            .pressable { onClick() }
+            .width(84.dp)
+            .background(if (on) ed.RunningContainer else ed.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+            .border(1.dp, borderColor, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -257,103 +416,113 @@ private fun CollabAgentChip(a: AgentInfo, on: Boolean, onClick: () -> Unit) {
             contentScale = androidx.compose.ui.layout.ContentScale.Crop,
         )
         Spacer(Modifier.height(6.dp))
-        Text(a.name, fontSize = 12.sp, color = if (on) Pa.TextPrimary else Pa.TextSecondary, maxLines = 1)
+        Text(
+            a.name,
+            fontSize = 12.sp, lineHeight = 17.sp,
+            color = if (on) ed.Ink else ed.Muted,
+            maxLines = 1,
+        )
         if (on) {
             Spacer(Modifier.height(2.dp))
-            Text("已选", fontSize = 10.sp, color = Pa.Accent)
+            Text("已选", fontSize = 10.sp, lineHeight = 14.sp, color = EditorialTone.RUNNING.text)
         }
     }
 }
 
-/** 单个 agent 的状态卡:品牌图标 + 名称 + 角色 + 派发相位(收到/执行中)。 */
+/**
+ * 逐 agent 进度行(设计稿 10「分工与状态」):身份图 + 名称 + 角色行 + 四词状态徽章;
+ * 一位失败不拖垮其余 —— 相位与失败原因都按成员独立展示。
+ */
 @Composable
-private fun CollabAgentCard(
+private fun CollabAgentRow(
     agent: AgentInfo,
     roleName: String?,
     phase: CollabAgentPhase,
+    memberError: String?,
     onConfigRole: () -> Unit,
 ) {
-    val phaseTint = phaseColor(phase)
+    val ed = MaterialTheme.editorial
     Column(
-        Modifier.fillMaxWidth()
-            // 唯一卡型:16dp/Pa.Card/无边框无阴影
-            .background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(16.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(
                 bitmap = agentBitmap(agent.iconRes),
                 contentDescription = agent.name,
-                modifier = Modifier.size(34.dp).clip(CircleShape),
+                modifier = Modifier
+                    .size(PaEditorial.Space.IconBox)
+                    .clip(RoundedCornerShape(13.dp)),
                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(agent.name, fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
+                Text(
+                    agent.name,
+                    fontSize = 15.sp, lineHeight = 21.sp,
+                    fontWeight = FontWeight(650), color = ed.Ink,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
                 if (roleName != null) {
-                    Spacer(Modifier.height(2.dp))
-                    Text("角色 · $roleName", fontSize = 11.5.sp, color = Pa.AccentText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        "角色 · $roleName",
+                        Modifier.padding(top = 1.dp),
+                        fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
-            // 相位徽标:纯语义色文字(去底色 pill)
-            Text(collabPhaseLabel(phase), fontSize = 11.sp, color = phaseTint)
+            // 四词状态徽章:接受/运行中=正在执行,完成=已完成,失败=未完成;
+            // 未派发(IDLE)不摆徽章(collabPhaseStatus 返回 null)。
+            val status = collabPhaseStatus(phase)
+            if (status != null) {
+                PaStatusBadge(status)
+            } else {
+                Text(
+                    collabPhaseLabel(phase),
+                    fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                )
+            }
         }
-        Spacer(Modifier.height(10.dp))
-        // 角色配置行(可点,复用既有角色数据);卡内扁平行,不做底色子容器
+        // 未完成成员的原因(daemon 人话原文,按成员各自展示;不改全局)
+        if (phase == CollabAgentPhase.ERROR && !memberError.isNullOrBlank()) {
+            Text(
+                memberError,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                fontSize = 12.sp, lineHeight = 17.sp,
+                color = EditorialTone.DENIED.text,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // 角色配置行(可点,复用既有角色数据);扁平行,不做底色子容器
         Row(
-            Modifier.fillMaxWidth().pressable { onConfigRole() }
-                .padding(horizontal = 2.dp, vertical = 10.dp),
+            Modifier
+                .fillMaxWidth()
+                .pressable { onConfigRole() }
+                .padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(painterResource(R.drawable.ic_lucide_sliders), null, tint = Pa.Accent, modifier = Modifier.size(16.dp))
+            Icon(
+                painterResource(R.drawable.ic_lucide_sliders), null,
+                tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
+            )
             Spacer(Modifier.width(8.dp))
             Text(
-                if (roleName != null) "角色：$roleName" else CollabCopy.ROLE_NONE,
-                fontSize = 12.5.sp, color = Pa.TextSecondary,
+                if (roleName != null) "角色:$roleName" else CollabCopy.ROLE_NONE,
+                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
             )
             Spacer(Modifier.weight(1f))
-            Icon(painterResource(R.drawable.ic_lucide_chevron_right), null, tint = Pa.TextTertiary, modifier = Modifier.size(16.dp))
+            Icon(
+                painterResource(R.drawable.ic_lucide_chevron_right), null,
+                tint = ed.Subtle, modifier = Modifier.size(16.dp),
+            )
         }
-    }
-}
-
-/** 相位 → 颜色(收到=蓝 / 执行中=黄 / 完成=绿 / 出错=红 / 空闲=灰)。 */
-private fun phaseColor(p: CollabAgentPhase): Color = when (p) {
-    CollabAgentPhase.IDLE -> Pa.TextTertiary
-    CollabAgentPhase.ACK -> Pa.Accent
-    CollabAgentPhase.RUNNING -> Pa.Yellow
-    CollabAgentPhase.DONE -> Pa.Green
-    CollabAgentPhase.ERROR -> Pa.Red
-}
-
-/** 底部指令输入框:共享一条指令,发送键在高亮/置灰间切换。 */
-@Composable
-private fun CommandInput(
-    cmd: String,
-    onCmdChange: (String) -> Unit,
-    canSend: Boolean,
-    onSend: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().background(Pa.Card, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicTextField(
-            value = cmd,
-            onValueChange = onCmdChange,
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 10.dp),
-            textStyle = TextStyle(color = Pa.TextPrimary, fontSize = 14.sp),
-            decorationBox = { inner ->
-                if (cmd.isEmpty()) Text("输入要协同执行的指令…", color = Pa.TextTertiary, fontSize = 14.sp)
-                inner()
-            },
-        )
-        IconActionButton(
-            R.drawable.ic_lucide_arrow_up, "发送",
-            onSend,
-            bg = if (canSend) Pa.Accent else Pa.Hover,
-        )
     }
 }
 
@@ -361,8 +530,8 @@ private fun CommandInput(
  * 角色选择底部弹层:列出该 agent 的协同角色(复用 CollabRolesState 既有数据),
  * 可解绑(未配置角色),也可跳去「协同角色」页做完整管理(复用 CollabRolesScreen)。
  *
- * 【PaSheet 统一浮层】玻璃底 + 82% 屏高上限 + 内建滚动(AUDIT sheet 溢出规则的
- * 结构化落地);被覆盖内容的推背模糊由 CollabScreen 根上的 paPushBack 负责。
+ * 【PaSheet 统一浮层】玻璃底 + 82% 屏高上限 + 内建滚动;被覆盖内容的推背模糊由
+ * CollabScreen 根上的 paPushBack 负责。选项行用瓷白卡 + 细线(编辑式弹层内容)。
  */
 @Composable
 private fun CollabRolePickerSheet(
@@ -372,14 +541,24 @@ private fun CollabRolePickerSheet(
     onManage: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val ed = MaterialTheme.editorial
     val roles = CollabRolesState.roles.filter { it.agentId == agentId }
     PaSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("为 ${selectedAgentLabel(agentId)} 选角色", fontSize = 18.sp, color = Pa.TextPrimary)
-                Text("同一 agent 可绑定不同岗位设定", fontSize = 12.sp, color = Pa.TextSecondary, modifier = Modifier.padding(top = 2.dp))
+                Text("为 ${selectedAgentLabel(agentId)} 选角色", fontSize = 17.sp, color = ed.Ink)
+                Text(
+                    "同一 agent 可绑定不同岗位设定",
+                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
             }
-            IconActionButton(R.drawable.ic_lucide_x, "关闭", onDismiss, bg = Color.Transparent, size = 38.dp, iconSize = 18.dp)
+            PaNavIconButton(
+                onClick = onDismiss,
+                contentDescription = "关闭",
+                iconRes = R.drawable.ic_lucide_x,
+                plain = true,
+            )
         }
         Spacer(Modifier.height(12.dp))
         Column(
@@ -397,39 +576,71 @@ private fun CollabRolePickerSheet(
                 )
             }
             if (roles.isEmpty()) {
-                Text("该 agent 还没有专属角色,去「协同角色」里新建", fontSize = 12.sp, color = Pa.TextTertiary, modifier = Modifier.padding(vertical = 6.dp))
+                Text(
+                    "该 agent 还没有专属角色,去「协同角色」里新建",
+                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
             }
-            // 管理角色入口(复用现有 CollabRolesScreen;唯一卡型)
+            // 管理角色入口(复用现有 CollabRolesScreen)
             Row(
-                Modifier.fillMaxWidth().pressable { onManage() }
-                    .background(Pa.Card, RoundedCornerShape(16.dp))
+                Modifier
+                    .fillMaxWidth()
+                    .pressable { onManage() }
+                    .background(ed.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+                    .border(1.dp, ed.Hairline, RoundedCornerShape(PaEditorial.Radius.Card))
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(painterResource(R.drawable.ic_lucide_sliders), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
+                Icon(
+                    painterResource(R.drawable.ic_lucide_sliders), null,
+                    tint = PaEditorial.Primary, modifier = Modifier.size(18.dp),
+                )
                 Spacer(Modifier.width(10.dp))
-                Text("管理协同角色", fontSize = 14.sp, color = Pa.Accent)
+                Text("管理协同角色", fontSize = 14.sp, color = PaEditorial.Primary)
             }
             Spacer(Modifier.height(30.dp))
         }
     }
 }
 
-/** 角色选择项(唯一卡型:16dp/Pa.Card/无边)。 */
+/** 角色选择项:瓷白卡 + 细线;选中 = 主色对勾(当前选择)。 */
 @Composable
 private fun RolePickRow(title: String, desc: String, selected: Boolean, onClick: () -> Unit) {
+    val ed = MaterialTheme.editorial
     Row(
-        Modifier.fillMaxWidth().pressable { onClick() }
-            .background(Pa.Card, RoundedCornerShape(16.dp))
+        Modifier
+            .fillMaxWidth()
+            .pressable { onClick() }
+            .background(ed.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+            .border(
+                1.dp,
+                if (selected) PaEditorial.Primary else ed.Hairline,
+                RoundedCornerShape(PaEditorial.Radius.Card),
+            )
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 14.5.sp, color = Pa.TextPrimary)
+            Text(
+                title,
+                fontSize = 14.sp, lineHeight = 20.sp,
+                fontWeight = FontWeight(650), color = ed.Ink,
+            )
             if (desc.isNotBlank()) {
-                Text(desc, fontSize = 12.sp, color = Pa.TextSecondary, modifier = Modifier.padding(top = 2.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    desc,
+                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             }
         }
-        if (selected) Icon(painterResource(R.drawable.ic_lucide_check), null, tint = Pa.Accent, modifier = Modifier.size(18.dp))
+        if (selected) {
+            Icon(
+                painterResource(R.drawable.ic_lucide_check), null,
+                tint = PaEditorial.Primary, modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }

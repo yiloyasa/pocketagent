@@ -13,15 +13,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,22 +36,27 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
-import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaNavIconButton
+import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.SplitButton
 import dev.pocketagent.app.ui.component.SplitOption
-import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.editorial
 import kotlinx.coroutines.launch
 import pocketagent.v1.CollabRole
 
 /**
- * 协同角色编辑页(新增/编辑共用)。
+ * 协同角色编辑页(新增/编辑共用;编辑式:表单字段 = 瓷白卡 + 细线,页面骨架走
+ * [PaScreenScaffold],右上唯一一次操作 = 保存)。
  *
  * 【id 是引用键】新增时可编辑;编辑时只读 —— 改了会让已有委派里的 role_id 引用失效。
  *
@@ -70,6 +76,7 @@ fun CollabRoleEditorScreen(
     roleId: String,
     onBack: () -> Unit,
 ) {
+    val ed = MaterialTheme.editorial
     val isNew = roleId.isBlank()
     // 从状态对象取已存在的角色(列表页已加载过,这里一定找得到);深链进来若未加载则回退为新建态。
     val existing = if (isNew) null else CollabRolesState.roles.find { it.id == roleId }
@@ -93,17 +100,19 @@ fun CollabRoleEditorScreen(
 
     // 编辑态找不到角色(可能已被删除):直接给人话 + 返回,不做半成品编辑。
     if (!isNew && existing == null) {
-        Column(Modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-                Spacer(Modifier.width(12.dp))
-                Text("编辑协同角色", fontSize = 17.sp, color = Pa.TextPrimary)
-            }
-            Box(Modifier.fillMaxSize().padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
-                Text("找不到该角色(可能已被删除)", fontSize = 14.sp, color = Pa.TextSecondary)
+        PaScreenScaffold(
+            title = "编辑协同角色",
+            leading = {
+                PaNavIconButton(
+                    onClick = onBack,
+                    contentDescription = "返回",
+                    iconRes = R.drawable.ic_lucide_chevron_left,
+                    plain = true,
+                )
+            },
+        ) {
+            Box(Modifier.fillMaxSize().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                Text("找不到该角色(可能已被删除)", fontSize = 14.sp, color = ed.Muted)
             }
         }
         return
@@ -139,52 +148,77 @@ fun CollabRoleEditorScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Pa.Bg).statusBarsPadding()) {
-        // ---- 顶部栏:返回 / 标题 / 保存 ----
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconActionButton(R.drawable.ic_lucide_chevron_left, "返回", onBack, bg = Pa.Card)
-            Text(if (isNew) "新建协同角色" else "编辑协同角色", fontSize = 17.sp, color = Pa.TextPrimary)
-            IconActionButton(
-                R.drawable.ic_lucide_check, "保存", { doSave() }, bg = Pa.Card,
-                tint = if (canSave) Pa.Accent else Pa.TextTertiary,
+    PaScreenScaffold(
+        title = if (isNew) "新建协同角色" else "编辑协同角色",
+        leading = {
+            PaNavIconButton(
+                onClick = onBack,
+                contentDescription = "返回",
+                iconRes = R.drawable.ic_lucide_chevron_left,
+                plain = true,
             )
-        }
-
+        },
+        trailing = {
+            PaNavIconButton(
+                onClick = { doSave() },
+                contentDescription = "保存",
+                iconRes = R.drawable.ic_lucide_check,
+                active = canSave, // 主色只给当前可执行的操作
+            )
+        },
+    ) {
         val errShown = saveError
         if (errShown != null) {
-            // 后端原文如实透传:扁平行,语义色文字足矣(统一卡语言:去底色块)
+            // 后端原文如实透传:浅珊瑚底条,语义色 + 原文双通道
             Text(
                 errShown,
-                fontSize = 13.sp,
-                color = Pa.RedText,
+                fontSize = 13.sp, lineHeight = 21.sp,
+                color = EditorialTone.DENIED.text,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .padding(12.dp),
             )
         }
 
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(top = 12.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             // ---- id(引用键) ----
             if (isNew) {
-                RoleTextField(value = idText, onValueChange = { idText = it }, label = "角色 id(引用键)", placeholder = "如 reviewer,只能英文/数字/横线,不能含空格")
+                RoleTextField(
+                    value = idText, onValueChange = { idText = it },
+                    label = "角色 id(引用键)",
+                    placeholder = "如 reviewer,只能英文/数字/横线,不能含空格",
+                )
                 if (idError != null) {
-                    Text(idError!!, fontSize = 12.sp, color = Pa.RedText, modifier = Modifier.padding(start = 3.dp))
+                    Text(idError!!, fontSize = 12.sp, color = EditorialTone.DENIED.text, modifier = Modifier.padding(start = 3.dp))
                 }
             } else {
-                // 只读 id:扁平行,层级靠字号颜色(统一卡语言:无底色块)
-                Column(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 4.dp)) {
-                    Text("角色 id(引用键)", fontSize = 10.5.sp, color = Pa.TextTertiary)
+                // 只读 id:瓷白卡内的扁平行(它是引用键,不是可编辑字段)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(ed.Surface, RoundedCornerShape(13.dp))
+                        .border(1.dp, ed.Hairline, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 13.dp, vertical = 12.dp),
+                ) {
+                    Text("角色 id(引用键)", fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle)
                     Spacer(Modifier.height(4.dp))
-                    Text(existing?.id ?: "", fontSize = 13.5.sp, color = Pa.TextPrimary)
+                    Text(
+                        existing?.id ?: "",
+                        fontSize = 13.sp, lineHeight = 21.sp,
+                        fontWeight = FontWeight(650), color = ed.Ink,
+                    )
                     Spacer(Modifier.height(2.dp))
-                    Text("只读:它是委派里的引用键,改了会让已有引用失效", fontSize = 11.sp, color = Pa.TextTertiary)
+                    Text("只读:它是委派里的引用键,改了会让已有引用失效", fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle)
                 }
             }
 
@@ -227,33 +261,32 @@ fun CollabRoleEditorScreen(
             // ---- 工作区覆盖(暴露但明确"留空=用默认") ----
             RoleTextField(value = workspaceText, onValueChange = { workspaceText = it }, label = "工作区覆盖", placeholder = "留空=用默认工作区(手填易错,一般无需填)")
 
-            // ---- 底部保存按钮(CTA 保留 AccentDim 强调底;可用态颜色 spring 过渡) ----
+            // ---- 底部保存按钮(当前操作:可用 = 石墨重点面白字;不可用 = 抬升面灰字) ----
             val saveBg by animateColorAsState(
-                targetValue = if (canSave) Pa.AccentDim else Pa.Card,
+                targetValue = if (canSave) ed.Graphite else ed.Raised,
                 animationSpec = PaMotion.standard(),
                 label = "saveBtnBg",
             )
             Row(
-                Modifier.fillMaxWidth()
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = PaEditorial.Space.TouchMin)
                     .pressable(enabled = canSave) { doSave() }
-                    .background(saveBg, RoundedCornerShape(16.dp))
+                    .background(saveBg, RoundedCornerShape(13.dp))
                     .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
             ) {
-                Icon(
-                    painterResource(R.drawable.ic_lucide_check), null,
-                    tint = if (canSave) Pa.Accent else Pa.TextTertiary, modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(10.dp))
                 Text(
                     if (saving) "保存中…" else "保存协同角色",
-                    fontSize = 15.sp,
-                    color = if (canSave) Pa.Accent else Pa.TextTertiary,
+                    fontSize = 14.sp, lineHeight = 20.sp,
+                    fontWeight = FontWeight(650),
+                    color = if (canSave) PaEditorial.OnGraphite else ed.Subtle,
                 )
             }
             if (idError != null) {
                 // 保存按钮禁用时的原因说明(双保险:输入框下已提示,这里再强调一次)
-                Text(idError!!, fontSize = 12.sp, color = Pa.TextTertiary, modifier = Modifier.padding(start = 3.dp))
+                Text(idError!!, fontSize = 12.sp, color = ed.Subtle, modifier = Modifier.padding(start = 3.dp))
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -261,11 +294,11 @@ fun CollabRoleEditorScreen(
 }
 
 /**
- * 自绘输入框:顶部小标签 + 描边输入区(对齐 SettingsTextField,不用 OutlinedTextField)。
+ * 自绘输入框(编辑式):顶部小标签 + 瓷白卡细线输入区。
  * [multiline]=true 时允许多行(minLines=3),用于职责描述/长期要求这类长文本。
  *
- * 【焦点态】聚焦时 1dp 描边亮成品牌蓝(颜色 spring 过渡,不是硬切)——表单行的
- * "当前在哪一格"一眼可辨。统一卡语言:输入区无底色(只靠描边划界),卡外铺 Bg。
+ * 【焦点态】聚焦时 1dp 描边亮成主蓝(颜色 spring 过渡,不是硬切)——表单行的
+ * "当前在哪一格"一眼可辨(焦点 = 当前操作,主色纪律落点)。
  */
 @Composable
 private fun RoleTextField(
@@ -275,30 +308,32 @@ private fun RoleTextField(
     placeholder: String = "",
     multiline: Boolean = false,
 ) {
+    val ed = MaterialTheme.editorial
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val borderColor by animateColorAsState(
-        targetValue = if (focused) Pa.Accent.copy(alpha = 0.55f) else Pa.Separator,
+        targetValue = if (focused) PaEditorial.Primary else ed.Hairline,
         animationSpec = PaMotion.standard(),
         label = "roleFieldBorder",
     )
     Column(Modifier.fillMaxWidth()) {
-        Text(label, Modifier.padding(start = 3.dp, bottom = 6.dp), fontSize = 10.5.sp, color = Pa.TextTertiary)
+        Text(label, Modifier.padding(start = 3.dp, bottom = 6.dp), fontSize = 11.sp, lineHeight = 16.sp, color = ed.Muted)
         Box(
             Modifier
                 .fillMaxWidth()
-                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                .background(ed.Surface, RoundedCornerShape(13.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(13.dp))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
         ) {
             if (value.isEmpty() && placeholder.isNotEmpty()) {
-                Text(placeholder, fontSize = 13.5.sp, color = Pa.TextTertiary)
+                Text(placeholder, fontSize = 13.sp, lineHeight = 21.sp, color = ed.Subtle)
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.fillMaxWidth(),
-                textStyle = TextStyle(color = Pa.TextPrimary, fontSize = 13.5.sp),
-                cursorBrush = SolidColor(Pa.Accent),
+                textStyle = TextStyle(fontSize = 13.sp, lineHeight = 21.sp, color = ed.Ink),
+                cursorBrush = SolidColor(PaEditorial.Primary),
                 singleLine = !multiline,
                 minLines = if (multiline) 3 else 1,
                 interactionSource = interaction,

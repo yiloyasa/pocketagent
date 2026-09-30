@@ -2,6 +2,7 @@ package dev.pocketagent.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -47,6 +49,7 @@ import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.component.FileKind
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PreviewMode
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
@@ -56,6 +59,8 @@ import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,6 +86,28 @@ fun FilesScreen(
     onOpenTaskCenter: () -> Unit = {},
     onOpenBrowser: (String) -> Unit = {},
     /** 返回层级:二级页面按返回 → 回主页并展开侧边栏。 */
+    onBackToHome: () -> Unit = {},
+    onGoTab: (Int) -> Unit = {},
+) {
+    // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
+    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
+        EditorialLightSystemBars()
+        FilesScreenBody(
+            initialPath, currentTab, onOpenTerminal, onOpenSettings,
+            onOpenTaskCenter, onOpenBrowser, onBackToHome, onGoTab,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FilesScreenBody(
+    initialPath: String?,
+    currentTab: Int = 2,
+    onOpenTerminal: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onOpenTaskCenter: () -> Unit = {},
+    onOpenBrowser: (String) -> Unit = {},
     onBackToHome: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
@@ -281,7 +308,7 @@ fun FilesScreen(
     }
 
     Scaffold(
-        containerColor = Pa.Bg,
+        containerColor = PaEditorial.Canvas,
         // 左边缘右滑也能唤出侧边栏(问题 7)
         modifier = Modifier.edgeSwipeToOpenDrawer(
                         onDragFraction = drawerCtrl::onDrag,
@@ -292,17 +319,21 @@ fun FilesScreen(
                 Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(start = PaEditorial.Space.NavGutter, end = 14.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = Pa.Card)
-                if (!showRoots) {
-                IconActionButton(
-                    AppR.drawable.ic_lucide_chevron_left, "上级",
-                    { goUpOneLevel() },
-                    bg = Pa.Card,
+                PaNavIconButton(
+                    onClick = { drawerCtrl.open() },
+                    contentDescription = "菜单",
+                    iconRes = AppR.drawable.ic_lucide_menu,
                 )
-                    Spacer(Modifier.width(10.dp))
+                if (!showRoots) {
+                    PaNavIconButton(
+                        onClick = { goUpOneLevel() },
+                        contentDescription = "上级",
+                        iconRes = AppR.drawable.ic_lucide_chevron_left,
+                        plain = true,
+                    )
                 }
                 Text(
                     when {
@@ -310,46 +341,44 @@ fun FilesScreen(
                         else -> path.substringAfterLast('\\').substringAfterLast('/').ifEmpty { path }
                     },
                     Modifier.weight(1f),
-                    fontSize = 17.sp,
-                    color = Pa.TextPrimary,
+                    style = PaEditorial.Type.Title,
+                    color = PaEditorial.Ink,
                     maxLines = 1,
                 )
                 if (loading) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Pa.Accent)
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = PaEditorial.Primary)
                     Spacer(Modifier.width(12.dp))
                 }
-                IconActionButton(
-                    AppR.drawable.ic_lucide_monitor, "此电脑",
-                    { loadRoots() },
-                    bg = Pa.Card,
+                PaNavIconButton(
+                    onClick = { loadRoots() },
+                    contentDescription = "此电脑",
+                    iconRes = AppR.drawable.ic_lucide_monitor,
                 )
                 Spacer(Modifier.width(8.dp))
                 if (!showRoots) {
                     // 【文件搜索】按名字过滤当前目录内容。放在这里而不是塞进抽屉,
                     // 是因为"在眼前这堆文件里找某个"才是高频场景。
-                    IconActionButton(
-                        if (searchOpen) AppR.drawable.ic_lucide_x else AppR.drawable.ic_lucide_search,
-                        if (searchOpen) "关闭搜索" else "搜索",
-                        {
+                    PaNavIconButton(
+                        onClick = {
                             searchOpen = !searchOpen
                             if (!searchOpen) searchQuery = ""
                         },
-                        bg = if (searchOpen) Pa.Accent else Pa.Card,
-                        // 开着时用反色图标(蓝底白图),关着时沿用主题默认色。
-                        tint = if (searchOpen) Color.White else null,
+                        contentDescription = if (searchOpen) "关闭搜索" else "搜索",
+                        iconRes = if (searchOpen) AppR.drawable.ic_lucide_x else AppR.drawable.ic_lucide_search,
+                        active = searchOpen,
                     )
                     Spacer(Modifier.width(8.dp))
-                    IconActionButton(
-                        AppR.drawable.ic_lucide_plus, "新建",
-                        { showCreate = true },
-                        bg = Pa.Card,
+                    PaNavIconButton(
+                        onClick = { showCreate = true },
+                        contentDescription = "新建",
+                        iconRes = AppR.drawable.ic_lucide_plus,
                     )
                     Spacer(Modifier.width(8.dp))
                 }
-                IconActionButton(
-                    AppR.drawable.ic_lucide_refresh_cw, "刷新",
-                    { if (showRoots) loadRoots() else loadDir(path) },
-                    bg = Pa.Card,
+                PaNavIconButton(
+                    onClick = { if (showRoots) loadRoots() else loadDir(path) },
+                    contentDescription = "刷新",
+                    iconRes = AppR.drawable.ic_lucide_refresh_cw,
                 )
             }
         },
@@ -360,18 +389,27 @@ fun FilesScreen(
         Box(Modifier.padding(pad).fillMaxSize().clipToBounds()) {
         Column(Modifier.fillMaxSize()) {
             if (path.isNotEmpty()) {
+                // 工作区路径面包屑(09:次级小字,完整路径可读)
                 Text(
                     path,
-                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    Modifier.padding(horizontal = PaEditorial.Space.PageMargin, vertical = 4.dp),
                     fontSize = 11.sp,
+                    lineHeight = 16.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Muted,
                     maxLines = 1,
                 )
             }
             error?.let {
-                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                    Text(it, Modifier.padding(10.dp), color = Pa.Red, fontSize = 13.sp)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp)
+                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(it, color = EditorialTone.DENIED.text, fontSize = 13.sp, lineHeight = 18.sp)
                 }
             }
             // ---- 搜索框(仅非"此电脑"层显示:盘符列表没有搜索的意义) ----
@@ -379,14 +417,15 @@ fun FilesScreen(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 2.dp)
-                        .background(Pa.Card, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                        .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 2.dp)
+                        .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_search), null,
-                        tint = Pa.TextTertiary, modifier = Modifier.size(14.dp),
+                        tint = PaEditorial.Subtle, modifier = Modifier.size(14.dp),
                     )
                     Spacer(Modifier.width(8.dp))
                     BasicTextField(
@@ -395,15 +434,15 @@ fun FilesScreen(
                         modifier = Modifier.weight(1f).padding(vertical = 10.dp),
                         singleLine = true,
                         textStyle = TextStyle(
-                            fontSize = 13.5.sp, color = Pa.TextPrimary,
+                            fontSize = 13.5.sp, color = PaEditorial.Ink,
                         ),
-                        cursorBrush = SolidColor(Pa.Accent),
+                        cursorBrush = SolidColor(PaEditorial.Primary),
                         decorationBox = { inner ->
                             Box {
                                 if (searchQuery.isEmpty()) {
                                     Text(
                                         "在当前目录中搜索文件名…",
-                                        fontSize = 13.5.sp, color = Pa.TextTertiary,
+                                        fontSize = 13.5.sp, color = PaEditorial.Muted,
                                     )
                                 }
                                 inner()
@@ -413,7 +452,7 @@ fun FilesScreen(
                     if (searchQuery.isNotEmpty()) {
                         Text(
                             "${visibleEntries.size} 项",
-                            fontSize = 10.5.sp, color = Pa.TextTertiary,
+                            fontSize = 10.5.sp, color = PaEditorial.Muted,
                         )
                     }
                 }
@@ -422,13 +461,32 @@ fun FilesScreen(
                     "范围：当前目录（不含子目录），按文件名匹配，不区分大小写",
                     Modifier.padding(start = 18.dp, top = 4.dp),
                     fontSize = 10.sp,
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Muted,
                 )
             }
             // 【修复】weight(1f) 让 LazyColumn 占满剩余高度并启用懒加载滚动;
             // 之前没加 weight 导致列表不滚动、看不到全部
+            // 分组标题(09:「工作区文件 · N 项」):条目数右对齐
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = PaEditorial.Space.PageMargin, end = PaEditorial.Space.PageMargin, top = 10.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (showRoots) "此电脑" else "工作区文件",
+                    style = PaEditorial.Type.Heading,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    visibleEntries.size.toString() + " 项",
+                    fontSize = 12.sp, lineHeight = 17.sp,
+                    color = PaEditorial.Muted,
+                )
+            }
             LazyColumn(
-                Modifier.weight(1f).padding(horizontal = 16.dp),
+                Modifier.weight(1f).padding(horizontal = PaEditorial.Space.PageMargin),
                 state = listState,
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
@@ -438,7 +496,7 @@ fun FilesScreen(
                             "当前目录没有匹配「$searchQuery」的文件",
                             Modifier.fillMaxWidth().padding(vertical = 24.dp),
                             fontSize = 12.5.sp,
-                            color = Pa.TextTertiary,
+                            color = PaEditorial.Muted,
                         )
                     }
                 }
@@ -449,11 +507,12 @@ fun FilesScreen(
                     SwipeRevealRow(
                         rowKey = e.path,
                         openKey = openKey,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        rowBackground = PaEditorial.Surface,
                         actions = listOf(
                             SwipeAction(
                                 "rename", "重命名", AppR.drawable.ic_lucide_pencil,
-                                Pa.TextPrimary,
+                                PaEditorial.Ink,
                             ),
                             SwipeAction(
                                 "delete", "删除", AppR.drawable.ic_lucide_trash_2,
@@ -488,21 +547,35 @@ fun FilesScreen(
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+                            .padding(start = 12.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            painterResource(
-                                if (e.isDir) AppR.drawable.ic_lucide_folder else AppR.drawable.ic_lucide_file_text,
-                            ),
-                            null,
-                            tint = if (e.isDir) Pa.Accent else (kind?.color ?: Pa.TextSecondary),
-                            modifier = Modifier.size(20.dp),
-                        )
+                        // 行首 42dp 图标方格(09:文件夹绿格 / 文件蓝格)
+                        Box(
+                            Modifier
+                                .size(42.dp)
+                                .background(
+                                    if (e.isDir) PaEditorial.RunningContainer else PaEditorial.PrimaryContainer,
+                                    RoundedCornerShape(13.dp),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painterResource(
+                                    if (e.isDir) AppR.drawable.ic_lucide_folder else AppR.drawable.ic_lucide_file_text,
+                                ),
+                                null,
+                                tint = if (e.isDir) PaEditorial.Running else PaEditorial.Primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                e.name, fontSize = 14.sp, color = Pa.TextPrimary,
+                                e.name,
+                                fontSize = 15.sp, lineHeight = 21.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = PaEditorial.Ink,
                                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                             if (!e.isDir) {
@@ -512,7 +585,7 @@ fun FilesScreen(
                                         kind?.takeIf { it != FileKind.OTHER }?.label,
                                         if (kind?.preview == PreviewMode.IN_APP) "可预览" else "需下载打开",
                                     ).joinToString("  ·  "),
-                                    fontSize = 10.5.sp, color = Pa.TextTertiary, maxLines = 1,
+                                    fontSize = 11.sp, lineHeight = 16.sp, color = PaEditorial.Muted, maxLines = 1,
                                 )
                             }
                         }
@@ -527,9 +600,13 @@ fun FilesScreen(
                                     ).show()
                                 },
                                 bg = Color.Transparent, size = 34.dp, iconSize = 16.dp,
-                                tint = Pa.TextSecondary,
+                                tint = PaEditorial.Subtle,
                             )
                         }
+                        Icon(
+                            painterResource(AppR.drawable.ic_lucide_chevron_right), null,
+                            tint = PaEditorial.Subtle, modifier = Modifier.size(16.dp),
+                        )
                     }
                     }
                 }
@@ -556,14 +633,14 @@ fun FilesScreen(
         androidx.compose.ui.window.Dialog(onDismissRequest = { renaming = null }) {
             Column(
                 Modifier
-                    .background(Pa.CardHigh, RoundedCornerShape(20.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(23.dp))
                     .padding(20.dp)
                     .fillMaxWidth(),
             ) {
-                Text("重命名", fontSize = 17.sp, color = Pa.TextPrimary)
+                Text("重命名", fontSize = 17.sp, color = PaEditorial.Ink)
                 Text(
                     (if (e.isDir) "文件夹 · " else "文件 · ") + e.name,
-                    fontSize = 11.sp, color = Pa.TextTertiary,
+                    fontSize = 11.sp, color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 2.dp, bottom = 10.dp), maxLines = 1,
                 )
                 androidx.compose.material3.OutlinedTextField(
@@ -585,9 +662,9 @@ fun FilesScreen(
                             if (n.isNotEmpty() && n != e.name) renameEntry(e, n)
                             renaming = null
                         },
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Pa.Accent),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PaEditorial.Graphite),
                         shape = RoundedCornerShape(14.dp),
-                    ) { Text("确定", color = androidx.compose.ui.graphics.Color(0xFF0B0B0D)) }
+                    ) { Text("确定", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold) }
                 }
             }
         }
@@ -602,14 +679,14 @@ fun FilesScreen(
                 Text(
                     if (e.isDir) "${e.name}\n\n文件夹内的全部内容都会一并删除,且无法恢复。"
                     else "${e.name}\n\n删除后无法恢复。",
-                    fontSize = 12.5.sp, color = Pa.TextSecondary,
+                    fontSize = 12.5.sp, color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     deleteEntry(e)
                     pendingDelete = null
-                }) { Text("删除", color = Pa.Red) }
+                }) { Text("删除", color = EditorialTone.DENIED.text, fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
         )
@@ -626,7 +703,7 @@ fun FilesScreen(
                     "${k.label} 这个格式没法在 App 内排版展示。\n" +
                         "下载到手机后,可以用系统里对应的应用打开。",
                     fontSize = 12.5.sp,
-                    color = Pa.TextSecondary,
+                    color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
@@ -663,14 +740,14 @@ fun FilesScreen(
         androidx.compose.ui.window.Dialog(onDismissRequest = { showCreate = false }) {
             Column(
                 Modifier
-                    .background(Pa.CardHigh, RoundedCornerShape(20.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(23.dp))
                     .padding(20.dp)
                     .fillMaxWidth(),
             ) {
-                Text("新建", fontSize = 17.sp, color = Pa.TextPrimary)
+                Text("新建", fontSize = 17.sp, color = PaEditorial.Ink)
                 Text(
                     "位置:${path.ifEmpty { "(未进入目录)" }}",
-                    fontSize = 11.sp, color = Pa.TextTertiary,
+                    fontSize = 11.sp, color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 2.dp, bottom = 10.dp), maxLines = 1,
                 )
                 androidx.compose.material3.OutlinedTextField(
@@ -698,9 +775,9 @@ fun FilesScreen(
                                 showCreate = false
                             }
                         },
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Pa.Accent),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PaEditorial.Graphite),
                         shape = RoundedCornerShape(14.dp),
-                    ) { Text("创建", color = androidx.compose.ui.graphics.Color(0xFF0B0B0D)) }
+                    ) { Text("创建", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold) }
                 }
             }
         }

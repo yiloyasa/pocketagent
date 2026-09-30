@@ -12,6 +12,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,7 +52,7 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
-import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import pocketagent.v1.GetHostInfoRequest
@@ -282,7 +284,7 @@ private fun onboardPages(piInstalled: Boolean, zcodeInstalled: Boolean): List<On
 )
 
 /**
- * 新手教程:横向翻页式引导。
+ * 新手教程:横向翻页式引导(编辑式浅盘)。
  * [onDone] 在「跳过」或末页「开始使用」时回调 —— 调用方负责写标志并切回主页。
  *
  * 【agent 点亮】进入时轻量探测一次电脑端能力(3 秒超时,连不上就全部灰显):
@@ -316,7 +318,7 @@ fun Onboarding(onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     val last = pages.lastIndex
 
-    Box(Modifier.fillMaxSize().background(Pa.Bg)) {
+    Box(Modifier.fillMaxSize().background(PaEditorial.Canvas)) {
         Column(Modifier.fillMaxSize()) {
             // 顶部:跳过(任意页可提前退出)
             Row(
@@ -328,7 +330,7 @@ fun Onboarding(onDone: () -> Unit) {
                     Modifier
                         .pressable { onDone() }
                         .padding(8.dp),
-                    fontSize = 14.sp, color = Pa.TextSecondary,
+                    fontSize = 14.sp, color = PaEditorial.Muted,
                 )
             }
 
@@ -360,7 +362,7 @@ fun Onboarding(onDone: () -> Unit) {
                         Modifier
                             .pressable { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }
                             .padding(8.dp),
-                        fontSize = 14.sp, color = Pa.TextSecondary,
+                        fontSize = 14.sp, color = PaEditorial.Muted,
                     )
                 }
 
@@ -369,7 +371,7 @@ fun Onboarding(onDone: () -> Unit) {
                     horizontalArrangement = Arrangement.Center,
                 ) {
                     repeat(pages.size) { i ->
-                        // 指示点:当前点放大 + 品牌色,尺寸/颜色都 spring 过渡(原来是硬切)
+                        // 指示点:当前点放大 + 主色,尺寸/颜色都 spring 过渡(原来是硬切)
                         val active = i == pager.currentPage
                         val dotSize by animateDpAsState(
                             targetValue = if (active) 9.dp else 7.dp,
@@ -377,7 +379,7 @@ fun Onboarding(onDone: () -> Unit) {
                             label = "onboardDotSize",
                         )
                         val dotColor by animateColorAsState(
-                            targetValue = if (active) Pa.Accent else Pa.Hover,
+                            targetValue = if (active) PaEditorial.Primary else PaEditorial.Hairline,
                             animationSpec = PaMotion.standard(),
                             label = "onboardDotColor",
                         )
@@ -392,13 +394,14 @@ fun Onboarding(onDone: () -> Unit) {
                 }
 
                 val isLast = pager.currentPage == last
+                // 主操作(下一步/开始使用)= 当前的操作,主色用在这里是纪律允许的一处
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(12.dp))
                         .pressable(haptic = true) {
                             if (isLast) onDone() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
                         }
-                        .background(Pa.Accent)
+                        .background(PaEditorial.Primary)
                         .padding(horizontal = 22.dp, vertical = 11.dp),
                 ) {
                     // 文案切换(下一步 ↔ 开始使用)淡入淡出,不再同帧硬换字
@@ -406,10 +409,10 @@ fun Onboarding(onDone: () -> Unit) {
                         targetState = isLast,
                         transitionSpec = { fadeIn(PaMotion.standard()) togetherWith fadeOut(PaMotion.nav(700f)) },
                         label = "onboardCta",
-                    ) { last ->
+                    ) { lastPage ->
                         Text(
-                            if (last) "开始使用" else "下一步",
-                            fontSize = 14.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold,
+                            if (lastPage) "开始使用" else "下一步",
+                            fontSize = 14.sp, color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
                         )
                     }
                 }
@@ -429,15 +432,16 @@ private fun OnboardPageContent(page: OnboardPage) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(8.dp))
-        // 页首图标裸放(统一卡语言:图标不套底色块),品牌色即层级
+        // 页首图标裸放(细线图标直接铺画布),主色即层级
         Icon(
             painterResource(page.icon), null,
-            tint = Pa.Accent, modifier = Modifier.size(52.dp),
+            tint = PaEditorial.Primary, modifier = Modifier.size(52.dp),
         )
         Spacer(Modifier.height(22.dp))
         Text(
             page.title,
-            fontSize = 22.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Bold,
+            fontSize = 22.sp, lineHeight = 28.sp,
+            color = PaEditorial.Ink, fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(20.dp))
 
@@ -449,7 +453,7 @@ private fun OnboardPageContent(page: OnboardPage) {
                 when (block) {
                     is OnboardBlock.Lead -> Text(
                         block.text,
-                        fontSize = 15.sp, color = Pa.TextSecondary, lineHeight = 22.sp,
+                        fontSize = 15.sp, lineHeight = 22.sp, color = PaEditorial.Muted,
                     )
                     is OnboardBlock.Bullet -> OnboardBullet(block)
                     is OnboardBlock.Note -> OnboardNote(block.text)
@@ -461,25 +465,28 @@ private fun OnboardPageContent(page: OnboardPage) {
     }
 }
 
-/** 带图标的小卡片块(唯一卡型:16dp/Pa.Card/无边;行首图标裸放)。 */
+/**
+ * 带图标的小卡片块(编辑式统一卡:瓷白面 + 1dp 细线 + 18dp 圆角;行首图标裸放)。
+ */
 @Composable
 private fun OnboardBullet(b: OnboardBlock.Bullet) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (b.icon != null) {
-            Icon(painterResource(b.icon), null, tint = Pa.Accent, modifier = Modifier.size(22.dp))
+            Icon(painterResource(b.icon), null, tint = PaEditorial.Primary, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(b.title, fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
+            Text(b.title, fontSize = 15.sp, color = PaEditorial.Ink, fontWeight = FontWeight.Medium)
             if (b.desc != null) {
                 Spacer(Modifier.height(3.dp))
-                Text(b.desc, fontSize = 12.sp, color = Pa.TextTertiary, lineHeight = 17.sp)
+                Text(b.desc, fontSize = 12.sp, lineHeight = 17.sp, color = PaEditorial.Muted)
             }
         }
     }
@@ -494,7 +501,8 @@ private fun OnboardAgentRow(b: OnboardBlock.AgentRow) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -507,35 +515,37 @@ private fun OnboardAgentRow(b: OnboardBlock.AgentRow) {
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(b.name, fontSize = 15.sp, color = Pa.TextPrimary, fontWeight = FontWeight.Medium)
+            Text(b.name, fontSize = 15.sp, color = PaEditorial.Ink, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(3.dp))
-            Text(b.desc, fontSize = 12.sp, color = Pa.TextTertiary, lineHeight = 17.sp)
+            Text(b.desc, fontSize = 12.sp, lineHeight = 17.sp, color = PaEditorial.Muted)
         }
+        // 状态词 + 语义色双通道:可用=运行绿的加深文字档;未点亮=中性灰
         Text(
             if (b.dimmed) "未点亮" else "可用",
             fontSize = 10.sp,
-            color = if (b.dimmed) Pa.TextTertiary else Pa.Accent,
+            color = if (b.dimmed) PaEditorial.Subtle else Color(0xFF167F65),
         )
     }
 }
 
-/** Info 提示卡块(唯一卡型:16dp/Pa.Card/无边)。 */
+/** Info 提示卡块(编辑式统一卡:瓷白面 + 细线 + 18dp 圆角)。 */
 @Composable
 private fun OnboardNote(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(R.drawable.ic_lucide_info), null,
-            tint = Pa.Accent, modifier = Modifier.size(16.dp),
+            tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
         )
         Spacer(Modifier.width(10.dp))
         Text(
-            text, fontSize = 12.5.sp, color = Pa.TextSecondary, lineHeight = 18.sp,
+            text, fontSize = 12.5.sp, lineHeight = 18.sp, color = PaEditorial.Muted,
             modifier = Modifier.weight(1f),
         )
     }

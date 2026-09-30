@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -53,6 +54,8 @@ import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -193,21 +196,23 @@ private fun ControlCenterSection(
     // 「管理」同款语言,收起/展开都可达。
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.padding(start = 14.dp, top = 12.dp, bottom = 8.dp),
+            Modifier.padding(start = 2.dp, top = 16.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 painterResource(R.drawable.ic_lucide_server), null,
-                tint = Pa.TextSecondary,
-                modifier = Modifier.size(15.dp),
+                tint = PaEditorial.Muted,
+                modifier = Modifier.size(14.dp),
             )
             Spacer(Modifier.width(7.dp))
             Text(
                 "控制中心",
                 Modifier.weight(1f),
-                fontSize = 13.sp,
-                letterSpacing = 1.4.sp,
-                color = Pa.TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                letterSpacing = 1.2.sp,
+                fontWeight = FontWeight(650),
+                color = PaEditorial.Muted,
             )
             Text(
                 "重新读取",
@@ -218,15 +223,16 @@ private fun ControlCenterSection(
                     }
                     .padding(horizontal = 6.dp, vertical = 2.dp),
                 fontSize = 13.sp,
-                color = Pa.Accent,
+                color = PaEditorial.Primary,
             )
         }
-        // 统一卡型:16dp 圆角 + Pa.Card 实色底,无边无影(SettingsScreen.paSettingsCard
-        // 是别文件 private,这里内联同款材质,不破坏统一卡铁律)。
+        // 统一卡型(编辑式):18dp 圆角 + 瓷白实色底 + 1dp 细线描边
+        // (SettingsScreen.paSettingsCard 是别文件 private,这里内联同款材质)。
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Pa.Card, RoundedCornerShape(16.dp))
+                .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+                .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
                 .padding(horizontal = 16.dp, vertical = 2.dp),
         ) {
         // ---- 入口行:人话标题 + 身份事实(版本/主机名/运行时长/系统) ----
@@ -256,7 +262,7 @@ private fun ControlCenterSection(
                 }
                 // ---- 分块读取失败:逐块说清,不整页清空 ----
                 sectionErrors.forEach { (k, v) ->
-                    SectionNote("$k: $v", Pa.Yellow)
+                    SectionNote("$k: $v", EditorialTone.ATTENTION.accent)
                 }
                 // ---- 每 agent 形态卡(运行时合同核验结果,总览域行只给计数) ----
                 cards.forEach { card ->
@@ -295,7 +301,7 @@ private fun ControlCenterSection(
                     )
                 }
                 writeError?.let {
-                    SectionNote(it, Pa.Yellow)
+                    SectionNote(it, EditorialTone.ATTENTION.accent)
                 }
             }
         }
@@ -328,9 +334,9 @@ private fun ControlCenterSection(
 @Composable
 private fun ControlStatusDot(kind: ControlDotKind) {
     val color = when (kind) {
-        ControlDotKind.NORMAL -> Pa.TextTertiary
-        ControlDotKind.ATTENTION -> Pa.Yellow
-        ControlDotKind.LIMITED -> Pa.Red
+        ControlDotKind.NORMAL -> PaEditorial.Subtle
+        ControlDotKind.ATTENTION -> EditorialTone.ATTENTION.accent
+        ControlDotKind.LIMITED -> PaEditorial.Denied
     }
     Box(
         Modifier
@@ -366,13 +372,13 @@ private fun ControlDomainHeaderRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 15.sp, color = Pa.TextPrimary, maxLines = 1)
+                Text(title, fontSize = 15.sp, color = PaEditorial.Ink, maxLines = 1)
                 // 行距收紧 2dp(通用行 top=2 → 0):summary 紧贴 title 成一块
                 Text(
                     summary,
                     Modifier.fillMaxWidth(),
                     fontSize = 12.sp,
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Muted,
                     maxLines = 2,
                 )
             }
@@ -381,13 +387,13 @@ private fun ControlDomainHeaderRow(
                 Spacer(Modifier.width(6.dp))
                 Icon(
                     painterResource(R.drawable.ic_lucide_chevron_right), null,
-                    tint = Pa.TextTertiary,
+                    tint = PaEditorial.Subtle,
                     modifier = Modifier.size(15.dp),
                 )
             }
         }
         if (divider) {
-            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
         }
     }
 }
@@ -442,7 +448,7 @@ private fun ControlDomainBlock(
             "还没有已接入的 Agent,合计显示在上面的摘要里",
             Modifier.padding(start = 2.dp, top = 2.dp),
             fontSize = 11.sp,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
         )
     }
     AnimatedVisibility(
@@ -460,7 +466,7 @@ private fun ControlDomainBlock(
                     onToggle = onToggle,
                 )
                 if (i < domain.items.lastIndex) {
-                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Pa.Separator))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
                 }
             }
         }
@@ -488,11 +494,16 @@ private fun ControlItemLine(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = PaEditorial.Ink)
                     Switch(
                         checked = controlToggleOn(item.current) == true,
                         enabled = enabled,
                         onCheckedChange = { on -> onToggle(item, on) },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                            checkedTrackColor = PaEditorial.Primary,
+                            uncheckedTrackColor = PaEditorial.Raised,
+                            uncheckedBorderColor = PaEditorial.Hairline,
+                        ),
                     )
                 }
             }
@@ -503,13 +514,13 @@ private fun ControlItemLine(
                         .pressable(haptic = true) { onEditNumber(item) },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
-                    Text(item.current, fontSize = 13.sp, color = Pa.TextTertiary)
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = PaEditorial.Ink)
+                    Text(item.current, fontSize = 13.sp, color = PaEditorial.Muted)
                     Spacer(Modifier.width(4.dp))
                     Icon(
                         painterResource(R.drawable.ic_lucide_chevron_right),
                         contentDescription = null,
-                        tint = Pa.TextTertiary,
+                        tint = PaEditorial.Subtle,
                         modifier = Modifier.size(14.dp),
                     )
                 }
@@ -521,13 +532,13 @@ private fun ControlItemLine(
                         .pressable(haptic = true) { onEditSelect(item) },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
-                    Text(item.current, fontSize = 13.sp, color = Pa.TextTertiary)
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = PaEditorial.Ink)
+                    Text(item.current, fontSize = 13.sp, color = PaEditorial.Muted)
                     Spacer(Modifier.width(4.dp))
                     Icon(
                         painterResource(R.drawable.ic_lucide_chevron_right),
                         contentDescription = null,
-                        tint = Pa.TextTertiary,
+                        tint = PaEditorial.Subtle,
                         modifier = Modifier.size(14.dp),
                     )
                 }
@@ -537,11 +548,11 @@ private fun ControlItemLine(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = Pa.TextPrimary)
+                    Text(item.label, Modifier.weight(1f), fontSize = 14.sp, color = PaEditorial.Ink)
                     Text(
                         item.current,
                         fontSize = 13.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Muted,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -553,7 +564,7 @@ private fun ControlItemLine(
                 item.hint,
                 Modifier.padding(top = 2.dp),
                 fontSize = 12.sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
         }
     }
@@ -583,11 +594,11 @@ private fun ControlNumberEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Pa.CardHigh,
-        title = { Text(item.label, fontSize = 16.sp, color = Pa.TextPrimary) },
+        containerColor = PaEditorial.Surface,
+        title = { Text(item.label, fontSize = 16.sp, color = PaEditorial.Ink) },
         text = {
             Column {
-                Text("当前:${item.current}", fontSize = 12.5.sp, color = Pa.TextSecondary)
+                Text("当前:${item.current}", fontSize = 12.5.sp, color = PaEditorial.Muted)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = text,
@@ -598,7 +609,7 @@ private fun ControlNumberEditDialog(
                 )
                 if (error != null) {
                     Spacer(Modifier.height(8.dp))
-                    Text(error!!, fontSize = 12.sp, color = Pa.RedText)
+                    Text(error!!, fontSize = 12.sp, color = EditorialTone.DENIED.text)
                 }
             }
         },
@@ -614,10 +625,10 @@ private fun ControlNumberEditDialog(
                         .onSuccess { onResult() }
                         .onFailure { error = it.message }
                 }
-            }) { Text("保存", color = Pa.AccentText) }
+            }) { Text("保存", color = PaEditorial.Primary) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = Pa.TextSecondary) }
+            TextButton(onClick = onDismiss) { Text("取消", color = PaEditorial.Muted) }
         },
     )
 }
@@ -644,11 +655,11 @@ private fun ControlSelectEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Pa.CardHigh,
-        title = { Text(item.label, fontSize = 16.sp, color = Pa.TextPrimary) },
+        containerColor = PaEditorial.Surface,
+        title = { Text(item.label, fontSize = 16.sp, color = PaEditorial.Ink) },
         text = {
             Column {
-                Text("当前:${item.current}", fontSize = 12.5.sp, color = Pa.TextSecondary)
+                Text("当前:${item.current}", fontSize = 12.5.sp, color = PaEditorial.Muted)
                 Spacer(Modifier.height(8.dp))
                 item.options.forEach { opt ->
                     Row(
@@ -661,16 +672,16 @@ private fun ControlSelectEditDialog(
                             selected = selected == opt,
                             onClick = { selected = opt },
                         )
-                        Text(opt, fontSize = 14.sp, color = Pa.TextPrimary)
+                        Text(opt, fontSize = 14.sp, color = PaEditorial.Ink)
                     }
                 }
                 if (item.hint.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
-                    Text(item.hint, fontSize = 12.sp, color = Pa.TextSecondary)
+                    Text(item.hint, fontSize = 12.sp, color = PaEditorial.Muted)
                 }
                 if (error != null) {
                     Spacer(Modifier.height(8.dp))
-                    Text(error!!, fontSize = 12.sp, color = Pa.RedText)
+                    Text(error!!, fontSize = 12.sp, color = EditorialTone.DENIED.text)
                 }
             }
         },
@@ -685,10 +696,10 @@ private fun ControlSelectEditDialog(
                             .onFailure { error = it.message }
                     }
                 },
-            ) { Text("保存", color = Pa.AccentText) }
+            ) { Text("保存", color = PaEditorial.Primary) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = Pa.TextSecondary) }
+            TextButton(onClick = onDismiss) { Text("取消", color = PaEditorial.Muted) }
         },
     )
 }
@@ -700,32 +711,32 @@ private fun RecoveryBannerBlock(banner: RecoveryBanner) {
         Modifier
             .fillMaxWidth()
             .padding(top = 8.dp, bottom = 2.dp)
-            .background(Pa.Red.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+            .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
             .padding(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 painterResource(R.drawable.ic_lucide_triangle_alert),
                 contentDescription = null,
-                tint = Pa.RedText,
+                tint = EditorialTone.DENIED.text,
                 modifier = Modifier.size(15.dp),
             )
             Spacer(Modifier.width(8.dp))
-            Text(banner.headline, fontSize = 13.sp, color = Pa.RedText)
+            Text(banner.headline, fontSize = 13.sp, color = EditorialTone.DENIED.text)
         }
         if (banner.lostLines.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             Text(
                 "上次退出时没轮到的输入(共 ${banner.lostLines.size} 句,涉及 ${banner.threadCount} 个会话)",
                 fontSize = 12.sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
             banner.lostLines.forEach { line ->
                 Text(
                     line,
                     Modifier.padding(top = 4.dp),
                     fontSize = 12.5.sp,
-                    color = Pa.TextPrimary,
+                    color = PaEditorial.Ink,
                 )
             }
         }
@@ -768,16 +779,16 @@ private fun AgentRuntimeDetail(card: AgentContractCard, onOpenMemory: () -> Unit
         Modifier
             .fillMaxWidth()
             .padding(start = 12.dp, bottom = 8.dp)
-            .background(Pa.CardHigh, RoundedCornerShape(12.dp))
+            .background(PaEditorial.Raised, RoundedCornerShape(12.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         card.rows.forEach { r ->
             DetailLine(r.label, r.value)
         }
-        card.issues.forEach { DetailLine("未交代", it, Pa.RedText) }
-        card.limitations.forEach { DetailLine("明确不支持", it, Pa.TextSecondary) }
+        card.issues.forEach { DetailLine("未交代", it, EditorialTone.DENIED.text) }
+        card.limitations.forEach { DetailLine("明确不支持", it, PaEditorial.Muted) }
         when {
-            resourceNote != null -> DetailLine("资源", resourceNote!!, Pa.TextTertiary)
+            resourceNote != null -> DetailLine("资源", resourceNote!!, PaEditorial.Muted)
             resources?.isEmpty() == true -> DetailLine("资源", "当前没有活跃的资源租约")
             resources != null -> resources!!.forEach { DetailLine("资源", it) }
         }
@@ -805,7 +816,7 @@ private fun MemoryUsageEntryRow(row: RuntimeUsageRow, onOpen: () -> Unit) {
     val unsupported = RuntimeControlState.memoriesUnsupported
     if (unsupported) {
         DetailLine(row.label, row.value)
-        DetailLine("内存管理", "此 daemon 版本未提供内存管理", Pa.TextTertiary)
+        DetailLine("内存管理", "此 daemon 版本未提供内存管理", PaEditorial.Muted)
         return
     }
     Row(
@@ -815,26 +826,26 @@ private fun MemoryUsageEntryRow(row: RuntimeUsageRow, onOpen: () -> Unit) {
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("记忆用量", fontSize = 12.sp, color = Pa.TextTertiary, modifier = Modifier.width(72.dp))
+        Text("记忆用量", fontSize = 12.sp, color = PaEditorial.Muted, modifier = Modifier.width(72.dp))
         Text(
             row.value,
             fontSize = 12.5.sp,
-            color = Pa.TextPrimary,
+            color = PaEditorial.Ink,
             modifier = Modifier.weight(1f),
         )
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right),
             contentDescription = null,
-            tint = Pa.TextTertiary,
+            tint = PaEditorial.Subtle,
             modifier = Modifier.size(13.dp),
         )
     }
 }
 
 @Composable
-private fun DetailLine(label: String, value: String, color: androidx.compose.ui.graphics.Color = Pa.TextPrimary) {
+private fun DetailLine(label: String, value: String, color: androidx.compose.ui.graphics.Color = PaEditorial.Ink) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Text(label, fontSize = 12.sp, color = Pa.TextTertiary, modifier = Modifier.width(72.dp))
+        Text(label, fontSize = 12.sp, color = PaEditorial.Muted, modifier = Modifier.width(72.dp))
         Text(value, fontSize = 12.5.sp, color = color, modifier = Modifier.weight(1f))
     }
 }
@@ -845,7 +856,7 @@ private fun SubHeader(text: String) {
         text,
         Modifier.padding(start = 2.dp, top = 12.dp, bottom = 2.dp),
         fontSize = 12.sp,
-        color = Pa.TextTertiary,
+        color = PaEditorial.Muted,
         fontWeight = FontWeight.Medium,
     )
 }
@@ -897,8 +908,8 @@ private fun BudgetEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Pa.CardHigh,
-        title = { Text(row.label, fontSize = 16.sp, color = Pa.TextPrimary) },
+        containerColor = PaEditorial.Surface,
+        title = { Text(row.label, fontSize = 16.sp, color = PaEditorial.Ink) },
         text = {
             Column {
                 OutlinedTextField(
@@ -910,7 +921,7 @@ private fun BudgetEditDialog(
                 )
                 if (error != null) {
                     Spacer(Modifier.height(8.dp))
-                    Text(error!!, fontSize = 12.sp, color = Pa.RedText)
+                    Text(error!!, fontSize = 12.sp, color = EditorialTone.DENIED.text)
                 }
             }
         },
@@ -930,7 +941,7 @@ private fun BudgetEditDialog(
                     val err = saveRuntimeEdit(row.key, scaled)
                     if (err != null) error = err else onResult(null)
                 }
-            }) { Text("保存", color = Pa.AccentText) }
+            }) { Text("保存", color = PaEditorial.Primary) }
         },
         dismissButton = {
             Row {
@@ -939,8 +950,8 @@ private fun BudgetEditDialog(
                         val err = saveRuntimeEdit(row.key, null)
                         if (err != null) error = err else onResult(null)
                     }
-                }) { Text("恢复默认", color = Pa.TextSecondary) }
-                TextButton(onClick = onDismiss) { Text("取消", color = Pa.TextSecondary) }
+                }) { Text("恢复默认", color = PaEditorial.Muted) }
+                TextButton(onClick = onDismiss) { Text("取消", color = PaEditorial.Muted) }
             }
         },
     )
@@ -1041,11 +1052,11 @@ private fun UnknownEventSheet(onDismiss: () -> Unit) {
             Text(
                 "消息透析",
                 fontSize = 19.sp,
-                color = Pa.TextPrimary,
+                color = PaEditorial.Ink,
                 fontWeight = FontWeight.SemiBold,
             )
             ledger?.let {
-                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = Pa.TextTertiary)
+                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
             }
             if (events.isEmpty()) {
                 EmptyState(
@@ -1098,7 +1109,7 @@ private fun UnknownEventSheet(onDismiss: () -> Unit) {
                         },
                     )
                     if (i < events.lastIndex) {
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
                     }
                 }
             }
@@ -1141,14 +1152,14 @@ private fun UnknownEventRow(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (line.relativeTime.isNotEmpty()) {
-                    Text(line.relativeTime, fontSize = 11.sp, color = Pa.TextTertiary)
+                    Text(line.relativeTime, fontSize = 11.sp, color = PaEditorial.Muted)
                     Spacer(Modifier.width(8.dp))
                 }
                 if (line.sourceAgent.isNotBlank()) {
                     Text(
                         line.sourceAgent,
                         fontSize = 11.sp,
-                        color = Pa.TextSecondary,
+                        color = PaEditorial.Muted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1159,7 +1170,7 @@ private fun UnknownEventRow(
                     line.summary ?: line.title,
                     Modifier.weight(1f),
                     fontSize = 13.sp,
-                    color = Pa.TextPrimary,
+                    color = PaEditorial.Ink,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1169,12 +1180,12 @@ private fun UnknownEventRow(
                         if (open) R.drawable.ic_lucide_chevron_up else R.drawable.ic_lucide_chevron_down
                     ),
                     contentDescription = null,
-                    tint = Pa.TextTertiary,
+                    tint = PaEditorial.Subtle,
                     modifier = Modifier.size(14.dp),
                 )
             }
             line.degradedNote?.let {
-                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = Pa.TextTertiary)
+                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
             }
         }
 
@@ -1190,11 +1201,11 @@ private fun UnknownEventRow(
             }
             Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
                 when {
-                    detail == null -> Text("读取中…", fontSize = 12.sp, color = Pa.TextTertiary)
+                    detail == null -> Text("读取中…", fontSize = 12.sp, color = PaEditorial.Muted)
                     detail.error != null -> Text(
                         detail.error!!,
                         fontSize = 12.sp,
-                        color = Pa.Yellow,
+                        color = EditorialTone.ATTENTION.accent,
                     )
                     else -> {
                         val d = detail.detail!!
@@ -1206,7 +1217,7 @@ private fun UnknownEventRow(
                                 it,
                                 Modifier.padding(top = 8.dp),
                                 fontSize = 12.5.sp,
-                                color = Pa.TextSecondary,
+                                color = PaEditorial.Muted,
                             )
                         }
                         if (d.digest.isNotEmpty()) {
@@ -1214,7 +1225,7 @@ private fun UnknownEventRow(
                                 "逐字段",
                                 Modifier.padding(top = 10.dp, bottom = 2.dp),
                                 fontSize = 11.sp,
-                                color = Pa.TextTertiary,
+                                color = PaEditorial.Muted,
                                 fontWeight = FontWeight.Medium,
                             )
                             d.digest.forEach { DigestRow(it) }
@@ -1229,7 +1240,7 @@ private fun UnknownEventRow(
                             Text(
                                 if (rawOpen) "收起原文" else "查看原文",
                                 fontSize = 12.sp,
-                                color = Pa.AccentText,
+                                color = PaEditorial.Primary,
                             )
                             Icon(
                                 painterResource(
@@ -1237,7 +1248,7 @@ private fun UnknownEventRow(
                                     else R.drawable.ic_lucide_chevron_down
                                 ),
                                 contentDescription = null,
-                                tint = Pa.AccentText,
+                                tint = PaEditorial.Primary,
                                 modifier = Modifier.size(13.dp),
                             )
                         }
@@ -1248,11 +1259,11 @@ private fun UnknownEventRow(
                                     .fillMaxWidth()
                                     .heightIn(max = 220.dp)
                                     .verticalScroll(rememberScrollState())
-                                    .background(Pa.Bg, RoundedCornerShape(12.dp))
+                                    .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
                                     .padding(10.dp),
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
-                                color = Pa.TextPrimary,
+                                color = PaEditorial.CodeText,
                             )
                         }
                         // 五键分两行:一行塞五个在窄屏会挤到换行截断。
@@ -1268,7 +1279,7 @@ private fun UnknownEventRow(
                             AckButton("待上游支持", "NEEDS_NATIVE_SUPPORT", pendingAck, onAck)
                         }
                         ackFailure?.let {
-                            Text(it, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = Pa.Yellow)
+                            Text(it, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = EditorialTone.ATTENTION.accent)
                         }
                     }
                 }
@@ -1286,7 +1297,7 @@ private fun DigestRow(row: UnknownEventDigestRow) {
             Modifier.weight(0.9f),
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
-            color = Pa.TextPrimary,
+            color = PaEditorial.Ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1295,14 +1306,14 @@ private fun DigestRow(row: UnknownEventDigestRow) {
                 row.meaning!!,
                 Modifier.weight(1f).padding(horizontal = 6.dp),
                 fontSize = 11.sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
         }
         Text(
             row.preview,
             Modifier.weight(1.1f),
             fontSize = 11.sp,
-            color = Pa.TextTertiary,
+            color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1319,7 +1330,7 @@ private fun rawBlockText(d: UnknownEventResponseOf): String =
 @Composable
 private fun AckButton(label: String, action: String, disabled: Boolean, onClick: (String) -> Unit) {
     TextButton(onClick = { onClick(action) }, enabled = !disabled) {
-        Text(label, fontSize = 13.sp, color = Pa.AccentText)
+        Text(label, fontSize = 13.sp, color = PaEditorial.Primary)
     }
 }
 
@@ -1397,7 +1408,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
             Text(
                 "内存管理",
                 fontSize = 19.sp,
-                color = Pa.TextPrimary,
+                color = PaEditorial.Ink,
                 fontWeight = FontWeight.SemiBold,
             )
             when {
@@ -1407,13 +1418,13 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                     Text(
                         "此 daemon 版本未提供内存管理",
                         fontSize = 13.sp,
-                        color = Pa.TextSecondary,
+                        color = PaEditorial.Muted,
                     )
                     Text(
                         "电脑端的记忆用量仍显示在形态卡里;升级 daemon 后这里可以按会话查看与清除。",
                         Modifier.padding(top = 4.dp),
                         fontSize = 12.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Muted,
                     )
                 }
                 else -> {
@@ -1423,7 +1434,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                             memoryModelExplanation(modelRaw),
                             Modifier.padding(top = 4.dp),
                             fontSize = 12.5.sp,
-                            color = Pa.TextSecondary,
+                            color = PaEditorial.Muted,
                         )
                     }
                     // ---- ② 合计 + 分层 ----
@@ -1432,7 +1443,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                             threadTotalsLine(it),
                             Modifier.padding(top = 8.dp),
                             fontSize = 13.sp,
-                            color = Pa.TextPrimary,
+                            color = PaEditorial.Ink,
                             fontWeight = FontWeight.Medium,
                         )
                     }
@@ -1441,23 +1452,23 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                             kinds.joinToString(" · ") { "${memoryKindLabel(it.kind)} ${it.count}" },
                             Modifier.padding(top = 3.dp),
                             fontSize = 12.sp,
-                            color = Pa.TextTertiary,
+                            color = PaEditorial.Muted,
                         )
                     }
                     kindsNote?.let {
-                        Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = Pa.TextTertiary)
+                        Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
                     }
                     rollbackNote?.let {
-                        Text(it, Modifier.padding(top = 4.dp), fontSize = 12.sp, color = Pa.Yellow)
+                        Text(it, Modifier.padding(top = 4.dp), fontSize = 12.sp, color = EditorialTone.ATTENTION.accent)
                     }
 
                     // ---- ③ 按会话清单 ----
                     when {
                         rows == null && loadError == null && !unsupported -> {
-                            Text("读取中…", Modifier.padding(top = 12.dp), fontSize = 12.sp, color = Pa.TextTertiary)
+                            Text("读取中…", Modifier.padding(top = 12.dp), fontSize = 12.sp, color = PaEditorial.Muted)
                         }
                         loadError != null -> {
-                            Text(loadError!!, Modifier.padding(top = 12.dp), fontSize = 12.sp, color = Pa.Yellow)
+                            Text(loadError!!, Modifier.padding(top = 12.dp), fontSize = 12.sp, color = EditorialTone.ATTENTION.accent)
                         }
                         rows?.isEmpty() == true -> {
                             EmptyState(
@@ -1471,7 +1482,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                                 "按会话(占得多的在前)",
                                 Modifier.padding(top = 12.dp, bottom = 2.dp),
                                 fontSize = 11.sp,
-                                color = Pa.TextTertiary,
+                                color = PaEditorial.Muted,
                                 fontWeight = FontWeight.Medium,
                             )
                             rows!!.forEachIndexed { i, r ->
@@ -1481,7 +1492,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                                     onClear = { pendingClear = r },
                                 )
                                 if (i < rows!!.lastIndex) {
-                                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                                    Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
                                 }
                             }
                         }
@@ -1496,9 +1507,9 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
     pendingClear?.let { target ->
         AlertDialog(
             onDismissRequest = { if (!clearing) pendingClear = null },
-            containerColor = Pa.CardHigh,
+            containerColor = PaEditorial.Surface,
             title = {
-                Text("清除这个会话的记忆?", fontSize = 16.sp, color = Pa.TextPrimary)
+                Text("清除这个会话的记忆?", fontSize = 16.sp, color = PaEditorial.Ink)
             },
             text = {
                 Column {
@@ -1506,7 +1517,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                         target.threadId,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = Pa.TextSecondary,
+                        color = PaEditorial.Muted,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1516,7 +1527,7 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                             "(${target.entries} 条 · ${formatBytesLabel(target.bytes)})，" +
                             "不动电脑端原生程序里的会话内容。清除后这个会话的记忆从零开始。",
                         fontSize = 13.sp,
-                        color = Pa.TextSecondary,
+                        color = PaEditorial.Muted,
                     )
                 }
             },
@@ -1550,13 +1561,13 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                             pendingClear = null
                         }
                     },
-                ) { Text("清除", color = Pa.RedText) }
+                ) { Text("清除", color = EditorialTone.DENIED.text) }
             },
             dismissButton = {
                 TextButton(
                     enabled = !clearing,
                     onClick = { pendingClear = null },
-                ) { Text("取消", color = Pa.TextSecondary) }
+                ) { Text("取消", color = PaEditorial.Muted) }
             },
         )
     }
@@ -1576,7 +1587,7 @@ private fun MemoryThreadRow(row: ThreadMemoryRowUi, clearing: Boolean, onClear: 
                 row.threadId,
                 fontSize = 12.5.sp,
                 fontFamily = FontFamily.Monospace,
-                color = Pa.TextPrimary,
+                color = PaEditorial.Ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1584,11 +1595,11 @@ private fun MemoryThreadRow(row: ThreadMemoryRowUi, clearing: Boolean, onClear: 
                 threadMemoryLine(row),
                 Modifier.padding(top = 2.dp),
                 fontSize = 11.5.sp,
-                color = Pa.TextTertiary,
+                color = PaEditorial.Muted,
             )
         }
         TextButton(onClick = onClear, enabled = !clearing) {
-            Text("清除", fontSize = 13.sp, color = Pa.RedText)
+            Text("清除", fontSize = 13.sp, color = EditorialTone.DENIED.text)
         }
     }
 }

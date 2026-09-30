@@ -67,12 +67,14 @@ object PaCache {
         }.sumOf { it.length() }
     }
 
-    /** 清理内置浏览器的 Web 数据:DOM Storage + HTTP 缓存 + 表单数据(审查 C5)。
-     * 缓存本身对浏览体验有益,所以只做用户主动清理,不自动执行。 */
+    /** 清理内置浏览器的 Web 数据:DOM Storage + HTTP 缓存(审查 C5)。
+     * 缓存本身对浏览体验有益,所以只做用户主动清理,不自动执行。
+     * 【表单数据】旧版还调 WebViewDatabase.clearFormData();compileSdk 35 起
+     * 该方法 deprecated 且为 no-op(WebView 已不再保存表单数据,无替代 API),
+     * 按现场安全移除以消除编译警告。 */
     fun clearBrowserData(ctx: Context) {
         runCatching { android.webkit.WebStorage.getInstance().deleteAllData() }
         runCatching { android.webkit.WebView(ctx).clearCache(true) }
-        runCatching { android.webkit.WebViewDatabase.getInstance(ctx).clearFormData() }
         runCatching { android.webkit.CookieManager.getInstance().removeAllCookies(null) }
         runCatching { android.webkit.CookieManager.getInstance().flush() }
     }

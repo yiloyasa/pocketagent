@@ -8,6 +8,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
@@ -39,13 +40,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.res.painterResource
 import dev.pocketagent.app.ui.anim.pressable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
-import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.component.PaNavIconButton
 import pocketagent.v1.OpenTerminal
 import pocketagent.v1.TerminalClientMessage
 import pocketagent.v1.TerminalInput
@@ -70,6 +74,15 @@ import pocketagent.v1.ListDirectoryRequest
  */
 @Composable
 fun TerminalScreen(onBack: () -> Unit = {}) {
+    // 编辑式浅色 M3 色板只包本页子树(chrome 编辑式;xterm 内容区在 WebView 内保持石墨深色)
+    androidx.compose.material3.MaterialTheme(colorScheme = paEditorialLightScheme()) {
+        EditorialLightSystemBars()
+        TerminalScreenBody(onBack)
+    }
+}
+
+@Composable
+private fun TerminalScreenBody(onBack: () -> Unit = {}) {
     // 工作目录:先从当前有效目录/最近工作区中解析,找不到时使用 daemon 默认目录。
     // 不能直接取最近一项:历史记录可能指向已删除或已卸载的盘符。
     // 切换 = 换 sessionKey 整体重建(旧 PTY 关闭,新 PTY 在新目录起 shell)。
@@ -178,29 +191,39 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Pa.Bg)) {
-        // 头部与会话/设置页统一:返回钮 + 标题 + 目录 + 状态点
+    Column(Modifier.fillMaxSize().background(PaEditorial.Canvas)) {
+        // 头部(编辑式 chrome):返回裸钮 + 标题/目录/状态行(词与点同色通道)+ 切换目录钮
         Row(
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(start = PaEditorial.Space.NavGutter, end = 16.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            IconActionButton(AppR.drawable.ic_lucide_chevron_left, "返回", {
-                // 顶栏返回钮与系统返回键同一套层级,避免"按钮回一级、按键回到底"的割裂
-                when {
-                    showBrowser -> showBrowser = false
-                    showDirPicker -> showDirPicker = false
-                    else -> onBack()
-                }
-            }, bg = Pa.Card)
-            Spacer(Modifier.width(10.dp))
+            PaNavIconButton(
+                onClick = {
+                    // 顶栏返回钮与系统返回键同一套层级,避免"按钮回一级、按键回到底"的割裂
+                    when {
+                        showBrowser -> showBrowser = false
+                        showDirPicker -> showDirPicker = false
+                        else -> onBack()
+                    }
+                },
+                contentDescription = "返回",
+                iconRes = AppR.drawable.ic_lucide_chevron_left,
+                plain = true,
+            )
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("终端", fontSize = 16.sp, color = Pa.TextPrimary)
+                Text(
+                    "终端",
+                    fontSize = 16.sp, lineHeight = 22.sp,
+                    fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp,
+                    color = PaEditorial.Ink,
+                )
                 Text(
                     cwd.ifBlank { "默认目录(点右侧文件夹切换)" },
-                    fontSize = 10.5.sp, color = Pa.TextTertiary, maxLines = 1,
+                    fontSize = 10.5.sp, lineHeight = 15.sp, color = PaEditorial.Muted, maxLines = 1,
                 )
                 Text(
                     when {
@@ -211,38 +234,39 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
                         else -> "正在连接终端…"
                     },
                     fontSize = 10.5.sp,
+                    lineHeight = 15.sp,
+                    // 语义双通道:状态词 + 同色状态点;连接失败走加深珊瑚(小字对比纪律)
                     color = when {
-                        !terminalReady -> Pa.TextTertiary
-                        terminalState == "connected" -> Pa.Green
-                        terminalState == "error" -> Pa.Red
-                        else -> Pa.TextTertiary
+                        terminalState == "connected" -> EditorialTone.RUNNING.text
+                        terminalState == "error" -> EditorialTone.DENIED.text
+                        else -> PaEditorial.Muted
                     },
                     maxLines = 1,
                 )
             }
-            IconActionButton(
-                AppR.drawable.ic_lucide_folder, "切换目录",
-                { showDirPicker = true }, bg = Pa.Card,
+            PaNavIconButton(
+                onClick = { showDirPicker = true },
+                contentDescription = "切换目录",
+                iconRes = AppR.drawable.ic_lucide_folder,
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             Box(
                 Modifier.size(8.dp).background(
                     when {
-                        !terminalReady -> Pa.TextTertiary
-                        terminalState == "connected" -> Pa.Green
-                        terminalState == "error" -> Pa.Red
-                        else -> Pa.TextTertiary
+                        !terminalReady -> PaEditorial.Subtle
+                        terminalState == "connected" -> PaEditorial.Running
+                        terminalState == "error" -> PaEditorial.Denied
+                        else -> PaEditorial.Subtle
                     },
                     CircleShape,
                 ),
             )
-            Spacer(Modifier.width(14.dp))
         }
         // sessionKey 必须同时重建 WebView。只重建 gRPC bridge 会留下旧的
         // JavaScript 回调，切换目录后按键和输出仍然会发给旧 PTY。
         if (!terminalReady) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Text("正在准备终端…", fontSize = 13.sp, color = Pa.TextTertiary)
+                Text("正在准备终端…", fontSize = 13.sp, color = PaEditorial.Muted)
             }
         } else {
             DisposableEffect(bridge) {
@@ -293,30 +317,32 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
     if (showDirPicker) {
         androidx.compose.material3.ModalBottomSheet(
             onDismissRequest = { showDirPicker = false },
-            containerColor = Pa.CardHigh,
+            containerColor = PaEditorial.Surface,
             shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
         ) {
             Text(
                 "切换工作目录", Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                fontSize = 17.sp, color = Pa.TextPrimary,
+                fontSize = 17.sp, lineHeight = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaEditorial.Ink,
             )
             Text(
                 "新终端将在所选目录启动(旧会话关闭)",
                 Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                fontSize = 12.sp, color = Pa.TextSecondary,
+                fontSize = 12.sp, color = PaEditorial.Muted,
             )
             if (switching) {
                 Text(
                     "正在切换目录…",
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                    fontSize = 12.sp, color = Pa.Accent,
+                    fontSize = 12.sp, color = PaEditorial.Primary,
                 )
             }
             switchError?.let {
                 Text(
                     it,
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                    fontSize = 12.sp, color = Pa.Red,
+                    fontSize = 12.sp, color = EditorialTone.DENIED.text,
                 )
             }
             // 整列可滚:recents 无上限,多时"浏览电脑文件夹…"等操作行会被推出视口
@@ -333,18 +359,19 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
                         Modifier
                             .fillMaxWidth()
                             .pressable(enabled = !switching) { switchDirectory(dir) }
-                            .background(Pa.Card, RoundedCornerShape(12.dp))
+                            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
                         Icon(
                             painterResource(AppR.drawable.ic_lucide_folder), null,
-                            tint = Pa.Accent, modifier = Modifier.size(16.dp),
+                            tint = PaEditorial.Running, modifier = Modifier.size(16.dp),
                         )
                         Spacer(Modifier.width(10.dp))
                         Text(
                             dir.ifBlank { "默认目录" },
-                            fontSize = 13.sp, color = Pa.TextPrimary, maxLines = 1,
+                            fontSize = 13.sp, color = PaEditorial.Ink, maxLines = 1,
                         )
                     }
                     Spacer(Modifier.height(6.dp))
@@ -354,16 +381,17 @@ fun TerminalScreen(onBack: () -> Unit = {}) {
                     Modifier
                         .fillMaxWidth()
                         .pressable(enabled = !switching) { showBrowser = true }
-                        .background(Pa.Card, RoundedCornerShape(12.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
                         .padding(horizontal = 12.dp, vertical = 12.dp),
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_monitor), null,
-                        tint = Pa.Accent, modifier = Modifier.size(16.dp),
+                        tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(10.dp))
-                    Text("浏览电脑文件夹…", fontSize = 13.sp, color = Pa.Accent)
+                    Text("浏览电脑文件夹…", fontSize = 13.sp, color = PaEditorial.Primary)
                 }
                 Spacer(Modifier.height(18.dp))
             }

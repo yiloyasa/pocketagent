@@ -126,13 +126,18 @@ class HomeAttentionSectionsTest {
 
     // ---- 元信息纯函数 ----
 
+    /** 四词纪律:待审批侧状态词只准「等待你处理」(编辑式升级后的统一口径)。 */
     @Test
     fun `待审批元信息_有审批对象报数_只有状态直说在等`() {
-        assertEquals("2 个审批待处理", pendingApprovalMeta(2))
-        assertEquals("1 个审批待处理", pendingApprovalMeta(1))
-        assertEquals("等待你的处理", pendingApprovalMeta(0))
+        assertEquals("2 项等待你处理", pendingApprovalMeta(2))
+        assertEquals("1 项等待你处理", pendingApprovalMeta(1))
+        assertEquals("等待你处理", pendingApprovalMeta(0))
     }
 
+    /**
+     * 运行侧元信息:只给时间维度,不再吐裸状态词 —— 「正在执行」由 PaStatusBadge
+     * (EditorialStatus.RUNNING)承担,函数在两个时间都缺席时返回空串,不摆字。
+     */
     @Test
     fun `运行中元信息_有真实起点报运行时长_缺席回落最近活动`() {
         val now = 10_000_000L
@@ -145,6 +150,7 @@ class HomeAttentionSectionsTest {
         // 缺席(旧 daemon/未知):回退"最近活动"相对时间,数据全真
         assertEquals("最近活动 · 刚刚", runningMetaLabel(null, now - 30_000L, now))
         assertEquals("最近活动 · 5 分钟前", runningMetaLabel(null, now - 5 * 60_000L, now))
-        assertEquals("运行中", runningMetaLabel(null, 0L, now))
+        // 无任何时间源:返回空串(状态词不在这里,由徽章统一承担)
+        assertEquals("", runningMetaLabel(null, 0L, now))
     }
 }

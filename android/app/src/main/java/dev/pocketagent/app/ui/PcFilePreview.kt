@@ -88,23 +88,25 @@ object PcFilePreview {
 
     // ---------------------------------------------------------------- 主题配色
 
-    /** 预览页配色:一次取齐,渲染器不再各自写死颜色。 */
+    /** 预览页配色:一次取齐,渲染器不再各自写死颜色。
+     *  浅色档 = 编辑式令牌(PaEditorial:冷白画布/深墨正文/细线/主色 #386BE7),
+     *  与逐页迁移后的 chrome 同一套体系;深色档维持原深色盘(内容区跟显示模式)。 */
     private class Pal(dark: Boolean) {
         val dark = dark
         val bg = if (dark) "#0b0b0d" else "#ffffff"
-        val text = if (dark) "#e6e6e6" else "#1c1c1e"
-        val title = if (dark) "#ffffff" else "#111114"
-        val muted = if (dark) "#9a9aa2" else "#6b6b73"
-        val faint = if (dark) "#7a7a82" else "#9a9aa2"
-        val border = if (dark) "#2a2a30" else "#e3e3e8"
-        val thead = if (dark) "#17171a" else "#f1f2f5"
-        val zebra = if (dark) "#121215" else "#fafafc"
-        val code = if (dark) "#17171a" else "#f2f3f6"
-        val quote = if (dark) "#17171a" else "#eef4ff"
-        val quoteBar = if (dark) "#4c8dff" else "#2f7fe8"
-        val accent = if (dark) "#4c8dff" else "#2f7fe8"
-        val slide = if (dark) "#121215" else "#fafafa"
-        val err = if (dark) "#ff6b6b" else "#d93025"
+        val text = if (dark) "#e6e6e6" else "#19222d"
+        val title = if (dark) "#ffffff" else "#19222d"
+        val muted = if (dark) "#9a9aa2" else "#697788"
+        val faint = if (dark) "#7a7a82" else "#98a3ae"
+        val border = if (dark) "#2a2a30" else "#e3e7eb"
+        val thead = if (dark) "#17171a" else "#edf0f2"
+        val zebra = if (dark) "#121215" else "#fafbfc"
+        val code = if (dark) "#17171a" else "#f2f4f6"
+        val quote = if (dark) "#17171a" else "#e8efff"
+        val quoteBar = if (dark) "#4c8dff" else "#386be7"
+        val accent = if (dark) "#4c8dff" else "#386be7"
+        val slide = if (dark) "#121215" else "#fafbfc"
+        val err = if (dark) "#ff6b6b" else "#c94f4d"
     }
 
     // ---------------------------------------------------------------- XLSX

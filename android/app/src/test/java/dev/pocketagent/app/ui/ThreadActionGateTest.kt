@@ -21,6 +21,7 @@ class ThreadActionGateTest {
         "compact:codex", "compact:pi", "compact:zcode",
         "fork:codex", "rollback:codex", "review:codex",
         "export_html:pi",
+        "image_input:codex", "image_input:pi", "image_input:zcode",
         "steer:codex", "steer:pi",
         "queue_clear:pi", "runtime.v1",
     )
@@ -89,20 +90,37 @@ class ThreadActionGateTest {
         assertTrue(rollbackActionOn(" codex ", listOf(" ROLLBACK:CODEX ")))
     }
 
-    // ---- 附件/图片入口(dsh 排除门)----
+    // ---- 附件/图片入口(image_input:<agentId> 缺位隐藏门)----
 
     @Test
-    fun `附件图片入口_dsh隐藏其余不动`() {
-        // dsh 当前路由不支持图片输入(daemon dsh.go:发图如实报错),入口隐藏
-        assertTrue(attachmentEntryHiddenFor("dsh"))
-        assertTrue(attachmentEntryHiddenFor(" DSH "))
-        // 其余 agent 行为不变(入口照常)
-        for (id in listOf("codex", "pi", "zcode", "echo")) {
-            assertFalse(attachmentEntryHiddenFor(id))
+    fun `附件图片入口_dsh无位隐藏带位agent不动`() {
+        // daemon 按 agent.ImageInputter 断言逐家宣告 image_input(host.go:151):
+        // codex/pi/zcode 带位,dsh 无位(发图如实报错)—— 缺位会话隐藏入口,
+        // 免得用户选完图必吃失败壳;带位 agent 行为不变(入口照常)。
+        assertTrue(attachmentEntryHiddenFor("dsh", capsAll))
+        assertTrue(attachmentEntryHiddenFor(" DSH ", capsAll))
+        for (id in listOf("codex", "pi", "zcode")) {
+            assertFalse(attachmentEntryHiddenFor(id, capsAll))
         }
-        // 会话信息未拉到:不隐藏(宁可先显示,不误杀老会话)
-        assertFalse(attachmentEntryHiddenFor(null))
-        assertFalse(attachmentEntryHiddenFor(""))
+    }
+
+    @Test
+    fun `附件图片入口_旧daemon无位或agentId未绑定一律隐藏`() {
+        // 旧 daemon 不宣告 image_input 位:全量隐藏(与 compact 缺位同口径,
+        // 不摆点了必败的假按钮);agentId 空/空白 = 会话信息未拉到、绑定不到
+        // 具体会话,按 agentCapableOf 口径视为缺位 → 隐藏。
+        assertTrue(attachmentEntryHiddenFor("pi", emptyList()))
+        assertTrue(attachmentEntryHiddenFor("codex", listOf("runtime.v1", "queue_clear:pi")))
+        assertTrue(attachmentEntryHiddenFor(null, capsAll))
+        assertTrue(attachmentEntryHiddenFor("", capsAll))
+        assertTrue(attachmentEntryHiddenFor("  ", capsAll))
+    }
+
+    @Test
+    fun `附件图片入口_位与agentId大小写空白不敏感`() {
+        assertFalse(attachmentEntryHiddenFor(" Pi ", listOf(" IMAGE_INPUT:pi ")))
+        // 别家的位不开我家的门
+        assertTrue(attachmentEntryHiddenFor("pi", listOf("image_input:zcode")))
     }
 
     // ---- 运行中发送回执(steer:<agentId> 两态文案)----
