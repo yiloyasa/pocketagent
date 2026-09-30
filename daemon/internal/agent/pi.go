@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pocketagent/daemon/internal/agency"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -274,9 +275,33 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 	if err != nil {
 		log.Printf("[pi] get_available_models 不可用(0.99.1 实测超时),回退实证候选: %v", err)
 		// 回退到 pi 自维护的模型目录文件(~/.pi/agent/models-store.json,只读):
-		// 通用用户的 pi 都有它,内容=各 provider 的真实全量目录,选择不再受限。
-		if fb := piModelsStoreFallback(); len(fb) > 0 {
-			return fb
+		// 通用用户的 pi 都有它。经 agency 自适应编译管道提取 —— 不依赖固定
+		// schema,上游改字段/嵌套仍能出全量候选(架构适应力,非硬编码解析)。
+		if fb := agency.Compile(context.Background(), 10*time.Second,
+			agency.StoreFileSource{Path: piModelsStorePath()},
+		); len(fb) > 0 {
+			out := make([]pb.ModelInfo, 0, len(fb))
+			for _, c := range fb {
+				mi := pb.ModelInfo{
+					Id:               c.Provider + "/" + c.ID,
+					Provider:         "pi",
+					DisplayName:      c.DisplayName,
+					Available:        true,
+					ContextWindow:    int32(c.ContextWindow),
+					SupportsThinking: c.Reasoning,
+				}
+				if mi.DisplayName == "" {
+					mi.DisplayName = c.ID
+				}
+				for _, in := range c.Input {
+					if in == "image" {
+						mi.SupportsImages = true
+						break
+					}
+				}
+				out = append(out, mi)
+			}
+			return out
 		}
 		return nil
 	}
@@ -328,56 +353,13 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 	return out
 }
 
-// piModelsStoreFallback 读 pi 自维护的模型目录文件并解析为候选列表。
-// 【只读红线】绝不写 ~/.pi 的任何内容;文件缺失/损坏 = 返回空(如实)。
-func piModelsStoreFallback() []pb.ModelInfo {
+// piModelsStorePath 返回 pi 自维护模型目录文件的标准路径(只读用途)。
+func piModelsStorePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return nil
+		return ""
 	}
-	raw, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "models-store.json"))
-	if err != nil {
-		return nil
-	}
-	var store map[string]struct {
-		Models map[string]struct {
-			Name             string                     `json:"name"`
-			Reasoning        bool                       `json:"reasoning"`
-			Input            []string                   `json:"input"`
-			ContextWindow    int64                      `json:"contextWindow"`
-			ThinkingLevelMap map[string]json.RawMessage `json:"thinkingLevelMap"`
-		} `json:"models"`
-	}
-	if json.Unmarshal(raw, &store) != nil {
-		return nil
-	}
-	var out []pb.ModelInfo
-	for prov, pv := range store {
-		for id, m := range pv.Models {
-			mi := pb.ModelInfo{
-				Id:               prov + "/" + id,
-				Provider:         "pi",
-				DisplayName:      m.Name,
-				Available:        true,
-				ContextWindow:    int32(m.ContextWindow),
-				SupportsThinking: m.Reasoning,
-				AvailableEfforts: piModelThinkingLevels(m.Reasoning, m.ThinkingLevelMap),
-				SupportsImages: func() bool {
-					for _, in := range m.Input {
-						if in == "image" {
-							return true
-						}
-					}
-					return false
-				}(),
-			}
-			if mi.DisplayName == "" {
-				mi.DisplayName = id
-			}
-			out = append(out, mi)
-		}
-	}
-	return out
+	return filepath.Join(home, ".pi", "agent", "models-store.json")
 }
 
 // ---- 会话挂载 ----
