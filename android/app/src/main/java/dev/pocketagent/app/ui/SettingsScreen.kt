@@ -3770,8 +3770,12 @@ private fun AgentDefaultsSection(agentId: String, settings: CodexSettings?, mode
     // 「原生设置」分组(2026-09-25 原生设置透出轮):agent 原生报告的目录型配置项,
     // 由 agent_native_settings:<id> 能力位点亮(旧 daemon / 未提供的家自动隐藏,
     // 不摆假开关)。分组自带空态隐藏与错误呈现,Agent 默认模型/强度行保持不变。
-    NativeConfigOptionsSection(agentId)
-    SectionBlock(icon = R.drawable.ic_lucide_cpu, title = agentDisplay(agentId)) {
+    // 【2026-09-30 合并】原生设置(Model/Reasoning effort 等)与下方"默认模型/
+    // 思考强度"偏好组对同一 agent 是同一件事的两个通道;原生组存在时它就是权威,
+    // 偏好组隐藏(避免同页两处改同一配置);无原生设置的 agent 才回落偏好组。
+    var nativeHasContent by androidx.compose.runtime.remember(agentId) { androidx.compose.runtime.mutableStateOf(false) }
+    NativeConfigOptionsSection(agentId) { nativeHasContent = it }
+    if (!nativeHasContent) SectionBlock(icon = R.drawable.ic_lucide_cpu, title = agentDisplay(agentId)) {
         SplitButton(label = "默认模型", mainLabel = choices.find { it.id == settings?.model }?.displayName ?: "跟随 Agent 默认",
             onMainClick = openModels,
             options = listOf(SplitOption("跟随 Agent 默认", selected = settings?.model.isNullOrEmpty()) { writer.copy(model="").commit() }) +
@@ -3798,7 +3802,7 @@ private fun AgentDefaultsSection(agentId: String, settings: CodexSettings?, mode
  * 无错误时整组隐藏(该 agent 此刻没有可示的原生设置,如实,不占位)。
  */
 @Composable
-internal fun NativeConfigOptionsSection(agentId: String) {
+internal fun NativeConfigOptionsSection(agentId: String, onHasContent: (Boolean) -> Unit = {}) {
     val caps = AgentConnection.hostCapabilities.collectAsState().value
     if (!caps.contains("agent_native_settings:$agentId")) return
     val scope = rememberCoroutineScope()
@@ -3825,6 +3829,11 @@ internal fun NativeConfigOptionsSection(agentId: String) {
         }
     }
     if (!loaded) return
+    // 回报"本 agent 有原生设置可示":AgentDefaultsSection 据此隐藏与之重复的
+    // daemon 偏好组(默认模型/思考强度) —— 原生组是权威协议面,偏好组只作回退。
+    androidx.compose.runtime.LaunchedEffect(items, error) {
+        onHasContent(items.isNotEmpty() || error != null)
+    }
     if (items.isEmpty() && error == null) return
     // 所有可写行的生效范围说明(dsh:仅会话内生效)在组尾统一呈现一次,不逐行重复。
     val sharedNote = items.firstOrNull { it.writable && it.note.isNotBlank() }?.note.orEmpty()

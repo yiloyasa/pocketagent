@@ -1271,7 +1271,7 @@ private fun EditorialDeliveryBadge(state: String, queuePos: Int) {
  * 待审批时整卡可点 → 打开审批弹窗(卡上只做入口,不放批准/拒绝按钮)。
  */
 @Composable
-private fun ChatIdentityCard(
+private fun ChatIdentityBadge(
     agentName: String,
     workspaceLabel: String?,
     statusView: EditorialStatusView,
@@ -1279,60 +1279,47 @@ private fun ChatIdentityCard(
     onOpenApproval: () -> Unit,
     agentIconRes: Int?,
 ) {
+    // 状态圆点(用户口径):蓝=运行中 / 绿=正常(已完成) / 红=故障(未完成) /
+    // 琥珀=等待你处理;审批等待时整枚徽章可点,直达审批弹窗。
+    val dotColor = when (statusView.status) {
+        EditorialStatus.RUNNING -> PaEditorial.Primary
+        EditorialStatus.COMPLETED -> PaEditorial.Running
+        EditorialStatus.WAITING_FOR_YOU -> PaEditorial.Attention
+        EditorialStatus.NOT_COMPLETED -> PaEditorial.Denied
+    }
     Row(
         Modifier
-            .fillMaxWidth()
             .then(
                 if (approvalWaiting) {
                     Modifier
                         .pressable(haptic = true) { onOpenApproval() }
                         .semantics { contentDescription = "打开审批弹窗" }
                 } else Modifier
-            )
-            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .heightIn(min = 56.dp),
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 42dp 图标方格:有品牌图用品牌图(原色,不染);未知 agent 用中性细线占位
-        Box(
-            Modifier
-                .size(PaEditorial.Space.IconBox)
-                .background(PaEditorial.Raised, RoundedCornerShape(13.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (agentIconRes != null) {
-                Icon(
-                    painterResource(agentIconRes), null,
-                    tint = Color.Unspecified, modifier = Modifier.size(24.dp),
-                )
-            } else {
-                Icon(
-                    painterResource(AppR.drawable.ic_lucide_message_square), null,
-                    tint = PaEditorial.Muted, modifier = Modifier.size(20.dp),
-                )
-            }
+        if (agentIconRes != null) {
+            Icon(
+                painterResource(agentIconRes), null,
+                tint = Color.Unspecified, modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(5.dp))
         }
-        Spacer(Modifier.width(12.dp))
         Text(
             if (workspaceLabel.isNullOrBlank()) agentName else "$agentName · $workspaceLabel",
-            Modifier.weight(1f),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = PaEditorial.Ink,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.width(8.dp))
-        PaStatusBadge(statusView)
-        if (approvalWaiting) {
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                painterResource(AppR.drawable.ic_lucide_chevron_right), null,
-                tint = PaEditorial.Attention, modifier = Modifier.size(16.dp),
-            )
-        }
+        Spacer(Modifier.width(7.dp))
+        Box(
+            Modifier
+                .size(8.dp)
+                .background(dotColor, CircleShape)
+                .semantics { contentDescription = "状态:" + statusView.label },
+        )
     }
 }
 
@@ -3710,21 +3697,12 @@ fun ChatScreen(
         SideEffect { prevItemCount.value = st.items.size }
         } // chatMiddle lambda 到此结束(两条骨架共用段的下边界)
 
-        // ---- 编辑式主机状态槽(05/12):会话身份卡 + 离线主机胶囊 + 断线横幅 ----
-        // 只在编辑式骨架使用(PaScreenScaffold.hostStatus);黑客终端保持旧顶栏状态点。
+        // ---- 编辑式主机状态槽(05/12):只承载离线件(主机胶囊+断线横幅) ----
+        // 会话身份已上移到标题行右侧(ChatIdentityBadge,2026-09-30 布局修复:
+        // "Agent·工作区+状态点"跟在标题旁,不再单独占一张大卡);本槽仅在断线时
+        // 出现内容 —— 未连接时状态仍显示上次更新,绝不出现"正在执行"。
         val chatHostStatus: @Composable () -> Unit = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChatIdentityCard(
-                    agentName = selectedAgentLabel(threadAgentId),
-                    workspaceLabel = threadWorkspace
-                        ?.let { it.substringAfterLast('/').substringAfterLast('\\') }
-                        ?.takeIf { it.isNotBlank() },
-                    statusView = identityStatus,
-                    approvalWaiting = st.pendingApproval != null &&
-                        !askIsAskAction(st.pendingApproval!!.action.name),
-                    onOpenApproval = { approvalDialogOpen = true },
-                    agentIconRes = agentBrandIcon(threadAgentId),
-                )
                 // 离线(12):主机胶囊 OFFLINE + 上次更新时间 —— 未连接时状态仍显示
                 // 上次更新,绝不出现"正在执行"(hostChipCaption 的构造性保证);
                 // 断线横幅保留既有机制(自动重连计数/排队条数/手动重试),草稿不丢。
@@ -4430,14 +4408,15 @@ fun ChatScreen(
                         onRelease = drawerCtrl::onRelease,
                     ),
             ) {
-                chatMiddle()
-                // ---- tmux 式状态条(黑客终端模式):输入条上方的"贴底仪表" ----
-                // 左段 [0:pa] + 会话标题;右段 连接状态 ● + 当前模型名 + HH:MM。
+                // ---- tmux 式状态条(黑客终端模式):布局修复后移到界面最顶部 ----
+                // (原在输入条上方;2026-09-30 用户令上移 —— 作为整个界面的第一行仪表,
+                //  左段 [0:pa] + 会话标题,右段 连接状态 ● + 当前模型名 + HH:MM。)
                 TmuxStatusLine(
                     title = threadTitle,
                     connState = connSt,
                     modelName = modelName,
                 )
+                chatMiddle()
                 // 输入区外壳(黑客终端):原键盘避让(max(ime,nav))与边距原样保留
                 Column(
                     Modifier
@@ -4452,6 +4431,22 @@ fun ChatScreen(
         } else {
             PaScreenScaffold(
                 title = threadTitle.ifBlank { "会话" },
+                titleContent = {
+                    // 布局修复(2026-09-30):标题右侧跟 当前 Agent·工作区 + 状态点
+                    // (绿=正常/蓝=运行中/红=故障/琥珀=待处理);原大身份卡取消。
+                    Spacer(Modifier.width(10.dp))
+                    ChatIdentityBadge(
+                        agentName = selectedAgentLabel(threadAgentId),
+                        workspaceLabel = threadWorkspace
+                            ?.let { it.substringAfterLast('/').substringAfterLast('\\') }
+                            ?.takeIf { it.isNotBlank() },
+                        statusView = identityStatus,
+                        approvalWaiting = st.pendingApproval != null &&
+                            !askIsAskAction(st.pendingApproval!!.action.name),
+                        onOpenApproval = { approvalDialogOpen = true },
+                        agentIconRes = agentBrandIcon(threadAgentId),
+                    )
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .paPushBack(drawerCtrl.visible)
