@@ -185,6 +185,8 @@ import dev.pocketagent.app.ui.theme.paPushBack
 import dev.pocketagent.app.ui.component.PaApprovalDialog
 import dev.pocketagent.app.ui.component.PaHostChip
 // 历史消息快速查看(2026-09-30,视频样板交互):左缘刻度条 + 左滑摘要卡浮层
+import dev.pocketagent.app.ui.component.HistoryDragState
+import dev.pocketagent.app.ui.component.HistoryQuickBubble
 import dev.pocketagent.app.ui.component.HistoryQuickNavLogic
 import dev.pocketagent.app.ui.component.HistoryQuickPanel
 import dev.pocketagent.app.ui.component.HistoryTickBar
@@ -2432,6 +2434,9 @@ fun ChatScreen(
     val historyCurrentIndex = HistoryQuickNavLogic.currentIndexOf(
         historyEntries, listState.firstVisibleItemIndex,
     )
+    // 按住拖动预览的实时手势状态(二版):刻度条写、预览气泡读;fingerY 逐帧更新
+    // 但只在 draw/offset 延迟读里消费,拖动全程不重组列表。
+    val historyDrag = remember(threadId) { HistoryDragState() }
 
     /** 浮层点卡片:跳到那条消息并关浮层(浮层自己不持列表状态)。 */
     fun jumpToHistoryEntry(listIndex: Int) {
@@ -2446,6 +2451,11 @@ fun ChatScreen(
             // 跳去历史 = 用户主动离开底部:解除跟随,新内容交给「↓ N 条新内容」胶囊
             followBottom = false
         }
+    }
+
+    /** 预览松手:跳到手指停住处的那条用户消息(与浮层点卡片同一条滚动路径)。 */
+    fun jumpToHistoryTick(entryIndex: Int) {
+        historyEntries.getOrNull(entryIndex)?.let { jumpToHistoryEntry(it.listIndex) }
     }
 
     // 距底观测:跟随状态只由"当前列表位置"裁定 —— 用户上滑出 100px 即解除跟随;
@@ -3728,14 +3738,23 @@ fun ChatScreen(
                 }
             }
         }
-            // 历史消息快速查看(视频样板):左缘垂直刻度条 —— 每条用户消息一个
-            // 刻度点(Canvas 一次绘制,不做逐条 composable);点按刻度区从左缘
-            // 浮出摘要卡列表。半透明、不遮内容,与「↓ N 条新内容」胶囊同层悬浮。
+            // 历史消息快速查看(视频样板二版):左缘垂直刻度条 —— 每条用户消息一个
+            // 刻度点(Canvas 一次绘制);轻点开完整列表浮层,按住拖动 = 预览气泡
+            // 跟手扫刻度、松手跳转。半透明、不遮内容,与「↓ N 条新内容」胶囊同层悬浮。
             HistoryTickBar(
                 count = historyEntries.size,
                 currentIndex = historyCurrentIndex,
-                onOpen = { showHistoryPanel = true },
+                drag = historyDrag,
+                onOpenPanel = { showHistoryPanel = true },
+                onJump = { entryIndex -> jumpToHistoryTick(entryIndex) },
                 modifier = Modifier.align(Alignment.CenterStart),
+            )
+            // 按住拖动的紧凑预览气泡:只在预览期间存在(scale+fade 出入场),
+            // 松手即收 —— 平时零遮挡。align TopStart 让气泡 Y 与刻度条同坐标系。
+            HistoryQuickBubble(
+                drag = historyDrag,
+                entries = historyEntries,
+                modifier = Modifier.align(Alignment.TopStart),
             )
             // P0-1「↓ N 条新内容」胶囊:仅在用户离底且确有未读新块时浮现(PaEditorial.Primary 底)。
             // 点击平滑滚回底部、恢复跟随并清零未读(轻触觉由 pressable 自带)——
@@ -4700,8 +4719,9 @@ fun ChatScreen(
                 chatMiddle()
             }
         }
-        // 历史消息快速查看浮层(视频样板):从左缘滑出,宽 ~78%;黑客模式
-        // GraphiteDrawer 底 + 等宽字,常规模式 Surface 底 —— 全走 editorial 槽位。
+        // 历史消息快速查看浮层(视频样板二版):从左缘滑出,宽 ~62%、scrim 0.25
+        // (去遮挡:能隐约看到正文 —— 速查不是切页);黑客模式 GraphiteDrawer 底 +
+        // 等宽字,常规模式 Surface 底 —— 全走 editorial 槽位。
         // 点卡片 → scrollToItem 跳转并关闭;Scrim 点击/返回键 → 关闭(BackHandler 见上)。
         HistoryQuickPanel(
             visible = showHistoryPanel,
