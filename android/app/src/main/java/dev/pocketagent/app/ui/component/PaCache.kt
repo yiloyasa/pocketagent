@@ -22,6 +22,10 @@ object PaCache {
         PreviewCache.init(ctx)
         // 网页快照缓存(离线浏览用)也归这里管:init 建好 pa_offline 下的各分区目录,
         // 并按各分区声明的生命周期(ttlMs)做一次陈旧清扫。
+        // 【分区注册表】OfflineStore.partitions 现登记三项:pa_url(物理分区)+ 轮次检查点/
+        // 会话快照(逻辑分区,物理目录仍是 TurnCheckpointStore/ThreadSnapshot 的既有磁盘契约,
+        // 不迁移不重命名)。逻辑分区 ttlMs=0,陈旧清扫对它们是 no-op;占用/条目数经
+        // OfflineStore.partitionStats / allPartitionStats 聚合,供「设置 → 缓存管理」展示。
         OfflineStore.init(ctx)
         OfflineStore.sweepAllStale()
     }

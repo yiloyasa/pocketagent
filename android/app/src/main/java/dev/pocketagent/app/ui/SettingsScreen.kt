@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
@@ -3258,8 +3259,14 @@ private fun CacheSection(
     var snapshotBytes by remember { mutableLongStateOf(0L) }
     var tempBytes by remember { mutableLongStateOf(0L) }
     var browserBytes by remember { mutableLongStateOf(0L) }
-    // 网页快照缓存(OfflineStore 的 pa_offline/pa_url 分区,与上面几项互不重叠)。
+    // 缓存分区(OfflineStore 分区注册表,2026-09-30 起三项):占用 + 条目数。
+    // url=网页快照(物理分区);checkpoint=轮次检查点、snapshot=会话快照(逻辑分区,
+    // 物理目录是 TurnCheckpointStore/ThreadSnapshot 的既有磁盘契约)。
     var urlSnapBytes by remember { mutableLongStateOf(0L) }
+    var urlSnapEntries by remember { mutableIntStateOf(0) }
+    var checkpointBytes by remember { mutableLongStateOf(0L) }
+    var checkpointEntries by remember { mutableIntStateOf(0) }
+    var snapshotEntries by remember { mutableIntStateOf(0) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
     var confirmClearTasks by remember { mutableStateOf(false) }
     var confirmClearSnap by remember { mutableStateOf(false) }
@@ -3267,21 +3274,28 @@ private fun CacheSection(
     /** 统计走 IO 线程:遍历目录不能在 UI 线程做。 */
     fun reload() = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
         val pv = dev.pocketagent.app.ui.component.PreviewCache.usage()
-        val sn = dev.pocketagent.app.ui.component.ThreadSnapshot.usage()
         val tp = dev.pocketagent.app.ui.component.PaCache.tempUsage(ctx)
         val br = webDataUsage(ctx)
-        // 网页快照缓存占用:走单分区统计(复用 OfflineStore 的 CacheEntry/bytesUsed 纯函数),
-        // 与淘汰/清理口径一致,而不是一把梭量整个 pa_offline。
-        val us = dev.pocketagent.app.ui.component.OfflineStore.partitionUsage("url")
+        // 缓存分区聚合:一次取齐三项分区的名称/占用/条目数/可清理性
+        // (字节口径复用 OfflineStore 的 CacheEntry/bytesUsed 纯函数,与淘汰/清理一致,
+        // 而不是一把梭量整个目录)。会话快照的占用与 ThreadSnapshot.usage() 同源同值。
+        val stats = dev.pocketagent.app.ui.component.OfflineStore.allPartitionStats()
+        val stUrl = stats.firstOrNull { it.id == "url" }
+        val stCkpt = stats.firstOrNull { it.id == "checkpoint" }
+        val stSnap = stats.firstOrNull { it.id == "snapshot" }
         // 真实目录大小 —— 这两个数字就是系统存储页看到的口径
         val cd = dev.pocketagent.app.ui.component.PaCache.cacheUsage(ctx)
         val fd = dev.pocketagent.app.ui.component.PaCache.filesUsage(ctx)
         withContext(kotlinx.coroutines.Dispatchers.Main) {
             previewBytes = pv
-            snapshotBytes = sn
+            snapshotBytes = stSnap?.bytes ?: 0L
+            snapshotEntries = stSnap?.entries ?: 0
             tempBytes = tp
             browserBytes = br
-            urlSnapBytes = us
+            urlSnapBytes = stUrl?.bytes ?: 0L
+            urlSnapEntries = stUrl?.entries ?: 0
+            checkpointBytes = stCkpt?.bytes ?: 0L
+            checkpointEntries = stCkpt?.entries ?: 0
             cacheBytes = cd
             userBytes = fd
         }
@@ -3304,13 +3318,14 @@ private fun CacheSection(
             StatCell2("下载", if (downloadUnknown) "无法获取" else sizeText(downloadBytes), Modifier.weight(1f))
         }
 
-        // ---- 缓存项明细:每一项是什么、占多大(需求③) ----
-        // 数据来源优先复用 OfflineStore 的纯统计(网页快照走 partitionUsage);
+        // ---- 缓存项明细:每一项是什么、占多大、多少条(需求③ + 分区化聚合) ----
+        // 数据来源:OfflineStore 分区注册表(allPartitionStats,三项分区口径统一);
         // 风险档由 [CacheCleanupLogic] 给出,高风险项(会话快照)打「清理需确认」标记,
-        // 对应下方清理动作里的二次确认弹窗。
+        // 对应下方清理动作里的二次确认弹窗;凭据(token)从不入列。
         val managedRows = listOf(
-            CacheCleanupLogic.Item("会话快照", CacheCleanupLogic.Kind.SNAPSHOT, snapshotBytes),
-            CacheCleanupLogic.Item("网页快照", CacheCleanupLogic.Kind.URL_SNAPSHOT, urlSnapBytes),
+            CacheCleanupLogic.Item("会话快照", CacheCleanupLogic.Kind.SNAPSHOT, snapshotBytes, snapshotEntries),
+            CacheCleanupLogic.Item("轮次检查点", CacheCleanupLogic.Kind.CHECKPOINT, checkpointBytes, checkpointEntries),
+            CacheCleanupLogic.Item("网页快照", CacheCleanupLogic.Kind.URL_SNAPSHOT, urlSnapBytes, urlSnapEntries),
             CacheCleanupLogic.Item("预览缓存", CacheCleanupLogic.Kind.PREVIEW, previewBytes),
             CacheCleanupLogic.Item("临时文件", CacheCleanupLogic.Kind.TEMP, tempBytes),
             CacheCleanupLogic.Item("浏览器数据", CacheCleanupLogic.Kind.BROWSER, browserBytes),
@@ -3327,7 +3342,9 @@ private fun CacheSection(
                         Text(" · 清理需确认", fontSize = 11.sp, color = Pa.Red)
                     }
                     Spacer(Modifier.weight(1f))
-                    Text(sizeText(row.bytes), fontSize = 13.sp, color = Pa.TextPrimary)
+                    // 占用 + 条目数(条目数未统计时只显示占用,不摆 0)
+                    val entryNote = if (row.entries > 0) " / ${row.entries} 项" else ""
+                    Text(sizeText(row.bytes) + entryNote, fontSize = 13.sp, color = Pa.TextPrimary)
                 }
             }
             // 小计:只汇总本 App 管理的可清理项,不含下载文件本体(那属于用户内容)
@@ -3390,6 +3407,23 @@ private fun CacheSection(
             }
         }
 
+        // ---- 清理轮次检查点(低风险:断点续跑副本,清了只是未完成轮次不能再续跑) ----
+        // 仅在有占用时出现;只删 filesDir/turn-checkpoints,与其它项口径互不重叠。
+        if (checkpointBytes > 0) {
+            CacheActionRow(
+                title = "清空轮次检查点",
+                desc = "断点续跑将失效",
+            ) {
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val x = dev.pocketagent.app.ui.component.OfflineStore.clear("checkpoint")
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        reload()
+                        toastMsg = "已释放 ${sizeText(x)}"
+                    }
+                }
+            }
+        }
+
         // ---- 清理网页快照缓存(仅在有占用时出现;与上面几项口径互不重叠) ----
         if (urlSnapBytes > 0) {
             CacheActionRow(
@@ -3436,7 +3470,8 @@ private fun CacheSection(
             )
             Text(
                 "用户数据 ${sizeText(userBytes)} = 会话快照 ${sizeText(snapshotBytes)}" +
-                    " + 设置与登录凭证;下方清理项都不会动到它。",
+                    " + 轮次检查点 ${sizeText(checkpointBytes)} + 设置与登录凭证;" +
+                    "清理项只动前两者,不碰登录凭证。",
                 Modifier.padding(bottom = 4.dp),
                 fontSize = 10.5.sp, color = Pa.TextTertiary,
             )
@@ -3449,6 +3484,13 @@ private fun CacheSection(
             Text(
                 "网页快照 ${sizeText(urlSnapBytes)} = 断网时可回看的网页内容(pa_offline/pa_url 分区);" +
                     "与上面几项口径互不重叠,「清空网页快照缓存」只清它。",
+                Modifier.padding(bottom = 4.dp),
+                fontSize = 10.5.sp, color = Pa.TextTertiary,
+            )
+            Text(
+                "轮次检查点 ${sizeText(checkpointBytes)} = 未完成轮次的断点续跑副本" +
+                    "(filesDir/turn-checkpoints 分区,最多保留 ${dev.pocketagent.app.ui.component.TurnCheckpointStore.MAX_CHECKPOINTS} 个);" +
+                    "「清空轮次检查点」只清它,已完成会话不受影响。",
                 Modifier.padding(bottom = 4.dp),
                 fontSize = 10.5.sp, color = Pa.TextTertiary,
             )

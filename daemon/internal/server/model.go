@@ -609,5 +609,15 @@ func (s *Server) setAgentNativeConfigOption(ctx context.Context, agentID, option
 	if err := src.SetNativeConfigOption(ctx, thread, optionID, value); err != nil {
 		return nil, errUnavailable(err.Error())
 	}
+	// 【失效纪律】原生配置写成功 = 本地下层事实变了(与 SetCodexSettings 成功后
+	// InvalidateAll 同款):dsh 的模型目录数据源就是 session/new 应答里的
+	// config-option 状态,写完不清缓存的话,手机端"随后重拉目录"拿到的还是
+	// TTL 内的旧 currentValue。谁实现了失效接口就清谁,不强迫所有 provider 摆空架子。
+	if inv, ok := provider.(interface{ InvalidateAll() }); ok {
+		inv.InvalidateAll()
+	}
+	if ref, ok := provider.(agent.ModelCatalogRefresher); ok {
+		ref.InvalidateModels()
+	}
 	return s.nativeSettings(ctx, agentID, threadID), nil
 }

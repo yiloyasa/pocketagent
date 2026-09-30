@@ -10,6 +10,13 @@ import java.nio.file.StandardCopyOption
 /** Cursor and visible text are committed together. A cursor without its matching
  * text is unsafe: the resumed stream would skip output the user never saw. */
 internal object TurnCheckpointStore {
+
+    // ---- LRU 上限(原 save() 内的硬编码,2026-09-30 提取为常量;值不变) ----
+    // 最多保留 50 个、合计 8MB,超出按 lastModified 删最旧。OfflineStore 的
+    // "checkpoint" 逻辑分区登记的 maxBytes 与此同源(见 OfflineStore.partitions)。
+    const val MAX_CHECKPOINTS = 50
+    const val MAX_TOTAL_BYTES = 8L * 1024 * 1024
+
     data class Checkpoint(
         val threadId: String,
         val messages: List<ThreadSnapshot.Msg>,
@@ -59,7 +66,7 @@ internal object TurnCheckpointStore {
             var bytes = 0L
             dir.listFiles { f -> f.extension == "json" }?.sortedByDescending { it.lastModified() }?.forEachIndexed { i, f ->
                 bytes += f.length()
-                if (i >= 50 || bytes > 8 * 1024 * 1024) f.delete()
+                if (i >= MAX_CHECKPOINTS || bytes > MAX_TOTAL_BYTES) f.delete()
             }
         }
     }
@@ -85,6 +92,19 @@ internal object TurnCheckpointStore {
 
     @Synchronized fun active(): List<Checkpoint> =
         root?.listFiles { f -> f.extension == "json" }?.mapNotNull(::read)?.filter { it.active }.orEmpty()
+
+    /** 只读用量统计:字节数 + 条目数(缓存管理页聚合展示用,不改任何文件)。 */
+    data class Usage(val bytes: Long, val entries: Int)
+
+    /**
+     * 只读用量:.json 正本的条数与字节数(.tmp 半成品不计,与 [save] 的 LRU 口径一致;
+     * 超大被拒写的 checkpoint 不落盘,自然也不计)。
+     */
+    fun usage(): Usage {
+        val d = root ?: return Usage(0L, 0)
+        val files = d.listFiles { f -> f.isFile && f.extension == "json" } ?: return Usage(0L, 0)
+        return Usage(files.sumOf { it.length() }, files.size)
+    }
 
     private fun read(file: File): Checkpoint? = runCatching {
         if (!file.isFile || file.length() > 512 * 1024) return null

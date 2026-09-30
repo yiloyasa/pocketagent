@@ -130,9 +130,12 @@ func (c *statusCache[T]) clear() {
 
 // InvalidateAll 清空三类只读查询的缓存。
 //
-// 调用时机:SetCodexSettings 成功变更后(server 层),让设置页立刻看到新值,
-// 而不是等 TTL 到期。以后若有其它"本地下层事实变化"的入口(如技能装卸),
-// 也应调用它 —— 目前保持最小接线。
+// 调用点清单(server 层,2026-09-30 起):
+//   - SetCodexSettings 成功变更后(model.go):设置页立刻看到新值,而不是等 TTL;
+//   - setAgentNativeConfigOption 写成功后(model.go):原生配置项是"本地下层事实",
+//     写完即失效 —— 该写路径同时按 agent.ModelCatalogRefresher 清 pi/dsh 的模型目录缓存。
+//
+// 以后若有其它"本地下层事实变化"的入口(如技能装卸),也应调用它。
 func (p *CodexProvider) InvalidateAll() {
 	p.capCache.clear()
 	p.mcpCache.clear()

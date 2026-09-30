@@ -54,7 +54,10 @@ class ThreadSnapshotO1Test {
 
         val msgs = listOf(ThreadSnapshot.Msg("user", "你好"), ThreadSnapshot.Msg("assistant", "在"))
         ThreadSnapshot.saveMessages("a", msgs)
-        assertEquals("单线程快照应原样往返", msgs, ThreadSnapshot.readThreadSnapshot("a"))
+        // savedAtMs(2026-09-30)是写入端打的落盘时间:往返比较 role/text 原样,时间戳应为正
+        val roundTrip = ThreadSnapshot.readThreadSnapshot("a")!!
+        assertEquals("单线程快照应原样往返", msgs.map { it.role to it.text }, roundTrip.map { it.role to it.text })
+        assertTrue("落盘时间戳应为正", roundTrip.all { it.savedAtMs > 0L })
         assertNull("无快照的线程返回 null", ThreadSnapshot.readThreadSnapshot("nope"))
     }
 

@@ -12,7 +12,9 @@ package dev.pocketagent.app.ui
  * 【与存储层的关系】这里只做"分级/筛选"的决策,不碰任何磁盘。真正的删除动作各自走
  * 自己的边界:会话快照走 [dev.pocketagent.app.ui.component.ThreadSnapshot](filesDir/pa_snap,
  * 只删自己的目录)、网页快照走 [dev.pocketagent.app.ui.component.OfflineStore].clear("url")
- * (只删 pa_offline/pa_url)、浏览器数据走 PaCache(只删 app_webview)。任何清理项都
+ * (只删 pa_offline/pa_url)、轮次检查点走 [dev.pocketagent.app.ui.component.OfflineStore]
+ * .clear("checkpoint")(只删 filesDir/turn-checkpoints,2026-09-30 分区化)、
+ * 浏览器数据走 PaCache(只删 app_webview)。任何清理项都
  * 不碰 cacheDir 里 pa_offline 之外的 WebView 内容,也不碰 EncryptedSharedPreferences 里的 token。
  */
 object CacheCleanupLogic {
@@ -21,6 +23,8 @@ object CacheCleanupLogic {
     enum class Kind {
         /** 会话快照:最近 N 轮的本地副本,清了只能从电脑重拉,离线看不了。 */
         SNAPSHOT,
+        /** 轮次检查点:未完成轮次的断点续跑副本,纯可再生(清了只是不能再续跑)。 */
+        CHECKPOINT,
         /** 网页快照:断网回看的网页内容,纯可再生。 */
         URL_SNAPSHOT,
         /** 文件预览缓存:纯临时。 */
@@ -46,14 +50,22 @@ object CacheCleanupLogic {
      * 风险分级主函数。当前只有「会话快照」是 RISKY —— 它是用户离线回看历史的唯一副本,
      * 清掉后离线态就空了,必须让用户二次确认并看清后果。其余项(含凭据)都不是「可直清的
      * 风险项」:可再生项清了联网自愈,凭据则根本不在清理目标内。
+     * 轮次检查点(2026-09-30 分区化新增)= SAFE:它是断点续跑副本,清掉只影响
+     * "未完成轮次接着跑",已完成会话与离线历史不受影响。
      */
     fun riskOf(kind: Kind): Risk = when (kind) {
         Kind.SNAPSHOT -> Risk.RISKY
-        Kind.URL_SNAPSHOT, Kind.PREVIEW, Kind.TEMP, Kind.BROWSER, Kind.CREDENTIAL -> Risk.SAFE
+        Kind.CHECKPOINT, Kind.URL_SNAPSHOT, Kind.PREVIEW, Kind.TEMP, Kind.BROWSER, Kind.CREDENTIAL -> Risk.SAFE
     }
 
     /** 一条清理候选(纯数据,便于枚举 UI 与单测)。 */
-    data class Item(val key: String, val kind: Kind, val bytes: Long)
+    data class Item(
+        val key: String,
+        val kind: Kind,
+        val bytes: Long,
+        /** 条目数(缓存管理页展示);0 = 未统计/不展示。默认值保住既有三参构造的调用方。 */
+        val entries: Int = 0,
+    )
 
     /** 从候选里滤出「可清理项」(凭据出局)。 */
     fun filterClearable(items: List<Item>): List<Item> = items.filter { isClearable(it.kind) }

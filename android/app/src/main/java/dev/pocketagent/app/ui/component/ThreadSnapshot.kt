@@ -48,8 +48,13 @@ object ThreadSnapshot {
         val agentId: String = "codex",
     )
 
-    /** 一条消息快照。 */
-    data class Msg(val role: String, val text: String)
+    /**
+     * 一条消息快照。
+     * @param savedAtMs 该条落盘时间(毫秒)。**向后兼容字段**:旧快照 JSON 里没有
+     * 这个键,反序列化时为 0(调用方按"未知"处理,不要拿它参与排序/展示判断);
+     * 新写入由 [saveMessages] 统一打当前时间。
+     */
+    data class Msg(val role: String, val text: String, val savedAtMs: Long = 0L)
 
     // ---- P1-8 限额口径(三层,见类注释) ----
     private const val MAX_MSG_PER_THREAD = 60
@@ -186,9 +191,16 @@ object ThreadSnapshot {
                 used += cost
                 kept += m
             }
+            // 写入端统一打当前时间(同一份快照共用一个值);调用方已自带时间戳则尊重原值。
+            val savedAt = System.currentTimeMillis()
             val arr = JSONArray()
             kept.asReversed().forEach { m ->
-                arr.put(JSONObject().apply { put("r", m.role); put("t", m.text) })
+                arr.put(
+                    JSONObject().apply {
+                        put("r", m.role); put("t", m.text)
+                        put("at", if (m.savedAtMs > 0L) m.savedAtMs else savedAt)
+                    },
+                )
             }
             writeAtomic(File(d, msgFileName(threadId)), arr.toString())
             evict(d)
@@ -210,7 +222,8 @@ object ThreadSnapshot {
             val out = mutableListOf<Msg>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                out += Msg(o.optString("r"), o.optString("t"))
+                // 旧 JSON 无 "at" 键 → optLong 读 0(见 [Msg.savedAtMs] 的兼容语义)。
+                out += Msg(o.optString("r"), o.optString("t"), o.optLong("at"))
             }
             out
         }.getOrNull()
@@ -313,6 +326,22 @@ object ThreadSnapshot {
 
     /** 快照占用(字节,含列表级文件)。 */
     fun usage(): Long = dir?.listFiles()?.sumOf { it.length() } ?: 0L
+
+    /** 只读用量统计:字节数 + 条目数(缓存管理页聚合展示用,不改任何文件)。 */
+    data class Usage(val bytes: Long, val entries: Int)
+
+    /**
+     * 只读用量(快照数据本体口径):条目 = 消息快照文件数;bytes/条目都与 [evict]
+     * 同一范围(threads.json / seen.json 是列表级文件、.tmp 是半成品,均不计)。
+     * 要"含列表级文件"的总占用用 [usage]。
+     */
+    fun usageStats(): Usage {
+        val d = dir ?: return Usage(0L, 0)
+        val files = d.listFiles { f ->
+            f.isFile && f.name != THREADS_FILE && f.name != SEEN_FILE && !f.name.endsWith(".tmp")
+        } ?: return Usage(0L, 0)
+        return Usage(files.sumOf { it.length() }, files.size)
+    }
 
     // ------------------------------------------------------------ 失效偏好键回收(C4)
 
