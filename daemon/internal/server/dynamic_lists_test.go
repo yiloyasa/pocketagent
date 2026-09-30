@@ -152,17 +152,17 @@ func TestDefaultModelIDForResolution(t *testing.T) {
 // ---- 4. agents_sessions:能力接口动态发现 + 动态报错文案 ----
 
 func TestAgentSessionImportRejectsUnknownWithDynamicList(t *testing.T) {
-	srv := newAgentSessionsServer(t) // 内置适配器:pi / zcode 可导入
+	srv := newAgentSessionsServer(t) // 内置适配器:pi / zcode / claude 可导入(claude 为 2026-09-30 只读接入)
 	for _, call := range []struct {
 		name string
 		do   func() error
 	}{
 		{"ListAgentThreads", func() error {
-			_, err := srv.ListAgentThreads(ctxBG(), &pb.ListAgentThreadsRequest{AgentId: "claude"})
+			_, err := srv.ListAgentThreads(ctxBG(), &pb.ListAgentThreadsRequest{AgentId: "no-such-agent"})
 			return err
 		}},
 		{"ImportAgentThread", func() error {
-			_, err := srv.ImportAgentThread(ctxBG(), &pb.ImportAgentThreadRequest{AgentId: "claude", SessionId: "s1"})
+			_, err := srv.ImportAgentThread(ctxBG(), &pb.ImportAgentThreadRequest{AgentId: "no-such-agent", SessionId: "s1"})
 			return err
 		}},
 	} {

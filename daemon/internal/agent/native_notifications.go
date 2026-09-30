@@ -178,16 +178,58 @@ func codexMethodNoticeKind(method string) string {
 //
 // 【为什么未知变体不硬套 PASSTHROUGH】session/update 的变体是开放的:上游加一个新
 // kind 就会落到 default。硬说"我们认识它"会让诊断页失去存在的意义 —— 那正是本轮要修的病。
+//
+// 【2026-09-30 台账积压收编批(证据:活跃台账 unknown-events.json 实测,200 条
+// 滚动窗内 dsh 裸 "session/update" UNKNOWN 13 条)】词表(knowledge_dsh.go)早已
+// 收了 agent_message_chunk / agent_thought_chunk / user_message_chunk /
+// usage_update / config_option_update 的人话,但本分类器没跟上,轮次之外到达的
+// session/update(全局钩子路径)整条以裸方法名落账,全部灌成 UNKNOWN。逐条判定:
+//   - agent_message_chunk / agent_thought_chunk / usage_update:与 context_usage
+//     同款 —— 轮次内已被投影成 TextDelta / ThinkingDelta / Usage 帧 → PROJECTED
+//     (走到留痕=已知路径上的意外或轮次外回声);
+//   - user_message_chunk:轮次内刻意不转发(手机端已展示用户自己的输入)→ 已知
+//     但无投影,PASSTHROUGH;
+//   - config_option_update:轮次内刷新原生目录缓存、不发协议帧 → PASSTHROUGH。
 func dshNoticeKind(method string) string {
 	switch {
 	case strings.HasPrefix(method, "session/update:context_usage"),
-		strings.HasPrefix(method, "session/update:tool_call"):
+		strings.HasPrefix(method, "session/update:usage_update"),
+		strings.HasPrefix(method, "session/update:tool_call"),
+		strings.HasPrefix(method, "session/update:agent_message_chunk"),
+		strings.HasPrefix(method, "session/update:agent_thought_chunk"):
 		return runtime.KindKnownProjected
 	case strings.HasPrefix(method, "session/update:plan"),
-		strings.HasPrefix(method, "session/update:available_commands_update"):
+		strings.HasPrefix(method, "session/update:available_commands_update"),
+		strings.HasPrefix(method, "session/update:user_message_chunk"),
+		strings.HasPrefix(method, "session/update:config_option_update"):
 		return runtime.KindKnownPassthrough
 	}
 	return runtime.KindUnknownNotification
+}
+
+// dshGlobalNoticeKind 给 dsh **全局钩子**收到的通知分档(dsh.go 的
+// SetGlobalHandler 调用点;轮次内的分发走 handleSessionUpdate,不经这里)。
+//
+// 【为什么必须在登记前拆壳】全局钩子收到的 session/update 是完整信封
+// {"sessionId":…,"update":{…}},变体名在 update.sessionUpdate 里。此前直接拿裸
+// 方法名 "session/update" 过 dshNoticeKind,必然落 UNKNOWN —— 台账 200 条滚动窗
+// 实测被它灌进 13 条 UNKNOWN(变体全是认识的:thought/message chunk、usage_update、
+// tool_call)。拆壳后按变体名复用 dshNoticeKind,与轮次内 recordAs 的登记名
+// ("session/update:<kind>")完全同形,词表也因此天然命中。
+//
+// 【拆不开怎么办】信封解不了、update 体缺失、变体名拿不到(空 update 体,台账
+// 实测有 {"update":{}} 这种空壳)→ 如实 UNKNOWN_NOTIFICATION,不猜。
+func dshGlobalNoticeKind(method string, params json.RawMessage) string {
+	if method != "session/update" {
+		return dshNoticeKind(method)
+	}
+	var env struct {
+		Update json.RawMessage `json:"update"`
+	}
+	if json.Unmarshal(params, &env) != nil || len(env.Update) == 0 {
+		return runtime.KindUnknownNotification
+	}
+	return dshNoticeKind("session/update:" + dshUpdateKind(env.Update))
 }
 
 // piNoticeKind 给 pi 的事件类型分档。

@@ -31,6 +31,15 @@
 // mock/experimentalMethod、server/diagnostics、thread/attachment/*、
 // plugin/reconcile 等)同属桌面/探针面,同样不收;完整 diff 见
 // docs/2026-09-30-agent-capability-matrix.md 的 codex 0.159.2 适配记录。
+//
+// 【2026-09-30 未知台账积压收编批】活跃台账 200 条滚动窗实测(本机
+// AppData\Local\PocketAgent\data\unknown-events.json,seq=1289):UNKNOWN 只剩
+// 三组 —— codex "response" 迟到错误应答 24 条(按 error.message 两家族收编为
+// "response:account/rateLimits/read" / "response:account/usage/read",见
+// codex.go 的 codexLateResponseLedger)、dsh 裸 "session/update" 13 条(全是
+// 认识的变体,dsh.go 全局钩子拆壳 + dshNoticeKind 补档后消灭)、remoteControl/
+// status/changed 2 条(属上方"明确不收清单"的 remoteControl/*,维持不收,
+// 如实留 UNKNOWN)。
 package runtime
 
 var codexEventSummaries = map[string]string{
@@ -82,4 +91,10 @@ var codexEventSummaries = map[string]string{
 	"codex\x1fmodelProvider/authRecoveryStarted":         "模型服务的登录状态出了问题,Codex 正在自动恢复",
 	"codex\x1fmodelProvider/authRecoveryCompleted":       "模型服务登录状态的自动恢复已完成",
 	"codex\x1fitem/commandExecution/terminalInteraction": "有一条命令在等终端输入(比如密码或确认提示)",
+
+	// ---- 2026-09-30 未知台账积压收编批(证据:活跃台账 200 条滚动窗实测)----
+	// 能力探测轮询超时放弃后,app-server 迟到补发的错误应答(codex.go 的
+	// codexLateResponseLedger 按 error.message 精确短语归家族,登记名带请求方法)。
+	"codex\x1fresponse:account/rateLimits/read": "Codex 补报了一次限额数据拉取失败(对应的轮询早已超时降级,此处仅留痕)",
+	"codex\x1fresponse:account/usage/read":      "Codex 补报了一次累计用量拉取失败(对应的轮询早已超时降级,此处仅留痕)",
 }

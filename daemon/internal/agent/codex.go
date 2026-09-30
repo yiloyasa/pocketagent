@@ -533,7 +533,8 @@ func (p *CodexProvider) withClientCtx(ctx context.Context, budget time.Duration,
 // 它在 readLoop 里被同步调用,一旦阻塞,整条事件管道都会卡住。
 func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 	c.SetUnknownResponseHandler(func(id int64, raw json.RawMessage) {
-		recordUnknownResponse("codex", strconv.FormatInt(id, 10), raw)
+		method, kind := codexLateResponseLedger(raw)
+		recordUnknownResponseAs(kind, "codex", method, strconv.FormatInt(id, 10), raw)
 	})
 	c.SetGlobalHandler(func(method string, params json.RawMessage) {
 		recordProviderEvent("codex", method, codexThreadIDOf(params), codexGlobalNoticeKind(method), params)
@@ -594,6 +595,40 @@ func codexGlobalNoticeKind(method string) string {
 	default:
 		return runtime.KindUnknownNotification
 	}
+}
+
+// codexLateResponseLedger 判定一条"无法关联到在途请求"的 codex 响应如何入账,
+// 返回(台账 SourceMethod, normalized_kind)。
+//
+// 【积压从哪来】daemon 的能力探测/用量面板会发 account/rateLimits/read 与
+// account/usage/read(codex_capabilities.go,本轮唯一调用方);CallCtx 的 ctx 或
+// 120s 兜底先到期时 pending 已删,app-server 随后把上游失败补发成 error 响应,
+// 无人认领 → UnknownResponseHandler。调用方早已按超时降级(用量面板如实显示
+// "读不到"),这条迟到应答是纯冗余证据 —— 台账 200 条滚动窗实测积压 24 条
+// UNKNOWN_RESPONSE,全部落在两个可实证的消息家族上。
+//
+// 【判定标准是消息原文,不是 id 猜测】响应体里只有 error.code/-32603 与
+// error.message,按 message 精确短语归入两个已知家族;登记名带上对应的请求方法
+// (dsh "session/update:<kind>" / zcode "session/event:<type>" 的同款后缀先例),
+// 词表(knowledge_codex.go)据此给"已知迟到应答"人话,真未知的仍走裸
+// "response" + UNKNOWN_RESPONSE,两类在诊断页一眼可分。
+func codexLateResponseLedger(raw json.RawMessage) (string, string) {
+	var resp struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &resp) != nil || resp.Error == nil {
+		return "response", runtime.KindUnknownResponse
+	}
+	switch {
+	case strings.Contains(resp.Error.Message, "failed to fetch codex rate limits"):
+		return "response:account/rateLimits/read", runtime.KindKnownPassthrough
+	case strings.Contains(resp.Error.Message, "token usage profile fetch timed out"):
+		return "response:account/usage/read", runtime.KindKnownPassthrough
+	}
+	return "response", runtime.KindUnknownResponse
 }
 
 // ThreadEventHandlerAsync 在独立 goroutine 里回调 server 层。

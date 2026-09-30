@@ -142,7 +142,8 @@ func TestImportAgentThreadZcodeMetadataOnly(t *testing.T) {
 
 func TestListAgentThreadsInvalidAgent(t *testing.T) {
 	srv := newAgentSessionsServer(t)
-	if _, err := srv.ListAgentThreads(ctxBG(), &pb.ListAgentThreadsRequest{AgentId: "claude"}); err == nil {
+	// "claude" 自 2026-09-30 起是可导入 agent(external_sessions.go),示例换成了真正不存在的 id。
+	if _, err := srv.ListAgentThreads(ctxBG(), &pb.ListAgentThreadsRequest{AgentId: "no-such-agent"}); err == nil {
 		t.Fatal("未知 agent 应显式报错,而不是返回空列表")
 	}
 }

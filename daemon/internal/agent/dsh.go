@@ -308,7 +308,10 @@ func (p *DshProvider) startClientLocked() (dshClient, error) {
 		SetGlobalHandler(func(string, json.RawMessage))
 	}); ok {
 		h.SetGlobalHandler(func(method string, params json.RawMessage) {
-			recordProviderEvent("dsh", method, "", dshNoticeKind(method), params)
+			// 轮次外的通知也要先拆壳再分档:session/update 的变体名在
+			// update.sessionUpdate 里,拿裸方法名分档会把认识的变体全灌成
+			// UNKNOWN(台账实测 13 条积压,见 dshGlobalNoticeKind 注释)。
+			recordProviderEvent("dsh", method, "", dshGlobalNoticeKind(method, params), params)
 		})
 	}
 	p.gen.Add(1)
