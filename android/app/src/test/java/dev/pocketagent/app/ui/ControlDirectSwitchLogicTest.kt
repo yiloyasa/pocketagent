@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pocketagent.v1.CollabPolicy
+import pocketagent.v1.ControlDomain
 import pocketagent.v1.ControlItem
 import pocketagent.v1.RuntimePolicy
 import pocketagent.v1.RuntimePolicyResponse

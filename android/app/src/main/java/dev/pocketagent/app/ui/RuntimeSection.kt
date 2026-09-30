@@ -448,9 +448,18 @@ private fun ControlDomainBlock(
     val headerTrailing: (@Composable () -> Unit)? = when (domain.id) {
         CONTROL_DOMAIN_COLLAB -> {
             val item = collabMasterSwitchItem(domain)
-            if (item != null) @Composable { CollabMasterSwitch(item = item, onToggle = onToggle) } else null
+            // @Composable lambda 字面量直接搁在 if/when 表达式位 K2 推断不出类型,
+            // 显式类型局部值承转(fa9ec7b 曾因此整包编译不过)。
+            if (item == null) null
+            else {
+                val block: @Composable () -> Unit = { CollabMasterSwitch(item = item, onToggle = onToggle) }
+                block
+            }
         }
-        CONTROL_DOMAIN_DIALYSIS -> @Composable { DialysisUnknownSwitch(onWriteError = onToggleUnknown) }
+        CONTROL_DOMAIN_DIALYSIS -> {
+            val block: @Composable () -> Unit = { DialysisUnknownSwitch(onWriteError = onToggleUnknown) }
+            block
+        }
         else -> null
     }
     // 【域行专用排版,不走通用 SettingRow】L2 真机挑刺(06-control-plane-full):
