@@ -84,9 +84,10 @@ internal fun isSlashPanelAgent(agentId: String?): Boolean =
  *   - 只认绑定同一 agent 的位:别家的位不开我家的门(能力位按 agent 逐个宣告)。
  */
 internal fun agentCapableOf(bit: String, agentId: String?, capabilities: List<String>): Boolean {
+    val b = bit.trim()
     val id = agentId?.trim().orEmpty()
-    if (id.isEmpty()) return false
-    return capabilities.any { it.trim().equals("$bit:$id", ignoreCase = true) }
+    if (b.isEmpty() || id.isEmpty()) return false
+    return capabilities.any { it.trim().equals("$b:$id", ignoreCase = true) }
 }
 
 /**
