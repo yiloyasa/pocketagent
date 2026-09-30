@@ -52,13 +52,14 @@ import androidx.compose.ui.window.PopupProperties
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.paGlass
 import kotlin.math.roundToInt
 
 /**
  * 锚点菜单项(设计规范 §2.2)。
  *
- * @param destructive 危险动作,文字与图标用 Pa.Red。
+ * @param destructive 危险动作,文字与图标用 PaEditorial.Denied。
  */
 data class ContextMenuItem(
     val id: String,
@@ -192,26 +193,26 @@ fun ContextMenu(
                             )
                         }
                         .clip(RoundedCornerShape(14.dp))
-                        // 玻璃语言:悬浮菜单 = 实色底(Pa.CardHigh,可读性优先)+ 顶缘发丝高光
+                        // 玻璃语言:悬浮菜单 = 实色底(PaEditorial.Raised,可读性优先)+ 顶缘发丝高光
                         // + 一点投影——"浮在内容之上"的层级感来自亮边与影子,不是透。
-                        .paGlass(RoundedCornerShape(14.dp), tint = Pa.CardHigh, shadowElevation = 16.dp)
+                        .paGlass(RoundedCornerShape(14.dp), tint = PaEditorial.Raised, shadowElevation = 16.dp)
                         .padding(vertical = 6.dp),
                 ) {
                     // 对象摘要行 —— 让用户确认"这次操作针对谁"
                     Text(
                         summary,
                         fontSize = 11.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 14.dp, vertical = 6.dp),
                     )
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
 
                     items.forEach { item ->
-                        val tint = if (item.destructive) Pa.Red else Pa.TextPrimary
+                        val tint = if (item.destructive) PaEditorial.Denied else PaEditorial.Ink
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -224,7 +225,7 @@ fun ContextMenu(
                             if (item.icon != null) {
                                 Icon(
                                     painterResource(item.icon), null,
-                                    tint = if (item.destructive) Pa.Red else Pa.TextSecondary,
+                                    tint = if (item.destructive) PaEditorial.Denied else PaEditorial.Muted,
                                     modifier = Modifier.size(16.dp),
                                 )
                                 Spacer(Modifier.width(10.dp))

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import pocketagent.v1.ThreadStatus
 
 /** 会话徽章的三种语义(审计 P1-1:Running 脉冲 / Waiting 红点 / Failed 红!)。 */
@@ -86,9 +87,9 @@ fun threadStatusBadge(
 @Composable
 fun ThreadStatusBadge(badge: PaThreadBadge, modifier: Modifier = Modifier) {
     val (dotColor, labelColor) = when (badge.kind) {
-        PaThreadBadgeKind.RUNNING -> Pa.Green to Pa.GreenText
-        PaThreadBadgeKind.WAITING -> Pa.Red to Pa.RedText
-        PaThreadBadgeKind.FAILED -> Pa.Red to Pa.RedText
+        PaThreadBadgeKind.RUNNING -> PaEditorial.Running to PaEditorial.RunningText
+        PaThreadBadgeKind.WAITING -> PaEditorial.Denied to PaEditorial.DeniedText
+        PaThreadBadgeKind.FAILED -> PaEditorial.Denied to PaEditorial.DeniedText
     }
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         when (badge.kind) {

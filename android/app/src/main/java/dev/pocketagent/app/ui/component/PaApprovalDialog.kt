@@ -52,13 +52,13 @@ import dev.pocketagent.app.ui.retryEnabled
 import dev.pocketagent.app.ui.theme.PaEditorial
 
 /** 拒绝按钮(.danger):浅珊瑚底 + 珊瑚描边 + 加深珊瑚字。 */
-private val DenyButtonColors = ButtonTones(
-    container = Color(0xFFFFF1ED), outline = Color(0xFFE9CFCA), content = Color(0xFFAC4845),
+private val DenyButtonColors: ButtonTones get() = ButtonTones(
+    container = PaEditorial.DeniedContainer, outline = PaEditorial.Denied.copy(alpha = 0.35f), content = PaEditorial.DeniedText,
 )
 
 /** 允许按钮(.primary 的编辑式稿形态):石墨底白字(README:主操作用石墨重点面,主色只给"当前操作")。 */
-private val AllowButtonColors = ButtonTones(
-    container = PaEditorial.Graphite, outline = PaEditorial.Graphite, content = Color.White,
+private val AllowButtonColors: ButtonTones get() = ButtonTones(
+    container = PaEditorial.Graphite, outline = PaEditorial.Graphite, content = PaEditorial.OnGraphite,
 )
 
 private data class ButtonTones(val container: Color, val outline: Color, val content: Color)
@@ -116,7 +116,7 @@ fun PaApprovalDialog(
                     .widthIn(max = 360.dp)
                     .clip(RoundedCornerShape(23.dp))
                     .background(PaEditorial.Surface)
-                    .border(1.dp, Color(0xFFE5E8EA), RoundedCornerShape(23.dp))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(23.dp))
                     // 卡片吃掉点击,不让冒泡到遮罩(点卡片不等于点窗外)
                     .clickable(interactionSource = cardInteraction, indication = null) {}
                     .padding(horizontal = 22.dp, vertical = 18.dp),
@@ -141,19 +141,19 @@ private fun ApprovalBody(
                 .align(Alignment.CenterHorizontally)
                 .padding(bottom = 14.dp)
                 .size(width = 36.dp, height = 4.dp)
-                .background(Color(0xFFD5DCE2), RoundedCornerShape(100.dp)),
+                .background(PaEditorial.Subtle, RoundedCornerShape(100.dp)),
         )
         // 标题区:琥珀盾牌 + 「确认执行命令」+ 来自 Agent · 会话 + 排队数量
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
                     .size(42.dp)
-                    .background(Color(0xFFFFF0D7), RoundedCornerShape(13.dp)),
+                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painterResource(R.drawable.ic_lucide_shield), null,
-                    tint = Color(0xFFAC6A24), modifier = Modifier.size(20.dp),
+                    tint = PaEditorial.Attention, modifier = Modifier.size(20.dp),
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -215,7 +215,7 @@ private fun ApprovalBody(
         Text(
             request.purpose,
             fontSize = 13.sp, lineHeight = 21.sp,
-            color = Color(0xFF6E7B89),
+            color = PaEditorial.Muted,
         )
         Spacer(Modifier.height(12.dp))
         // 范围行:工作区 / 操作类型(premium.css .scope:细线分隔 + 左灰右墨)
@@ -242,19 +242,19 @@ private fun ApprovalBody(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFFFFF0DC), RoundedCornerShape(13.dp))
-                    .border(1.dp, Color(0xFFF0DDC1), RoundedCornerShape(13.dp))
+                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
+                    .border(1.dp, PaEditorial.Attention.copy(alpha = 0.30f), RoundedCornerShape(13.dp))
                     .padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
                 Text(
                     request.unavailableReason ?: "请求状态已变化，请刷新后重试",
                     fontSize = 12.sp, lineHeight = 17.sp,
-                    color = Color(0xFF87561F),
+                    color = PaEditorial.AttentionText,
                 )
                 Text(
                     "决定按钮已停用，处理完成后可重试。",
                     fontSize = 11.sp, lineHeight = 16.sp,
-                    color = Color(0xFF9A5C19),
+                    color = PaEditorial.AttentionText,
                 )
             }
             Spacer(Modifier.height(12.dp))
@@ -309,7 +309,7 @@ private fun ApprovalBody(
             Modifier.fillMaxWidth(),
             fontSize = 11.sp, lineHeight = 16.sp,
             textAlign = TextAlign.Center,
-            color = Color(0xFF919DA7),
+            color = PaEditorial.Subtle,
         )
     }
 }

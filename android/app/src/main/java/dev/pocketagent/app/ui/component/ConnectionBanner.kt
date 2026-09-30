@@ -28,6 +28,7 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.TurnSession
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * 断连全局横幅文案(纯函数,单测钉死 ConnectionBannerCopyTest)。
@@ -88,24 +89,24 @@ fun ConnectionBanner(
             // 语义状态条(不算卡):警示色 8% 透明底 + 16dp 圆角,
             // 与 Home/Threads 既有错误横幅同一套语言(黄=等待,红=失败)
             .pressable { onRetry() }
-            .background(Pa.Yellow.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+            .background(PaEditorial.Attention.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(R.drawable.ic_lucide_refresh_cw), null,
-            tint = Pa.Yellow, modifier = Modifier.size(14.dp),
+            tint = PaEditorial.Attention, modifier = Modifier.size(14.dp),
         )
         Spacer(Modifier.width(9.dp))
         Text(
             connectionBannerCopy(reconnectAttempts, TurnSession.totalQueuedInputs()),
             Modifier.weight(1f),
             fontSize = 12.sp,
-            color = Pa.Yellow,
+            color = PaEditorial.Attention,
             maxLines = 2,
         )
         TextButton(onClick = onRetry) {
-            Text("重试", fontSize = 12.sp, color = Pa.Accent)
+            Text("重试", fontSize = 12.sp, color = PaEditorial.Primary)
         }
     }
 }

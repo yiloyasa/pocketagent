@@ -20,6 +20,7 @@ import dev.pocketagent.app.ui.DELIVERY_QUEUED
 import dev.pocketagent.app.ui.DELIVERY_STEERED
 import dev.pocketagent.app.ui.deliveryLabel
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * P0-2 发送状态徽标 —— WhatsApp 语义的「图标 + 短文案」,常规气泡与 hacker
@@ -84,9 +85,9 @@ internal fun DeliveryStatusBadge(
     // 【语义色】失败=红(必须先处理);已提交=绿(到达 daemon 的确认);
     // 等待类=Accent(进行中的中性强调)。红色永远只表示"要用户出手"。
     val tint = when {
-        visual.failure -> Pa.Red
-        state == DELIVERY_STEERED -> Pa.Green
-        else -> Pa.AccentText
+        visual.failure -> PaEditorial.Denied
+        state == DELIVERY_STEERED -> PaEditorial.Running
+        else -> PaEditorial.AccentText
     }
     val font = if (mono) TerminalFont.chatFont else null
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -108,7 +109,7 @@ internal fun DeliveryStatusBadge(
             Text(
                 "点按重发",
                 fontSize = 10.sp,
-                color = Pa.Red,
+                color = PaEditorial.Denied,
                 fontWeight = FontWeight.Medium,
                 fontFamily = font,
             )

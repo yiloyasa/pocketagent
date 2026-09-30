@@ -2098,12 +2098,12 @@ fun FilterChip2(label: String, selected: Boolean, onClick: () -> Unit) {
         Modifier
             .pressable { onClick() }
             .background(
-                if (selected) Pa.AccentDim else Pa.Card,
+                if (selected) PaEditorial.PrimaryContainer else PaEditorial.Surface,
                 RoundedCornerShape(50),
             )
             .padding(horizontal = 16.dp, vertical = 7.dp),
     ) {
-        Text(label, fontSize = 13.sp, color = if (selected) Pa.Accent else Pa.TextSecondary)
+        Text(label, fontSize = 13.sp, color = if (selected) PaEditorial.Primary else PaEditorial.Muted)
     }
 }
 
@@ -2194,7 +2194,7 @@ internal fun matchesAgentFilter(agentId: String, filter: String): Boolean =
 
 /** 抽屉操作行:图标 + 文案(重命名/归档/删除)。 */
 @Composable
-fun SheetAction(iconRes: Int, label: String, tint: Color = Pa.TextPrimary, onClick: () -> Unit) {
+fun SheetAction(iconRes: Int, label: String, tint: Color = PaEditorial.Ink, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()

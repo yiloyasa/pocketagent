@@ -45,6 +45,7 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.looksLikeSubagentDelegation
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -57,7 +58,7 @@ import java.util.Date
  * 【设计公理(调研结论,来源 Warp Blocks / cool-retro-term / eDEX / starship / Tokyo Night)】
  *  - 黑客感=结构不是颜色:层级靠 Block 类型(输入/输出/工具/脚注)而非底色;
  *  - 代码感=语法层级:提示符/状态符/正文分三级颜色,不铺饱和色;
- *  - 纯饱和色铺纯黑是灾难:正文恒 Pa.TextPrimary,彩色只给提示符与状态符。
+ *  - 纯饱和色铺纯黑是灾难:正文恒 PaEditorial.Ink,彩色只给提示符与状态符。
  *
  * 【四类 Block】① 用户输入 `❯ 正文`(无气泡无卡片);② Agent 输出(无底色,
  * 块间留白分隔);③ 工具调用 `▸ 名  参数`(左 1dp Separator 竖条,可折叠);
@@ -184,7 +185,7 @@ internal fun terminalBodyFontSize(uiScale: Float) = 14f * uiScale
 internal fun terminalBodyLineHeight(uiScale: Float) = terminalBodyFontSize(uiScale) * 1.45f
 
 /**
- * ① 用户输入 Block:`❯ 正文` —— ❯ bold Pa.Accent,正文 bold Pa.TextPrimary;
+ * ① 用户输入 Block:`❯ 正文` —— ❯ bold PaEditorial.Primary,正文 bold PaEditorial.Ink;
  * 无气泡无卡片背景(与普通聊天的根本区别);多行时 ❯ 只在首行。
  * 附件网格与投递状态标签沿用常规主题的既有语义(渲染在正文上方/下方);
  * 投递标签 P0-2 起与常规主题共用 [DeliveryStatusBadge] 同一映射与组件
@@ -215,10 +216,10 @@ internal fun TerminalUserBlock(
             SelectionContainer {
                 Text(
                     buildAnnotatedString {
-                        withStyle(SpanStyle(color = Pa.Accent, fontWeight = FontWeight.Bold)) {
+                        withStyle(SpanStyle(color = PaEditorial.Primary, fontWeight = FontWeight.Bold)) {
                             append("$TERM_PROMPT ")
                         }
-                        withStyle(SpanStyle(color = Pa.TextPrimary, fontWeight = FontWeight.Bold)) {
+                        withStyle(SpanStyle(color = PaEditorial.Ink, fontWeight = FontWeight.Bold)) {
                             append(item.text)
                         }
                     },
@@ -244,7 +245,7 @@ internal fun TerminalUserBlock(
                                 .pressable(haptic = true) { onClearQueued() }
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                             fontSize = 10.sp,
-                            color = Pa.Red,
+                            color = PaEditorial.Denied,
                             fontFamily = TerminalFont.chatFont,
                         )
                     }
@@ -256,7 +257,7 @@ internal fun TerminalUserBlock(
 
 /**
  * ② Agent 输出 Block:无底色差(层级靠留白与语法色),正文走 MarkdownText
- * (hacker 下自动等宽);streaming=true 时块尾放 braille 转轮(80ms/帧 Pa.Accent)。
+ * (hacker 下自动等宽);streaming=true 时块尾放 braille 转轮(80ms/帧 PaEditorial.Primary)。
  */
 @Composable
 internal fun TerminalOutputBlock(
@@ -296,7 +297,7 @@ internal fun TerminalOutputBlock(
 
 /** braille 转轮:⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏,80ms/帧;减弱动效时静止首帧(不闪)。 */
 @Composable
-internal fun BrailleSpinner(color: Color = Pa.Accent) {
+internal fun BrailleSpinner(color: Color = PaEditorial.Primary) {
     val reduceMotion = rememberReduceMotion()
     var tick by remember { mutableStateOf(0) }
     if (!reduceMotion) {
@@ -317,7 +318,7 @@ internal fun BrailleSpinner(color: Color = Pa.Accent) {
 
 /**
  * ③ 工具调用 Block:`▸ 工具名  参数摘要` + 右对齐状态(运行中=转轮 /
- * 成功=✓ / 失败=✗);左侧 1dp Pa.Separator 竖条横贯整块;单击折叠
+ * 成功=✓ / 失败=✗);左侧 1dp PaEditorial.Hairline 竖条横贯整块;单击折叠
  * (折叠只留一行)。参数/输出等宽小字,不再铺卡片底色。
  */
 @Composable
@@ -337,9 +338,9 @@ internal fun TerminalToolBlock(
     val statusMark = terminalToolStatusMark(item.toolStatus, item.toolElapsedMs)
     val running = statusMark.isEmpty()
     val statusColor = when (item.toolStatus) {
-        "failure" -> Pa.Red
-        "success" -> Pa.Green
-        else -> Pa.Accent
+        "failure" -> PaEditorial.Denied
+        "success" -> PaEditorial.Running
+        else -> PaEditorial.Primary
     }
     Row(
         Modifier
@@ -353,7 +354,7 @@ internal fun TerminalToolBlock(
             Modifier
                 .width(1.dp)
                 .fillMaxHeight()
-                .background(Pa.Separator),
+                .background(PaEditorial.Hairline),
         )
         Spacer(Modifier.width(8.dp))
         // 名字与参数摘要共享剩余宽度(各占一半封顶,超长省略号),
@@ -361,14 +362,14 @@ internal fun TerminalToolBlock(
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "▸ ",
-                color = Pa.TextTertiary,
+                color = PaEditorial.Subtle,
                 fontSize = (13 * uiScale).sp,
                 fontFamily = TerminalFont.chatFont,
             )
             Text(
                 item.toolName.ifBlank { "工具" },
                 Modifier.weight(1f, fill = false),
-                color = Pa.TextPrimary,
+                color = PaEditorial.Ink,
                 fontSize = (13 * uiScale).sp,
                 fontFamily = TerminalFont.chatFont,
                 maxLines = 1,
@@ -380,7 +381,7 @@ internal fun TerminalToolBlock(
                 Text(
                     argsSummary,
                     Modifier.weight(1f, fill = false),
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Subtle,
                     fontSize = (11.5f * uiScale).sp,
                     fontFamily = TerminalFont.chatFont,
                     maxLines = 1,
@@ -390,7 +391,7 @@ internal fun TerminalToolBlock(
         }
         Spacer(Modifier.width(8.dp))
         if (running) {
-            BrailleSpinner(color = Pa.Accent)
+            BrailleSpinner(color = PaEditorial.Primary)
         } else {
             Text(
                 statusMark,
@@ -409,7 +410,7 @@ internal fun TerminalToolBlock(
             if (item.toolArgs.isNotBlank()) {
                 Text(
                     item.toolArgs,
-                    color = Pa.TextSecondary,
+                    color = PaEditorial.Muted,
                     fontSize = (10.5f * uiScale).sp,
                     lineHeight = (10.5f * uiScale * 1.4f).sp,
                     fontFamily = TerminalFont.chatFont,
@@ -419,7 +420,7 @@ internal fun TerminalToolBlock(
                 Text(
                     item.text,
                     Modifier.padding(top = 4.dp),
-                    color = if (item.toolStatus == "failure") Pa.Red else Pa.TextSecondary,
+                    color = if (item.toolStatus == "failure") PaEditorial.Denied else PaEditorial.Muted,
                     fontSize = (10.5f * uiScale).sp,
                     lineHeight = (10.5f * uiScale * 1.4f).sp,
                     fontFamily = TerminalFont.chatFont,
@@ -428,7 +429,7 @@ internal fun TerminalToolBlock(
             if (item.toolArgs.isBlank() && item.text.isBlank()) {
                 Text(
                     "等待结果…",
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Subtle,
                     fontSize = (11 * uiScale).sp,
                     fontFamily = TerminalFont.chatFont,
                 )
@@ -450,7 +451,7 @@ internal fun TerminalFootnote(
         label,
         modifier = modifier.fillMaxWidth(),
         textAlign = TextAlign.End,
-        color = Pa.TextTertiary,
+        color = PaEditorial.Subtle,
         fontSize = 11.sp,
         fontFamily = TerminalFont.chatFont,
     )
@@ -462,8 +463,8 @@ internal fun TerminalFootnote(
 
 /**
  * tmux 式状态条:聊天页底部、输入条上方,28dp 高。
- * 左段 `[0:pa]`(Pa.Accent 底 + Bg 字反色)+ 会话标题;右段 连接状态 `● 已连接` /
- * `● 重连中` + 当前模型名 + `HH:MM`,段间 `│` Pa.Separator。
+ * 左段 `[0:pa]`(PaEditorial.Primary 底 + Bg 字反色)+ 会话标题;右段 连接状态 `● 已连接` /
+ * `● 重连中` + 当前模型名 + `HH:MM`,段间 `│` PaEditorial.Hairline。
  * 数据全部来自现成状态(connState/线程标题/生效模型/设备时钟),不造。
  */
 @Composable
@@ -487,7 +488,7 @@ internal fun TmuxStatusLine(
             .height(28.dp)
             // 顶缘一条发丝分隔:状态条是"贴底仪表",与上方会话流断开一层
             .drawWithContent {
-                drawRect(Pa.Separator, topLeft = Offset.Zero, size = Size(size.width, 1.dp.toPx()))
+                drawRect(PaEditorial.Hairline, topLeft = Offset.Zero, size = Size(size.width, 1.dp.toPx()))
                 drawContent()
             }
             .padding(horizontal = 16.dp),
@@ -495,12 +496,12 @@ internal fun TmuxStatusLine(
     ) {
         Box(
             Modifier
-                .background(Pa.Accent, RoundedCornerShape(3.dp))
+                .background(PaEditorial.Primary, RoundedCornerShape(3.dp))
                 .padding(horizontal = 6.dp, vertical = 1.dp),
         ) {
             Text(
                 "[0:pa]",
-                color = Pa.Bg,
+                color = PaEditorial.Canvas,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = TerminalFont.chatFont,
@@ -510,7 +511,7 @@ internal fun TmuxStatusLine(
         Text(
             title.ifBlank { "任务" },
             Modifier.weight(1f),
-            color = Pa.TextTertiary,
+            color = PaEditorial.Subtle,
             fontSize = 10.5.sp,
             fontFamily = TerminalFont.chatFont,
             maxLines = 1,
@@ -518,7 +519,7 @@ internal fun TmuxStatusLine(
         )
         Text(
             "● ${tmuxConnLabel(connState)}",
-            color = if (connState == "ok") Pa.Green else Pa.Yellow,
+            color = if (connState == "ok") PaEditorial.Running else PaEditorial.Attention,
             fontSize = 10.5.sp,
             fontFamily = TerminalFont.chatFont,
         )
@@ -526,7 +527,7 @@ internal fun TmuxStatusLine(
             TmuxSegmentDivider()
             Text(
                 modelName,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
                 fontSize = 10.5.sp,
                 fontFamily = TerminalFont.chatFont,
                 maxLines = 1,
@@ -536,20 +537,20 @@ internal fun TmuxStatusLine(
         TmuxSegmentDivider()
         Text(
             tmuxClockLabel(clockMs),
-            color = Pa.TextTertiary,
+            color = PaEditorial.Subtle,
             fontSize = 10.5.sp,
             fontFamily = TerminalFont.chatFont,
         )
     }
 }
 
-/** 段间 `│` 分隔(Pa.Separator,与竖条同源,层级靠结构)。 */
+/** 段间 `│` 分隔(PaEditorial.Hairline,与竖条同源,层级靠结构)。 */
 @Composable
 private fun TmuxSegmentDivider() {
     Text(
         "│",
         Modifier.padding(horizontal = 6.dp),
-        color = Pa.Separator,
+        color = PaEditorial.Hairline,
         fontSize = 10.5.sp,
         fontFamily = TerminalFont.chatFont,
     )

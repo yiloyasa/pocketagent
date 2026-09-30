@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
 
 enum class MarkdownLineKind { PARAGRAPH, HEADING, BULLET, CODE }
@@ -199,12 +200,12 @@ private fun MarkdownLine.annotated(): AnnotatedString = buildAnnotatedString {
     spans.forEach { span ->
         when (span.kind) {
             MarkdownSpanKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(span.text) }
-            MarkdownSpanKind.INLINE_CODE -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Pa.Accent)) { append(span.text) }
+            MarkdownSpanKind.INLINE_CODE -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = PaEditorial.Primary)) { append(span.text) }
             // 链接走 LinkAnnotation:点击由 LocalUriHandler 处理 —— 聊天页会把它接到内置浏览器上
             MarkdownSpanKind.LINK -> withLink(
                 LinkAnnotation.Url(
                     span.url,
-                    TextLinkStyles(style = SpanStyle(color = Pa.Accent, textDecoration = TextDecoration.Underline)),
+                    TextLinkStyles(style = SpanStyle(color = PaEditorial.Primary, textDecoration = TextDecoration.Underline)),
                 ),
             ) { append(span.text) }
             MarkdownSpanKind.TEXT -> append(span.text)
@@ -243,7 +244,7 @@ private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
         // 资源缺失的回退是 theme 层的 PaHacker.mono(系统等宽)。
         fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
         modifier = Modifier.fillMaxWidth(),
-        color = Pa.TextPrimary,
+        color = PaEditorial.Ink,
         fontSize = (if (line.kind == MarkdownLineKind.HEADING) fontSize + 2 else fontSize).sp,
         fontWeight = if (line.kind == MarkdownLineKind.HEADING) FontWeight.Bold else FontWeight.Normal,
         lineHeight = (fontSize * 1.55f).sp,
@@ -254,7 +255,7 @@ private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
 private fun MarkdownCodeBlock(code: String, fontSize: Float) {
     // 等宽 + 比页底抬高一档的背景 + 细描边,读起来是"一块代码面板"而不是"凹进去的黑洞"。
     // 代码块内容不走 inline span 着色 —— 那会把整段代码染成强调蓝(旧实现的问题之一)。
-    // 【本轮对齐玻璃层级】底色 Pa.Card → Pa.CardHigh(海拨再抬一档):
+    // 【本轮对齐玻璃层级】底色 PaEditorial.Surface → PaEditorial.Raised(海拨再抬一档):
     // 助手正文直接铺在页底上,代码块是与正文并列的"面板",材质上要比正文
     // 高一级才读得出块边界;CardHigh 是不透明实色 —— 可读性永远优先于质感,
     // 不用半透明玻璃(正文下面滚过内容时会透字)。代码文字同步从 TextSecondary
@@ -265,8 +266,8 @@ private fun MarkdownCodeBlock(code: String, fontSize: Float) {
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Pa.CardHigh)
-            .border(0.5.dp, Pa.Separator, RoundedCornerShape(12.dp))
+            .background(PaEditorial.Raised)
+            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp))
             // 先裁形状再横滚,滚动内容不会溢出圆角
             .horizontalScroll(scroll),
     ) {
@@ -276,7 +277,7 @@ private fun MarkdownCodeBlock(code: String, fontSize: Float) {
             fontFamily = FontFamily.Monospace,
             // 代码比正文小半号更接近"终端感",同时保证不低于 9sp 以免不可读
             fontSize = (fontSize - 1.5f).coerceAtLeast(9f).sp,
-            color = Pa.TextPrimary,
+            color = PaEditorial.Ink,
             lineHeight = (fontSize * 1.4f).sp,
             // 关键:不折行,交给横向滚动 —— ASCII 图与长命令行靠这个保住对齐
             softWrap = false,

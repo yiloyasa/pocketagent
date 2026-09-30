@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import java.util.Locale
 import kotlin.math.max
@@ -94,7 +95,7 @@ fun AttachmentCard(
             // 【玻璃材质语言】附件卡保持实色底(AccentDim,用户侧家族色)——卡内有
             // 缩略图与文件名正文,叠玻璃会透字;高级感由 0.5dp 发丝高光边给出
             // (与玻璃家族同一根亮边令牌),材质家族一致、可读性不打折。
-            .background(Pa.AccentDim, RoundedCornerShape(14.dp))
+            .background(PaEditorial.PrimaryContainer, RoundedCornerShape(14.dp))
             .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(14.dp))
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -104,13 +105,13 @@ fun AttachmentCard(
             Image(preview, contentDescription = attachment.name, modifier = Modifier.size(64.dp))
         } else {
             Box(
-                Modifier.size(54.dp).background(Pa.CardHigh, RoundedCornerShape(10.dp)),
+                Modifier.size(54.dp).background(PaEditorial.Raised, RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painterResource(if (image) R.drawable.ic_lucide_image else R.drawable.ic_lucide_file_text),
                     contentDescription = null,
-                    tint = Pa.Accent,
+                    tint = PaEditorial.Primary,
                     modifier = Modifier.size(24.dp),
                 )
             }
@@ -120,10 +121,10 @@ fun AttachmentCard(
         Column(Modifier.weight(1f)) {
             Text(
                 middleEllipsize(attachment.name, ATTACH_CARD_NAME_MAX),
-                color = Pa.TextPrimary, fontSize = 12.sp,
+                color = PaEditorial.Ink, fontSize = 12.sp,
                 maxLines = 3, softWrap = true, overflow = TextOverflow.Ellipsis,
             )
-            Text(formatAttachmentSize(attachment.size.toLong()), color = Pa.TextSecondary, fontSize = 10.sp)
+            Text(formatAttachmentSize(attachment.size.toLong()), color = PaEditorial.Muted, fontSize = 10.sp)
         }
     }
 }

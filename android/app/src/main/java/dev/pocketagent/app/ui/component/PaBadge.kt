@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * 数字角标(设计规范 §2.5)。
@@ -48,14 +49,14 @@ fun PaBadge(
         if (count > 0) {
             val label = if (count > 99) "99+" else count.toString()
             // 描边色与所处表面一致,让角标"咬合"进图标而不是浮在空中
-            val outline = if (Pa.IsDark) Pa.CardHigh else Pa.Card
+            val outline = if (PaEditorial.IsDark) PaEditorial.Raised else PaEditorial.Surface
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
                     .offset(x = 5.dp, y = (-5).dp)
                     .heightIn(min = 15.dp)
                     .widthIn(min = 15.dp)
-                    .background(Pa.Red, CircleShape)
+                    .background(PaEditorial.Denied, CircleShape)
                     .border(1.5.dp, outline, CircleShape)
                     .padding(horizontal = 4.dp, vertical = 1.dp)
                     .semantics { contentDescription = "任务中心，$count 条未处理" },

@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /** 骨架屏形状类型 —— 必须与真实内容逐项对位,否则切换时会跳动(设计规范 §2.3)。 */
 enum class SkeletonKind { SESSION_ROW, MESSAGE_BUBBLE, FILE_ROW, CARD_BLOCK }
@@ -41,7 +42,7 @@ enum class SkeletonKind { SESSION_ROW, MESSAGE_BUBBLE, FILE_ROW, CARD_BLOCK }
 /**
  * 骨架屏高光块。
  *
- * 【实现】底色 [Pa.Hover] + 一条 [Pa.Card] 高光带自左向右循环平移 1200ms。
+ * 【实现】底色 [PaEditorial.Hover] + 一条 [PaEditorial.Surface] 高光带自左向右循环平移 1200ms。
  * 高光用 [drawWithCache] 一次性算好 brush,靠 graphicsLayer 级别的工作量,
  * 不触发任何重组,也没有任何 RPC —— 符合设计规范"骨架屏零开销"的红线。
  */
@@ -53,7 +54,7 @@ private fun ShimmerBox(
 ) {
     if (reduceMotion) {
         // 减弱动态效果:退化为静态色块,不保留平移
-        Box(modifier.clip(shape).background(Pa.Hover.copy(alpha = 0.6f)))
+        Box(modifier.clip(shape).background(PaEditorial.Hover.copy(alpha = 0.6f)))
         return
     }
     val transition = rememberInfiniteTransition(label = "skeleton")
@@ -69,7 +70,7 @@ private fun ShimmerBox(
             .drawWithCache {
                 val start = phase * (size.width + 240f) - 240f
                 val brush = Brush.linearGradient(
-                    colors = listOf(Pa.Hover, Pa.Card, Pa.Hover),
+                    colors = listOf(PaEditorial.Hover, PaEditorial.Surface, PaEditorial.Hover),
                     start = Offset(start, 0f),
                     end = Offset(start + 240f, 0f),
                 )
@@ -136,7 +137,7 @@ private fun SkeletonCardBlock(reduceMotion: Boolean) {
             .fillMaxWidth()
             .padding(vertical = 8.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(Pa.Card)
+            .background(PaEditorial.Surface)
             .padding(14.dp),
     ) {
         ShimmerBox(Modifier.fillMaxWidth(0.40f).height(13.dp), reduceMotion = reduceMotion)

@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.usageOfflineLabel
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import pocketagent.v1.Usage
 
 /**
@@ -98,17 +99,17 @@ fun ContextUsageCard(
         ) {
             // 标题
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("上下文窗口", fontSize = 20.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text("上下文窗口", fontSize = 20.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
                         .size(28.dp)
                         .clip(CircleShape)
-                        .background(Pa.Bg)
+                        .background(PaEditorial.Canvas)
                         .clickable { onDismiss() },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("✕", fontSize = 14.sp, color = Pa.TextSecondary)
+                    Text("✕", fontSize = 14.sp, color = PaEditorial.Muted)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -118,13 +119,13 @@ fun ContextUsageCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Yellow.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .background(PaEditorial.Attention.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         usageOfflineLabel(cachedAt ?: 0L, nowMillis),
-                        fontSize = 11.sp, color = Pa.Yellow, maxLines = 1,
+                        fontSize = 11.sp, color = PaEditorial.Attention, maxLines = 1,
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -135,13 +136,13 @@ fun ContextUsageCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .background(PaEditorial.Primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         compactionNoticeLabel(lastCompactedAt, nowMillis),
-                        fontSize = 11.sp, color = Pa.Accent, maxLines = 1,
+                        fontSize = 11.sp, color = PaEditorial.Primary, maxLines = 1,
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -150,14 +151,14 @@ fun ContextUsageCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .background(PaEditorial.Primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         "上下文压缩中 · 旧占用暂不显示",
                         fontSize = 11.sp,
-                        color = Pa.Accent,
+                        color = PaEditorial.Primary,
                         maxLines = 1,
                     )
                 }
@@ -171,7 +172,7 @@ fun ContextUsageCard(
                     val stroke = 13.dp.toPx()
                     // 底环
                     drawArc(
-                        color = Pa.Bg,
+                        color = PaEditorial.Canvas,
                         startAngle = -90f,
                         sweepAngle = 360f,
                         useCenter = false,
@@ -189,18 +190,18 @@ fun ContextUsageCard(
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (compactionInProgress) {
-                        Text("压缩中", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.Accent)
+                        Text("压缩中", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary)
                         // 按 agent 点名(agentLabel 空串退中性"agent"),不再硬编码 Codex。
                         Text(
                             "等待 ${agentLabel.ifBlank { "agent" }} 完成压缩",
                             fontSize = 11.sp,
-                            color = Pa.TextTertiary,
+                            color = PaEditorial.Subtle,
                         )
                     } else if (compactedPending) {
                         // 压缩态:不显示任何百分比 —— 压缩前的旧占比已失真,
                         // 新占比要等下一轮用量上报,此处绝不造数。
-                        Text("已压缩", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.Accent)
-                        Text("等待新一轮用量上报", fontSize = 11.sp, color = Pa.TextTertiary)
+                        Text("已压缩", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary)
+                        Text("等待新一轮用量上报", fontSize = 11.sp, color = PaEditorial.Subtle)
                     } else if (windowKnown) {
                         Text(
                             String.format(java.util.Locale.US, "%.0f%%", ratio * 100f),
@@ -211,14 +212,14 @@ fun ContextUsageCard(
                         Text(
                             "${formatTokens(occupied)} / ${formatTokens(contextWindow)}",
                             fontSize = 11.sp,
-                            color = Pa.TextSecondary,
+                            color = PaEditorial.Muted,
                         )
                     } else {
                         // 窗口真未知(schema 无该字段/daemon 未上报):如实显"—"不造数
                         // (README §11 既定口径,与 [ContextRing] 的 ringPercentLabel 同一形态),
                         // 不写「未知」字样(AUDIT §3.3 禁令)。
-                        Text("窗口 —", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Pa.TextSecondary)
-                        Text("daemon 尚未上报窗口大小", fontSize = 11.sp, color = Pa.TextTertiary)
+                        Text("窗口 —", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
+                        Text("daemon 尚未上报窗口大小", fontSize = 11.sp, color = PaEditorial.Subtle)
                     }
                 }
             }
@@ -229,7 +230,7 @@ fun ContextUsageCard(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Pa.Bg)
+                    .background(PaEditorial.Canvas)
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
@@ -240,7 +241,7 @@ fun ContextUsageCard(
 
             // 指标表:4 项(输入 / 输出 / 缓存 / 缓存命中率)。
             // 【为什么是表】以后要加一项只需在 usageMetrics() 里加一行,不必再复制一段 UI。
-            Text("用量明细", fontSize = 13.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+            Text("用量明细", fontSize = 13.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             usageMetrics().forEach { m ->
                 MetricLine(m.label, m.value(usage), toneColor(m.tone))
@@ -272,10 +273,10 @@ internal fun usageMetrics(): List<UsageMetric> = listOf(
 
 @Composable
 private fun toneColor(tone: UsageMetricTone): Color = when (tone) {
-    UsageMetricTone.ACCENT -> Pa.Accent
-    UsageMetricTone.GREEN -> Pa.Green
-    UsageMetricTone.ACCENT_DIM -> Pa.Accent.copy(alpha = 0.7f)
-    UsageMetricTone.NEUTRAL -> Pa.TextSecondary
+    UsageMetricTone.ACCENT -> PaEditorial.Primary
+    UsageMetricTone.GREEN -> PaEditorial.Running
+    UsageMetricTone.ACCENT_DIM -> PaEditorial.Primary.copy(alpha = 0.7f)
+    UsageMetricTone.NEUTRAL -> PaEditorial.Muted
 }
 
 @Composable
@@ -283,31 +284,31 @@ private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(if (active) Pa.Card else Pa.Bg)
+            .background(if (active) PaEditorial.Surface else PaEditorial.Canvas)
             .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 12.sp, color = if (active) Pa.TextPrimary else Pa.TextSecondary)
+        Text(label, fontSize = 12.sp, color = if (active) PaEditorial.Ink else PaEditorial.Muted)
     }
 }
 
 @Composable
 private fun MetricLine(label: String, value: String, color: Color) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), fontSize = 12.sp, color = Pa.TextSecondary)
+        Text(label, Modifier.weight(1f), fontSize = 12.sp, color = PaEditorial.Muted)
         Box(Modifier.size(8.dp).background(color, RoundedCornerShape(2.dp)))
         Spacer(Modifier.width(8.dp))
-        Text(value, fontSize = 13.sp, color = Pa.TextPrimary, textAlign = TextAlign.End)
+        Text(value, fontSize = 13.sp, color = PaEditorial.Ink, textAlign = TextAlign.End)
     }
 }
 
 /** 占用率环色:命名常量阈值,<80% 主色、≥80% 黄、≥95% 红。 */
 internal fun ringColor(ratio: Float): Color {
     return when {
-        ratio >= RING_DANGER_THRESHOLD -> Pa.Red
-        ratio >= RING_WARN_THRESHOLD -> Pa.Yellow
-        else -> Pa.Accent
+        ratio >= RING_DANGER_THRESHOLD -> PaEditorial.Denied
+        ratio >= RING_WARN_THRESHOLD -> PaEditorial.Attention
+        else -> PaEditorial.Primary
     }
 }
 
@@ -339,16 +340,16 @@ fun ContextRing(
 ) {
     val label = if (compacted) "已压" else ringPercentLabel(ratio, windowKnown)
     val color = when {
-        compacted -> Pa.Accent
+        compacted -> PaEditorial.Primary
         windowKnown -> ringColor(ratio)
-        else -> Pa.TextTertiary
+        else -> PaEditorial.Subtle
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = RING_STROKE.toPx()
             // 底环:先铺满一圈,占比弧叠在上面
             drawArc(
-                color = Pa.Bg,
+                color = PaEditorial.Canvas,
                 startAngle = -90f,
                 sweepAngle = 360f,
                 useCenter = false,

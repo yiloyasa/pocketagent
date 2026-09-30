@@ -3,6 +3,7 @@ package dev.pocketagent.app.ui.component
 import androidx.compose.ui.graphics.Color
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * 文件预览能力 —— 决定"点开一个文件"会发生什么。
@@ -45,66 +46,66 @@ enum class FileKind(
     /** 该类型在列表里应该显示的图标(任务中心/用户数据管理共用)。 */
     val iconRes: Int,
 ) {
-    APK("安装包", Pa.Green, PreviewMode.SYSTEM, "application/vnd.android.package-archive", R.drawable.ic_lucide_package),
+    APK("安装包", PaEditorial.Running, PreviewMode.SYSTEM, "application/vnd.android.package-archive", R.drawable.ic_lucide_package),
 
-    HTML("网页", Pa.AccentText, PreviewMode.IN_APP, "text/html", R.drawable.ic_lucide_globe),
+    HTML("网页", PaEditorial.AccentText, PreviewMode.IN_APP, "text/html", R.drawable.ic_lucide_globe),
 
-    MARKDOWN("Markdown", Pa.AccentText, PreviewMode.IN_APP, "text/markdown", R.drawable.ic_lucide_file_text),
+    MARKDOWN("Markdown", PaEditorial.AccentText, PreviewMode.IN_APP, "text/markdown", R.drawable.ic_lucide_file_text),
 
     /** 纯文本与各类源码:统一等宽渲染。 */
-    TEXT("文本", Pa.TextSecondary, PreviewMode.IN_APP, "text/plain", R.drawable.ic_lucide_file_text),
+    TEXT("文本", PaEditorial.Muted, PreviewMode.IN_APP, "text/plain", R.drawable.ic_lucide_file_text),
 
     /** CSV/TSV:按分隔符切成真表格(比等宽文本好读得多)。 */
-    CSV("表格", Pa.Green, PreviewMode.IN_APP, "text/csv", R.drawable.ic_lucide_table),
+    CSV("表格", PaEditorial.Running, PreviewMode.IN_APP, "text/csv", R.drawable.ic_lucide_table),
 
     /** JSON/XML 等结构化文本:等宽 + 高亮底色。 */
-    DATA("数据", Pa.Yellow, PreviewMode.IN_APP, "application/json", R.drawable.ic_lucide_file_code),
+    DATA("数据", PaEditorial.Attention, PreviewMode.IN_APP, "application/json", R.drawable.ic_lucide_file_code),
 
-    IMAGE("图片", Pa.Mcp, PreviewMode.IN_APP, "image/*", R.drawable.ic_lucide_image),
+    IMAGE("图片", PaEditorial.Mcp, PreviewMode.IN_APP, "image/*", R.drawable.ic_lucide_image),
 
     /** PDF:用系统自带的 PdfRenderer 逐页转图后内嵌,不依赖任何阅读器 App。 */
-    PDF("PDF", Pa.Red, PreviewMode.IN_APP, "application/pdf", R.drawable.ic_lucide_file_text),
+    PDF("PDF", PaEditorial.Denied, PreviewMode.IN_APP, "application/pdf", R.drawable.ic_lucide_file_text),
 
     /** OOXML Word(.docx):解析 word/document.xml 出段落与表格。 */
-    DOCX("Word", Pa.Accent, PreviewMode.IN_APP, MIME_DOCX, R.drawable.ic_lucide_file_text),
+    DOCX("Word", PaEditorial.Primary, PreviewMode.IN_APP, MIME_DOCX, R.drawable.ic_lucide_file_text),
 
     /** 旧版 Word(.doc):OfficeLegacy 提取正文文字(OLE2 容器 + FIB/分片表),排版不还原。 */
-    DOC("Word 旧版", Pa.TextSecondary, PreviewMode.IN_APP, "application/msword", R.drawable.ic_lucide_file_text),
+    DOC("Word 旧版", PaEditorial.Muted, PreviewMode.IN_APP, "application/msword", R.drawable.ic_lucide_file_text),
 
     /** RTF:剥掉控制字后按富文本段落渲染。 */
-    RTF("RTF", Pa.TextSecondary, PreviewMode.IN_APP, "application/rtf", R.drawable.ic_lucide_file_text),
+    RTF("RTF", PaEditorial.Muted, PreviewMode.IN_APP, "application/rtf", R.drawable.ic_lucide_file_text),
 
     /** OpenDocument 文本(.odt)。 */
-    ODT("ODT", Pa.TextSecondary, PreviewMode.IN_APP, MIME_ODT, R.drawable.ic_lucide_file_text),
+    ODT("ODT", PaEditorial.Muted, PreviewMode.IN_APP, MIME_ODT, R.drawable.ic_lucide_file_text),
 
     /** OOXML Excel(.xlsx):解析 sharedStrings + sheets 出多表表格。 */
-    XLSX("表格", Pa.Green, PreviewMode.IN_APP, MIME_XLSX, R.drawable.ic_lucide_table),
+    XLSX("表格", PaEditorial.Running, PreviewMode.IN_APP, MIME_XLSX, R.drawable.ic_lucide_table),
 
     /** 旧版 Excel(.xls):自带 OLE2 + BIFF8 解析器,同样能出表格。 */
-    XLS("表格 旧版", Pa.Green, PreviewMode.IN_APP, "application/vnd.ms-excel", R.drawable.ic_lucide_table),
+    XLS("表格 旧版", PaEditorial.Running, PreviewMode.IN_APP, "application/vnd.ms-excel", R.drawable.ic_lucide_table),
 
     /** OpenDocument 表格(.ods)。 */
-    ODS("表格", Pa.Green, PreviewMode.IN_APP, MIME_ODS, R.drawable.ic_lucide_table),
+    ODS("表格", PaEditorial.Running, PreviewMode.IN_APP, MIME_ODS, R.drawable.ic_lucide_table),
 
     /** OOXML PowerPoint(.pptx):按页抽标题 + 正文要点(纯文本大纲,不带版式)。 */
-    PPTX("演示", Pa.Yellow, PreviewMode.IN_APP, MIME_PPTX, R.drawable.ic_lucide_presentation),
+    PPTX("演示", PaEditorial.Attention, PreviewMode.IN_APP, MIME_PPTX, R.drawable.ic_lucide_presentation),
 
     /** 旧版 PowerPoint(.ppt):OfficeLegacy 走记录流抽每页「标题 + 要点」,大纲预览。 */
-    PPT("演示 旧版", Pa.Yellow, PreviewMode.IN_APP, "application/vnd.ms-powerpoint", R.drawable.ic_lucide_presentation),
+    PPT("演示 旧版", PaEditorial.Attention, PreviewMode.IN_APP, "application/vnd.ms-powerpoint", R.drawable.ic_lucide_presentation),
 
     /** OpenDocument 演示(.odp)。 */
-    ODP("演示", Pa.Yellow, PreviewMode.IN_APP, MIME_ODP, R.drawable.ic_lucide_presentation),
+    ODP("演示", PaEditorial.Attention, PreviewMode.IN_APP, MIME_ODP, R.drawable.ic_lucide_presentation),
 
-    ZIP("压缩包", Pa.TextSecondary, PreviewMode.IN_APP, "application/zip", R.drawable.ic_lucide_archive),
+    ZIP("压缩包", PaEditorial.Muted, PreviewMode.IN_APP, "application/zip", R.drawable.ic_lucide_archive),
 
     /** rar/7z/tar 等没有通用纯 Kotlin 解码器,先只保证能下载。 */
-    ARCHIVE("压缩包", Pa.TextSecondary, PreviewMode.SAVE_ONLY, "application/zip", R.drawable.ic_lucide_archive),
+    ARCHIVE("压缩包", PaEditorial.Muted, PreviewMode.SAVE_ONLY, "application/zip", R.drawable.ic_lucide_archive),
 
-    AUDIO("音频", Pa.Mcp, PreviewMode.SYSTEM, "audio/*", R.drawable.ic_lucide_music),
+    AUDIO("音频", PaEditorial.Mcp, PreviewMode.SYSTEM, "audio/*", R.drawable.ic_lucide_music),
 
-    VIDEO("视频", Pa.Mcp, PreviewMode.SYSTEM, "video/*", R.drawable.ic_lucide_video),
+    VIDEO("视频", PaEditorial.Mcp, PreviewMode.SYSTEM, "video/*", R.drawable.ic_lucide_video),
 
-    OTHER("文件", Pa.TextTertiary, PreviewMode.SYSTEM, "application/octet-stream", R.drawable.ic_lucide_file),
+    OTHER("文件", PaEditorial.Subtle, PreviewMode.SYSTEM, "application/octet-stream", R.drawable.ic_lucide_file),
     ;
 
     /** 能否交给 App 内置浏览器渲染。 */

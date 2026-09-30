@@ -605,7 +605,7 @@ private fun LazyListScope.connectedHomeItems(
                     .pressable { onRetry() }
                     // 未完成语义:珊瑚浅底 + 加深珊瑚字(语义双通道:有词有色)
                     .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
-                    .border(1.dp, Color(0xFFF0D9D6), RoundedCornerShape(13.dp))
+                    .border(1.dp, PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -885,7 +885,7 @@ private fun LazyListScope.discoveryItems(
             "POCKET AGENT / CONNECT",
             Modifier.padding(top = 18.dp),
             fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
-            color = Color(0xFF7D8996),
+            color = PaEditorial.Subtle,
         )
     }
     item(key = "hero") {
@@ -910,13 +910,13 @@ private fun LazyListScope.discoveryItems(
             Box(
                 Modifier
                     .size(240.dp)
-                    .background(Color(0xFFEEF2F5), CircleShape),
+                    .background(PaEditorial.Raised, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
                     Modifier
                         .size(192.dp)
-                        .background(Color(0xFFE6EDF4), CircleShape),
+                        .background(PaEditorial.Hover, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(
@@ -924,7 +924,7 @@ private fun LazyListScope.discoveryItems(
                             .size(154.dp)
                             .background(
                                 Brush.radialGradient(
-                                    colors = listOf(Color.White, Color(0xFFE8F0F8), Color(0xFFDBE8F4)),
+                                    colors = listOf(PaEditorial.Surface, PaEditorial.PrimaryContainer, PaEditorial.Raised),
                                 ),
                                 CircleShape,
                             ),
@@ -932,7 +932,7 @@ private fun LazyListScope.discoveryItems(
                     ) {
                         Icon(
                             painterResource(R.drawable.ic_lucide_monitor), null,
-                            tint = Color(0xFF3D6EAF), modifier = Modifier.size(56.dp),
+                            tint = PaEditorial.Primary, modifier = Modifier.size(56.dp),
                         )
                     }
                 }
@@ -948,7 +948,7 @@ private fun LazyListScope.discoveryItems(
                     .background(MaterialTheme.editorial.Surface, RoundedCornerShape(10.dp))
                     .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(10.dp))
                     .padding(horizontal = 9.dp, vertical = 6.dp),
-                fontSize = 11.sp, color = Color(0xFF446D9F),
+                fontSize = 11.sp, color = PaEditorial.AccentText,
             )
         }
     }
@@ -977,7 +977,7 @@ private fun LazyListScope.discoveryItems(
                 .fillMaxWidth()
                 .pressable { onManualAdd() }
                 .padding(vertical = 12.dp),
-            fontSize = 12.sp, fontWeight = FontWeight(650), color = Color(0xFF4B6FAB),
+            fontSize = 12.sp, fontWeight = FontWeight(650), color = PaEditorial.AccentText,
         )
     }
     item(key = "bottomNote") {
@@ -999,7 +999,7 @@ private fun LazyListScope.discoveryItems(
 // ---------------------------------------------------------------- 行/卡组件
 
 /** 11sp 以下小字的加深珊瑚色(= EditorialTone.DENIED.text,对浅底 ≥4.5:1)。 */
-private val EditorialDeniedText = Color(0xFFBE504C)
+private val EditorialDeniedText: Color get() = PaEditorial.DeniedText
 
 /** 区块头:模块标题 16/22 + 行尾辅助小字(可选点击动作,premium.css .section-title)。 */
 @Composable
@@ -1022,10 +1022,10 @@ private fun SectionHeader(title: String, action: String, onAction: (() -> Unit)?
                 Modifier
                     .pressable(onClick = onAction)
                     .padding(horizontal = 6.dp, vertical = 2.dp),
-                fontSize = 11.sp, color = Color(0xFF758395),
+                fontSize = 11.sp, color = PaEditorial.Subtle,
             )
         } else {
-            Text(action, fontSize = 11.sp, color = Color(0xFF758395))
+            Text(action, fontSize = 11.sp, color = PaEditorial.Subtle)
         }
     }
 }
@@ -1066,7 +1066,7 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
     ) {
         Icon(
             painterResource(R.drawable.ic_lucide_shield), null,
-            tint = Color(0xFFFFD593), modifier = Modifier.size(20.dp),
+            tint = PaEditorial.Attention, modifier = Modifier.size(20.dp),
         )
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
@@ -1087,7 +1087,7 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
         Spacer(Modifier.width(8.dp))
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
-            tint = Color(0xFFD6E0EA), modifier = Modifier.size(18.dp),
+            tint = PaEditorial.Hairline, modifier = Modifier.size(18.dp),
         )
     }
 }
@@ -1241,19 +1241,19 @@ private fun DiscoveredHostCard(host: DiscoveredHost, onClick: () -> Unit) {
             .pressable { onClick() }
             .heightIn(min = 75.dp)
             .background(MaterialTheme.editorial.Surface, RoundedCornerShape(18.dp))
-            .border(1.dp, Color(0xFFDCE6F1), RoundedCornerShape(18.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
                 .size(42.dp)
-                .background(Color(0xFFEAF1F8), RoundedCornerShape(13.dp)),
+                .background(PaEditorial.Raised, RoundedCornerShape(13.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painterResource(R.drawable.ic_lucide_monitor), null,
-                tint = Color(0xFF3D70B2), modifier = Modifier.size(22.dp),
+                tint = PaEditorial.Primary, modifier = Modifier.size(22.dp),
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -1261,18 +1261,18 @@ private fun DiscoveredHostCard(host: DiscoveredHost, onClick: () -> Unit) {
             Text(
                 host.displayName,
                 fontSize = 14.sp, fontWeight = FontWeight(650),
-                color = Color(0xFF243447), maxLines = 1,
+                color = PaEditorial.Ink, maxLines = 1,
             )
             Spacer(Modifier.height(5.dp))
             Text(
                 "局域网发现 · ${host.address()}",
-                fontSize = 11.sp, color = Color(0xFF8796A5),
+                fontSize = 11.sp, color = PaEditorial.Subtle,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
-            tint = Color(0xFF4A75B4), modifier = Modifier.size(18.dp),
+            tint = PaEditorial.Primary, modifier = Modifier.size(18.dp),
         )
     }
 }
@@ -1456,7 +1456,7 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(agent.name, fontSize = 19.sp, color = Pa.TextPrimary)
+                Text(agent.name, fontSize = 19.sp, color = PaEditorial.Ink)
                 Text(
                     // 状态行:占位展示项固定"接入中";能力驱动型分"已装 vX"/"电脑端未安装"两态
                     when {
@@ -1466,9 +1466,9 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
                     },
                     fontSize = 12.sp,
                     color = when {
-                        agent.id in placeholderDisplayAgents -> Pa.TextSecondary
-                        installedVersion != null -> Pa.Green
-                        else -> Pa.Red
+                        agent.id in placeholderDisplayAgents -> PaEditorial.Muted
+                        installedVersion != null -> PaEditorial.Running
+                        else -> PaEditorial.Denied
                     },
                     modifier = Modifier.padding(top = 2.dp),
                 )
@@ -1484,7 +1484,7 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
             Text(
                 "装好后重连 daemon,磁贴自动点亮",
                 Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
-                fontSize = 11.sp, color = Pa.TextTertiary,
+                fontSize = 11.sp, color = PaEditorial.Subtle,
             )
         }
         Spacer(Modifier.height(30.dp))
@@ -1498,11 +1498,11 @@ private fun GuideBlock(title: String, body: String) {
         Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
-            .background(Pa.Card, RoundedCornerShape(16.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
-        Text(title, fontSize = 12.sp, color = Pa.TextSecondary)
-        Text(body, fontSize = 13.sp, color = Pa.TextPrimary, modifier = Modifier.padding(top = 4.dp))
+        Text(title, fontSize = 12.sp, color = PaEditorial.Muted)
+        Text(body, fontSize = 13.sp, color = PaEditorial.Ink, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -1538,10 +1538,10 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
     PaSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("管理 agent", fontSize = 19.sp, color = Pa.TextPrimary)
+                Text("管理 agent", fontSize = 19.sp, color = PaEditorial.Ink)
                 Text(
                     "停用后不再显示该 agent,正在运行的任务不受影响",
-                    fontSize = 12.sp, color = Pa.TextSecondary, modifier = Modifier.padding(top = 2.dp),
+                    fontSize = 12.sp, color = PaEditorial.Muted, modifier = Modifier.padding(top = 2.dp),
                 )
             }
             IconActionButton(R.drawable.ic_lucide_x, "关闭", onDismiss, bg = Color.Transparent, size = 38.dp, iconSize = 18.dp)
@@ -1558,7 +1558,7 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Pa.Card, RoundedCornerShape(16.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(16.dp))
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1570,11 +1570,11 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                     )
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(a.name, fontSize = 15.sp, color = Pa.TextPrimary)
-                        Text(a.method + " · " + a.subtitle, fontSize = 11.sp, color = Pa.TextSecondary)
+                        Text(a.name, fontSize = 15.sp, color = PaEditorial.Ink)
+                        Text(a.method + " · " + a.subtitle, fontSize = 11.sp, color = PaEditorial.Muted)
                         // T-MW2:不可用(daemon 未报)与已停用(本地偏好)两态目视可分
                         if (AgentConnection.isAgentDisabled(a.id)) {
-                            Text("已停用", fontSize = 10.sp, color = Pa.TextTertiary)
+                            Text("已停用", fontSize = 10.sp, color = PaEditorial.Subtle)
                         }
                     }
                     Switch(
@@ -1591,10 +1591,10 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                             toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedTrackColor = Pa.Accent,
-                            checkedThumbColor = Color(0xFF0A2A4A),
-                            uncheckedTrackColor = Pa.Hover,
-                            uncheckedThumbColor = Pa.TextTertiary,
+                            checkedTrackColor = PaEditorial.Primary,
+                            checkedThumbColor = PaEditorial.Ink,
+                            uncheckedTrackColor = PaEditorial.Hover,
+                            uncheckedThumbColor = PaEditorial.Subtle,
                             uncheckedBorderColor = Color.Transparent,
                         ),
                     )

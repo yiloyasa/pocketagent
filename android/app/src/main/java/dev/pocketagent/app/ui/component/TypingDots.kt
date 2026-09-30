@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -45,7 +46,7 @@ import kotlin.math.sin
 fun TypingDots(
     modifier: Modifier = Modifier,
     dotSize: Dp = 6.dp,
-    color: Color = Pa.Accent,
+    color: Color = PaEditorial.Primary,
     gap: Dp = 4.dp,
 ) {
     if (rememberReduceMotion()) {

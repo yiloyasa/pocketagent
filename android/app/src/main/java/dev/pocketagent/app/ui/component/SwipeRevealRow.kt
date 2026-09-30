@@ -46,12 +46,13 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.launch
 
 /**
  * 侧滑动作项(设计规范 §2.1)。
  *
- * @param destructive 危险动作(删除),用 Pa.Red 底;非危险动作用 Pa.AccentDim 底。
+ * @param destructive 危险动作(删除),用 PaEditorial.Denied 底;非危险动作用 PaEditorial.PrimaryContainer 底。
  */
 data class SwipeAction(
     val id: String,
@@ -109,7 +110,7 @@ fun SwipeRevealRow(
     actions: List<SwipeAction>,
     onAction: (SwipeAction) -> Unit,
     modifier: Modifier = Modifier,
-    rowBackground: Color = Pa.Card,
+    rowBackground: Color = PaEditorial.Surface,
     shape: Shape = RoundedCornerShape(18.dp),
     onClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
@@ -170,7 +171,7 @@ fun SwipeRevealRow(
             Modifier
                 .matchParentSize()
                 .clip(shape)
-                .background(Pa.Card),
+                .background(PaEditorial.Surface),
         ) {
             Row(
                 Modifier
@@ -184,7 +185,7 @@ fun SwipeRevealRow(
                         Modifier
                             .weight(1f, fill = true)
                             .fillMaxHeight()
-                            .background(if (action.destructive) Pa.Red else Pa.AccentDim)
+                            .background(if (action.destructive) PaEditorial.Denied else PaEditorial.PrimaryContainer)
                             .clickable {
                                 openKey.value = null
                                 onAction(action)

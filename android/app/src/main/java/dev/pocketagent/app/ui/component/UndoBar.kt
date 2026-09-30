@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -202,7 +203,7 @@ fun UndoBarHost(
     ) {
         val it0 = item ?: return@AnimatedVisibility
         val isError = feedback?.startsWith("撤销失败") == true
-        val bg = if (isError) Pa.Red else Pa.CardHigh
+        val bg = if (isError) PaEditorial.Denied else PaEditorial.Raised
 
         Box(
             Modifier
@@ -215,7 +216,7 @@ fun UndoBarHost(
                 .widthIn(max = 520.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(bg)
-                .border(0.5.dp, Pa.Separator, RoundedCornerShape(14.dp))
+                .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
                 .semantics { liveRegion = LiveRegionMode.Polite },
         ) {
             Row(
@@ -228,7 +229,7 @@ fun UndoBarHost(
                 Text(
                     feedback ?: it0.message,
                     fontSize = 13.sp,
-                    color = if (isError) androidx.compose.ui.graphics.Color.White else Pa.TextPrimary,
+                    color = if (isError) androidx.compose.ui.graphics.Color.White else PaEditorial.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -260,7 +261,7 @@ fun UndoBarHost(
                         Text(
                             "撤销",
                             fontSize = 13.sp,
-                            color = Pa.AccentText,
+                            color = PaEditorial.AccentText,
                             fontWeight = FontWeight.Medium,
                         )
                     }
@@ -274,7 +275,7 @@ fun UndoBarHost(
                         .align(Alignment.BottomStart)
                         .fillMaxWidth(progress.value.coerceIn(0f, 1f))
                         .height(2.dp)
-                        .background(Pa.Accent),
+                        .background(PaEditorial.Primary),
                 )
             }
         }

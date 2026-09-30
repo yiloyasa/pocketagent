@@ -171,14 +171,14 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
         when {
             mLower.startsWith("text/markdown") || lower.endsWith(".md") || lower.endsWith(".markdown") ->
                 renderLocal(
-                    PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name, Pa.IsDark),
+                    PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name, PaEditorial.IsDark),
                     name,
                 )
             mLower.startsWith("image/") || lower.endsWith(".png") || lower.endsWith(".jpg") ||
                 lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") ->
                 renderLocal(
                     "<body style=\"margin:0;background:" +
-                        (if (Pa.IsDark) "#0b0b0d" else "#ffffff") +
+                        (if (PaEditorial.IsDark) "#0b0b0d" else "#ffffff") +
                         ";display:flex;align-items:center;" +
                         "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
                         "max-height:100vh\" src=\"data:image/png;base64," +
@@ -190,7 +190,7 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                 renderLocal(String(bytes, Charsets.UTF_8), name)
             else -> {
                 // 【预览配色跟主题走】否则浅色主题下打开文件,预览却是黑底
-                val structured = PcFilePreview.render(ctx, lower, bytes, Pa.IsDark)
+                val structured = PcFilePreview.render(ctx, lower, bytes, PaEditorial.IsDark)
                 when {
                     structured != null -> renderLocal(structured, name)
                     PcFilePreview.isBinary(lower) || mLower.endsWith("octet-stream") ->
@@ -740,7 +740,7 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     settings.allowFileAccess = false
                     settings.allowUniversalAccessFromFileURLs = false
                     settings.allowContentAccess = false
-                    setBackgroundColor(if (Pa.IsDark) 0xFF0B0B0D.toInt() else 0xFFFFFFFF.toInt())
+                    setBackgroundColor(if (PaEditorial.IsDark) 0xFF0B0B0D.toInt() else 0xFFFFFFFF.toInt())
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
@@ -1069,7 +1069,7 @@ private class Pal(
     val muted: String, val subtle: String, val card: String, val hint: String,
 )
 
-private fun pal(): Pal = if (Pa.IsDark) Pal(
+private fun pal(): Pal = if (PaEditorial.IsDark) Pal(
     bg = "#0b0b0d", fg = "#e6e6e6", heading = "#ffffff",
     muted = "#b9b9c0", subtle = "#9a9aa2", card = "#17171a", hint = "#7a7a82",
 ) else Pal(

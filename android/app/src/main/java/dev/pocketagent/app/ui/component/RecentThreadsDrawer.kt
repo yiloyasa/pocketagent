@@ -50,6 +50,7 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.paGlass
 import pocketagent.v1.Thread
@@ -145,14 +146,14 @@ fun RecentThreadsDrawer(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("最近会话", Modifier.weight(1f), fontSize = 17.sp, color = Pa.TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text("最近会话", Modifier.weight(1f), fontSize = 17.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
                 Text(
                     "全部会话",
                     Modifier
                         .pressable(haptic = true) { onOpenAllThreads() }
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     fontSize = 12.sp,
-                    color = Pa.AccentText,
+                    color = PaEditorial.AccentText,
                 )
                 IconActionButton(
                     R.drawable.ic_lucide_x, "关闭", onClose,
@@ -165,32 +166,32 @@ fun RecentThreadsDrawer(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp, vertical = 10.dp)
-                    .background(Pa.Bg, RoundedCornerShape(12.dp))
+                    .background(PaEditorial.Canvas, RoundedCornerShape(12.dp))
                     .padding(horizontal = 11.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     painterResource(R.drawable.ic_lucide_search), null,
-                    tint = Pa.TextTertiary, modifier = Modifier.size(14.dp),
+                    tint = PaEditorial.Subtle, modifier = Modifier.size(14.dp),
                 )
                 Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f)) {
                     if (query.isEmpty()) {
-                        Text("搜索会话标题或工作区", fontSize = 12.5.sp, color = Pa.TextTertiary)
+                        Text("搜索会话标题或工作区", fontSize = 12.5.sp, color = PaEditorial.Subtle)
                     }
                     BasicTextField(
                         value = query,
                         onValueChange = { query = it },
                         singleLine = true,
-                        textStyle = TextStyle(color = Pa.TextPrimary, fontSize = 12.5.sp),
-                        cursorBrush = SolidColor(Pa.Accent),
+                        textStyle = TextStyle(color = PaEditorial.Ink, fontSize = 12.5.sp),
+                        cursorBrush = SolidColor(PaEditorial.Primary),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 if (query.isNotEmpty()) {
                     Icon(
                         painterResource(R.drawable.ic_lucide_x), "清空",
-                        tint = Pa.TextTertiary,
+                        tint = PaEditorial.Subtle,
                         modifier = Modifier
                             .size(14.dp)
                             .clickable { query = "" },
@@ -208,7 +209,7 @@ fun RecentThreadsDrawer(
                     if (query.isEmpty()) "还没有会话" else "没有匹配的会话",
                     Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                     fontSize = 12.5.sp,
-                    color = Pa.TextTertiary,
+                    color = PaEditorial.Subtle,
                 )
                 else -> LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
@@ -224,7 +225,7 @@ fun RecentThreadsDrawer(
                                 .fillMaxWidth()
                                 .pressable(haptic = true) { onOpenThread(th.id) }
                                 .background(
-                                    if (active) Pa.AccentDim else Color.Transparent,
+                                    if (active) PaEditorial.PrimaryContainer else Color.Transparent,
                                     RoundedCornerShape(12.dp),
                                 )
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -232,7 +233,7 @@ fun RecentThreadsDrawer(
                             Text(
                                 th.title.ifEmpty { "(未命名)" },
                                 fontSize = 13.5.sp,
-                                color = if (active) Pa.AccentText else Pa.TextPrimary,
+                                color = if (active) PaEditorial.AccentText else PaEditorial.Ink,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -241,7 +242,7 @@ fun RecentThreadsDrawer(
                                 relativeTime(th.updatedAtUnixMs) +
                                     if (th.workspace.isNotEmpty()) "  ·  " + shortWorkspace(th.workspace) else "",
                                 fontSize = 10.5.sp,
-                                color = Pa.TextTertiary,
+                                color = PaEditorial.Subtle,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -251,7 +252,7 @@ fun RecentThreadsDrawer(
             }
 
             // ---------- 底部全局入口 ----------
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Pa.Separator))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -275,11 +276,11 @@ private fun DrawerFooterAction(icon: Int, label: String, onClick: () -> Unit) {
     ) {
         Icon(
             painterResource(icon), label,
-            tint = Pa.TextSecondary,
+            tint = PaEditorial.Muted,
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.height(4.dp))
-        Text(label, fontSize = 10.sp, color = Pa.TextTertiary)
+        Text(label, fontSize = 10.sp, color = PaEditorial.Subtle)
     }
 }
 

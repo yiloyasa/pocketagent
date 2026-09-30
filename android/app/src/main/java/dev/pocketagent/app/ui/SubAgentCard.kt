@@ -49,6 +49,7 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -76,16 +77,16 @@ private fun SubAgentBrandIcon(agentId: String, size: Int) {
     val res = agentBrandIcon(agentId) ?: AppR.drawable.ic_lucide_cpu
     Icon(
         painterResource(res), null,
-        tint = Pa.Accent, modifier = Modifier.size(size.dp),
+        tint = PaEditorial.Primary, modifier = Modifier.size(size.dp),
     )
 }
 
 /** 运行态 → 状态色(蓝本 §4.1:运行=品牌蓝 / 等审批·失败=红 / 完成=绿 / 排队·取消=灰)。 */
 private fun subAgentStateColor(state: SubAgentRunState): Color = when (state) {
-    SubAgentRunState.RUNNING -> Pa.Accent
-    SubAgentRunState.WAITING_APPROVAL, SubAgentRunState.FAILED -> Pa.Red
-    SubAgentRunState.DONE -> Pa.Green
-    SubAgentRunState.QUEUED, SubAgentRunState.CANCELLED -> Pa.TextTertiary
+    SubAgentRunState.RUNNING -> PaEditorial.Primary
+    SubAgentRunState.WAITING_APPROVAL, SubAgentRunState.FAILED -> PaEditorial.Denied
+    SubAgentRunState.DONE -> PaEditorial.Running
+    SubAgentRunState.QUEUED, SubAgentRunState.CANCELLED -> PaEditorial.Subtle
 }
 
 /**
@@ -145,7 +146,7 @@ fun SubAgentCard(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Pa.AccentDim)
+            .background(PaEditorial.PrimaryContainer)
             // 玻璃材质语言:实色底(AccentDim) + 0.5dp 发丝高光边(同玻璃家族的亮边令牌)
             .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(12.dp))
             .pressableLong(
@@ -165,7 +166,7 @@ fun SubAgentCard(
                 .height(IntrinsicSize.Min),
         ) {
             // 左缘品牌竖条(与工具卡的"动作"区分:这是"一个在干活的分身",身份感优先)
-            Box(Modifier.width(3.dp).fillMaxHeight().background(Pa.Accent))
+            Box(Modifier.width(3.dp).fillMaxHeight().background(PaEditorial.Primary))
             Column(
                 Modifier
                     .weight(1f)
@@ -178,7 +179,7 @@ fun SubAgentCard(
                         meta.title,
                         Modifier.weight(1f),
                         fontSize = 13.sp,
-                        color = Pa.TextPrimary,
+                        color = PaEditorial.Ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -201,7 +202,7 @@ fun SubAgentCard(
                             Modifier.fillMaxWidth(),
                             fontSize = 11.5.sp,
                             lineHeight = 15.sp,
-                            color = Pa.TextSecondary,
+                            color = PaEditorial.Muted,
                             maxLines = 2,
                             overflow = TextOverflow.Clip,
                             onTextLayout = { overflowed = it.hasVisualOverflow },
@@ -214,7 +215,7 @@ fun SubAgentCard(
                                     .height(12.dp)
                                     .background(
                                         Brush.verticalGradient(
-                                            listOf(Pa.AccentDim.copy(alpha = 0f), Pa.AccentDim),
+                                            listOf(PaEditorial.PrimaryContainer.copy(alpha = 0f), PaEditorial.PrimaryContainer),
                                         ),
                                     ),
                             )
@@ -226,14 +227,14 @@ fun SubAgentCard(
                     Text(
                         "${meta.messageCount} 条消息",
                         fontSize = 10.5.sp,
-                        color = Pa.AccentText,
+                        color = PaEditorial.AccentText,
                     )
                     Spacer(Modifier.weight(1f))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("查看对话", fontSize = 10.5.sp, color = Pa.AccentText)
+                        Text("查看对话", fontSize = 10.5.sp, color = PaEditorial.AccentText)
                         Icon(
                             painterResource(AppR.drawable.ic_lucide_chevron_right), null,
-                            tint = Pa.AccentText, modifier = Modifier.size(12.dp),
+                            tint = PaEditorial.AccentText, modifier = Modifier.size(12.dp),
                         )
                     }
                 }
@@ -268,7 +269,7 @@ fun SubAgentGroupCard(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Pa.AccentDim)
+            .background(PaEditorial.PrimaryContainer)
             // 同单卡:实色底 + 发丝高光边(材质家族统一)
             .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(12.dp))
             .animateContentSize(
@@ -283,20 +284,20 @@ fun SubAgentGroupCard(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(3.dp, 14.dp).background(Pa.Accent, RoundedCornerShape(2.dp)))
+            Box(Modifier.size(3.dp, 14.dp).background(PaEditorial.Primary, RoundedCornerShape(2.dp)))
             Spacer(Modifier.width(8.dp))
             Text(
                 "${children.size} 个子智能体在协同",
                 Modifier.weight(1f),
                 fontSize = 13.sp,
-                color = Pa.TextPrimary,
+                color = PaEditorial.Ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 SubAgentsLogic.groupSummaryLine(states),
                 fontSize = 10.5.sp,
-                color = Pa.TextSecondary,
+                color = PaEditorial.Muted,
             )
             Spacer(Modifier.width(6.dp))
             Icon(
@@ -304,7 +305,7 @@ fun SubAgentGroupCard(
                     if (expanded) AppR.drawable.ic_lucide_chevron_up
                     else AppR.drawable.ic_lucide_chevron_down,
                 ),
-                null, tint = Pa.TextSecondary, modifier = Modifier.size(14.dp),
+                null, tint = PaEditorial.Muted, modifier = Modifier.size(14.dp),
             )
         }
         if (expanded) {
@@ -332,7 +333,7 @@ fun SubAgentGroupCard(
                         meta.title,
                         Modifier.weight(1f),
                         fontSize = 12.sp,
-                        color = Pa.TextPrimary,
+                        color = PaEditorial.Ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -383,26 +384,26 @@ fun SubAgentSourceLine(
         ) {
             Icon(
                 painterResource(AppR.drawable.ic_lucide_chevron_left), "返回主对话",
-                tint = if (onBackToParent != null) Pa.AccentText else Pa.TextTertiary,
+                tint = if (onBackToParent != null) PaEditorial.AccentText else PaEditorial.Subtle,
                 modifier = Modifier.size(13.dp),
             )
             Text(
                 "主对话",
                 fontSize = 11.5.sp,
-                color = if (onBackToParent != null) Pa.AccentText else Pa.TextTertiary,
+                color = if (onBackToParent != null) PaEditorial.AccentText else PaEditorial.Subtle,
             )
         }
         Spacer(Modifier.width(6.dp))
         Icon(
             painterResource(AppR.drawable.ic_lucide_message_square), null,
-            tint = Pa.TextSecondary, modifier = Modifier.size(11.dp),
+            tint = PaEditorial.Muted, modifier = Modifier.size(11.dp),
         )
         Spacer(Modifier.width(5.dp))
         Text(
             if (parentTitle.isBlank()) "来自主对话" else "来自主对话 · $parentTitle",
             Modifier.weight(1f),
             fontSize = 11.5.sp,
-            color = Pa.TextSecondary,
+            color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -429,13 +430,13 @@ fun SubAgentSiblingSwitch(
     Row(
         modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(Pa.Card)
+            .background(PaEditorial.Surface)
             .padding(horizontal = 2.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painterResource(AppR.drawable.ic_lucide_chevron_left), "上一个子对话",
-            tint = if (pos > 1) Pa.AccentText else Pa.TextTertiary,
+            tint = if (pos > 1) PaEditorial.AccentText else PaEditorial.Subtle,
             modifier = Modifier
                 .size(20.dp)
                 .pressable(enabled = pos > 1) { onPrev() },
@@ -443,13 +444,13 @@ fun SubAgentSiblingSwitch(
         Text(
             "$pos/$total",
             fontSize = 10.5.sp,
-            color = Pa.TextSecondary,
+            color = PaEditorial.Muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.width(26.dp),
         )
         Icon(
             painterResource(AppR.drawable.ic_lucide_chevron_right), "下一个子对话",
-            tint = if (pos < total) Pa.AccentText else Pa.TextTertiary,
+            tint = if (pos < total) PaEditorial.AccentText else PaEditorial.Subtle,
             modifier = Modifier
                 .size(20.dp)
                 .pressable(enabled = pos < total) { onNext() },
@@ -505,7 +506,7 @@ fun SubAgentPeekSheet(
                     meta.title,
                     Modifier.weight(1f),
                     fontSize = 15.sp,
-                    color = Pa.TextPrimary,
+                    color = PaEditorial.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -521,7 +522,7 @@ fun SubAgentPeekSheet(
                 "最近消息",
                 Modifier.padding(top = 10.dp, bottom = 4.dp),
                 fontSize = 10.5.sp,
-                color = Pa.TextTertiary,
+                color = PaEditorial.Subtle,
             )
             when {
                 loading -> {
@@ -535,7 +536,7 @@ fun SubAgentPeekSheet(
                         "暂无消息记录",
                         Modifier.padding(vertical = 18.dp),
                         fontSize = 12.sp,
-                        color = Pa.TextTertiary,
+                        color = PaEditorial.Subtle,
                     )
                 }
                 else -> {
@@ -544,14 +545,14 @@ fun SubAgentPeekSheet(
                             Text(
                                 subAgentRoleLabel(item.role),
                                 fontSize = 10.sp,
-                                color = Pa.AccentText,
+                                color = PaEditorial.AccentText,
                                 modifier = Modifier.width(34.dp),
                             )
                             Text(
                                 item.text,
                                 Modifier.weight(1f),
                                 fontSize = 12.sp,
-                                color = Pa.TextSecondary,
+                                color = PaEditorial.Muted,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -564,7 +565,7 @@ fun SubAgentPeekSheet(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 14.dp, bottom = 18.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Pa.Accent),
+                colors = ButtonDefaults.buttonColors(containerColor = PaEditorial.Primary),
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text("打开完整对话", color = Color.White, fontSize = 13.sp)
