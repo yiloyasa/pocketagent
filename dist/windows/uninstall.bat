@@ -10,7 +10,7 @@ REM  需"以管理员身份运行"。语法自检:set PA_DRYRUN=1 后运行。
 REM ============================================================
 set "PORT=7246"
 set "RULE=PocketAgent"
-set "TASK=PocketAgentGuard"
+set "TASK=PocketAgentDaemonGuard"
 
 REM ---- 语法自检模式:仅验证脚本可解析,不执行任何系统改动 ----
 if defined PA_DRYRUN (

@@ -14,7 +14,7 @@ set "PORT=7246"
 set "BASE=%~dp0"
 set "CONF=%BASE%pocketagentd.conf"
 set "RULE=PocketAgent"
-set "TASK=PocketAgentGuard"
+set "TASK=PocketAgentDaemonGuard"
 
 REM ---- 语法自检模式:仅验证脚本可解析,不执行任何系统改动 ----
 if defined PA_DRYRUN (
@@ -86,12 +86,14 @@ if errorlevel 1 (
 REM ---- 4) 注册看护进程计划任务(paguard,开机自启、崩溃拉起) ----
 REM 【为什么不用 SYSTEM】codex 的登录态(auth.json)属于当前登录用户,
 REM daemon 以 SYSTEM 身份拉起 codex 子进程会读不到登录态,任务必失败。
-REM 因此计划任务按"当前用户登录时"启动(/sc onlogon 省略 /ru 即当前用户)。
+REM 因此计划任务以当前用户身份运行(省略 /ru 即当前用户)。
+REM 触发方式:每分钟直跑一次 paguard.exe(已在跑则自动跳过)——
+REM 开机登录后 1 分钟内自然兜底拉起;崩溃退出后最多 1 分钟也会被重新拉起。
 echo [4/5] 注册看护进程计划任务(%TASK%)...
 schtasks /query /tn "%TASK%" >nul 2>&1
 if errorlevel 1 (
-    schtasks /create /tn "%TASK%" /tr "\"%BASE%paguard.exe\" -daemon-addr 0.0.0.0:%PORT% -pair-code %TOKEN%" /sc onlogon /rl highest /f >nul 2>&1
-    echo       已创建计划任务: %TASK%(当前用户登录时自动拉起)
+    schtasks /create /tn "%TASK%" /tr "\"%BASE%paguard.exe\" -daemon-addr 0.0.0.0:%PORT% -pair-code %TOKEN%" /sc minute /mo 1 /rl highest /f >nul 2>&1
+    echo       已创建计划任务: %TASK%(每分钟触发,当前用户身份直跑)
 ) else (
     echo       计划任务已存在,跳过。
 )

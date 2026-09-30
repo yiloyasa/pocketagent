@@ -61,6 +61,9 @@ captures/
 # ---------- Node（备用）----------
 node_modules/
 
+# ---------- SDD 过程数据(showcase 残留,不入库) ----------
+.superpowers/
+
 # ---------- 操作系统 ----------
 Thumbs.db
 desktop.ini

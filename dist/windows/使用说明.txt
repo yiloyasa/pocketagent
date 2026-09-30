@@ -23,7 +23,9 @@ install.bat(一键安装)、uninstall.bat(卸载)、本说明。
      · 检查 codex CLI 是否可用
      · 自动生成一个连接口令(token),并保存到 pocketagentd.conf
      · 放行防火墙 7246 端口(已存在则跳过)
-     · 注册看护进程(paguard)为你登录时自启;它负责在 daemon 崩溃时 10 秒内拉起
+     · 注册计划任务 PocketAgentDaemonGuard,每分钟直跑一次看护进程(paguard,
+       已在跑则自动跳过):开机登录后 1 分钟内 daemon 即自启,崩溃退出后
+       最多 1 分钟也会被重新拉起
        (用当前用户身份跑,是为了让 daemon 能读到你的 codex 登录态;
         登录后会有一个黑色控制台窗口,那是 daemon,最小化即可,别关)
 5. 运行结束后,屏幕上会打印:本机局域网 IP、Tailscale IP、以及那个 token。
