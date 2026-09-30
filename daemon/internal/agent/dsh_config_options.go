@@ -116,9 +116,57 @@ func (p *DshProvider) dshSessionIDFor(t *store.Thread) string {
 	return ""
 }
 
-// sampleCatalogOptions 用一次性瞬态会话取目录:新建 → 灌"新会话初始值"(已确认
-// 灌入的项覆盖 currentValue)→ close。全程不作业(临时目录)。
+// dshCatalogProbe 是一次目录取样探测的在飞状态(结果先写后关 done;dshModelsProbe
+// 同款:等待方看到 done 关闭时结果必然可见)。
+type dshCatalogProbe struct {
+	done chan struct{}
+	opts []dshapp.ConfigOption
+	err  error
+}
+
+// sampleCatalogOptions 用一次性瞬态会话取目录(新建 → 灌"新会话初始值"(已确认
+// 灌入的项覆盖 currentValue)→ close,全程不作业(临时目录)),并发调用单飞去重
+// (与 fetchModels 同款治理,2026-10-01 探测互踩治理:设置页并发打开/写入校验时
+// 共享同一次瞬态会话取样,不在 lifeMu 上互踩)。等待方共享领队结果;自身 ctx 先
+// 到截止则放弃(领队继续探测,不受等待方影响)。
 func (p *DshProvider) sampleCatalogOptions(ctx context.Context) ([]dshapp.ConfigOption, error) {
+	return p.sampleCatalogSingleFlight(ctx, p.sampleCatalogUncached)
+}
+
+// sampleCatalogSingleFlight 把 do 包装成并发去重:第一个调用者执行 do,在飞期间
+// 的其余调用者等待并共享其结果(含失败)。测试注入 do 以钉住"N 个并发调用只跑 1 次"。
+func (p *DshProvider) sampleCatalogSingleFlight(ctx context.Context, do func(context.Context) ([]dshapp.ConfigOption, error)) ([]dshapp.ConfigOption, error) {
+	p.catProbeMu.Lock()
+	if cur := p.catProbe; cur != nil {
+		p.catProbeMu.Unlock()
+		select {
+		case <-cur.done:
+			return cur.opts, cur.err
+		case <-ctx.Done():
+			return nil, fmt.Errorf("等待在飞目录探测: %w", ctx.Err())
+		}
+	}
+	f := &dshCatalogProbe{done: make(chan struct{})}
+	p.catProbe = f
+	p.catProbeMu.Unlock()
+
+	f.opts, f.err = do(ctx)
+	close(f.done)
+
+	// 只清自己名下的在飞槽:若已有新调用换上了新的 f,不要误删别人的。
+	p.catProbeMu.Lock()
+	if p.catProbe == f {
+		p.catProbe = nil
+	}
+	p.catProbeMu.Unlock()
+	return f.opts, f.err
+}
+
+// sampleCatalogUncached 是目录取样的真实实现(无去重,经 sampleCatalogSingleFlight
+// 调用)。先礼让在飞握手(有界)再开自己的取样预算,理由同 fetchModelsUncached
+// (预算不能被等锁期烧光)。
+func (p *DshProvider) sampleCatalogUncached(ctx context.Context) ([]dshapp.ConfigOption, error) {
+	p.awaitHandshake(dshBusyHandshakeWait)
 	ctx, cancel := context.WithTimeout(ctx, dshCatalogBudget)
 	defer cancel()
 	var opts []dshapp.ConfigOption

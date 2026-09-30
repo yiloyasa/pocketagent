@@ -40,6 +40,15 @@
 // 认识的变体,dsh.go 全局钩子拆壳 + dshNoticeKind 补档后消灭)、remoteControl/
 // status/changed 2 条(属上方"明确不收清单"的 remoteControl/*,维持不收,
 // 如实留 UNKNOWN)。
+//
+// 【2026-10-01 通宵采样批】codexliveturnprobe 活体单轮(0.159.2)通知序列 46 条
+// 逐一对表:轮次骨架族(warning、turn/started|completed、item/started|completed、
+// item/agentMessage 与 reasoning 摘要与命令输出的 delta、thread/tokenUsage/
+// updated、account/rateLimits/updated、mcpServer/startupStatus/updated、
+// serverRequest/resolved)全局钩子路径此前不认识,一次最小轮就能灌 ~39 条
+// UNKNOWN —— 分类与词表同批补齐(见 codexGlobalNoticeKind 与下方同日词条)。
+// 同轮 dsh/pi 真实轮、zcode 控制面/设置面复跑均无新 UNKNOWN 来源(zcode 受限:
+// 真实轮因本机凭据 401 不可跑,如实受限)。
 package runtime
 
 var codexEventSummaries = map[string]string{
@@ -97,4 +106,19 @@ var codexEventSummaries = map[string]string{
 	// codexLateResponseLedger 按 error.message 精确短语归家族,登记名带请求方法)。
 	"codex\x1fresponse:account/rateLimits/read": "Codex 补报了一次限额数据拉取失败(对应的轮询早已超时降级,此处仅留痕)",
 	"codex\x1fresponse:account/usage/read":      "Codex 补报了一次累计用量拉取失败(对应的轮询早已超时降级,此处仅留痕)",
+
+	// ---- 2026-10-01 通宵采样批(codexliveturnprobe 活体单轮实证,0.159.2)----
+	// 轮次骨架通知族:全局钩子路径此前不认识这些 method,一次最小轮 46 条通知
+	// 里 ~39 条灌 UNKNOWN(分类批同步见 codex.go 的 codexGlobalNoticeKind;
+	// warning 与 serverRequest/resolved 词条更早已有,此处只补其余十条)。
+	"codex\x1fturn/started":                      "Codex 已接收并开始执行这一轮任务",
+	"codex\x1fturn/completed":                    "Codex 完成了这一轮任务",
+	"codex\x1fitem/started":                      "Codex 开始处理一个条目(命令/压缩/子代理等,手机端出对应卡片)",
+	"codex\x1fitem/completed":                    "Codex 完成了一个条目(结果已投影到对应卡片或终稿)",
+	"codex\x1fitem/agentMessage/delta":           "Codex 正在流式输出回复正文",
+	"codex\x1fitem/reasoning/summaryTextDelta":   "Codex 正在流式输出思考摘要(已投影为思考流)",
+	"codex\x1fitem/commandExecution/outputDelta": "Codex 的命令正在回传执行输出(已投影为工具卡进度)",
+	"codex\x1fthread/tokenUsage/updated":         "Codex 上报了 token 用量(已投影为用量帧与用量卡)",
+	"codex\x1faccount/rateLimits/updated":        "Codex 上报了套餐用量限制(已投影为限额卡)",
+	"codex\x1fmcpServer/startupStatus/updated":   "一个 MCP 服务的启动状态有变化(已投影为状态卡)",
 }

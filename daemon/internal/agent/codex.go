@@ -135,6 +135,12 @@ type CodexProvider struct {
 	// 的整段预算;零值回落 statusBudget(10s)。仅测试注入更短值以钉"预算内返回
 	// 可重试错误"的行为,生产恒为零值。
 	modelsBudget time.Duration
+
+	// usageProbeBudget 是 account/rateLimits/read + account/usage/read 两个用量
+	// 探测(fetchUsageUncached,本轮唯一调用方)的整段预算;零值回落
+	// statusBudget(10s)。仅测试注入更短值以钉"探测超时放弃 → 迟到应答静默
+	// 丢弃"的行为(与 modelsBudget 同款注入模式),生产恒为零值。
+	usageProbeBudget time.Duration
 }
 
 // guardianKeep 最多记住多少条审查结论。审查是高频事件(每个被执行的动作一次),
@@ -572,7 +578,30 @@ func codexGlobalNoticeKind(method string) string {
 		// terminalInteraction 分支,带指引文案),此前漏登记被当 UNKNOWN 计数;
 		// 0.159.2 起它还常有配套的 writeStdin 审批卡(codex_requests.go),
 		// 出现频率会上升,更不该灌 UNKNOWN。
-		"item/commandExecution/terminalInteraction":
+		"item/commandExecution/terminalInteraction",
+		// 2026-10-01 通宵采样批(codexliveturnprobe 活体单轮实证,0.159.2):
+		// 轮次骨架通知族。codexapp 对每条通知都是"先 global 后 notif"两路分发,
+		// 本表管的是全局那一路 —— 轮次内 Run 路径明明有投影分支,全局路径却不
+		// 认识这些方法,一次最小轮(46 条通知)就有 ~39 条灌成 UNKNOWN
+		// (zcode session/event 收编批同一病根,见 native_notifications.go 的
+		// zcodeNoticeKind 注释)。逐条判定依据 = Run 路径对它做了什么:
+		//   - warning → WARNING 状态卡(codex_events.go warning 分支);
+		//   - item/started|completed → 工具卡 STARTED/FINISHED、压缩卡、终稿聚合
+		//     (codex.go Run 的 item/started|completed 分支);
+		//   - item/agentMessage/delta → 流式正文主来源(→ AssistantDelta);
+		//   - item/reasoning/summaryTextDelta → 思考流(→ ThinkingDelta,随
+		//     HideReasoning 过滤);
+		//   - item/commandExecution/outputDelta → 工具卡 UPDATE(codex_events.go);
+		//   - thread/tokenUsage/updated → 用量帧 + Token 用量卡;
+		//   - account/rateLimits/updated → RATE_LIMIT 用量卡;
+		//   - mcpServer/startupStatus/updated → MCP 服务器状态卡;
+		//   - turn/completed → 轮次终局驱动(Run 收口 + 终稿冲洗)。
+		"warning", "turn/completed",
+		"item/started", "item/completed",
+		"item/agentMessage/delta", "item/reasoning/summaryTextDelta",
+		"item/commandExecution/outputDelta",
+		"thread/tokenUsage/updated", "account/rateLimits/updated",
+		"mcpServer/startupStatus/updated":
 		return runtime.KindKnownProjected
 	case "turn/diff/updated", "model/verification",
 		// 0.156.1 收编批(docs/verify/evidence/codex-0156-probe.log;词表在
@@ -590,7 +619,13 @@ func codexGlobalNoticeKind(method string) string {
 		// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
 		// 模型服务登录态自动恢复两连 —— 它解释"轮次莫名失败",属关键通知,
 		// daemon 无专属投影,留痕 + 词表人话。
-		"modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted":
+		"modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
+		// 2026-10-01 通宵采样批(同上活体单轮):已知但无投影,只留痕 ——
+		//   - turn/started → Run 路径只做日志 + steer 目标登记(codex.go 的
+		//     turn/started 分支),不发协议帧(zcode turn.started 同款 PASSTHROUGH);
+		//   - serverRequest/resolved → 桌面端处理完反向请求的回执,手机端无消费方
+		//     (词表词条已有,分类此前漏档)。
+		"turn/started", "serverRequest/resolved":
 		return runtime.KindKnownPassthrough
 	default:
 		return runtime.KindUnknownNotification
@@ -606,6 +641,11 @@ func codexGlobalNoticeKind(method string) string {
 // 无人认领 → UnknownResponseHandler。调用方早已按超时降级(用量面板如实显示
 // "读不到"),这条迟到应答是纯冗余证据 —— 台账 200 条滚动窗实测积压 24 条
 // UNKNOWN_RESPONSE,全部落在两个可实证的消息家族上。
+//
+// 【2026-10-01 源头治理后的定位】这两个探测已改走 CallProbeCtx(按调用代号在
+// codexapp dispatch 处静默丢弃迟到应答),本家族不再新增;本分类器保留作兜底 ——
+// 极端陈旧(超过 abandonedProbeTTL)才到达的应答、以及非探测调用产生的孤儿帧,
+// 仍按既有口径留痕,不静默隐身。
 //
 // 【判定标准是消息原文,不是 id 猜测】响应体里只有 error.code/-32603 与
 // error.message,按 message 精确短语归入两个已知家族;登记名带上对应的请求方法

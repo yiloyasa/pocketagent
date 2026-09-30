@@ -28,6 +28,7 @@ import (
 	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/jobobject"
 	"github.com/pocketagent/daemon/internal/mdns"
+	"github.com/pocketagent/daemon/internal/panel"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/server"
@@ -96,6 +97,11 @@ func main() {
 	// env 注入另有四道门控(piapp.CollabEnvInjection),目录不存在就不注入,
 	// 不会把 pi 的凭据与扩展弄丢。要关掉仍可显式传 -pi-collab=false。
 	piCollab := flag.Bool("pi-collab", true, "启用 pi 协作 MCP(默认开):把本 daemon 注册为 pi 的 pocketagent-collab MCP 服务器;-pi-collab=false 可关闭")
+	// 本地 Web 管理面板(默认关):仅绑定回环的 HTTP 页,浏览器可见可点的
+	// 八域控制面 + 白名单开关(协同/委派/扇出、未知请求透传 B 开关)。写动作
+	// 与手机控制中心走同一批 server 方法(同源 RPC);非回环地址 panel.Start
+	// 直接拒绝启动。
+	panelAddr := flag.String("panel", "", "本地管理面板(默认关):仅回环地址,如 -panel 127.0.0.1:7455")
 	flag.Parse()
 
 	resolvedData, resolveErr := hostenv.ResolveDataDir(*dataDir)
@@ -382,6 +388,18 @@ func main() {
 		log.Printf("WARNING: Job Object 绑定失败(退出时可能残留 agent 子进程,不影响其他功能): %v", err)
 	} else {
 		log.Printf("Job Object 已绑定:本进程退出时全部 agent 子进程随之终止")
+	}
+
+	// 本地 Web 管理面板(默认关):进程内直调自己的 server 方法(与手机同一批
+	// RPC、同一把锁、同一份落盘),仅回环监听 + Host 守卫,页面不含任何
+	// token/密钥。非回环地址在 panel.Start 里被拒,这里如实 Fatal —— 红线不降级。
+	if strings.TrimSpace(*panelAddr) != "" {
+		panelURL, stopPanel, err := panel.Start(*panelAddr, srv)
+		if err != nil {
+			log.Fatalf("管理面板启动失败(仅允许回环地址,如 -panel 127.0.0.1:7455): %v", err)
+		}
+		defer stopPanel()
+		log.Printf("管理面板已开启: %s(仅本机回环可访问;页面不含 token/密钥;每 10 秒自动刷新)", panelURL)
 	}
 
 	// 优雅退出:Ctrl+C / kill 时先注销 mDNS(发 GOODBYE,局域网内缓存立刻过期),

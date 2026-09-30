@@ -674,6 +674,14 @@ func (p *PiProvider) setThinkingLevel(ctx context.Context, c *piapp.Client, leve
 //     0.99.1 事件全集复核后补归。
 func piEventNoticeKind(eventType string) string {
 	switch eventType {
+	case "session_info_changed":
+		// 2026-10-01 通宵采样批:标题同步是真实投影(GlobalHandler 里
+		// MapSessionNameChange → TitleHandler → server 落库双端同步,与 zcode 的
+		// session.titleUpdated → PROJECTED 同语义),词表 knowledge_pi.go 也早有
+		// 词条 —— 但分类两表(piEventNoticeKind / piNoticeKind)都没档,活跃台账
+		// 实测落了一条 UNKNOWN(unknown-events.json seq 1291)。补归 PROJECTED,
+		// 别让"已知且已消费"的事件灌诊断页。
+		return runtime.KindKnownProjected
 	case "turn_start", "turn_end", "message_start", "message_end",
 		"entry_appended", "summarization_retry_scheduled",
 		"summarization_retry_attempt_start", "summarization_retry_finished",

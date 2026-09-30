@@ -67,6 +67,11 @@ var (
 	dshWarmupBudget  = 2 * time.Minute  // 单次预热握手预算(吸收分钟级首跑启动)
 	dshWarmupRetry   = 30 * time.Second // 预热失败后的重试间隔
 	dshWarmupRetries = 12               // 预热重试次数上限(2min+30s × 12 ≈ 29 分钟覆盖)
+	// dshBusyHandshakeWait 撞上在飞握手时的礼让等待上界。生产 45s:覆盖真机
+	// 实测 31s 冷启动握手(daemon.log 2026-10-01 00:49:11→00:49:42),低于预热
+	// 单次预算 2min;窗口耗尽照旧 dshBusy,"一个卡死的操作不拖住全线"底线不变。
+	// 包级变量仅为测试注入短值。
+	dshBusyHandshakeWait = 45 * time.Second
 )
 
 // dshApprovalTimeout 审批等待上限:超时走拒绝路径,绝不伪造"同意"(红线 1)。
@@ -117,10 +122,15 @@ type DshProvider struct {
 	turnMu     sync.Mutex
 	lifeMu     sync.Mutex
 	turnActive atomic.Bool
-	client     dshClient
-	inited     bool
-	caps       *dshapp.InitializeResult // initialize 能力快照(§5.2 能力门控的事实来源)
-	gen        atomic.Int32             // 子进程代号,每次(重)启 +1
+	// hsMu/handshake 在飞握手信号(beginHandshake 登记,落定即 close):并发的
+	// 控制面操作据此礼让握手而不是空撞锁 busy-reject(2026-10-01 探测互踩治理,
+	// 见 withClientCtx 的 lockLife 失败分支与 awaitHandshake)。
+	hsMu      sync.Mutex
+	handshake chan struct{}
+	client    dshClient
+	inited    bool
+	caps      *dshapp.InitializeResult // initialize 能力快照(§5.2 能力门控的事实来源)
+	gen       atomic.Int32             // 子进程代号,每次(重)启 +1
 
 	// 我们的 threadID → dsh sessionId(threadRef 复用 codex 的 gen 语义):
 	// 内存缓存只在同一子进程代内有效,重启后走 ExternalSession 重挂载。
@@ -135,6 +145,15 @@ type DshProvider struct {
 	catalog   dshapp.ModelCatalog   // 最近一次目录(切换模型时取原样编码串)
 	modelVals map[string]string     // "dsh/<slug>" → 原样双层编码串(探索目录时顺手登记)
 	rawOpts   []dshapp.ConfigOption // 最近一次完整原生目录(原生设置透出用;非仅模型面)
+	// probeMu/probe 模型探测的单飞状态(fetchModelsSingleFlight):并发调用共享
+	// 同一次瞬态会话探测,绝不互踩(pi.go fetchMu/fetch 同款;2026-10-01 探测
+	// 互踩治理 —— TTL 判空与写回之间无互斥,并发 ListModels 会各开一个瞬态会话)。
+	probeMu sync.Mutex
+	probe   *dshModelsProbe
+	// catProbeMu/catProbe 原生目录取样的单飞状态(sampleCatalogSingleFlight,
+	// 同上款治理:设置页并发打开/写入校验共享同一次瞬态会话取样)。
+	catProbeMu sync.Mutex
+	catProbe   *dshCatalogProbe
 	// nativeDefaults 原生设置的"新会话初始值"(设置页无线程上下文写入的目标;
 	// 探针实证 set_config_option 仅会话内生效不持久,新会话由 ensureSession 灌入。
 	// 进程内存态:daemon 重启后由手机设置页当前值重新写入 —— 与"仅新建对话生效"
@@ -172,10 +191,75 @@ func (p *DshProvider) DisplayName() string { return "DeepSeek Harness(桌面 age
 
 // ---- 子进程生命周期(对标 codex.withClientCtx:TryLock/超时上界/重启一次)----
 
+// dshBusy        = errors.New("dsh 正忙(另一个操作正在初始化/探测),请稍后重试")
+// dshErrNoClient = errors.New("dsh 子进程未启动")
+//
+// 【"正忙"错误从哪来(2026-10-01 探测互踩治理时查实)】dshBusy 是 daemon 侧
+// lifeMu 有界排队窗口耗尽的本地错误,不是 dsh 子进程回的。实证(daemon.log
+// 2026-10-01 00:49:11→00:49:42):启动预热拉起子进程后在锁内做 initialize
+// 握手(冷启动 31s),窗口内到达的模型列表探测(ctx 预算 10s → 排队窗口 ≤10s)
+// 窗口耗尽忙拒 → "模型列表探测失败(返回 default 兜底)";轮次就绪(窗口 15s)
+// 同理 → "另一个操作正在初始化/探测"会话错误。治理见 awaitHandshake。
 var (
 	dshBusy        = errors.New("dsh 正忙(另一个操作正在初始化/探测),请稍后重试")
 	dshErrNoClient = errors.New("dsh 子进程未启动")
 )
+
+// ---- 控制面探测互踩治理:在飞握手信号 + 礼让 + 单飞(2026-10-01)----
+//
+// 【治理三件套】① 握手登记(beginHandshake/endHandshake);② 礼让等待
+// (awaitHandshake,有界 dshBusyHandshakeWait):撞上在飞握手先等它落定再竞争
+// —— 调用方要的多半正是握手的产物(就绪态/能力/目录),先等后试把"必然失败的
+// 互踩"变成"等到即成功";③ 探测单飞(fetchModelsSingleFlight/
+// sampleCatalogSingleFlight):同类探测共享同一次结果。会话轮次(Run/prompt)
+// 的并发语义不变:仍单轮串行(turnMu)、仍经 lifeMu、等待仍有界。
+
+// beginHandshake 登记一次在飞握手,返回落定信号;调用方在 Initialize 返回后
+// 必须 endHandshake(成功失败都算落定)。lifeMu 保证握手互斥,槽内至多一个
+// 未落定信号。
+func (p *DshProvider) beginHandshake() chan struct{} {
+	p.hsMu.Lock()
+	defer p.hsMu.Unlock()
+	ch := make(chan struct{})
+	p.handshake = ch
+	return ch
+}
+
+// endHandshake 关闭落定信号,唤醒所有礼让等待方。
+func (p *DshProvider) endHandshake(ch chan struct{}) {
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// awaitHandshake 等在飞握手落定(有界 wait)。返回 true=确实等到一次落定
+// (值得再竞争一次锁);false=没有在飞握手/早已落定/等待超时。无握手时零开销
+// (一次快照 + 一次非阻塞读)。槽内信号落定后不清除:已关闭的 channel 会被
+// 下方非阻塞预检瞬时判 false,等价于"无在飞握手"。
+func (p *DshProvider) awaitHandshake(wait time.Duration) bool {
+	p.hsMu.Lock()
+	ch := p.handshake
+	p.hsMu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return false // 已落定(可能是很久以前的旧信号),无需礼让
+	default:
+	}
+	log.Printf("[dsh] 操作撞上在飞握手,先礼让等待落定(至多 %v)", wait)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		log.Printf("[dsh] 在飞握手已落定,重试获取生命周期锁")
+		return true
+	case <-timer.C:
+		log.Printf("[dsh] 等待在飞握手落定超时(%v),按正忙处理", wait)
+		return false
+	}
+}
 
 func (p *DshProvider) withClient(fn func(context.Context, dshClient) error) error {
 	return p.withClientCtx(context.Background(), dshInitBudget, fn)
@@ -223,7 +307,12 @@ func (p *DshProvider) withClientCtx(ctx context.Context, budget time.Duration, f
 		}
 	}
 	if !p.lockLife(wait) {
-		return dshBusy
+		// 【握手礼让】锁被占住且占住方是在飞握手(冷启动可达十位数秒,首跑可到
+		// 分钟级)时,先等握手落定(有界)再竞争一次 —— 把"必然失败的互踩"变成
+		// "等到即成功"。仍串行仍有界:窗口耗尽照旧 dshBusy,不拖住全线。
+		if !p.awaitHandshake(dshBusyHandshakeWait) || !p.lockLife(wait) {
+			return dshBusy
+		}
 	}
 	defer p.lifeMu.Unlock()
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -240,7 +329,11 @@ func (p *DshProvider) withClientCtx(ctx context.Context, budget time.Duration, f
 			return dshErrNoClient
 		}
 		if !p.inited {
+			// 登记在飞握手:并发的控制面操作(模型/目录取样、轮次就绪)据此
+			// 礼让等待落定,而不是空撞锁 busy-reject(见 lockLife 失败分支)。
+			hs := p.beginHandshake()
 			caps, err := p.client.Initialize(ctx)
+			p.endHandshake(hs) // 成功失败都算落定,等待方据此放行或按忙处理
 			if err != nil {
 				return err
 			}
@@ -391,8 +484,7 @@ func (p *DshProvider) Models() []pb.ModelInfo {
 	}}
 	fetched, cat, err := p.fetchModels()
 	if err != nil {
-		log.Printf("[dsh] 模型列表探测失败(返回 default 兜底): %v", err)
-		return out
+		return out // 失败日志在 fetchModelsUncached 落一次(单飞共享结果,不逐调用方刷屏)
 	}
 	out = append(out, fetched...)
 	p.modelsMu.Lock()
@@ -409,8 +501,59 @@ func (p *DshProvider) InvalidateModels() {
 	p.modelsMu.Unlock()
 }
 
-// fetchModels 用一次性瞬态会话取样模型目录。
+// dshModelsProbe 是一次模型探测的在飞状态(结果先写后关 done;piModelsFetch
+// 同款:等待方看到 done 关闭时结果必然可见)。
+type dshModelsProbe struct {
+	done   chan struct{}
+	models []pb.ModelInfo
+	cat    dshapp.ModelCatalog
+	err    error
+}
+
+// fetchModels 用一次性瞬态会话取样模型目录,并发调用单飞去重。
+//
+// 【并发去重(2026-10-01 探测互踩治理)】TTL 缓存挡不住"同一瞬间并发进来的一批
+// 调用"—— 缓存判空与写回之间无互斥,并发 ListModels 会各自拉起一次瞬态会话
+// 探测、在 lifeMu 上互踩(pi.go 弹窗治理专项的同款问题与同款修复)。单飞包裹
+// 后:在飞期间的所有调用共享同一次探测结果,一个探测周期最多一个瞬态会话。
 func (p *DshProvider) fetchModels() ([]pb.ModelInfo, dshapp.ModelCatalog, error) {
+	return p.fetchModelsSingleFlight(p.fetchModelsUncached)
+}
+
+// fetchModelsSingleFlight 把 do 包装成并发去重:第一个调用者执行 do,在飞期间
+// 的其余调用者等待并共享其结果(含失败)。测试注入 do 以钉住"N 个并发调用只跑
+// 1 次"。
+func (p *DshProvider) fetchModelsSingleFlight(do func() ([]pb.ModelInfo, dshapp.ModelCatalog, error)) ([]pb.ModelInfo, dshapp.ModelCatalog, error) {
+	p.probeMu.Lock()
+	if cur := p.probe; cur != nil {
+		p.probeMu.Unlock()
+		<-cur.done
+		return cur.models, cur.cat, cur.err
+	}
+	f := &dshModelsProbe{done: make(chan struct{})}
+	p.probe = f
+	p.probeMu.Unlock()
+
+	f.models, f.cat, f.err = do()
+	close(f.done)
+
+	// 只清自己名下的在飞槽:若已有新调用换上了新的 f,不要误删别人的。
+	p.probeMu.Lock()
+	if p.probe == f {
+		p.probe = nil
+	}
+	p.probeMu.Unlock()
+	return f.models, f.cat, f.err
+}
+
+// fetchModelsUncached 是模型探测的真实实现(无去重,经 fetchModelsSingleFlight
+// 调用;命名对齐 pi.go fetchModelsUncached)。
+func (p *DshProvider) fetchModelsUncached() ([]pb.ModelInfo, dshapp.ModelCatalog, error) {
+	// 【先礼让在飞握手】取样预算(10s)从这之后才起算:预热/懒启动的 initialize
+	// 握手冷启动可达十位数秒,先等它落定(有界)再开自己的预算 —— 否则预算会在
+	// 等锁期被烧光,握手落定后照样超时(真机 2026-10-01:预热握手 31s,模型探测
+	// 10s 忙拒 → default 兜底)。无握手在飞时零开销。失败只在此落一次日志。
+	p.awaitHandshake(dshBusyHandshakeWait)
 	ctx, cancel := context.WithTimeout(context.Background(), dshModelsBudget)
 	defer cancel()
 	var out []pb.ModelInfo
@@ -436,6 +579,7 @@ func (p *DshProvider) fetchModels() ([]pb.ModelInfo, dshapp.ModelCatalog, error)
 		return nil
 	})
 	if err != nil {
+		log.Printf("[dsh] 模型列表探测失败(返回 default 兜底): %v", err)
 		return nil, cat, err
 	}
 	return out, cat, nil

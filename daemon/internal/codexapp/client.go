@@ -32,6 +32,10 @@ type Client struct {
 	writeMu   sync.Mutex
 	nextID    int64
 	pending   map[int64]chan rpcResp
+	// abandoned 记录"调用方已按预算放弃"的探测请求(见 CallProbeCtx / giveUp):
+	// dispatch 收到无人认领的应答时先按调用代号(id)查这里,命中即静默丢弃 ——
+	// 不进 UnknownResponseHandler、不进未知事件台账。与 pending 同受 mu 保护。
+	abandoned map[int64]abandonedProbe
 	handlerMu sync.Mutex
 
 	// waitOnce 保证 cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait):意外退出
@@ -179,10 +183,11 @@ func Start() (*Client, error) {
 		return nil, fmt.Errorf("启动 codex app-server 失败: %w", err)
 	}
 	c := &Client{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  bufio.NewReaderSize(stdout, 4*1024*1024),
-		pending: map[int64]chan rpcResp{},
+		cmd:       cmd,
+		stdin:     stdin,
+		stdout:    bufio.NewReaderSize(stdout, 4*1024*1024),
+		pending:   map[int64]chan rpcResp{},
+		abandoned: map[int64]abandonedProbe{},
 	}
 	c.syncHandlers() // readLoop 的读面就位(此刻 handler 均为 nil:上层 Start 之后才装)
 	go c.readLoop()
@@ -248,6 +253,31 @@ type wireMsg struct {
 // (本机实测过的坑)。CallCtx 让超时由 context 负责:到期即返回,不留后台 goroutine,
 // 也不占着调用方的锁。
 func (c *Client) CallCtx(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	return c.call(ctx, method, params, false)
+}
+
+// CallProbeCtx 是**只读探测轮询**专用的 CallCtx 变体(account/rateLimits/read、
+// account/usage/read 这类"问一句答一句"的状态查询,2026-10-01 起 fetchUsageUncached
+// 的两个用量探测走这里)。
+//
+// 【与 CallCtx 唯一的差别】探测按预算放弃后,app-server 迟到补发的应答**静默丢弃**,
+// 不再进 UnknownResponseHandler / 未知事件台账:
+//   - 背景:app-server 对这两个方法要先等自己的上游(chatgpt.com backend),实测
+//     慢路径远超 daemon 的 10s 探测预算;daemon 超时降级后,上游失败才姗姗补发
+//     error 帧(daemon.log + 台账 200 条滚动窗实证:每个探测窗积 24 条;上一轮已
+//     把它们收编为 KNOWN_PASSTHROUGH,但只是分类,源头仍在)。
+//   - 机制:放弃时把请求 id 记入 abandoned(见 giveUp);dispatch 对无人认领的
+//     应答先查 abandoned,命中即丢弃(见 dispatch / takeAbandoned)。一次应答只丢
+//     一次:同 id 再来的帧视为真异常,回退走兜底留痕。
+//   - 边界:仅探测调用方(CallProbeCtx)选择加入;CallCtx 的迟到应答语义一字不变,
+//     普通孤儿帧仍走 UnknownResponseHandler 留痕(不碰其他探测,红线)。
+func (c *Client) CallProbeCtx(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	return c.call(ctx, method, params, true)
+}
+
+// call 是 CallCtx / CallProbeCtx 的公共实现;probe=true 时,"放弃等待"除名 pending
+// 之外还会把 id 记入 abandoned(迟到应答静默丢弃),其余行为逐字节一致。
+func (c *Client) call(ctx context.Context, method string, params interface{}, probe bool) (json.RawMessage, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -287,10 +317,10 @@ func (c *Client) CallCtx(ctx context.Context, method string, params interface{})
 		}
 		return resp.raw, nil
 	case <-ctx.Done():
-		c.forget(id)
+		c.giveUp(id, method, probe)
 		return nil, fmt.Errorf("%s: %w", method, ctx.Err())
 	case <-time.After(callTimeout):
-		c.forget(id)
+		c.giveUp(id, method, probe)
 		return nil, fmt.Errorf("%s: 等待 codex 应答超时(%s)", method, callTimeout)
 	}
 }
@@ -304,6 +334,52 @@ func (c *Client) forget(id int64) {
 	c.mu.Lock()
 	delete(c.pending, id)
 	c.mu.Unlock()
+}
+
+// abandonedProbe 一次"调用方已按预算放弃"的探测请求的记账:dispatch 用 id 认出
+// 它的迟到应答并静默丢弃;method 仅用于 PA_CODEX_DEBUG 下的丢弃日志。
+type abandonedProbe struct {
+	method string
+	at     time.Time
+}
+
+// abandonedProbeTTL 是已放弃探测 id 的记账保留期。迟到应答通常在 app-server 自己
+// 的上游超时内就会到达、在此之前被丢弃;超过保留期还没来的(上游彻底失联)按过期
+// 清理,防止 abandoned 无界增长。此后若真有应答到达,回退走 UnknownResponseHandler
+// 留痕 —— 极端陈旧的孤儿帧仍可诊断,不该永久隐身。
+const abandonedProbeTTL = 10 * time.Minute
+
+// giveUp 在调用方放弃等待时收尾:普通调用从 pending 除名(迟到应答此后照旧走
+// UnknownResponseHandler 留痕);探测调用改为把 id 记入 abandoned(dispatch 据此
+// 静默丢弃它的迟到应答)。同一把锁内完成除名与登记,分派侧不会看到中间态。
+func (c *Client) giveUp(id int64, method string, probe bool) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	if probe {
+		now := time.Now()
+		for aid, ap := range c.abandoned {
+			if now.Sub(ap.at) > abandonedProbeTTL {
+				delete(c.abandoned, aid)
+			}
+		}
+		if c.abandoned == nil {
+			c.abandoned = map[int64]abandonedProbe{} // 直构 Client 的测试路径
+		}
+		c.abandoned[id] = abandonedProbe{method: method, at: now}
+	}
+	c.mu.Unlock()
+}
+
+// takeAbandoned 认领一条已放弃探测的迟到应答:命中即除名(一次应答只丢一次,
+// 同 id 的重复帧回退走兜底,不当成无限重复的静默丢弃)。
+func (c *Client) takeAbandoned(id int64) (abandonedProbe, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ap, ok := c.abandoned[id]
+	if ok {
+		delete(c.abandoned, id)
+	}
+	return ap, ok
 }
 
 var errClientClosed = errors.New("codex app-server 连接已关闭")
@@ -423,6 +499,15 @@ func (c *Client) dispatch(m *wireMsg) {
 				ch <- rpcResp{err: fmt.Errorf("codex 返回错误 %d: %s", m.Error.Code, m.Error.Message)}
 			} else {
 				ch <- rpcResp{raw: m.Result}
+			}
+		} else if ap, abandoned := c.takeAbandoned(*m.ID); abandoned {
+			// 迟到的探测应答:调用方早已按预算放弃并降级(用量面板如实显示
+			// "读不到"),app-server 补发的上游错误是纯冗余证据 —— 静默丢弃,
+			// 不进 UnknownResponseHandler、不进未知事件台账(源头治理,2026-10-01;
+			// 先前的台账收编见 provider 侧 codexLateResponseLedger,仍作兜底)。
+			// PA_CODEX_DEBUG 下留一行,与 readLoop 的原始帧日志同款口径。
+			if os.Getenv("PA_CODEX_DEBUG") != "" {
+				log.Printf("[codex-debug] 丢弃已放弃探测 %s(id=%d)的迟到应答", ap.method, *m.ID)
 			}
 		} else if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
 			raw, _ := json.Marshal(m)

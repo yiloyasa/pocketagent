@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -83,8 +84,9 @@ func runFakeCodexAppServer() int {
 	defer logf.Close()
 
 	var (
-		mu      sync.Mutex // 保护 logf 与 stdout 的逐行写
-		counter int        // fake threadId 计数
+		mu         sync.Mutex // 保护 logf 与 stdout 的逐行写
+		counter    int        // fake threadId 计数
+		orphanSent bool       // PA_FAKE_CODEX_ACCOUNT_ORPHAN 只发一次
 	)
 	writeLine := func(v interface{}) error {
 		raw, err := json.Marshal(v)
@@ -212,6 +214,34 @@ func runFakeCodexAppServer() int {
 					},
 				},
 			})
+		case "account/rateLimits/read", "account/usage/read":
+			// 用量探测的迟到应答注入(2026-10-01,fetchUsageUncached 治理回归):
+			//   - PA_FAKE_CODEX_ACCOUNT_DELAY_MS 非空 = 先睡再回 error 帧,模拟
+			//     app-server 等自己的上游(chatgpt.com backend)远超 daemon 预算、
+			//     调用方超时放弃后才补发失败 —— 原文取台账实测的家族消息;
+			//   - PA_FAKE_CODEX_ACCOUNT_ORPHAN=1 = 在第一个 account/* 应答前先
+			//     补一条**从没被请求过**的孤儿错误帧(消息刻意避开两个已知家族,
+			//     归裸 "response"),作台账管道的活体对照:它必须入账,而已放弃
+			//     探测的迟到应答必须不入账 —— 一帧流里完成 A/B。
+			logOnly(m.Method, m.Params)
+			if os.Getenv("PA_FAKE_CODEX_ACCOUNT_ORPHAN") == "1" && !orphanSent {
+				orphanSent = true
+				respondErr(id+1_000_000, -32603, "orphan: never-requested frame for ledger pipeline control")
+			}
+			if r := os.Getenv("PA_FAKE_CODEX_ACCOUNT_RESULT"); r != "" {
+				// 预算内正常应答注入:两个 account/* 方法各取所需(rateLimits/read
+				// 取 rateLimits 键,usage/read 取 summary 键),钉"预算内仍生效"。
+				respond(id, json.RawMessage(r))
+				continue
+			}
+			if d := os.Getenv("PA_FAKE_CODEX_ACCOUNT_DELAY_MS"); d != "" {
+				if ms, err := strconv.Atoi(d); err == nil && ms > 0 {
+					time.Sleep(time.Duration(ms) * time.Millisecond)
+					respondErr(id, -32603, "failed to fetch codex rate limits: error sending request for url (https://chatgpt.com/backend-api/wham/usage)")
+					continue
+				}
+			}
+			respond(id, map[string]interface{}{})
 		default:
 			logOnly(m.Method, m.Params)
 			respond(id, map[string]interface{}{})

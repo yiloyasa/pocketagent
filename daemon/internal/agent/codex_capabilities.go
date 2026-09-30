@@ -118,13 +118,23 @@ func (p *CodexProvider) Usage() *pb.CodexUsage {
 }
 
 // fetchUsageUncached 是 Usage 的真实拉取(无缓存)。
+//
+// 【2026-10-01:两个 account/* 探测的迟到应答治理】它们改走 CallProbeCtx:
+// app-server 对这两个方法要先等自己的上游(chatgpt.com backend),慢路径远超
+// 10s 探测预算(daemon.log 实证大量 "context deadline exceeded");daemon 超时
+// 降级后,上游失败才补发迟到 error 帧,此前每个探测窗在未知事件台账积 24 条。
+// CallProbeCtx 把这些已放弃探测的迟到应答在 codexapp dispatch 处按调用代号静默
+// 丢弃(见该处注释);预算维持 statusBudget 不上调 —— 实测慢路径的迟到帧全是
+// 上游错误("failed to fetch codex rate limits"/"token usage profile fetch
+// timed out"),调大预算只会让用量面板同步阻塞更久、最终拿到的还是同一个
+// "读不到"。usageProbeBudget 仅供测试注入,生产恒为零值(= statusBudget)。
 func (p *CodexProvider) fetchUsageUncached() *pb.CodexUsage {
 	out := &pb.CodexUsage{Primary: &pb.RateLimitWindow{}, Secondary: &pb.RateLimitWindow{}}
 	var firstErr error
 
 	// 1) 限流窗口 + 积分。这是"还能不能用"的正面回答。
-	err := p.withStatusClient(func(ctx context.Context, c *codexapp.Client) error {
-		raw, err := c.CallCtx(ctx, "account/rateLimits/read", map[string]interface{}{})
+	err := p.withStatusClientBudget(p.usageProbeBudget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallProbeCtx(ctx, "account/rateLimits/read", map[string]interface{}{})
 		if err != nil {
 			return err
 		}
@@ -174,8 +184,8 @@ func (p *CodexProvider) fetchUsageUncached() *pb.CodexUsage {
 	}
 
 	// 2) 累计用量(锦上添花:失败不影响限流数据)。
-	if err := p.withStatusClient(func(ctx context.Context, c *codexapp.Client) error {
-		raw, err := c.CallCtx(ctx, "account/usage/read", map[string]interface{}{})
+	if err := p.withStatusClientBudget(p.usageProbeBudget, func(ctx context.Context, c *codexapp.Client) error {
+		raw, err := c.CallProbeCtx(ctx, "account/usage/read", map[string]interface{}{})
 		if err != nil {
 			return err
 		}
