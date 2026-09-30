@@ -1278,6 +1278,107 @@ func (x *HostIdentityHealth) GetReason() string {
 	return ""
 }
 
+// 配对前置问询(自动配对)。【安全模型】handler 仅应答本机回环来源(USB reverse
+// 场景);daemon 关闭鉴权(-insecure-no-auth)时如实回答 pairing_enabled=false。
+type GetPairingInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPairingInfoRequest) Reset() {
+	*x = GetPairingInfoRequest{}
+	mi := &file_v1_host_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPairingInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPairingInfoRequest) ProtoMessage() {}
+
+func (x *GetPairingInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_host_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPairingInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetPairingInfoRequest) Descriptor() ([]byte, []int) {
+	return file_v1_host_proto_rawDescGZIP(), []int{19}
+}
+
+type GetPairingInfoResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// true = 配对码模式开启,且本次来源被允许读取配对码。
+	PairingEnabled bool `protobuf:"varint,1,opt,name=pairing_enabled,json=pairingEnabled,proto3" json:"pairing_enabled,omitempty"`
+	// 当前生效配对码(持久码或一次性码均指它;配对成功即走 Authorize 换 token)。
+	PairCode string `protobuf:"bytes,2,opt,name=pair_code,json=pairCode,proto3" json:"pair_code,omitempty"`
+	// daemon 版本(便于手机端展示"发现的主机"卡片)。
+	DaemonVersion string `protobuf:"bytes,3,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPairingInfoResponse) Reset() {
+	*x = GetPairingInfoResponse{}
+	mi := &file_v1_host_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPairingInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPairingInfoResponse) ProtoMessage() {}
+
+func (x *GetPairingInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_host_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPairingInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetPairingInfoResponse) Descriptor() ([]byte, []int) {
+	return file_v1_host_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GetPairingInfoResponse) GetPairingEnabled() bool {
+	if x != nil {
+		return x.PairingEnabled
+	}
+	return false
+}
+
+func (x *GetPairingInfoResponse) GetPairCode() string {
+	if x != nil {
+		return x.PairCode
+	}
+	return ""
+}
+
+func (x *GetPairingInfoResponse) GetDaemonVersion() string {
+	if x != nil {
+		return x.DaemonVersion
+	}
+	return ""
+}
+
 var File_v1_host_proto protoreflect.FileDescriptor
 
 const file_v1_host_proto_rawDesc = "" +
@@ -1369,9 +1470,15 @@ const file_v1_host_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"H\n" +
 	"\x12HostIdentityHealth\x12\x1a\n" +
 	"\bdegraded\x18\x01 \x01(\bR\bdegraded\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason2\x97\x03\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x17\n" +
+	"\x15GetPairingInfoRequest\"\x85\x01\n" +
+	"\x16GetPairingInfoResponse\x12'\n" +
+	"\x0fpairing_enabled\x18\x01 \x01(\bR\x0epairingEnabled\x12\x1b\n" +
+	"\tpair_code\x18\x02 \x01(\tR\bpairCode\x12%\n" +
+	"\x0edaemon_version\x18\x03 \x01(\tR\rdaemonVersion2\xf8\x03\n" +
 	"\vHostService\x12K\n" +
-	"\vGetHostInfo\x12\".pocketagent.v1.GetHostInfoRequest\x1a\x18.pocketagent.v1.HostInfo\x12P\n" +
+	"\vGetHostInfo\x12\".pocketagent.v1.GetHostInfoRequest\x1a\x18.pocketagent.v1.HostInfo\x12_\n" +
+	"\x0eGetPairingInfo\x12%.pocketagent.v1.GetPairingInfoRequest\x1a&.pocketagent.v1.GetPairingInfoResponse\x12P\n" +
 	"\tAuthorize\x12 .pocketagent.v1.AuthorizeRequest\x1a!.pocketagent.v1.AuthorizeResponse\x12A\n" +
 	"\x04Ping\x12\x1b.pocketagent.v1.PingRequest\x1a\x1c.pocketagent.v1.PingResponse\x12N\n" +
 	"\vWatchEvents\x12\".pocketagent.v1.WatchEventsRequest\x1a\x19.pocketagent.v1.HostEvent0\x01\x12V\n" +
@@ -1389,7 +1496,7 @@ func file_v1_host_proto_rawDescGZIP() []byte {
 	return file_v1_host_proto_rawDescData
 }
 
-var file_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_v1_host_proto_goTypes = []any{
 	(*GetHostInfoRequest)(nil),       // 0: pocketagent.v1.GetHostInfoRequest
 	(*HostInfo)(nil),                 // 1: pocketagent.v1.HostInfo
@@ -1410,6 +1517,8 @@ var file_v1_host_proto_goTypes = []any{
 	(*HostLostQueueInput)(nil),       // 16: pocketagent.v1.HostLostQueueInput
 	(*HostDeviceHealth)(nil),         // 17: pocketagent.v1.HostDeviceHealth
 	(*HostIdentityHealth)(nil),       // 18: pocketagent.v1.HostIdentityHealth
+	(*GetPairingInfoRequest)(nil),    // 19: pocketagent.v1.GetPairingInfoRequest
+	(*GetPairingInfoResponse)(nil),   // 20: pocketagent.v1.GetPairingInfoResponse
 }
 var file_v1_host_proto_depIdxs = []int32{
 	13, // 0: pocketagent.v1.HostInfo.recovery:type_name -> pocketagent.v1.HostRecoveryReport
@@ -1422,17 +1531,19 @@ var file_v1_host_proto_depIdxs = []int32{
 	18, // 7: pocketagent.v1.HostRecoveryReport.identity:type_name -> pocketagent.v1.HostIdentityHealth
 	16, // 8: pocketagent.v1.HostTurnJournalHealth.lost_inputs:type_name -> pocketagent.v1.HostLostQueueInput
 	0,  // 9: pocketagent.v1.HostService.GetHostInfo:input_type -> pocketagent.v1.GetHostInfoRequest
-	2,  // 10: pocketagent.v1.HostService.Authorize:input_type -> pocketagent.v1.AuthorizeRequest
-	5,  // 11: pocketagent.v1.HostService.Ping:input_type -> pocketagent.v1.PingRequest
-	7,  // 12: pocketagent.v1.HostService.WatchEvents:input_type -> pocketagent.v1.WatchEventsRequest
-	10, // 13: pocketagent.v1.HostService.ListDevServers:input_type -> pocketagent.v1.ListDevServersRequest
-	1,  // 14: pocketagent.v1.HostService.GetHostInfo:output_type -> pocketagent.v1.HostInfo
-	4,  // 15: pocketagent.v1.HostService.Authorize:output_type -> pocketagent.v1.AuthorizeResponse
-	6,  // 16: pocketagent.v1.HostService.Ping:output_type -> pocketagent.v1.PingResponse
-	8,  // 17: pocketagent.v1.HostService.WatchEvents:output_type -> pocketagent.v1.HostEvent
-	12, // 18: pocketagent.v1.HostService.ListDevServers:output_type -> pocketagent.v1.DevServerList
-	14, // [14:19] is the sub-list for method output_type
-	9,  // [9:14] is the sub-list for method input_type
+	19, // 10: pocketagent.v1.HostService.GetPairingInfo:input_type -> pocketagent.v1.GetPairingInfoRequest
+	2,  // 11: pocketagent.v1.HostService.Authorize:input_type -> pocketagent.v1.AuthorizeRequest
+	5,  // 12: pocketagent.v1.HostService.Ping:input_type -> pocketagent.v1.PingRequest
+	7,  // 13: pocketagent.v1.HostService.WatchEvents:input_type -> pocketagent.v1.WatchEventsRequest
+	10, // 14: pocketagent.v1.HostService.ListDevServers:input_type -> pocketagent.v1.ListDevServersRequest
+	1,  // 15: pocketagent.v1.HostService.GetHostInfo:output_type -> pocketagent.v1.HostInfo
+	20, // 16: pocketagent.v1.HostService.GetPairingInfo:output_type -> pocketagent.v1.GetPairingInfoResponse
+	4,  // 17: pocketagent.v1.HostService.Authorize:output_type -> pocketagent.v1.AuthorizeResponse
+	6,  // 18: pocketagent.v1.HostService.Ping:output_type -> pocketagent.v1.PingResponse
+	8,  // 19: pocketagent.v1.HostService.WatchEvents:output_type -> pocketagent.v1.HostEvent
+	12, // 20: pocketagent.v1.HostService.ListDevServers:output_type -> pocketagent.v1.DevServerList
+	15, // [15:21] is the sub-list for method output_type
+	9,  // [9:15] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -1458,7 +1569,7 @@ func file_v1_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_host_proto_rawDesc), len(file_v1_host_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

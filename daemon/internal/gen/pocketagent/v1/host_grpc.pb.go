@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	HostService_GetHostInfo_FullMethodName    = "/pocketagent.v1.HostService/GetHostInfo"
+	HostService_GetPairingInfo_FullMethodName = "/pocketagent.v1.HostService/GetPairingInfo"
 	HostService_Authorize_FullMethodName      = "/pocketagent.v1.HostService/Authorize"
 	HostService_Ping_FullMethodName           = "/pocketagent.v1.HostService/Ping"
 	HostService_WatchEvents_FullMethodName    = "/pocketagent.v1.HostService/WatchEvents"
@@ -32,6 +33,10 @@ const (
 type HostServiceClient interface {
 	// 局域网发现后的第一问:你是谁、你能干什么
 	GetHostInfo(ctx context.Context, in *GetHostInfoRequest, opts ...grpc.CallOption) (*HostInfo, error)
+	// 配对前置问询(2026-09-30 自动配对):返回当前配对码,供 USB/回环来源的
+	// 手机自动完成配对(免手输)。handler 内自检来源必须为本机回环(USB reverse
+	// 后手机请求即回环);局域网/Tailscale 来源一律拒绝 —— 物理接触才拿得到码。
+	GetPairingInfo(ctx context.Context, in *GetPairingInfoRequest, opts ...grpc.CallOption) (*GetPairingInfoResponse, error)
 	// 配对码换长期 token
 	Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error)
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
@@ -58,6 +63,16 @@ func (c *hostServiceClient) GetHostInfo(ctx context.Context, in *GetHostInfoRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HostInfo)
 	err := c.cc.Invoke(ctx, HostService_GetHostInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) GetPairingInfo(ctx context.Context, in *GetPairingInfoRequest, opts ...grpc.CallOption) (*GetPairingInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPairingInfoResponse)
+	err := c.cc.Invoke(ctx, HostService_GetPairingInfo_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +134,10 @@ func (c *hostServiceClient) ListDevServers(ctx context.Context, in *ListDevServe
 type HostServiceServer interface {
 	// 局域网发现后的第一问:你是谁、你能干什么
 	GetHostInfo(context.Context, *GetHostInfoRequest) (*HostInfo, error)
+	// 配对前置问询(2026-09-30 自动配对):返回当前配对码,供 USB/回环来源的
+	// 手机自动完成配对(免手输)。handler 内自检来源必须为本机回环(USB reverse
+	// 后手机请求即回环);局域网/Tailscale 来源一律拒绝 —— 物理接触才拿得到码。
+	GetPairingInfo(context.Context, *GetPairingInfoRequest) (*GetPairingInfoResponse, error)
 	// 配对码换长期 token
 	Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error)
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
@@ -143,6 +162,9 @@ type UnimplementedHostServiceServer struct{}
 
 func (UnimplementedHostServiceServer) GetHostInfo(context.Context, *GetHostInfoRequest) (*HostInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetHostInfo not implemented")
+}
+func (UnimplementedHostServiceServer) GetPairingInfo(context.Context, *GetPairingInfoRequest) (*GetPairingInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPairingInfo not implemented")
 }
 func (UnimplementedHostServiceServer) Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Authorize not implemented")
@@ -191,6 +213,24 @@ func _HostService_GetHostInfo_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(HostServiceServer).GetHostInfo(ctx, req.(*GetHostInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_GetPairingInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPairingInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).GetPairingInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_GetPairingInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).GetPairingInfo(ctx, req.(*GetPairingInfoRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -270,6 +310,10 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHostInfo",
 			Handler:    _HostService_GetHostInfo_Handler,
+		},
+		{
+			MethodName: "GetPairingInfo",
+			Handler:    _HostService_GetPairingInfo_Handler,
 		},
 		{
 			MethodName: "Authorize",

@@ -25,6 +25,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import pocketagent.v1.AuthorizeRequest
+import pocketagent.v1.GetPairingInfoRequest
 import pocketagent.v1.ChallengeAnswer
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.HostEvent
@@ -410,6 +411,47 @@ object AgentConnection {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "旧配对流程也失败: ${e.message}")
             PairCodeResult(false, e.passThroughMessage())
+        }
+    }
+
+    /** 鉴权类失败判定:token 失效/未配对(UNAUTHENTICATED)或被明确要求配对。 */
+    private fun Exception.isAuthDenied(): Boolean {
+        val m = (message ?: "") + " " + (cause?.message ?: "")
+        return m.contains("UNAUTHENTICATED") ||
+            m.contains("token 无效") ||
+            m.contains("请先配对") ||
+            m.contains("配对码")
+    }
+
+    /**
+     * USB 自动配对(2026-09-30):向回环 daemon 问询配对码(GetPairingInfo ——
+     * daemon 仅对本机回环来源应答,USB reverse 后手机请求即回环,等于物理接触
+     * 证明),拿到码走标准配对流程领设备 token。全程静默:任何失败返回 false,
+     * 不打扰手动配对;持久层已有可用 token 时由调用方(探活 AUTH 失败)把关,
+     * 不在这里短路 —— 重装/daemon 换血后 token 失效正是要覆盖的主场景。
+     */
+    private fun maybeAutoPairViaUsb(): Boolean {
+        return try {
+            val probe = buildChannel(USB_ADDR, keepAlive = false)
+            val info = try {
+                HostServiceGrpc.newBlockingStub(probe)
+                    .withDeadlineAfter(6, java.util.concurrent.TimeUnit.SECONDS)
+                    .getPairingInfo(GetPairingInfoRequest.getDefaultInstance())
+            } finally {
+                probe.shutdown()
+            }
+            if (!info.pairingEnabled || info.pairCode.isBlank()) return false
+            val r = authorizeWithPairCodeDetailed(info.pairCode)
+            if (r.ok) {
+                android.util.Log.i(TAG, "USB 自动配对成功(免手输配对码)")
+                true
+            } else {
+                android.util.Log.w(TAG, "USB 自动配对未成功: ${r.error}")
+                false
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "USB 自动配对不可用: ${e.message}")
+            false
         }
     }
 
@@ -1269,6 +1311,16 @@ object AgentConnection {
                 true
                 } catch (e: Exception) {
                     connError.value = failureFor(e, address)
+                    // USB 自动配对(2026-09-30):物理插线场景免手输配对码。
+                    // 仅回环候选 + 鉴权类失败(token 失效/未配对)时,向 daemon
+                    // 问询配对码(GetPairingInfo 仅对回环应答 = 物理接触证明),
+                    // 拿到即走标准配对;成功后本轮置位让探活立即重连。
+                    if (address == USB_ADDR && e.isAuthDenied()) {
+                        if (maybeAutoPairViaUsb()) {
+                            connectionEpoch.value += 1
+                            return@launch
+                        }
+                    }
                     false
                 }
                 if (ok) {

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"net"
 	"sort"
 	"strings"
@@ -59,6 +61,25 @@ type (
 		ExportHTML(t *store.Thread) (string, error)
 	}
 )
+
+// GetPairingInfo 配对前置问询(2026-09-30 自动配对):返回当前配对码。
+// 【安全边界】仅应答本机回环来源 —— USB(reverse 后手机请求即 127.0.0.1)代表
+// 物理接触,与"在电脑屏幕上看配对码"等价;局域网/Tailscale 来源一律拒绝,
+// 配对码绝不_remote 泄露。-insecure-no-auth 模式如实回答 pairing_enabled=false
+// (该模式不需要配对)。
+func (s *Server) GetPairingInfo(ctx context.Context, _ *pb.GetPairingInfoRequest) (*pb.GetPairingInfoResponse, error) {
+	if !peerIsLoopback(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "配对码仅对本机回环(USB)来源提供;请用 USB 连接或在电脑屏幕上查看配对码")
+	}
+	if s.cfg.InsecureNoAuth || s.cfg.PairCode == "" {
+		return &pb.GetPairingInfoResponse{PairingEnabled: false, DaemonVersion: version.Version}, nil
+	}
+	return &pb.GetPairingInfoResponse{
+		PairingEnabled: true,
+		PairCode:       s.cfg.PairCode,
+		DaemonVersion:  version.Version,
+	}, nil
+}
 
 func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb.HostInfo, error) {
 	osName, arch, shell := platformInfo()

@@ -11,6 +11,10 @@ option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;p
 service HostService {
   // 局域网发现后的第一问:你是谁、你能干什么
   rpc GetHostInfo(GetHostInfoRequest) returns (HostInfo);
+  // 配对前置问询(2026-09-30 自动配对):返回当前配对码,供 USB/回环来源的
+  // 手机自动完成配对(免手输)。handler 内自检来源必须为本机回环(USB reverse
+  // 后手机请求即回环);局域网/Tailscale 来源一律拒绝 —— 物理接触才拿得到码。
+  rpc GetPairingInfo(GetPairingInfoRequest) returns (GetPairingInfoResponse);
   // 配对码换长期 token
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
   rpc Ping(PingRequest) returns (PingResponse);
@@ -181,4 +185,17 @@ message HostDeviceHealth {
 message HostIdentityHealth {
   bool degraded = 1; // 身份文件不可用 → 本次改用临时 host id(手机会认为换了机器)
   string reason = 2;
+}
+
+// 配对前置问询(自动配对)。【安全模型】handler 仅应答本机回环来源(USB reverse
+// 场景);daemon 关闭鉴权(-insecure-no-auth)时如实回答 pairing_enabled=false。
+message GetPairingInfoRequest {}
+
+message GetPairingInfoResponse {
+  // true = 配对码模式开启,且本次来源被允许读取配对码。
+  bool pairing_enabled = 1;
+  // 当前生效配对码(持久码或一次性码均指它;配对成功即走 Authorize 换 token)。
+  string pair_code = 2;
+  // daemon 版本(便于手机端展示"发现的主机"卡片)。
+  string daemon_version = 3;
 }
