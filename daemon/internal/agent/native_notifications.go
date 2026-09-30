@@ -246,6 +246,16 @@ func piNoticeKind(eventType string) string {
 //   - permission.requested / userInput.requested:与反向请求
 //     interaction/requestPermission 的关系探针证不出(审批流需要真实轮次,
 //     本轮红线禁跑),按"证不出就留 UNKNOWN(不猜)"处理。
+//
+// 【2026-09-30 复验收编批(证据:zcprobe 全子模式重跑 + bundle 静态 zod 枚举,
+// 见 knowledge_zcode.go 同日注释)】message.*/part.*/streamRecovery.updated 是
+// stdio session/event union(zod 枚举)内的桌面记录流镜像粒度,v4/telemetry/
+// event 与 computer-use/operation-event 是 0.16.9 实测在发的顶层遥测(一次委派
+// 轮 8 条)—— 四组此前词表已收、分类批漏掉,一直灌 UNKNOWN,在此补档
+// PASSTHROUGH(只留痕不投影;流式正文唯一来源仍是 model.streaming)。
+// interaction/requestOfficialMcpAuthHeaders **不进本表**:它是反向请求,走
+// zcode.go reqHandler 兜底硬编码 UNKNOWN_REQUEST 登记(zcode 侧尚无 request
+// 分类器,已知拒答也如实入账),人话由词表读时翻译 —— 本表只管通知。
 func zcodeNoticeKind(method string) string {
 	switch method {
 	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated",
@@ -258,7 +268,11 @@ func zcodeNoticeKind(method string) string {
 		"checkpoint.created", "rewind.triggered",
 		"usage.delta", "subagent.lifecycle", "turn.terminal",
 		"process/resourceSample", "process/mcpResourceSamples",
-		"process/mcpTelemetry", "startup/storageState":
+		"process/mcpTelemetry", "startup/storageState",
+		"message.upserted", "message.removed",
+		"part.started", "part.delta", "part.upserted", "part.removed",
+		"streamRecovery.updated",
+		"v4/telemetry/event", "computer-use/operation-event":
 		return runtime.KindKnownPassthrough
 	}
 	return runtime.KindUnknownNotification
