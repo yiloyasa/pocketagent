@@ -108,6 +108,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -116,16 +117,21 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.google.protobuf.ByteString
 import androidx.compose.runtime.collectAsState
 import dev.pocketagent.app.AgentConnection
@@ -178,6 +184,10 @@ import dev.pocketagent.app.ui.theme.paPushBack
 // 编辑式基座共享组件(第二波迁移;基座文件禁止修改,只消费)
 import dev.pocketagent.app.ui.component.PaApprovalDialog
 import dev.pocketagent.app.ui.component.PaHostChip
+// 历史消息快速查看(2026-09-30,视频样板交互):左缘刻度条 + 左滑摘要卡浮层
+import dev.pocketagent.app.ui.component.HistoryQuickNavLogic
+import dev.pocketagent.app.ui.component.HistoryQuickPanel
+import dev.pocketagent.app.ui.component.HistoryTickBar
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
@@ -974,6 +984,36 @@ internal fun modelsForAgent(models: List<ModelInfo>, agentId: String): List<Mode
 internal fun modelBareName(id: String): String = id.substringAfter('/', id)
 
 /**
+ * 【选模型的共享落点】完整选择卡(ModelEffortCard)与模型行快速切换面板
+ * 共用同一份"选中之后做什么":标 selectionPending、新模型的档位表不含当前
+ * 强度覆盖即清掉、写会话级(或全局)模型选择 —— 与原 ModelEffortCard.pick
+ * 逐行等价,保证快速面板切模型与完整卡零语义差。顺手记一次"最近使用"
+ * (ModelQuickSwitchLogic,进程内真实数据,驱动快速面板的 MRU 排序)。
+ *
+ * @param modelsForEffort 档位清理判定用的模型表:完整卡传自己刚拉到的实时表
+ *   (行为与旧 pick 完全一致),快速面板传会话级 sessionModels。
+ */
+internal fun applyModelPick(
+    threadId: String,
+    agentId: String,
+    modelsForEffort: List<ModelInfo>,
+    id: String,
+) {
+    TurnSession.state(threadId).selectionPending = true
+    val levels = effortsFor(modelsForEffort, id, agentId)
+    if (levels.none { it.id == AgentConnection.selectedEffort }) {
+        AgentConnection.setThreadEffort(threadId, "")
+    }
+    AgentConnection.selectedModel = id
+    if (threadId.isNotBlank()) {
+        AgentConnection.setThreadModel(threadId, id)
+    } else {
+        AgentConnection.setGlobalModel(id)
+    }
+    ModelQuickSwitchLogic.rememberPick(agentId, id)
+}
+
+/**
  * "压缩上下文"动作的后果文案,按会话归属 agent 动态(纯函数,单测钉死)。
  * 真机实锤(图9):Pi 会话里显示"让 Codex 压缩历史上下文" —— 文案硬编码 codex。
  * daemon 的 CompactThread RPC 已按会话 AgentID 路由(pi/zcode/codex 各走各的
@@ -1299,9 +1339,11 @@ private fun ChatIdentityBadge(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (agentIconRes != null) {
+            // 2026-09-30 品牌图标 18→24dp:标题行身份一眼可辨(用户令);原色
+            // tint=Unspecified 不变,未知 agent 仍不画图标(不塞通用图标冒充身份)。
             Icon(
                 painterResource(agentIconRes), null,
-                tint = Color.Unspecified, modifier = Modifier.size(18.dp),
+                tint = Color.Unspecified, modifier = Modifier.size(24.dp),
             )
             Spacer(Modifier.width(5.dp))
         }
@@ -1881,6 +1923,14 @@ fun ChatScreen(
     }
 
     var showModelCard by remember { mutableStateOf(false) }
+    // 【历史消息快速查看】左缘刻度条点开/关闭的浮层(视频样板交互)。
+    // rememberSaveable:进程重建(切主题/配置变化)后面板开合态不丢。
+    var showHistoryPanel by rememberSaveable { mutableStateOf(false) }
+    // 【模型快速切换面板】模型行下拉箭头直接展开的轻面板(单点即切,
+    // 不再强制进 ModelEffortCard 二级弹窗;"更多…"仍可进完整选择卡)。
+    var showQuickModels by remember { mutableStateOf(false) }
+    // 切换成功后的行内反馈 tick:驱动模型名一次轻量闪光(真实选择才有,不造假状态)
+    var modelFlashTick by remember { mutableStateOf(0) }
     var showContextCard by remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
     // 侧边栏跟手:手势与面板共用同一个进度(0..1),手指在哪面板就在哪
@@ -1931,6 +1981,7 @@ fun ChatScreen(
     BackHandler(enabled = true) {
         when {
             drawerCtrl.visible -> drawerCtrl.close()
+            showHistoryPanel -> showHistoryPanel = false
             rollbackOpen -> rollbackOpen = false
             showMore -> showMore = false
             showExport -> showExport = false
@@ -2369,6 +2420,33 @@ fun ChatScreen(
     var arriveStreamBlocks by remember(threadId) { mutableStateOf(0) }
     val haptic = LocalHapticFeedback.current
     val reduceMotion = rememberReduceMotion()
+
+    // ---- 历史消息快速查看(视频样板):刻度条目 + 当前刻度 + 跳转 ----
+    // 刻度 = 每条用户消息;LazyColumn 头部偏移:时间线顶部挂「加载更早」入口时
+    // itemsIndexed 的下标整体 +1(与该入口的显隐条件严格一致)。
+    val historyListOffset = if (historyTruncated && !offlineSnapshot) 1 else 0
+    val historyEntries = remember(threadId, historyListOffset, st.items.size) {
+        HistoryQuickNavLogic.entriesOf(st.items.toList(), historyListOffset)
+    }
+    // 当前刻度由 LazyListState 首个可见项驱动(规格:不额外造状态)
+    val historyCurrentIndex = HistoryQuickNavLogic.currentIndexOf(
+        historyEntries, listState.firstVisibleItemIndex,
+    )
+
+    /** 浮层点卡片:跳到那条消息并关浮层(浮层自己不持列表状态)。 */
+    fun jumpToHistoryEntry(listIndex: Int) {
+        showHistoryPanel = false
+        scope.launch {
+            programmaticScroll.set(true)
+            try {
+                listState.scrollToItem(listIndex)
+            } finally {
+                programmaticScroll.set(false)
+            }
+            // 跳去历史 = 用户主动离开底部:解除跟随,新内容交给「↓ N 条新内容」胶囊
+            followBottom = false
+        }
+    }
 
     // 距底观测:跟随状态只由"当前列表位置"裁定 —— 用户上滑出 100px 即解除跟随;
     // 手动滚回距底 100px 内即恢复跟随并清未读。程序滚动(带标记)不参与裁定。
@@ -3650,6 +3728,15 @@ fun ChatScreen(
                 }
             }
         }
+            // 历史消息快速查看(视频样板):左缘垂直刻度条 —— 每条用户消息一个
+            // 刻度点(Canvas 一次绘制,不做逐条 composable);点按刻度区从左缘
+            // 浮出摘要卡列表。半透明、不遮内容,与「↓ N 条新内容」胶囊同层悬浮。
+            HistoryTickBar(
+                count = historyEntries.size,
+                currentIndex = historyCurrentIndex,
+                onOpen = { showHistoryPanel = true },
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
             // P0-1「↓ N 条新内容」胶囊:仅在用户离底且确有未读新块时浮现(PaEditorial.Primary 底)。
             // 点击平滑滚回底部、恢复跟随并清零未读(轻触觉由 pressable 自带)——
             // 流式输出从此不再把上滑阅读历史的用户拽回来。
@@ -4043,7 +4130,13 @@ fun ChatScreen(
                 // 现在无条件显示全文;整行同时内联"运行中模型确认",把原本独立的一行合并进来
                 // (设计取向:能一行放下的不要分行),少一层堆叠且不丢信息。整行作模型/强度
                 // 点击入口;所有控件触控箱仍走 INPUT_TOUCH_TARGET_DP(PA-REAL-0004)。
-                Row(Modifier.fillMaxWidth().pressable { showModelCard = true }
+                //
+                // 【2026-09-30 快速切换】点击整行(含下拉箭头)直接展开**快速切换面板**:
+                // 最近用过的模型单点即切,不再强制进 ModelEffortCard 二级弹窗(两段式太重);
+                // 面板尾部「更多…」仍进完整选择卡(跟随桌面/全部模型入口不丢)。模型名
+                // 11sp→13sp、Muted→Ink:这是高频操作控件,字号与对比度按主控件档给。
+                Box {
+                Row(Modifier.fillMaxWidth().pressable { showQuickModels = true }
                     .semantics { contentDescription = "切换模型与思考强度" }
                     // PA-REAL-0004:整行高度 ≥48dp(实测 37.8dp)。heightIn 在 padding 外层,
                     // 内容(verticalAlignment=CenterVertically)在 48dp 内居中,只是上下多留白。
@@ -4060,13 +4153,133 @@ fun ChatScreen(
                         " · 最近运行：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}"
                     } else ""
                     val base = modelName + if (effortLabel != "默认") " · $effortLabel" else ""
-                    Text(base + runningHint,
+                    // 切换成功行内反馈:modelFlashTick(快速面板/完整卡真实选中后 +1)驱动
+                    // 模型名一次 Primary→Ink 的轻量闪光(纯绘制层动效,不造假状态;
+                    // 模型名本体由生效链即时更新,闪的只是"刚变过"的提示)。
+                    val nameFlash = remember { Animatable(0f) }
+                    LaunchedEffect(modelFlashTick) {
+                        if (modelFlashTick > 0) {
+                            nameFlash.snapTo(1f)
+                            nameFlash.animateTo(0f, tween(650))
+                        }
+                    }
+                    val nameColor = lerp(ChatInkColor, ChatAccentColor, nameFlash.value)
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(fontSize = 13.sp, color = nameColor, fontWeight = FontWeight.Medium)) {
+                                append(base)
+                            }
+                            if (runningHint.isNotEmpty()) {
+                                withStyle(SpanStyle(fontSize = 12.sp, color = ChatMutedColor)) {
+                                    append(runningHint)
+                                }
+                            }
+                        },
                         modifier=Modifier.weight(1f),
-                        // 11sp:模型名是控件态的次级信息,与占位文字(15sp)拉开两级,
-                        // 不再和提示文案混读(L2 真机挑刺 #9)
-                        fontSize=11.sp, color=ChatMutedColor,
                         maxLines=2, overflow=TextOverflow.Ellipsis)
-                    Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "选择模型", tint=ChatMutedColor,modifier=Modifier.requiredSize(18.dp))
+                    Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "展开快速切换模型", tint=ChatMutedColor,modifier=Modifier.requiredSize(18.dp))
+                }
+                // 快速切换面板:锚在模型行上方弹出;focusable 让面板外点击/返回键关闭。
+                if (showQuickModels) {
+                    val quickModels = remember(sessionModels, sessionAgent) {
+                        ModelQuickSwitchLogic.quickModels(sessionAgent, sessionModels)
+                    }
+                    Popup(
+                        alignment = Alignment.BottomStart,
+                        onDismissRequest = { showQuickModels = false },
+                        properties = PopupProperties(focusable = true),
+                    ) {
+                        Column(
+                            Modifier
+                                .widthIn(max = 330.dp)
+                                // 黑客模式 GraphiteDrawer 底 + 等宽字;常规 Surface 底(同浮层口径)
+                                .background(
+                                    if (PaHacker.isHacker) PaEditorial.GraphiteDrawer else PaEditorial.Surface,
+                                    RoundedCornerShape(14.dp),
+                                )
+                                .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
+                                .padding(vertical = 6.dp),
+                        ) {
+                            val mono = if (PaHacker.isHacker) PaHacker.mono else null
+                            if (quickModels.isEmpty()) {
+                                Text(
+                                    if (sessionModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
+                                    else "暂无可快速切换的模型",
+                                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                    fontSize = 12.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                                )
+                            }
+                            quickModels.forEach { qm ->
+                                val current = qm.id == effectiveModelId
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .pressable {
+                                            showQuickModels = false
+                                            applyModelPick(threadId, sessionAgent, sessionModels, qm.id)
+                                            modelFlashTick++ // 行内闪光:模型名刚真实切过一次
+                                        }
+                                        .heightIn(min = 44.dp)
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            qm.label,
+                                            fontSize = 13.5.sp,
+                                            color = if (current) PaEditorial.Primary else PaEditorial.Ink,
+                                            fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            fontFamily = mono,
+                                        )
+                                        if (qm.detail.isNotEmpty()) {
+                                            Text(
+                                                qm.detail, fontSize = 10.5.sp,
+                                                color = PaEditorial.Subtle, fontFamily = mono,
+                                            )
+                                        }
+                                    }
+                                    if (current) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Icon(
+                                            painterResource(AppR.drawable.ic_lucide_check), "当前模型",
+                                            tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            // 面板尾:「更多…」进完整选择卡(跟随桌面/全部模型/强度档位)
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    .height(1.dp)
+                                    .background(PaEditorial.Hairline)
+                            )
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .pressable {
+                                        showQuickModels = false
+                                        showModelCard = true
+                                    }
+                                    .heightIn(min = 44.dp)
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "更多…",
+                                    Modifier.weight(1f),
+                                    fontSize = 13.sp, color = PaEditorial.Muted, fontFamily = mono,
+                                )
+                                Icon(
+                                    painterResource(AppR.drawable.ic_lucide_chevron_right), "打开完整模型选择器",
+                                    tint = PaEditorial.Subtle, modifier = Modifier.size(15.dp),
+                                )
+                            }
+                        }
+                    }
+                }
                 }
                 // 第二行:工具行
                 Row(
@@ -4487,6 +4700,16 @@ fun ChatScreen(
                 chatMiddle()
             }
         }
+        // 历史消息快速查看浮层(视频样板):从左缘滑出,宽 ~78%;黑客模式
+        // GraphiteDrawer 底 + 等宽字,常规模式 Surface 底 —— 全走 editorial 槽位。
+        // 点卡片 → scrollToItem 跳转并关闭;Scrim 点击/返回键 → 关闭(BackHandler 见上)。
+        HistoryQuickPanel(
+            visible = showHistoryPanel,
+            entries = historyEntries,
+            currentIndex = historyCurrentIndex,
+            onJump = { listIndex -> jumpToHistoryEntry(listIndex) },
+            onDismiss = { showHistoryPanel = false },
+        )
         // 「已优化提示词[撤销]」悬浮条:置顶居中,不挤内容(组件自带 5s 计时,
         // 撤销恢复原文;离开页面自动提交 —— 本条无提交动作,等价于自动消失)。
         UndoBarHost(promptOptUndo, Modifier.align(Alignment.TopCenter))
@@ -4966,6 +5189,8 @@ fun ChatScreen(
             // 点选后由卡面内部状态即时接管。
             initialSelectedId = effectiveModelId,
             onDismiss = { showModelCard = false },
+            // 卡内真实选中 → 关卡后模型行给一次行内闪光(与快速面板同一反馈口径)
+            onPicked = { modelFlashTick++ },
         )
     }
 
@@ -5027,6 +5252,8 @@ fun ModelEffortCard(
     agentId: String = "",
     initialSelectedId: String = "",
     onDismiss: () -> Unit,
+    // 一次真实选中(含"跟随桌面")后的回调:宿主给模型行闪光等行内反馈用
+    onPicked: () -> Unit = {},
 ) {
     // 会话归属 agent:调用方没给(旧调用点/预览)时退全局选中 agent,行为不变。
     val sessionAgent = agentId.ifBlank { AgentConnection.selectedAgent }
@@ -5093,21 +5320,14 @@ fun ModelEffortCard(
              * 不污染全局默认,也不影响其他会话。
              * 【选中态即时生效】currentPick 是卡面内单一选中状态:初始值来自
              * [initialSelectedId],点选立即改它 —— 高亮不等任何 RPC/重组链。
+             * 【落点共享】选中后的动作收敛到 [applyModelPick](与模型行快速切换面板
+             * 同一份语义:档位清理/会话级选择/最近使用记忆),卡面只管自己的高亮。
              */
             var currentPick by remember(threadId) { mutableStateOf(initialSelectedId) }
             fun pick(id: String) {
-                TurnSession.state(threadId).selectionPending = true
+                applyModelPick(threadId, sessionAgent, models.value, id)
+                onPicked()
                 currentPick = id
-                val levels = effortsFor(models.value, id, sessionAgent)
-                if (levels.none { it.id == AgentConnection.selectedEffort }) {
-                    AgentConnection.setThreadEffort(threadId, "")
-                }
-                AgentConnection.selectedModel = id
-                if (threadId.isNotBlank()) {
-                    AgentConnection.setThreadModel(threadId, id)
-                } else {
-                    AgentConnection.setGlobalModel(id)
-                }
             }
 
             Column(
