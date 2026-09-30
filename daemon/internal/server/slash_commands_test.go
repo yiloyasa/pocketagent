@@ -124,8 +124,9 @@ func TestListSlashCommandsFetchSuccessAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("拉取成功不应报错: %v", err)
 	}
-	if len(resp.Commands) != 2 {
-		t.Fatalf("应透出 2 条命令,得到 %d 条", len(resp.Commands))
+	// 原生 2 条在前(顺序保持),聚合层补的 fork/rewind 漏报条目追加在后。
+	if len(resp.Commands) != 4 {
+		t.Fatalf("应透出 2 原生 + 2 补充共 4 条命令,得到 %d 条: %+v", len(resp.Commands), resp.Commands)
 	}
 	got := resp.Commands[0]
 	if got.Name != "goal" || got.Description != "常驻目标" || got.InputHint != "/goal [pause|resume|…]" {
@@ -134,12 +135,25 @@ func TestListSlashCommandsFetchSuccessAndCache(t *testing.T) {
 	if resp.Commands[1].Name != "compact" || resp.Commands[1].InputHint != "" {
 		t.Fatalf("第二条字段映射不符(空 inputHint 要保住空串): %+v", resp.Commands[1])
 	}
-	// 第二次调用命中缓存:fake 只会被拉取一次。
-	if _, err := srv.ListSlashCommands(context.Background(), req); err != nil {
+	// 补充条目字段钉子(出处:zcode.cjs 0.16.9 内建注册面 $R 的 fork/rewind 行)。
+	if resp.Commands[2].Name != "fork" || resp.Commands[2].InputHint != "/fork [latest|checkpointId]" ||
+		resp.Commands[2].Description == "" {
+		t.Fatalf("fork 补充条目不符: %+v", resp.Commands[2])
+	}
+	if resp.Commands[3].Name != "rewind" || resp.Commands[3].InputHint != "/rewind [latest|checkpointId]" ||
+		resp.Commands[3].Description == "" {
+		t.Fatalf("rewind 补充条目不符: %+v", resp.Commands[3])
+	}
+	// 第二次调用命中缓存:fake 只会被拉取一次,且缓存的已是补齐后的清单。
+	second, err := srv.ListSlashCommands(context.Background(), req)
+	if err != nil {
 		t.Fatalf("缓存命中调用不应报错: %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("10 分钟内第二次调用应命中缓存(fake 被调 %d 次)", calls)
+	}
+	if len(second.Commands) != 4 {
+		t.Fatalf("缓存命中的清单也应含补充条目,得到 %d 条", len(second.Commands))
 	}
 }
 
@@ -170,7 +184,8 @@ func TestListSlashCommandsProviderLedgerWins(t *testing.T) {
 		return nil, errors.New("不该被调用")
 	}
 	defer func() { zcodeSlashFetch = restore }()
-	// zcode provider 实现了账本接口:优先走内存账本,不冷启子进程。
+	// zcode provider 实现了账本接口:优先走内存账本,不冷启子进程;
+	// 账本清单是原生子集,聚合层照样补漏报的 fork/rewind(共 3 条)。
 	ledger := &slashFakeProvider{
 		seqProvider: seqProvider{id: "zcode"},
 		commands:    []*pb.SlashCommand{{Name: "init", Description: "初始化", InputHint: "/init"}},
@@ -182,8 +197,11 @@ func TestListSlashCommandsProviderLedgerWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("账本通路不应报错: %v", err)
 	}
-	if len(resp.Commands) != 1 || resp.Commands[0].Name != "init" {
-		t.Fatalf("应透出账本里的命令: %+v", resp.Commands)
+	if len(resp.Commands) != 3 || resp.Commands[0].Name != "init" {
+		t.Fatalf("应透出账本命令 + 补充条目: %+v", resp.Commands)
+	}
+	if resp.Commands[1].Name != "fork" || resp.Commands[2].Name != "rewind" {
+		t.Fatalf("补充条目应追加在原生之后: %+v", resp.Commands)
 	}
 	if calls != 0 {
 		t.Fatalf("账本通路不应触发子进程拉取(调用 %d 次)", calls)
@@ -230,5 +248,56 @@ func TestListSlashCommandsCacheExpires(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("TTL 过期后应重新拉取(fake 被调 %d 次)", calls)
+	}
+}
+
+// ---- zcode 漏报补充(zcodeWithPromptCommandSupplement)的行为钉子 ----
+
+// 原生清单已含同名条目(如用户自定义命令恰好叫 fork)时去重:fork 只出现一次,
+// rewind 照补;大小写变体(Fork)也算命中,避免面板出现两条同义命令。
+func TestZcodeSupplementDedupesNativeEntries(t *testing.T) {
+	native := []*pb.SlashCommand{
+		{Name: "goal", Description: "g", InputHint: "/goal"},
+		{Name: "fork", Description: "自定义 fork 命令", InputHint: "/fork [自定义]"},
+	}
+	got := zcodeWithPromptCommandSupplement(native)
+	if len(got) != 3 {
+		t.Fatalf("fork 已列时只应补 rewind,得到 %d 条: %+v", len(got), got)
+	}
+	if got[1].Name != "fork" || got[1].Description != "自定义 fork 命令" {
+		t.Fatalf("同名原生条目必须原样保留(不得被补充覆盖): %+v", got[1])
+	}
+	if got[2].Name != "rewind" {
+		t.Fatalf("rewind 应照补: %+v", got[2])
+	}
+	if got := zcodeWithPromptCommandSupplement([]*pb.SlashCommand{{Name: "Fork"}}); len(got) != 2 {
+		t.Fatalf("大小写变体 Fork 也应视为已列,得到 %+v", got)
+	}
+}
+
+// 原生清单为"显式空"(会话没有任何命令)时补充仍然生效:内建文本命令与
+// 工作区自定义命令互不依赖,空只是没有 custom,不代表 fork/rewind 不可用。
+func TestZcodeSupplementAppliesToEmptyNativeList(t *testing.T) {
+	got := zcodeWithPromptCommandSupplement([]*pb.SlashCommand{})
+	if len(got) != len(zcodePromptCommandSupplement) {
+		t.Fatalf("空原生清单应得到全部补充条目,得到 %d 条: %+v", len(got), got)
+	}
+}
+
+// 补充不得改动入参切片:账本路径传入的是 provider 共享的底层数组,
+// 聚合层改了它就等于改了 provider 的记账(下一次查询会重复追加)。
+func TestZcodeSupplementDoesNotMutateInput(t *testing.T) {
+	native := []*pb.SlashCommand{{Name: "goal", Description: "g"}}
+	before := len(native)
+	_ = zcodeWithPromptCommandSupplement(native)
+	if len(native) != before || native[0].Name != "goal" {
+		t.Fatalf("入参切片被改动: %+v", native)
+	}
+}
+
+// nil(拉取失败/无快照)原样返回 nil:失败路径安静收起面板,绝不凭空发条目。
+func TestZcodeSupplementNilStaysNil(t *testing.T) {
+	if got := zcodeWithPromptCommandSupplement(nil); got != nil {
+		t.Fatalf("nil 入参应返回 nil,得到 %+v", got)
 	}
 }

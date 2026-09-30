@@ -45,9 +45,13 @@ func TestListSlashCommandsRealProviderLedgerMissFallsBackToResume(t *testing.T) 
 	if calls != 1 {
 		t.Fatalf("未记账应回退到 resume 兜底(fake 被调 %d 次)", calls)
 	}
-	if len(resp.Commands) != 1 || resp.Commands[0].Name != "goal" ||
+	// 兜底命令字段映射不变;聚合层的 fork/rewind 漏报补充照样追加(共 3 条)。
+	if len(resp.Commands) != 3 || resp.Commands[0].Name != "goal" ||
 		resp.Commands[0].InputHint != "/goal [pause|resume|…]" {
 		t.Fatalf("兜底命令字段映射不符: %+v", resp.Commands)
+	}
+	if resp.Commands[1].Name != "fork" || resp.Commands[2].Name != "rewind" {
+		t.Fatalf("兜底路径也应带漏报补充: %+v", resp.Commands)
 	}
 	// 兜底路径的 10 分钟缓存仍在:第二次调用不再拉取(与切账本前等价)。
 	if _, err := srv.ListSlashCommands(context.Background(), req); err != nil {

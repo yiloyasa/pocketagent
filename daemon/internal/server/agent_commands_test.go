@@ -156,8 +156,8 @@ func TestListSlashCommandsZcodeLedgerStillWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zcode 账本通路不是错误: %v", err)
 	}
-	if len(resp.Commands) != 1 || resp.Commands[0].Name != "goal" {
-		t.Fatalf("zcode 会话应回 zcode 账本命令: %+v", resp.Commands)
+	if len(resp.Commands) != 3 || resp.Commands[0].Name != "goal" {
+		t.Fatalf("zcode 会话应回 zcode 账本命令 + 漏报补充(fork/rewind): %+v", resp.Commands)
 	}
 	if codex.gotCwd != "" {
 		t.Fatalf("zcode 会话不应触碰 codex 技能源(cwd=%q)", codex.gotCwd)

@@ -25,10 +25,35 @@ package server
 // 【失败哲学】非 zcode 会话 / 无快照 / 拉取失败,一律回**空列表**而不是 gRPC
 // 错误:命令面板是锦上添花的入口,拉不到就让手机端安静地不显示,绝不 Toast
 // 报错打断输入(与 ExportThreadHtml"可降级"的家训一致,只是这里连错误码都省)。
+//
+// 【四家面板现状(2026-09-30 全量实证)】用户反馈"面板内容不全"后逐家核验:
+//   - codex 0.159.2:app-server 协议**没有**斜杠/prompt 命令概念(2026-09-30
+//     surface 探针拿到的全量方法面无 commands/slash RPC;rust-v0.159.2 源码里
+//     SlashCommand 只存在于 tui/,core/app-server/protocol 零引用、斜杠文本
+//     无拦截)——TUI 的 60+ 条斜杠命令是 TUI 本地转换的,协议客户端发 "/xxx"
+//     只是一段普通文本。协议层真实可用的"命令"只有 skills(skills/list),
+//     面板即全集,不补(补了就是伪造能力位)。
+//   - pi 0.99.1:get_commands(extension/prompt/skill 三源)就是"prompt 以
+//     /名 开头即可触发"的全集;随包官方文档 docs/rpc-commands.md 明文:内建
+//     TUI 命令(/model /theme /compact 等 24 条,bundle 实证)只在交互模式
+//     处理,"would not execute if sent via prompt" —— 不列,面板即全集。
+//   - zcode 0.16.9:快照 slashCommands[](协议清单 listProtocolSlashCommands)
+//     是权威源,但它**漏报**两条:bundle 实证 parseCompactCommand/parseRewind
+//     Command 在 app.submitPrompt 轮次启动路径内联解析 "/compact /fork
+//     /rewind"(session/send → app.sendInput → submitPrompt 同一解析,TUI 的
+//     rewind/fork 分支也是把原文转发 submitPrompt),而协议清单只列
+//     [goal,workflow,compact,init,plan]+custom —— fork/rewind 由本文件在
+//     聚合层补齐(zcodeWithPromptCommandSupplement),其余各家语义不变。
+//   - dsh 0.2.0-rc.2:daemon 唯一通路是 `dsh --profile acp`(ACP 1.4.0),实测
+//     bundle:agentCapabilities 无 load 能力、bridge 从不发
+//     available_commands_update、prompt 文本无斜杠展开(产品内的 /compact
+//     /goal /feedback 命令注册面 dsh-commands 只服务自家 tui/web,不经 ACP)
+//     —— 该家无可透传命令,维持空列表。
 
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,7 +114,7 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 	// 落到下面的重挂路径兜底,一次性 resume 分支保留不删)。
 	if p, ok := s.cfg.Providers["zcode"].(zcodeSlashSource); ok && !req.Refresh {
 		if cmds := p.SlashCommandsFor(t.ID); cmds != nil {
-			resp.Commands = append(resp.Commands, cmds...)
+			resp.Commands = append(resp.Commands, zcodeWithPromptCommandSupplement(cmds)...)
 			return resp, nil
 		}
 	}
@@ -103,11 +128,12 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 			if err != nil {
 				return nil, errUnavailable("原生命令列表暂不可用: " + err.Error())
 			}
-			resp.Commands = commands
+			resp.Commands = zcodeWithPromptCommandSupplement(commands)
 		}
 		return resp, nil
 	}
-	// 缓存命中:同一条 zcode 会话 10 分钟内只冷启一次子进程。
+	// 缓存命中:同一条 zcode 会话 10 分钟内只冷启一次子进程(缓存里存的已是
+	// 补齐后的完整面板清单,命中即返回,不再二次补充)。
 	if cmds, hit := slashCacheGet(sid); hit && !req.Refresh {
 		resp.Commands = append(resp.Commands, cmds...)
 		return resp, nil
@@ -118,11 +144,64 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 		log.Printf("[slash] 拉取 zcode 斜杠命令失败(回空列表)session=%s: %v", sid, err)
 		return resp, nil
 	}
+	cmds = zcodeWithPromptCommandSupplement(cmds)
 	if len(cmds) > 0 {
 		slashCachePut(sid, cmds)
 	}
 	resp.Commands = append(resp.Commands, cmds...)
 	return resp, nil
+}
+
+// zcodePromptCommandSupplement zcode 快照协议清单的漏报补充(bundle 实证可执行
+// 但原生 slashCommands 不列的命令)。字段逐条照抄本机 zcode.cjs 0.16.9 的内建
+// 命令注册面 $R(name/summary/usage,与 goal/compact 等原生条目同源):
+//
+//   - fork:  parseRewindCommand(bundle 函数 vko)在 app.submitPrompt 轮次启动
+//     路径解析 "/fork [latest|checkpointId]";session/send → app.sendInput →
+//     submitPrompt 走同一解析,TUI 的 fork 分支也是把原文转发 submitPrompt。
+//   - rewind: 同一 parseRewindCommand 解析 "/rewind [latest|checkpointId]"
+//     (无参 = status 回读),session/send 文本直接可触发。
+//
+// 【为什么由 daemon 补而不是改原生】协议清单(listProtocolSlashCommands)只列
+// WVo[goal,workflow,compact,init]+plan+custom,fork/rewind 是 app 层文本命令
+// 而非 protocol 声明面 —— 客户端侧补齐是唯一改动点,版本漂移风险由"只补不删"
+// 约束住:原生清单将来若把这两条列进来,去重逻辑让本补充自动失效。
+// workflow 不在此列:dynamicWorkflowEnabled=false 时 bundle 明确不展开
+// /workflow(resolveZCodeBuiltinPromptCommand 返回 void),原生不列就是真不可用,
+// 补了反而伪造能力位。
+var zcodePromptCommandSupplement = []struct {
+	name        string
+	description string
+	inputHint   string
+}{
+	{"fork", "Fork a new session from a workspace checkpoint.", "/fork [latest|checkpointId]"},
+	{"rewind", "Inspect or restore workspace checkpoints.", "/rewind [latest|checkpointId]"},
+}
+
+// zcodeWithPromptCommandSupplement 把漏报补充并入原生清单:原生条目全序在前,
+// 补充条目按 name(大小写不敏感)去重后追加;入参 nil(拉取失败/无快照)原样
+// 返回 nil —— 失败路径绝不凭空发面板。入参切片不被本函数改动(账本里那份
+// 是 provider 的共享底层数组,只读)。
+func zcodeWithPromptCommandSupplement(cmds []*pb.SlashCommand) []*pb.SlashCommand {
+	if cmds == nil {
+		return nil
+	}
+	have := make(map[string]struct{}, len(cmds)+len(zcodePromptCommandSupplement))
+	for _, c := range cmds {
+		if c != nil {
+			have[strings.ToLower(c.Name)] = struct{}{}
+		}
+	}
+	out := make([]*pb.SlashCommand, len(cmds), len(cmds)+len(zcodePromptCommandSupplement))
+	copy(out, cmds)
+	for _, s := range zcodePromptCommandSupplement {
+		if _, ok := have[s.name]; ok {
+			continue
+		}
+		have[s.name] = struct{}{}
+		out = append(out, &pb.SlashCommand{Name: s.name, Description: s.description, InputHint: s.inputHint})
+	}
+	return out
 }
 
 // zcodeSlashFetch 拉取实现的注入点:生产走一次性 ZCode 子进程(见下方
