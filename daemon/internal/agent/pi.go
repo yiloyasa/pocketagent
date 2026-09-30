@@ -807,9 +807,13 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	}()
 
 	var (
-		mu        sync.Mutex
-		textBuf   strings.Builder // 最终正文(text_delta 拼接)
-		started   = map[string]bool{}
+		mu      sync.Mutex
+		textBuf strings.Builder // 最终正文(text_delta 拼接)
+		started = map[string]bool{}
+		// toolStart 各 callId 的执行开始时刻(daemon 实测):UPDATE 帧据此带
+		// "已运行 X.Xs" 脚注、END 帧在 structuredContent 缺 wall_time 时兜底,
+		// 对齐 pi TUI 工具卡的 Elapsed/Took 展示(见 pi_events.go piToolFooter)。
+		toolStart = map[string]time.Time{}
 		lastUsage *pb.Usage // pb 消息存指针:含互斥量,按值复制会被 vet 拒绝
 		// compacting 压缩进行中(compaction_start/end 维护):中程用量推送暂停。
 		// 手机端已由 CONTEXT_COMPACTED 事件进入"压缩中"状态并清空 turnUsage,
@@ -873,16 +877,20 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			if upd, ok := MapToolExecStart(ev.Raw); ok {
 				mu.Lock()
 				started[upd.Call.Id] = true
+				toolStart[upd.Call.Id] = time.Now()
 				mu.Unlock()
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
 			}
 		case "tool_execution_update":
-			if upd, ok := MapToolExecUpdate(ev.Raw, piToolClip); ok {
+			if upd, ok := MapToolExecUpdate(ev.Raw, piToolClip, piElapsedOf(&mu, toolStart, ev.Raw)); ok {
 				// partialResult 是累积值:App 端按 callId 原地替换(UPDATE 相位)
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
 			}
 		case "tool_execution_end":
-			if upd, ok := MapToolExecEnd(ev.Raw, piToolClip); ok {
+			if upd, ok := MapToolExecEnd(ev.Raw, piToolClip, piElapsedOf(&mu, toolStart, ev.Raw)); ok {
+				mu.Lock()
+				delete(toolStart, upd.Call.Id)
+				mu.Unlock()
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
 			}
 		case "agent_end":
@@ -942,6 +950,13 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 				// 0.87.1 噪音治理:轮次骨架事件只落台账、不推 sink(理由见
 				// piLedgerOnlyEvent)。分类照旧走 piEventNoticeKind → KNOWN_PASSTHROUGH,
 				// 治的是推送,不动台账。
+				// 【例外:助手消息异常收尾】message_end 携带 stopReason=length/error
+				// 时补一张 WARNING 卡上屏(pi TUI 会渲染 "Response was truncated
+				// before completion."/"Error: msg",手机端此前对截断完全不可见);
+				// 正常 stop/aborted 不发卡,台账照落。
+				if cev, ok := MapAssistantStop(ev.Raw); ok {
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
+				}
 				notices.recordLedgerOnly(piEventNoticeKind(ev.Type), "pi", ev.Type, ev.Raw)
 				return
 			}
@@ -1305,6 +1320,22 @@ func toolCallIDOf(raw json.RawMessage) string {
 		return e.ToolCallID
 	}
 	return ""
+}
+
+// piElapsedOf 取该 callId 自 tool_execution_start 起的实测时长(daemon 自己的钟,
+// 真测量非编造);没有开始时刻(断点回放/乱序帧)返回 0 = 无脚注。
+// mu 保护 starts map:与事件泵消费 goroutine 并发。
+func piElapsedOf(mu *sync.Mutex, starts map[string]time.Time, raw json.RawMessage) time.Duration {
+	id := toolCallIDOf(raw)
+	if id == "" {
+		return 0
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if st, ok := starts[id]; ok {
+		return time.Since(st)
+	}
+	return 0
 }
 
 // blocksToPrompt 把输入块转成 Pi 的 prompt 参数(文本拼接 + base64 图片)。
@@ -1792,7 +1823,7 @@ func replayEntryDigest(e *piapp.Entry) string {
 				toolName = upd.Call.Name
 			}
 		case "tool_execution_end":
-			if upd, ok := MapToolExecEnd(ev.Raw, piToolClip); ok {
+			if upd, ok := MapToolExecEnd(ev.Raw, piToolClip, 0); ok {
 				ends++
 				toolName = upd.Call.Name
 				if !upd.Result.Ok {

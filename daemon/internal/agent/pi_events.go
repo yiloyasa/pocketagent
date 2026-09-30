@@ -13,7 +13,9 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
@@ -102,6 +104,11 @@ func piArgsString(raw json.RawMessage) string {
 // ---- tool_execution_* ----
 
 // piToolExec tool_execution_start/update/end 的公共形状。
+//
+// 【0.99.1 deepseek 实帧(2026-09-30,%TEMP%\pistudy_json_tool.jsonl)】update/end
+// 帧都带 args 字段 —— UPDATE/FINISHED 帧据此回填 JsonArgs,手机端按 callId 原地
+// 替换工具卡时参数摘要不丢(pi TUI 的工具卡标题 = 工具名 + key=value 参数摘要,
+// 见包内 dist/core/tools/render-utils.js formatToolCallWithArgs)。
 type piToolExec struct {
 	Type       string          `json:"type"`
 	ToolCallID string          `json:"toolCallId"`
@@ -116,6 +123,75 @@ type piToolExec struct {
 // piToolResult 工具执行结果:content 是块数组(取全部 text 拼接)。
 type piToolResult struct {
 	Content []piContent `json:"content"`
+	// structuredContent 工具自带的结构化结果(bash 实帧:
+	// {"output":...,"truncated":false,"exit_code":0,"wall_time_seconds":0.1})。
+	// 只取展示用字段,不影响正文文本。
+	Structured json.RawMessage `json:"structuredContent"`
+}
+
+// piToolStructured structuredContent 的展示字段(全部指针/可选:不同工具给的
+// 字段不同,缺什么就不展示什么,绝不编造)。
+type piToolStructured struct {
+	ExitCode  *float64 `json:"exit_code"`
+	WallTime  *float64 `json:"wall_time_seconds"`
+	Truncated bool     `json:"truncated"`
+}
+
+// parseToolStructured 解析 structuredContent;空/解析失败返回零值(无脚注)。
+func parseToolStructured(raw json.RawMessage) piToolStructured {
+	var s piToolStructured
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return piToolStructured{}
+	}
+	return s
+}
+
+// piFormatSeconds 秒数格式化(与 pi TUI formatDuration 的 <60s 分支同形:一位小数)。
+func piFormatSeconds(sec float64) string {
+	return fmt.Sprintf("%.1fs", sec)
+}
+
+// piToolFooter 工具卡的耗时/退出码/截断脚注(对齐 pi TUI bash 渲染器的
+// "Took 4.1s" / "(exit N)" / "[Truncated: ...]" 语义 —— 包内
+// dist/core/tools/renderers/bash.js)。
+//
+// 数据来源纪律:wallTime 只信 structuredContent 的 wall_time_seconds;elapsed 是
+// daemon 自己实测的起止差(真测量,非编造)。三者的展示条件:
+//   - secs(耗时):structuredContent 优先,缺了用 elapsed,再缺就没有耗时行;
+//   - exitCode:非 0 才展示(pi 也是只在出错时标 exit);
+//   - truncated:true 才展示。
+//
+// 全部缺席返回空串(无脚注);body 非空时脚注前加换行,保证不黏在正文上。
+func piToolFooter(s piToolStructured, elapsed time.Duration, running bool, bodyLen int) string {
+	var parts []string
+	switch {
+	case s.WallTime != nil:
+		label := "用时"
+		if running {
+			label = "已运行"
+		}
+		parts = append(parts, label+" "+piFormatSeconds(*s.WallTime))
+	case elapsed > 0:
+		label := "用时"
+		if running {
+			label = "已运行"
+		}
+		parts = append(parts, label+" "+piFormatSeconds(elapsed.Seconds()))
+	}
+	if s.ExitCode != nil && *s.ExitCode != 0 {
+		parts = append(parts, fmt.Sprintf("退出码 %s", strconv.FormatFloat(*s.ExitCode, 'f', -1, 64)))
+	}
+	if s.Truncated {
+		parts = append(parts, "输出已截断")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	footer := "[" + strings.Join(parts, " · ") + "]"
+	if bodyLen > 0 {
+		footer = "\n" + footer
+	}
+	return footer
 }
 
 type piContent struct {
@@ -154,15 +230,19 @@ func piResultText(r *piToolResult) string {
 // 【proto 新增 UPDATE 相位的原因】旧枚举只有 STARTED/FINISHED,表达不了
 // "同一 callId 的进行中进度";Android 端已有按 callId 覆盖机制,UPDATE 帧
 // 直接被它消费(调研 §3.1#1)。
-func MapToolExecUpdate(raw json.RawMessage, clip int) (pb.ToolCallUpdate, bool) {
+//
+// elapsed 是 daemon 对该 callId 实测的"从 tool_execution_start 到本帧"的时长
+// (pi TUI 在执行中每秒刷 "Elapsed Xs",这里以脚注形式带给手机端;0=未知,无脚注)。
+func MapToolExecUpdate(raw json.RawMessage, clip int, elapsed time.Duration) (pb.ToolCallUpdate, bool) {
 	e := parseToolExec(raw)
 	if e == nil || e.Type != "tool_execution_update" || e.ToolCallID == "" {
 		return pb.ToolCallUpdate{}, false
 	}
 	out := clipRunes(piResultText(e.PartialResult), clip)
+	out += piToolFooter(piToolStructured{}, elapsed, true, len(out))
 	return pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_UPDATE,
-		Call:  &pb.ToolCallBlock{Id: e.ToolCallID, Name: e.ToolName},
+		Call:  &pb.ToolCallBlock{Id: e.ToolCallID, Name: e.ToolName, JsonArgs: piArgsString(e.Args)},
 		Result: &pb.ToolResultBlock{
 			CallId: e.ToolCallID,
 			Ok:     true, // 进行中:没有失败语义
@@ -172,18 +252,24 @@ func MapToolExecUpdate(raw json.RawMessage, clip int) (pb.ToolCallUpdate, bool) 
 }
 
 // MapToolExecEnd tool_execution_end → FINISHED 帧。
-func MapToolExecEnd(raw json.RawMessage, clip int) (pb.ToolCallUpdate, bool) {
+//
+// 【展示增强(对齐 pi TUI)】finish 脚注 = structuredContent 的真实字段
+// (wall_time_seconds/exit_code/truncated),缺字段回退 daemon 实测 elapsed,
+// 再缺就没有脚注 —— 绝不编造。脚注在 clip 之后追加,永不被截掉。
+func MapToolExecEnd(raw json.RawMessage, clip int, elapsed time.Duration) (pb.ToolCallUpdate, bool) {
 	e := parseToolExec(raw)
 	if e == nil || e.Type != "tool_execution_end" || e.ToolCallID == "" {
 		return pb.ToolCallUpdate{}, false
 	}
+	out := clipRunes(piResultText(e.Result), clip)
+	out += piToolFooter(parseToolStructured(e.Result.Structured), elapsed, false, len(out))
 	return pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_FINISHED,
-		Call:  &pb.ToolCallBlock{Id: e.ToolCallID, Name: e.ToolName},
+		Call:  &pb.ToolCallBlock{Id: e.ToolCallID, Name: e.ToolName, JsonArgs: piArgsString(e.Args)},
 		Result: &pb.ToolResultBlock{
 			CallId: e.ToolCallID,
 			Ok:     !e.IsError,
-			Output: clipRunes(piResultText(e.Result), clip),
+			Output: out,
 		},
 	}, true
 }
@@ -614,6 +700,45 @@ func MapSessionNameChange(raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// MapAssistantStop 从 message_end 帧提取"异常收尾"的助手消息(0.99.1 实帧:
+// {"type":"message_end","message":{"role":"assistant",...,"stopReason":"length|error|stop|aborted",
+// "errorMessage":...}})。
+//
+// 【为什么需要它】pi TUI 会把 length 截断渲染成 "Response was truncated before
+// completion."、error 渲染成 "Error: <msg>"(包内
+// dist/modes/interactive/components/assistant-message.js);daemon 此前把 message_end
+// 整类归为只落台账(piLedgerOnlyEvent),手机端对"回复被截断"完全不可见 ——
+// 用户看到的是一条戛然而止的回复,分不清是模型说完了还是被截了。
+// 只认 length/error 两类正常路径不会出现的收尾;stop/aborted 不发卡(aborted 有
+// 专门的取消 UX,error 大多伴随 auto_retry/TurnFailed,别双重报警)。
+// 返回 (事件, true) 表示应上屏一张 WARNING 状态卡;调用方仍照旧落台账。
+func MapAssistantStop(raw json.RawMessage) (*pb.CodexEvent, bool) {
+	var e struct {
+		Message struct {
+			Role         string `json:"role"`
+			StopReason   string `json:"stopReason"`
+			ErrorMessage string `json:"errorMessage"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &e) != nil || e.Message.Role != "assistant" {
+		return nil, false
+	}
+	ev := &pb.CodexEvent{Kind: pb.CodexEvent_WARNING}
+	switch e.Message.StopReason {
+	case "length":
+		ev.Code = "assistant_stop_length"
+		ev.Title = "回复被截断"
+		ev.Message = "本条回复在达到长度上限前被截断,内容可能不完整;可让 agent 继续输出。"
+		return ev, true
+	case "error":
+		ev.Code = "assistant_stop_error"
+		ev.Title = "模型返回错误"
+		ev.Message = firstNonEmpty(e.Message.ErrorMessage, "模型流以错误收尾。")
+		return ev, true
+	}
+	return nil, false
 }
 
 // clipRunes 按 rune 截断(工具输出进 pb 前限长,防单帧过大)。

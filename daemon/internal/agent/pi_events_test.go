@@ -61,8 +61,9 @@ func TestMapToolcallEndStartsCard(t *testing.T) {
 func TestMapToolExecUpdateIsCumulativeReplacement(t *testing.T) {
 	first := `{"type":"tool_execution_update","toolCallId":"call_1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"line-1\nline-2\n"}]}}`
 	second := `{"type":"tool_execution_update","toolCallId":"call_1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"line-1\nline-2\nline-3\n"}]}}`
-	u1, ok1 := MapToolExecUpdate(json.RawMessage(first), piToolClip)
-	u2, ok2 := MapToolExecUpdate(json.RawMessage(second), piToolClip)
+	// elapsed=0(无脚注)才能做包含断言;带脚注的形状在 display 测试里钉。
+	u1, ok1 := MapToolExecUpdate(json.RawMessage(first), piToolClip, 0)
+	u2, ok2 := MapToolExecUpdate(json.RawMessage(second), piToolClip, 0)
 	if !ok1 || !ok2 {
 		t.Fatalf("update 映射失败: %v %v", ok1, ok2)
 	}
@@ -80,8 +81,8 @@ func TestMapToolExecUpdateIsCumulativeReplacement(t *testing.T) {
 func TestMapToolExecEndIsError(t *testing.T) {
 	okEnd := `{"type":"tool_execution_end","toolCallId":"call_1","toolName":"bash","isError":false,"result":{"content":[{"type":"text","text":"done"}]}}`
 	badEnd := `{"type":"tool_execution_end","toolCallId":"call_2","toolName":"bash","isError":true,"result":{"content":[{"type":"text","text":"boom"}]}}`
-	u1, ok1 := MapToolExecEnd(json.RawMessage(okEnd), piToolClip)
-	u2, ok2 := MapToolExecEnd(json.RawMessage(badEnd), piToolClip)
+	u1, ok1 := MapToolExecEnd(json.RawMessage(okEnd), piToolClip, 0)
+	u2, ok2 := MapToolExecEnd(json.RawMessage(badEnd), piToolClip, 0)
 	if !ok1 || !ok2 || !u1.Result.Ok || u2.Result.Ok {
 		t.Fatalf("FINISHED 帧 Ok 语义错误: %v %v %v %v", ok1, ok2, u1.Result.Ok, u2.Result.Ok)
 	}
