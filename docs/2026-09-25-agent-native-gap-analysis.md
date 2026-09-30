@@ -12,22 +12,29 @@
 - 明确不收：realtime 语音、fs/changed、remoteControl、fuzzyFileSearch、windowsSandbox、plugin/marketplace、command/exec（桌面面无手机消费方）。
 - 留观：thread/turns/list、thread/items/list、thread/search*、thread/timeline/list、thread/queue/*（6 请求）、thread/settings/update、rollout/compress、collaborationMode/list、mcpServer/event/stream/*——与现有能力的整合点待判读。
 
+## Codex 0.159.2（2026-09-30 适配轮）
+
+运行时请求面 167→170（+3 gatewayOAuth/*，桌面面不收）；通知面 75→85（零消失）。收编 2+1：authRecovery 两连（PASSTHROUGH+词表）、terminalInteraction 补登 PROJECTED（0.159.2 起配套 kind=writeStdin 审批卡，codex_requests.go 诚实分卡）。不收：thread/realtime/item/*、account/gatewayOAuth/*、thread/attachment/*、mcpServer/event/stream/notification（理由见 runtime/knowledge_codex.go 头注）。thread/read includeTurns 在 paginated 线程活体实测仍全量回水（已标 deprecated，留观）。审批回路/turn/steer 活体单轮全绿。schema 快照已刷新至 0.159.2（codex-schema/）。
+
 ## Pi 0.87.1
 - **usage 复测结论**：非零但口径为 per-message（每条 assistant 消息最后增量帧带真实用量，与 get_session_stats 终值相等）；过程帧仍恒 0。已改事件驱动优先+轮询兜底（可望去掉常态轮询）。
 - 新事件 9 键进词表：turn_start/turn_end、message_start/message_end（携带 ~70KB system 全量 prompt——已治理为只落台账不推 sink）、entry_appended、summarization_retry 三件套（实名为 summarization_retry_finished）、extension_error。
 - 已接：clear_queue 全链（piapp+server `ClearQueuedInputs`，RPC 81→82）。
 - 留观（P2/P3）：follow_up 原生投递、set_auto_compaction/set_auto_retry 设置透出、fork/clone/get_tree 会话树（需树 UI，收益低）、bash RPC。
+- 2026-09-30 重探 0.99.1（piprobe 29 项全过）：新增 6 命令（new_session/cycle_model/cycle_thinking_level/set_follow_up_mode/abort_retry/abort_bash）全部留观；新增事件 bash_execution_update+补收编 thinking_level_changed；compaction_end 四态如实呈现；get_state 新增 sessionName（只读已呈现）；set_follow_up_mode 实证落盘 `<agentDir>/settings.json`，红线维持只读；词表 +2。
 
 ## ZCode 0.16.9
 - **关键实证**：settings.updated/session.modelUpdated 已消失；模型/思考档切换由顶层 `state.updated`（patch.settings.*）携带——**既有同步链路未断**，死分支保留作旧版兼容。
 - 词表收编 12 条：session.titleUpdated（PROJECTED→TitleHandler 桌面改名同步）、session.created/resumed/closed、checkpoint.created、rewind.triggered、turn.terminal、subagent.lifecycle、usage.delta、startup/storageState + 4 条遥测（process/resourceSample 每分钟 1 条，此前灌 UNKNOWN 193 条/两天）。
 - session/event 已拆壳分类（`session/event:<type>`），model.streaming 不再落 UNKNOWN。
 - 留观：permission.requested/userInput.requested 双轨（需带审批的真实轮次实证）；session/subagents、session/usage RPC 接入（P2）；browser*/workspace 偏好（不收）。
+- 2026-09-30 复验补齐：词表+分类双收 9 键——顶层遥测 v4/telemetry/event（委派轮 8 条）、computer-use/operation-event，union 记录流镜像 message.*/part.*/streamRecovery.updated（bundle 静态 zod 枚举）；台账复合键 session/event:<type> 全集入词表；interaction/requestOfficialMcpAuthHeaders 给人话（设计即 UNKNOWN_REQUEST 登记+读时翻译）。
 
 ## DSH 0.1.5-rc.3
 - **探针 4/8 项因缺 API key 受阻**（README 阻碍 5 同源）——补 key 是解锁自身验证债的第一步。
 - 0.1.7 在 next 通道（明示 breaking），**等进 latest 再统一重探**：plan_update 变体、image 能力可能翻真、权限模式/Auto review、archive 管理。现有 `session/update:plan` 前缀透传恰好兜住 plan_update。
 - P3 不收：Agent Team、定时任务、浏览器后端（桌面概念，ACP 未暴露）。
+- 2026-09-30 已重探 0.2.0-rc.2（依赖 419 包大换血）：ACP 9 方法不变；resume cwd 必填延续且旧会话 57/57 可恢复；breaking 点全部落在解析层并已适配（tool_call_update 嵌套 content/title 即工具名/config_option_update 刷新/messageId 新字段）；证据见 docs/verify/evidence/2026-09-30/。
 
 ## 翻译词表口径订正
 词表实数 62 条（55 精确 + 7 dsh 前缀），此前文档写 70 有误；本轮后各家又新增（zcode +12、pi +9、codex +13），以 `daemon/internal/runtime/knowledge_*.go` 为准。
