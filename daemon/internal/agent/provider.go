@@ -43,6 +43,12 @@ type TurnRequest struct {
 	Thread      *store.Thread
 	InputBlocks []pb.ContentBlock
 	Workspace   string
+	// MemoryContextPrefix 是 server 层在请求前组装好的记忆上下文前缀（四层：
+	// 会话元数据 → 已保存记忆 → 早期摘要 → 近期消息，组装与预算见
+	// server/turn_memory_context.go）。可选注入：目前仅 OpenAI 兼容 provider
+	// 消费（并入首条 user 消息前的 system 补充段），其余 provider 不读该字段、
+	// 零影响；空串 = 本轮不注入。protobuf 不承载（仅 Go 内存态，不出进程）。
+	MemoryContextPrefix string
 }
 
 // Provider 大模型提供商。

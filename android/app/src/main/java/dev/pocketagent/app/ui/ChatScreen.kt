@@ -61,7 +61,6 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -103,7 +102,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
@@ -116,15 +114,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -190,9 +184,7 @@ import io.grpc.Status
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import pocketagent.v1.ApprovalDecision
 import pocketagent.v1.ApprovalRequest
-import pocketagent.v1.ContentBlock
 import pocketagent.v1.CodexEvent
 import pocketagent.v1.CreateThreadRequest
 import pocketagent.v1.CodexSettings
@@ -216,15 +208,9 @@ import pocketagent.v1.ListSlashCommandsRequest
 import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ModelInfo
 import pocketagent.v1.SetCodexSettingsRequest
-import pocketagent.v1.TextBlock
 import pocketagent.v1.ApproveGuardianDeniedActionRequest
 import pocketagent.v1.Thread as PThread
-import pocketagent.v1.ToolCallUpdate
-import pocketagent.v1.TurnClientMessage
 import pocketagent.v1.ThreadStatus
-import pocketagent.v1.TurnInput
-import pocketagent.v1.TurnServerMessage
-import pocketagent.v1.Usage
 import pocketagent.v1.WriteFileRequest
 
 /** 一条聊天记录(用户/助手/工具过程/思考过程/执行计划)。 */
@@ -1166,13 +1152,22 @@ internal fun rollbackActionOn(agentId: String?, capabilities: List<String>): Boo
     agentCapableOf("rollback", agentId, capabilities)
 
 /**
- * 附件/图片入口的隐藏门(最小事实门控):dsh 当前路由不支持图片输入
- * (daemon/internal/agent/dsh.go:promptCapabilities.image=false 时发图如实报
- * "请改用文本输入"),附件按钮是手机端唯一的图片入口 —— dsh 会话里隐藏,
- * 免得用户选完图必吃失败壳;其余 agent 行为不变。
- * 【切换预案】daemon 的 `image_input:<id>` 位尚未生成(位就绪后本函数改为
- * `!agentCapableOf("image_input", agentId, capabilities)`,与 compact/fork 同一
- * 节奏);在那之前按"事实"先挡住唯一确定的必败入口。
+ * 附件/图片入口的隐藏门(能力位门控):daemon 逐 agent 宣告 `image_input:<id>`
+ * (host.go:151,按 agent.ImageInputter 断言逐家如实声明——codex/pi/zcode 带位、
+ * dsh 无位),缺位 = 该家发图必败(dsh 对图片块如实报"请改用文本输入"),
+ * 附件按钮是手机端唯一的图片入口 —— 缺位会话里隐藏,免得用户选完图必吃失败壳;
+ * 带位 agent 行为不变。判定与 compact/fork 同一口径(agentCapableOf,见
+ * SlashCommandsLogic.kt:大小写/空白不敏感,agentId 空/空白一律视为缺位)。
+ * 【切换记录】此前按"事实"硬编码 dsh(daemon 的 image_input 位尚未生成);
+ * 位就绪后(2026-09-27 能力对齐)切为按位判定,与 compact/fork 同一节奏。
+ */
+internal fun attachmentEntryHiddenFor(agentId: String?, capabilities: List<String>): Boolean =
+    !agentCapableOf("image_input", agentId, capabilities)
+
+/**
+ * 【仅旧单测兼容的遗留壳,生产勿用】单参形态是 image_input 位落地前的 dsh
+ * 硬编码门,生产调用点已全部切到上方能力位形态;保留只为 ThreadActionGateTest
+ * 的旧用例可编译(其"空位不隐藏"语义已随位落地过时),测试改写后即删本壳。
  */
 internal fun attachmentEntryHiddenFor(agentId: String?): Boolean =
     agentId?.trim().equals("dsh", ignoreCase = true)
@@ -3514,11 +3509,10 @@ fun ChatScreen(
                     Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                         verticalAlignment=Alignment.CenterVertically) {
                     // [+ 附件]
-                    // 【dsh 排除门】dsh 当前路由不支持图片输入(daemon dsh.go 对图片块
-                    // 如实报"请改用文本输入"),附件按钮是手机端唯一的图片入口 —— dsh
-                    // 会话隐藏,免得选完图必吃失败壳;其余 agent 不动。daemon 的
-                    // image_input:<id> 位就绪后切换为按位判定(见 attachmentEntryHiddenFor)。
-                    if (!attachmentEntryHiddenFor(threadAgentId)) {
+                    // 【image_input 位门控】daemon 逐 agent 宣告 image_input:<id>(dsh 无位,
+                    // 发图必败),附件按钮是手机端唯一的图片入口 —— 缺位会话隐藏,免得
+                    // 选完图必吃失败壳;带位 agent 不动(见 attachmentEntryHiddenFor)。
+                    if (!attachmentEntryHiddenFor(threadAgentId, hostCaps)) {
                     Box(
                         Modifier
                             // PA-REAL-0004:触控箱 ≥48dp(原 32dp);图标仍 20dp 居中,视觉不变。

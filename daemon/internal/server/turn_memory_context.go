@@ -1,8 +1,14 @@
 package server
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strings"
+
+	"github.com/pocketagent/daemon/internal/agent"
+	"github.com/pocketagent/daemon/internal/runtime"
+	"github.com/pocketagent/daemon/internal/store"
 )
 
 // turn_memory_context.go —— P2「四层上下文组装」：ReadWindow/记忆槽的第一个真实读者
@@ -190,4 +196,88 @@ func truncateRunesEllipsis(s string, maxBytes int64) string {
 		b.WriteString(mark)
 	}
 	return b.String()
+}
+
+// turnContextTruncatedMark 超预算兜底截断时追加在前缀尾部的如实标注。
+// 截断必须让人（和模型）看得出来——谎称完整比超限更糟。
+const turnContextTruncatedMark = "[上下文摘要已截断]"
+
+// buildTurnMemoryContext 四层上下文的**取数半边**（组装半边是上方的纯函数）：
+// 从统一 Runtime 读本会话的记忆槽，组装出本轮请求的上下文前缀（thread.go
+// 轮次心脏的接线点消费，填进 agent.TurnRequest.MemoryContextPrefix）。
+// 返回空串 = 本轮不注入。
+//
+// 【分档判据照 recordTurnMemory】只有 daemon 家（memory.daemon：echo/OpenAI 兼容）
+// 的 conversation 槽里存着会话**原文**；hybrid 家 daemon 侧只有 JSON 索引行
+// （拼进提示词是让模型读账目）、native 家 daemon 侧无正文——一律返回空串不注入。
+// 谁的记忆给谁用，猜着注入就是把别家的数据记到它名下。
+//
+// 【预算】取 effectiveLimits 的 DiskConversationBytes 档位（接线定案），传给
+// assembleTurnContext 做内部裁剪；出口处再按同一档位兜底截断并追加
+// turnContextTruncatedMark（组装的内部预算只决定"选哪些层"，保底消息仍可能越线）。
+//
+// 【失败不阻断轮次】与 recordTurnMemory 同一条纪律：读槽失败按空槽降级并留日志，
+// 前缀缺一层好过一轮跑不了；静默降级会让"记忆没接上"无从发现，所以必须出声。
+func (s *Server) buildTurnMemoryContext(provider agent.Provider, t *store.Thread) string {
+	if s == nil || s.runtimeBackend == nil || provider == nil || t == nil {
+		return ""
+	}
+	if memoryModelOf(provider) != runtime.MemoryDaemon {
+		return ""
+	}
+	agentID := provider.ID()
+	ctx := context.Background()
+	mem := s.runtimeBackend.Memory()
+
+	// 层②：summary 槽的收敛摘要行（compact_digest 行，登记序即旧→新）。
+	var saved []string
+	if snap, err := mem.Load(ctx, runtime.MemoryKey{AgentID: agentID, ThreadID: t.ID, Kind: runtime.MemorySummary}); err != nil {
+		log.Printf("[memory] %s 上下文前缀读 summary 槽失败（按空槽降级）: thread=%s err=%v", agentID, t.ID, err)
+	} else if snap != nil {
+		for i := range snap.Items {
+			if snap.Items[i].Meta[metaEntryKind] != entryCompactDigest {
+				continue
+			}
+			if line := strings.TrimSpace(string(snap.Items[i].Payload)); line != "" {
+				saved = append(saved, line)
+			}
+		}
+	}
+
+	// 层③+层④：conversation 槽的 Digest（早期摘要）与未压缩项（近期消息，旧→新）。
+	var digest string
+	var msgs []turnContextMessage
+	if snap, err := mem.Load(ctx, runtime.MemoryKey{AgentID: agentID, ThreadID: t.ID, Kind: runtime.MemoryConversation}); err != nil {
+		log.Printf("[memory] %s 上下文前缀读 conversation 槽失败（按空槽降级）: thread=%s err=%v", agentID, t.ID, err)
+	} else if snap != nil {
+		digest = strings.TrimSpace(snap.Digest)
+		for i := range snap.Items {
+			text := string(snap.Items[i].Payload)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			msgs = append(msgs, turnContextMessage{Role: snap.Items[i].Role, Text: text})
+		}
+	}
+
+	// 全空：不发（空前缀只会让 provider 平白多一条空 system 消息）。
+	if len(saved) == 0 && digest == "" && len(msgs) == 0 {
+		return ""
+	}
+
+	budget := derefInt64(s.effectiveLimits(agentID, t.Workspace, t.ID, "").DiskConversationBytes)
+	prefix := assembleTurnContext(daemonTurnContextMeta(s.hostID, agentID, t.ID, t.Workspace), saved, digest, msgs, budget)
+	if budget > 0 && int64(len(prefix)) > budget {
+		// 给截断标注本身留出字节；额度连标注都容不下时硬裁到 0，只留标注。
+		room := budget - int64(len(turnContextTruncatedMark)+1)
+		if room < 0 {
+			room = 0
+		}
+		prefix = truncateRunesEllipsis(prefix, room)
+		if prefix != "" {
+			prefix += "\n"
+		}
+		prefix += turnContextTruncatedMark
+	}
+	return prefix
 }

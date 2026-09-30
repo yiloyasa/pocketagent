@@ -148,14 +148,6 @@ type MemoryLimit struct {
 	FromSequence int64 `json:"from_sequence,omitempty"`
 }
 
-// Truncated 报告窗口是否被任一上限截断（调用方据此决定是否需要翻页或压缩）。
-func (l MemoryLimit) Truncated(items int, bytes int64) bool {
-	if l.MaxItems > 0 && items >= l.MaxItems {
-		return true
-	}
-	return l.MaxBytes > 0 && bytes >= l.MaxBytes
-}
-
 // CompactPolicy 是压缩策略（规格 §6.3 SummaryMemory）。
 type CompactPolicy struct {
 	// KeepRecentItems 必须保留的最近项数（压缩只能动更早的项）。

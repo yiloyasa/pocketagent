@@ -1590,7 +1590,8 @@ func (p *CodexProvider) ApplyPrefs(pref DesktopPrefs) {
 	p.disablePasteBurst = pref.DisablePasteBurst
 }
 
-// Prefs 读回当前内存态(供 GetCodexSettings 回显与 server 层合并)。
+// Prefs 读回当前内存态(仅供测试与调试回显;生产链路七项设置经 PrefsAware
+// 广播(ApplyPrefs 灌入、轮次参数透传),不经此结构)。
 func (p *CodexProvider) Prefs() DesktopPrefs {
 	p.setMu.Lock()
 	defer p.setMu.Unlock()

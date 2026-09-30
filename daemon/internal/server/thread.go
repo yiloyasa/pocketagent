@@ -1336,21 +1336,20 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 	// append 用户消息，所以此处与"消息落库那一刻"看到的是同一份内容）。
 	// 写在各调用点会漏 —— 委派与协同两条路径就是这样：它们自己 append 用户消息后
 	// 直接进来，不经过 StartTurn 的那两行，于是子线程只剩 assistant 侧记忆。
+	// 【P2 memory 分层·四层上下文注入(已接线,原 TODO 落地)】daemon 家
+	// (memory.daemon:echo/OpenAI 兼容)的每轮请求前,把 assembleTurnContext
+	// (turn_memory_context.go)的四层产物——元数据 → 已保存记忆(summary 槽
+	// compact_digest 行)→ 早期摘要(conversation 槽 Digest)→ 近期消息(尾部窗口)
+	// ——作为上下文前缀注入。定案走注释里两案的**混合最小面**:TurnRequest 增加可选
+	// 字段 MemoryContextPrefix(protobuf 不动,仅 Go 内存态),由 openai_compat.go
+	// 组装 oaMessage 时并入(首条 user 消息前的 system 补充段);其余 provider 不读
+	// 该字段,零影响 —— 不用"server 偷改 Thread"那条路(红线)。
+	// 【取数在用户侧记忆写入之前】下一行的 recordTurnMemory 会把本轮用户输入写进
+	// conversation 槽,而同一条输入又作为 InputBlocks 原样进请求 —— 先取前缀,
+	// 近期消息层就只含历史轮,同一条输入不会在上下文里出现两遍(取数/分档/预算
+	// 细节见 buildTurnMemoryContext)。
+	memoryPrefix := s.buildTurnMemoryContext(provider, t)
 	s.recordTurnMemory(provider, t, "user", turnID, inputBlocks)
-
-	// 【P2 memory 分层·四层上下文组装的接线点（本轮交付组装函数，注入待接）】
-	// 设计稿 D4/spec §7：daemon 家（memory.daemon：echo/OpenAI 兼容）的每轮请求前，
-	// 应把 assembleTurnContext（turn_memory_context.go）的四层产物——元数据 → 已保存
-	// 记忆（summary 槽）→ 早期摘要（conversation 槽 Digest）→ 近期消息（尾部窗口）——
-	// 作为上下文前缀注入。此处（用户侧记忆写入之后、provider.Run 之前）就是注入位：
-	//   前缀 := assembleTurnContext(daemonTurnContextMeta(...), savedRows, digest, msgs, 预算)
-	// 未接的原因：注入要过 agent 包——要么 agent.TurnRequest 增加前缀字段，要么
-	// openai_compat.go:135 的 oaMessage 组装处回读 daemon 组装结果（req.Thread.Messages
-	// 是它唯一的历史来源），两者都在 agent/**（本轮冻结：并行代理在改 agent 家文件，
-	// 且 daemon 不重写轮次循环的红线要求注入点在 provider 边界内显式成形，而不是靠
-	// server 偷改 Thread）。接线时预算取 s.effectiveLimits(...) 的 DiskConversationBytes，
-	// saved/digest/messages 三层从 runtimeBackend.Memory() 按 key 读取（读法照
-	// recordTurnMemory 的分档判据，非 daemon 家一律不注入）。
 	// 每轮独立的取消函数:CancelTurn RPC / 重入打断拿到的是"当前这一轮"的;
 	// 父 ctx(手机取消帧)被取消时会连带取消这里的子 ctx。
 	// 【先取 Err 再 cancel】cancel 之后再查 runCtx.Err() 永远非 nil,
@@ -1358,6 +1357,7 @@ func (s *Server) runTurnOnce(ctx context.Context, provider agent.Provider, turnI
 	runCtx, cancel := context.WithCancel(ctx)
 	blocks, usagePtr, runErr := provider.Run(runCtx, agent.TurnRequest{
 		Thread: t, InputBlocks: inputBlocks, Workspace: t.Workspace,
+		MemoryContextPrefix: memoryPrefix,
 	}, sink, approve)
 	userStopped = runCtx.Err() != nil
 	cancel()

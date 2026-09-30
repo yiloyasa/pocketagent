@@ -132,6 +132,16 @@ func (p *OpenAICompatible) Run(ctx context.Context, req TurnRequest, sink Sink, 
 		Content: "你是 PocketAgent,一个在用户电脑上工作的编程助手。工具执行结果会以 role=tool 返回。" +
 			"文件路径一律相对工作区。改文件和跑命令前先说明意图。任务完成就总结,不要无限循环。",
 	}}
+	// 【四层记忆上下文注入】server 层在请求前组装好的前缀(TurnRequest.MemoryContextPrefix,
+	// 仅 daemon 家注入)作为 system 补充段插在首条 user 消息之前,让模型带着
+	// "会话元数据/已保存记忆/早期摘要/近期消息"开工;空前缀不发(省一条空消息)。
+	// 其他 provider 不读该字段,此处是唯一消费点,注入对它们零影响。
+	if prefix := strings.TrimSpace(req.MemoryContextPrefix); prefix != "" {
+		msgs = append(msgs, oaMessage{
+			Role:    "system",
+			Content: "以下是 daemon 为本会话组装的记忆上下文(元数据/已保存记忆/早期摘要/近期消息),供参考:\n" + prefix,
+		})
+	}
 	for _, m := range req.Thread.Messages {
 		msgs = append(msgs, blocksToOpenAI(m.Role, m.Blocks)...)
 	}
