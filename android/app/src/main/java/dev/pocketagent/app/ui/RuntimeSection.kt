@@ -40,6 +40,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -298,6 +300,9 @@ private fun ControlCenterSection(
                                     .onFailure { writeError = it.message }
                             }
                         },
+                        // 透析域头部 B 开关的写失败与展开体内的开关共用同一个失败位:
+                        // 用户分得清"没改成"还是"没读到",原因也只有一个落点。
+                        onToggleUnknown = { err -> writeError = err },
                     )
                 }
                 writeError?.let {
@@ -353,6 +358,10 @@ private fun ControlStatusDot(kind: ControlDotKind) {
  * 状态点是固定小圆点不参与挤压;行距收紧 2dp;字阶降一档 —— 三件事都来自
  * L2 真机对长 summary 域行(资源预算)的挑刺。结构上仍守统一行型:无边无影,
  * 分隔线 0.5dp Separator,点击整行 pressable(与设置页行同手感)。
+ *
+ * 【trailing 插槽(直控开关位)】部分域(协同/未知事件)在行尾、状态点之前摆一个
+ * 直控 Switch —— 用户不进展开体就能碰总闸。插槽消费自己的点击,整行的 pressable
+ * (展开/弹窗)不受影响;null = 该域没有直控开关,版面与改造前完全一致。
  */
 @Composable
 private fun ControlDomainHeaderRow(
@@ -362,6 +371,7 @@ private fun ControlDomainHeaderRow(
     divider: Boolean,
     chevron: Boolean,
     onClick: (() -> Unit)?,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Column {
         Row(
@@ -382,6 +392,7 @@ private fun ControlDomainHeaderRow(
                     maxLines = 2,
                 )
             }
+            trailing?.invoke()
             ControlStatusDot(dotKind)
             if (chevron) {
                 Spacer(Modifier.width(6.dp))
@@ -422,12 +433,25 @@ private fun ControlDomainBlock(
     onEditNumber: (ControlItemRow) -> Unit,
     onEditSelect: (ControlItemRow) -> Unit,
     onToggle: (ControlItemRow, Boolean) -> Unit,
+    onToggleUnknown: (String?) -> Unit,
 ) {
     val memoryAgent = if (domain.id == CONTROL_DOMAIN_MEMORY) memoryAgentTargetOf(domain.items) else null
     val onClick: (() -> Unit)? = when (domain.id) {
         CONTROL_DOMAIN_DIALYSIS -> onOpenDialysis
         CONTROL_DOMAIN_MEMORY -> memoryAgent?.let { { onOpenMemory(it) } }
         else -> if (controlDomainExpandable(domain.items)) onToggleExpand else null
+    }
+    // 【域行头部直控开关(2026-09-30 双端直控)】协同域头部摆协同总开关、未知事件
+    // 域头部摆未知请求透传 B 开关 —— 不进展开体/二级编辑就能碰总闸。数据取值与
+    // 可用性由 ControlDirectSwitchLogic 的纯函数钉死(现值认不出/快照缺席/提交中
+    // 一律禁用);开关本体见 [CollabMasterSwitch] / [DialysisUnknownSwitch]。
+    val headerTrailing: (@Composable () -> Unit)? = when (domain.id) {
+        CONTROL_DOMAIN_COLLAB -> {
+            val item = collabMasterSwitchItem(domain)
+            if (item != null) @Composable { CollabMasterSwitch(item = item, onToggle = onToggle) } else null
+        }
+        CONTROL_DOMAIN_DIALYSIS -> @Composable { DialysisUnknownSwitch(onWriteError = onToggleUnknown) }
+        else -> null
     }
     // 【域行专用排版,不走通用 SettingRow】L2 真机挑刺(06-control-plane-full):
     // summary 长文案被行尾状态点/箭头挤压、title 与 summary 行距偏松、字阶偏大。
@@ -441,6 +465,7 @@ private fun ControlDomainBlock(
         divider = divider,
         chevron = onClick != null,
         onClick = onClick,
+        trailing = headerTrailing,
     )
     // memory 行点不动 = 只有合计项(还没有 Agent 接入);补一句事实说明为什么不跳。
     if (domain.id == CONTROL_DOMAIN_MEMORY && memoryAgent == null && domain.items.isNotEmpty()) {
@@ -474,6 +499,86 @@ private fun ControlDomainBlock(
 }
 
 /**
+ * 直控 Switch 的统一色板(与展开体内 ControlItemLine 的开关同款):
+ * 选中轨道 = 主色,未选 = 抬升面 + 细线描边。三处开关一个色,控制中心内部不分叉。
+ */
+@Composable
+private fun controlSwitchColors() = androidx.compose.material3.SwitchDefaults.colors(
+    checkedTrackColor = PaEditorial.Primary,
+    uncheckedTrackColor = PaEditorial.Raised,
+    uncheckedBorderColor = PaEditorial.Hairline,
+)
+
+/**
+ * 协同域头部的协同总开关直控(2026-09-30 双端直控波次)。
+ *
+ * 【写通道】与展开体内的同类开关同一条:[ControlPlaneState.applyToggle] → 既有
+ * SetCollabPolicy(先 Get 再完整 Set + CAS),键 → 字段映射在 applyControlToggle
+ * (纯函数,单测钉死);成功后回读 GetControlPlane,开关位置由 daemon 下一份快照
+ * 决定 —— 不做乐观改写。
+ *
+ * 【状态失真时如实】现值认不出 / 提交中 → 禁用([collabMasterSwitchState] 钉死);
+ * daemon 快照里没有该项 → 头部根本不摆开关(装配点判空)。
+ */
+@Composable
+private fun CollabMasterSwitch(
+    item: ControlItemRow,
+    onToggle: (ControlItemRow, Boolean) -> Unit,
+) {
+    val state = collabMasterSwitchState(item, ControlPlaneState.busyItemId != null)
+    Switch(
+        checked = state.checked,
+        enabled = state.enabled,
+        onCheckedChange = { on -> onToggle(item, on) },
+        colors = controlSwitchColors(),
+        modifier = Modifier
+            .padding(start = 6.dp)
+            .semantics { contentDescription = "协同总开关" },
+    )
+}
+
+/**
+ * 未知事件域头部的未知请求透传 B 开关(同语义直控,2026-09-30 双端直控波次)。
+ *
+ * 【为什么在透析域头部】该开关决定"未识别的反向请求要不要先来手机上确认",
+ * 归宿就是消息透析;设置页实验区已有同款入口(SplitButton),这里是同数据的
+ * 快捷位 —— 数据源与写通道完全同一条:读 RuntimeControlState.budget.policy 的
+ * unknown_request_passthrough,写走 [applyUnknownPassthroughToggle](既有
+ * SetRuntimePolicy 完整策略 + CAS,成功后回读控制中心)。
+ *
+ * 【加载中禁用】预算快照缺席(还没读到/上次读取失败)时禁用 —— 把"没读到"
+ * 画成"是关的"且可点,用户一按就可能写反;等快照在手再启用,如实。
+ * busy 状态本地持有(本开关的提交不经过 busyItemId 通道),提交期间禁用防连点。
+ */
+@Composable
+private fun DialysisUnknownSwitch(onWriteError: (String?) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    val state = unknownPassthroughSwitchState(
+        budget = RuntimeControlState.budget,
+        busy = busy || ControlPlaneState.busyItemId != null,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("透传", fontSize = 11.sp, color = PaEditorial.Muted)
+        Switch(
+            checked = state.checked,
+            enabled = state.enabled,
+            onCheckedChange = { on ->
+                busy = true
+                scope.launch {
+                    onWriteError(applyUnknownPassthroughToggle(on))
+                    busy = false
+                }
+            },
+            colors = controlSwitchColors(),
+            modifier = Modifier
+                .padding(start = 2.dp)
+                .semantics { contentDescription = "未知请求透传开关(未识别操作确认)" },
+        )
+    }
+}
+
+/**
  * 域内一项:toggle → Switch(现值认不出时走只读分支,显示原文不猜布尔);
  * budget/collab number → 点行弹小输入框;agents 桌面偏好 select → 点行弹候选弹窗
  * (候选只列 daemon 给的 options);其余(info / 未接写通道)只读 label + 现值原文。
@@ -499,11 +604,7 @@ private fun ControlItemLine(
                         checked = controlToggleOn(item.current) == true,
                         enabled = enabled,
                         onCheckedChange = { on -> onToggle(item, on) },
-                        colors = androidx.compose.material3.SwitchDefaults.colors(
-                            checkedTrackColor = PaEditorial.Primary,
-                            uncheckedTrackColor = PaEditorial.Raised,
-                            uncheckedBorderColor = PaEditorial.Hairline,
-                        ),
+                        colors = controlSwitchColors(),
                     )
                 }
             }
