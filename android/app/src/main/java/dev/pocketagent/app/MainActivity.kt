@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -148,14 +147,21 @@ private fun RootNav() {
         PaNotifications.clearPendingChatNavigation()
     }
 
-    SideEffect {
-        val window = (context as? ComponentActivity)?.window ?: return@SideEffect
-        window.statusBarColor = PaEditorial.Canvas.toArgb()
-        window.navigationBarColor = PaEditorial.Canvas.toArgb()
-        WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = !PaEditorial.IsDark
-            isAppearanceLightNavigationBars = !PaEditorial.IsDark
+    // 系统栏随显示模式换肤:把色盘状态槽放进键位(读键即订阅),浅/深/黑客任意
+    // 切盘都重挂。原 SideEffect 写法读状态但不订阅,切盘后栏色/图标停留在上一盘
+    // —— 与 SettingsScreen.EditorialSystemBars(DisposableEffect(PaEditorial.IsDark))
+    // 同一机制,两处键控口径一致。
+    androidx.compose.runtime.DisposableEffect(PaEditorial.Canvas, PaEditorial.IsDark) {
+        val window = (context as? ComponentActivity)?.window
+        if (window != null) {
+            window.statusBarColor = PaEditorial.Canvas.toArgb()
+            window.navigationBarColor = PaEditorial.Canvas.toArgb()
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !PaEditorial.IsDark
+                isAppearanceLightNavigationBars = !PaEditorial.IsDark
+            }
         }
+        onDispose { }
     }
 
     NavHost(

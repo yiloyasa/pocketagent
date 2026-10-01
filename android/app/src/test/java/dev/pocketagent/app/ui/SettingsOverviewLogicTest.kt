@@ -96,6 +96,14 @@ class SettingsOverviewLogicTest {
         )
     }
 
+    // ---- S2:Daemon 桥接行摘要(对话显示散项聚拢后,改取实验功能开关)----------
+
+    @Test
+    fun `Daemon桥接行摘要 取优化按钮开关状态_本地偏好断连可读`() {
+        assertEquals("优化按钮关", daemonBridgeSummary(false))
+        assertEquals("优化按钮开", daemonBridgeSummary(true))
+    }
+
     // ---- 主机信任摘要 -------------------------------------------------------------
 
     @Test

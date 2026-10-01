@@ -75,6 +75,14 @@ object PaEditorial {
     // ---- 语义色(README:主色只用于当前操作) ----
     /** 主色(浅:#386BE7)仅当前操作(激活导航项/主按钮/进行中的选择)。 */
     var Primary by mutableStateOf(Color(0xFF386BE7)); private set
+    /**
+     * 主色之上的内容色(M3 onPrimary)。浅/深盘主色为深色蓝系,内容=白;
+     * 黑客盘主色是电光青 #22D3EE(高亮度),白字对比率仅 **1.81:1**(WCAG 深红区),
+     * 2026-09-30 换暗青 **#062B33** 后 **8.29:1**(≥7:1 达 WCAG AAA)。
+     * 消费:PaTheme 与 editorialM3Scheme 的 onPrimary —— 两处必须同读本槽位,
+     * 防止"同一主色两种内容色"的盘间漂移。
+     */
+    var OnPrimary by mutableStateOf(Color.White); private set
     /** 主色浅底(浅:--blue-dim #E8EFFF)。 */
     var PrimaryContainer by mutableStateOf(Color(0xFFE8EFFF)); private set
     /** 运行/已连接(浅:#21977D)。 */
@@ -133,6 +141,8 @@ object PaEditorial {
             GraphiteCode = Color(0xFF050507); Hairline = Color(0xFF1C2028)
             Ink = Color(0xFFE6E9EF); Muted = Color(0xFF8B93A3); Subtle = Color(0xFF5B6372)
             Primary = Color(0xFF22D3EE); PrimaryContainer = Color(0xFF0E2A33)
+            // onPrimary:电光青上白字 1.81:1 → 暗青上 8.29:1(计算见 [OnPrimary] 头注)
+            OnPrimary = Color(0xFF062B33)
             Running = Color(0xFF2DD4BF); RunningContainer = Color(0xFF0B2B27)
             Attention = Color(0xFFFBBF24); AttentionContainer = Color(0xFF332708)
             Denied = Color(0xFFF87171); DeniedContainer = Color(0xFF331B1B)
@@ -154,7 +164,7 @@ object PaEditorial {
             Hover = Color(0xFF232C3B); Graphite = Color(0xFF1A2230); GraphiteDrawer = Color(0xFF141B27)
             GraphiteCode = Color(0xFF10161F); Hairline = Color(0xFF2A3442)
             Ink = Color(0xFFE8EDF4); Muted = Color(0xFFA2AEBD); Subtle = Color(0xFF6B7887)
-            Primary = Color(0xFF6C9BF2); PrimaryContainer = Color(0xFF1D3050)
+            Primary = Color(0xFF6C9BF2); OnPrimary = Color.White; PrimaryContainer = Color(0xFF1D3050)
             Running = Color(0xFF4CC2A4); RunningContainer = Color(0xFF12312B)
             Attention = Color(0xFFE5B36B); AttentionContainer = Color(0xFF33270F)
             Denied = Color(0xFFF08580); DeniedContainer = Color(0xFF3A2123)
@@ -177,7 +187,7 @@ object PaEditorial {
             Hover = Color(0xFFE8ECEF); Graphite = Color(0xFF1E2835); GraphiteDrawer = Color(0xFF1B2634)
             GraphiteCode = Color(0xFF1A2430); Hairline = Color(0xFFE3E7EB)
             Ink = Color(0xFF19222D); Muted = Color(0xFF5F6C7C); Subtle = Color(0xFF828B95)
-            Primary = Color(0xFF386BE7); PrimaryContainer = Color(0xFFE8EFFF)
+            Primary = Color(0xFF386BE7); OnPrimary = Color.White; PrimaryContainer = Color(0xFFE8EFFF)
             Running = Color(0xFF21977D); RunningContainer = Color(0xFFE5F5EF)
             Attention = Color(0xFFA96726); AttentionContainer = Color(0xFFFFF1DD)
             Denied = Color(0xFFC94F4D); DeniedContainer = Color(0xFFFFF0ED)

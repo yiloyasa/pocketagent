@@ -52,6 +52,12 @@ enum class ApprovalPhase {
  * @param unavailableReason UNAVAILABLE 时的人话原因(失效/重复/超时/提交失败),
  *   由调用方给具体文案,组件只负责展示。
  * @param queuePosition / queueTotal 多请求按到达顺序的数量(1 起始)。
+ * @param options 审批卡可选项(daemon ApprovalRequest.options,codex 0.159.2
+ *   三按钮审批);**空 = 旧 daemon**,组件走旧两按钮,行为一字不变。
+ * @param details daemon 给的人话详情(proposedExecpolicyAmendment /
+ *   commandActions 摘要);null/空白不渲染,不摆空壳。
+ * @param submittedOption SUBMITTING 中用户点的选项 id(第三按钮起才有;null =
+ *   旧两按钮口径,回显按 [submittedChoice] 落位)。
  */
 data class ApprovalRequestUi(
     val requestId: String,
@@ -67,6 +73,9 @@ data class ApprovalRequestUi(
     val unavailableReason: String? = null,
     val queuePosition: Int = 1,
     val queueTotal: Int = 1,
+    val options: List<ApprovalOptionUi> = emptyList(),
+    val details: String? = null,
+    val submittedOption: String? = null,
 )
 
 /** 决定按钮是否可用:只有收到请求/待决定两态可点(提交中禁重复,终态/失效禁用)。 */
@@ -80,9 +89,15 @@ val ApprovalRequestUi.retryEnabled: Boolean
 /**
  * 进入提交中:记录用户点的按钮用于单按钮回显;非可决定态调用是**无操作**
  * (纯函数不抛异常,防御调用方双击竞态 —— 第二次点击落在 SUBMITTING 时不改状态)。
+ *
+ * [option] 是三按钮审批的选项 id(如 acceptForSession);null/空 = 旧两按钮
+ * 口径,只记 [ApprovalRequestUi.submittedChoice]。acceptForSession 也是允许:
+ * allow=true + option,布尔语义与旧端完全一致。
  */
-fun ApprovalRequestUi.submitting(allow: Boolean): ApprovalRequestUi =
-    if (decideEnabled) copy(phase = ApprovalPhase.SUBMITTING, submittedChoice = allow) else this
+fun ApprovalRequestUi.submitting(allow: Boolean, option: String? = null): ApprovalRequestUi =
+    if (decideEnabled) {
+        copy(phase = ApprovalPhase.SUBMITTING, submittedChoice = allow, submittedOption = option)
+    } else this
 
 /** 服务端确认(带结果):仅提交中可进;允许/拒绝从此以服务端确认为唯一依据。 */
 fun ApprovalRequestUi.serverConfirmed(allow: Boolean): ApprovalRequestUi =
@@ -257,3 +272,100 @@ fun approvalRiskVisualOf(signal: ApprovalRiskSignal): ApprovalRiskVisual =
     } else {
         ApprovalRiskVisual(alert = false, headline = "常规操作", reasonsLabel = null)
     }
+
+// ---------------------------------------------------------------- 三按钮选项(C1)
+
+/**
+ * 审批卡上的一个可选项(来自 daemon ApprovalRequest.options,codex 0.159.2
+ * 三按钮审批增量)。[id] 是 codex 应答枚举原词(accept / acceptForSession /
+ * decline,旧词 approved / approved_for_session / denied),应答时**原样**回填
+ * ApprovalDecision.option,由 daemon 按协议版本翻译 —— 手机端不做词形转换。
+ */
+data class ApprovalOptionUi(
+    val id: String,
+    val label: String = "",
+    val description: String = "",
+)
+
+/** daemon proto 选项 → UI 值对象(调用方装配 [ApprovalRequestUi.options] 用)。 */
+fun List<pocketagent.v1.ApprovalOption>.toApprovalOptionUi(): List<ApprovalOptionUi> =
+    map { ApprovalOptionUi(id = it.id, label = it.label, description = it.description) }
+
+/** 选项按钮的语义色档:主允许(石墨实底)/ 次允许(浅底描边)/ 拒绝(红)。 */
+enum class ApprovalOptionRole { PRIMARY_ALLOW, SECONDARY_ALLOW, DENY }
+
+/** 渲染用的一颗选项按钮:[id] 应答原词、[label] 钉死文案、[role] 决定色档与应答通道。 */
+data class ApprovalOptionButton(
+    val id: String,
+    val label: String,
+    val role: ApprovalOptionRole,
+)
+
+// deny 类特征词:decline / denied / deny / reject(大小写不敏感;旧词 denied 也命中)。
+// 不命中才按允许类渲染 —— 宁可红得保守,不给破坏性选项穿允许色的外衣。
+// 【I2 修复】原词表 "deni|declin|reject" 漏了 deny 本形(d-e-n-y 第四字母是 y 不是 i),
+// "DenyOnce" 这类自定义 deny 选项被误判成允许类(ApprovalThreeOptionTest 钉住)。
+private val ApprovalOptionDenyPattern = Regex("deny|deni|declin|reject", RegexOption.IGNORE_CASE)
+
+// 三个已知 id(与旧词枚举)的钉死文案与色档(手机端语序:主按钮最短最常用;
+// "本会话允许"讲清作用域;旧词 approved 系列是同一语义的历史拼写,同色同文。
+// cancel 也是合法应答但**不作第三按钮广告**,不在映射表里)。
+private val KnownOptionRoles = mapOf(
+    "accept" to ApprovalOptionRole.PRIMARY_ALLOW,
+    "approved" to ApprovalOptionRole.PRIMARY_ALLOW,
+    "acceptForSession" to ApprovalOptionRole.SECONDARY_ALLOW,
+    "approved_for_session" to ApprovalOptionRole.SECONDARY_ALLOW,
+)
+private val KnownOptionLabels = mapOf(
+    "accept" to "本次允许",
+    "approved" to "本次允许",
+    "acceptForSession" to "本会话允许",
+    "approved_for_session" to "本会话允许",
+    "decline" to "拒绝",
+    "denied" to "拒绝",
+)
+
+/**
+ * options → 按钮序列(纯函数,单测钉死 ApprovalThreeOptionTest)。
+ *
+ * 【映射规则】已知 id 用钉死文案与色档:accept(旧词 approved)=主允许「本次允许」/
+ * acceptForSession(旧词 approved_for_session)=次允许「本会话允许」/
+ * decline 与一切 deny 类(旧词 denied)=红「拒绝」;未知 id 不猜语义,文案用
+ * daemon 给的 label(空则回退 id),deny 特征词命中的按拒绝渲染,其余按次允许渲染。
+ * 【排序】允许类在前、拒绝殿后,同类保持 daemon 顺序(stable)—— 卡片上
+ * 先给出口、再给刹车,与旧两按钮"左拒右许"同一空间语言。
+ * 【空 options = 旧 daemon】返回空列表,组件据此走旧两按钮,行为一字不变。
+ */
+fun approvalOptionButtonsOf(options: List<ApprovalOptionUi>): List<ApprovalOptionButton> =
+    options.map { o ->
+        val denyLike = ApprovalOptionDenyPattern.containsMatchIn(o.id) ||
+            ApprovalOptionDenyPattern.containsMatchIn(o.label)
+        ApprovalOptionButton(
+            id = o.id,
+            label = KnownOptionLabels[o.id] ?: o.label.ifBlank { o.id },
+            role = KnownOptionRoles[o.id]
+                ?: if (denyLike) ApprovalOptionRole.DENY else ApprovalOptionRole.SECONDARY_ALLOW,
+        )
+    }.sortedByDescending { it.role != ApprovalOptionRole.DENY } // 稳定排序:允许在前,拒绝殿后
+
+/**
+ * 该选项按钮是否处于「提交中」单按钮回显(纯函数,单测钉死)。只有用户点中的
+ * 那颗转圈,其余保持可读 —— 与旧两按钮的 [ApprovalRequestUi.submittedChoice]
+ * 纪律一致:[submittedOption] 空(旧口径)时允许类回显落主按钮、拒绝类按
+ * submittedChoice=false 回显;有选项 id 时严格按 id 落位,绝不两颗同转。
+ */
+fun approvalOptionEcho(
+    button: ApprovalOptionButton,
+    phase: ApprovalPhase,
+    submittedChoice: Boolean?,
+    submittedOption: String?,
+): Boolean {
+    if (phase != ApprovalPhase.SUBMITTING) return false
+    return if (submittedOption.isNullOrBlank()) {
+        // 旧口径(没带选项 id = 点的主允许/拒绝):回显只落主允许或拒绝,次允许不亮
+        (button.role == ApprovalOptionRole.PRIMARY_ALLOW && submittedChoice == true) ||
+            (button.role == ApprovalOptionRole.DENY && submittedChoice == false)
+    } else {
+        button.id == submittedOption
+    }
+}

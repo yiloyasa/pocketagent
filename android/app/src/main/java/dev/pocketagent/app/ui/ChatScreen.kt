@@ -124,6 +124,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -194,6 +195,8 @@ import dev.pocketagent.app.ui.component.HistoryTickBar
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
+import dev.pocketagent.app.ui.component.PaSkeletonList
+import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.PaStatusBadge
 import dev.pocketagent.app.ui.component.connectionBannerCopy
 import dev.pocketagent.app.ui.component.ConnectionBannerState
@@ -897,7 +900,7 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
     // 词走四词纪律(编辑式升级:状态必须写词,语义不单靠颜色);黑客终端保持旧词旧色。
     val statusColor = when (item.toolStatus) {
         "failure" -> ChatDeniedColor
-        "success" -> if (PaHacker.isHacker) PaEditorial.Running else PaEditorial.Running
+        "success" -> PaEditorial.Running
         else -> ChatAccentColor
     }
     Column(
@@ -1269,6 +1272,45 @@ internal fun offlineSnapshotBanner(atMs: Long): String? {
     if (atMs <= 0) return null
     val hhmm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(atMs))
     return "离线快照 · $hhmm"
+}
+
+// ---- 时间线首载骨架 / 空会话空态(R1 深接残项收口;纯函数,单测钉死)----
+// hermes 等会话首次进入时历史在途,旧实现整屏空白 —— 在途读作"卡死",空历史
+// 没有交代。骨架/空态都只在数据真实处于那一态时出现,绝不盖住错误横幅或离线副本。
+
+/**
+ * 是否显示"历史还在加载"骨架:时间线为空、首次历史还没回来、没有报错、
+ * 也没在离线副本上。任一否定条件成立就不摆 —— 有内容/已加载完/明确报错/
+ * 看副本,都轮不到骨架说话。
+ */
+internal fun shouldShowTimelineSkeleton(
+    itemsEmpty: Boolean,
+    historyLoaded: Boolean,
+    hasLoadError: Boolean,
+    offlineSnapshot: Boolean,
+): Boolean = itemsEmpty && !historyLoaded && !hasLoadError && !offlineSnapshot
+
+/**
+ * 是否显示"空会话"空态:历史确实加载完且一条都没有,且不在运行/恢复
+ * (轮次帧马上会来,不该闪空态),也没有报错/离线副本。
+ */
+internal fun shouldShowTimelineEmptyState(
+    itemsEmpty: Boolean,
+    historyLoaded: Boolean,
+    hasLoadError: Boolean,
+    offlineSnapshot: Boolean,
+    running: Boolean,
+    recovering: Boolean,
+): Boolean =
+    itemsEmpty && historyLoaded && !hasLoadError && !offlineSnapshot && !running && !recovering
+
+/**
+ * 空会话空态文案:主行陈述事实,副行给下一步(发第一条)。agent 名字带上让
+ * "在跟谁说话"可辨;归属未知退中性"agent",不冒名。无禁词(单测钉死)。
+ */
+internal fun timelineEmptyStateCopy(agentLabel: String): Pair<String, String> {
+    val who = agentLabel.ifBlank { "agent" }
+    return "还没有消息" to "发第一条消息，和 $who 开始这次任务"
 }
 
 // ---- 编辑式迁移(2026-09-29 UI 整体升级·第二波 2/4)纯函数区 ----
@@ -2397,19 +2439,29 @@ fun ChatScreen(
     // ---- 上下文窗口卡:断网缓存 + 自动刷新 ----
     // ① 每次收到用量更新(含从缓存回填的首帧)都写一份"最后一次已知用量"到本地:
     //    断网/自动断网后,卡片仍能照常显示这些数字,并标出是什么时候的。
+    //    【R1 收口 · 落盘节流】hermes 的 usage_update 逐事件投影(密集时一秒数帧),
+    //    缓存按 usagePersistCursorAccepts 节流写(3s 间隔;窗口变化/占用大跳除外,
+    //    纯函数 UsagePersistThrottleTest 钉死)—— 输入栏实时环与卡面实时值不受
+    //    节流影响,st.turnUsage 本身仍是逐帧真实值,这里只管磁盘写频率。
+    var usagePersistCursor by remember(threadId) { mutableStateOf<UsagePersistCursor?>(null) }
     LaunchedEffect(threadId, st.turnUsage, st.totalUsage, st.liveContextWindow) {
         UsageCache.init(ctx)
         if (st.turnUsage != null || st.totalUsage != null) {
-            UsageCache.save(
-                threadId,
-                UsageSnapshot(
-                    contextWindow = contextWindow,
-                    windowIsFallback = windowIsFallback,
-                    turnUsage = st.turnUsage,
-                    totalUsage = st.totalUsage,
-                    updatedAt = System.currentTimeMillis(),
-                ),
-            )
+            val nowMs = System.currentTimeMillis()
+            val nextTokens = usageTotalTokens(st.turnUsage)
+            if (usagePersistCursorAccepts(usagePersistCursor, nowMs, nextTokens, contextWindow)) {
+                UsageCache.save(
+                    threadId,
+                    UsageSnapshot(
+                        contextWindow = contextWindow,
+                        windowIsFallback = windowIsFallback,
+                        turnUsage = st.turnUsage,
+                        totalUsage = st.totalUsage,
+                        updatedAt = nowMs,
+                    ),
+                )
+                usagePersistCursor = UsagePersistCursor(nowMs, nextTokens, contextWindow)
+            }
         }
     }
     // ② 卡片打开期间每 3s 刷新一次;卡片关闭即随 LaunchedEffect 作用域取消,不会漏取消。
@@ -3128,6 +3180,11 @@ fun ChatScreen(
                 actionKind = copy.actionKind,
                 command = copy.command,
                 phase = ApprovalPhase.PENDING,
+                // 【R2 三选项装配】daemon(R1-C1)透出的选项列表与详情:有则审批卡
+                // 渲染三按钮(本次允许/本会话允许/拒绝);旧 daemon 无此字段 → 空
+                // 列表走旧两按钮分支,双向兼容。
+                options = ap.optionsList.toApprovalOptionUi(),
+                details = ap.details,
             )
             approvalDialogOpen = true
         }
@@ -3200,11 +3257,25 @@ fun ChatScreen(
                 request = ui,
                 onDecide = { allow ->
                     if (ui.decideEnabled) {
-                        PaHaptics.confirm(hapticView)
+                        // 触感按决定语义分档(同动作全局同强度):允许 = confirm
+                        // (已交出去);拒绝 = warning(打断电脑端的活,分量更重)。
+                        if (allow) PaHaptics.confirm(hapticView) else PaHaptics.warning(hapticView)
                         approvalUi = ui.submitting(allow)
                         // 现有 SubmitApproval 链:通道直发,失败回退 submitApproval RPC;
                         // 请求是否被收下以 st.pendingApproval 的移除为准(见上方状态机)
                         TurnSession.answerApproval(threadId, ui.requestId, allow)
+                    }
+                },
+                onDecideOption = { optionId ->
+                    if (ui.decideEnabled) {
+                        // 三按钮的第三按钮(acceptForSession 等):同为允许语义 →
+                        // confirm 档;选项 id 原词走同一条 answerApproval 链
+                        // (approved=true + option,daemon 按协议版本翻译)。
+                        PaHaptics.confirm(hapticView)
+                        approvalUi = ui.submitting(allow = true, option = optionId)
+                        TurnSession.answerApproval(
+                            threadId, ui.requestId, approved = true, option = optionId,
+                        )
                     }
                 },
                 onDismiss = {
@@ -3270,6 +3341,9 @@ fun ChatScreen(
                 IconActionButton(
                     AppR.drawable.ic_lucide_square, "终止任务",
                     {
+                        // 终止 = warning 档(打断电脑端的活;与发送键原位终止、
+                        // 「更多」面板终止同一档 —— 同动作全局同强度)
+                        PaHaptics.warning(hapticView)
                         TurnSession.cancelTurn(threadId)
                         Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
                     },
@@ -3493,7 +3567,7 @@ fun ChatScreen(
                             Text(
                                 "重试",
                                 fontSize = 11.5.sp,
-                                color = if (PaHacker.isHacker) PaEditorial.Primary else PaEditorial.Primary,
+                                color = PaEditorial.Primary,
                             )
                         }
                     }
@@ -3531,11 +3605,11 @@ fun ChatScreen(
                         offlineSnapshotAt = 0
                         reloadToken++
                     }) {
-                        Text(
-                            "重试",
-                            fontSize = 11.5.sp,
-                            color = if (PaHacker.isHacker) PaEditorial.Primary else PaEditorial.Primary,
-                        )
+                    Text(
+                        "重试",
+                        fontSize = 11.5.sp,
+                        color = PaEditorial.Primary,
+                    )
                     }
                 }
             }
@@ -3615,7 +3689,7 @@ fun ChatScreen(
                                 Text(
                                     "加载更早",
                                     fontSize = 12.5.sp,
-                                    color = if (PaHacker.isHacker) PaEditorial.Primary else PaEditorial.Primary,
+                                    color = PaEditorial.Primary,
                                 )
                             }
                         }
@@ -4012,6 +4086,59 @@ fun ChatScreen(
                 }
             }
         }
+        // 【R1 收口】hermes 等会话首次进入的两条"空白路"补齐(时间线 Box 的同层
+        // 覆盖层,不进 LazyColumn —— 头部 item 会让既有的 historyListOffset 滚动
+        // 锚定差一位;而骨架/空态只在 st.items 为空时出现,覆盖层无遮挡问题,
+        // 列表与覆盖层在同一帧原子切换,不会闪叠):
+        //  · 历史在途 → 消息气泡骨架(与真实气泡同轮廓,切内容不跳变;整块折叠为
+        //    单条「正在加载」读屏播报);
+        //  · 历史加载完且确实为空 → 空态(事实 + 下一步),不发愣。
+        // 判定走纯函数(shouldShowTimelineSkeleton / shouldShowTimelineEmptyState,
+        // TimelineSkeletonEmptyTest 钉死):报错横幅、离线副本、运行/恢复中都不摆。
+        if (shouldShowTimelineSkeleton(
+                itemsEmpty = st.items.isEmpty(),
+                historyLoaded = st.historyLoaded,
+                hasLoadError = loadError != null,
+                offlineSnapshot = offlineSnapshot,
+            )
+        ) {
+            // 气泡实际高度 ≈82dp,按它推条数,切到真实内容时高度不跳
+            PaSkeletonList(SkeletonKind.MESSAGE_BUBBLE, perRowHeight = 82.dp)
+        }
+        if (shouldShowTimelineEmptyState(
+                itemsEmpty = st.items.isEmpty(),
+                historyLoaded = st.historyLoaded,
+                hasLoadError = loadError != null,
+                offlineSnapshot = offlineSnapshot,
+                running = st.running,
+                recovering = st.recovering,
+            )
+        ) {
+            val (emptyHead, emptySub) = timelineEmptyStateCopy(selectedAgentLabel(threadAgentId))
+            Column(
+                Modifier.fillMaxWidth().padding(top = 96.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    painterResource(AppR.drawable.ic_lucide_message_square), null,
+                    tint = PaEditorial.Subtle, modifier = Modifier.size(28.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    emptyHead,
+                    fontSize = 14.sp, lineHeight = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = PaEditorial.Muted,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    emptySub,
+                    fontSize = 12.sp, lineHeight = 18.sp,
+                    color = PaEditorial.Subtle,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
             // 历史消息快速查看(视频样板二版+R1 实时刷选):左缘垂直刻度条 —— 每条
             // 用户消息一个刻度点(Canvas 一次绘制);轻点开完整列表浮层;按住拖动 =
             // 预览气泡跟手 + **列表实时滚动到手指所指**(拖到哪看到哪),松手精确锚定。
@@ -4073,12 +4200,12 @@ fun ChatScreen(
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_chevron_down), null,
-                        tint = Color.White, modifier = Modifier.size(12.dp),
+                        tint = PaEditorial.OnPrimary, modifier = Modifier.size(12.dp),
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
                         "${unreadBlocks.coerceAtLeast(1)} 条新内容",
-                        color = Color.White,
+                        color = PaEditorial.OnPrimary,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
                     )
@@ -4224,7 +4351,7 @@ fun ChatScreen(
                     )
                     .border(
                         1.dp,
-                        (if (PaHacker.isHacker) PaEditorial.Primary else PaEditorial.Primary).copy(alpha = 0.30f * focusGlow),
+                        PaEditorial.Primary.copy(alpha = 0.30f * focusGlow),
                         composerShape,
                     )
                     .animateContentSize(PaMotion.emphasized()),
@@ -4289,7 +4416,7 @@ fun ChatScreen(
                                         }
                                     }
                                     .background(
-                                        if (PaHacker.isHacker) PaEditorial.Raised else PaEditorial.Raised,
+                                        PaEditorial.Raised,
                                         RoundedCornerShape(12.dp),
                                     )
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -4929,7 +5056,14 @@ fun ChatScreen(
                                     inserting -> "插入运行中任务"
                                     else -> "发送"
                                 },
-                                tint = if (sendEnabled || canStopTurn) Color.White else ChatSubtleColor,
+                                // 内容色:sendEnabled 腿坐 Primary 实底,读 OnPrimary 令牌
+                                //(黑客盘电光青上白字 1.81:1);canStopTurn 腿坐 Denied,
+                                // 白字为既有口径(OnDenied 令牌在案待议)。
+                                tint = when {
+                                    canStopTurn -> Color.White
+                                    sendEnabled -> PaEditorial.OnPrimary
+                                    else -> ChatSubtleColor
+                                },
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -5207,6 +5341,8 @@ fun ChatScreen(
                     if (st.running) {
                         SheetAction(AppR.drawable.ic_lucide_square, "终止当前任务", ChatDeniedColor) {
                             showMore = false
+                            // 终止 = warning 档(与顶栏终止键、发送键原位终止同档)
+                            PaHaptics.warning(hapticView)
                             TurnSession.cancelTurn(threadId)
                             Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
                         }
@@ -5356,7 +5492,10 @@ fun ChatScreen(
                 ) {
                     Text(
                         if (goalSaving) "正在保存…" else "保存目标",
-                        fontSize = 14.5.sp, color = Color.White, fontWeight = FontWeight.Medium,
+                        // saving 腿坐 Hover 底保持白字;就绪腿坐 Primary 实底读 OnPrimary
+                        fontSize = 14.5.sp,
+                        color = if (goalSaving) Color.White else PaEditorial.OnPrimary,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
             }
@@ -5636,6 +5775,8 @@ fun ModelEffortCard(
 ) {
     // 会话归属 agent:调用方没给(旧调用点/预览)时退全局选中 agent,行为不变。
     val sessionAgent = agentId.ifBlank { AgentConnection.selectedAgent }
+    // 强度胶囊的触感落点(独立卡面,自取 LocalView;light 档见下方 onClick)
+    val effortHapticView = LocalView.current
     Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier
@@ -5837,6 +5978,9 @@ fun ModelEffortCard(
                     Box(
                         Modifier
                             .pressable {
+                                // 强度切换 = light 档(高频低强度的刻度级反馈,触感分级
+                                // 体系;模型/档位选择卡内不惊扰)。LocalView 由卡面自取。
+                                PaHaptics.light(effortHapticView)
                                 // 按会话记住并立即持久化(与模型同一套语义):
                                 // 退出再进不回退、不污染其它会话、重启 App 不丢失。
                                 AgentConnection.setThreadEffort(threadId, e.id)
@@ -5851,7 +5995,7 @@ fun ModelEffortCard(
                         Text(
                             e.label,
                             fontSize = 13.sp,
-                            color = if (selected) Color.White else PaEditorial.Muted,
+                            color = if (selected) PaEditorial.OnPrimary else PaEditorial.Muted,
                         )
                     }
                 }
@@ -6245,7 +6389,7 @@ private fun ApprovalSheet(
                                                     Icon(
                                                         painterResource(AppR.drawable.ic_lucide_check),
                                                         null,
-                                                        tint = Color.White,
+                                                        tint = PaEditorial.OnPrimary,
                                                         modifier = Modifier.size(12.dp),
                                                     )
                                                 }
@@ -6413,7 +6557,7 @@ private fun ApprovalSheet(
                 Text(
                     if (isAsk) "提交" else "允许",
                     fontSize = 16.sp,
-                    color = if (isAsk && !canSubmit) PaEditorial.Subtle else Color.White,
+                    color = if (isAsk && !canSubmit) PaEditorial.Subtle else PaEditorial.OnPrimary,
                 )
             }
         }
@@ -6661,7 +6805,12 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                                     .padding(vertical = 12.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("提交全部变更", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "提交全部变更",
+                                    fontSize = 14.sp,
+                                    color = PaEditorial.OnPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         }
                     }
@@ -6824,7 +6973,7 @@ private fun ExpandedInputSheet(
                 ) {
                     Text(
                         "发送", fontSize = 13.sp,
-                        color = if (canSend) Color.White else PaEditorial.Subtle,
+                        color = if (canSend) PaEditorial.OnPrimary else PaEditorial.Subtle,
                     )
                 }
             }
@@ -7066,7 +7215,7 @@ private fun ExportChatSheet(
                             if (on) {
                                 Icon(
                                     painterResource(AppR.drawable.ic_lucide_check), null,
-                                    tint = Color.White, modifier = Modifier.size(11.dp),
+                                    tint = PaEditorial.OnPrimary, modifier = Modifier.size(11.dp),
                                 )
                             }
                         }
@@ -7120,7 +7269,7 @@ private fun ExportChatSheet(
                 Text(
                     if (selected.isEmpty()) "请选择要导出的消息" else "导出 " + selected.size + " 条消息(Markdown)",
                     fontSize = 14.5.sp,
-                    color = if (selected.isEmpty()) PaEditorial.Subtle else Color.White,
+                    color = if (selected.isEmpty()) PaEditorial.Subtle else PaEditorial.OnPrimary,
                     fontWeight = FontWeight.Medium,
                 )
             }

@@ -40,6 +40,7 @@ class PaPaletteMatrixTest {
         "Muted" to { PaEditorial.Muted },
         "Subtle" to { PaEditorial.Subtle },
         "Primary" to { PaEditorial.Primary },
+        "OnPrimary" to { PaEditorial.OnPrimary },
         "PrimaryContainer" to { PaEditorial.PrimaryContainer },
         "Running" to { PaEditorial.Running },
         "RunningContainer" to { PaEditorial.RunningContainer },
@@ -74,7 +75,7 @@ class PaPaletteMatrixTest {
         "Hover" to 0xFFE8ECEF, "Graphite" to 0xFF1E2835, "GraphiteDrawer" to 0xFF1B2634,
         "GraphiteCode" to 0xFF1A2430, "Hairline" to 0xFFE3E7EB,
         "Ink" to 0xFF19222D, "Muted" to 0xFF5F6C7C, "Subtle" to 0xFF828B95,
-        "Primary" to 0xFF386BE7, "PrimaryContainer" to 0xFFE8EFFF,
+        "Primary" to 0xFF386BE7, "OnPrimary" to 0xFFFFFFFF, "PrimaryContainer" to 0xFFE8EFFF,
         "Running" to 0xFF21977D, "RunningContainer" to 0xFFE5F5EF,
         "Attention" to 0xFFA96726, "AttentionContainer" to 0xFFFFF1DD,
         "Denied" to 0xFFC94F4D, "DeniedContainer" to 0xFFFFF0ED,
@@ -92,7 +93,7 @@ class PaPaletteMatrixTest {
         "Hover" to 0xFF232C3B, "Graphite" to 0xFF1A2230, "GraphiteDrawer" to 0xFF141B27,
         "GraphiteCode" to 0xFF10161F, "Hairline" to 0xFF2A3442,
         "Ink" to 0xFFE8EDF4, "Muted" to 0xFFA2AEBD, "Subtle" to 0xFF6B7887,
-        "Primary" to 0xFF6C9BF2, "PrimaryContainer" to 0xFF1D3050,
+        "Primary" to 0xFF6C9BF2, "OnPrimary" to 0xFFFFFFFF, "PrimaryContainer" to 0xFF1D3050,
         "Running" to 0xFF4CC2A4, "RunningContainer" to 0xFF12312B,
         "Attention" to 0xFFE5B36B, "AttentionContainer" to 0xFF33270F,
         "Denied" to 0xFFF08580, "DeniedContainer" to 0xFF3A2123,
@@ -110,7 +111,7 @@ class PaPaletteMatrixTest {
         "Hover" to 0xFF1A1D26, "Graphite" to 0xFF0A0B0F, "GraphiteDrawer" to 0xFF08090C,
         "GraphiteCode" to 0xFF050507, "Hairline" to 0xFF1C2028,
         "Ink" to 0xFFE6E9EF, "Muted" to 0xFF8B93A3, "Subtle" to 0xFF5B6372,
-        "Primary" to 0xFF22D3EE, "PrimaryContainer" to 0xFF0E2A33,
+        "Primary" to 0xFF22D3EE, "OnPrimary" to 0xFF062B33, "PrimaryContainer" to 0xFF0E2A33,
         "Running" to 0xFF2DD4BF, "RunningContainer" to 0xFF0B2B27,
         "Attention" to 0xFFFBBF24, "AttentionContainer" to 0xFF332708,
         "Denied" to 0xFFF87171, "DeniedContainer" to 0xFF331B1B,
@@ -156,8 +157,10 @@ class PaPaletteMatrixTest {
         val l = applyAndSnapshot(light, dark = false, hacker = false)
         val d = applyAndSnapshot(dark, dark = true, hacker = false)
         val h = applyAndSnapshot(hacker, dark = true, hacker = true)
-        // 白名单:CodeText 在浅盘也只出现在石墨代码箱(恒暗底),浅==深是母题而非漂移
-        val carryOver = setOf("CodeText")
+        // 白名单:CodeText 在浅盘也只出现在石墨代码箱(恒暗底),浅==深是母题而非漂移;
+        // OnPrimary 浅/深两盘同为白(两盘主色同为深蓝系,白字达标),仅黑客盘刻意换
+        // 暗青 #062B33(电光青上白字仅 1.81:1),浅==深同样是母题而非漏灌。
+        val carryOver = setOf("CodeText", "OnPrimary")
         slots.forEach { (name, _) ->
             if (name !in carryOver) {
                 assertNotEquals("槽位 $name 深盘与浅盘同值——疑似 apply 漏灌", l[name], d[name])
@@ -308,6 +311,20 @@ class PaPaletteMatrixTest {
         assertEquals(21f, PaContrast.contrastRatio(Color.Black, Color.White), 0.01f)
         assertEquals(1f, PaContrast.contrastRatio(Color.Black, Color.Black), 0.01f)
         assertTrue(PaContrast.meets(Color.White, Color.Black))
+    }
+
+    @Test
+    fun `对比度_onPrimary对各自盘Primary_黑客盘AAA浅盘AA`() {
+        // onPrimary = 主色之上的按钮/组件内容色(M3 语义)。黑客盘 2026-09-30 修复:
+        // 电光青 #22D3EE 上白字仅 1.81:1 → 换暗青 #062B33 后 8.29:1(≥7:1 AAA);
+        // 浅盘白字对 #386BE7 为 4.75:1(AA);深盘白字对 #6C9BF2 为 2.76:1,
+        // 未达 AA —— 本轮范围只限黑客盘反馈项,深盘在案待议(见 PaEditorial.OnPrimary)。
+        val hackerPair = applyAndSnapshot(hacker, dark = true, hacker = true)
+        val hackerRatio = PaContrast.contrastRatio(hackerPair["OnPrimary"]!!, hackerPair["Primary"]!!)
+        assertTrue("黑客盘 OnPrimary 对比率 $hackerRatio 低于 7(AAA)", hackerRatio >= 7f)
+        val lightPair = applyAndSnapshot(light, dark = false, hacker = false)
+        val lightRatio = PaContrast.contrastRatio(lightPair["OnPrimary"]!!, lightPair["Primary"]!!)
+        assertTrue("浅色盘 OnPrimary 对比率 $lightRatio 低于 4.5(AA)", lightRatio >= PaContrast.AA_TEXT)
     }
 
     companion object {

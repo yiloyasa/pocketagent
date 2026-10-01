@@ -534,7 +534,8 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                         PaDownloader.downloadFromPc(pcPath, pageTitle)
                         android.widget.Toast.makeText(ctx, "已开始下载到手机", android.widget.Toast.LENGTH_SHORT).show()
                     },
-                    bg = PaEditorial.Primary, tint = androidx.compose.ui.graphics.Color.White,
+                    // 内容色读 OnPrimary 令牌(黑客盘主色电光青上白字 1.81:1,该盘=暗青)
+                    bg = PaEditorial.Primary, tint = PaEditorial.OnPrimary,
                     size = 34.dp, iconSize = 16.dp,
                 )
                 Spacer(Modifier.width(8.dp))

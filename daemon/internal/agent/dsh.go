@@ -181,10 +181,15 @@ func NewDshProvider() *DshProvider {
 	}
 }
 
-// CollabReady 见 CollabAware。dsh 的协同走 ACP 的**会话级** mcpServers
-// (session/new 参数),所以判据是"cmd 层是否已把 collab 服务器注入进来" ——
-// 由 dshapp.SessionMCPServers 报告,空即未接线。
-func (p *DshProvider) CollabReady() bool { return len(dshapp.SessionMCPServers()) > 0 }
+// CollabReady 见 CollabAware。dsh 的协同接线已从**会话级** mcpServers 迁到
+// **部署级** profile 补丁层(dshapp.WriteCollabMcpPatch,cmd 层启动时写入;
+// 会话级路径因 dsh"非空拒绝"已弃用,生产恒空 —— 见 dshapp/protocol.go 注记)。
+// 判据随之换到接线事实本身:读补丁层文件,含 pocketagent-collab 条目 = dsh 的
+// Cordis 插件层确实注册了本 daemon 的 collab MCP;层被其他内容占用(启动时
+// 刻意不覆盖)或文件不在,如实报不具备 —— 不再拿恒空的会话级快照当判据
+// (旧判据让"已接线"永远漏报,手机端协同入口对 dsh 恒暗)。
+// 由 dshCollabWired 报告(collab_inject.go),false 即未接线。
+func (p *DshProvider) CollabReady() bool { return dshCollabWired() }
 
 func (p *DshProvider) ID() string          { return "dsh" }
 func (p *DshProvider) DisplayName() string { return "DeepSeek Harness(桌面 agent)" }

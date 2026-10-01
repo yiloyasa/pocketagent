@@ -148,6 +148,13 @@ func LocateCodex() (string, error) {
 // 回归钉子:start_args_test.go 以 fake 子进程捕获真实 argv 逐项断言。
 var daemonScopeArgs = []string{"-c", "notify=[]", "--disable", "apps"}
 
+// CollabExtraArgs 上层注入的可选 argv 追加器(internal/agent 协同接线,
+// agent/collab_inject.go):每次拉起 app-server **现算**(数据目录在 daemon
+// 启动期才注入,不能在包初始化时定格),返回的参数逐项追加在 daemonScopeArgs
+// 之后;nil/空 = 零行为变化。红线同 daemonScopeArgs:覆盖只进本子进程内存,
+// 绝不写用户 ~/.codex/config.toml。
+var CollabExtraArgs func() []string
+
 // Start 拉起 codex app-server 子进程。
 func Start() (*Client, error) {
 	bin, err := LocateCodex()
@@ -155,6 +162,9 @@ func Start() (*Client, error) {
 		return nil, err
 	}
 	args := append([]string{"app-server"}, daemonScopeArgs...)
+	if CollabExtraArgs != nil {
+		args = append(args, CollabExtraArgs()...)
+	}
 	// .cmd/.bat 不能被 CreateProcess 直接执行,要经 cmd /c
 	if len(bin) >= 4 && (bin[len(bin)-4:] == ".cmd" || bin[len(bin)-4:] == ".bat") {
 		args = append([]string{"/c", bin}, args...)

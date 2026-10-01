@@ -105,12 +105,15 @@ fun PaTheme(content: @Composable () -> Unit) {
     // 编辑式三色盘与 Pa 同步换肤:全部 editorial.* 消费点(700+ 处直取 + 44 处
     // 组合局部)随本调用零改动响应 显示模式(浅色/深色/黑客终端)。
     PaEditorial.apply(dark, hacker = AgentTheme.mode == "hacker")
+    // onPrimary 统一读 PaEditorial.OnPrimary:hacker 盘主色是电光青 #22D3EE,
+    // 白字对比仅 1.81:1,该盘内容色=暗青 #062B33(8.29:1)——与 editorialM3Scheme
+    // 同读同一槽位,两套 M3 色板内容色不漂移。
     val scheme = if (dark) darkColorScheme(
-        primary = Pa.Accent, onPrimary = Color.White, background = Pa.Bg, onBackground = Pa.TextPrimary,
+        primary = Pa.Accent, onPrimary = PaEditorial.OnPrimary, background = Pa.Bg, onBackground = Pa.TextPrimary,
         surface = Pa.Card, onSurface = Pa.TextPrimary, surfaceVariant = Pa.CardHigh,
         onSurfaceVariant = Pa.TextSecondary, outline = Pa.Separator, error = Pa.Red,
     ) else lightColorScheme(
-        primary = Pa.Accent, onPrimary = Color.White, background = Pa.Bg, onBackground = Pa.TextPrimary,
+        primary = Pa.Accent, onPrimary = PaEditorial.OnPrimary, background = Pa.Bg, onBackground = Pa.TextPrimary,
         surface = Pa.Card, onSurface = Pa.TextPrimary, surfaceVariant = Pa.CardHigh,
         onSurfaceVariant = Pa.TextSecondary, outline = Pa.Separator, error = Pa.Red,
     )

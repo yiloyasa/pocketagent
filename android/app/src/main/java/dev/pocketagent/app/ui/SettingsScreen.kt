@@ -130,7 +130,9 @@ import pocketagent.v1.SetCodexSettingsRequest
 internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.material3.darkColorScheme(
 
     primary = PaEditorial.Primary,
-    onPrimary = Color.White,
+    // onPrimary 同读 PaEditorial.OnPrimary(与 PaTheme 同槽位):黑客盘主色电光青
+    // #22D3EE 上白字 1.81:1,该盘内容色=暗青 #062B33(8.29:1);浅/深盘仍为白。
+    onPrimary = PaEditorial.OnPrimary,
     background = PaEditorial.Canvas,
     onBackground = PaEditorial.Ink,
     surface = PaEditorial.Surface,
@@ -142,7 +144,7 @@ internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.mate
 ) else androidx.compose.material3.lightColorScheme(
 
     primary = PaEditorial.Primary,
-    onPrimary = Color.White,
+    onPrimary = PaEditorial.OnPrimary,
     background = PaEditorial.Canvas,
     onBackground = PaEditorial.Ink,
     surface = PaEditorial.Surface,
@@ -382,7 +384,11 @@ private fun ManagedPolicyNote(text: String) {
  */
 private fun agentIcon(id: String): Int? = agentBrandIcon(id)
 
-private fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
+/**
+ * agent id → 人话名(内部可见:AgentScopeBadge 的作用域标签复用同一份词表,
+ * 不另立映射 —— 见 AgentScopeBadge.kt 头注的"名称与图标都只有一份来源")。
+ */
+internal fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank { "Agent" }
 
 /**
  * 全 app 唯一卡型(编辑式统一卡语言):18dp 圆角 + 瓷白实色底 + 1dp 细线描边
@@ -430,13 +436,15 @@ internal data class SettingsSearchEntry(
 
 /**
  * 设置搜索索引(静态,字符串与各分区行的 title/desc 同源 —— 改分区文案时
- * 这里一并改)。覆盖:一级导航行(连接 / Agent / 外观 / 数据与缓存 / 安全 / 关于
- * 的 R1-C 新分组)、Agent 与模型/Daemon/用户数据各页的代表分区、运行时控制台。
+ * 这里一并改)。覆盖:一级导航行(连接 / Agent / 外观 / 会话与对话 / 数据与缓存 /
+ * 安全 / 关于 的 S2 新分组)、Agent 与模型/Daemon/用户数据各页的代表分区、
+ * 运行时控制台。
  */
 internal fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("连接与配对", "地址 · 配对码 · 主机指纹", "连接", "userdata"),
-    SettingsSearchEntry("Daemon 桥接与输入", "连接策略 · 对话显示 · 语音 · 实验功能", "连接", "daemon"),
+    SettingsSearchEntry("Daemon 桥接与输入", "连接策略 · 语音 · 实验功能", "连接", "daemon"),
     SettingsSearchEntry("用户数据管理", "连接 · 配对 · 下载内容 · 存储占用", "连接", "userdata"),
+    SettingsSearchEntry("会话与对话", "显示思考 · 工具详情 · 历史轮数", "会话与对话"),
     SettingsSearchEntry("Agent 与模型", "切换 Agent · 权限 · 模型 · MCP", "Agent", "agent"),
     SettingsSearchEntry("外观与阅读", "显示模式 · 文字尺寸", "外观", "appearance"),
     SettingsSearchEntry("下载与存储", "下载内容 · 缓存清理 · 存储占用", "数据与缓存", "userdata"),
@@ -456,6 +464,14 @@ internal fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("下载内容", "文件 · 网页 · 快照缓存", "用户数据管理", "userdata"),
     SettingsSearchEntry("存储占用", "清理缓存 · 浏览器数据 · 会话快照", "用户数据管理", "userdata"),
 )
+
+/**
+ * Daemon 桥接与输入行的值摘要(S2:对话显示散项已聚拢到一级「会话与对话」组,
+ * 该页剩的可调项里唯一有开关状态的是实验功能的优化按钮 —— 摘要如实取它;
+ * 连接策略是固定事实,语音识别无开关,都不进摘要)。
+ */
+internal fun daemonBridgeSummary(optimizePromptEnabled: Boolean): String =
+    if (optimizePromptEnabled) "优化按钮开" else "优化按钮关"
 
 /**
  * 设置搜索过滤(纯函数):空/空白查询 = 不进入搜索模式(返回空列表,页面照常
@@ -486,15 +502,19 @@ internal fun matchRange(title: String, query: String): IntRange? {
 /**
  * 设置页(重做版:一级导航、二级编辑)。
  *
- * 【信息架构(R1-C 调整:M3 分组语义)】
- *  1. 一级页 = 电脑连接卡(hostStatus 槽)+ 六个卡组:连接 / Agent / 外观 /
- *     数据与缓存 / 安全 / 关于(另有运行时=控制中心区段)。相关项聚成卡组,
- *     组间留白 > 组内行距;每个导航行带"当前值摘要"——本地偏好断连照常出值,
- *     依赖主机的项断连如实标"需连接主机";
+ * 【信息架构(S2 调整:按"使用频率 + 风险"重排)】
+ *  1. 一级页 = 电脑连接卡(hostStatus 槽)+ 七个卡组:连接(最高频)/ Agent /
+ *     外观 / 会话与对话(S2 新增:显示思考 / 工具详情 / 历史轮数,从 Daemon 页
+ *     散项聚拢)/ 数据与缓存 / 安全 / 关于(另有运行时=控制中心区段,低频专业域,
+ *     能力位点亮才出现)。相关项聚成卡组,组间留白 > 组内行距;每个导航行带
+ *     "当前值摘要"——本地偏好断连照常出值,依赖主机的项断连如实标"需连接主机";
  *  2. 所有编辑动作收进二级页:连接与配对+下载与存储 → 用户数据管理 /
- *     Daemon 桥接与输入 / 外观与阅读 / Agent 与模型(安全组的两行分别深链前两者);
+ *     Daemon 桥接与输入(连接策略 · 语音 · 实验功能)/ 外观与阅读 / Agent 与模型
+ *     (安全组的两行分别深链前两者);
  *  3. 多选项设置仍统一 SplitButton;危险操作(撤销信任/删除数据)二次确认 +
- *     说明后果;开关给状态词与轻触感反馈。
+ *     说明后果;开关给状态词与轻触感反馈;
+ *  4. 【S2 作用域徽章】"仅作用于某 agent"的分区说明统一收敛为 AgentScopeBadge
+ *     小标签(codex/pi/zcode/hermes),谁生效一眼可辨。
  *
  * 【逻辑未变】审批/沙箱/模型/思考强度照样走 writeCodex 乐观更新 + 失败回滚;
  * 连接凭证照样走 setCredentials + connectWithFallback。
@@ -1027,11 +1047,9 @@ private fun SettingsScreenBody(
     // 各导航行的"当前值摘要"(R1-C:不用点进去就知道现状)——取值映射全部在
     // SettingsOverviewLogic 的纯函数里(单测钉死),这里只喂状态。
     val connSummary = connectionSummary(connStateTop, connTransportTop)
-    // 桥接与输入行:全局对话显示的两项本地偏好(Compose 状态,断连可读)。
-    val bridgeSummary = localDisplayPrefsSummary(
-        AgentConnection.showThinking,
-        AgentConnection.toolDetailsExpanded,
-    )
+    // Daemon 桥接与输入行(S2:对话显示三项已聚拢到下方「会话与对话」组就地展示,
+    // 该行摘要改取页内唯一带状态的实验功能开关;本地偏好,断连可读)。
+    val daemonSummary = daemonBridgeSummary(AgentConnection.optimizePromptEnabled)
     // 下载与存储行:本地任务清单(断连可用),只数已完成的下载。
     val allTasksTop by TaskCenter.tasks.collectAsState()
     val doneDownloadsTop = allTasksTop.count {
@@ -1191,12 +1209,13 @@ private fun SettingsScreenBody(
             if (settingsQuery.isBlank()) {
             // 当前主机卡已上移到骨架的 hostStatus 槽(PaHostChip,点进去 = 连接与配对)。
             //
-            // 【M3 分组语义(R1-C)】一级页重排为六组:连接 / Agent / 外观 / 数据与缓存 /
-            // 安全 / 关于(另有运行时=控制中心区段)。相关项聚成卡组:组间留白
-            // (GroupLabel top=16dp)> 组内行距(12dp);组头小字说明本组职责;
-            // 组内 1dp 细线分隔,组间零分割线(留白分层)。
-            // 每个导航行带"当前值摘要"—— 本地偏好类断连照常出值,依赖主机的项
-            // (审批/沙箱/电脑信息)断连如实标"需连接主机"。
+            // 【S2 分组语义(按"使用频率 + 风险"重排)】一级页七个卡组:连接(最高频)/
+            // Agent / 外观 / 会话与对话(S2 新增,自 Daemon 页聚拢)/ 数据与缓存 /
+            // 安全 / 关于(另有运行时=控制中心区段,低频专业域,排在会话与对话之后、
+            // 数据与缓存之前)。相关项聚成卡组:组间留白(GroupLabel top=16dp)>
+            // 组内行距(12dp);组头小字说明本组职责;组内 1dp 细线分隔,组间零分割线
+            // (留白分层)。每个导航行带"当前值摘要"—— 本地偏好类断连照常出值,
+            // 依赖主机的项(审批/沙箱/电脑信息)断连如实标"需连接主机"。
 
             // ---------- 连接 ----------
             item(key = "connect") {
@@ -1220,10 +1239,10 @@ private fun SettingsScreenBody(
                         )
                         SettingRow(
                             title = "Daemon 桥接与输入",
-                            desc = "连接策略 · 对话显示 · 语音 · 实验功能",
+                            desc = "连接策略 · 语音 · 实验功能",
                             icon = R.drawable.ic_lucide_server,
                             iconBox = true,
-                            value = bridgeSummary,
+                            value = daemonSummary,
                             chevron = true,
                             onClick = { subPage = "daemon" },
                         )
@@ -1254,11 +1273,6 @@ private fun SettingsScreenBody(
                 }
             }
 
-            // ---------- 运行时 ----------
-            // 只加这一行:区段本体在 ui/RuntimeSection.kt(排版 + 交互都在那边),
-            // 免得继续往这个 178KB 的文件里长内容。
-            item(key = "runtime") { RuntimeSection() }
-
             // ---------- 外观 ----------
             item(key = "appearance") {
                 Column {
@@ -1281,6 +1295,111 @@ private fun SettingsScreenBody(
                     }
                 }
             }
+
+            // ---------- 会话与对话(S2 新增)----------
+            // 原 Daemon 页「全局对话显示」的三项散项(显示思考 / 工具详情 / 历史轮数)
+            // 按使用频率聚拢为一级分组就地展示 —— 它们是对话观感的高频开关,不该藏在
+            // 二级页;写入路径原样(思考走 daemon 七项写入通道,工具/历史是本地偏好),
+            // Daemon 页不再保留副本(一个偏好只有一处控件,不出现第二个事实源)。
+            // 组头作用域徽章:这组对所有已接入 agent 生效(S2 作用域徽章纪律)。
+            item(key = "session") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_brain, "会话与对话", "思考与工具的展示 · 历史加载")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .paSettingsCard()
+                            .padding(horizontal = 16.dp),
+                    ) {
+                        AgentScopeBadge(
+                            SESSION_DISPLAY_SCOPES,
+                            Modifier.padding(top = 10.dp),
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // 显示思考过程(展示/隐藏):daemon 侧 hide_agent_reasoning 决定
+                        // 是否推送思考事件;客户端 showThinking 以 daemon 为权威在写入
+                        // 成功后同步(逻辑原样,自 Daemon 页平移)。
+                        SplitButton(
+                            label = "显示思考过程",
+                            mainLabel = if (AgentConnection.showThinking) "展示" else "隐藏",
+                            onMainClick = {
+                                codexWriter.copy(hideReasoning = AgentConnection.showThinking).commit()
+                                showSettingsFeedback(
+                                    if (AgentConnection.showThinking) "将流式显示思考过程" else "将只显示对话结果",
+                                )
+                            },
+                            options = listOf(
+                                SplitOption("展示", selected = AgentConnection.showThinking) {
+                                    codexWriter.copy(hideReasoning = false).commit()
+                                    showSettingsFeedback("将流式显示思考过程")
+                                },
+                                SplitOption("隐藏", selected = !AgentConnection.showThinking) {
+                                    codexWriter.copy(hideReasoning = true).commit()
+                                    showSettingsFeedback("将只显示对话结果")
+                                },
+                            ),
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // 工具详情(折叠/展开):纯本地偏好。
+                        SplitButton(
+                            label = "工具详情",
+                            mainLabel = if (AgentConnection.toolDetailsExpanded) "展开" else "折叠",
+                            onMainClick = {
+                                AgentConnection.toolDetailsExpanded = !AgentConnection.toolDetailsExpanded
+                                showSettingsFeedback("工具详情设置已保存")
+                            },
+                            options = listOf(
+                                SplitOption(
+                                    "折叠", selected = !AgentConnection.toolDetailsExpanded,
+                                ) {
+                                    AgentConnection.toolDetailsExpanded = false
+                                    showSettingsFeedback("工具详情设置已保存")
+                                },
+                                SplitOption(
+                                    "展开", selected = AgentConnection.toolDetailsExpanded,
+                                ) {
+                                    AgentConnection.toolDetailsExpanded = true
+                                    showSettingsFeedback("工具详情设置已保存")
+                                },
+                            ),
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // 【F-D 历史按轮加载】打开会话只拉最近 N 轮,更早的靠时间线顶部
+                        // 「加载更早」补齐(主=循环切换+下拉选档,自 Daemon 页平移)。
+                        val roundsOptions = HistoryRoundsLogic.STEP_OPTIONS
+                        val roundsIdx = roundsOptions.indexOf(AgentConnection.historyRounds).coerceAtLeast(0)
+                        SplitButton(
+                            label = "历史消息加载轮数",
+                            caption = "打开会话时只加载最近 N 轮,更早的内容在会话顶部点「加载更早」继续查看",
+                            mainLabel = HistoryRoundsLogic.labelFor(roundsOptions[roundsIdx]),
+                            onMainClick = {
+                                val next = roundsOptions[(roundsIdx + 1) % roundsOptions.size]
+                                AgentConnection.historyRounds = next
+                                showSettingsFeedback("历史加载已保存:${HistoryRoundsLogic.labelFor(next)}")
+                            },
+                            options = roundsOptions.map { r ->
+                                SplitOption(
+                                    HistoryRoundsLogic.labelFor(r),
+                                    selected = r == AgentConnection.historyRounds,
+                                ) {
+                                    AgentConnection.historyRounds = r
+                                    showSettingsFeedback("历史加载已保存:${HistoryRoundsLogic.labelFor(r)}")
+                                }
+                            },
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
+                }
+            }
+
+            // ---------- 运行时(控制中心区段,低频专业域)----------
+            // 只加这一行:区段本体在 ui/RuntimeSection.kt(排版 + 交互都在那边),
+            // 免得继续往这个大文件里长内容。S2 排序:能力位(runtime.v1)点亮才出现,
+            // 按使用频率排在会话与对话之后、数据与缓存之前。
+            item(key = "runtime") { RuntimeSection() }
 
             // ---------- 数据与缓存 ----------
             item(key = "data") {
@@ -2001,6 +2120,8 @@ private fun AgentPage(
 
             SectionBlock(icon = R.drawable.ic_lucide_shield, title = "权限与安全") {
                 Spacer(Modifier.height(10.dp))
+                // 【S2 作用域徽章】审批/沙箱写的是 Codex 的设置快照 —— 作用于谁一眼可辨。
+                AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 8.dp))
                 // 托管策略:被 requirements.toml 约束时,只渲染白名单里的取值。
                 // 读取/写入都还是原字段,只是可选项被收窄。
                 val allowedApproval = settings?.allowedApprovalPoliciesList.orEmpty()
@@ -2202,6 +2323,8 @@ private fun AgentPage(
 
             SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "模型与思考") {
                 Spacer(Modifier.height(10.dp))
+                // 【S2 作用域徽章】默认模型/思考强度写的是当前 agent 的桌面默认值。
+                AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 8.dp))
                 val currentModelName = settings?.model?.takeIf { it.isNotEmpty() }
                     ?.let { id -> modelChoices.find { it.id == id }?.displayName ?: id }
                     ?: "跟随桌面配置"
@@ -2306,11 +2429,14 @@ private fun AgentPage(
 
             SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "Codex 输出偏好") {
                 Spacer(Modifier.height(10.dp))
-                // 【边界说明】这些偏好只作用于"从 App 发起的任务"。
+                // 【边界说明(S2 作用域徽章化)】这些偏好只作用于"从 App 发起的任务"。
                 // daemon 把它们写进自己拉起的 app-server 子进程内存态,
                 // 不会改写用户桌面 codex 的 config.toml。
+                // 整句"仅控制 Codex 生成方式"收敛为作用域徽章;跨 agent 的思考/工具
+                // 显示已聚拢到一级页「会话与对话」,指路文案同步改。
+                AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 6.dp))
                 Text(
-                    "以下参数仅控制 Codex 生成方式；所有 Agent 的思考/工具显示在 Daemon 设置中统一管理。",
+                    "仅控制 Codex 的生成方式；全部 Agent 的思考与工具显示在「会话与对话」调整。",
                     fontSize = 11.sp, color = PaEditorial.Muted,
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
@@ -2411,6 +2537,8 @@ private fun AgentPage(
 
             SectionBlock(icon = R.drawable.ic_lucide_server, title = "用量与限流") {
                 Spacer(Modifier.height(10.dp))
+                // 【S2 作用域徽章】额度/限流是 Codex 账户(chatgpt.com 上游)的口径。
+                AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 8.dp))
                 CodexUsageBody(usage = codexUsage, loading = usageLoading)
                 Spacer(Modifier.height(6.dp))
             }
@@ -2420,6 +2548,8 @@ private fun AgentPage(
                 // 以前每个 kind 各有一行"展开更多(N)",onClick 却全指向同一个弹窗,
                 // 用户看到"两个入口点开的页面完全相同";现在统一为一个页面。
                 Spacer(Modifier.height(10.dp))
+                // 【S2 作用域徽章】技能/hooks/插件清单读的是电脑端 Codex 的能力。
+                AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 8.dp))
                 if (capabilities.isEmpty()) {
                     // 四态必须分清:还在读 / 读失败 / 读完确实没有 / 有数据。
                     // 前两个都不能渲染成最后一个 —— "还在读"说成"未报告任何",
@@ -4137,81 +4267,9 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer:
             Text("USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",
                 fontSize = 13.sp, color = PaEditorial.Muted, modifier = Modifier.padding(vertical=12.dp))
         }
-        SectionBlock(icon = R.drawable.ic_lucide_brain, title = "全局对话显示") {
-            Spacer(Modifier.height(10.dp))
-            // 显示思考过程(展示/隐藏)
-            SplitButton(
-                label = "显示思考过程",
-                mainLabel = if (AgentConnection.showThinking) "展示" else "隐藏",
-                onMainClick = {
-                    writer.copy(hideReasoning = AgentConnection.showThinking).commit()
-                    onFeedback(
-                        if (AgentConnection.showThinking) "将流式显示思考过程" else "将只显示对话结果",
-                    )
-                },
-                options = listOf(
-                    SplitOption("展示", selected = AgentConnection.showThinking) {
-                        writer.copy(hideReasoning = false).commit()
-                        onFeedback("将流式显示思考过程")
-                    },
-                    SplitOption("隐藏", selected = !AgentConnection.showThinking) {
-                        writer.copy(hideReasoning = true).commit()
-                        onFeedback("将只显示对话结果")
-                    },
-                ),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            // 工具详情(折叠/展开)
-            SplitButton(
-                label = "工具详情",
-                mainLabel = if (AgentConnection.toolDetailsExpanded) "展开" else "折叠",
-                onMainClick = {
-                    AgentConnection.toolDetailsExpanded = !AgentConnection.toolDetailsExpanded
-                    onFeedback("工具详情设置已保存")
-                },
-                options = listOf(
-                    SplitOption(
-                        "折叠", selected = !AgentConnection.toolDetailsExpanded,
-                    ) {
-                        AgentConnection.toolDetailsExpanded = false
-                        onFeedback("工具详情设置已保存")
-                    },
-                    SplitOption(
-                        "展开", selected = AgentConnection.toolDetailsExpanded,
-                    ) {
-                        AgentConnection.toolDetailsExpanded = true
-                        onFeedback("工具详情设置已保存")
-                    },
-                ),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            // 【F-D 历史按轮加载】打开会话只拉最近 N 轮,更早的靠时间线顶部
-            // 「加载更早」补齐(样式照抄"界面文字大小"的主=循环切换+下拉三/四选一)。
-            val roundsOptions = HistoryRoundsLogic.STEP_OPTIONS
-            val roundsIdx = roundsOptions.indexOf(AgentConnection.historyRounds).coerceAtLeast(0)
-            SplitButton(
-                label = "历史消息加载轮数",
-                caption = "打开会话时只加载最近 N 轮,更早的内容在会话顶部点「加载更早」继续查看",
-                mainLabel = HistoryRoundsLogic.labelFor(roundsOptions[roundsIdx]),
-                onMainClick = {
-                    val next = roundsOptions[(roundsIdx + 1) % roundsOptions.size]
-                    AgentConnection.historyRounds = next
-                    onFeedback("历史加载已保存:${HistoryRoundsLogic.labelFor(next)}")
-                },
-                options = roundsOptions.map { r ->
-                    SplitOption(
-                        HistoryRoundsLogic.labelFor(r),
-                        selected = r == AgentConnection.historyRounds,
-                    ) {
-                        AgentConnection.historyRounds = r
-                        onFeedback("历史加载已保存:${HistoryRoundsLogic.labelFor(r)}")
-                    }
-                },
-            )
-            Spacer(Modifier.height(6.dp))
-        }
+        // 【S2 聚拢】原「全局对话显示」分区(显示思考 / 工具详情 / 历史轮数)已整体
+        // 上收为一级页「会话与对话」组(高频观感开关不该藏在二级页);写入路径原样,
+        // 这里不再保留副本 —— 一个偏好只有一处控件,不会有第二个事实源。
 
         // 实验功能:提示词优化(默认关;依赖电脑端 ZCode 且消耗其 Token Plan 配额)
         SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "实验功能") {

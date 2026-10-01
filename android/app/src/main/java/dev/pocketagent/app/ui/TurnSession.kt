@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import pocketagent.v1.OutputState
 import pocketagent.v1.SubmitApprovalRequest
@@ -1115,6 +1116,11 @@ object TurnSession {
      * 流已断开时退回 CancelTurn 一元 RPC —— daemon 会从 activeTurns
      * 注册表里找到该线程在跑的轮次并取消。本地状态由随后到达的
      * FAILED/COMPLETED 帧收尾;若流本来就断了,取消后走一次历史同步兜底。
+     *
+     * 【R1 收口 · 时限与文案】RPC 带 [CANCEL_TURN_TIMEOUT_MS] 时限 —— 断线
+     * 场景下一元调用可能无限挂起,终止键就永远等不到"下一步"。超时与报错
+     * 分两档人话([cancelTurnFailureCopy]:禁裸词、不责备、给与界面真实按钮
+     * 对齐的下一步),不再输出「终止失败:…」这类没有出路的裸句。
      */
     fun cancelTurn(threadId: String) {
         val st = state(threadId)
@@ -1129,15 +1135,25 @@ object TurnSession {
             scope.launch {
                 runCatching {
                     withContext(Dispatchers.IO) {
-                        AgentConnection.threadService().cancelTurn(
-                            CancelTurnRequest.newBuilder().setThreadId(threadId).build(),
-                        )
+                        withTimeout(CANCEL_TURN_TIMEOUT_MS) {
+                            AgentConnection.threadService().cancelTurn(
+                                CancelTurnRequest.newBuilder().setThreadId(threadId).build(),
+                            )
+                        }
                     }
                 }.onSuccess {
                     // 电脑端已取消:同步一次历史,把已产出的部分内容拿回来
                     resyncFromDaemon(threadId, silent = true)
                 }.onFailure {
-                    st.recoveryError = "终止失败:${it.message ?: "无法连接电脑"}"
+                    // 协程被取消(页面销毁等)不算"没送达",不摆横幅;
+                    // 超时(TimeoutCancellationException)与真报错分两档文案。
+                    when (it) {
+                        is kotlinx.coroutines.TimeoutCancellationException ->
+                            st.recoveryError = cancelTurnFailureCopy(timedOut = true, e = it)
+                        is kotlinx.coroutines.CancellationException -> Unit
+                        else ->
+                            st.recoveryError = cancelTurnFailureCopy(timedOut = false, e = it)
+                    }
                 }
             }
         }
@@ -1199,8 +1215,14 @@ object TurnSession {
      * 里面装的是 `{"<问题id>":{"answers":["..."]}}`,daemon 原样转成 codex 期望的答案映射。
      * 审批类固定传空串 —— 别把两类语义混在一个字段里,否则 agent 会收到一段
      * 和它的问题无关的"理由"。
+     *
+     * option 是三按钮审批的选项 id(codex 应答枚举原词,与卡 options[].id 对应,
+     * 如 acceptForSession);只有用户点第三按钮才填。daemon 把它与 note 包装成
+     * {"option":..,"note":..} 信封并入 note 传给 provider(provider 侧
+     * agent.parseApprovalChoice 解析)。空 = 旧端 approved/note 语义,daemon
+     * 行为一字不变;approved 布尔语义保持(acceptForSession 也是 approved=true+option)。
      */
-    fun answerApproval(threadId: String, requestId: String, approved: Boolean, note: String = "") {
+    fun answerApproval(threadId: String, requestId: String, approved: Boolean, note: String = "", option: String = "") {
         val st = state(threadId)
         val ap = st.pendingApproval ?: return
         if (ap.requestId != requestId) {
@@ -1211,6 +1233,8 @@ object TurnSession {
             .setRequestId(requestId)
             .setApproved(approved)
         if (note.isNotEmpty()) decision.setNote(note)
+        // C1 只增不改:三按钮的选项回填,只影响新端;空串不设字段,线上旧链路零变化。
+        if (option.isNotEmpty()) decision.setOption(option)
         val result = st.replyCh?.trySend(
             TurnClientMessage.newBuilder()
                 .setApproval(decision.build())
@@ -1229,7 +1253,10 @@ object TurnSession {
                     if(st.pendingApproval?.requestId==requestId) st.pendingApproval=null
                     st.approvalError=null
                 } catch(e: Exception) {
-                    st.approvalError="审批未送达：${e.message ?: "请重连后重试"}"
+                    // R1 收口:三选项(允许/本会话允许/拒绝)与旧两按钮同一条失败链,
+                    // 人话原因统一走 approvalAnswerFailureCopy(原文透传 + 点「重试」
+                    // 再交一次,与弹窗里原因正下方的重试按钮对齐)。
+                    st.approvalError = approvalAnswerFailureCopy(e)
                 }
             }
         }

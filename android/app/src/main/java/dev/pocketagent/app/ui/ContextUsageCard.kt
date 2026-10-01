@@ -439,3 +439,39 @@ internal fun compactionNoticeLabel(compactedAt: Long, now: Long): String {
     return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
         .format(java.util.Date(compactedAt))
 }
+
+// ---- usage 落盘节流(R1 hermes usage_update 投影的残项收口;纯函数,单测钉死) ----
+
+/**
+ * 用量落盘的最小间隔。hermes 的 usage_update 逐事件投影成 Usage 帧,密集时
+ * 一秒数帧;本地缓存([dev.pocketagent.app.ui.component.UsageCache],重开会话
+ * 回显用)不需要逐帧精度,按这个间隔节流写,断网提示条的"最后更新"最多滞后
+ * 一个间隔,可接受。卡片打开时的 3s 刷新 tick(见 ChatScreen)与本间隔同数量级。
+ */
+internal const val USAGE_SAVE_MIN_INTERVAL_MS = 3_000L
+
+/** 间隔未到但占用跳变超过这个 token 数也立即落盘:大跳说明有真实活动,缓存别落后太多。 */
+internal const val USAGE_SAVE_TOKEN_STEP = 2_000L
+
+/** 上一次用量落盘的游标:时间 + 当时的占用 token + 当时的窗口。null = 本会话还没落过。 */
+internal data class UsagePersistCursor(val atMs: Long, val tokens: Long, val contextWindow: Long)
+
+/**
+ * 这次用量更新要不要写进本地缓存(纯函数):节流回答"缓存不必逐帧写";
+ * 两条例外保证缓存永不失真 —— 窗口变了(切模型/首次上报真实窗口)必须立即写;
+ * 间隔未到但占用大跳也写。输入栏实时环与卡面实时值不受节流影响:st.turnUsage
+ * 本身仍是逐帧真实值,这里只管落盘频率。
+ */
+internal fun usagePersistCursorAccepts(
+    cursor: UsagePersistCursor?,
+    nowMs: Long,
+    nextTokens: Long,
+    nextContextWindow: Long,
+): Boolean = when {
+    cursor == null -> true
+    // 窗口未知(0)不算变化:两个 0 之间比较没有意义,不触发额外落盘
+    nextContextWindow > 0 && nextContextWindow != cursor.contextWindow -> true
+    nowMs - cursor.atMs >= USAGE_SAVE_MIN_INTERVAL_MS -> true
+    kotlin.math.abs(nextTokens - cursor.tokens) >= USAGE_SAVE_TOKEN_STEP -> true
+    else -> false
+}

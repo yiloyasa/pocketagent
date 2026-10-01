@@ -74,6 +74,27 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	return out, nil
 }
 
+// SessionMCPServersSource 由上层(internal/agent 协同接线,agent/collab_inject.go)
+// 注入:非 nil 且返回非空时,四个会话建立/重挂请求把条目带进 mcpServers。适配器
+// 侧实证(acp_adapter/server.py:_register_session_mcp_servers):session/new·
+// load·resume·fork 的 mcpServers 非空即 register_mcp_servers 注册进会话工具面
+// —— 真注册,不是 dsh 式的"非空拒绝"。nil/空 = 原样发空数组,零行为变化。
+var SessionMCPServersSource func() []map[string]any
+
+// sessionMCPServersParam 组装 mcpServers 参数值:接线生效用注入条目,否则空数组。
+func sessionMCPServersParam() []any {
+	if SessionMCPServersSource != nil {
+		if entries := SessionMCPServersSource(); len(entries) > 0 {
+			out := make([]any, 0, len(entries))
+			for _, e := range entries {
+				out = append(out, e)
+			}
+			return out
+		}
+	}
+	return []any{}
+}
+
 // SessionNewResult 建一个 ACP 会话的应答(sessionId + 模型/模式目录快照)。
 type SessionNewResult struct {
 	SessionID string `json:"sessionId"`
@@ -82,7 +103,7 @@ type SessionNewResult struct {
 
 func (c *Client) SessionNew(ctx context.Context, cwd string) (*SessionNewResult, error) {
 	raw, err := c.callCtx(ctx, "session/new", map[string]any{
-		"cwd": cwd, "mcpServers": []any{},
+		"cwd": cwd, "mcpServers": sessionMCPServersParam(),
 	})
 	if err != nil {
 		return nil, err
@@ -144,7 +165,7 @@ var ErrSessionNotFound = fmt.Errorf("hermes 会话不存在(session/load 应答 
 // 查无此会话返回 (nil, ErrSessionNotFound)。
 func (c *Client) LoadSession(ctx context.Context, cwd, sessionID string) (*SessionLoadResult, error) {
 	raw, err := c.callCtx(ctx, "session/load", map[string]any{
-		"cwd": cwd, "sessionId": sessionID, "mcpServers": []any{},
+		"cwd": cwd, "sessionId": sessionID, "mcpServers": sessionMCPServersParam(),
 	})
 	if err != nil {
 		return nil, err
@@ -164,7 +185,7 @@ func (c *Client) LoadSession(ctx context.Context, cwd, sessionID string) (*Sessi
 // daemon 重挂载走 LoadSession,此方法供协议完整性/探针对表)。
 func (c *Client) ResumeSession(ctx context.Context, cwd, sessionID string) (*SessionLoadResult, error) {
 	raw, err := c.callCtx(ctx, "session/resume", map[string]any{
-		"cwd": cwd, "sessionId": sessionID, "mcpServers": []any{},
+		"cwd": cwd, "sessionId": sessionID, "mcpServers": sessionMCPServersParam(),
 	})
 	if err != nil {
 		return nil, err
@@ -189,7 +210,7 @@ type ForkSessionResult struct {
 // ForkSession 分叉一个已有会话(fork/list/resume 能力实证在 initialize 应答)。
 func (c *Client) ForkSession(ctx context.Context, cwd, sessionID string) (*ForkSessionResult, error) {
 	raw, err := c.callCtx(ctx, "session/fork", map[string]any{
-		"cwd": cwd, "sessionId": sessionID, "mcpServers": []any{},
+		"cwd": cwd, "sessionId": sessionID, "mcpServers": sessionMCPServersParam(),
 	})
 	if err != nil {
 		return nil, err

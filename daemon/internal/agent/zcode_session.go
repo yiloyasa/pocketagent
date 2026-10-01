@@ -71,7 +71,10 @@ var _ zcodeSessionClient = (*zcodeapp.Client)(nil)
 // —— ensureSession 保留"失败改开新会话"的降级决策与账号同步错误直通,适配器
 // 按 D4 直接报错,两条调用方各取所需。
 func (p *ZcodeProvider) resumeZcodeSession(ctx context.Context, c zcodeSessionClient, threadID, sid string, gen int) (json.RawMessage, error) {
-	raw, err := c.CallCtx(ctx, "session/resume", map[string]interface{}{"sessionId": sid})
+	// 协同 MCP 随重挂载带上(withCollabMCP,collab_inject.go):协议 schema
+	// 实证 session/resume 与 session/create 同收 mcpServers;未接线时不带该键,
+	// 与改造前零差异。
+	raw, err := c.CallCtx(ctx, "session/resume", withCollabMCP(map[string]interface{}{"sessionId": sid}))
 	if err != nil {
 		return nil, err
 	}
@@ -87,10 +90,10 @@ func (p *ZcodeProvider) resumeZcodeSession(ctx context.Context, c zcodeSessionCl
 // thread 上的旧引用原样保留(落库引用归调用方掌管)。workspace 由调用方给出
 // (Run 链传 req.Workspace,适配器传 th.Workspace),与写回的 Cwd 同源。
 func (p *ZcodeProvider) createZcodeSession(ctx context.Context, c zcodeSessionClient, th *store.Thread, workspace string, gen int) (string, bool, json.RawMessage, error) {
-	raw, err := c.CallCtx(ctx, "session/create", map[string]interface{}{
+	raw, err := c.CallCtx(ctx, "session/create", withCollabMCP(map[string]interface{}{
 		"workspace": zcodeWorkspace(workspace),
 		"mode":      "build", // 红线:显式 build
-	})
+	}))
 	if err != nil {
 		return "", false, nil, fmt.Errorf("session/create: %w", err)
 	}

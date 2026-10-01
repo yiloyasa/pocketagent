@@ -52,4 +52,31 @@ class SettingsSearchFilterTest {
         assertNull(matchRange("外观与阅读", "模型"))
         assertNull(matchRange("外观与阅读", ""))
     }
+
+    // ---- S2 信息架构重排:改组不丢索引 -----------------------------------------
+
+    @Test
+    fun `会话与对话组已入索引_一级就地展示无跳转目标`() {
+        val entry = index.first { it.title == "会话与对话" }
+        assertEquals("会话与对话", entry.group)
+        assertTrue(entry.desc.contains("思考"))
+        assertTrue(entry.desc.contains("工具"))
+        assertTrue(entry.desc.contains("历史"))
+        // 一级分组就地展示,没有二级页可跳:target=null(仅展示归属,与「电脑控制台」同口径)
+        assertNull(entry.target)
+    }
+
+    @Test
+    fun `Daemon条目描述已随聚拢更新_不再提对话显示`() {
+        val daemon = index.first { it.title == "Daemon 桥接与输入" }
+        assertTrue(!daemon.desc.contains("对话显示"))
+        assertTrue(daemon.desc.contains("语音"))
+        assertTrue(daemon.desc.contains("实验功能"))
+    }
+
+    @Test
+    fun `搜历史轮数_命中会话与对话组`() {
+        val hits = filterSettingsEntries("历史轮数", index)
+        assertTrue(hits.any { it.title == "会话与对话" })
+    }
 }

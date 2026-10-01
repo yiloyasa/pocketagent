@@ -1,8 +1,15 @@
 package dev.pocketagent.app.ui.component
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,11 +56,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.ApprovalOptionButton
+import dev.pocketagent.app.ui.ApprovalOptionRole
 import dev.pocketagent.app.ui.ApprovalPhase
 import dev.pocketagent.app.ui.ApprovalRequestUi
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
+import dev.pocketagent.app.ui.approvalOptionButtonsOf
+import dev.pocketagent.app.ui.approvalOptionEcho
 import dev.pocketagent.app.ui.approvalPhaseGlyph
 import dev.pocketagent.app.ui.approvalQueueLabel
 import dev.pocketagent.app.ui.approvalRiskOf
@@ -72,6 +83,11 @@ private val DenyButtonColors: ButtonTones get() = ButtonTones(
 /** 允许按钮(.primary 的编辑式稿形态):石墨底白字(README:主操作用石墨重点面,主色只给"当前操作")。 */
 private val AllowButtonColors: ButtonTones get() = ButtonTones(
     container = PaEditorial.Graphite, outline = PaEditorial.Graphite, content = PaEditorial.OnGraphite,
+)
+
+/** 次允许按钮(「本会话允许」):浅底描边,与主按钮拉开层级,但同为允许语义(不红)。 */
+private val SecondaryAllowButtonColors: ButtonTones get() = ButtonTones(
+    container = PaEditorial.Raised, outline = PaEditorial.Hairline, content = PaEditorial.Ink,
 )
 
 private data class ButtonTones(val container: Color, val outline: Color, val content: Color)
@@ -107,8 +123,12 @@ private data class ButtonTones(val container: Color, val outline: Color, val con
  * 【图标槽】[agentIcon] 缺省不渲染任何头像 —— 未知 Agent 保持中性,不冒认品牌。
  *
  * @param request  纯逻辑状态值(见 [ApprovalRequestUi])。
- * @param onDecide 用户点了「拒绝」(false)/「仅本次允许」(true);仅当
- *   [ApprovalRequestUi.decideEnabled] 时组件才会回调。
+ * @param onDecide 用户点了「拒绝」(false)/「允许」(true);仅当
+ *   [ApprovalRequestUi.decideEnabled] 时组件才会回调。三按钮下主按钮 accept 与
+ *   拒绝 decline 仍走这条老通道(approved 布尔语义不变)。
+ * @param onDecideOption 用户点了第三按钮(如 acceptForSession):回调选项 id
+ *   (codex 应答枚举原词),宿主把它回填 ApprovalDecision.option;缺省回退
+ *   onDecide(true)(acceptForSession 也是允许 —— 旧语义放行,不至于点了没反应)。
  * @param onDismiss 弹窗外点击/系统返回 = 暂不处理;**绝不**等价于拒绝。
  * @param onRetry   「重试」(暂无法处理态);仅当 [ApprovalRequestUi.retryEnabled]。
  * @param agentIcon Agent 品牌图标槽(44dp 内);null = 中性留空。
@@ -120,6 +140,7 @@ fun PaApprovalDialog(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     onRetry: () -> Unit = {},
+    onDecideOption: (optionId: String) -> Unit = { onDecide(true) },
     agentIcon: (@Composable () -> Unit)? = null,
 ) {
     Dialog(
@@ -161,7 +182,7 @@ fun PaApprovalDialog(
                     .clickable(interactionSource = cardInteraction, indication = null) {}
                     .padding(horizontal = 22.dp, vertical = 18.dp),
             ) {
-                ApprovalBody(request, onDecide, onRetry, agentIcon)
+                ApprovalBody(request, onDecide, onRetry, onDecideOption, agentIcon)
             }
         }
     }
@@ -172,8 +193,12 @@ private fun ApprovalBody(
     request: ApprovalRequestUi,
     onDecide: (allow: Boolean) -> Unit,
     onRetry: () -> Unit,
+    onDecideOption: (optionId: String) -> Unit,
     agentIcon: (@Composable () -> Unit)?,
 ) {
+    // 详情区/暂无法处理区的出入门动效令牌(见下方两处 AnimatedVisibility):
+    // 减弱动效开启时直达,反馈仍在、位移消失。
+    val reduceMotion = rememberReduceMotion()
     Column(Modifier.verticalScroll(rememberScrollState())) {
         // 拖柄(premium.css .modal .handle)
         Box(
@@ -339,72 +364,155 @@ private fun ApprovalBody(
             )
         }
         Spacer(Modifier.height(12.dp))
-        // 暂无法处理:原因 + 重试(失效/重复/超时/提交失败;不显示已批准)
-        if (request.phase == ApprovalPhase.UNAVAILABLE) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
-                    .border(1.dp, PaEditorial.Attention.copy(alpha = 0.30f), RoundedCornerShape(13.dp))
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-            ) {
-                Text(
-                    request.unavailableReason ?: "请求状态已变化，请刷新后重试",
-                    fontSize = 12.sp, lineHeight = 17.sp,
-                    color = PaEditorial.AttentionText,
-                )
-                Text(
-                    "决定按钮已停用，处理完成后可重试。",
-                    fontSize = 11.sp, lineHeight = 16.sp,
-                    color = PaEditorial.AttentionText,
-                )
+        // 详情(daemon 给的人话摘要:proposedExecpolicyAmendment / commandActions;
+        // 有才渲染,不摆空壳;与风险条同属"影响范围"的补充说明,不抢决定的音量)。
+        // 出入门走 AnimatedVisibility(details 随事件补齐到达时不硬顶布局,按钮区
+        // 不跳变;PaMotion.standard 临界阻尼,减弱动效直达)。
+        AnimatedVisibility(
+            visible = !request.details.isNullOrBlank(),
+            enter = if (reduceMotion) EnterTransition.None else {
+                expandVertically(PaMotion.standard()) + fadeIn(PaMotion.standard())
+            },
+            exit = if (reduceMotion) ExitTransition.None else {
+                shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard())
+            },
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PaEditorial.Raised, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                ) {
+                    Text(
+                        "详情",
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontWeight = FontWeight(650),
+                        color = PaEditorial.Muted,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        request.details.orEmpty(),
+                        fontSize = 12.sp, lineHeight = 18.sp,
+                        color = PaEditorial.Muted,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
             }
-            Spacer(Modifier.height(12.dp))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 44.dp) // README 最小触达:重试也是要点的行
-                    .pressable(enabled = request.retryEnabled) { onRetry() },
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    painterResource(R.drawable.ic_lucide_refresh_cw), null,
-                    tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "重试",
-                    fontSize = 13.sp, lineHeight = 18.sp,
-                    fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary,
-                )
-            }
-            Spacer(Modifier.height(10.dp))
         }
-        // 决定按钮:拒绝 / 仅本次允许(提交中禁重复;终态锁定;两档风险下同等可达)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ApprovalButton(
-                text = if (request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == false) {
-                    "提交中…"
-                } else {
-                    "拒绝"
-                },
-                tones = DenyButtonColors,
-                enabled = request.decideEnabled,
-                showSpinner = request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == false,
-                modifier = Modifier.weight(1f),
-            ) { onDecide(false) }
-            ApprovalButton(
-                text = if (request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == true) {
-                    "提交中…"
-                } else {
-                    "仅本次允许"
-                },
-                tones = AllowButtonColors,
-                enabled = request.decideEnabled,
-                showSpinner = request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == true,
-                modifier = Modifier.weight(1f),
-            ) { onDecide(true) }
+        // 暂无法处理:原因 + 重试(失效/重复/超时/提交失败;不显示已批准)。
+        // 出入门同详情区:提交失败出现/点重试消失都不硬顶布局(AnimatedVisibility)。
+        AnimatedVisibility(
+            visible = request.phase == ApprovalPhase.UNAVAILABLE,
+            enter = if (reduceMotion) EnterTransition.None else {
+                expandVertically(PaMotion.standard()) + fadeIn(PaMotion.standard())
+            },
+            exit = if (reduceMotion) ExitTransition.None else {
+                shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard())
+            },
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
+                        .border(1.dp, PaEditorial.Attention.copy(alpha = 0.30f), RoundedCornerShape(13.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                ) {
+                    Text(
+                        request.unavailableReason ?: "请求状态已变化，请刷新后重试",
+                        fontSize = 12.sp, lineHeight = 17.sp,
+                        color = PaEditorial.AttentionText,
+                    )
+                    Text(
+                        "决定按钮已停用，处理完成后可重试。",
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = PaEditorial.AttentionText,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 44.dp) // README 最小触达:重试也是要点的行
+                        .pressable(enabled = request.retryEnabled) { onRetry() },
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_refresh_cw), null,
+                        tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "重试",
+                        fontSize = 13.sp, lineHeight = 18.sp,
+                        fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+        // 决定按钮:三通道都在这里,互不串线 ——
+        //  · 有 options(codex 0.159.2 三按钮):accept=主允许「本次允许」(石墨实底)、
+        //    acceptForSession=次允许「本会话允许」(浅底描边)、decline/deny 类=红「拒绝」;
+        //    主允许/拒绝仍走 onDecide 老通道(approved 布尔语义不变),第三按钮走
+        //    onDecideOption 带选项 id。取消/关闭不在按钮里广告 —— 关闭=暂不处理(下方承诺行)。
+        //  · 无 options(旧 daemon):保持旧两按钮「拒绝 / 仅本次允许」,一字不变。
+        // 提交中单按钮回显「提交中…」(approvalOptionEcho 纯函数钉死);终态锁定。
+        if (request.options.isEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ApprovalButton(
+                    text = if (request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == false) {
+                        "提交中…"
+                    } else {
+                        "拒绝"
+                    },
+                    tones = DenyButtonColors,
+                    enabled = request.decideEnabled,
+                    showSpinner = request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == false,
+                    modifier = Modifier.weight(1f),
+                ) { onDecide(false) }
+                ApprovalButton(
+                    text = if (request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == true) {
+                        "提交中…"
+                    } else {
+                        "仅本次允许"
+                    },
+                    tones = AllowButtonColors,
+                    enabled = request.decideEnabled,
+                    showSpinner = request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == true,
+                    modifier = Modifier.weight(1f),
+                ) { onDecide(true) }
+            }
+        } else {
+            val buttons = remember(request.options) { approvalOptionButtonsOf(request.options) }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                buttons.forEach { button ->
+                    val echo = approvalOptionEcho(
+                        button, request.phase, request.submittedChoice, request.submittedOption,
+                    )
+                    ApprovalButton(
+                        text = if (echo) "提交中…" else button.label,
+                        tones = when (button.role) {
+                            ApprovalOptionRole.PRIMARY_ALLOW -> AllowButtonColors
+                            ApprovalOptionRole.SECONDARY_ALLOW -> SecondaryAllowButtonColors
+                            ApprovalOptionRole.DENY -> DenyButtonColors
+                        },
+                        enabled = request.decideEnabled,
+                        showSpinner = echo,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        when (button.role) {
+                            // 主允许/拒绝走老通道(approved 布尔语义,不填 option);
+                            // 第三按钮与未知允许类选项带原词 id,由宿主回填 proto option。
+                            ApprovalOptionRole.DENY -> onDecide(false)
+                            ApprovalOptionRole.PRIMARY_ALLOW -> onDecide(true)
+                            ApprovalOptionRole.SECONDARY_ALLOW -> onDecideOption(button.id)
+                        }
+                    }
+                }
+            }
         }
         Spacer(Modifier.height(10.dp))
         // 常驻承诺:关闭 ≠ 拒绝(README 红线的界面落点)

@@ -568,7 +568,8 @@ fun SubAgentPeekSheet(
                 colors = ButtonDefaults.buttonColors(containerColor = PaEditorial.Primary),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text("打开完整对话", color = Color.White, fontSize = 13.sp)
+                // 内容色读 OnPrimary 令牌(黑客盘主色电光青上白字 1.81:1,该盘=暗青)
+                Text("打开完整对话", color = PaEditorial.OnPrimary, fontSize = 13.sp)
             }
         }
     }

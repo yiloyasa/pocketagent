@@ -53,11 +53,12 @@ import kotlinx.coroutines.launch
 
 /**
  * 启动动效(编辑式版):
- *   1) 背景固定走编辑式冷白画布 #F6F7F6(PaEditorial.Canvas;编辑式令牌是固定
- *      浅色盘,不随 AgentTheme.mode 换肤 —— 启动即新设计的第一屏);
+ *   1) 背景走当前盘的编辑式画布(PaEditorial.Canvas 随显示模式换肤:浅盘冷白
+ *      #F6F7F6 / 黑客·深盘近黑 —— 2026-09-30 起令牌是三盘同槽位,首屏与后续
+ *      页面同盘,不再有"固定浅色首屏");
  *   2) 字标先淡入并轻微放大"立住",再逐字打出品牌名,节奏均匀;
- *   3) 到 "agent" 时主色光晕柔和扩散,底部一条进度线同步展开(主色 #386BE7
- *      只用于这一处品牌时刻,不铺满画面);
+ *   3) 到 "agent" 时主色光晕柔和扩散,底部一条进度线同步展开(主色只用于这一处
+ *      品牌时刻,不铺满画面);
  *   4) 收尾整屏淡出交接主页,全程无跳变。
  */
 private val PaFont = FontFamily(Font(R.font.poppins_bold))
@@ -77,7 +78,9 @@ fun Splash(onDone: () -> Unit) {
     // 减弱动效:字标/进度线瞬时到位,整体短驻留后直接交接主页(不播任何位移/缩放)
     val reduceMotion = rememberReduceMotion()
 
-    // 编辑式固定浅色盘:画布冷白、字标深墨、强调主色(README §视觉系统)
+    // 编辑式画布随当前盘(三色盘 2026-09-30 起同槽位换肤:黑客/深盘=近黑,浅盘=冷白):
+    // 冷启动首屏与其余页面同盘;系统栏图标按 IsDark,近黑画布上是浅色图标
+    // (原固定 isAppearanceLightStatusBars=true 在黑客/深盘 = 深图标坐近黑栏,漂移)。
     val bg = PaEditorial.Canvas
     val ink = PaEditorial.Ink
     val accent = PaEditorial.Primary
@@ -86,10 +89,9 @@ fun Splash(onDone: () -> Unit) {
         val window = (context as? Activity)?.window ?: return@SideEffect
         window.statusBarColor = bg.toArgb()
         window.navigationBarColor = bg.toArgb()
-        // 浅色画布上用深色系统图标(固定 true,不随显示模式摇摆)
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = true
-            isAppearanceLightNavigationBars = true
+            isAppearanceLightStatusBars = !PaEditorial.IsDark
+            isAppearanceLightNavigationBars = !PaEditorial.IsDark
         }
     }
 

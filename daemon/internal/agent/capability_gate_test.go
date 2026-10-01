@@ -208,11 +208,13 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		{
 			family: "collab",
 			// 只钉接口归属(host.go:93 的位生成 = CollabAware 断言 **且** CollabReady()
-			// 真值;真值依赖运行时接线 —— pi 看 daemon 自有目录、dsh 看会话级 MCP
-			// 注入 —— hermetic 环境会漂,由 collab_ready_test.go 单独钉)。矩阵 A 区
-			// 该行因此记 ✅*(条件位):pi/dsh 接口在场,codex/zcode 未实现。
+			// 真值;真值依赖运行时接线 —— pi 看 daemon 自有目录、dsh 看部署级补丁层、
+			// codex/zcode/hermes 看 collab_inject.go 的注入要素 —— hermetic 环境会漂,
+			// 由 collab_ready_test.go / collab_inject_test.go 单独钉)。X2 收口后五家
+			// 接口全部在场:codex(-c argv 覆盖)/zcode(会话参数)/hermes(ACP 会话参数)
+			// 的注入通道实证见 collab_inject.go 文件头。
 			probe: func(p Provider) bool { _, ok := p.(CollabAware); return ok },
-			want:  map[string]bool{"codex": false, "pi": true, "zcode": false, "dsh": true},
+			want:  map[string]bool{"codex": true, "pi": true, "zcode": true, "dsh": true},
 		},
 		{
 			family: "steer",

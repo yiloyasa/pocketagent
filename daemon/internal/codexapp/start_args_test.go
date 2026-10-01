@@ -109,3 +109,39 @@ func TestStartFakeChildCloseIdempotent(t *testing.T) {
 		t.Fatal("Close 幂等调用 5s 未返回")
 	}
 }
+
+// TestStartAppendsCollabExtraArgs 协同 MCP 注入钩子(X2 收口)的 argv 落点:
+// 钩子非 nil 时,返回的参数逐项追加在 daemonScopeArgs 之后 —— daemon 据此把
+// pocketagent-collab 以 `-c mcp_servers.*` 内存态覆盖挂进 app-server(见
+// internal/agent/collab_inject.go);nil = 与改造前逐字一致(上一条测试即钉此)。
+func TestStartAppendsCollabExtraArgs(t *testing.T) {
+	argvFile := filepath.Join(t.TempDir(), "argv.txt")
+	t.Setenv("PA_DAEMON_SCOPE_ARGV_FILE", argvFile)
+	t.Setenv("CODEX_BIN", os.Args[0])
+	prev := CollabExtraArgs
+	CollabExtraArgs = func() []string {
+		return []string{"-c", `mcp_servers.pocketagent-collab.command="C:\pa\daemon.exe"`}
+	}
+	t.Cleanup(func() { CollabExtraArgs = prev })
+
+	c, err := Start()
+	if err != nil {
+		t.Fatalf("Start(fake CODEX_BIN): %v", err)
+	}
+	raw, err := waitFile(t, argvFile, 5*time.Second)
+	c.Close()
+	if err != nil {
+		t.Fatalf("fake 子进程未写出 argv: %v", err)
+	}
+	got := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	want := append([]string{"app-server"}, daemonScopeArgs...)
+	want = append(want, "-c", `mcp_servers.pocketagent-collab.command="C:\pa\daemon.exe"`)
+	if len(got) != len(want) {
+		t.Fatalf("app-server argv = %v, 期望 %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, 期望 %q(协同覆盖应整体追加在 daemonScopeArgs 之后)", i, got[i], want[i])
+		}
+	}
+}

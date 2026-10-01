@@ -58,6 +58,48 @@ internal fun failureNextStep(
     else -> "点右侧重新下载,再取一次"
 }
 
+// ---------------------------------------------------------------- 新功能面的失败文案(R1 深接残项收口)
+
+/**
+ * 终止轮次的 CancelTurn RPC 时限:超时就按"电脑没有回应"口径给文案并停下,
+ * 不让取消协程在断线场景无限挂起(会话页的终止键也就没了下一步)。
+ */
+internal const val CANCEL_TURN_TIMEOUT_MS: Long = 15_000L
+
+/**
+ * 终止轮次的请求没有(及时)送达电脑时的横幅文案(纯函数,单测钉死)。
+ *
+ * 【为什么分两档】RPC 直接报异常 = 大概率没送达,任务多半还在跑;等满时限
+ * 没回应 = 终止可能已生效也可能没生效,不能替电脑下结论。两档都遵守本文件
+ * 顶部的 ErrorCopy 纪律:不用「失败/未知/错误」裸词开头收尾、不责备、给
+ * **与界面上真实存在的按钮对齐**的下一步 —— 顶栏/发送键上的「终止」还在
+ * (st.running 未清),提示条右侧的「重试」会重新接上并找回已产出的内容。
+ * 异常原文按 [humanizeError] 三档透传,不吞、不含糊。
+ *
+ * @param timedOut true = 等满 [CANCEL_TURN_TIMEOUT_MS] 电脑没有回应;
+ *                 false = RPC 直接报了异常
+ * @param e        原始异常(透传原文用)
+ */
+internal fun cancelTurnFailureCopy(timedOut: Boolean, e: Throwable?): String {
+    val detail = humanizeError(e)
+    return if (timedOut) {
+        "终止指令电脑暂时没有回应，可能已生效也可能还在运行；可再按一次「终止」，或点「重试」找回已产出的内容（$detail）"
+    } else {
+        "终止指令没有送到电脑，任务可能仍在运行；可再按一次「终止」，或点「重试」找回已产出的内容（$detail）"
+    }
+}
+
+/**
+ * 审批应答(允许 / 仅本会话允许 / 拒绝 —— 三选项同一条 answerApproval 链)
+ * 没有送到电脑时,弹窗「暂无法处理」区的原因文案(纯函数,单测钉死)。
+ *
+ * 人话陈述事实 + 下一步:弹窗里这个原因的**正下方就是「重试」**,文案与
+ * 按钮动作一致(点重试回到待决定,再交一次);异常原文按 [humanizeError]
+ * 透传。禁「未知/错误」裸词,不责备任何一方。
+ */
+internal fun approvalAnswerFailureCopy(e: Throwable?): String =
+    "这个决定没有送到电脑；恢复连接后点「重试」再交一次（${humanizeError(e)}）"
+
 /**
  * 「已完成」的下载条目文件丢失时的行内说明(纯函数):先陈述事实(文件不在了),
  * 再给与 [failureNextStep] 同一套口径的出路 —— 手机上的文件可能被用户或清理软件
