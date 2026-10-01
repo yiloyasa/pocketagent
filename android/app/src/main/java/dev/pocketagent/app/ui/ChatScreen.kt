@@ -267,6 +267,13 @@ data class ChatItem(
     val deliverState: String = "",
     /** 排队位次(Queued.position,1 起;仅 deliverState=queued 时有值)。 */
     val queuePos: Int = 0,
+    /**
+     * 消息的墙钟时间(用户消息=发出时刻,assistant=创建时刻),毫秒 epoch;
+     * **0 = 未知**(旧快照/上游未给)—— 消费方(历史导航气泡/面板按日分组)
+     * 见 0 必须隐藏时间行,绝不编造。数据链:实时发送(System.currentTimeMillis)/
+     * daemon 历史(ThreadMessage.created_at_unix_ms)/离线快照(Msg.savedAtMs)。
+     */
+    val sentAtMs: Long = 0,
 )
 
 /** 已上传到电脑的附件(手机 → daemon 工作区 .pocketagent-uploads)。 */
@@ -2557,6 +2564,11 @@ fun ChatScreen(
     // 按住拖动预览的实时手势状态(二版):刻度条写、预览气泡读;fingerY 逐帧更新
     // 但只在 draw/offset 延迟读里消费,拖动全程不重组列表。
     val historyDrag = remember(threadId) { HistoryDragState() }
+    // 【R2 日期上下文】刻度日界标记(每天第一条画全长):随 entries 变化重算,
+    // "now" 只影响跨日边界的归属,聊天页存续期内漂移可忽略。
+    val historyDayStarts = remember(historyEntries) {
+        HistoryQuickNavLogic.dayStartFlags(historyEntries, System.currentTimeMillis())
+    }
 
     /** 浮层点卡片:跳到那条消息并关浮层(浮层自己不持列表状态)。 */
     fun jumpToHistoryEntry(listIndex: Int) {
@@ -3966,6 +3978,7 @@ fun ChatScreen(
                 onJump = { entryIndex -> jumpToHistoryTick(entryIndex) },
                 onScrub = { entryIndex -> scrubToHistoryTick(entryIndex) },
                 onScrubEnd = { programmaticScroll.set(false) },
+                dayStarts = historyDayStarts,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     // 【真机修正 2026-10-01】本 Box 已被 PaScreenScaffold 收进 23dp

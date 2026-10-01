@@ -1,6 +1,8 @@
 package dev.pocketagent.app.ui.component
 
 import dev.pocketagent.app.ui.ChatItem
+import java.util.Calendar
+import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -29,7 +31,7 @@ object HistoryQuickNavLogic {
     /** 刻度卡标题(消息首行)的截断上限。超过交给省略号,不撑破单行。 */
     const val TITLE_MAX_CHARS = 40
 
-    /** 一张刻度对应的摘要卡:消息在时间线里的两个下标 + 展示文案。 */
+    /** 一张刻度对应的摘要卡:消息在时间线里的两个下标 + 展示文案 + 真实时间。 */
     data class Entry(
         /** [ChatItem] 在 st.items 里的下标(业务序,发消息/重试等按它定位)。 */
         val itemIndex: Int,
@@ -39,6 +41,11 @@ object HistoryQuickNavLogic {
         val title: String,
         /** 卡片次行:首行之外的内容合并截断。 */
         val summary: String,
+        /**
+         * 消息墙钟时间(epoch ms);**0 = 未知**(旧快照/上游未给),消费方
+         * (气泡日期行/面板按日分组)见 0 必须隐藏或归入「早前」,绝不编造。
+         */
+        val sentAtMs: Long = 0,
     )
 
     /** 首行截断:换行/首尾空白都收掉;超长以省略号收尾。 */
@@ -96,7 +103,7 @@ object HistoryQuickNavLogic {
                 // 既无文本也无附件的占位消息不进刻度(没有可导航的内容)
                 return@mapIndexedNotNull null
             }
-            Entry(itemIndex = i, listIndex = i + listOffset, title = title, summary = summary)
+            Entry(itemIndex = i, listIndex = i + listOffset, title = title, summary = summary, sentAtMs = item.sentAtMs)
         }
     }
 
@@ -111,6 +118,96 @@ object HistoryQuickNavLogic {
             if (e.listIndex <= firstVisibleListIndex) found = i else break
         }
         return found
+    }
+
+    // ==== R2 日期上下文(2026-10-01 深优):气泡日期行 + 面板按日分组 + 日界长刻度 ====
+    //
+    // 全部纯函数,时钟/时区注入(单测钉死);风格与 ThreadsRowLogic.threadRowTime
+    // 同源(当天零点差防夏令时)。sentAtMs==0(旧快照/上游未给)一律诚实降级:
+    // 气泡不显日期行、分组归入「早前」—— 绝不编造时间。
+
+    /**
+     * 预览气泡的日期戳:今天→「HH:mm」、昨天→「昨天 HH:mm」、同年→「M月d日 HH:mm」、
+     * 跨年→「yyyy年M月d日」;ms<=0 回空串(消费方隐藏日期行)。
+     */
+    fun historyStampOf(unixMs: Long, nowMs: Long, zone: TimeZone = TimeZone.getDefault()): String {
+        if (unixMs <= 0L) return ""
+        val dayDiff = dayDiffOf(unixMs, nowMs, zone)
+        return when {
+            dayDiff == 0L -> formatTime(unixMs, "HH:mm", zone)
+            dayDiff == 1L -> "昨天 " + formatTime(unixMs, "HH:mm", zone)
+            sameYear(unixMs, nowMs, zone) -> formatTime(unixMs, "M月d日 HH:mm", zone)
+            else -> formatTime(unixMs, "yyyy年M月d日 HH:mm", zone)
+        }
+    }
+
+    /** 当天在时区内的零点毫秒(跨夏令时的 23/25 小时天不靠整除)。 */
+    private fun dayStartMs(ms: Long, zone: TimeZone): Long {
+        val cal = Calendar.getInstance(zone)
+        cal.timeInMillis = ms
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    /** unix 与 now 之间隔了几个自然日(now 在前为正);风格与 threadRowTime 一致。 */
+    private fun dayDiffOf(unixMs: Long, nowMs: Long, zone: TimeZone): Long =
+        Math.round((dayStartMs(nowMs, zone) - dayStartMs(unixMs, zone)) / 86_400_000.0)
+
+    private fun sameYear(unixMs: Long, nowMs: Long, zone: TimeZone): Boolean {
+        val a = Calendar.getInstance(zone).apply { timeInMillis = unixMs }.get(Calendar.YEAR)
+        val b = Calendar.getInstance(zone).apply { timeInMillis = nowMs }.get(Calendar.YEAR)
+        return a == b
+    }
+
+    private fun formatTime(ms: Long, pattern: String, zone: TimeZone): String {
+        val fmt = java.text.SimpleDateFormat(pattern, java.util.Locale.CHINESE)
+        fmt.timeZone = zone
+        return fmt.format(java.util.Date(ms))
+    }
+
+    /** 按自然日分组(保持原顺序);sentAtMs==0 的条目全部归入末尾「早前」组。 */
+    data class DayGroup(val label: String, /** 该组首条在 entries 里的下标。 */ val firstIndex: Int, val entries: List<Entry>)
+
+    fun groupByDay(entries: List<Entry>, nowMs: Long, zone: TimeZone = TimeZone.getDefault()): List<DayGroup> {
+        if (entries.isEmpty()) return emptyList()
+        val out = mutableListOf<DayGroup>()
+        var currentKey: String? = null
+        for ((i, e) in entries.withIndex()) {
+            val key = if (e.sentAtMs <= 0L) "earlier" else "d${dayStartMs(e.sentAtMs, zone)}"
+            if (key != currentKey) {
+                val label = if (e.sentAtMs <= 0L) "早前" else {
+                    when (dayDiffOf(e.sentAtMs, nowMs, zone)) {
+                        0L -> "今天"
+                        1L -> "昨天"
+                        else -> formatTime(e.sentAtMs, if (sameYear(e.sentAtMs, nowMs, zone)) "M月d日" else "yyyy年M月d日", zone)
+                    }
+                }
+                out += DayGroup(label, i, mutableListOf(e))
+                currentKey = key
+            } else {
+                (out.last().entries as MutableList<Entry>).add(e)
+            }
+        }
+        return out
+    }
+
+    /**
+     * 刻度条日界标记:每天第一条刻度画全长(其余 0.7 宽),长会话里日期分段
+     * 一眼可辨。首条恒为日界(无论其时间是否已知);0 时间戳不打断日界序列。
+     */
+    fun dayStartFlags(entries: List<Entry>, nowMs: Long, zone: TimeZone = TimeZone.getDefault()): List<Boolean> {
+        if (entries.isEmpty()) return emptyList()
+        val flags = ArrayList<Boolean>(entries.size)
+        var lastKey: String? = null
+        for (e in entries) {
+            val key = if (e.sentAtMs <= 0L) lastKey ?: "unknown" else "d${dayStartMs(e.sentAtMs, zone)}"
+            flags += key != lastKey
+            lastKey = key
+        }
+        return flags
     }
 
     // ==== 按住拖动预览(二版新增):手指位置 ↔ 刻度下标映射 + 手势状态机 + 气泡定位 ====

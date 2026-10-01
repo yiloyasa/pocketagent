@@ -11,7 +11,10 @@ fun historyMessageToChatItems(message: ThreadMessage): List<ChatItem> {
     val items = mutableListOf<ChatItem>()
     for (block in message.blocksList) {
         when {
-            block.hasText() -> items += ChatItem(message.role, block.text.text)
+            block.hasText() -> items += ChatItem(
+                message.role, block.text.text,
+                sentAtMs = message.createdAtUnixMs,
+            )
             block.hasImage() -> items += ChatItem(
                 role = message.role,
                 attachments = listOf(
@@ -23,6 +26,7 @@ fun historyMessageToChatItems(message: ThreadMessage): List<ChatItem> {
                         previewData = block.image.data.toByteArray(),
                     ),
                 ),
+                sentAtMs = message.createdAtUnixMs,
             )
             block.hasThinking() -> items += ChatItem("thinking", block.thinking.text)
             block.hasToolCall() -> items += ChatItem(

@@ -366,3 +366,104 @@ class HistoryQuickNavLogicTest {
         assertEquals("", HistoryQuickNavLogic.positionLabel(2, -1))
     }
 }
+
+// ---- R2 日期上下文:时间戳纯函数(时钟/时区注入,固定时区免环境依赖) ----
+
+private val R2_ZONE = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+
+/** 2026-10-01 12:00:00 +08:00 的 epoch ms(测试锚点"今天中午")。 */
+private fun r2Ms(y: Int, mo: Int, d: Int, h: Int, mi: Int): Long {
+    val cal = java.util.Calendar.getInstance(R2_ZONE)
+    cal.clear()
+    cal.set(y, mo - 1, d, h, mi, 0)
+    return cal.timeInMillis
+}
+
+private fun entry(text: String, ms: Long) =
+    ChatItem(role = "user", text = text, sentAtMs = ms)
+
+class HistoryQuickNavDateTest {
+
+    private val now = r2Ms(2026, 10, 1, 12, 0)
+
+    @Test
+    fun `日期戳_今天只给时刻`() {
+        assertEquals(
+            "08:05",
+            HistoryQuickNavLogic.historyStampOf(r2Ms(2026, 10, 1, 8, 5), now, R2_ZONE),
+        )
+    }
+
+    @Test
+    fun `日期戳_昨天带昨天前缀`() {
+        assertEquals(
+            "昨天 23:07",
+            HistoryQuickNavLogic.historyStampOf(r2Ms(2026, 9, 30, 23, 7), now, R2_ZONE),
+        )
+    }
+
+    @Test
+    fun `日期戳_同年带月日_跨年带年份`() {
+        assertEquals(
+            "9月1日 09:30",
+            HistoryQuickNavLogic.historyStampOf(r2Ms(2026, 9, 1, 9, 30), now, R2_ZONE),
+        )
+        assertEquals(
+            "2025年12月31日 18:00",
+            HistoryQuickNavLogic.historyStampOf(r2Ms(2025, 12, 31, 18, 0), now, R2_ZONE),
+        )
+    }
+
+    @Test
+    fun `日期戳_0时间戳回空串_消费方隐藏不编造`() {
+        assertEquals("", HistoryQuickNavLogic.historyStampOf(0L, now, R2_ZONE))
+        assertEquals("", HistoryQuickNavLogic.historyStampOf(-5L, now, R2_ZONE))
+    }
+
+    @Test
+    fun `按日分组_相邻同日合并_跨日成新组_0时间戳归早前`() {
+        val items = listOf(
+            entry("最早的", r2Ms(2026, 9, 28, 10, 0)),
+            entry("同日第二条", r2Ms(2026, 9, 28, 20, 0)),
+            entry("昨天的", r2Ms(2026, 9, 30, 9, 0)),
+            entry("今天的", r2Ms(2026, 10, 1, 8, 0)),
+            entry("无时间的", 0L),
+        )
+        // ChatItem → Entry(与生产路径同一条转换,偏移 0)
+        val groups = HistoryQuickNavLogic.groupByDay(
+            HistoryQuickNavLogic.entriesOf(items, 0), now, R2_ZONE,
+        )
+        assertEquals(listOf("9月28日", "昨天", "今天", "早前"), groups.map { it.label })
+        assertEquals(listOf(0, 2, 3, 4), groups.map { it.firstIndex })
+        assertEquals(listOf(2, 1, 1, 1), groups.map { it.entries.size })
+    }
+
+    @Test
+    fun `按日分组_全同日只有一组_空列表回空`() {
+        val one = listOf(entry("a", r2Ms(2026, 10, 1, 1, 0)), entry("b", r2Ms(2026, 10, 1, 2, 0)))
+        assertEquals(1, HistoryQuickNavLogic.groupByDay(HistoryQuickNavLogic.entriesOf(one, 0), now, R2_ZONE).size)
+        assertTrue(HistoryQuickNavLogic.groupByDay(emptyList(), now, R2_ZONE).isEmpty())
+    }
+
+    @Test
+    fun `日界标记_首条恒真_跨日翻真_0时间戳不打断序列`() {
+        val items = listOf(
+            entry("a", r2Ms(2026, 9, 28, 10, 0)),
+            entry("b", r2Ms(2026, 9, 28, 11, 0)),
+            entry("c", r2Ms(2026, 9, 30, 9, 0)),
+            entry("无时间", 0L),
+            entry("d", r2Ms(2026, 10, 1, 8, 0)),
+        )
+        // 0 时间戳继承前一日的键:不打断日界,不产生假日界
+        assertEquals(
+            listOf(true, false, true, false, true),
+            HistoryQuickNavLogic.dayStartFlags(HistoryQuickNavLogic.entriesOf(items, 0), now, R2_ZONE),
+        )
+        // 全 0 时间戳:只有首条是日界
+        val zeros = listOf(entry("x", 0L), entry("y", 0L))
+        assertEquals(
+            listOf(true, false),
+            HistoryQuickNavLogic.dayStartFlags(HistoryQuickNavLogic.entriesOf(zeros, 0), now, R2_ZONE),
+        )
+    }
+}

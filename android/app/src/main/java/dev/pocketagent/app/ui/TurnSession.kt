@@ -203,7 +203,9 @@ object TurnSession {
             for(saved in checkpoints) {
                 val st=state(saved.threadId)
                 if(st.running || st.recovering || st.items.isNotEmpty()) continue
-                st.items.addAll(saved.messages.map { ChatItem(it.role,it.text) })
+                st.items.addAll(saved.messages.map {
+                    ChatItem(it.role, it.text, sentAtMs = it.savedAtMs)
+                })
                 st.streamText=saved.stream
                 st.thinkingText=saved.thinking
                 st.lastSequence=saved.sequence
@@ -460,7 +462,7 @@ object TurnSession {
         val sent = ch.trySend(TurnClientMessage.newBuilder().setInput(input).build())
         if (!sent.isSuccess) return false
         // 时间线先挂「发送中…」小标签;daemon 的 Steered/Queued 回执决定最终状态
-        st.items.add(ChatItem("user", text, attachments = attachments, deliverState = DELIVERY_PENDING))
+        st.items.add(ChatItem("user", text, attachments = attachments, deliverState = DELIVERY_PENDING, sentAtMs = System.currentTimeMillis()))
         // 任务中心:同一会话自动合并累计(rounds+1),与首轮同一条目
         TaskCenter.trackMessage(threadId, text.replace('\n', ' ').take(24))
         return true
@@ -487,7 +489,7 @@ object TurnSession {
         // 【任务中心】登记这一轮消息处理 —— 之后退出聊天页也由 TaskCenter 持有引用,
         // 侧边栏角标与任务中心列表由此得到数据来源(此前无人调用,角标恒 0)。
         TaskCenter.trackMessage(threadId, text.replace('\n', ' ').take(24))
-        st.items.add(ChatItem("user", text, attachments = attachments))
+        st.items.add(ChatItem("user", text, attachments = attachments, sentAtMs = System.currentTimeMillis()))
 
         val turnInput = buildTurnInput(threadId, text, attachments)
         scope.launch {

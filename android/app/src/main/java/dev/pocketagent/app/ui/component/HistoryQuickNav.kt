@@ -253,6 +253,8 @@ fun HistoryTickBar(
     onScrub: (Int) -> Unit = {},
     /** 【R1 实时刷选】刷选收场(松手/取消/手势打断,指数回 -1):宿主复位程序滚动标记。 */
     onScrubEnd: () -> Unit = {},
+    /** 【R2 日期上下文】日界标记(每天第一条=true):长会话里日期分段一眼可辨。 */
+    dayStarts: List<Boolean> = emptyList(),
 ) {
     if (count <= 0) return
     val hacker = PaHacker.isHacker
@@ -333,7 +335,12 @@ fun HistoryTickBar(
             val highlight = scrubIndex.value.takeIf { it >= 0 } ?: currentIndex
             for (i in 0 until count) {
                 val active = i == highlight
-                val w = if (active) size.width else size.width * 0.7f
+                // 日界刻度画全长:非激活态也比普通刻度长,日期分段一眼可辨(R2)
+                val w = when {
+                    active -> size.width
+                    dayStarts.getOrNull(i) == true -> size.width
+                    else -> size.width * 0.7f
+                }
                 drawRoundRect(
                     color = if (active) activeColor else idleColor,
                     topLeft = Offset(0f, geo.top + i * geo.step),
@@ -463,7 +470,21 @@ fun HistoryQuickBubble(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(3.dp))
+                // 【R2 日期上下文】真实墙钟时间(WhatsApp/Telegram 刷选日期气泡同款);
+                // 0 = 时间未知,诚实隐藏不编造
+                val stamp = HistoryQuickNavLogic.historyStampOf(
+                    entry.sentAtMs, System.currentTimeMillis(),
+                )
+                if (stamp.isNotEmpty()) {
+                    Text(
+                        stamp,
+                        fontSize = 10.5.sp,
+                        color = PaEditorial.Subtle,
+                        fontFamily = PaHacker.mono,
+                    )
+                    Spacer(Modifier.height(5.dp))
+                }
                 if (entry.summary.isNotEmpty()) {
                     Text(
                         entry.summary,
@@ -579,33 +600,51 @@ fun HistoryQuickPanel(
                     fontFamily = if (hacker) PaHacker.mono else null,
                 )
             } else {
+                // 【R2 日期上下文】按自然日分组:组头「今天/昨天/M月d日/早前」,
+                // 组内行序号沿用全量序号(group.firstIndex + i)——跳转映射不变
+                val groups = remember(entries) {
+                    HistoryQuickNavLogic.groupByDay(entries, System.currentTimeMillis())
+                }
                 LazyColumn(
                     Modifier.fillMaxWidth(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
                 ) {
-                    itemsIndexed(entries, key = { _, e -> e.listIndex }) { i, entry ->
-                        val active = i == currentIndex
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                // 高亮 = 当前可见位置:主色细条 + 主色标题;点卡片跳转
-                                .then(
-                                    if (active) Modifier.background(PaEditorial.PrimaryContainer)
-                                    else Modifier
-                                )
-                                .clickable { onJump(entry.listIndex) }
-                                .heightIn(min = 56.dp)
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.Top,
-                        ) {
-                            // 序号:第几条用户消息(1 起),等宽对齐不跳动
+                    groups.forEach { group ->
+                        item(key = "h-${group.firstIndex}") {
                             Text(
-                                "${i + 1}",
-                                Modifier.width(24.dp),
-                                fontSize = 11.5.sp,
-                                color = if (active) PaEditorial.Primary else PaEditorial.Subtle,
+                                group.label,
+                                Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
+                                fontSize = 11.sp,
+                                color = PaEditorial.Subtle,
                                 fontWeight = FontWeight.SemiBold,
                                 fontFamily = PaHacker.mono,
+                            )
+                        }
+                        itemsIndexed(group.entries, key = { _, e -> e.listIndex }) { i, entry ->
+                            // 高亮/序号都以「全量 entries」为准:组内 i 只是组内序
+                            val entryIndex = group.firstIndex + i
+                            val active = entryIndex == currentIndex
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    // 高亮 = 当前可见位置:主色细条 + 主色标题;点卡片跳转
+                                    .then(
+                                        if (active) Modifier.background(PaEditorial.PrimaryContainer)
+                                        else Modifier
+                                    )
+                                    .clickable { onJump(entry.listIndex) }
+                                    .heightIn(min = 56.dp)
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                // 序号:第几条用户消息(1 起),等宽对齐不跳动
+                                Text(
+                                    "${entryIndex + 1}",
+                                    Modifier.width(24.dp),
+                                    fontSize = 11.5.sp,
+                                    color = if (active) PaEditorial.Primary else PaEditorial.Subtle,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = PaHacker.mono,
                             )
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -641,8 +680,9 @@ fun HistoryQuickPanel(
                                 )
                             }
                         }
-                    }
-                }
+                    } // itemsIndexed(组内行)
+                } // groups.forEach
+                } // LazyColumn
             }
         }
     }
