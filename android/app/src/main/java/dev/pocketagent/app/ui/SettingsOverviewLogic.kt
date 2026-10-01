@@ -20,11 +20,6 @@ internal fun connectionSummary(connState: String, transport: String): String = w
     else -> "检查中"
 }
 
-/** 桥接与输入行摘要:全局对话显示的两项本地偏好(不依赖连接,断连可读)。 */
-internal fun localDisplayPrefsSummary(showThinking: Boolean, toolDetailsExpanded: Boolean): String =
-    (if (showThinking) "思考展示" else "思考隐藏") + " · " +
-        (if (toolDetailsExpanded) "工具展开" else "工具折叠")
-
 /** 下载与存储行摘要:只数已完成的下载(本地任务清单,断连可用);0 个不摆 0。 */
 internal fun downloadStorageSummary(doneCount: Int): String =
     if (doneCount <= 0) "暂无下载内容" else "$doneCount 个文件"

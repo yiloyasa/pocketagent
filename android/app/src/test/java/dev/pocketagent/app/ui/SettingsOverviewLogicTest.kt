@@ -30,13 +30,7 @@ class SettingsOverviewLogicTest {
         assertEquals("检查中", connectionSummary("checking", ""))
     }
 
-    // ---- 本地偏好摘要(断连可用)-------------------------------------------------
-
-    @Test
-    fun `桥接与输入摘要 读两项本地偏好`() {
-        assertEquals("思考展示 · 工具折叠", localDisplayPrefsSummary(true, false))
-        assertEquals("思考隐藏 · 工具展开", localDisplayPrefsSummary(false, true))
-    }
+    // ---- 下载与存储摘要(断连可用)-------------------------------------------------
 
     @Test
     fun `下载与存储摘要 0 个不摆 0`() {

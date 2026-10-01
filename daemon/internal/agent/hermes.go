@@ -200,8 +200,54 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		workspace, _ = os.Getwd()
 	}
 
+	// 【思考强度真实化(2026-10-02,时机优化:写入挪到 ensureSession 之前)】
+	// hermes 的强度没有运行时 RPC,唯一入口是家目录 config.yaml 的
+	// agent.reasoning_effort(会话创建那一刻读取)。写入提前到会话就绪前:
+	//   - 新建会话:创建那一刻即读到新值 → "本轮已生效";
+	//   - 重挂载会话(内存缓存命中 / ExternalSession 重挂载,历史已按旧强度
+	//     落库):创建时刻已过 → 仍"下轮会话生效"。
+	// 重挂载判定与 ensureSession 的分路同源(缓存命中且适配器活着,或
+	// ExternalSession 在场)。用户在手机上显式选了强度 → 写该键(与手动编辑
+	// config.yaml 等价,hermes 官方配置面)。空串 = 用户选"默认" = 删键回
+	// hermes 默认。白名单校验(VALID_REASONING_EFFORTS)在写入前做,非法档
+	// 宁可不写。
+	if req.Thread != nil {
+		if e := req.Thread.Effort; e != "" {
+			resumed := false // 重挂载判定(与 ensureSession 三分支同源)
+			if _, ok := p.threadRefFor(req.Thread.ID); ok && c.Alive() {
+				resumed = true
+			} else if req.Thread.ExternalSession.SessionID != "" {
+				resumed = true
+			}
+			if hermesapp.IsValidReasoningEffort(e) {
+				if werr := hermesapp.SetReasoningEffort(e); werr != nil {
+					log.Printf("[hermes] 写强度 %s 失败(沿用 config 现值): %v", e, werr)
+				} else {
+					effortTiming := "下轮会话生效"
+					if !resumed {
+						effortTiming = "本轮已生效" // 新建会话在创建那一刻读 config
+					}
+					log.Printf("[hermes] 思考强度已设为 %s(%s)", e, effortTiming)
+					// 【用户可见反馈(H3)】强度没有运行时 RPC;手机此刻看不到
+					// config.yaml,静默会让"我明明改了强度"像没生效。写成功即发
+					// 一条 STATUS 事件(手机端 codex 事件面板照常渲染,hermes ·
+					// 执行计划 同通道),按新建/重挂载如实说清生效时机。
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+						Kind:    pb.CodexEvent_STATUS,
+						Code:    "reasoning_effort_applied",
+						Title:   "hermes · 思考强度",
+						Message: fmt.Sprintf("已设为 %s,%s", e, effortTiming),
+					}}})
+				}
+			} else {
+				log.Printf("[hermes] 强度 %s 不在 hermes 档位表(minimal..ultra),跳过写入", e)
+			}
+		}
+	}
+
 	// 会话就绪:同代内存缓存 → ExternalSession 重挂载(session/load + 历史回放)
 	// → 新建。手机重开历史会话续聊 = daemon 重启/适配器重启后的重挂载路径。
+	// (强度写入已在此前完成:新建会话在 session/new 那一刻即读到新值。)
 	sid, err := p.ensureSession(ctx, c, req, workspace)
 	if err != nil {
 		return nil, nil, err
@@ -216,33 +262,6 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		}
 		if serr := c.SetSessionModel(ctx, sid, acpModel); serr != nil {
 			log.Printf("[hermes] 切模型失败(按默认跑): %v", serr)
-		}
-	}
-
-	// 【思考强度真实化(2026-10-02)】hermes 的强度没有运行时 RPC,唯一入口是
-	// 家目录 config.yaml 的 agent.reasoning_effort(会话创建那一刻读取)。用户在
-	// 手机上显式选了强度 → 写该键(与手动编辑 config.yaml 等价,hermes 官方配置
-	// 面;下一轮生效,本轮已按旧值创建)。空串 = 用户选"默认" = 删键回 hermes 默认。
-	// 白名单校验(VALID_REASONING_EFFORTS)在写入前做,非法档宁可不写。
-	if e := req.Thread.Effort; e != "" {
-		if hermesapp.IsValidReasoningEffort(e) {
-			if werr := hermesapp.SetReasoningEffort(e); werr != nil {
-				log.Printf("[hermes] 写强度 %s 失败(沿用 config 现值): %v", e, werr)
-			} else {
-				log.Printf("[hermes] 思考强度已设为 %s(下轮会话生效)", e)
-				// 【用户可见反馈(H3)】强度没有运行时 RPC,本写入只影响"下一次
-				// 会话创建";手机此刻看不到 config.yaml,静默会让"我明明改了强度"
-				// 像没生效。写成功即发一条 STATUS 事件(手机端 codex 事件面板照常
-				// 渲染,hermes · 执行计划 同通道),如实说清生效时机。
-				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
-					Kind:    pb.CodexEvent_STATUS,
-					Code:    "reasoning_effort_applied",
-					Title:   "hermes · 思考强度",
-					Message: fmt.Sprintf("已设为 %s,下轮会话生效", e),
-				}}})
-			}
-		} else {
-			log.Printf("[hermes] 强度 %s 不在 hermes 档位表(minimal..ultra),跳过写入", e)
 		}
 	}
 

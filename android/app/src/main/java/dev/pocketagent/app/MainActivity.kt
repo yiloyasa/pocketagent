@@ -56,6 +56,10 @@ import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaTheme
 import androidx.core.view.WindowCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,7 +72,13 @@ class MainActivity : ComponentActivity() {
         dev.pocketagent.app.ui.TurnSession.restoreRunningCheckpoints()
         ThreadSnapshot.init(this) // 会话离线快照:断线时列表/最近消息仍可读
         PaDownloader.init(this) // 下载到手机(会话输出/电脑文件)
-        PaCache.init(this) // 缓存管家:启动时清扫崩溃残留的临时文件(pa_pdf_* / pa_ziplist*)
+        // 缓存管家:启动时清扫崩溃残留的临时文件(pa_pdf_* / pa_ziplist*)+
+        // OfflineStore 陈旧分区清扫。【启动面 T4】这一串是纯磁盘 IO
+        // (cacheDir.listFiles + 删除 + 分区扫盘),原先在主线程 onCreate 里跑,
+        // 直接卡首帧;清扫结果没有任何 UI 状态同步依赖(缓存管理页要读时它早已
+        // 完成),挪到后台线程,onCreate 不再等它。放在 ThreadSnapshot.init 之后
+        // 保持"分区注册表晚于各物理目录初始化"的原有顺序语义。
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { PaCache.init(this@MainActivity) }
         // 【P1-6】本地通知:建渠道 + 动态注册审批动作接收器 + 启动逐秒监控。
         // 必须在 TaskCenter.init 之后(种子要读任务清单)。
         PaNotifications.init(this)

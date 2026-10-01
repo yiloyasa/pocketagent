@@ -35,12 +35,24 @@ class WorkflowAUsageMetricsTest {
     }
 
     @Test
-    fun null_usage_renders_zeros_and_a_dash_not_a_crash() {
+    fun null_usage_renders_a_dash_not_zeros() {
+        // 【N3】整个口径没有用量对象(null,如 hermes 的"本会话累计")给"—":
+        // 0/0/0 是"daemon 报了且都是 0"的形状,与"根本没报"必须可区分。
         val byLabel = usageMetrics().associate { it.label to it.value(null) }
+        assertEquals("—", byLabel["输入"])
+        assertEquals("—", byLabel["输出"])
+        assertEquals("—", byLabel["缓存"])
+        // 输入为 0 时命中率给"—"(不造数)
+        assertEquals("—", byLabel["缓存命中率"])
+    }
+
+    @Test
+    fun present_usage_with_zero_fields_still_renders_zeros() {
+        // 有用量对象但字段本身是 0:如实显示 0(只有"对象不存在"才升级为"—")
+        val u = Usage.getDefaultInstance()
+        val byLabel = usageMetrics().associate { it.label to it.value(u) }
         assertEquals("0", byLabel["输入"])
         assertEquals("0", byLabel["输出"])
         assertEquals("0", byLabel["缓存"])
-        // 输入为 0 时命中率给"—"(不造数)
-        assertEquals("—", byLabel["缓存命中率"])
     }
 }

@@ -32,6 +32,7 @@ const (
 	ThreadService_ClearQueuedInputs_FullMethodName           = "/pocketagent.v1.ThreadService/ClearQueuedInputs"
 	ThreadService_SubmitApproval_FullMethodName              = "/pocketagent.v1.ThreadService/SubmitApproval"
 	ThreadService_GetThreadHistory_FullMethodName            = "/pocketagent.v1.ThreadService/GetThreadHistory"
+	ThreadService_SearchThreadMessages_FullMethodName        = "/pocketagent.v1.ThreadService/SearchThreadMessages"
 	ThreadService_GetThreadEventsSince_FullMethodName        = "/pocketagent.v1.ThreadService/GetThreadEventsSince"
 	ThreadService_ListCodexThreads_FullMethodName            = "/pocketagent.v1.ThreadService/ListCodexThreads"
 	ThreadService_ImportCodexThread_FullMethodName           = "/pocketagent.v1.ThreadService/ImportCodexThread"
@@ -80,6 +81,13 @@ type ThreadServiceClient interface {
 	SubmitApproval(ctx context.Context, in *SubmitApprovalRequest, opts ...grpc.CallOption) (*Empty, error)
 	// 历史消息(打开旧会话时拉取)
 	GetThreadHistory(ctx context.Context, in *GetThreadHistoryRequest, opts ...grpc.CallOption) (*GetThreadHistoryResponse, error)
+	// ---- 会话内消息内容搜索(只增)----
+	// 在一个会话的历史消息正文里搜一段文字(大小写不敏感),命中项带前后文
+	// 摘要(snippet)。手机端历史导航浮层目前只能按标题/摘要过滤本地已加载的
+	// 列表;daemon 内存 store 里有**全量**消息(含未随 limit 下发的更早内容),
+	// 这个 RPC 让"搜历史聊过什么"不需要把整条会话拖到手机上再翻。
+	// 鉴权走既有 UnaryAuth 通道(与 GetThreadHistory 同级),无新增配置。
+	SearchThreadMessages(ctx context.Context, in *SearchThreadMessagesRequest, opts ...grpc.CallOption) (*SearchThreadMessagesResponse, error)
 	// ---- P1-5 事件断点续传(只增)----
 	// 按 seq 增量回放某线程的事件帧(seq > after_sequence,升序),回放完即关流,
 	// 不做 live 跟随。手机断线重连后用它把错过的帧无缝补上,替代"整屏历史回填"。
@@ -311,6 +319,16 @@ func (c *threadServiceClient) GetThreadHistory(ctx context.Context, in *GetThrea
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetThreadHistoryResponse)
 	err := c.cc.Invoke(ctx, ThreadService_GetThreadHistory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) SearchThreadMessages(ctx context.Context, in *SearchThreadMessagesRequest, opts ...grpc.CallOption) (*SearchThreadMessagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchThreadMessagesResponse)
+	err := c.cc.Invoke(ctx, ThreadService_SearchThreadMessages_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +588,13 @@ type ThreadServiceServer interface {
 	SubmitApproval(context.Context, *SubmitApprovalRequest) (*Empty, error)
 	// 历史消息(打开旧会话时拉取)
 	GetThreadHistory(context.Context, *GetThreadHistoryRequest) (*GetThreadHistoryResponse, error)
+	// ---- 会话内消息内容搜索(只增)----
+	// 在一个会话的历史消息正文里搜一段文字(大小写不敏感),命中项带前后文
+	// 摘要(snippet)。手机端历史导航浮层目前只能按标题/摘要过滤本地已加载的
+	// 列表;daemon 内存 store 里有**全量**消息(含未随 limit 下发的更早内容),
+	// 这个 RPC 让"搜历史聊过什么"不需要把整条会话拖到手机上再翻。
+	// 鉴权走既有 UnaryAuth 通道(与 GetThreadHistory 同级),无新增配置。
+	SearchThreadMessages(context.Context, *SearchThreadMessagesRequest) (*SearchThreadMessagesResponse, error)
 	// ---- P1-5 事件断点续传(只增)----
 	// 按 seq 增量回放某线程的事件帧(seq > after_sequence,升序),回放完即关流,
 	// 不做 live 跟随。手机断线重连后用它把错过的帧无缝补上,替代"整屏历史回填"。
@@ -712,6 +737,9 @@ func (UnimplementedThreadServiceServer) SubmitApproval(context.Context, *SubmitA
 }
 func (UnimplementedThreadServiceServer) GetThreadHistory(context.Context, *GetThreadHistoryRequest) (*GetThreadHistoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetThreadHistory not implemented")
+}
+func (UnimplementedThreadServiceServer) SearchThreadMessages(context.Context, *SearchThreadMessagesRequest) (*SearchThreadMessagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchThreadMessages not implemented")
 }
 func (UnimplementedThreadServiceServer) GetThreadEventsSince(*GetThreadEventsSinceRequest, grpc.ServerStreamingServer[TurnServerMessage]) error {
 	return status.Error(codes.Unimplemented, "method GetThreadEventsSince not implemented")
@@ -1019,6 +1047,24 @@ func _ThreadService_GetThreadHistory_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ThreadServiceServer).GetThreadHistory(ctx, req.(*GetThreadHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_SearchThreadMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchThreadMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).SearchThreadMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_SearchThreadMessages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).SearchThreadMessages(ctx, req.(*SearchThreadMessagesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1466,6 +1512,10 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetThreadHistory",
 			Handler:    _ThreadService_GetThreadHistory_Handler,
+		},
+		{
+			MethodName: "SearchThreadMessages",
+			Handler:    _ThreadService_SearchThreadMessages_Handler,
 		},
 		{
 			MethodName: "ListCodexThreads",

@@ -35,6 +35,14 @@ service ThreadService {
   // 历史消息(打开旧会话时拉取)
   rpc GetThreadHistory(GetThreadHistoryRequest) returns (GetThreadHistoryResponse);
 
+  // ---- 会话内消息内容搜索(只增)----
+  // 在一个会话的历史消息正文里搜一段文字(大小写不敏感),命中项带前后文
+  // 摘要(snippet)。手机端历史导航浮层目前只能按标题/摘要过滤本地已加载的
+  // 列表;daemon 内存 store 里有**全量**消息(含未随 limit 下发的更早内容),
+  // 这个 RPC 让"搜历史聊过什么"不需要把整条会话拖到手机上再翻。
+  // 鉴权走既有 UnaryAuth 通道(与 GetThreadHistory 同级),无新增配置。
+  rpc SearchThreadMessages(SearchThreadMessagesRequest) returns (SearchThreadMessagesResponse);
+
   // ---- P1-5 事件断点续传(只增)----
   // 按 seq 增量回放某线程的事件帧(seq > after_sequence,升序),回放完即关流,
   // 不做 live 跟随。手机断线重连后用它把错过的帧无缝补上,替代"整屏历史回填"。
@@ -828,4 +836,32 @@ message ClearQueuedInputsResponse {
 message SubmitApprovalRequest {
   string thread_id = 1;
   ApprovalDecision decision = 2;
+}
+
+// ---- 会话内消息内容搜索(只增,字段号从 1 起,不碰旧消息)----
+
+message SearchThreadMessagesRequest {
+  string thread_id = 1;  // 会话 id(必须已存在于本地库)
+  // 搜索词(trim 后必须非空):对消息正文(文本块)做大小写不敏感的包含匹配。
+  string query = 2;
+  // 返回命中条数上限:0 = 默认 20;负数同 0;超过 100 钳到 100(daemon 侧钳制,
+  // 手机端不必自行防御)。命中按消息序号升序返回(先出现的先回)。
+  int32 limit = 3;
+}
+
+// ThreadMessageHit 一条命中:sequence 是该消息在会话消息数组里的 0 基下标,
+// 与 GetThreadHistory 返回顺序一致 —— 手机端据此定位跳转/取整条正文。
+// snippet 是命中处的摘录(匹配词 + 前后文各 40 字符,截断处以 … 标示),
+// 只含文本正文;思考块/工具调用参数刻意不搜(那是过程不是正文)。
+message ThreadMessageHit {
+  int32 sequence = 1;             // 消息在会话消息数组中的下标(0 基)
+  string role = 2;                // user / assistant
+  string snippet = 3;             // 命中摘录(含匹配词与前后文)
+  int64 created_at_unix_ms = 4;   // 消息时间戳(透传 store 值;0 = 未知)
+}
+
+message SearchThreadMessagesResponse {
+  // 无命中 = 空列表(不是错误);命中超出 limit 时截断(不回总数,客户端
+  // 拿"满 limit"自行判断可能还有更多,避免为计数多做一次全扫)。
+  repeated ThreadMessageHit hits = 1;
 }

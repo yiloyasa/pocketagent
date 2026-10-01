@@ -279,6 +279,17 @@ data class ChatItem(
     val sentAtMs: Long = 0,
 )
 
+/**
+ * 【PF4 组合热点】时间线 item 的 LazyColumn 复用桶([androidx.compose.foundation.lazy.LazyColumn]
+ * `contentType`):同桶 item 才能互相复用组合槽。桶必须等价于"渲染形态":
+ *  - 常规主题:`item.role` 一对一映射 `when (item.role)` 分支(3778 起),同 role 同结构;
+ *  - 黑客终端:渲染分支走 [terminalBlockKind],桶与其对齐(plan/usage 同为 SKIP 等)。
+ * 不补桶时,滚动回收会让"用户气泡滚出、工具卡滚进"互相销毁重建整棵子树 —— 长会话
+ * 滚动/流式追加期最大的组合浪费。纯函数:桶映射可 JVM 单测(ChatItemContentTypeTest)。
+ */
+internal fun chatItemContentType(hackerMode: Boolean, item: ChatItem): Any =
+    if (hackerMode) terminalBlockKind(item) else item.role
+
 /** 已上传到电脑的附件(手机 → daemon 工作区 .pocketagent-uploads)。 */
 data class Attachment(
     val name: String,
@@ -2187,7 +2198,9 @@ fun ChatScreen(
     }
     var attachments by remember { mutableStateOf(listOf<Attachment>()) }
     var selectedAttachment by remember { mutableStateOf<Attachment?>(null) }
-    var threadWorkspace by remember { mutableStateOf<String?>(null) }
+    // 【PF4】按 threadId 记忆:导航 launchSingleTop 复用同一 ChatScreen 实例,
+    // 会话切换必须重置本会话的 daemon 回填值,不能闪现上一会话的残值。
+    var threadWorkspace by remember(threadId) { mutableStateOf<String?>(null) }
     var codexSettings by remember { mutableStateOf<CodexSettings?>(null) }
     var models by remember { mutableStateOf(listOf<ModelInfo>()) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -2223,7 +2236,7 @@ fun ChatScreen(
     // daemon 回空列表 / RPC 失败都安静降级,绝不 Toast 报错打断输入;在线时
     // hostCapabilities 已就位,内置伪命令(随 compact/review 位点亮,见
     // slashCandidatesFor)仍给三源会话兜出可用卡面。
-    var threadAgentId by remember { mutableStateOf("") }
+    var threadAgentId by remember(threadId) { mutableStateOf("") } // 【PF4】换会话重置,理由同 threadWorkspace
     // 【能力位数据源】hostCapabilities 共享快照(与主页网格/设置页同一真源):
     // 会话级动作(压缩/分叉/回滚/计划审查/HTML 导出)与运行中发送回执(steer)
     // 的唯一门控数据源 —— 位在才亮入口,缺位不显示假入口(硬红线)。
@@ -2233,7 +2246,7 @@ fun ChatScreen(
     // "pi/zai-coding-cn/glm-5.3" 这种 agent 前缀形式。模型芯片/弹窗的选中态以它
     // 为准(图3 实锤:过去 pi 会话没取到它,链路落到 codex 桌面默认
     // GLM-5.3-Flash 上,芯片显示成了 codex 的模型)。
-    var threadModelId by remember { mutableStateOf("") }
+    var threadModelId by remember(threadId) { mutableStateOf("") } // 【PF4】换会话重置,理由同 threadWorkspace
     var slashCommands by remember(threadId) { mutableStateOf<List<SlashCommandInfo>>(emptyList()) }
     LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, st.running) {
         if (!isSlashPanelAgent(threadAgentId)) {
@@ -2746,14 +2759,16 @@ fun ChatScreen(
         }
     }
 
-    var threadTitle by remember { mutableStateOf("任务") }
+    // 【PF4】按 threadId 记忆(getThread 用 t.title 回填且空标题不覆盖 —— 不带键时
+    // 换到无标题会话会永远顶着上一会话的标题;带键换会话即回落「任务」)。
+    var threadTitle by remember(threadId) { mutableStateOf("任务") }
     // daemon 上报的会话状态(getThread 回填;四词状态徽章的兜底数据源。
     // 运行中/恢复中由 st.running 实时覆盖,待审批由 st.pendingApproval 实时覆盖 ——
     // 徽章口径见下方 identityStatus 的装配注释)
     var threadStatus by remember(threadId) { mutableStateOf(ThreadStatus.THREAD_STATUS_UNSPECIFIED) }
     // 【桌面只读回显】会话目标顶栏文案(GoalDisplayLogic:goal_detail 电脑端现读优先,
     // goal 本地库兜底):有则显示一行,无则不占位。
-    var threadGoalLine by remember { mutableStateOf<String?>(null) }
+    var threadGoalLine by remember(threadId) { mutableStateOf<String?>(null) } // 【PF4】换会话重置,理由同 threadWorkspace
     LaunchedEffect(threadId, connectionEpoch, reloadToken) {
         // 【P1-4 阶段 D · 离线快照】已知断网(down)进页且时间线还没内容:
         // 直接用本地只读副本渲染 + 顶部横幅 + 输入停用。checking 是巡检中间态,
@@ -3095,8 +3110,10 @@ fun ChatScreen(
     //                      对应 item 的局部 selectMode(LazyColumn 的 item 只能
     //                      改自己的局部态,跨层经这一棒交接)
     val messageMenu = rememberContextMenuState()
-    var messageMenuTarget by remember { mutableStateOf<ChatItem?>(null) }
-    var messageSelectArmed by remember { mutableStateOf<ChatItem?>(null) }
+    // 【PF4】按 threadId 记忆:菜单目标/选择模式请求持有旧会话 ChatItem 引用,
+    // 换会话必须作废(否则跨会话 copy/quote/retry 操作到上一会话的消息)。
+    var messageMenuTarget by remember(threadId) { mutableStateOf<ChatItem?>(null) }
+    var messageSelectArmed by remember(threadId) { mutableStateOf<ChatItem?>(null) }
 
     val connSt = AgentConnection.connState.collectAsState().value
     val hasFailure = loadError != null ||
@@ -3696,7 +3713,13 @@ fun ChatScreen(
                     }
                 }
             }
-            itemsIndexed(st.items) { index, item ->
+            // 【PF4】contentType 按渲染形态分桶(见 chatItemContentType):滚动回收只
+            // 同形态复用,不同形态不再互毁重建。无稳定 id(改 ChatItem/TurnSession 越权)
+            // 故不加 key,位置匹配语义原样保留 —— 纯复用提示,不碰投影。
+            itemsIndexed(
+                st.items,
+                contentType = { _, item -> chatItemContentType(PaHacker.isHacker, item) },
+            ) { index, item ->
                 // 进入动画只武装"新消息追加"的那一帧(见上方 prevItemCount 注释)
                 val prevCount = prevItemCount.value
                 val enterArm = prevCount != null &&

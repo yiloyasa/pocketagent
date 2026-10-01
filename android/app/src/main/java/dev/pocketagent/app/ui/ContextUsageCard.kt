@@ -272,13 +272,22 @@ internal class UsageMetric(
 /**
  * 上下文窗口卡只展示的 4 项指标(纯函数,便于单测)。
  * "缓存"取 cacheReadTokens —— 与"缓存命中率 = 缓存读 ÷ 输入"同口径,不另造合计口径。
+ *
+ * 【N3】当前 Tab 的口径整个没有用量对象(null,如 hermes 从不报"本会话累计")时,
+ * 三项 token 指标给"—"而不是 0:0/0/0 是"daemon 报了且都是 0"的形状,与"根本
+ * 没报"必须可区分。"本 turn"口径在首帧上报前/压缩后同样为 null,同一形态呈现
+ * 未知 —— 与本卡"绝不造数"的既定口径一致(命中率本就对 null 给"—")。
  */
 internal fun usageMetrics(): List<UsageMetric> = listOf(
-    UsageMetric("输入", UsageMetricTone.ACCENT) { formatTokens(it?.inputTokens ?: 0L) },
-    UsageMetric("输出", UsageMetricTone.GREEN) { formatTokens(it?.outputTokens ?: 0L) },
-    UsageMetric("缓存", UsageMetricTone.ACCENT_DIM) { formatTokens(it?.cacheReadTokens ?: 0L) },
+    UsageMetric("输入", UsageMetricTone.ACCENT) { metricTokens(it) { u -> u.inputTokens } },
+    UsageMetric("输出", UsageMetricTone.GREEN) { metricTokens(it) { u -> u.outputTokens } },
+    UsageMetric("缓存", UsageMetricTone.ACCENT_DIM) { metricTokens(it) { u -> u.cacheReadTokens } },
     UsageMetric("缓存命中率", UsageMetricTone.NEUTRAL) { cacheHitRate(it) },
 )
+
+/** 该口径没有用量对象时给"—";有对象则如实显示字段值(字段本身为 0 仍显示 0)。 */
+internal fun metricTokens(u: Usage?, field: (Usage) -> Long): String =
+    if (u == null) "—" else formatTokens(field(u))
 
 @Composable
 private fun toneColor(tone: UsageMetricTone): Color = when (tone) {

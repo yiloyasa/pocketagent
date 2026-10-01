@@ -626,17 +626,24 @@ object TurnSession {
                 // 用量进上下文窗口交互卡，不再挤占聊天时间线。
                 st.compactionInProgress = false
                 st.turnUsage = ev.usage.usage
-                st.totalUsage = ev.usage.totalUsage
+                // 【N3·hermes 修复】total_usage 未设置时按 null 处理(见
+                // [projectedTotalUsage]):protobuf 消息字段未设置的 getter 永远返回
+                // 默认实例而非 null,直接赋值等于把"daemon 没报累计"渲染成 0/0/0。
+                val total = projectedTotalUsage(ev.usage)
+                st.totalUsage = total
                 // codex 上报的真实窗口大小:模型列表没有各模型的窗口,
                 // 切模型后上下文窗口靠这个继续显示。
                 if (ev.usage.modelContextWindow > 0) {
                     st.liveContextWindow = ev.usage.modelContextWindow
                 }
-                // 落盘缓存:重开该会话时先回显,不再从 0% 开始
+                // 落盘缓存:重开该会话时先回显,不再从 0% 开始。
+                // total 未设置传 null:ThreadUsageStore 的合并语义会保留磁盘上
+                // 上一次已知的 total(部分帧缺字段不抹历史),而 hermes 这类
+                // 从不设置该字段的会话,磁盘上也从不会有 total 键。
                 ThreadUsageStore.save(
                     threadId,
                     ev.usage.usage,
-                    ev.usage.totalUsage,
+                    total,
                     st.liveContextWindow,
                 )
             }
@@ -1283,3 +1290,15 @@ internal fun emptyOutputNotice(state: OutputState): Pair<String, String>? = when
         "正文可能丢了" to "电脑上有这一轮的记录,但正文没能取回。可以重试同一句话。"
     else -> null
 }
+
+/**
+ * usage_update 投影里的"本会话累计"读取(N3·hermes 修复;纯函数,单测钉死)。
+ *
+ * 【为什么必须 hasTotalUsage】proto 消息字段未设置时 `getTotalUsage()` 返回的是
+ * 默认实例而非 null —— 直接赋值等于把"daemon 没报累计"说成"累计是 0"。
+ * hermes 适配器只有会话级 size/used、没有总量来源,usage_update 投影从不设置
+ * total_usage,手机端"本会话累计"Tab 便对 hermes 恒显 0/0/0。daemon 侧补不了
+ * (没有总量数据源),这里把"未设置"如实还原为 null,由卡面以"—"呈现未知。
+ */
+internal fun projectedTotalUsage(update: pocketagent.v1.UsageUpdate): pocketagent.v1.Usage? =
+    if (update.hasTotalUsage()) update.totalUsage else null
