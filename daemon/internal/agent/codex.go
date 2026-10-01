@@ -611,6 +611,14 @@ func codexGlobalNoticeKind(method string) string {
 		// 0.156 生命周期钩子,以及思考摘要分段(思考流投影已有
 		// item/reasoning/summaryTextDelta,本条只补"新一段开始"的留痕)。
 		"thread/environment/connected", "thread/environment/disconnected",
+		// 2026-10-02 收编(unknown-events.json 滚动窗 200 条复盘:UNKNOWN 只剩
+		// remoteControl/status/changed 2 条):Codex 桌面端远程控制开关启停通知,
+		// 载荷 {status: enabled|disabled, serverName}。此前按"remoteControl/*
+		// 桌面面不收"维持 UNKNOWN;但它与 environment/connected|disconnected
+		// 同性质(状态变化+人话可译),留痕+词表,不做投影。收编后 codex 侧
+		// UNKNOWN 清零;其余 remoteControl/* 变体仍属明确不收清单,出现即如实
+		// UNKNOWN 留观。
+		"remoteControl/status/changed",
 		"thread/settings/updated", "configWarning", "deprecationNotice",
 		"item/reasoning/summaryPartAdded", "turn/moderationMetadata",
 		"account/updated", "account/login/completed",

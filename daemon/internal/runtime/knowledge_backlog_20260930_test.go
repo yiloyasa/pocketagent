@@ -55,13 +55,19 @@ func TestCodexBareResponseStaysUnknown(t *testing.T) {
 	}
 }
 
-// remoteControl/* 在 knowledge_codex.go 文件头"明确不收清单"里(桌面远程控制,
-// 手机端无消费方)—— 分类维持 UNKNOWN,翻译维持未知口径。哪天有人想收编,
-// 先推翻文件头的决策并把本用例一起改,别只加词表。
-func TestCodexRemoteControlStatusStaysUnknown(t *testing.T) {
-	tr := TranslateEvent("codex", "remoteControl/status/changed", KindUnknownNotification,
+// remoteControl/status/changed 于 2026-10-02 收编(推翻 20260930 决策,按本用例
+// 当初写下的规则来:先改决策再改用例)—— 滚动窗复盘 UNKNOWN 只剩这 2 条,且它
+// 与 environment/connected|disconnected 同性质(状态变化+人话可译),收为
+// PASSTHROUGH + 词表;其余 remoteControl/* 变体仍在"明确不收清单",保持 UNKNOWN。
+func TestCodexRemoteControlStatusChangedKnown(t *testing.T) {
+	tr := TranslateEvent("codex", "remoteControl/status/changed", KindKnownPassthrough,
 		`{"environmentId":null,"installationId":"x","serverName":"s","status":"disabled"}`)
-	if !strings.Contains(tr.Summary, "未知") {
-		t.Errorf("remoteControl/status/changed 刻意不收,必须仍译为未知事件,得到: %s", tr.Summary)
+	if strings.Contains(tr.Summary, "未知") {
+		t.Errorf("remoteControl/status/changed 已收编,不得再译为未知事件,得到: %s", tr.Summary)
+	}
+	// 收编仅限精确名:其他 remoteControl/* 变体仍 UNKNOWN
+	tr2 := TranslateEvent("codex", "remoteControl/otherVariant", KindUnknownNotification, `{}`)
+	if !strings.Contains(tr2.Summary, "未知") {
+		t.Errorf("remoteControl/otherVariant 仍应译为未知事件,得到: %s", tr2.Summary)
 	}
 }

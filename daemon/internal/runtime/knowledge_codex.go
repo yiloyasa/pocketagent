@@ -84,6 +84,8 @@ var codexEventSummaries = map[string]string{
 	// ---- 0.156.1 收编批(证据与不收清单见文件头注释)----
 	"codex\x1fthread/environment/connected":    "Codex 的执行环境已接通,可以开始执行命令了",
 	"codex\x1fthread/environment/disconnected": "Codex 的执行环境掉线了,可能影响后续命令执行",
+	// 2026-10-02 收编:载荷 {status: enabled|disabled, serverName},远程控制开关启停
+	"codex\x1fremoteControl/status/changed":    "Codex 桌面端的远程控制开关状态变了(开启/关闭),不影响手机端的连接",
 	"codex\x1fthread/settings/updated":         "这个会话的设置被修改了(通常是桌面端改的),以最新设置为准",
 	"codex\x1fconfigWarning":                   "Codex 的配置文件有问题,已忽略无效项继续运行",
 	"codex\x1fdeprecationNotice":               "Codex 提示某个配置将来会弃用,建议按提示迁移",

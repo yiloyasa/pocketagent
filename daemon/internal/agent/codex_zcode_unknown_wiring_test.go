@@ -70,6 +70,15 @@ func TestCodexGlobalNoticeKindClassification(t *testing.T) {
 	if got := codexGlobalNoticeKind("item/commandExecution/terminalInteraction"); got != runtime.KindKnownProjected {
 		t.Errorf("codexGlobalNoticeKind(terminalInteraction) = %q, want PROJECTED(事件流有投影,见 codex_events.go)", got)
 	}
+	// 2026-10-02 收编批(unknown-events.json 滚动窗 200 条复盘:UNKNOWN 清零):
+	// remoteControl/status/changed = 桌面端远程控制开关启停,留痕不投影。
+	// 其余 remoteControl/* 变体仍属"明确不收清单",必须保持 UNKNOWN。
+	if got := codexGlobalNoticeKind("remoteControl/status/changed"); got != runtime.KindKnownPassthrough {
+		t.Errorf("codexGlobalNoticeKind(remoteControl/status/changed) = %q, want PASSTHROUGH(2026-10-02 收编,只留痕不投影)", got)
+	}
+	if got := codexGlobalNoticeKind("remoteControl/otherVariant"); got != runtime.KindUnknownNotification {
+		t.Errorf("codexGlobalNoticeKind(remoteControl/otherVariant) = %q, want UNKNOWN(收编仅限 status/changed 精确名)", got)
+	}
 	// 幻影方法回归钉(codexplanprobe 两轮定案:0.156.1/0.159.2 二进制均不命中、
 	// 运行时 unknown variant,真实投影走 turn/plan/updated):词表与分类表
 	// 都不得再挂 thread/plan/updated,挂了就是给不存在的帧发"已知"身份证。

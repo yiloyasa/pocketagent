@@ -13,6 +13,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 	"github.com/pocketagent/daemon/internal/dshapp"
+	"github.com/pocketagent/daemon/internal/hermesapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/store"
@@ -192,6 +193,17 @@ func DetectProviders() map[string]Provider {
 		} else {
 			log.Printf("[providers] dsh 存在但 --version 失败(bin=%s),不注册", bin)
 		}
+	}
+
+	// hermes(桌面 agent 桥接,Nous Research):hermes-agent npm 包的 ACP stdio
+	// 适配器(venv python -m acp_adapter)。探测只做"venv python 存在"(runtimeReady
+	// 的充分证据),不起子进程、不做 initialize —— 与 codex/pi 同红线。未配置
+	// 模型/凭据时线程照建,首轮 prompt 以人话错误如实回给手机端。
+	if py, dir, err := hermesapp.LocateHermes(); err == nil {
+		log.Printf("[providers] hermes 探测成功: python=%s acp=%s", py, dir)
+		m["hermes"] = NewHermesProvider()
+	} else {
+		log.Printf("[providers] hermes 未就绪(%v),不注册", err)
 	}
 
 	// echo 永远在场:没有任何 key 时也能把整条链路(手机→协议→daemon)跑通。
