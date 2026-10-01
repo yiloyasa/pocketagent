@@ -298,6 +298,9 @@ private fun RootNav() {
                 onBack = { nav.popBackStack() },
                 // 编排台里的"管理岗位"再进角色列表页,与主页入口同一条路由。
                 onOpenCollabRoles = { nav.navigate("collabRoles") },
+                // 结论 2(逐成员会话):派发受理后每个成员有自己的子线程,
+                // 进度卡「查看会话」直达 chat/<threadId>(与其他入口同一目标路由)。
+                onOpenThread = { id -> nav.navigate("chat/$id") },
             )
         }
         // ---- 协同角色配置:列表页 ----

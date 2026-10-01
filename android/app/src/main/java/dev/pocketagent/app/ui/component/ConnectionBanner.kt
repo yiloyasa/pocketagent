@@ -103,10 +103,27 @@ fun ConnectionBanner(
         mutableStateOf(ConnectionBannerState(visible = false, attempts = 0))
     }
     var prev by remember { mutableStateOf(AgentConnection.connState.value) }
+    // 【重试中反馈 + 防重入】(R3-C 微调):点重试后按钮换「重试中…」并禁点,
+    // 冷却窗口内的第二发一律拒收;connState 一有动静即视为这轮重试已有下文,
+    // 再兜 2.5s 超时,避免状态不动时按钮卡在"重试中"。
+    var retrying by remember { mutableStateOf(false) }
+    val retryGate = remember { RetryGate() }
+    fun beginRetry() {
+        if (!retryGate.tryBegin()) return
+        retrying = true
+        onRetry()
+    }
+    LaunchedEffect(retrying) {
+        if (retrying) {
+            kotlinx.coroutines.delay(2500)
+            retrying = false
+        }
+    }
     LaunchedEffect(Unit) {
         AgentConnection.connState.collect { s ->
             banner = nextConnectionBannerState(prev, s, banner.attempts)
             prev = s
+            retrying = false
         }
     }
     if (!banner.visible) return
@@ -117,7 +134,7 @@ fun ConnectionBanner(
             .padding(horizontal = 16.dp, vertical = 2.dp)
             // 语义状态条(不算卡):警示色 8% 透明底 + 16dp 圆角,
             // 与 Home/Threads 既有错误横幅同一套语言(黄=等待,红=失败)
-            .pressable { onRetry() }
+            .pressable { beginRetry() }
             .background(PaEditorial.Attention.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -134,8 +151,8 @@ fun ConnectionBanner(
             color = PaEditorial.Attention,
             maxLines = 2,
         )
-        TextButton(onClick = onRetry) {
-            Text("重试", fontSize = 12.sp, color = PaEditorial.Primary)
+        TextButton(onClick = { beginRetry() }, enabled = !retrying) {
+            Text(if (retrying) "重试中…" else "重试", fontSize = 12.sp, color = PaEditorial.Primary)
         }
     }
 }

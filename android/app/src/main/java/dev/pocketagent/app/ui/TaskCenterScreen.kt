@@ -63,16 +63,22 @@ import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
+import dev.pocketagent.app.ui.component.DocFormatRegistry
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaStatusBadge
+import dev.pocketagent.app.ui.component.RedownloadPlan
+import dev.pocketagent.app.ui.component.RetryGate
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.redownloadNeedsPc
+import dev.pocketagent.app.ui.component.redownloadPlanOf
 import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 
@@ -120,19 +126,72 @@ internal fun taskCenterStats(tasks: List<TaskCenter.Task>): TaskCenterStats = Ta
 )
 
 /**
- * 当前页签的分区列表(纯函数):按四词状态把任务分成
- * 等待你处理 / 正在执行 / 已完成 / 未完成 四组(空组不出现),组序即优先级
- * (README:待你处理优先于运行中)。分区标题取四词本身 —— 同一份事实,
- * 徽章与分区头长出同一个词。
+ * 任务分区的一行:分区头文案 + 该组任务。四词分区的头 = 状态词本身(与行内徽章
+ * 长出同一个词);断线时消息类运行中任务落到 [offlineResume] 分区 —— 头**不写
+ * 「正在执行」**(README:未连接时绝不显示),改写「离线待恢复」,与行内
+ * 隐去徽章 + 离线提示是同一套事实,不让分区头把徽章刚收起的词又摆回来。
+ */
+internal data class TaskPartitionRow(
+    val word: String,
+    val offlineResume: Boolean,
+    val tasks: List<TaskCenter.Task>,
+)
+
+/**
+ * 当前页签的分区行(纯函数):按四词状态分成
+ * 等待你处理 / 离线待恢复(仅断线时) / 正在执行 / 已完成 / 未完成 五组
+ * (空组不出现),组序即优先级(README:待你处理优先于运行中)。
+ * 下载类的「正在执行」是手机本机行为,断连也照常归执行分区。
+ */
+internal fun taskPartitionRows(
+    tasks: List<TaskCenter.Task>,
+    hostOffline: Boolean,
+): List<TaskPartitionRow> {
+    val offlineMessageRunning = if (hostOffline) {
+        tasks.filter { it.kind == TaskCenter.Kind.MESSAGE && it.status == TaskCenter.Status.RUNNING }
+    } else {
+        emptyList()
+    }
+    return listOf(
+        TaskPartitionRow(
+            EditorialStatus.WAITING_FOR_YOU.word,
+            false,
+            tasks.filter { editorialStatusOf(it.status) == EditorialStatus.WAITING_FOR_YOU },
+        ),
+        TaskPartitionRow("离线待恢复", true, offlineMessageRunning),
+        TaskPartitionRow(
+            EditorialStatus.RUNNING.word,
+            false,
+            tasks.filter {
+                it.status == TaskCenter.Status.RUNNING &&
+                    !(hostOffline && it.kind == TaskCenter.Kind.MESSAGE)
+            },
+        ),
+        TaskPartitionRow(
+            EditorialStatus.COMPLETED.word,
+            false,
+            tasks.filter { it.status == TaskCenter.Status.DONE },
+        ),
+        TaskPartitionRow(
+            EditorialStatus.NOT_COMPLETED.word,
+            false,
+            tasks.filter {
+                it.status != TaskCenter.Status.RUNNING && it.status != TaskCenter.Status.DONE
+            },
+        ),
+    ).filter { it.tasks.isNotEmpty() }
+}
+
+/**
+ * 当前页签的分区(纯函数,在线口径):四词状态分组(空组不出现)。
+ * 渲染走 [taskPartitionRows](含断线分区);本函数保留四词口径本身,
+ * 供既有单测钉住"分区头与行内徽章长出同一个词"。
  */
 internal fun taskPartitions(tasks: List<TaskCenter.Task>): List<Pair<EditorialStatus, List<TaskCenter.Task>>> =
-    listOf(
-        EditorialStatus.WAITING_FOR_YOU,
-        EditorialStatus.RUNNING,
-        EditorialStatus.COMPLETED,
-        EditorialStatus.NOT_COMPLETED,
-    ).map { s -> s to tasks.filter { editorialStatusOf(it.status) == s } }
-        .filter { it.second.isNotEmpty() }
+    taskPartitionRows(tasks, hostOffline = false).map { row ->
+        // hostOffline=false 时离线分区恒为空,首任务的四词即分区口径
+        editorialStatusOf(row.tasks.first().status) to row.tasks
+    }
 
 /**
  * 任务中心(设计稿 08 · 编辑式)。
@@ -175,6 +234,88 @@ fun TaskCenterScreen(
     // 主机连接态:只用于离线分支(消息类 RUNNING 不得显示「正在执行」,见 taskStatusView)
     val connState = AgentConnection.connState.collectAsState().value
     val hostOffline = connState == "down"
+    // 【重试防重入】每行一扇门闩:冷却窗口内的第二次点击一律拒收(消息类双击会
+    // 连发两次结果找回;下载类双击会并发两条同名下载流);"重试中"视觉态到点自动退场。
+    val retryGates = remember { java.util.concurrent.ConcurrentHashMap<String, RetryGate>() }
+    var retryingIds by remember { mutableStateOf(setOf<String>()) }
+    // 【文件丢失态】「打开文件」先验存在性:失效的行内转"文件丢失",给出
+    // 重新下载/移除的下一步,而不是弹一个 toast 就没了下文。
+    var missingFileIds by remember { mutableStateOf(setOf<String>()) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    /** 打开已下载的文件:先验存在(手机侧文件可能已被清理),失效转"文件丢失"态。 */
+    fun requestOpenFile(task: TaskCenter.Task) {
+        if (task.localUri.isEmpty()) {
+            missingFileIds = missingFileIds + task.id
+            return
+        }
+        scope.launch {
+            val exists = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                PaDownloader.localFileExists(ctx, task.localUri)
+            }
+            if (exists) {
+                PaDownloader.openLocalFile(
+                    ctx = ctx,
+                    uri = task.localUri,
+                    title = task.title,
+                    detail = task.detail,
+                    onOpenInBrowser = onOpenBrowser,
+                )
+            } else {
+                missingFileIds = missingFileIds + task.id
+            }
+        }
+    }
+
+    /**
+     * 失败态重试 / 文件丢失重新下载的唯一入口:门闩拒重入 → 按类别分派 →
+     * 重试视觉到冷却窗口结束自动退场。重试语义(结论 3):点了必须有下文 ——
+     * 下载类经 [TaskCenter.trackDownload] 原地复活为进行中(进度条接手反馈)。
+     * 需要电脑在线的重试(消息找回 / 电脑文件重下)在断线时**不消费门闩直接拒收**:
+     * 行内根本不摆可点入口(见行尾动作),这里再拦一道防其它入口绕过。
+     */
+    fun requestRetry(task: TaskCenter.Task) {
+        val plan = if (task.kind == TaskCenter.Kind.DOWNLOAD) {
+            redownloadPlanOf(task.id.removePrefix("dl:"))
+        } else {
+            RedownloadPlan.NONE
+        }
+        if (hostOffline && (task.kind == TaskCenter.Kind.MESSAGE || plan == RedownloadPlan.FROM_PC)) return
+        val gate = retryGates.getOrPut(task.id) { RetryGate() }
+        if (!gate.tryBegin()) return
+        retryingIds = retryingIds + task.id
+        when {
+            // 中断/失败的消息类:不只是"引路"—— 先从电脑端把已完成的结果同步回来
+            // (找到对应消息并输出到手机端),再进会话
+            task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty() -> {
+                TurnSession.resyncFromDaemon(task.threadId)
+                onOpenThread(task.threadId)
+            }
+            task.kind == TaskCenter.Kind.DOWNLOAD -> {
+                missingFileIds = missingFileIds - task.id
+                when (plan) {
+                    RedownloadPlan.FROM_URL -> PaDownloader.downloadFromUrl(
+                        url = task.id.removePrefix("dl:"),
+                        name = task.title,
+                        mime = DocFormatRegistry.mimeFor(task.title),
+                        sourceTitle = task.sourceTitle,
+                        threadId = task.threadId,
+                    )
+                    RedownloadPlan.FROM_PC -> PaDownloader.downloadFromPc(
+                        remotePath = task.id.removePrefix("dl:"),
+                        sourceTitle = task.sourceTitle,
+                        threadId = task.threadId,
+                    )
+                    // 不可重取的条目不摆重试钮,走不到这一支
+                    RedownloadPlan.NONE -> Unit
+                }
+            }
+        }
+        scope.launch {
+            kotlinx.coroutines.delay(gate.cooldownMs)
+            retryingIds = retryingIds - task.id
+        }
+    }
     // 旧版本下载条目无 localUri:进任务中心时按文件名找回本地路径,
     // DONE 行的「打开文件」才能正常走 openLocalFile(列表元素原地改+persist 重发射,
     // List.equals 按元素比较 → LaunchedEffect 不会因此重启,legacyTried 双保险防重查)。
@@ -304,20 +445,23 @@ fun TaskCenterScreen(
                         Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 96.dp),
                     ) {
-                        // 四词分区(空组不出现):分区头 = 状态词本身,行内徽章同一口径
-                        taskPartitions(rows).forEach { (status, partition) ->
-                            item(key = "header-${pageKind.name}-${status.name}") {
+                        // 四词分区(空组不出现):分区头 = 状态词本身;断线时消息类运行中
+                        // 落「离线待恢复」分区 —— 头不写「正在执行」(状态词纪律,全渲染路径)
+                        taskPartitionRows(rows, hostOffline).forEach { row ->
+                            item(key = "header-${pageKind.name}-${row.word}") {
                                 Text(
-                                    status.word,
+                                    row.word,
                                     Modifier.padding(top = 16.dp, bottom = 2.dp),
                                     style = PaEditorial.Type.Heading,
                                     color = ed.Ink,
                                 )
                             }
-                            items(partition, key = { it.id }) { task ->
+                            items(row.tasks, key = { it.id }) { task ->
                                 TaskRow(
                                     task = task,
                                     hostOffline = hostOffline,
+                                    fileMissing = task.id in missingFileIds,
+                                    retrying = task.id in retryingIds,
                                     onClick = {
                                         TaskCenter.markRead(task.id)
                                         when {
@@ -330,24 +474,8 @@ fun TaskCenterScreen(
                                         }
                                     },
                                     onRemove = { TaskCenter.remove(task.id) },
-                                    onRetry = {
-                                        // 中断/失败的消息类任务:不只是"引路"—— 先从电脑端把
-                                        // 已完成的结果同步回来(找到对应消息并输出到手机端),再进会话
-                                        if (task.kind == TaskCenter.Kind.MESSAGE && task.threadId.isNotEmpty()) {
-                                            TurnSession.resyncFromDaemon(task.threadId)
-                                            onOpenThread(task.threadId)
-                                        }
-                                    },
-                                    onOpenFile = {
-                                        // 网页/文本/图片 → 内置浏览器;APK → 系统安装器
-                                        PaDownloader.openLocalFile(
-                                            ctx = ctx,
-                                            uri = task.localUri,
-                                            title = task.title,
-                                            detail = task.detail,
-                                            onOpenInBrowser = onOpenBrowser,
-                                        )
-                                    },
+                                    onRetry = { requestRetry(task) },
+                                    onOpenFile = { requestOpenFile(task) },
                                 )
                                 HorizontalHairline()
                             }
@@ -463,15 +591,18 @@ private fun KindTab(label: String, selected: Boolean, modifier: Modifier = Modif
 /**
  * 单条任务行(设计稿 08:类型图标浅底方格 + 标题 + 四词徽章 + 元信息 + 行尾动作;
  * 留白 + 细分隔线,不套卡)。
- * 进行中:语义色进度条 + 可点"打开会话";失败/中断:重试入口(不伪装可恢复)。
+ * 进行中:语义色进度条 + 可点"打开会话";失败/中断:重试入口(不伪装可恢复);
+ * 文件丢失:行内转"重新下载/移除",不摆点了没反应的死按钮(重试语义,结论 3)。
  */
 @Composable
 private fun TaskRow(
     task: TaskCenter.Task,
     hostOffline: Boolean,
+    fileMissing: Boolean,
+    retrying: Boolean,
     onClick: () -> Unit,
     onRemove: () -> Unit,
-    onRetry: () -> Unit,
+    onRetry: (() -> Unit)?,
     onOpenFile: (() -> Unit)? = null,
 ) {
     val ed = MaterialTheme.editorial
@@ -480,6 +611,12 @@ private fun TaskRow(
     val tone = statusView?.status?.tone ?: EditorialTone.GREY
     // 下载项按文件类型出图(用户反馈:只显示"2.0MB"看不出这是什么文件)
     val kind = if (task.kind == TaskCenter.Kind.DOWNLOAD) fileKindOf(task.title) else null
+    // 重新下载可行性(下载类):决定失败/文件丢失态的行尾动作与下一步文案
+    val redownload = if (task.kind == TaskCenter.Kind.DOWNLOAD) {
+        redownloadPlanOf(task.id.removePrefix("dl:"))
+    } else {
+        RedownloadPlan.NONE
+    }
     val icon = when (task.kind) {
         TaskCenter.Kind.MESSAGE -> R.drawable.ic_lucide_message_square
         TaskCenter.Kind.DOWNLOAD -> kind?.iconRes ?: R.drawable.ic_lucide_download
@@ -546,6 +683,40 @@ private fun TaskRow(
                         color = EditorialTone.GREY.text,
                     )
                 }
+                // 失败/中断:条目详情已答"为什么",这里统一补"现在能做什么"
+                // (原因 + 下一步,不带责备语气,不堆技术栈术语 —— 结论 3)
+                if (task.status == TaskCenter.Status.FAILED || task.status == TaskCenter.Status.INTERRUPTED) {
+                    Text(
+                        failureNextStep(
+                            kind = task.kind,
+                            hostOffline = hostOffline,
+                            redownloadNeedsPc = if (task.kind == TaskCenter.Kind.DOWNLOAD) {
+                                redownloadNeedsPc(redownload)
+                            } else {
+                                null
+                            },
+                            hasSourceThread = task.threadId.isNotEmpty(),
+                        ),
+                        Modifier.padding(top = 2.dp),
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = EditorialTone.GREY.text,
+                    )
+                }
+                // 已完成的下载文件丢了:先陈述事实,再给同一套口径的出路
+                if (fileMissing && task.status == TaskCenter.Status.DONE &&
+                    task.kind == TaskCenter.Kind.DOWNLOAD
+                ) {
+                    Text(
+                        missingFileNextStep(
+                            redownloadNeedsPc(redownload),
+                            task.threadId.isNotEmpty(),
+                            hostOffline,
+                        ),
+                        Modifier.padding(top = 2.dp),
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = EditorialTone.GREY.text,
+                    )
+                }
                 if (task.sourceTitle.isNotEmpty()) {
                     Text(
                         "来自会话「" + task.sourceTitle + "」",
@@ -579,13 +750,40 @@ private fun TaskRow(
             }
             Spacer(Modifier.width(8.dp))
             when {
+                // 重试中:文字占位代替图标、不可点 —— 防双击重入的可见反馈(结论 3)
+                retrying && onRetry != null &&
+                    (
+                        task.status == TaskCenter.Status.FAILED ||
+                            task.status == TaskCenter.Status.INTERRUPTED ||
+                            (task.status == TaskCenter.Status.DONE && fileMissing)
+                        ) ->
+                    RetryInFlightLabel()
                 task.status == TaskCenter.Status.DONE &&
-                    task.kind == TaskCenter.Kind.DOWNLOAD && onOpenFile != null ->
+                    task.kind == TaskCenter.Kind.DOWNLOAD && !fileMissing && onOpenFile != null ->
                     RowActionIcon(R.drawable.ic_lucide_globe, "打开文件", onOpenFile, PaEditorial.Primary)
-                task.status == TaskCenter.Status.FAILED ||
-                    task.status == TaskCenter.Status.INTERRUPTED ->
-                    // 失败显示重试,不伪装成已完成(README §状态)
-                    RowActionIcon(R.drawable.ic_lucide_refresh_cw, "重试", onRetry, PaEditorial.Primary)
+                // 文件丢失:能重取的给「重新下载」,不能重取的只给「移除」—— 不摆死按钮;
+                // 需要电脑的重取在断线时同样不给入口(此刻点了注定失败,文案让用户回头再来)
+                task.status == TaskCenter.Status.DONE &&
+                    task.kind == TaskCenter.Kind.DOWNLOAD && fileMissing &&
+                    redownload != RedownloadPlan.NONE &&
+                    !(redownload == RedownloadPlan.FROM_PC && hostOffline) &&
+                    onRetry != null ->
+                    RowActionIcon(R.drawable.ic_lucide_refresh_cw, "重新下载", onRetry, PaEditorial.Primary)
+                task.status == TaskCenter.Status.FAILED || task.status == TaskCenter.Status.INTERRUPTED -> when {
+                    // 失败显示重试,不伪装成已完成(README §状态);断线时消息找回无从做起,
+                    // 不给一个点了必失败的按钮(行内文案引导恢复连接后再来)
+                    task.kind == TaskCenter.Kind.MESSAGE && !hostOffline && onRetry != null ->
+                        RowActionIcon(R.drawable.ic_lucide_refresh_cw, "重试", onRetry, PaEditorial.Primary)
+                    // 下载类失败:旧实现这里的「重试」点了毫无反应(死按钮)——
+                    // 可重取的改「重新下载」(走门闩 + 原地复活),不可重取的诚实给「移除」
+                    task.kind == TaskCenter.Kind.DOWNLOAD &&
+                        redownload != RedownloadPlan.NONE &&
+                        !(redownload == RedownloadPlan.FROM_PC && hostOffline) &&
+                        onRetry != null ->
+                        RowActionIcon(R.drawable.ic_lucide_refresh_cw, "重新下载", onRetry, PaEditorial.Primary)
+                    else ->
+                        RowActionIcon(R.drawable.ic_lucide_x, "移除", onRemove, ed.Subtle)
+                }
                 else ->
                     RowActionIcon(R.drawable.ic_lucide_x, "移除", onRemove, ed.Subtle)
             }
@@ -607,6 +805,24 @@ private fun RowActionIcon(iconRes: Int, label: String, onClick: () -> Unit, tint
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(iconRes), label, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+/**
+ * 重试中的行尾占位(结论 3:重试点了必须有"进行中"的反馈):文字代替图标,
+ * 且不是可点目标 —— 第二次点击落在它身上不会触发任何重入。
+ */
+@Composable
+private fun RetryInFlightLabel() {
+    Box(
+        Modifier.size(PaEditorial.Space.TouchMin),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "重试中",
+            fontSize = 10.sp, lineHeight = 14.sp,
+            color = MaterialTheme.editorial.Muted,
+        )
     }
 }
 

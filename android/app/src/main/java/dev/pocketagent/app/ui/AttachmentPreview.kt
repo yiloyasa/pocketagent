@@ -16,7 +16,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,12 +80,15 @@ fun AttachmentCard(
 ) {
     val image = attachmentKind(attachment.name, attachment.mediaType) == AttachmentKind.IMAGE
     val ctx = LocalContext.current
+    // 触感:长按复制成功时给一次长按触觉确认(与全局 pressable(haptic=true) 同一纪律)
+    val haptics = LocalHapticFeedback.current
     Row(
         modifier
             // 单击预览 / 长按复制完整文件名(与消息长按复制同一写法)
             .pressableLong(
                 onClick = onClick,
                 onLongPress = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                         as android.content.ClipboardManager
                     cm.setPrimaryClip(

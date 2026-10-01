@@ -381,7 +381,9 @@ internal fun TerminalToolBlock(
                 Text(
                     argsSummary,
                     Modifier.weight(1f, fill = false),
-                    color = PaEditorial.Subtle,
+                    // 参数摘要是 11.5sp 可读正文:用 Muted(hacker 盘对黑底 ≥6:1),
+                    // Subtle 档只有 ~3:1,小字不可读(对比度核查结论)
+                    color = PaEditorial.Muted,
                     fontSize = (11.5f * uiScale).sp,
                     fontFamily = TerminalFont.chatFont,
                     maxLines = 1,
@@ -429,7 +431,8 @@ internal fun TerminalToolBlock(
             if (item.toolArgs.isBlank() && item.text.isBlank()) {
                 Text(
                     "等待结果…",
-                    color = PaEditorial.Subtle,
+                    // 11sp 小字:Muted 档保证对黑底 ≥4.5:1(对比度核查结论)
+                    color = PaEditorial.Muted,
                     fontSize = (11 * uiScale).sp,
                     fontFamily = TerminalFont.chatFont,
                 )
@@ -451,7 +454,8 @@ internal fun TerminalFootnote(
         label,
         modifier = modifier.fillMaxWidth(),
         textAlign = TextAlign.End,
-        color = PaEditorial.Subtle,
+        // 11sp 脚注:Muted 档(≥6:1),Subtle 档对黑底不足 4.5:1
+        color = PaEditorial.Muted,
         fontSize = 11.sp,
         fontFamily = TerminalFont.chatFont,
     )
@@ -511,7 +515,8 @@ internal fun TmuxStatusLine(
         Text(
             title.ifBlank { "任务" },
             Modifier.weight(1f),
-            color = PaEditorial.Subtle,
+            // 10.5sp 状态条小字:Muted 档保证黑底可读(对比度核查结论)
+            color = PaEditorial.Muted,
             fontSize = 10.5.sp,
             fontFamily = TerminalFont.chatFont,
             maxLines = 1,
@@ -537,7 +542,8 @@ internal fun TmuxStatusLine(
         TmuxSegmentDivider()
         Text(
             tmuxClockLabel(clockMs),
-            color = PaEditorial.Subtle,
+            // 10.5sp 时钟:Muted 档,与标题同档可读(对比度核查结论)
+            color = PaEditorial.Muted,
             fontSize = 10.5.sp,
             fontFamily = TerminalFont.chatFont,
         )

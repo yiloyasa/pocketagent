@@ -2,10 +2,15 @@ package dev.pocketagent.app.ui.anim
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 
 /**
  * 全局动效令牌（UI 改版 ·「丝滑跟手」的地基）。
@@ -25,6 +30,28 @@ import androidx.compose.animation.core.spring
  * 【可中断性是铁律】所有令牌都是 spring——spring 从**当前值**继续动画，任何
  * 时刻被新手势打断都不会跳帧（tween 从起点重播，打断即"砖墙"）。手势驱动的
  * 地方禁止换 tween。
+ *
+ * 【动效分层（M3 Expressive：同族组件同弹簧参数）】
+ *  - [press]      微交互：按压缩放等瞬时反馈，最快、无过冲；
+ *  - [standard]   标准：颜色/透明度/小位移的默认选择，临界阻尼；
+ *  - [emphasized] 强调：出场/揭示，允许 <5% 过冲立住；
+ *  - [momentum]   动量：只准跟在手势（甩/掷/松手）后面；
+ *  - [nav]        导航：NavHost 进出场，退场传更大 stiffness；
+ *  - [sheet]      弹层：抽屉/Sheet 大面积位移，慢而柔。
+ * 同一层族的组件必须共用同一参数；新增交互先选层再写调用——禁止裸写
+ * spring/tween 绕过令牌（循环动效除外，见下）。
+ *
+ * 【循环动效 2026-09-30 增补】骨架 shimmer、呼吸点、不定进度此前各自裸写
+ * `infiniteRepeatable(tween(...))` 绕开令牌；现收敛为 [pulse] / [sweep] 两个
+ * 循环令牌（时长见 [Loop]）。循环是"恒定节拍器"不是状态过渡，spring 无时长
+ * 语义不适循环，故循环令牌是唯一允许的 tween 家族。使用方迁移（本层不改使用方）：
+ *  - PaSkeleton / ThreadsScreen 骨架：`infiniteRepeatable(tween(1200, LinearEasing))`
+ *    → `PaMotion.sweep()`；
+ *  - TaskCenter 不定进度：`tween(1500, LinearEasing)` → `PaMotion.sweep(PaMotion.Loop.PROGRESS_MS)`；
+ *  - HomeScreen 呼吸点 / ThreadStatusBadge：`tween(900, LinearEasing, Reverse)`
+ *    → `PaMotion.pulse()`。
+ * 减弱动效纪律不变：循环动画的使用方必须继续用 rememberReduceMotion() 自行
+ * 退化为静态（令牌层不感知组合环境，保持纯函数可测）。
  *
  * 【减弱动效】rememberReduceMotion() 为 true 时改用 [instant]（无位移的
  * 状态直达），反馈仍在、位移消失——"减少动效"≠"没有反馈"。
@@ -73,4 +100,32 @@ object PaMotion {
         dampingRatio = 1f,
         stiffness = stiffness,
     )
+
+    /** 循环动效时长基线（ms），取自全 app 既有循环的实测值——令牌化后只有
+     * 这几个数，新增循环先从这里选，确需新节奏先改这里。
+     */
+    object Loop {
+        /** 骨架 shimmer 扫描一周（PaSkeleton / ThreadsScreen 骨架现状 1200ms）。 */
+        const val SHIMMER_MS = 1200
+
+        /** 状态点呼吸一个来回（HomeScreen 呼吸点 / ThreadStatusBadge 现状 900ms）。 */
+        const val PULSE_MS = 900
+
+        /** 不定进度条扫一周（TaskCenter indeterminate 现状 1500ms）。 */
+        const val PROGRESS_MS = 1500
+    }
+
+    /**
+     * 循环·呼吸：0→1→0 线性往复（Reverse），用于呼吸点/波纹的"存在感"脉动。
+     * 循环是恒定节拍，用线性 tween 而非 spring（见类头【循环动效】）。
+     */
+    fun <T> pulse(durationMs: Int = Loop.PULSE_MS): InfiniteRepeatableSpec<T> =
+        infiniteRepeatable(tween(durationMs, easing = LinearEasing), RepeatMode.Reverse)
+
+    /**
+     * 循环·扫掠：起点→终点线性单程后重来（Restart），用于骨架 shimmer /
+     * 不定进度的"位移扫过"。更慢的进度条传 [Loop.PROGRESS_MS]。
+     */
+    fun <T> sweep(durationMs: Int = Loop.SHIMMER_MS): InfiniteRepeatableSpec<T> =
+        infiniteRepeatable(tween(durationMs, easing = LinearEasing))
 }

@@ -1,19 +1,32 @@
 package dev.pocketagent.app.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -26,12 +39,12 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.TerminalFont
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
 
-enum class MarkdownLineKind { PARAGRAPH, HEADING, BULLET, CODE }
+enum class MarkdownLineKind { PARAGRAPH, HEADING, BULLET, CODE, QUOTE, TABLE }
 
 enum class MarkdownSpanKind { TEXT, BOLD, INLINE_CODE, LINK }
 
@@ -46,6 +59,12 @@ data class MarkdownLine(
     val kind: MarkdownLineKind,
     val text: String,
     val spans: List<MarkdownSpan> = listOf(MarkdownSpan(text)),
+    /** BULLET 的嵌套层级(前导空白每 2 字符一级,封顶 4);其余行恒 0。 */
+    val indent: Int = 0,
+    /** CODE 行所属围栏的语言标注(如 "python");裸围栏 / 非代码行为空串。 */
+    val lang: String = "",
+    /** TABLE 行的单元格(每格已解析为行内 spans);非表格行为空表。 */
+    val cells: List<List<MarkdownSpan>> = emptyList(),
 )
 
 private val boldPattern = Regex("\\*\\*(.+?)\\*\\*|__(.+?)__")
@@ -112,9 +131,6 @@ private fun inlineSpans(source: String): List<MarkdownSpan> {
             token.startsWith("/") || Regex("^[A-Za-z]:").containsMatchIn(token) ->
                 // 电脑文件路径:交给内置浏览器以 pc: 模式读取渲染
                 spans += MarkdownSpan(token, MarkdownSpanKind.LINK, "pc:" + token)
-            token.startsWith("/") || Regex("^[A-Za-z]:").containsMatchIn(token) ->
-                // 电脑文件路径:交给内置浏览器以 pc: 模式读取渲染
-                spans += MarkdownSpan(token, MarkdownSpanKind.LINK, "pc:" + token)
             else -> spans += MarkdownSpan(token, MarkdownSpanKind.LINK, token)
         }
         cursor = end + 1
@@ -123,32 +139,149 @@ private fun inlineSpans(source: String): List<MarkdownSpan> {
     return spans.ifEmpty { listOf(MarkdownSpan("")) }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 解析层纯函数(逐行/逐块映射,JVM 可单测 —— 渲染质量的地基钉在这里)
+// ─────────────────────────────────────────────────────────────────────────────
+
+private val headingPattern = Regex("^#{1,6}\\s+(.*)$")
+private val bulletPattern = Regex("^(?:[-*+]\\s+|\\d+[.)]\\s+)(.*)$")
+
+/** 分隔行单元格 `---` / `:---:` / `---:`。 */
+private val tableSepCellPattern = Regex(":?-+:?")
+
+/** 单元格内的转义竖线占位符(拆列前替换,拆完还原)。 */
+private const val ESCAPED_PIPE = '\u0000'
+
+/**
+ * 围栏开口行的语言标注:` ```python ` → "python";裸 ` ``` ` → "";
+ * ` ```kotlin title=Main.kt ` 这类带元信息的取第一个空格前的词。解析层不丢语言,
+ * 渲染层据此在代码块右上角标注(调研结论 1)。
+ */
+fun fenceLanguage(raw: String): String =
+    raw.trimStart().removePrefix("```").trim().substringBefore(' ').trim()
+
+/**
+ * 列表嵌套层级:前导空白每 2 字符一级,封顶 4(渲染端按层级缩进)。
+ * 只看原始行的前导空白,标记符(`-`/`*`/`1.`)与内容层级无关。
+ */
+fun bulletIndentLevel(raw: String): Int =
+    ((raw.length - raw.trimStart().length) / 2).coerceAtMost(4)
+
+/**
+ * 一行表格文本 → 单元格文本列表:剥首尾 `|` 后按 `|` 拆列,格子 trim;
+ * `\|` 是转义竖线(内容里的竖线不拆列)。空行拆出单个空串。
+ */
+fun splitTableRow(line: String): List<String> {
+    var t = line.replace("\\|", ESCAPED_PIPE.toString()).trim()
+    if (t.startsWith("|")) t = t.substring(1)
+    if (t.endsWith("|")) t = t.dropLast(1)
+    return t.split('|').map { it.replace(ESCAPED_PIPE.toString(), "|").trim() }
+}
+
+/**
+ * 表格分隔行判定(`| --- | :---: |`):拆出的每格都只由 `-`/`:` 组成且至少有一个 `-`。
+ * 无 `|` 的水平线(`---`)不算 —— 那是分隔线,不是表格(防误吞段落)。
+ */
+fun isTableSeparatorRow(line: String): Boolean {
+    val t = line.trim()
+    if (!t.contains('-')) return false
+    if (!t.contains('|')) return false
+    val cells = splitTableRow(line)
+    return cells.isNotEmpty() && cells.all { tableSepCellPattern.matches(it) }
+}
+
+/** 表格行 → 定长单元格 spans(不足补空、超出截断到 [cols]),格内继续走行内 span 解析。 */
+fun tableRowCells(line: String, cols: Int): List<List<MarkdownSpan>> {
+    val texts = splitTableRow(line)
+    return List(cols) { i -> inlineSpans(texts.getOrElse(i) { "" }) }
+}
+
+/** 表格列宽自适应的字符数上下限(超限内容换行,防一列把表撑到天宽)。 */
+internal const val TABLE_COL_MIN_CHARS = 4f
+internal const val TABLE_COL_MAX_CHARS = 24f
+
+/**
+ * 表格列宽配比:按各列最大文本长度归一到和为 1 的权重,单列占比封顶在
+ * [TABLE_COL_MIN_CHARS]..[TABLE_COL_MAX_CHARS] 字符档(渲染端 Row weight 用)。
+ * 纯函数:渲染层把表头+数据行拍平成字符串传入,测试直接钉归一与封顶。
+ */
+fun tableColumnWeights(rows: List<List<String>>): List<Float> {
+    if (rows.isEmpty()) return emptyList()
+    val n = rows.maxOf { it.size }
+    if (n == 0) return emptyList()
+    val raw = IntArray(n)
+    for (row in rows) for (i in row.indices) {
+        val len = row[i].length.coerceAtLeast(1)
+        if (len > raw[i]) raw[i] = len
+    }
+    val capped = raw.map { it.toFloat().coerceIn(TABLE_COL_MIN_CHARS, TABLE_COL_MAX_CHARS) }
+    val sum = capped.sum()
+    if (sum <= 0f) return List(n) { 1f / n }
+    return capped.map { it / sum }
+}
+
 fun parseMarkdownForDisplay(source: String): List<MarkdownLine> {
     val result = mutableListOf<MarkdownLine>()
+    val lines = source.replace("\r\n", "\n").split('\n')
     var inFence = false
-    source.replace("\r\n", "\n").split('\n').forEach { raw ->
+    var fenceLang = ""
+    var i = 0
+    while (i < lines.size) {
+        val raw = lines[i]
         if (raw.trimStart().startsWith("```")) {
+            // 开围栏记语言,闭围栏清掉:语言只属于这一个代码块
+            fenceLang = if (inFence) "" else fenceLanguage(raw)
             inFence = !inFence
-            return@forEach
+            i++
+            continue
         }
         if (inFence) {
-            result += MarkdownLine(MarkdownLineKind.CODE, raw, listOf(MarkdownSpan(raw, MarkdownSpanKind.INLINE_CODE)))
-            return@forEach
+            result += MarkdownLine(
+                MarkdownLineKind.CODE, raw,
+                listOf(MarkdownSpan(raw, MarkdownSpanKind.INLINE_CODE)),
+                lang = fenceLang,
+            )
+            i++
+            continue
         }
         val trimmed = raw.trimStart()
-        val heading = Regex("^#{1,6}\\s+(.*)$").find(trimmed)
-        val bullet = Regex("^(?:[-*+]\\s+|\\d+[.)]\\s+)(.*)$").find(trimmed)
+        val heading = headingPattern.find(trimmed)
         when {
             heading != null -> {
                 val text = stripInlineMarkdown(heading.groupValues[1])
                 result += MarkdownLine(MarkdownLineKind.HEADING, text, inlineSpans(heading.groupValues[1]))
             }
-            bullet != null -> {
-                val text = stripInlineMarkdown(bullet.groupValues[1])
-                result += MarkdownLine(MarkdownLineKind.BULLET, text, inlineSpans(bullet.groupValues[1]))
+            // 表格:当前行含 '|' 且下一行是分隔行才成立(无分隔行的竖线是普通段落);
+            // 随后连续含 '|' 的非空行都归入表体,空行终止(GFM 语义)。
+            trimmed.contains('|') && i + 1 < lines.size && isTableSeparatorRow(lines[i + 1]) -> {
+                val cols = splitTableRow(lines[i + 1]).size
+                result += MarkdownLine(MarkdownLineKind.TABLE, "", cells = tableRowCells(trimmed, cols))
+                i += 2
+                while (i < lines.size) {
+                    val t = lines[i].trim()
+                    if (t.isEmpty() || !t.contains('|') || t.startsWith("```")) break
+                    result += MarkdownLine(MarkdownLineKind.TABLE, "", cells = tableRowCells(lines[i], cols))
+                    i++
+                }
+                continue
+            }
+            bulletPattern.find(trimmed) != null -> {
+                val content = bulletPattern.find(trimmed)!!.groupValues[1]
+                val text = stripInlineMarkdown(content)
+                result += MarkdownLine(
+                    MarkdownLineKind.BULLET, text, inlineSpans(content),
+                    indent = bulletIndentLevel(raw),
+                )
+            }
+            trimmed.startsWith(">") -> {
+                // 引用块:剥一层 '>' 与其后空白,嵌套 '> >' 逐层剥到内容
+                val content = trimmed.dropWhile { it == '>' }.trimStart()
+                val text = stripInlineMarkdown(content)
+                result += MarkdownLine(MarkdownLineKind.QUOTE, text, inlineSpans(content))
             }
             else -> result += MarkdownLine(MarkdownLineKind.PARAGRAPH, stripInlineMarkdown(raw), inlineSpans(raw))
         }
+        i++
     }
     return result
 }
@@ -195,12 +328,24 @@ fun sanitizeDisplayText(text: String): String {
     return out
 }
 
-private fun MarkdownLine.annotated(): AnnotatedString = buildAnnotatedString {
-    if (kind == MarkdownLineKind.BULLET) append("• ")
+// ─────────────────────────────────────────────────────────────────────────────
+// 渲染层(spans → AnnotatedString 与各类块)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 行内元素 → AnnotatedString;[bullet] 为 true 时行首补列表符。 */
+fun spansToAnnotated(spans: List<MarkdownSpan>, bullet: Boolean = false): AnnotatedString = buildAnnotatedString {
+    if (bullet) append("• ")
     spans.forEach { span ->
         when (span.kind) {
             MarkdownSpanKind.BOLD -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(span.text) }
-            MarkdownSpanKind.INLINE_CODE -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = PaEditorial.Primary)) { append(span.text) }
+            // 行内代码:等宽 + 底色芯片(调研结论 3:底色区分,不只靠颜色)
+            MarkdownSpanKind.INLINE_CODE -> withStyle(
+                SpanStyle(
+                    fontFamily = FontFamily.Monospace,
+                    color = PaEditorial.Primary,
+                    background = PaEditorial.Raised,
+                ),
+            ) { append(span.text) }
             // 链接走 LinkAnnotation:点击由 LocalUriHandler 处理 —— 聊天页会把它接到内置浏览器上
             MarkdownSpanKind.LINK -> withLink(
                 LinkAnnotation.Url(
@@ -211,6 +356,20 @@ private fun MarkdownLine.annotated(): AnnotatedString = buildAnnotatedString {
             MarkdownSpanKind.TEXT -> append(span.text)
         }
     }
+}
+
+private fun MarkdownLine.annotated(): AnnotatedString =
+    spansToAnnotated(spans, bullet = kind == MarkdownLineKind.BULLET)
+
+/**
+ * 代码块复制:与消息长按复制(ChatScreen.copyMessage)同一套剪贴板语义 ——
+ * ClipboardManager.setPrimaryClip + Toast「已复制」回执,成功才提示。
+ */
+internal fun copyCodeToClipboard(ctx: Context, code: String) {
+    if (code.isBlank()) return
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("PocketAgent 代码", code))
+    Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -224,27 +383,41 @@ fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float 
     // 现在把连续代码行聚合成**一个**整块,统一背景/圆角/内边距,并允许横向滚动。
     // 渲染前清洗:把可能在部分机型掉字形的少数符号(如 §)替换为友好形式,
     // 作为字体回退之外的兜底(见 sanitizeDisplayText)。
+    //
+    // 【性能纪律】parse 与 compose 分离:解析+聚合包在 remember(source) 里,
+    // 流式追加时只在新内容到达时重算一次,不逐帧重组。
     val blocks = remember(source) { groupMarkdownBlocks(parseMarkdownForDisplay(sanitizeDisplayText(source))) }
     Column(modifier) {
         blocks.forEach { block ->
             when (block) {
-                is MdBlock.Code -> MarkdownCodeBlock(block.text, fontSize)
-                is MdBlock.Line -> MarkdownTextLine(block.line, fontSize)
+                is MdBlock.Code -> MarkdownCodeBlock(block.text, block.lang, fontSize)
+                is MdBlock.Table -> MarkdownTableBlock(block.header, block.rows, fontSize)
+                is MdBlock.Quote -> MarkdownQuoteBlock(block.lines, fontSize)
+                is MdBlock.Line ->
+                    // 空行 = 段落间的呼吸:固定 6dp 节奏(旧实现画一行空文字,高度吃满整行行距)
+                    if (block.line.kind == MarkdownLineKind.PARAGRAPH && block.line.text.isBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                    } else {
+                        MarkdownTextLine(block.line, fontSize)
+                    }
             }
         }
     }
 }
 
 @Composable
-private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
+private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float, color: Color = PaEditorial.Ink) {
     Text(
         text = line.annotated(),
         // 黑客终端模式:正文行整体等宽(代码块本来就是等宽,普通行随之统一)。
         // 字体走 TerminalFont.chatFont(JetBrains Mono,下载落库 res/font);
         // 资源缺失的回退是 theme 层的 PaHacker.mono(系统等宽)。
         fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
-        modifier = Modifier.fillMaxWidth(),
-        color = PaEditorial.Ink,
+        // 嵌套列表:按解析层给出的层级缩进(每级 14dp),层级一眼可辨
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = (line.indent * 14).dp),
+        color = color,
         fontSize = (if (line.kind == MarkdownLineKind.HEADING) fontSize + 2 else fontSize).sp,
         fontWeight = if (line.kind == MarkdownLineKind.HEADING) FontWeight.Bold else FontWeight.Normal,
         lineHeight = (fontSize * 1.55f).sp,
@@ -252,68 +425,220 @@ private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float) {
 }
 
 @Composable
-private fun MarkdownCodeBlock(code: String, fontSize: Float) {
+private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
     // 等宽 + 比页底抬高一档的背景 + 细描边,读起来是"一块代码面板"而不是"凹进去的黑洞"。
     // 代码块内容不走 inline span 着色 —— 那会把整段代码染成强调蓝(旧实现的问题之一)。
     // 【本轮对齐玻璃层级】底色 PaEditorial.Surface → PaEditorial.Raised(海拨再抬一档):
     // 助手正文直接铺在页底上,代码块是与正文并列的"面板",材质上要比正文
-    // 高一级才读得出块边界;CardHigh 是不透明实色 —— 可读性永远优先于质感,
-    // 不用半透明玻璃(正文下面滚过内容时会透字)。代码文字同步从 TextSecondary
-    // 提到 TextPrimary:深色实色底上二级灰读代码费眼。
+    // 高一级才读得出块边界;代码文字用 TextPrimary:深色实色底上二级灰读代码费眼。
+    // 【本轮新增头部条】右上角语言标注(解析层不再丢弃围栏语言)+ 复制按钮
+    // (与消息长按复制同一剪贴板语义,调研结论 1)。
     val scroll = rememberScrollState()
-    Box(
+    val ctx = LocalContext.current
+    // hacker 模式下代码与正文同一 JetBrains Mono:扫描线/等宽网格逐列对齐
+    val mono = if (PaHacker.isHacker) TerminalFont.chatFont else FontFamily.Monospace
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(PaEditorial.Raised)
-            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp))
-            // 先裁形状再横滚,滚动内容不会溢出圆角
-            .horizontalScroll(scroll),
+            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp)),
     ) {
-        Text(
-            text = code,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            fontFamily = FontFamily.Monospace,
-            // 代码比正文小半号更接近"终端感",同时保证不低于 9sp 以免不可读
-            fontSize = (fontSize - 1.5f).coerceAtLeast(9f).sp,
-            color = PaEditorial.Ink,
-            lineHeight = (fontSize * 1.4f).sp,
-            // 关键:不折行,交给横向滚动 —— ASCII 图与长命令行靠这个保住对齐
-            softWrap = false,
-        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 6.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.weight(1f))
+            if (lang.isNotBlank()) {
+                Text(
+                    lang,
+                    fontSize = 10.sp,
+                    color = PaEditorial.Muted,
+                    fontFamily = mono,
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(
+                "复制",
+                Modifier
+                    .pressable(haptic = true) { copyCodeToClipboard(ctx, code) }
+                    // 10dp 竖向 padding:按钮热区约 36dp 高,紧凑但可点(触达)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                fontSize = 11.sp,
+                color = PaEditorial.Muted,
+                fontFamily = mono,
+            )
+        }
+        Box(
+            Modifier
+                // 先裁形状再横滚,滚动内容不会溢出圆角
+                .fillMaxWidth()
+                .horizontalScroll(scroll),
+        ) {
+            Text(
+                text = code,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp, top = 2.dp),
+                fontFamily = mono,
+                // 代码比正文小半号更接近"终端感",同时保证不低于 9sp 以免不可读
+                fontSize = (fontSize - 1.5f).coerceAtLeast(9f).sp,
+                color = PaEditorial.Ink,
+                lineHeight = (fontSize * 1.4f).sp,
+                // 关键:不折行,交给横向滚动 —— ASCII 图与长命令行靠这个保住对齐
+                softWrap = false,
+            )
+        }
     }
 }
 
-/** Markdown 渲染块:要么是一个整块代码,要么是普通一行。 */
+@Composable
+private fun MarkdownTableBlock(
+    header: List<List<MarkdownSpan>>,
+    rows: List<List<List<MarkdownSpan>>>,
+    fontSize: Float,
+) {
+    // 表格(调研结论 2):列宽按内容自适应(IntrinsicSize.Max 取最宽行自然宽),
+    // 超出屏宽交给横向滚动;表头加粗 + 抬一档底色区分;行间 0.5dp 发丝分隔线。
+    // 权重由纯函数 tableColumnWeights 计算(单列封顶,长内容换行不撑爆)。
+    val scroll = rememberScrollState()
+    val weights = remember(header, rows) {
+        tableColumnWeights((listOf(header) + rows).map { row -> row.map { cell -> cell.joinToString("") { it.text } } })
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .horizontalScroll(scroll),
+    ) {
+        Column(
+            Modifier
+                .width(IntrinsicSize.Max)
+                .clip(RoundedCornerShape(12.dp))
+                .background(PaEditorial.Surface)
+                .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp)),
+        ) {
+            MarkdownTableRow(header, weights, fontSize, header = true)
+            rows.forEach { row ->
+                Box(Modifier.fillMaxWidth().height(0.5.dp).background(PaEditorial.Hairline))
+                MarkdownTableRow(row, weights, fontSize, header = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableRow(
+    cells: List<List<MarkdownSpan>>,
+    weights: List<Float>,
+    fontSize: Float,
+    header: Boolean,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(if (header) Modifier.background(PaEditorial.Raised) else Modifier),
+    ) {
+        cells.forEachIndexed { i, cell ->
+            Box(Modifier.weight(if (i < weights.size) weights[i] else 1f)) {
+                Text(
+                    text = spansToAnnotated(cell),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    color = PaEditorial.Ink,
+                    fontSize = (fontSize - 1f).coerceAtLeast(9f).sp,
+                    fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+                    lineHeight = (fontSize * 1.4f).sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownQuoteBlock(quotes: List<MarkdownLine>, fontSize: Float) {
+    // 引用块(调研结论 4):左侧 3dp 竖线 + 正文降一档灰,连续 '>' 行并成一个块,
+    // 竖线贯通整块(不是每行各画一截)。
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .height(IntrinsicSize.Min),
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(PaEditorial.Muted.copy(alpha = 0.6f), RoundedCornerShape(2.dp)),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            quotes.forEach { MarkdownTextLine(it, fontSize, color = PaEditorial.Muted) }
+        }
+    }
+}
+
+/** Markdown 渲染块:整块代码 / 表格 / 引用 / 普通行。 */
 sealed interface MdBlock {
-    /** 连续的代码行已合并,text 内部用 '\n' 分隔。 */
-    data class Code(val text: String) : MdBlock
+    /** 连续的代码行已合并,text 内部用 '\n' 分隔;lang 为围栏语言标注(可为空)。 */
+    data class Code(val text: String, val lang: String = "") : MdBlock
+
+    /** 一个完整表格:header 为首行(表头),rows 为其后数据行;每行是单元格列表,单元格为行内 spans。 */
+    data class Table(val header: List<List<MarkdownSpan>>, val rows: List<List<List<MarkdownSpan>>>) : MdBlock
+
+    /** 连续引用行(已剥 '>'),并成一个左竖线块。 */
+    data class Quote(val lines: List<MarkdownLine>) : MdBlock
+
     data class Line(val line: MarkdownLine) : MdBlock
 }
 
 /**
- * 把逐行解析结果聚合成渲染块 —— 连续 [MarkdownLineKind.CODE] 合并成单个 [MdBlock.Code]。
+ * 把逐行解析结果聚合成渲染块 —— 连续 [MarkdownLineKind.CODE] 合并成单个 [MdBlock.Code],
+ * 连续 [MarkdownLineKind.TABLE] 合并成单个 [MdBlock.Table](首行=表头),
+ * 连续 [MarkdownLineKind.QUOTE] 合并成单个 [MdBlock.Quote]。
  *
- * 抽成纯函数是为了能单测:块边界(代码块开头/结尾/多段代码块/空代码块)是这类
- * 渲染最容易出错的边界,不应该只能靠肉眼在真机上看。
+ * 抽成纯函数是为了能单测:块边界(代码块开头/结尾/多段代码块/空代码块/表格起止/
+ * 引用块边界)是这类渲染最容易出错的边界,不应该只能靠肉眼在真机上看。
  */
 fun groupMarkdownBlocks(lines: List<MarkdownLine>): List<MdBlock> {
     val out = mutableListOf<MdBlock>()
     var i = 0
     while (i < lines.size) {
-        if (lines[i].kind != MarkdownLineKind.CODE) {
+        val kind = lines[i].kind
+        if (kind != MarkdownLineKind.CODE && kind != MarkdownLineKind.TABLE && kind != MarkdownLineKind.QUOTE) {
             out += MdBlock.Line(lines[i])
             i++
             continue
         }
-        val buf = StringBuilder()
-        while (i < lines.size && lines[i].kind == MarkdownLineKind.CODE) {
-            if (buf.isNotEmpty()) buf.append('\n')
-            buf.append(lines[i].text)
+        if (kind == MarkdownLineKind.CODE) {
+            // 语言取自本块首行(开围栏时记下,闭围栏即清,不会串块)
+            val lang = lines[i].lang
+            val buf = StringBuilder()
+            while (i < lines.size && lines[i].kind == MarkdownLineKind.CODE) {
+                if (buf.isNotEmpty()) buf.append('\n')
+                buf.append(lines[i].text)
+                i++
+            }
+            out += MdBlock.Code(buf.toString(), lang)
+            continue
+        }
+        if (kind == MarkdownLineKind.TABLE) {
+            val header = lines[i].cells
+            i++
+            val body = mutableListOf<List<List<MarkdownSpan>>>()
+            while (i < lines.size && lines[i].kind == MarkdownLineKind.TABLE) {
+                body += lines[i].cells
+                i++
+            }
+            out += MdBlock.Table(header, body)
+            continue
+        }
+        val quotes = mutableListOf<MarkdownLine>()
+        while (i < lines.size && lines[i].kind == MarkdownLineKind.QUOTE) {
+            quotes += lines[i]
             i++
         }
-        out += MdBlock.Code(buf.toString())
+        out += MdBlock.Quote(quotes)
     }
     return out
 }

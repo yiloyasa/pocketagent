@@ -28,8 +28,9 @@ class PaEditorialTokensTest {
         assertEquals(Color(0xFF1A2430), PaEditorial.GraphiteCode)
         assertEquals(Color(0xFFE3E7EB), PaEditorial.Hairline)
         assertEquals(Color(0xFF19222D), PaEditorial.Ink)
-        assertEquals(Color(0xFF697788), PaEditorial.Muted)
-        assertEquals(Color(0xFF98A3AE), PaEditorial.Subtle)
+        // 2026-09-30 对比度终审:Muted #697788→#5F6C7C(三浅面 ≥4.5:1)、Subtle #98A3AE→#828B95(三级档 ≥3:1)
+        assertEquals(Color(0xFF5F6C7C), PaEditorial.Muted)
+        assertEquals(Color(0xFF828B95), PaEditorial.Subtle)
     }
 
     @Test
@@ -120,14 +121,16 @@ class PaEditorialTokensTest {
 
     @Test
     fun `色档三件套钉值_小字变体对浅底加深`() {
-        assertEquals(Color(0xFF167F65), EditorialTone.RUNNING.text)
+        // 2026-09-30 对比度终审:小字档对各自浅底 ≥4.5:1 的微调值
+        assertEquals(Color(0xFF157C63), EditorialTone.RUNNING.text)
         // 2026-09-30 三色盘改造:RUNNING.container 归并到 RunningContainer(#E5F5EF,
         // 原 .state.run 底 #E2F4EC 与 --mint-dim 差异不可辨,少一个槽位)
         assertEquals(Color(0xFFE5F5EF), EditorialTone.RUNNING.container)
         assertEquals(Color(0xFF99621E), EditorialTone.ATTENTION.text)
-        assertEquals(Color(0xFF6A7C8A), EditorialTone.NEUTRAL.text)
+        // NEUTRAL/GREY 的 text 三盘并轨到 Muted(灰阶 inactive 不留近似色)
+        assertEquals(PaEditorial.Muted, EditorialTone.NEUTRAL.text)
         assertEquals(Color(0xFFE8EDEF), EditorialTone.NEUTRAL.container)
-        assertEquals(Color(0xFFBE504C), EditorialTone.DENIED.text)
+        assertEquals(Color(0xFFB84D49), EditorialTone.DENIED.text)
         assertEquals(Color(0xFFFFF0ED), EditorialTone.DENIED.container)
     }
 

@@ -139,15 +139,35 @@ object TaskCenter {
 
     fun trackDownload(fileKey: String, title: String, threadId: String = ""): String {
         val id = "dl:$fileKey"
-        if (_tasks.value.none { it.id == id }) {
-            _tasks.value = _tasks.value + Task(
-                id = id,
-                threadId = threadId,
-                kind = Kind.DOWNLOAD,
-                title = title,
-                status = Status.RUNNING,
-            )
-            persist()
+        val existing = _tasks.value.firstOrNull { it.id == id }
+        when {
+            existing == null -> {
+                _tasks.value = _tasks.value + Task(
+                    id = id,
+                    threadId = threadId,
+                    kind = Kind.DOWNLOAD,
+                    title = title,
+                    status = Status.RUNNING,
+                )
+                persist()
+            }
+            // 【防重入】同一条已在下载中:直接复用条目,不重置进度 ——
+            // 重置会让仍在写入的流把进度条打回零再爬上来,视觉上像"越下越少"。
+            existing.status == Status.RUNNING -> Unit
+            // 【重新下载】对已结束(完成/失败/中断)的条目**原地复活**:清掉旧进度
+            // 与旧文件位置,状态回到进行中 —— 任务中心立刻给出"在动"的反馈,
+            // 而不是一条点了重下载却纹丝不动的死记录(旧文件位置若不 clear,
+            // 失败后会残留指向已失效文件的 localUri)。
+            else -> {
+                existing.status = Status.RUNNING
+                existing.progress = 0f
+                existing.detail = ""
+                existing.read = false
+                existing.startedAt = System.currentTimeMillis()
+                existing.localUri = ""
+                existing.sizeText = ""
+                persist()
+            }
         }
         return id
     }

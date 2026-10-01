@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -101,15 +102,23 @@ fun ContextUsageCard(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("上下文窗口", fontSize = 20.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
+                // 触达:点击区吃满 44dp(PaEditorial.Space.TouchMin),视觉仍是 28dp 圆 ——
+                // 关闭是高频操作,28dp 原始点击区太小容易点空
                 Box(
                     Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(PaEditorial.Canvas)
+                        .size(PaEditorial.Space.TouchMin)
                         .clickable { onDismiss() },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("✕", fontSize = 14.sp, color = PaEditorial.Muted)
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(PaEditorial.Canvas),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("✕", fontSize = 14.sp, color = PaEditorial.Muted)
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -286,6 +295,8 @@ private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
             .clip(RoundedCornerShape(8.dp))
             .background(if (active) PaEditorial.Surface else PaEditorial.Canvas)
             .clickable { onClick() }
+            // 触达:分段切换的最小高度吃到 44dp(README 点击区纪律),不再靠 padding 凑
+            .defaultMinSize(minHeight = PaEditorial.Space.TouchMin)
             .padding(horizontal = 16.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {

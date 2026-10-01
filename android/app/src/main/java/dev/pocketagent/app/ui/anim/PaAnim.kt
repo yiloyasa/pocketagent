@@ -1,8 +1,6 @@
 package dev.pocketagent.app.ui.anim
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -61,10 +59,7 @@ fun Modifier.pressable(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed) scaleDown else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = 520f,
-        ),
+        animationSpec = PaMotion.press(),
         label = "press",
     )
     val hf = LocalHapticFeedback.current
@@ -86,10 +81,7 @@ fun Modifier.pressableLong(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = 520f,
-        ),
+        animationSpec = PaMotion.press(),
         label = "pressLong",
     )
     this

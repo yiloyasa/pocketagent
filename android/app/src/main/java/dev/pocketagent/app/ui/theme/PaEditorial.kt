@@ -33,6 +33,11 @@ import androidx.compose.ui.unit.sp
  *  - HACKER:GitHub Dark 基底(中性纯黑零色相)+ 一处电光青 #22D3EE 强调,
  *    语法色只做小面积点缀 —— 与 [Pa] hacker 分支同一母题,色值同源对齐。
  *
+ * 【对比度终审 2026-09-30】正文/辅助(Ink/Muted)与全部 *Text 小字档对各自盘底
+ * ≥4.5:1(WCAG AA),三级档(Subtle/OnGraphiteSubtle)≥3:1;浅盘 Muted 由
+ * #697788 加深为 #5F6C7C,NeutralText/GreyText 三盘并轨到 Muted 值(灰阶
+ * inactive 不再有两个近似色)。计算工具与钉值见 PaContrast + PaPaletteMatrixTest。
+ *
  * 【语义红线】语义绝不单靠颜色:状态展示必须同时带状态词(见 ui/EditorialStatus
  * 四词映射器);主色 [Primary] 只用于"当前操作"。11-12sp 小字用各语义的
  * *Text 档(对比度 ≥4.5:1),与 Pa.GreenText 同一套纪律。
@@ -62,10 +67,10 @@ object PaEditorial {
     var Hairline by mutableStateOf(Color(0xFFE3E7EB)); private set
     /** 正文(浅:--text #19222D 深墨)。 */
     var Ink by mutableStateOf(Color(0xFF19222D)); private set
-    /** 次级文本(浅:--muted #697788)。 */
-    var Muted by mutableStateOf(Color(0xFF697788)); private set
-    /** 三级文本(浅:--subtle #98A3AE)。 */
-    var Subtle by mutableStateOf(Color(0xFF98A3AE)); private set
+    /** 次级文本(浅:--muted #697788;2026-09-30 对比度终审加深为 #5F6C7C,三浅面全 ≥4.5:1)。 */
+    var Muted by mutableStateOf(Color(0xFF5F6C7C)); private set
+    /** 三级文本/占位/图形(浅:--subtle #98A3AE;终审加深为 #828B95,三级档 ≥3:1)。 */
+    var Subtle by mutableStateOf(Color(0xFF828B95)); private set
 
     // ---- 语义色(README:主色只用于当前操作) ----
     /** 主色(浅:#386BE7)仅当前操作(激活导航项/主按钮/进行中的选择)。 */
@@ -87,15 +92,15 @@ object PaEditorial {
 
     // ---- 小字号文本专用变体(11-12sp 文本对比度 ≥4.5:1;同 Pa.*Text 纪律) ----
     var AccentText by mutableStateOf(Color(0xFF2B5BC7)); private set
-    var RunningText by mutableStateOf(Color(0xFF167F65)); private set
-    var DeniedText by mutableStateOf(Color(0xFFBE504C)); private set
+    var RunningText by mutableStateOf(Color(0xFF157C63)); private set
+    var DeniedText by mutableStateOf(Color(0xFFB84D49)); private set
     var AttentionText by mutableStateOf(Color(0xFF99621E)); private set
-    /** 已完成(中性)的小字/图形档(浅:.state.done #6a7c8a)。 */
-    var NeutralText by mutableStateOf(Color(0xFF6A7C8A)); private set
+    /** 已完成(中性)的小字/图形档。三盘同构:= [Muted](灰阶 inactive 与次级文本同值,少一个近似色)。 */
+    var NeutralText by mutableStateOf(Color(0xFF5F6C7C)); private set
     /** 已完成徽章底(浅:.state.done #e8edef)。 */
     var NeutralContainer by mutableStateOf(Color(0xFFE8EDEF)); private set
-    /** 灰:离线/不可用的小字档(浅:=subtle #98A3AE)。 */
-    var GreyText by mutableStateOf(Color(0xFF98A3AE)); private set
+    /** 灰:离线/不可用的小字档。三盘同构:= [Muted](终审并轨,原浅盘 =subtle 漂移且仅 2.3:1)。 */
+    var GreyText by mutableStateOf(Color(0xFF5F6C7C)); private set
     /** 灰徽章底(浅:.brand 底 #f0f2f4)。 */
     var GreyContainer by mutableStateOf(Color(0xFFF0F2F4)); private set
     /** 数据可视化专用:上下文构成中的「MCP技能」段。 */
@@ -126,17 +131,17 @@ object PaEditorial {
             Canvas = Color(0xFF050507); Surface = Color(0xFF0C0D11); Raised = Color(0xFF12141A)
             Hover = Color(0xFF1A1D26); Graphite = Color(0xFF0A0B0F); GraphiteDrawer = Color(0xFF08090C)
             GraphiteCode = Color(0xFF050507); Hairline = Color(0xFF1C2028)
-            Ink = Color(0xFFE6E9EF); Muted = Color(0xFF8B93A3); Subtle = Color(0xFF565E6E)
+            Ink = Color(0xFFE6E9EF); Muted = Color(0xFF8B93A3); Subtle = Color(0xFF5B6372)
             Primary = Color(0xFF22D3EE); PrimaryContainer = Color(0xFF0E2A33)
             Running = Color(0xFF2DD4BF); RunningContainer = Color(0xFF0B2B27)
             Attention = Color(0xFFFBBF24); AttentionContainer = Color(0xFF332708)
             Denied = Color(0xFFF87171); DeniedContainer = Color(0xFF331B1B)
             AccentText = Color(0xFF67E8F9); RunningText = Color(0xFF5EEAD4); DeniedText = Color(0xFFFCA5A5)
             AttentionText = Color(0xFFFCD34D); NeutralText = Color(0xFF8B93A3); NeutralContainer = Color(0xFF12141A)
-            GreyText = Color(0xFF565E6E); GreyContainer = Color(0xFF12141A)
+            GreyText = Color(0xFF8B93A3); GreyContainer = Color(0xFF12141A)
             Mcp = Color(0xFFA78BFA)
             OnGraphite = Color(0xFFE6E9EF); OnGraphiteMuted = Color(0xFF8B93A3)
-            OnGraphiteSubtle = Color(0xFF565E6E); OnGraphiteHairline = Color(0xFF1C2028)
+            OnGraphiteSubtle = Color(0xFF5C6473); OnGraphiteHairline = Color(0xFF1C2028)
             CodeText = Color(0xFF67E8F9); Scrim = Color(0xB3000000)
             IsDark = true
             Shadow.Card = ShadowSpec(16.dp, 3.dp, Color(0x140D1117))
@@ -155,28 +160,30 @@ object PaEditorial {
             Denied = Color(0xFFF08580); DeniedContainer = Color(0xFF3A2123)
             AccentText = Color(0xFF9DBDF8); RunningText = Color(0xFF7DD8C0); DeniedText = Color(0xFFF4A9A4)
             AttentionText = Color(0xFFEBC98F); NeutralText = Color(0xFFA2AEBD); NeutralContainer = Color(0xFF1D2532)
-            GreyText = Color(0xFF6B7887); GreyContainer = Color(0xFF1D2532)
+            GreyText = Color(0xFFA2AEBD); GreyContainer = Color(0xFF1D2532)
             Mcp = Color(0xFFBC8CFF)
             OnGraphite = Color(0xFFE8EDF4); OnGraphiteMuted = Color(0xFF97A5B5)
-            OnGraphiteSubtle = Color(0xFF5F6D7E); OnGraphiteHairline = Color(0xFF2A3442)
+            OnGraphiteSubtle = Color(0xFF667384); OnGraphiteHairline = Color(0xFF2A3442)
             CodeText = Color(0xFFD5E6F8); Scrim = Color(0x99000000)
             IsDark = true
             Shadow.Card = ShadowSpec(18.dp, 4.dp, Color(0x14304A66))
             Shadow.Alert = ShadowSpec(24.dp, 8.dp, Color(0x1A101820))
             Shadow.Modal = ShadowSpec(48.dp, 16.dp, Color(0x73000000))
         } else {
-            // 【浅色】原型定稿值(premium.css),默认盘,零漂移。
+            // 【浅色】原型定稿值(premium.css),默认盘;2026-09-30 对比度终审微调:
+            // Muted/NeutralText/GreyText 并轨加深(#5F6C7C)、Subtle #828B95、
+            // RunningText #157C63、DeniedText #B84D49 —— 全部文字档三浅面 ≥4.5:1。
             Canvas = Color(0xFFF6F7F6); Surface = Color(0xFFFFFFFF); Raised = Color(0xFFEDF0F2)
             Hover = Color(0xFFE8ECEF); Graphite = Color(0xFF1E2835); GraphiteDrawer = Color(0xFF1B2634)
             GraphiteCode = Color(0xFF1A2430); Hairline = Color(0xFFE3E7EB)
-            Ink = Color(0xFF19222D); Muted = Color(0xFF697788); Subtle = Color(0xFF98A3AE)
+            Ink = Color(0xFF19222D); Muted = Color(0xFF5F6C7C); Subtle = Color(0xFF828B95)
             Primary = Color(0xFF386BE7); PrimaryContainer = Color(0xFFE8EFFF)
             Running = Color(0xFF21977D); RunningContainer = Color(0xFFE5F5EF)
             Attention = Color(0xFFA96726); AttentionContainer = Color(0xFFFFF1DD)
             Denied = Color(0xFFC94F4D); DeniedContainer = Color(0xFFFFF0ED)
-            AccentText = Color(0xFF2B5BC7); RunningText = Color(0xFF167F65); DeniedText = Color(0xFFBE504C)
-            AttentionText = Color(0xFF99621E); NeutralText = Color(0xFF6A7C8A); NeutralContainer = Color(0xFFE8EDEF)
-            GreyText = Color(0xFF98A3AE); GreyContainer = Color(0xFFF0F2F4)
+            AccentText = Color(0xFF2B5BC7); RunningText = Color(0xFF157C63); DeniedText = Color(0xFFB84D49)
+            AttentionText = Color(0xFF99621E); NeutralText = Color(0xFF5F6C7C); NeutralContainer = Color(0xFFE8EDEF)
+            GreyText = Color(0xFF5F6C7C); GreyContainer = Color(0xFFF0F2F4)
             Mcp = Color(0xFFB584FF)
             OnGraphite = Color(0xFFFFFFFF); OnGraphiteMuted = Color(0xFFBFCCD9)
             OnGraphiteSubtle = Color(0xFF8B98A6); OnGraphiteHairline = Color(0xFF364655)
@@ -252,8 +259,9 @@ object PaEditorial {
  * ([PaEditorial] 的 mutableStateOf 槽位),在组合内取值即随显示模式换肤。
  *
  * 枚举身份不变(RUNNING/ATTENTION/... 的身份被多处映射器与测试钉住);
- * 浅色盘的值与 2026-09-30 之前的固定浅色一致(仅 RUNNING.container 由
- * #E2F4EC 归并到 RunningContainer #E5F5EF,视觉不可辨)。
+ * 浅色盘的值源自固定浅色原型;2026-09-30 对比度终审把小字档微调加深
+ * (RUNNING.text #157C63、DENIED.text #B84D49)并把 NEUTRAL/GREY 的 text
+ * 并轨到 Muted(三盘同构,详见 [PaEditorial] 头注)。
  * PRIMARY 的 text 与 accent 同值 —— 原型纪律:主色文字只出现在 ≥14sp 粗体
  * 操作语境,不用于 11-12sp 辅助文字(那些用各自的 *Text 档)。
  */

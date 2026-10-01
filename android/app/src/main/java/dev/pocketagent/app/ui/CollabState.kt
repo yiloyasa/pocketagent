@@ -50,6 +50,13 @@ object CollabState {
     /** 整体派发失败(连 RPC 都没通)时的人话原因;成员级失败看 [memberErrors]。 */
     var dispatchError by mutableStateOf<String?>(null)
         private set
+    /**
+     * 一单派发在飞(RPC 未返回)。防重复提交的**硬闸**:置位期间 dispatch /
+     * redispatchMember 直接忽略 —— 双击、IME 回车、重派连点都只算一单。
+     * UI 侧的按钮禁用(collabDispatchDecision)是第一道,这里是不依赖重组时序的第二道。
+     */
+    var dispatching by mutableStateOf(false)
+        private set
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -58,6 +65,9 @@ object CollabState {
     // JVM 上的 setSelected(Set) —— 这里再声明同名函数会撞 Platform declaration clash。
     // 改名而不是删除:批量设置(全选/清空)是要保留的能力,只是不能占用委托的签名。
     fun setSelection(ids: Set<String>) { selected = ids }
+
+    /** 剪掉已失效的选中项(agent 掉线/被停用后,"已选 N 位"与能派发的对不上)。 */
+    fun retainSelection(readyIds: Set<String>) { selected = pruneCollabSelection(selected, readyIds) }
     fun bindRole(agentId: String, roleId: String?) { roleBinding = bindCollabRole(roleBinding, agentId, roleId) }
 
     /**
@@ -70,22 +80,49 @@ object CollabState {
      *  - ACK     = 手机上确实把指令交出去了(客户端事实);
      *  - RUNNING = daemon 已**受理**(子线程已建、轮次已起飞),结果还得等;
      *  - ERROR   = 这家受理失败,daemon 给了人话原因;
-     *  - DONE    = 子线程跑完(由 [refreshMemberStates] 按 thread_id 回填)。
+     *  - DONE    = 子线程跑完(由按 thread_id 回填)。
      * 受理(ack)不等于执行成功 —— 把受理显示成"已完成"就是伪造结果。
-     *
-     * 【为什么要按位置对应 items】返回项与请求成员顺序一致,按索引取 agent id
-     * 才不会在"同一个 agent 出现多次 / 成员未指定 agent"时错位。
      */
     fun dispatch(instruction: String) {
         val cmd = instruction.trim()
+        if (dispatching) return
         if (cmd.isEmpty() || selected.isEmpty()) return
+        send(cmd, selected.toList(), memberOnly = false)
+    }
+
+    /**
+     * 重派单个成员(结论 2:失败卡的「重派该 Agent」):其余成员的相位/原因**原样
+     * 不动** —— 一家失败不拖垮其余,同样也不该在补跑一家时搅动别家。
+     * 指令沿用 [lastInstruction](重派是对上一条共同指令的重来,不接受新指令文本);
+     * 该成员旧的子线程 id 先移除:重派受理结果回来前不摆「查看会话」假入口。
+     */
+    fun redispatchMember(agentId: String) {
+        if (dispatching) return
+        val cmd = lastInstruction?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (agentId !in selected) return
+        send(cmd, listOf(agentId), memberOnly = true)
+    }
+
+    /**
+     * 派发的公共通道:[dispatch](全员)与 [redispatchMember](单成员)共用,
+     * 相位/线程/错误的落点按 [memberOnly] 分流 —— 全员失败是整体错误位,单成员
+     * 失败只落该成员,原因各归各位,不互相污染。
+     */
+    private fun send(cmd: String, ordered: List<String>, memberOnly: Boolean) {
+        dispatching = true
         lastInstruction = cmd
         dispatchError = null
-        memberErrors = emptyMap()
-        // 每个选中 agent 先落 ACK(已收到,客户端事实)
-        phases = selected.associateWith { CollabAgentPhase.ACK }
+        if (memberOnly) {
+            // 重派:先撤旧线程与旧原因 —— 受理结果回来前,卡上不该残留上一单的凭据。
+            val ids = ordered.toSet()
+            threadIds = threadIds.filterKeys { it !in ids }
+            memberErrors = memberErrors.filterKeys { it !in ids }
+        } else {
+            memberErrors = emptyMap()
+        }
+        // 每个目标 agent 先落 ACK(已收到,客户端事实)
+        phases = phases + ordered.associateWith { CollabAgentPhase.ACK }
         // 成员列表定序一次:后面按索引与返回项对位,避免 Set 迭代顺序带来的歧义。
-        val ordered = selected.toList()
         val members = ordered.map { id ->
             CollabMember.newBuilder()
                 .setAgentId(id)
@@ -125,9 +162,18 @@ object CollabState {
                 threadIds = nextThreads
                 memberErrors = nextErrors
             } catch (e: Exception) {
-                // 连 RPC 都没通(未连接/鉴权/传输):整体失败,如实给原文,不粉饰。
-                dispatchError = extractRpcMessage(e)
-                phases = selected.associateWith { CollabAgentPhase.ERROR }
+                // 连 RPC 都没通(未连接/鉴权/传输):如实给原文,不粉饰。
+                // 落点按范围分流:全员派发是整体错误位;单成员重派只落该成员,
+                // 其余成员的相位与原因原样保留。
+                if (memberOnly) {
+                    phases = phases + ordered.associateWith { CollabAgentPhase.ERROR }
+                    memberErrors = memberErrors + ordered.associateWith { extractRpcMessage(e) }
+                } else {
+                    dispatchError = extractRpcMessage(e)
+                    phases = ordered.associateWith { CollabAgentPhase.ERROR }
+                }
+            } finally {
+                dispatching = false
             }
         }
     }
@@ -146,5 +192,6 @@ object CollabState {
     fun reset() {
         selected = emptySet(); roleBinding = emptyMap(); phases = emptyMap(); lastInstruction = null
         sessionId = null; threadIds = emptyMap(); memberErrors = emptyMap(); dispatchError = null
+        dispatching = false
     }
 }
