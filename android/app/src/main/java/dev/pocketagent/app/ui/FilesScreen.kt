@@ -600,7 +600,8 @@ private fun FilesScreenBody(
                             ),
                             SwipeAction(
                                 "delete", "删除", AppR.drawable.ic_lucide_trash_2,
-                                androidx.compose.ui.graphics.Color.White, destructive = true,
+                                // 坐 Denied 实底,读 OnDenied 令牌(不再白字直写)
+                                PaEditorial.OnDenied, destructive = true,
                             ),
                         ),
                         onAction = { a ->

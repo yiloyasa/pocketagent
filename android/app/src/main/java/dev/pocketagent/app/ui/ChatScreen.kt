@@ -5057,10 +5057,11 @@ fun ChatScreen(
                                     else -> "发送"
                                 },
                                 // 内容色:sendEnabled 腿坐 Primary 实底,读 OnPrimary 令牌
-                                //(黑客盘电光青上白字 1.81:1);canStopTurn 腿坐 Denied,
-                                // 白字为既有口径(OnDenied 令牌在案待议)。
+                                //(黑客盘电光青上白字 1.81:1);canStopTurn 腿坐 Denied
+                                // 实底,读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514,
+                                // 白字仅 2.51/2.77:1 已废)。
                                 tint = when {
-                                    canStopTurn -> Color.White
+                                    canStopTurn -> PaEditorial.OnDenied
                                     sendEnabled -> PaEditorial.OnPrimary
                                     else -> ChatSubtleColor
                                 },
@@ -5576,7 +5577,7 @@ fun ChatScreen(
                                 containerColor = PaEditorial.Denied,
                             ),
                             shape = RoundedCornerShape(14.dp),
-                        ) { Text("确认回滚", color = Color.White) }
+                        ) { Text("确认回滚", color = PaEditorial.OnDenied) }
                     }
                 }
             }

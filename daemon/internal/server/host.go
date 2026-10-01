@@ -42,8 +42,9 @@ type (
 	zcodeShapedCompactor interface {
 		CompactSession(sessionID string) error
 	}
-	// codexShapedForker 分叉(codex thread/fork;pi/zcode/dsh 无对等能力,
-	// ForkThread 路由只落 codexProvider)。
+	// codexShapedForker 分叉(codex thread/fork;zcode/dsh 无对等能力;pi 走
+	// piShapedForker(thread.go)的 *store.Thread 形,同 compact 三形状一位先例 ——
+	// ForkThread 路由按 AgentID 分流到两个形状之一)。
 	codexShapedForker interface {
 		ForkThread(codexThreadID, lastTurnID string) (string, error)
 	}
@@ -149,6 +150,9 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 			caps = append(caps, "compact:"+id)
 		}
 		if _, ok := provider.(codexShapedForker); ok {
+			caps = append(caps, "fork:"+id)
+		}
+		if _, ok := provider.(piShapedForker); ok {
 			caps = append(caps, "fork:"+id)
 		}
 		if _, ok := provider.(codexShapedRollbacker); ok {

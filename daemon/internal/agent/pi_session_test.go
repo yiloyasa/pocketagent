@@ -58,6 +58,12 @@ func (f *fakeMountClient) Call(typ string, _ map[string]any, _ time.Duration) (j
 	return nil, nil
 }
 
+// Close 子进程回收打桩(piMountClient 2026-09-30 起带 Close:fork 的关闭回收
+// 需要;mount 握手路径从不调用,不影响既有序列断言)。
+func (f *fakeMountClient) Close() {
+	f.calls = append(f.calls, "close")
+}
+
 // fakeMountSeq 给每"一代"假客户端独立编号:新建会话分支回填的引用与下一代的
 // 当前挂载必然不同,模拟"子进程重启后同代缓存作废"的真实形状。
 var fakeMountSeq atomic.Int64

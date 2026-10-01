@@ -110,9 +110,10 @@ type PiProvider struct {
 	// 子进程;nil = 生产路径走 ensureMounted。与 dsh 的 newClient 注入同模式)。
 	remount func(t *store.Thread) (stateReader, error)
 
-	// sessionFor 原生会话适配器(pi_session.go)的挂载客户端源:生产为 nil,走
-	// clientFor(冷启/复用真子进程);单测与契约套件注入假客户端,不拉真子进程
-	// (与上方 remount 钩子、clearQueueOn 的窄接口打桩同模式)。
+	// sessionFor 原生会话适配器(pi_session.go)与 ForkThread(forkMount)共用的
+	// 挂载客户端源:生产为 nil,走 clientFor(冷启/复用真子进程);单测与契约套件
+	// 注入假客户端,不拉真子进程(与上方 remount 钩子、clearQueueOn 的窄接口打桩
+	// 同模式)。
 	sessionFor func(t *store.Thread) (piMountClient, error)
 
 	// TitleHandler 标题同步钩子:Pi 会话名变化时回调(server 落库,双端一致)。
@@ -431,17 +432,20 @@ func (p *PiProvider) DropThread(threadID string) {
 	}
 }
 
-// piMountClient 是 mount 握手对 piapp.Client 的窄接口(单测打桩,不依赖子进程;
-// piapp.Client 的方法集天然满足,生产零适配 —— 与 sendSessionName 的
-// sessionNameSetter、advanceEntryCursor 的 entriesFetcher 同款模式)。抽它出来
+// piMountClient 是 mount 握手与 fork 序列对 piapp.Client 的窄接口(单测打桩,
+// 不依赖子进程;piapp.Client 的方法集天然满足,生产零适配 —— 与 sendSessionName
+// 的 sessionNameSetter、advanceEntryCursor 的 entriesFetcher 同款模式)。抽它出来
 // 是为了让原生会话适配器(pi_session.go)复用 mount 时可用假客户端钉握手行为,
-// 而不是在适配器里第二实现握手。
+// 而 ForkThread(forkMount)复用它钉"clone → 取新身份 → Close 回收"的唯一序列,
+// 而不是在两条路径里各写第二实现。
 type piMountClient interface {
 	SessionFile() string
 	SessionID() string
 	GetState(ctx context.Context) (map[string]any, error)
 	SwitchSession(ctx context.Context, sessionFile string) error
 	Call(typ string, params map[string]any, timeout time.Duration) (json.RawMessage, error)
+	// Close 子进程回收(DropThread/fork 的关闭回收用;mount 不调)。
+	Close()
 }
 
 // 生产零适配的编译期保证:真客户端的方法集必须天然满足窄接口。
@@ -1586,6 +1590,109 @@ func (p *PiProvider) CompactThread(t *store.Thread) error {
 	}
 	log.Printf("[pi] 手动压缩完成 thread=%s tokens %d → 约 %d", t.ID, res.TokensBefore, res.EstimatedTokensAfter)
 	return nil
+}
+
+// ForkThread 把当前 pi 会话在"当前叶"分叉成一个新会话(pi 0.99.1 clone RPC),
+// 返回新会话的挂载引用;原会话与其会话文件不受影响(pi_fork_plan.md §0 的语义
+// 裁决:pi 的 clone 才是 codex thread/fork 的对等物 —— fork {entryId} 是"切换
+// 当前进程"的半对等语义,不采用)。落库由 server 层做(forkPiThread),本方法只
+// 回引用 —— 与 mount"回填由 server 落库"的分工一致(pi.go:464 注释)。
+//
+// 【子进程归属裁决(v1:关闭回收,活体证据 pi-fork-live-probe.md F7/F8)】
+// clone 后这个子进程已切到新分支会话,而新线程 id 由 server 生成、provider 拿
+// 不到;把"挂在新会话上的子进程"留给任何一条线程都会把对方的事件记错账
+// (GlobalHandler 按 threadID 闭包记账)。这里按 DropThread 的内存回收三连关闭
+// 回收:活体实测分支文件立即落盘,源线程下次 Run 冷启动后按 SessionFile switch
+// 回源文件、新线程首次 Run 冷启动后 switch 上分支文件都稳 —— 各多一次 spawn,
+// 换零事件错账。
+//
+// 【三道闸,前两道不发 RPC】轮次运行中/未落地(SessionFile 空)→ 结构化拒绝
+// (server 侧 forkPiThread 同款前置,双保险);会话未落盘(文件不在磁盘上)→
+// 对齐 bundle 闸门(agent-session-runtime.js:217 的 existsSync,活体 F2:pi 原生
+// 报英文 "This session has not been saved yet…")提前转结构化中文错误。
+func (p *PiProvider) ForkThread(t *store.Thread) (store.ExternalSessionRef, error) {
+	p.mu.Lock()
+	busy := p.running[t.ID]
+	p.mu.Unlock()
+	if busy {
+		return store.ExternalSessionRef{}, &piError{code: "PI_BUSY", msg: "这个会话正在执行任务,等它跑完再分叉"}
+	}
+	if t.ExternalSession.SessionFile == "" {
+		return store.ExternalSessionRef{}, &piError{code: "PI_NOT_MOUNTED", msg: "这个会话还没有在电脑上落地(先发一条消息),暂时无法分叉"}
+	}
+	c, err := p.forkMount(t)
+	if err != nil {
+		return store.ExternalSessionRef{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), piCallBudget)
+	defer cancel()
+	// 前置校验:文件必须在磁盘上(bundle existsSync 闸门的结构化前移)+ 树上
+	// 必须有叶(get_state 只保证"落过盘",leafId=null 的空树 clone 会被 pi 以
+	// "no current entry selected" 拒 —— 活体 F6:正常分支 leafId 非空)。
+	st, err := c.GetState(ctx)
+	if err != nil {
+		return store.ExternalSessionRef{}, &piError{code: "PI_FORK_FAILED", msg: "获取 Pi 会话状态失败: " + err.Error()}
+	}
+	current, _ := st["sessionFile"].(string)
+	if current == "" {
+		current = t.ExternalSession.SessionFile
+	}
+	if _, err := os.Stat(current); err != nil {
+		return store.ExternalSessionRef{}, &piError{code: "PI_NOT_SAVED", msg: "先发一条消息,会话落盘后才能分叉"}
+	}
+	if raw, err := c.Call("get_tree", nil, piCallBudget); err == nil {
+		var tree struct {
+			LeafID any `json:"leafId"`
+		}
+		if json.Unmarshal(raw, &tree) == nil && tree.LeafID == nil {
+			return store.ExternalSessionRef{}, &piError{code: "PI_NOT_SAVED", msg: "先发一条消息,会话有内容后才能分叉"}
+		}
+	}
+	// clone:pi 侧 createBranchedSession(复制活跃分支全量)→ 进程切到新会话。
+	// 应答 data={cancelled}(不回新会话 id),新身份靠下一步 get_state(活体 F4/F5)。
+	raw, err := c.Call("clone", nil, piCallBudget)
+	if err != nil {
+		return store.ExternalSessionRef{}, &piError{code: "PI_FORK_FAILED", msg: "Pi 分叉失败: " + err.Error()}
+	}
+	var data struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	if json.Unmarshal(raw, &data) == nil && data.Cancelled {
+		return store.ExternalSessionRef{}, &piError{code: "PI_FORK_CANCELLED", msg: "Pi 分叉被扩展取消"}
+	}
+	// 取新引用:clone 后进程已切到新分支会话,GetState 刷新 SessionFile/SessionID
+	// 缓存(updateSession)后组装 ref(与 mount 回填 pi.go:470-474 同式)。
+	if _, err := c.GetState(ctx); err != nil {
+		return store.ExternalSessionRef{}, &piError{code: "PI_FORK_FAILED", msg: "分叉后获取新会话状态失败: " + err.Error()}
+	}
+	ref := store.ExternalSessionRef{
+		SessionID:   c.SessionID(),
+		SessionFile: c.SessionFile(),
+		Cwd:         t.Workspace,
+	}
+	if ref.SessionFile == "" || ref.SessionID == "" {
+		return store.ExternalSessionRef{}, &piError{code: "PI_FORK_FAILED", msg: "分叉后未取得新会话身份(sessionFile/sessionId 为空)"}
+	}
+	// 子进程回收(DropThread 三连 + Close):子进程已属于"新会话"但新线程 id
+	// 归 server 管,关闭回收换零事件错账(见方法头裁决)。
+	p.mu.Lock()
+	delete(p.clients, t.ID)
+	delete(p.cursors, t.ID)
+	p.mu.Unlock()
+	p.forgetNativeQueue(t.ID)
+	c.Close()
+	log.Printf("[pi] 分叉完成 thread=%s → 新会话 %s(子进程已回收,两条线程下次 Run 各自冷启动重挂载)", t.ID, filepath.Base(ref.SessionFile))
+	return ref, nil
+}
+
+// forkMount 分叉前的挂载入口:生产走 ensureMounted(复用活客户端或冷启重挂载,
+// 握手在 mount 内);测试经 sessionFor 钩子注入假客户端(与原生会话适配器的
+// mountFor 同一注入源,不拉真子进程)。
+func (p *PiProvider) forkMount(t *store.Thread) (piMountClient, error) {
+	if hook := p.sessionFor; hook != nil {
+		return hook(t)
+	}
+	return p.ensureMounted(t)
 }
 
 // ExportHTML 把会话导出成离线 HTML 存档,落到会话工作区下的

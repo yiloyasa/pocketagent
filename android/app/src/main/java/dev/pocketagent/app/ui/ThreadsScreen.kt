@@ -1345,7 +1345,8 @@ fun ThreadsScreen(
                                             ),
                                             SwipeAction(
                                                 "delete", "删除", R.drawable.ic_lucide_trash_2,
-                                                Color.White, destructive = true,
+                                                // 坐 Denied 实底,读 OnDenied 令牌
+                                                PaEditorial.OnDenied, destructive = true,
                                             ),
                                         ),
                                         onAction = { a ->
@@ -1412,7 +1413,8 @@ fun ThreadsScreen(
                                             ),
                                             SwipeAction(
                                                 "delete", "删除", R.drawable.ic_lucide_trash_2,
-                                                Color.White, destructive = true,
+                                                // 坐 Denied 实底,读 OnDenied 令牌
+                                                PaEditorial.OnDenied, destructive = true,
                                             ),
                                         ),
                                         onAction = { a ->
@@ -1474,7 +1476,8 @@ fun ThreadsScreen(
                                             SwipeAction("pin", if (isPinned) "取消置顶" else "置顶", R.drawable.ic_lucide_pin, PaEditorial.Primary),
                                             SwipeAction("archive", "App归档", R.drawable.ic_lucide_archive, PaEditorial.Primary),
                                             SwipeAction("remove", "移除", R.drawable.ic_lucide_x, PaEditorial.Primary),
-                                            SwipeAction("delete", "删除", R.drawable.ic_lucide_trash_2, Color.White, destructive=true),
+                                            // 坐 Denied 实底,读 OnDenied 令牌(不再白字直写)
+                                            SwipeAction("delete", "删除", R.drawable.ic_lucide_trash_2, PaEditorial.OnDenied, destructive=true),
                                         ),
                                         onAction = { act ->
                                             openKey.value = null
@@ -1633,7 +1636,8 @@ fun ThreadsScreen(
                         containerColor = if (action == "delete") PaEditorial.Denied else PaEditorial.Graphite,
                     ),
                     shape = RoundedCornerShape(14.dp),
-                ) { Text("确认", color = Color.White) }
+                // 删除腿坐 Denied 实底读 OnDenied(深/黑客盘=暗红棕);石墨腿保持白字
+                ) { Text("确认", color = if (action == "delete") PaEditorial.OnDenied else Color.White) }
             }
         }
     }
@@ -2690,7 +2694,7 @@ private fun SectionManagerSheet(
                             containerColor = PaEditorial.Denied,
                         ),
                         shape = RoundedCornerShape(14.dp),
-                    ) { Text("确认删除", color = Color.White) }
+                    ) { Text("确认删除", color = PaEditorial.OnDenied) }
                 }
             } else {
                 OutlinedTextField(

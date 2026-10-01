@@ -239,7 +239,8 @@ fun UndoBarHost(
                 Text(
                     feedback ?: it0.message,
                     fontSize = 13.sp,
-                    color = if (isError) androidx.compose.ui.graphics.Color.White else PaEditorial.Ink,
+                    // 错误条坐 Denied 实底,读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514)
+                    color = if (isError) PaEditorial.OnDenied else PaEditorial.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),

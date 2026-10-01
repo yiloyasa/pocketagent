@@ -408,7 +408,7 @@ type result struct {
 
 func main() {
 	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\pi-p0-probe.md`, "报告输出路径")
-	mode := flag.String("mode", "p0", "p0 = 全量 P0 探针;s = S 级增量命令探针(export_html/compact/thinking_levels/follow_up/session_info_changed);cmds = get_commands 斜杠命令探针;m99 = 0.99.1 协议新面探针(new_session/cycle_*/bash/abort_*/disposition/follow_up_mode)")
+	mode := flag.String("mode", "p0", "p0 = 全量 P0 探针;s = S 级增量命令探针(export_html/compact/thinking_levels/follow_up/session_info_changed);cmds = get_commands 斜杠命令探针;m99 = 0.99.1 协议新面探针(new_session/cycle_*/bash/abort_*/disposition/follow_up_mode);fork = fork/clone 活体复核探针(分支落盘时机/新会话身份,隔离 agent 目录)")
 	flag.Parse()
 
 	r := &runner{}
@@ -420,6 +420,9 @@ func main() {
 	case "m99":
 		fmt.Println("== Pi 0.99.1 协议新面探针开始 ==")
 		r.runM99Mode()
+	case "fork":
+		fmt.Println("== Pi fork/clone 活体复核探针开始(隔离 agent 目录) ==")
+		r.runForkLiveMode()
 	case "models":
 		fmt.Println("== Pi get_available_models 探针开始 ==")
 		modelsProbe()
@@ -450,6 +453,8 @@ func main() {
 		title = "Pi get_commands 斜杠命令探针记录"
 	case "native":
 		title = "Pi 原生设置探针记录(auto_compaction/steering_mode 读写语义,隔离 agent 目录)"
+	case "fork":
+		title = "Pi fork/clone 活体复核探针记录(分支落盘时机/新会话身份,隔离 agent 目录)"
 	}
 	var b strings.Builder
 	b.WriteString("# " + title + "\n\n")

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -278,6 +279,18 @@ func (s *Server) ForkThread(ctx context.Context, req *pb.ForkThreadRequest) (*pb
 	if !ok {
 		return nil, errNotFound("会话不存在")
 	}
+	// pi 路径:pi 0.99.1 的 clone 在"当前叶"分出新分支会话文件,与 server 语义
+	// ("分出一条新会话,原会话不动")直接对齐 —— pi_fork_plan.md §0 的语义裁决。
+	// 仿 CompactThread 的 pi 分家先例(thread.go:600-611):会话归属以 AgentID 为
+	// 准,显式失败不静默换人;req.LastTurnId 是 codex 回合 id 语义,pi 侧 v1 无
+	// entryId 映射,固定"从最新状态分叉"(降级不破坏,§3 v2 展望)。
+	if threadAgentID(src) == "pi" {
+		pc, ok := s.cfg.Providers["pi"].(piShapedForker)
+		if !ok {
+			return nil, errUnavailable("电脑上没有可用的 pi")
+		}
+		return s.forkPiThread(src, pc)
+	}
 	p := s.codexProvider()
 	if p == nil {
 		return nil, errUnavailable("电脑上没有可用的 codex")
@@ -316,6 +329,55 @@ func (s *Server) ForkThread(ctx context.Context, req *pb.ForkThreadRequest) (*pb
 		log.Printf("[fork] 把标题写回 codex 失败(不影响分叉): %v", err)
 	}
 	log.Printf("[fork] %s → %s(codex %s → %s)", src.ID, t.ID, src.CodexThreadID, newCodexID)
+	return s.threadToPB(t), nil
+}
+
+// forkPiThread pi 线程的分叉组装(ForkThread 的 pi 分支载体,避免在原函数里叠
+// 分支;codex 路径一行不动):provider 完成 clone 并回传新会话引用,这里负责建
+// 本地线程与落库 —— 与 mount"回填由 server 落库"的分工一致(pi_fork_plan.md §3-7)。
+//
+// 【不填 CodexThreadID】pi 线程的身份在 ExternalSession;历史播种走
+// forkSeedMessages("", src, nil) 的兜底路径(newCodexID=="" 时复制 src.Messages,
+// 天然复用 —— pi 侧没有"读新线程 rollout"的 load 通道,v1 以源历史播种)。
+func (s *Server) forkPiThread(src *store.Thread, pc piShapedForker) (*pb.Thread, error) {
+	if src.ExternalSession.SessionFile == "" {
+		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法分叉")
+	}
+	ref, err := pc.ForkThread(src)
+	if err != nil {
+		return nil, errInternal(err)
+	}
+	t := &store.Thread{
+		ID:              randomID("th"),
+		AgentID:         "pi",
+		Title:           forkTitle(src.Title),
+		Workspace:       src.Workspace,
+		ModelID:         src.ModelID,
+		Effort:          src.Effort,
+		SectionID:       src.SectionID,
+		ExternalSession: ref,
+		CreatedAt:       time.Now().UnixMilli(),
+		UpdatedAt:       time.Now().UnixMilli(),
+		// 与 codex 路径同理由(thread.go GetThreadHistory 只读本地 store):
+		// 分叉会话不带消息,手机上打开就是空白时间线 —— 用源历史播种。
+		Messages: forkSeedMessages("", src, nil),
+	}
+	if err := s.cfg.Store.Create(t); err != nil {
+		return nil, errInternal(err)
+	}
+	// 【把分叉标题也推给 pi】否则下次 pi 侧标题同步(set_session_name/TitleHandler)
+	// 可能用源会话的名字顶掉「· 分支」标记(codex 路径 SetCodexThreadName 同款教训)。
+	// Rename 走 titlePusher(生产实现 pi.go Rename → set_session_name):新线程此刻
+	// 在 provider 侧还没有子进程,会冷启一个挂上分支文件的客户端再改名 —— 顺带把
+	// 新线程的子进程按新线程 id 就位,后续 Run 免一次 spawn。失败不影响分叉本身,
+	// 记日志即可(与 codex 路径同纪律)。
+	if tp, ok := pc.(titlePusher); ok {
+		if err := tp.Rename(t, t.Title); err != nil {
+			log.Printf("[fork] 把标题写回 pi 失败(不影响分叉): %v", err)
+		}
+	}
+	log.Printf("[fork] %s → %s(pi %s → %s)", src.ID, t.ID,
+		filepath.Base(src.ExternalSession.SessionFile), filepath.Base(ref.SessionFile))
 	return s.threadToPB(t), nil
 }
 

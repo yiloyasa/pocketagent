@@ -12,8 +12,11 @@ package server
 //                     的 string 形、pi compact 的 *store.Thread 形、zcode
 //                     session/compact 的 CompactSession 形;dsh 无 → 手机端
 //                     "压缩上下文"入口只应在这三家点亮);
-//   - fork/rollback/review:<id> = codex 专属(ForkThread / RollbackThread /
-//                     StartReview 路由只落 codexProvider;pi/zcode/dsh 缺位);
+//   - fork:<id>      = ForkThread 路由的两种原生形状之一(codex thread/fork 的
+//                     (string,string) 形、pi clone 的 *store.Thread 形 —— 2026-09-30
+//                     pi fork 接通后与 compact 同列"多形状一位";zcode/dsh 缺位);
+//   - rollback/review:<id> = codex 专属(RollbackThread / StartReview 路由只落
+//                     codexProvider;pi/zcode/dsh 缺位);
 //   - export_html:<id> = pi 专属(ExportThreadHtml 路由只认 pi 的 ExportHTML);
 //   - image_input:<id> = agent.ImageInputter(手机图片附件真正进入模型输入;
 //                     codex/pi/zcode 的 Run 真实携带图片,dsh 当前路由不收图
@@ -75,8 +78,20 @@ func TestGetHostInfoCapabilityBitsAlignedWithControllers(t *testing.T) {
 	if caps["compact:dsh"] {
 		t.Fatal("dsh 无任何压缩实现(thread.go CompactThread 会误落 codex 路径),不得虚报 compact 位")
 	}
-	// fork/rollback/review:路由只落 codexProvider 的三件事,pi/zcode/dsh 缺位。
-	for _, family := range []string{"fork", "rollback", "review"} {
+	// fork:分叉路由的两种原生形状(codex thread/fork 的 string 形、pi clone 的
+	// *store.Thread 形),与 compact 同列"多形状一位";zcode/dsh 缺位。
+	for _, id := range []string{"codex", "pi"} {
+		if !caps["fork:"+id] {
+			t.Fatalf("%s 有原生分叉实现,应声明 fork 位, caps=%v", id, resp.Capabilities)
+		}
+	}
+	for _, id := range []string{"zcode", "dsh"} {
+		if caps["fork:"+id] {
+			t.Fatalf("%s 无 fork 对等能力,不得虚报 fork 位", id)
+		}
+	}
+	// rollback/review:路由只落 codexProvider 的两件事,pi/zcode/dsh 缺位。
+	for _, family := range []string{"rollback", "review"} {
 		if !caps[family+":codex"] {
 			t.Fatalf("codex 应声明 %s 位, caps=%v", family, resp.Capabilities)
 		}

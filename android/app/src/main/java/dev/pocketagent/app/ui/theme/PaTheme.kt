@@ -108,14 +108,19 @@ fun PaTheme(content: @Composable () -> Unit) {
     // onPrimary 统一读 PaEditorial.OnPrimary:hacker 盘主色是电光青 #22D3EE,
     // 白字对比仅 1.81:1,该盘内容色=暗青 #062B33(8.29:1)——与 editorialM3Scheme
     // 同读同一槽位,两套 M3 色板内容色不漂移。
+    // onError 同读 PaEditorial.OnDenied(U2 反馈 C 类):深/黑客盘 error 实底
+    // (#FF453A/#F87171)上白字仅 3.41/2.77:1,内容色=暗红棕 #3A1514
+    // (4.75/5.85:1,≥4.5 AA)——与 editorialM3Scheme 同读同一槽位不漂移。
     val scheme = if (dark) darkColorScheme(
         primary = Pa.Accent, onPrimary = PaEditorial.OnPrimary, background = Pa.Bg, onBackground = Pa.TextPrimary,
         surface = Pa.Card, onSurface = Pa.TextPrimary, surfaceVariant = Pa.CardHigh,
         onSurfaceVariant = Pa.TextSecondary, outline = Pa.Separator, error = Pa.Red,
+        onError = PaEditorial.OnDenied,
     ) else lightColorScheme(
         primary = Pa.Accent, onPrimary = PaEditorial.OnPrimary, background = Pa.Bg, onBackground = Pa.TextPrimary,
         surface = Pa.Card, onSurface = Pa.TextPrimary, surfaceVariant = Pa.CardHigh,
         onSurfaceVariant = Pa.TextSecondary, outline = Pa.Separator, error = Pa.Red,
+        onError = PaEditorial.OnDenied,
     )
     MaterialTheme(colorScheme = scheme, content = content)
 }

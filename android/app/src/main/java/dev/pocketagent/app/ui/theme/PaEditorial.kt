@@ -97,6 +97,16 @@ object PaEditorial {
     var Denied by mutableStateOf(Color(0xFFC94F4D)); private set
     /** 珊瑚红浅底(浅:--red-dim #FFF0ED)。 */
     var DeniedContainer by mutableStateOf(Color(0xFFFFF0ED)); private set
+    /**
+     * Denied **实底**上的内容色(M3 onError 语义;U2 反馈 C 类,2026-09-30)。
+     * 浅盘保持白(对 #C94F4D 4.46:1,原型既有口径);深/黑客盘原为白字坐
+     * #F08580/#F87171 仅 2.51/2.77:1(WCAG 深红区),换暗红棕 **#3A1514** 后
+     * **6.45/5.85:1**(≥4.5 达 WCAG AA;对 PaTheme 深盘 error #FF453A 亦
+     * 4.75:1)。消费:PaTheme 与 editorialM3Scheme 的 onError —— 两处必须同读
+     * 本槽位,以及全部"白字坐 Denied 实底"的按钮/角标/滑动腿/提示条(替换
+     * Color.White 直写,防"同一实底两种内容色"的盘间漂移)。
+     */
+    var OnDenied by mutableStateOf(Color.White); private set
 
     // ---- 小字号文本专用变体(11-12sp 文本对比度 ≥4.5:1;同 Pa.*Text 纪律) ----
     var AccentText by mutableStateOf(Color(0xFF2B5BC7)); private set
@@ -146,6 +156,8 @@ object PaEditorial {
             Running = Color(0xFF2DD4BF); RunningContainer = Color(0xFF0B2B27)
             Attention = Color(0xFFFBBF24); AttentionContainer = Color(0xFF332708)
             Denied = Color(0xFFF87171); DeniedContainer = Color(0xFF331B1B)
+            // onDenied:#F87171 上白字 2.77:1 → 暗红棕上 5.85:1(计算见 [OnDenied] 头注)
+            OnDenied = Color(0xFF3A1514)
             AccentText = Color(0xFF67E8F9); RunningText = Color(0xFF5EEAD4); DeniedText = Color(0xFFFCA5A5)
             AttentionText = Color(0xFFFCD34D); NeutralText = Color(0xFF8B93A3); NeutralContainer = Color(0xFF12141A)
             GreyText = Color(0xFF8B93A3); GreyContainer = Color(0xFF12141A)
@@ -168,6 +180,8 @@ object PaEditorial {
             Running = Color(0xFF4CC2A4); RunningContainer = Color(0xFF12312B)
             Attention = Color(0xFFE5B36B); AttentionContainer = Color(0xFF33270F)
             Denied = Color(0xFFF08580); DeniedContainer = Color(0xFF3A2123)
+            // onDenied:#F08580 上白字 2.51:1 → 暗红棕上 6.45:1(计算见 [OnDenied] 头注)
+            OnDenied = Color(0xFF3A1514)
             AccentText = Color(0xFF9DBDF8); RunningText = Color(0xFF7DD8C0); DeniedText = Color(0xFFF4A9A4)
             AttentionText = Color(0xFFEBC98F); NeutralText = Color(0xFFA2AEBD); NeutralContainer = Color(0xFF1D2532)
             GreyText = Color(0xFFA2AEBD); GreyContainer = Color(0xFF1D2532)
@@ -191,6 +205,8 @@ object PaEditorial {
             Running = Color(0xFF21977D); RunningContainer = Color(0xFFE5F5EF)
             Attention = Color(0xFFA96726); AttentionContainer = Color(0xFFFFF1DD)
             Denied = Color(0xFFC94F4D); DeniedContainer = Color(0xFFFFF0ED)
+            // 浅盘保持白字(对 #C94F4D 4.46:1,原型既有口径,见 [OnDenied] 头注)
+            OnDenied = Color.White
             AccentText = Color(0xFF2B5BC7); RunningText = Color(0xFF157C63); DeniedText = Color(0xFFB84D49)
             AttentionText = Color(0xFF99621E); NeutralText = Color(0xFF5F6C7C); NeutralContainer = Color(0xFFE8EDEF)
             GreyText = Color(0xFF5F6C7C); GreyContainer = Color(0xFFF0F2F4)

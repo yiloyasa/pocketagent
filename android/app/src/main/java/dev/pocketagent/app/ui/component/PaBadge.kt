@@ -65,7 +65,8 @@ fun PaBadge(
                 Text(
                     label,
                     fontSize = 9.sp,
-                    color = Color.White,
+                    // 坐 Denied 实底,读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514)
+                    color = PaEditorial.OnDenied,
                     fontWeight = FontWeight.SemiBold,
                 )
             }

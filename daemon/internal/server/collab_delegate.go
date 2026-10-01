@@ -24,6 +24,14 @@
 // 父链、且父链指向一个委派子线程,就在此被拦下。工具可见性保留(模型看得见
 // agent_delegate),但引擎拒绝执行、如实报错,绝不代拟结果(collabmcp 准则 6:
 // 诚实报错不算伪造)。
+// 【深度锁第三道闸(X2,2026-09-30):父链推断的推理防线】第二道闸依赖发起方
+// 如实上报父链(opts.ParentThreadID),而 v1 链路里该入参恒空 → handler 经
+// soleParentTurn 从活跃轮次推断。推断的隐含假设"唯一非子活跃轮次就是发起方"
+// 会被"委派子线程发起再委派"击穿:此时父轮次仍同步阻塞在自己的 agent_delegate
+// 工具调用上(租约未放),真正发起方是仍在运行的子线程 —— 旧逻辑把阻塞父
+// 误判为唯一父,父链指向非子线程,深度闸形同虚设。DelegateSubTask 因此改用
+// resolveParentThreadIDGuarded:推断出唯一候选且仍有子轮次在飞时,不再信任
+// 推断,以深度拒绝收场(见该函数注释)。
 // 【为什么深度锁不再靠 depth>0 一刀切】早期实现用"全局在飞数 > 0"同时承担
 // 两件事:既当并发闸又当深度锁,导致"只能同时派 1 个子智能体"。二者语义本应
 // 拆开:并发是"有界上限"(可并行 N 个),深度锁是"子不生子"的精确判定。本文件
@@ -287,6 +295,9 @@ func (e *collabEngine) soleParentTurn() (string, bool) {
 // collabmcp 工具入参 / proto 字段 6 / DelegateOptions.ParentThreadID 透传);
 // 没给则尝试从活跃轮次推断(soleParentTurn)。推断不出如实返回空串 —— 父链
 // 留空则手机端子代理卡不亮(诚实变暗),不误报、不伪造。
+// 【生产 RPC 入口不用本函数】DelegateSubTask 走 resolveParentThreadIDGuarded
+// (X2 深度锁推理防线);本函数保留给引擎级直调方与既有钉子测试(T-S1Pb),
+// 二者对"显式父链 / 无活跃轮次 / 唯一父候选"的语义完全一致。
 func (e *collabEngine) resolveParentThreadID(explicit string) string {
 	if strings.TrimSpace(explicit) != "" {
 		return strings.TrimSpace(explicit)
@@ -296,6 +307,57 @@ func (e *collabEngine) resolveParentThreadID(explicit string) string {
 	}
 	// 推断不出:如实留空,不猜不伪造。handler 处会据此记一行日志。
 	return ""
+}
+
+// hasActiveChildTurn 报告此刻是否有委派子线程的轮次仍在活跃(activeTurns)。
+// 深度锁推理防线的判据:有子轮次在飞 = 某个父轮次正同步阻塞在它自己的
+// agent_delegate 工具调用上等子返回 —— 阻塞中的线程不可能同时发起新委派。
+func (e *collabEngine) hasActiveChildTurn() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, id := range e.srv.activeTurns.IDs() {
+		if e.childThreads[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveParentThreadIDGuarded RPC 入口(DelegateSubTask)专用的父链解析,
+// 在 resolveParentThreadID 的推断之上加深度锁推理防线(X2,2026-09-30):
+//
+// soleParentTurn 的推断依据是"agent_delegate 由父轮次同步发起,父此刻必持
+// activeTurns 租约" —— 该前提单向成立:唯一非子活跃轮次也可能只是**仍阻塞
+// 中的父轮次**(它在自己早前的 agent_delegate 调用上等子轮次返回),真正的
+// 发起方是仍在运行的委派子线程。旧逻辑此时把阻塞父误判为唯一父,推断出的
+// 父链指向非子线程,第二道闸(opts.ParentThreadID ∈ childThreads)被
+// "子线程再委派"完整绕过。本函数的防线:推断出唯一候选、且此刻仍有委派
+// 子轮次在飞时,不再信任推断,以 errDelegateDepthRejected 如实拒绝 ——
+// 同步阻塞语义保证候选父不可能是本次发起方,发起方只能是(某个代理进程树上
+// 的)子线程。
+//
+// 被误拒的只剩两种窄窗口,均为"稍后重试即可"的保守面、错误如实说明(准则 6):
+//  1. 协调器借并行工具调用同时派发多个委派(一个会话内同时两个在飞);
+//  2. 父轮次刚被取消、子轮次尚未收尾的瞬间,另一协调器恰好发起委派。
+// 深度锁是安全不变量("子不生子"),宁可保守拦截也不放行 —— 与并发闸
+// "超限如实报错、由 coordinator 择机重试"同一纪律。
+//
+// 显式父链不经本防线(它由引擎入口闸按 childThreads 精确判定,语义不变)。
+func (e *collabEngine) resolveParentThreadIDGuarded(explicit string) (string, error) {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit), nil
+	}
+	pid, ok := e.soleParentTurn()
+	if !ok {
+		// 推断不出(无活跃轮次/候选不唯一):如实留空,不猜不伪造。
+		return "", nil
+	}
+	if e.hasActiveChildTurn() {
+		// 唯一候选 + 有子轮次在飞:候选父此刻必然阻塞在自己的 agent_delegate
+		// 调用上,不可能是发起方 → 发起方是子线程 → 深度拒绝。
+		return "", errDelegateDepthRejected
+	}
+	return pid, nil
 }
 
 // delegate 委派主体(建子线程 → 落库 → runTurnOnce),由 Delegate 与
@@ -456,9 +518,16 @@ func (s *Server) DelegateSubTask(ctx context.Context, req *pb.DelegateSubTaskReq
 	eng := s.collabEngineFor()
 	// 父链归属:agent_delegate 入参 parent_thread_id 本应由宿主/链路基建注入,
 	// 但 v1 全仓从未赋值(实证:子智能体卡片不显示)。此处补齐"宿主自动注入":
-	// 显式给了就用显式的;没给则从活跃轮次推断唯一父轮次(soleParentTurn)。
-	// 推断不出如实留空、手机端子代理卡变暗,不伪造父链(准则 6)。
-	parentID := eng.resolveParentThreadID(req.GetParentThreadId())
+	// 显式给了就用显式的;没给则从活跃轮次推断唯一父轮次(resolveParentThreadIDGuarded,
+	// 带 X2 深度锁推理防线:唯一候选 + 子轮次在飞 = 发起方是子线程,如实拒绝,
+	// 详见该函数注释)。推断不出如实留空、手机端子代理卡变暗,不伪造父链(准则 6)。
+	parentID, perr := eng.resolveParentThreadIDGuarded(req.GetParentThreadId())
+	if perr != nil {
+		// 深度锁推理防线拦截:业务失败走 error 字段 + 人话原文,不建子线程、
+		// 不伪造成功、不靠 gRPC status 承载(准则 6)。
+		log.Printf("DelegateSubTask: 深度锁推理防线拦截(唯一父候选仍阻塞在自身委派上,发起方应为委派子线程): %v", perr)
+		return &pb.DelegateSubTaskResponse{Error: perr.Error()}, nil
+	}
 	if strings.TrimSpace(req.GetParentThreadId()) == "" && parentID == "" {
 		// 推断失败的如实留痕:不 guess、不粉饰,便于排障。
 		log.Printf("DelegateSubTask: 无法从活跃轮次推断父线程(parent_thread_id 为空且活跃父轮次不唯一),子线程父链留空")

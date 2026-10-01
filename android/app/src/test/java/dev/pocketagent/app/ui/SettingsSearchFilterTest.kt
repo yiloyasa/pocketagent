@@ -79,4 +79,19 @@ class SettingsSearchFilterTest {
         val hits = filterSettingsEntries("历史轮数", index)
         assertTrue(hits.any { it.title == "会话与对话" })
     }
+
+    // ---- F3 终验:搜新组名本身 -----------------------------------------------
+
+    @Test
+    fun `搜会话_到达新组名_组名自洽且不可跳转`() {
+        // 一级导航词"会话"必须命中新组(S2 重排后用户搜组名就要能到):
+        val hits = filterSettingsEntries("会话", index)
+        val hit = hits.firstOrNull { it.title == "会话与对话" }
+        assertTrue(hit != null)
+        // 命中的就是组自己的索引条目:组名=标题(一级就地展示,无二级页可跳),
+        // 关键词覆盖标题与描述两侧(思考/工具/历史都在 desc 里)。
+        assertEquals("会话与对话", hit!!.group)
+        assertNull(hit.target)
+        assertEquals(0 until 2, matchRange(hit.title, "会话"))
+    }
 }

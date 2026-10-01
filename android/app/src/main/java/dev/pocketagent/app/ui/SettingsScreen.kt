@@ -141,6 +141,9 @@ internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.mate
     onSurfaceVariant = PaEditorial.Muted,
     outline = PaEditorial.Hairline,
     error = PaEditorial.Denied,
+    // onError 同读 PaEditorial.OnDenied(与 PaTheme 同槽位):深/黑客盘 Denied
+    // 实底 #F08580/#F87171 上白字仅 2.51/2.77:1,内容色=暗红棕 #3A1514(6.45/5.85:1)。
+    onError = PaEditorial.OnDenied,
 ) else androidx.compose.material3.lightColorScheme(
 
     primary = PaEditorial.Primary,
@@ -153,6 +156,8 @@ internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.mate
     onSurfaceVariant = PaEditorial.Muted,
     outline = PaEditorial.Hairline,
     error = PaEditorial.Denied,
+    // 浅盘保持白字(对 #C94F4D 4.46:1,原型既有口径),同读 PaEditorial.OnDenied。
+    onError = PaEditorial.OnDenied,
 )
 
 /**
@@ -974,7 +979,9 @@ private fun SettingsScreenBody(
         return
     }
     if (subPage == "daemon") {
-        DaemonPage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) }, writer = codexWriter, models = modelChoices, capabilities = host?.capabilitiesList.orEmpty())
+        // 【F3 终验】S2 把「全局对话显示」上收一级页后,DaemonPage 不再需要写入通道
+        // (思考三项走上方 codexWriter),原 writer 形参随之移除 —— 一个偏好只有一处控件。
+        DaemonPage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) }, models = modelChoices, capabilities = host?.capabilitiesList.orEmpty())
         return
     }
     if (subPage == "appearance") {
@@ -4260,8 +4267,9 @@ private fun selectNativeOption(
     }
 }
 
+/** writer 形参已随 S2 聚拢移除(F3 终验):对话显示三项只留在一级页「会话与对话」。 */
 @Composable
-private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer: CodexWriter, models: List<ModelInfo>, capabilities: List<String>) {
+private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models: List<ModelInfo>, capabilities: List<String>) {
     SubPageScaffold(title = "Daemon 桥接与输入", onBack = onBack) {
         SectionBlock(icon = R.drawable.ic_lucide_server, title = "连接策略") {
             Text("USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",

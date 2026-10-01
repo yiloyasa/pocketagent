@@ -545,6 +545,15 @@ type piThreadCompactor interface {
 	CompactThread(t *store.Thread) error
 }
 
+// piShapedForker pi 侧分叉能力(pi 0.99.1 clone;生产由 *agent.PiProvider 实现,
+// pi_fork_plan.md §1)。参数 *store.Thread,与 codexShapedForker 的 string 形状
+// 天然互斥 —— 一家只命中一个(host.go:34-36 compactor 同款纪律),能力位断言
+// 才不会误亮。【不要】让 PiProvider 实现与 codexShapedForker 同形签名,否则
+// host.go 的断言会给 pi 误亮 fork:pi 位而路由仍走 codex 形状。
+type piShapedForker interface {
+	ForkThread(t *store.Thread) (store.ExternalSessionRef, error)
+}
+
 // piThreadDropper pi 侧删除回收能力(P2-1:DropThread = Close 子进程 + 清
 // clients/cursors;LocalOnly 移除路径同步调用 —— 真删除路径已并入
 // *agent.PiProvider.DeleteNativeSession,见 nativeSessionDeleter)。

@@ -163,6 +163,29 @@ fork 时按 id 直查。**手机端 v1 照发 last_turn_id,daemon 忽略之 —�
 
 ## 6. 实施前必须活体复核的两件事(隔离 PI_CODING_AGENT_DIR,红线不碰 ~/.pi)
 
+> **复核结论(2026-10-02,P3 实施轮,两项均证实,未证伪 —— §1/§2/§3 按原清单实施):**
+> 探针 `piprobe -mode fork`(daemon/cmd/piprobe/forklive.go)8/8 通过,活体证据
+> `docs/verify/evidence/pi-fork-live-probe.md`。隔离方式:临时 PI_CODING_AGENT_DIR +
+> 临时 --session-dir,凭据文件(auth.json/models-store.json)从 ~/.pi **只读拷入**
+> (settings.json 刻意不拷:其 packages 清单会让 pi 在隔离目录里 npm install 扩展,
+> 干净 env 无 npm 直接 spawn ENOENT —— 首两轮实测),~/.pi 零写入。逐项:
+>
+> 1. **分支会话文件落盘时机:立即落盘(非惰性)。** 已保存会话上 `clone` 成功应答
+>    (`data={"cancelled":false}`,耗时 351ms)返回后**立即** `os.Stat` 新 sessionFile
+>    即存在;且冷启动新进程 `switch_session(新文件)` 成功、get_state 校验一致、
+>    get_messages 3 条(源轮历史完整复制)。→ **§3 步骤 6 的"关闭回收 + 下次 Run
+>    冷启动 switch_session 重挂载"成立,无需补 flush,无需变体 B。**
+> 2. **clone 后 get_state 字段完备:证实。** sessionId `01a0f9b8-27d…` →
+>    `01a0f9b8-3b2…`、sessionFile 均非空且异于源,rebindSession 后新会话身份确实
+>    可从 get_state 取得(§3 步骤 5 成立)。附带证据:源会话文件不动、切回源文件
+>    历史仍在(daemon"原会话不动"语义的活体对齐);空会话 clone 被闸门拒
+>    ("This session has not been saved yet…",与 m99 piprobe-21 一致,daemon 侧
+>    §3 步骤 3 的前置校验把这条英文报错提前变成结构化中文错误)。
+>    (备注:clone 后 1.5s 事件窗内未捕到 `session_start.reason="fork"` 帧,身份
+>    以 get_state 实测为准,不影响结论。)
+>
+> 原清单(留档):
+
 1. **分支会话文件落盘时机**:m99 实测 fork 刚产出的新会话文件在 clone 视角
    `existsSync` 为假(pi-0991-m99.md 附录 piprobe-21)。须验证:正常已保存会话上
    `clone` 成功后,新 sessionFile 是否**立即可被 switch_session 打开**(决定 §3 步骤 6

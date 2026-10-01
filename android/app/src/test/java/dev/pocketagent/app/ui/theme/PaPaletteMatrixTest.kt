@@ -12,7 +12,7 @@ import org.junit.Test
  * 三盘槽位完备性 + 对比度达标矩阵(2026-09-30 主题根层终审的回归钉)。
  *
  * 【钉什么】
- *  1. **完备性钉**:34 个颜色槽位 × 浅/深/黑客三盘逐值钉死——任何"某槽位只调过
+ *  1. **完备性钉**:35 个颜色槽位 × 浅/深/黑客三盘逐值钉死——任何"某槽位只调过
  *     一盘"的漂移(apply 漏灌某槽位时它会停留在上一盘的值)在这里必然炸出;
  *  2. **同构规则钉**:NeutralText/GreyText 三盘都等于 Muted(灰阶 inactive 与
  *     次级文本同值,盘内不允许出现两个近似灰);
@@ -25,7 +25,7 @@ import org.junit.Test
  */
 class PaPaletteMatrixTest {
 
-    // ---- 槽位取值器(34 个颜色槽位;新增槽位必须在此登记,否则完备性钉测不到它) ----
+    // ---- 槽位取值器(35 个颜色槽位;新增槽位必须在此登记,否则完备性钉测不到它) ----
 
     private val slots: List<Pair<String, () -> Color>> = listOf(
         "Canvas" to { PaEditorial.Canvas },
@@ -48,6 +48,7 @@ class PaPaletteMatrixTest {
         "AttentionContainer" to { PaEditorial.AttentionContainer },
         "Denied" to { PaEditorial.Denied },
         "DeniedContainer" to { PaEditorial.DeniedContainer },
+        "OnDenied" to { PaEditorial.OnDenied },
         "AccentText" to { PaEditorial.AccentText },
         "RunningText" to { PaEditorial.RunningText },
         "DeniedText" to { PaEditorial.DeniedText },
@@ -78,7 +79,7 @@ class PaPaletteMatrixTest {
         "Primary" to 0xFF386BE7, "OnPrimary" to 0xFFFFFFFF, "PrimaryContainer" to 0xFFE8EFFF,
         "Running" to 0xFF21977D, "RunningContainer" to 0xFFE5F5EF,
         "Attention" to 0xFFA96726, "AttentionContainer" to 0xFFFFF1DD,
-        "Denied" to 0xFFC94F4D, "DeniedContainer" to 0xFFFFF0ED,
+        "Denied" to 0xFFC94F4D, "DeniedContainer" to 0xFFFFF0ED, "OnDenied" to 0xFFFFFFFF,
         "AccentText" to 0xFF2B5BC7, "RunningText" to 0xFF157C63, "DeniedText" to 0xFFB84D49,
         "AttentionText" to 0xFF99621E, "NeutralText" to 0xFF5F6C7C, "NeutralContainer" to 0xFFE8EDEF,
         "GreyText" to 0xFF5F6C7C, "GreyContainer" to 0xFFF0F2F4,
@@ -96,7 +97,7 @@ class PaPaletteMatrixTest {
         "Primary" to 0xFF6C9BF2, "OnPrimary" to 0xFFFFFFFF, "PrimaryContainer" to 0xFF1D3050,
         "Running" to 0xFF4CC2A4, "RunningContainer" to 0xFF12312B,
         "Attention" to 0xFFE5B36B, "AttentionContainer" to 0xFF33270F,
-        "Denied" to 0xFFF08580, "DeniedContainer" to 0xFF3A2123,
+        "Denied" to 0xFFF08580, "DeniedContainer" to 0xFF3A2123, "OnDenied" to 0xFF3A1514,
         "AccentText" to 0xFF9DBDF8, "RunningText" to 0xFF7DD8C0, "DeniedText" to 0xFFF4A9A4,
         "AttentionText" to 0xFFEBC98F, "NeutralText" to 0xFFA2AEBD, "NeutralContainer" to 0xFF1D2532,
         "GreyText" to 0xFFA2AEBD, "GreyContainer" to 0xFF1D2532,
@@ -114,7 +115,7 @@ class PaPaletteMatrixTest {
         "Primary" to 0xFF22D3EE, "OnPrimary" to 0xFF062B33, "PrimaryContainer" to 0xFF0E2A33,
         "Running" to 0xFF2DD4BF, "RunningContainer" to 0xFF0B2B27,
         "Attention" to 0xFFFBBF24, "AttentionContainer" to 0xFF332708,
-        "Denied" to 0xFFF87171, "DeniedContainer" to 0xFF331B1B,
+        "Denied" to 0xFFF87171, "DeniedContainer" to 0xFF331B1B, "OnDenied" to 0xFF3A1514,
         "AccentText" to 0xFF67E8F9, "RunningText" to 0xFF5EEAD4, "DeniedText" to 0xFFFCA5A5,
         "AttentionText" to 0xFFFCD34D, "NeutralText" to 0xFF8B93A3, "NeutralContainer" to 0xFF12141A,
         "GreyText" to 0xFF8B93A3, "GreyContainer" to 0xFF12141A,
@@ -311,6 +312,23 @@ class PaPaletteMatrixTest {
         assertEquals(21f, PaContrast.contrastRatio(Color.Black, Color.White), 0.01f)
         assertEquals(1f, PaContrast.contrastRatio(Color.Black, Color.Black), 0.01f)
         assertTrue(PaContrast.meets(Color.White, Color.Black))
+    }
+
+    @Test
+    fun `对比度_OnDenied对各自盘Denied_深黑客盘AA浅盘保持白`() {
+        // onDenied = Denied 实底上的内容色(M3 onError 语义;U2 反馈 C 类修复)。
+        // 深/黑客盘修复前白字坐 #F08580/#F87171 仅 2.51/2.77:1 → 换暗红棕
+        // #3A1514 后 6.45/5.85:1(≥4.5 WCAG AA);浅盘保持白字(对 #C94F4D
+        // 4.46:1,原型既有口径,本轮不回改)。深/黑客盘对 PaTheme 深色 error
+        // #FF453A 亦 4.75:1(两处 onError 消费同读本槽位)。
+        val lightPair = applyAndSnapshot(light, dark = false, hacker = false)
+        assertEquals("浅色盘 OnDenied 应保持白字", Color.White, lightPair["OnDenied"])
+        val darkPair = applyAndSnapshot(dark, dark = true, hacker = false)
+        val darkRatio = PaContrast.contrastRatio(darkPair["OnDenied"]!!, darkPair["Denied"]!!)
+        assertTrue("深色盘 OnDenied 对比率 $darkRatio 低于 4.5(AA)", darkRatio >= PaContrast.AA_TEXT)
+        val hackerPair = applyAndSnapshot(hacker, dark = true, hacker = true)
+        val hackerRatio = PaContrast.contrastRatio(hackerPair["OnDenied"]!!, hackerPair["Denied"]!!)
+        assertTrue("黑客盘 OnDenied 对比率 $hackerRatio 低于 4.5(AA)", hackerRatio >= PaContrast.AA_TEXT)
     }
 
     @Test

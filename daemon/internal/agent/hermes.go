@@ -230,6 +230,16 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 				log.Printf("[hermes] 写强度 %s 失败(沿用 config 现值): %v", e, werr)
 			} else {
 				log.Printf("[hermes] 思考强度已设为 %s(下轮会话生效)", e)
+				// 【用户可见反馈(H3)】强度没有运行时 RPC,本写入只影响"下一次
+				// 会话创建";手机此刻看不到 config.yaml,静默会让"我明明改了强度"
+				// 像没生效。写成功即发一条 STATUS 事件(手机端 codex 事件面板照常
+				// 渲染,hermes · 执行计划 同通道),如实说清生效时机。
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+					Kind:    pb.CodexEvent_STATUS,
+					Code:    "reasoning_effort_applied",
+					Title:   "hermes · 思考强度",
+					Message: fmt.Sprintf("已设为 %s,下轮会话生效", e),
+				}}})
 			}
 		} else {
 			log.Printf("[hermes] 强度 %s 不在 hermes 档位表(minimal..ultra),跳过写入", e)

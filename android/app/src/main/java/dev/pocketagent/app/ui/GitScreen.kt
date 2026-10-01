@@ -521,7 +521,8 @@ private fun GitScreenBody(
                                                     SwipeAction(
                                                         "discard", "丢弃",
                                                         AppR.drawable.ic_lucide_trash_2,
-                                                        Color.White, destructive = true,
+                                                        // 坐 Denied 实底,读 OnDenied 令牌
+                                                        PaEditorial.OnDenied, destructive = true,
                                                     ),
                                                 ),
                                                 onAction = { a ->
@@ -665,7 +666,8 @@ private fun GitScreenBody(
                     },
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                         containerColor = PaEditorial.Denied,
-                        contentColor = Color.White,
+                        // onError 语义:读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514)
+                        contentColor = PaEditorial.OnDenied,
                     ),
                     shape = RoundedCornerShape(14.dp),
                 ) {
