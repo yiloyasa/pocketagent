@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,9 +83,10 @@ import kotlinx.coroutines.launch
  * (ZCode 客户端左缘时间线)并做触屏翻译 —— 触屏没有 hover,"按住拖动"就是它的
  * 等价物:
  *
- *  - **A 按住拖动预览(丝滑核心)**:手指按住刻度条 → 紧凑预览气泡贴左缘浮出
- *    (55% 屏宽、120dp 单卡、靠左,不遮正文主体);上下拖动气泡**进度驱动**跟手,
- *    内容实时切换为手指处的用户消息;松手跳到那条;几乎没拖 = 取消只收气泡;
+ *  - **A 按住拖动 = 实时刷选(R1,Telegram date-bar 模式)**:手指按住刻度条 →
+ *    紧凑预览气泡贴左缘浮出(55% 屏宽、120dp 单卡、靠左,不遮正文主体);上下拖动
+ *    气泡**进度驱动**跟手,**列表同时实时滚动到手指所指**(宿主 requestScrollToItem,
+ *    非挂起逐帧安全)——"拖到哪看到哪",松手精确锚定;几乎没拖 = 取消只收气泡;
  *  - **B 轻点开浮层(去遮挡)**:预览出现前的快启轻点 → 完整列表,宽度
  *    78% → **62%**、scrim alpha 降到 **0.25**(隐约透出正文,强调"速查不是切页");
  *  - **C 不挡字硬保证**:刻度条视觉 10dp 全程在 23dp 页边距区内;气泡/浮层只在
@@ -247,6 +249,10 @@ fun HistoryTickBar(
     onJump: (Int) -> Unit,
     modifier: Modifier = Modifier,
     drag: HistoryDragState = remember { HistoryDragState() },
+    /** 【R1 实时刷选】预览中跨到新刻度(含回扫);宿主把列表立刻滚到该条。 */
+    onScrub: (Int) -> Unit = {},
+    /** 【R1 实时刷选】刷选收场(松手/取消/手势打断,指数回 -1):宿主复位程序滚动标记。 */
+    onScrubEnd: () -> Unit = {},
 ) {
     if (count <= 0) return
     val hacker = PaHacker.isHacker
@@ -272,9 +278,29 @@ fun HistoryTickBar(
     // 【触感分级】轻档统一走 PaHaptics.light(CLOCK_TICK):与 pressable(haptic)
     // 同强度,且同样跟随系统「触感反馈」总开关 —— 关了全局安静,不各自为政。
     val hapticView = LocalView.current
+    // 【实时刷选(Telegram date-bar 模式,2026-10-01 三轮深优 R1)】预览中跨过
+    // 刻度 → 宿主**立刻滚动列表**到那条 —— "预览→松手才跳"两段合一为"拖到哪
+    // 看到哪",与全局刷选手感对齐(宿主经 requestScrollToItem 逐帧安全滚动)。
+    // 【首指只记档】预览刚浮现时 scrubIndex=离按下点最近的刻度,这一跳不是用户
+    // 拖出来的 —— 直接滚会变成"按住 120ms 列表自己跳一格"的失控感;首个指数
+    // 只记档,之后每个**变化**才刷选(快扫时 slop 仅 ~21px,几乎无感损耗)。
+    // 回调经 rememberUpdatedState 转接,防重组换 lambda 掐断进行中的手势。
+    val hapticScrub by rememberUpdatedState(onScrub)
+    val hapticScrubEnd by rememberUpdatedState(onScrubEnd)
+    var firedScrub by remember { mutableIntStateOf(Int.MIN_VALUE) }
     LaunchedEffect(scrubIndex.value) {
-        if (scrubIndex.value >= 0) {
-            PaHaptics.light(hapticView)
+        val v = scrubIndex.value
+        if (v < 0) {
+            if (firedScrub != Int.MIN_VALUE) hapticScrubEnd()
+            firedScrub = Int.MIN_VALUE
+            return@LaunchedEffect
+        }
+        PaHaptics.light(hapticView)
+        if (firedScrub == Int.MIN_VALUE) {
+            firedScrub = v
+        } else if (v != firedScrub) {
+            hapticScrub(v)
+            firedScrub = v
         }
     }
     Box(
@@ -415,10 +441,11 @@ fun HistoryQuickBubble(
                     .padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 序号:第几条用户消息(1 起),等宽对齐,拖动扫过时不跳动
+                    // 序号:第几条/共几条(等宽对齐,拖动扫过时不跳动;实时刷选下
+                    // 气泡即"当前视口锚点"的元数据,给全量感)
                     Text(
-                        "${index + 1}",
-                        fontSize = 11.5.sp,
+                        HistoryQuickNavLogic.positionLabel(index, entries.size),
+                        fontSize = 11.sp,
                         color = PaEditorial.Primary,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = PaHacker.mono,

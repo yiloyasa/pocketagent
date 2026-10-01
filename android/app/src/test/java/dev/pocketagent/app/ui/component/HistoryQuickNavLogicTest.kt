@@ -351,4 +351,18 @@ class HistoryQuickNavLogicTest {
         g = HistoryQuickNavLogic.moved(g, 80f, dragSlopPx = 8f) // |dy| == 阈值
         assertTrue(released(g) is HistoryQuickNavLogic.NavRelease.Jump)
     }
+
+    @Test
+    fun `位置标签_N斜M_1起_越界钳制_空量回空`() {
+        // R1 实时刷选:气泡头部的全量感指示
+        assertEquals("1/6", HistoryQuickNavLogic.positionLabel(0, 6))
+        assertEquals("6/6", HistoryQuickNavLogic.positionLabel(5, 6))
+        assertEquals("3/6", HistoryQuickNavLogic.positionLabel(2, 6))
+        // 退场定格路径可能短暂越界:钳到界内,不出"7/6"
+        assertEquals("6/6", HistoryQuickNavLogic.positionLabel(9, 6))
+        assertEquals("1/6", HistoryQuickNavLogic.positionLabel(-3, 6))
+        // 无内容不摆壳
+        assertEquals("", HistoryQuickNavLogic.positionLabel(0, 0))
+        assertEquals("", HistoryQuickNavLogic.positionLabel(2, -1))
+    }
 }

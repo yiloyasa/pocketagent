@@ -2578,6 +2578,19 @@ fun ChatScreen(
         historyEntries.getOrNull(entryIndex)?.let { jumpToHistoryEntry(it.listIndex) }
     }
 
+    /**
+     * 【R1 实时刷选(Telegram date-bar 模式)】按住刻度条拖动,跨过刻度列表**立刻**
+     * 滚到那条 —— "预览→松手才跳"两段合一为"拖到哪看到哪"。滚动用
+     * requestScrollToItem(非挂起,可在手势中逐帧调用,不会与进行中的滚动冲突);
+     * 刷选即离开底部:解除跟随,程序滚动标记压住"距底观测"(onScrubEnd 复位)。
+     */
+    fun scrubToHistoryTick(entryIndex: Int) {
+        val entry = historyEntries.getOrNull(entryIndex) ?: return
+        programmaticScroll.set(true)
+        followBottom = false
+        listState.requestScrollToItem(entry.listIndex)
+    }
+
     // 距底观测:跟随状态只由"当前列表位置"裁定 —— 用户上滑出 100px 即解除跟随;
     // 手动滚回距底 100px 内即恢复跟随并清未读。程序滚动(带标记)不参与裁定。
     LaunchedEffect(listState) {
@@ -3942,15 +3955,17 @@ fun ChatScreen(
                 }
             }
         }
-            // 历史消息快速查看(视频样板二版):左缘垂直刻度条 —— 每条用户消息一个
-            // 刻度点(Canvas 一次绘制);轻点开完整列表浮层,按住拖动 = 预览气泡
-            // 跟手扫刻度、松手跳转。半透明、不遮内容,与「↓ N 条新内容」胶囊同层悬浮。
+            // 历史消息快速查看(视频样板二版+R1 实时刷选):左缘垂直刻度条 —— 每条
+            // 用户消息一个刻度点(Canvas 一次绘制);轻点开完整列表浮层;按住拖动 =
+            // 预览气泡跟手 + **列表实时滚动到手指所指**(拖到哪看到哪),松手精确锚定。
             HistoryTickBar(
                 count = historyEntries.size,
                 currentIndex = historyCurrentIndex,
                 drag = historyDrag,
                 onOpenPanel = { showHistoryPanel = true },
                 onJump = { entryIndex -> jumpToHistoryTick(entryIndex) },
+                onScrub = { entryIndex -> scrubToHistoryTick(entryIndex) },
+                onScrubEnd = { programmaticScroll.set(false) },
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     // 【真机修正 2026-10-01】本 Box 已被 PaScreenScaffold 收进 23dp

@@ -47,6 +47,13 @@ object HistoryQuickNavLogic {
         return truncate(firstLine, max)
     }
 
+    /**
+     * 预览气泡头部的位置指示:N/M(1 起,等宽字不跳动)。count<=0 回空串
+     * (无内容不摆壳);index 越界钳制(退场定格路径可能短暂越界)。
+     */
+    fun positionLabel(index: Int, count: Int): String =
+        if (count <= 0) "" else "${index.coerceIn(0, count - 1) + 1}/$count"
+
     /** 摘要截断:取首行之后的剩余内容,压成一行;空则回空串(卡片只显示标题)。 */
     fun summaryOf(text: String, max: Int = SUMMARY_MAX_CHARS): String {
         val rest = text.lineSequence().dropWhile { it.isBlank() }.drop(1)
