@@ -1555,12 +1555,15 @@ private fun ApprovalEntryCard(onOpen: () -> Unit) {
         Box(
             Modifier
                 .size(36.dp)
-                .background(Color(0xFFFFF0D7), RoundedCornerShape(13.dp)),
+                // 【三盘同构 2026-09-30】原硬编码浅盘值 #FFF0D7(图标盒)/#AC6A24(盾)/
+                // #99621E(副文),深/黑客盘的琥珀底已反相为暗琥珀,浅奶油盒压暗底
+                // 是漂移 —— 全部改走色盘:琥珀淡染/Attention/AttentionText。
+                .background(PaEditorial.Attention.copy(alpha = 0.12f), RoundedCornerShape(13.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painterResource(AppR.drawable.ic_lucide_shield), null,
-                tint = Color(0xFFAC6A24), modifier = Modifier.size(18.dp),
+                tint = PaEditorial.Attention, modifier = Modifier.size(18.dp),
             )
         }
         Spacer(Modifier.width(10.dp))
@@ -1575,7 +1578,7 @@ private fun ApprovalEntryCard(onOpen: () -> Unit) {
                 "查看操作范围和命令 · 点击处理",
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
-                color = Color(0xFF99621E),
+                color = PaEditorial.AttentionText,
             )
         }
         Icon(

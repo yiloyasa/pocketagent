@@ -59,6 +59,7 @@ import dev.pocketagent.app.ui.component.WebNavPolicy
 import dev.pocketagent.app.ui.component.humanSize
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import kotlinx.coroutines.Dispatchers
@@ -178,7 +179,8 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                 lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") ->
                 renderLocal(
                     "<body style=\"margin:0;background:" +
-                        (if (PaEditorial.IsDark) "#0b0b0d" else "#ffffff") +
+                        // 图片页底色与 pal().bg 同镜像(三盘同构,黑客盘纯黑基底)
+                        pal().bg +
                         ";display:flex;align-items:center;" +
                         "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
                         "max-height:100vh\" src=\"data:image/png;base64," +
@@ -740,7 +742,9 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     settings.allowFileAccess = false
                     settings.allowUniversalAccessFromFileURLs = false
                     settings.allowContentAccess = false
-                    setBackgroundColor(if (PaEditorial.IsDark) 0xFF0B0B0D.toInt() else 0xFFFFFFFF.toInt())
+                    // 加载闪屏底色与 pal().bg 同一 hex 镜像(三盘同构:浅=瓷白、
+                    // 深=#0F141C、黑客=#050507,不再单写一套 #0b0b0d)
+                    setBackgroundColor(android.graphics.Color.parseColor(pal().bg))
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView,
@@ -1063,19 +1067,32 @@ private fun stripPcMeta(raw: String): String {
 /** 内置页面(起始页 / 失败页 / 纯文本 / 二进制提示)的配色 —— 统一跟 App 主题走。
  *
  *  【为什么单独抽出来】这几个页面原本各自写死黑底浅字,浅色主题下点开文件会突然变黑,
- *  和系统里的查看器一对比就像两个 App。现在所有内置页共用一套取值,只改一处。 */
+ *  和系统里的查看器一对比就像两个 App。现在所有内置页共用一套取值,只改一处。
+ *
+ *  【三盘同构 2026-09-30】WebView 里用不了 Compose 令牌,这里放的是 PaEditorial
+ *  三盘槽位的 **hex 镜像**(浅盘=premium.css 原型值,深盘=apply(dark) 值,黑客盘
+ *  单列 —— 与 PaHacker 契约一致);浅盘 muted/subtle 同步 2026-09-30 对比度终审
+ *  后的加深值(#5F6C7C/#828B95),accent/danger 同样随盘(黑客=#22D3EE 电光青)。 */
 private class Pal(
     val bg: String, val fg: String, val heading: String,
     val muted: String, val subtle: String, val card: String, val hint: String,
+    val accent: String, val danger: String,
 )
 
-private fun pal(): Pal = if (PaEditorial.IsDark) Pal(
-    bg = "#0b0b0d", fg = "#e6e6e6", heading = "#ffffff",
-    muted = "#b9b9c0", subtle = "#9a9aa2", card = "#17171a", hint = "#7a7a82",
+// 判定顺序:黑客先于 IsDark(黑客盘 IsDark=true,先判 IsDark 会吞掉黑客分支)。
+private fun pal(): Pal = if (PaHacker.isHacker) Pal(
+    bg = "#050507", fg = "#e6e9ef", heading = "#e6e9ef",
+    muted = "#8b93a3", subtle = "#5b6372", card = "#0c0d11", hint = "#8b93a3",
+    accent = "#22d3ee", danger = "#f87171",
+) else if (PaEditorial.IsDark) Pal(
+    bg = "#0f141c", fg = "#e8edf4", heading = "#e8edf4",
+    muted = "#a2aebd", subtle = "#6b7887", card = "#161d28", hint = "#a2aebd",
+    accent = "#6c9bf2", danger = "#f08580",
 ) else Pal(
     // 浅色档 = 编辑式令牌(冷白画布/深墨正文/次级灰/瓷白卡),与迁移后的 chrome 同体系
     bg = "#f6f7f6", fg = "#19222d", heading = "#19222d",
-    muted = "#697788", subtle = "#98a3ae", card = "#ffffff", hint = "#697788",
+    muted = "#5f6c7c", subtle = "#828b95", card = "#ffffff", hint = "#5f6c7c",
+    accent = "#386be7", danger = "#c94f4d",
 )
 
 /** 起始页:不再是一张白纸。 */
@@ -1089,7 +1106,7 @@ private fun startPage(): String {
           会话里 agent 生成的网页、报告、图片都在这台电脑上,可以直接在 App 内打开。
         </div>
         <div style="margin-top:18px;background:${p.card};border-radius:14px;padding:14px">
-          <div style="color:#386be7;font-weight:600;font-size:13px">怎么用</div>
+          <div style="color:${p.accent};font-weight:600;font-size:13px">怎么用</div>
           <div style="margin-top:8px;color:${p.muted};font-size:12.5px">
             · 在会话里点那条文件路径,自动在这里打开<br>
             · 也可以把路径粘到上面的地址栏,例如
@@ -1108,7 +1125,7 @@ private fun errorPage(target: String, reason: String): String {
     return """
     <body style="margin:0;background:${p.bg};color:${p.fg};font:14px/1.7 system-ui,-apple-system,sans-serif">
       <div style="padding:22px 18px">
-        <div style="color:#c94f4d;font-size:17px;font-weight:600">打不开这个页面</div>
+        <div style="color:${p.danger};font-size:17px;font-weight:600">打不开这个页面</div>
         <div style="margin-top:10px;color:${p.muted};font-size:13px">${escapeHtml(reason)}</div>
         <div style="margin-top:14px;background:${p.card};border-radius:12px;padding:12px;
                     font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:${p.subtle}">
@@ -1143,7 +1160,7 @@ private fun binaryPage(name: String, size: Long, canDownload: Boolean): String {
         "font-size:14px;font-weight:600;text-decoration:none;margin:0 10px 10px 0"
     val buttons = buildString {
         if (canDownload) {
-            append("<a style=\"" + btn + ";background:#386be7;color:#ffffff\" " +
+            append("<a style=\"" + btn + ";background:${p.accent};color:#ffffff\" " +
                 "href=\"pa-action://download\">下载到手机</a>")
         }
         append("<a style=\"" + btn + ";background:${p.card};color:${p.fg}\" " +

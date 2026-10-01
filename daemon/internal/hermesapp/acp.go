@@ -249,9 +249,10 @@ func isNullJSON(raw json.RawMessage) bool {
 //	agent_message_chunk / agent_thought_chunk / tool_call / tool_call_update /
 //	plan —— 主投影五件套(Provider 消费);
 //	user_message_chunk(排队 prompt 回显 + load 历史回放)/ current_mode_update /
-//	available_commands_update / usage_update(上下文占用)/ session_info_update
-//	(标题/压缩轮转)—— 已知协议成员,逐变体具名解析(不再笼统静默),daemon
-//	暂无消费方的留字段待接;未知变体如实带 Raw 上抛(未知事件同一纪律)。
+//	available_commands_update / usage_update(上下文占用→ provider 投影为
+//	TurnServerMessage_Usage 发手机)/ session_info_update(标题/压缩轮转)
+//	—— 已知协议成员,逐变体具名解析(不再笼统静默),暂无消费方的留字段待接;
+//	未知变体如实带 Raw 上抛(未知事件同一纪律)。
 type StreamEvent struct {
 	SessionID string
 	// 以下按 Update 分类:
@@ -441,6 +442,36 @@ func (c *Client) Prompt(ctx context.Context, sessionID, text string) (string, er
 		return "", nil
 	}
 	return out.StopReason, nil
+}
+
+// ---- 轮次取消(session/cancel,ACP 通知)----
+// 【形状实证 2026-09-30】venv acp 包 agent/router.py:112 把 "session/cancel"
+// 路由为**通知**(无 id、无应答帧)到 server.py cancel:cancel_event.set() +
+// request_hard_interrupt(连同该会话的后台委派一并打断)。
+
+// CancelSession 发 session/cancel 通知,叫停一个正在跑的轮次。协议上没有受理
+// 回执 —— 返回错误仅代表写入失败/超时,"是否真停了"以 prompt 侧的终局应答
+// (stopReason=cancelled)或调用方自己的 ctx 返回为准。
+// 【超时安全】stdin 管道写串行(writeMu)且可能因适配器挂死不读而阻塞:按
+// 调用方 ctx 有界等待,超时即放弃。放弃的写 goroutine 可能仍占着 writeMu ——
+// 那时连接已无救,调用方会 Close 收尸;轮次收尾绝不能陪葬在取消帧上。
+func (c *Client) CancelSession(ctx context.Context, sessionID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- c.writeFrame(map[string]any{
+			"jsonrpc": "2.0", "method": "session/cancel",
+			"params": map[string]any{"sessionId": sessionID},
+		})
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ---- 反向请求(session/request_permission,审批桥的数据面)----

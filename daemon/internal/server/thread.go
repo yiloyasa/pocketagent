@@ -1115,7 +1115,10 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		defer approvals.remove(reqID)
 		// 原因文案跟着动作类型走(而不是对所有类型都写"危险操作"):
 		// 反问类请求被贴"危险操作"会让人误判出了事故。
+		// 【C1】provider 在卡 JSON 里带的 options/details(0.159.2 三按钮审批)
+		// 同步提升为结构化字段;旧手机忽略,行为不变(见 approval_options.go)。
 		request := &pb.ApprovalRequest{RequestId: reqID, Action: call, Reason: agent.ApprovalReason(call)}
+		request.Options, request.Details = approvalCardExtras(call)
 		approvals.attach(request)
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalRequest{ApprovalRequest: request}})
 		defer sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{RequestId: reqID, Note: "审批已结束"}}})
@@ -1123,7 +1126,9 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		defer waitCancel()
 		select {
 		case d := <-approvalCh:
-			return d.Approved, d.Note, nil
+			// 【C1】新端回填的 Decision.option(acceptForSession/cancel 等)包装成
+			// 信封并入 note 传给 provider;旧端 option 为空,note 原样透传。
+			return d.Approved, approvalNoteWithOption(d), nil
 		case <-waitCtx.Done():
 			return false, "", waitCtx.Err()
 		case <-streamRunCtx.Done():

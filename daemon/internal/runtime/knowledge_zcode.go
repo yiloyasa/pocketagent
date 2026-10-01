@@ -29,6 +29,11 @@
 //  5. 刻意不收:permission.requested/permission.resolved/userInput.requested/
 //     userInput.resolved 四件套(union 在,但投影形状需带审批的真实轮次实证,
 //     维持遗留⑤"证不出就留 UNKNOWN(不猜)")。
+//  6. 2026-09-30 预收编批:process/toolExecResource、plugins/operationProgress、
+//     interaction/providerRuntimeHeadersCancelled 三名在 bundle 顶层通知注册表
+//     静态在案、探针无实测帧 —— 按 process/* 遥测家族口径预收编 PASSTHROUGH,
+//     分类侧(zcodeNoticeKind)与词表同批落位,未来出现即已知不灌 UNKNOWN;
+//     措辞按通知名直译,实测帧到手后再校准。
 
 package runtime
 
@@ -92,4 +97,12 @@ var zcodeEventSummaries = map[string]string{
 	"zcode\x1fv4/telemetry/event":                        "ZCode 上报了内核遥测(模型请求状态/轮次终态等诊断数据,daemon 只留痕)",
 	"zcode\x1fcomputer-use/operation-event":              "ZCode 上报了桌面端轮次操作镜像事件(诊断数据,daemon 只留痕)",
 	"zcode\x1finteraction/requestOfficialMcpAuthHeaders": "ZCode 反问官方 MCP 鉴权头(桌面端职责,daemon 已按协议错误安全拒绝)",
+
+	// ---- 2026-09-30 预收编批:bundle 顶层通知注册表静态在案、暂无实测帧(证据分级:静态)----
+	// 主模型裁决:按 process/* 遥测家族同款口径预收编为 PASSTHROUGH —— 未来真出现
+	// 即已知,不再灌 UNKNOWN。措辞按通知名直译+家族同款(诊断数据/只留痕),载荷
+	// 到手后以 Detail 的"以原文为准"红线兜底,届时可按实测校准。
+	"zcode\x1fprocess/toolExecResource":                     "ZCode 上报了工具执行资源采样(诊断数据,daemon 只留痕)",
+	"zcode\x1fplugins/operationProgress":                    "ZCode 上报了插件操作进度(诊断数据,daemon 只留痕)",
+	"zcode\x1finteraction/providerRuntimeHeadersCancelled":  "ZCode 通知提供方运行时鉴权头流程已取消(桌面端职责域,daemon 只留痕)",
 }

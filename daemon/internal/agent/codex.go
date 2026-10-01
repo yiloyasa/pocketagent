@@ -960,20 +960,21 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id int64
 	// 把挂着的审批卡撤下去 —— 否则就是一张点不动也没意义的"幽灵审批卡"。
 	resolved := p.registerPendingServerRequest(id)
 	type approveOut struct {
-		allow bool
-		note  string
-		err   error
+		allow  bool
+		choice approvalChoice
+		err    error
 	}
 	outCh := make(chan approveOut, 1)
 	go func() {
 		a, n, e := approve(ctx, call)
-		outCh <- approveOut{a, n, e}
+		outCh <- approveOut{allow: a, choice: parseApprovalChoice(n), err: e}
 	}()
-	allow, note := false, ""
+	allow := false
+	choice := approvalChoice{}
 	askErr := error(nil)
 	select {
 	case out := <-outCh:
-		allow, note, askErr = out.allow, out.note, out.err
+		allow, choice, askErr = out.allow, out.choice, out.err
 	case <-resolved:
 		// 迟到的手机应答会落进 outCh(带缓冲),由 GC 回收,无泄漏。
 		log.Printf("[codex] 反向请求 %s(id=%d)已在桌面端被解决,不再等待手机审批", method, id)
@@ -995,9 +996,20 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id int64
 	}
 
 	// 【第三条规则】应答形状按方法名走,尤其旧版审批用 approved/denied 而不是 accept/decline。
+	// 【0.159.2 三按钮】choice.Option 非空时按选项翻译:acceptForSession =
+	// 允许且本会话内同类请求不再询问(旧版 approved_for_session);cancel =
+	// 拒绝且**立即中止本轮** —— codex 收到该枚举后自己打断当前轮次
+	// (schema: "The turn will also be immediately interrupted."),
+	// daemon 不再另发停止指令,避免双重中止。旧手机不带选项,行为一字不变。
 	switch kind {
 	case reqApprovalCommand, reqApprovalFileChange, reqApprovalPatch:
-		_ = rsp.Respond(id, map[string]string{"decision": approvalDecision(method, allow)})
+		decision := codexApprovalDecision(method, choice.Option, allow)
+		if choice.Option == optCancel || choice.Option == optAbort {
+			log.Printf("[codex] 用户拒绝并中止本轮, %s 回 decision=%q(上游将打断当前轮次)", method, decision)
+		} else if choice.Option == optAcceptSession || choice.Option == optApprovedSession {
+			log.Printf("[codex] 用户允许且本会话内同类请求不再询问, %s 回 decision=%q", method, decision)
+		}
+		_ = rsp.Respond(id, map[string]string{"decision": decision})
 
 	case reqApprovalPermissions:
 		if allow {
@@ -1017,7 +1029,8 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id int64
 		var a askUserParams
 		_ = json.Unmarshal(params, &a)
 		// 手机端的答案放在 ApprovalDecision.note 里(JSON),这里原样转成 answers。
-		_ = rsp.Respond(id, map[string]interface{}{"answers": splitAnswerNote(note, a.Questions)})
+		// 用 choice.Note:若 note 恰是选项信封(不该发生),剥完再解析。
+		_ = rsp.Respond(id, map[string]interface{}{"answers": splitAnswerNote(choice.Note, a.Questions)})
 
 	case reqAskMcp:
 		action := "decline"

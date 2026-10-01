@@ -652,6 +652,87 @@ func TestDshUnknownReverseRequestNoFabricatedDecision(t *testing.T) {
 	}
 }
 
+// TestDshApprovalLivePermwriteFrame 逐字段对账 2026-09-30 permwrite 探针原始帧
+// (docs/verify/evidence/2026-09-30/dsh-live/dshlive_permwrite.md 第 38 行):
+// 请求 = sessionId + toolCall 只带 toolCallId(无 title/kind/rawInput)+ options
+// 双项(allow_once/reject_once,requestKind/kind 均缺席);应答 =
+// outcome={outcome:"selected",optionId}。全链路 allow 路应答的 optionId 必须
+// 精确等于 allow-once(地面真值,防形状漂移回归)。
+func TestDshApprovalLivePermwriteFrame(t *testing.T) {
+	liveFrame := `{"sessionId":"22384808-33f5-4391-aa2f-9825e9fbc19b","toolCall":{"toolCallId":"call_00_VynocbqY0xbNQpSM3ps63707"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}`
+	fake, done, free := runWithPendingApproval(t, func(context.Context, *pb.ToolCallBlock) (bool, string, error) {
+		return true, "", nil
+	})
+	fake.reqFn(11, "session/request_permission", json.RawMessage(liveFrame))
+	free()
+	if err := <-done; err != nil {
+		t.Fatalf("Run 应成功: %v", err)
+	}
+	snap := fake.snapshot()
+	if len(snap.responds) != 1 || snap.responds[0].isError {
+		t.Fatalf("live 帧应按成功应答回 outcome: %+v", snap.responds)
+	}
+	b, _ := json.Marshal(snap.responds[0].result)
+	want := `{"outcome":{"optionId":"allow-once","outcome":"selected"}}`
+	if string(b) != want {
+		t.Fatalf("live 帧 allow 应答与探针地面真值不符:\n got=%s\nwant=%s", b, want)
+	}
+}
+
+// TestDshPermissionRequestKindDualShape 双形状兼容:实测帧无 kind/requestKind,
+// 规范侧写 requestKind、旧蓝本写 kind —— 两者都解析,展示取先到者;应答选择
+// 只认 options[].kind,不受该字段影响。
+func TestDshPermissionRequestKindDualShape(t *testing.T) {
+	both := []byte(`{"sessionId":"s1","requestKind":"write","kind":"tool","options":[
+		{"optionId":"ok1","name":"Allow","kind":"allow_once"},
+		{"optionId":"no1","name":"Reject","kind":"reject_once"}]}`)
+	p, err := dshapp.ParseRequestPermission(both)
+	if err != nil {
+		t.Fatalf("双形状参数应可解析: %v", err)
+	}
+	if p.DisplayKind() != "tool" {
+		t.Fatalf("实侧 kind 优先: %q", p.DisplayKind())
+	}
+	onlySpec := []byte(`{"sessionId":"s1","requestKind":"write","options":[
+		{"optionId":"ok1","name":"Allow","kind":"allow_once"},
+		{"optionId":"no1","name":"Reject","kind":"reject_once"}]}`)
+	p2, _ := dshapp.ParseRequestPermission(onlySpec)
+	if p2.DisplayKind() != "write" {
+		t.Fatalf("仅 requestKind 时应回退取它: %q", p2.DisplayKind())
+	}
+	absent := []byte(permParams) // 探针实帧:两字段均缺席
+	p3, _ := dshapp.ParseRequestPermission(absent)
+	if p3.DisplayKind() != "" {
+		t.Fatalf("两字段缺席应为空串: %q", p3.DisplayKind())
+	}
+	if p3.AllowOptionID() != "allow-once" || p3.RejectOptionID() != "reject-once" {
+		t.Fatalf("缺席不影响选项选择: %q %q", p3.AllowOptionID(), p3.RejectOptionID())
+	}
+	// 审批卡:live 实帧 toolCall 只有 toolCallId → id 取它,name 兜底通用名。
+	card := buildDshPermissionCall(p3)
+	if card.GetId() != "dsh-permission" {
+		// permParams 无 toolCall → id 保持默认;live 帧单独验:
+		t.Fatalf("无 toolCall 时 id 应为默认: %q", card.GetId())
+	}
+	liveCard := buildDshPermissionCardFromLiveFrame(t)
+	if liveCard.GetId() != "call_00_VynocbqY0xbNQpSM3ps63707" || liveCard.GetName() != "dsh_permission" {
+		t.Fatalf("live 帧 toolCallId 应作卡 id、title 缺席回退通用名: id=%q name=%q", liveCard.GetId(), liveCard.GetName())
+	}
+}
+
+// buildDshPermissionCardFromLiveFrame 用 permwrite 探针 live 帧构造审批卡。
+func buildDshPermissionCardFromLiveFrame(t *testing.T) *pb.ToolCallBlock {
+	t.Helper()
+	live := `{"sessionId":"s","toolCall":{"toolCallId":"call_00_VynocbqY0xbNQpSM3ps63707"},"options":[
+		{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},
+		{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}`
+	perm, err := dshapp.ParseRequestPermission(json.RawMessage(live))
+	if err != nil {
+		t.Fatalf("live 帧应可解析: %v", err)
+	}
+	return buildDshPermissionCall(perm)
+}
+
 // ---- 事件映射:未知变体透传 / HideReasoning / 图片门控 ----
 
 // TestDshUnknownUpdateVariantPassthrough 探针修正⑤:未知变体原样透传进诊断

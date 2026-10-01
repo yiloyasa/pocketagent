@@ -79,7 +79,9 @@ func SetReasoningEffort(effort string) error {
 
 type hermesHomeError struct{}
 
-func (hermesHomeError) Error() string { return "hermes 家目录不可定位(HERMES_HOME 未设且无用户家)" }
+func (hermesHomeError) Error() string {
+	return "hermes 家目录不可定位(HERMES_HOME 未设且无用户家)"
+}
 
 var errNoHermesHome = hermesHomeError{}
 

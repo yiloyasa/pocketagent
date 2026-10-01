@@ -90,14 +90,16 @@ object PcFilePreview {
 
     /** 预览页配色:一次取齐,渲染器不再各自写死颜色。
      *  浅色档 = 编辑式令牌(PaEditorial:冷白画布/深墨正文/细线/主色 #386BE7),
-     *  与逐页迁移后的 chrome 同一套体系;深色档维持原深色盘(内容区跟显示模式)。 */
+     *  与逐页迁移后的 chrome 同一套体系(muted/faint 已同步 2026-09-30 对比度
+     *  终审加深值 #5F6C7C/#828B95);深色档维持原深色盘(内容区跟显示模式,
+     *  黑客终端经布尔 dark 归入本档 —— PaHacker 契约:黑客盘 IsDark=true)。 */
     private class Pal(dark: Boolean) {
         val dark = dark
         val bg = if (dark) "#0b0b0d" else "#ffffff"
         val text = if (dark) "#e6e6e6" else "#19222d"
         val title = if (dark) "#ffffff" else "#19222d"
-        val muted = if (dark) "#9a9aa2" else "#697788"
-        val faint = if (dark) "#7a7a82" else "#98a3ae"
+        val muted = if (dark) "#9a9aa2" else "#5f6c7c"
+        val faint = if (dark) "#7a7a82" else "#828b95"
         val border = if (dark) "#2a2a30" else "#e3e7eb"
         val thead = if (dark) "#17171a" else "#edf0f2"
         val zebra = if (dark) "#121215" else "#fafbfc"

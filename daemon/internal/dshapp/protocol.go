@@ -458,14 +458,27 @@ func parseEffortValues(raw json.RawMessage) []string {
 
 // ---- 反向请求(session/request_permission,审批桥的数据面)----
 
-// RequestPermissionParams 是反向请求参数(受缺 key 阻塞,形状按 ACP v1 规范 +
-// 蓝本 §4.3;真机待验,字段读取全部容错,解析失败走显式报错路径)。
+// RequestPermissionParams 是反向请求参数(形状按 2026-09-30 permwrite 探针实帧:
+// {"sessionId","toolCall":{"toolCallId"},"options":[{optionId,name,kind}]};
+// requestKind 实测缺席/空,容错兼容:字段读取全部容错,解析失败走显式报错路径)。
 type RequestPermissionParams struct {
 	SessionID string              `json:"sessionId"`
 	ToolCall  *PermissionToolCall `json:"toolCall,omitempty"`
 	Options   []PermissionOption  `json:"options"`
 	Kind      string              `json:"kind,omitempty"`
-	Raw       json.RawMessage     `json:"-"`
+	// RequestKind 是 ACP 规范侧的同类字段(蓝本/规范写 requestKind,探针实帧缺席)。
+	// 双形状兼容:解析出来仅供审批卡展示,选择 allow/reject 只认 options[].kind。
+	RequestKind string          `json:"requestKind,omitempty"`
+	Raw         json.RawMessage `json:"-"`
+}
+
+// DisplayKind 返回审批卡展示用的请求类别:实测 kind 与规范 requestKind 双形状,
+// 取先到者,都缺给空串(展示层自行兜底,不影响应答)。
+func (p *RequestPermissionParams) DisplayKind() string {
+	if p.Kind != "" {
+		return p.Kind
+	}
+	return p.RequestKind
 }
 
 // PermissionToolCall 是请求里的可选工具上下文(ACP v1:toolCall 可缺席)。

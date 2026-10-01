@@ -1540,7 +1540,7 @@ func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, p
 // 参数原样透出,绝不编造具体命令。
 func buildDshPermissionCall(perm *dshapp.RequestPermissionParams) *pb.ToolCallBlock {
 	id, name := "dsh-permission", "dsh_permission"
-	args := map[string]interface{}{"kind": perm.Kind}
+	args := map[string]interface{}{"kind": perm.DisplayKind()}
 	if perm.ToolCall != nil {
 		if perm.ToolCall.ToolCallID != "" {
 			id = perm.ToolCall.ToolCallID

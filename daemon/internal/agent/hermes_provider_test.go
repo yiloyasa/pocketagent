@@ -35,6 +35,7 @@ type fakeHermesClient struct {
 	loadArgs                                                [][2]string
 	loadSeenNotifHandlers                                   int // load 期间装的弃帧收集器应有
 	promptSids, promptTexts                                 []string
+	cancelCalls                                             []string // session/cancel 的记账(H1 看门狗钉子;方法在 hermes_cancel_test.go)
 
 	notifFn func(json.RawMessage)
 	reqFn   func(int64, string, json.RawMessage)

@@ -2913,7 +2913,10 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                         .weight(1f)
                         .pressable { onDismiss() }
                         .background(PaEditorial.DeniedContainer, RoundedCornerShape(14.dp))
-                        .border(1.dp, Color(0xFFE9CFCA), RoundedCornerShape(14.dp))
+                        // 【三盘同构 2026-09-30】描边原硬编码浅盘值 #E9CFCA,深/黑客盘
+                        // 的 DeniedContainer 已反相为暗底,浅粉描边刺眼 —— 对齐
+                        // PaApprovalDialog 拒绝卡的既有口径:Denied 30% 淡染。
+                        .border(1.dp, PaEditorial.Denied.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) { Text("拒绝(示例)", fontSize = 15.sp, color = EditorialTone.DENIED.text) }

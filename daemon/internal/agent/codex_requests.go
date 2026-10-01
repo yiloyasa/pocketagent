@@ -19,6 +19,7 @@ package agent
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
@@ -113,20 +114,211 @@ func approvalDecision(method string, allow bool) string {
 	return "decline"
 }
 
+// codex 0.159.2 审批应答枚举(按协议形态分新旧两套,精确字符串以
+// codex-schema/CommandExecutionRequestApprovalResponse.json 与
+// ExecCommandApprovalResponse.json 为准):
+//
+//	新版(item/* 命名空间):accept / acceptForSession / cancel /
+//	                       acceptWithExecpolicyAmendment{...} / decline
+//	旧版(顶层 camelCase):  approved / approved_for_session / abort /
+//	                       approved_execpolicy_amendment{...} / denied
+//
+// acceptForSession = 允许且本会话内同类请求不再询问;cancel / abort =
+// 拒绝且立即中止当前轮次(codex 侧收到后自己打断,daemon 不再另发停止指令)。
+const (
+	optAccept          = "accept"
+	optAcceptSession   = "acceptForSession"
+	optDecline         = "decline"
+	optCancel          = "cancel"
+	optApproved        = "approved"
+	optApprovedSession = "approved_for_session"
+	optDenied          = "denied"
+	optAbort           = "abort"
+)
+
+// codexApprovalDecision 把(允许?, 选项 id)翻译成该协议版本的 decision 值。
+// option 为空 = 旧手机两按钮,行为与 approvalDecision 完全一致;
+// option 非空时以选项为准(手机按钮 id 与应答枚举一一对应,approved 布尔
+// 只作参考)。未知 option 一律退回 approved 布尔,绝不猜。
+func codexApprovalDecision(method, option string, allow bool) string {
+	switch option {
+	case optAcceptSession, optApprovedSession:
+		if isLegacyApproval(method) {
+			return optApprovedSession
+		}
+		return optAcceptSession
+	case optCancel, optAbort:
+		if isLegacyApproval(method) {
+			return optAbort
+		}
+		return optCancel
+	}
+	return approvalDecision(method, allow)
+}
+
+// approvalChoice 从手机应答里解析出的"选项"。
+type approvalChoice struct {
+	Option string // 选项 id(accept/acceptForSession/cancel/...),空 = 旧端两按钮
+	Note   string // 剥离信封后的原始 note(自由文本或反问答案 JSON)
+}
+
+// parseApprovalChoice 从审批应答的 note 里解析三按钮选项。
+//
+// 【为什么藏在 note 里】ApprovalHook 的签名是 (bool, string, error),跨
+// provider 共用,不能为 codex 一个家改动;note 本来就是自由文本通道
+// (反问卡的答案 JSON 也走它),再搭载一个信封是既有模式的延续。
+// 两种来源都归一在这里:
+//  1. server 把新端回填的 ApprovalDecision.option 包装成
+//     {"option":"...","note":"..."} 信封并入 note;
+//  2. 手机端(不经 server 包装的路径)直接把同样的信封写进 note。
+//
+// 只有当 note 是"恰含字符串 option 键(可另带字符串 note 键)"的 JSON 对象时
+// 才视为信封:反问卡答案 {"<qid>":{"answers":[...]}} 、{"option":{...}} 这类
+// 一律原样放行,绝不错杀用户的真实回答。解析失败 = 旧端纯文本,原样返回。
+func parseApprovalChoice(note string) approvalChoice {
+	choice := approvalChoice{Note: note}
+	trimmed := strings.TrimSpace(note)
+	if !strings.HasPrefix(trimmed, "{") {
+		return choice
+	}
+	var env struct {
+		Option *string `json:"option"`
+		Note   *string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &env); err != nil || env.Option == nil {
+		return choice
+	}
+	// 确认除 option/note 外没有别的键:有别的键说明这是业务 JSON(如反问答案),
+	// 不是信封 —— 原样放行。
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &keys); err != nil {
+		return choice
+	}
+	if len(keys) != 1 && !(len(keys) == 2 && env.Note != nil) {
+		return choice
+	}
+	choice.Option = *env.Option
+	if env.Note != nil {
+		choice.Note = *env.Note
+	} else {
+		choice.Note = ""
+	}
+	return choice
+}
+
+// codexApprovalOptions 审批卡的三个可选项(卡 JSON "options" 键,同时经
+// server 提升为 ApprovalRequest.options 结构化字段)。
+// id 用 codex 应答枚举原词:新端按钮回填 ApprovalDecision.option 后由
+// codexApprovalDecision 原样翻译;旧手机忽略未知键,仍渲染两按钮。
+// cancel/abort(拒绝并中止)是合法应答值但**不**作为第三按钮广告 ——
+// 第三按钮按方案是"本次及本会话允许";中止入口留给后续 UI 轮决策。
+func codexApprovalOptions(method string) []map[string]string {
+	sessionOpt, denyOpt := optAcceptSession, optDecline
+	if isLegacyApproval(method) {
+		sessionOpt, denyOpt = optApprovedSession, optDenied
+	}
+	return []map[string]string{
+		{"id": approvalDecision(method, true), "label": "允许", "description": "仅本次执行"},
+		{"id": sessionOpt, "label": "本次及本会话允许", "description": "本会话内同类请求不再询问"},
+		{"id": denyOpt, "label": "拒绝", "description": "告知 agent 换其他做法"},
+	}
+}
+
+// codexCommandAction schema CommandAction 的只读视图(只取人话需要的字段;
+// path/query 在 schema 里可空,解析不到就是零值)。
+type codexCommandAction struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Query   string `json:"query"`
+}
+
+// codexCommandActionText 把一个 CommandAction 翻成半句话,如
+// 读取「name」(path)/ 列出目录 path / 在 path 搜索「query」/ 执行命令。
+func codexCommandActionText(a codexCommandAction) string {
+	switch a.Type {
+	case "read":
+		if a.Name != "" && a.Path != "" {
+			return "读取「" + a.Name + "」(" + a.Path + ")"
+		}
+		if a.Name != "" {
+			return "读取「" + a.Name + "」"
+		}
+		return "读取文件"
+	case "listFiles":
+		if a.Path != "" {
+			return "列出目录 " + a.Path
+		}
+		return "列出目录内容"
+	case "search":
+		if a.Query != "" {
+			return "搜索「" + a.Query + "」"
+		}
+		return "执行搜索"
+	default:
+		return "执行命令"
+	}
+}
+
+// codexCommandDetails 把 0.159.2 新增的 proposedExecpolicyAmendment /
+// commandActions 拼成审批卡的人话详情文案。两者都缺时返回空串,卡上不加
+// details 键(老版 codex 的卡片内容一字不变)。只拼文案,不做结构化 UI。
+func codexCommandDetails(a *commandApprovalParams) string {
+	parts := make([]string, 0, 2)
+	if len(a.CommandActions) > 0 {
+		fragments := make([]string, 0, len(a.CommandActions))
+		for _, raw := range a.CommandActions {
+			var act codexCommandAction
+			if json.Unmarshal(raw, &act) != nil {
+				continue
+			}
+			fragments = append(fragments, codexCommandActionText(act))
+		}
+		if len(fragments) > 0 {
+			const maxShow = 5
+			shown := fragments
+			if len(shown) > maxShow {
+				shown = shown[:maxShow]
+			}
+			text := "这条命令会:" + strings.Join(shown, "、")
+			if len(fragments) > maxShow {
+				text += "等 " + strconv.Itoa(len(fragments)) + " 项操作"
+			}
+			parts = append(parts, text)
+		}
+	}
+	if len(a.ProposedExecpolicyAmendment) > 0 {
+		example := ""
+		if a.ProposedExecpolicyAmendment[0] != "" {
+			example = "(如「" + a.ProposedExecpolicyAmendment[0] + "」)"
+		}
+		parts = append(parts, "上游提议把 "+strconv.Itoa(len(a.ProposedExecpolicyAmendment))+
+			" 条命令规则加入本会话免审批清单"+example+";选择「本次及本会话允许」即接受,同类命令之后不再询问")
+	}
+	return strings.Join(parts, "。")
+}
+
 // ---- 各类请求的参数结构(只声明我们用得到的字段) ----
 
 // commandApprovalParams 同时覆盖 v2 的 item/commandExecution/requestApproval
 // 与旧版 execCommandApproval(v2 用 itemId,旧版用 callId)。
 // Kind 是 0.159.2 新增字段:"command"(默认,老服务端不带)= 审批一条新命令;
 // "writeStdin" = 请求向运行中的终端写入输入(schema 有 default,解析不到不报错)。
+// ProposedExecpolicyAmendment / CommandActions 也是 0.159.2 新增(schema
+// CommandExecutionRequestApprovalParams):前者是上游提议的"本会话免审批"规则,
+// 后者是服务端尽力解析出的命令动作(read/listFiles/search)—— 都只用于拼
+// 审批卡的人话详情,不做结构化 UI。
 type commandApprovalParams struct {
-	ApprovalId string          `json:"approvalId"`
-	CallId     string          `json:"callId"`
-	ItemId     string          `json:"itemId"`
-	Kind       string          `json:"kind"`
-	Command    json.RawMessage `json:"command"` // 新版字符串 / 旧版数组,都兼容
-	Cwd        string          `json:"cwd"`
-	Reason     string          `json:"reason"`
+	ApprovalId                  string            `json:"approvalId"`
+	CallId                      string            `json:"callId"`
+	ItemId                      string            `json:"itemId"`
+	Kind                        string            `json:"kind"`
+	Command                     json.RawMessage   `json:"command"` // 新版字符串 / 旧版数组,都兼容
+	Cwd                         string            `json:"cwd"`
+	Reason                      string            `json:"reason"`
+	ProposedExecpolicyAmendment []string          `json:"proposedExecpolicyAmendment"`
+	CommandActions              []json.RawMessage `json:"commandActions"`
 }
 
 // fileChangeApprovalParams v2 的文件变更审批。注意它**不带**文件列表 ——
@@ -201,26 +393,36 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 		}
 		// 0.159.2 kind=writeStdin:向已运行终端写入 stdin 的审批,与"执行新命令"
 		// 是两种动作,卡片如实分开 —— 用户该知道他批准的是"写输入",不是跑命令。
-		// 应答形状两种 kind 相同(accept/decline,Response schema 未变),无需分叉。
+		// 应答形状两种 kind 相同(同一 CommandExecutionApprovalDecision 枚举,
+		// 含 acceptForSession/cancel),三选项卡同样适用。
 		if a.Kind == "writeStdin" {
 			return &pb.ToolCallBlock{
 				Id:   id,
 				Name: toolNameWriteStdin,
 				JsonArgs: mustJSON(map[string]interface{}{
-					"kind":   a.Kind,
-					"reason": a.Reason,
+					"kind":    a.Kind,
+					"reason":  a.Reason,
+					"options": codexApprovalOptions(method),
 				}),
 			}
 		}
+		args := map[string]interface{}{
+			"kind":    a.Kind,
+			"command": approvalCommand(a.Command),
+			"cwd":     a.Cwd,
+			"reason":  a.Reason,
+			// 0.159.2 三按钮:允许 / 本次及本会话允许 / 拒绝。
+			// 旧手机忽略未知键仍两按钮;新手机按 options 渲染第三按钮。
+			"options": codexApprovalOptions(method),
+		}
+		// proposedExecpolicyAmendment / commandActions 只拼人话详情(无则不加键)。
+		if details := codexCommandDetails(&a); details != "" {
+			args["details"] = details
+		}
 		return &pb.ToolCallBlock{
-			Id:   id,
-			Name: toolNameShell,
-			JsonArgs: mustJSON(map[string]interface{}{
-				"kind":    a.Kind,
-				"command": approvalCommand(a.Command),
-				"cwd":     a.Cwd,
-				"reason":  a.Reason,
-			}),
+			Id:       id,
+			Name:     toolNameShell,
+			JsonArgs: mustJSON(args),
 		}
 
 	case reqApprovalFileChange:
@@ -234,6 +436,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 				"count":     len(changedFiles),
 				"reason":    a.Reason,
 				"grantRoot": a.GrantRoot,
+				"options":   codexApprovalOptions(method),
 			}),
 		}
 
@@ -257,6 +460,7 @@ func buildApprovalCall(kind codexRequestKind, method string, params json.RawMess
 				"count":     len(paths),
 				"reason":    a.Reason,
 				"grantRoot": a.GrantRoot,
+				"options":   codexApprovalOptions(method),
 			}),
 		}
 

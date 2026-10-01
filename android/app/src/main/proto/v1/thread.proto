@@ -566,6 +566,12 @@ message ApprovalDecision {
   string request_id = 1;
   bool approved = 2;
   string note = 3;  // 拒绝时的说明,agent 可见
+  // ---- C1 只增不改 ----
+  // 新端三按钮时填选项 id(与卡 options[].id 对应,如 acceptForSession /
+  // cancel);为空 = 旧端 approved/note 语义,daemon 行为一字不变。
+  // daemon 会把它与 note 包装成 {"option":..,"note":..} 信封并入 note 传给
+  // provider,provider 侧解析(见 agent.parseApprovalChoice)。
+  string option = 4;
 }
 
 message CancelSignal { string reason = 1; }
@@ -729,11 +735,27 @@ message ToolCallUpdate {
   ToolResultBlock result = 3;
 }
 
+// ApprovalOption 审批卡上的一个可选项(C1:codex 0.159.2 三按钮审批增量)。
+// daemon 在审批卡 JSON(action.json_args)里同步带同样的 options/details;
+// 旧手机对未知 proto 字段与未知 JSON 键都忽略,仍按 approved 双按钮渲染,
+// 新手机读 options 渲染第三按钮 —— 新旧端互不破坏。
+message ApprovalOption {
+  // 选项 id,codex 应答枚举原词(accept / acceptForSession / decline,
+  // 旧版 approved / approved_for_session / denied)。应答时原样回填
+  // ApprovalDecision.option,daemon 按协议版本翻译。
+  string id = 1;
+  string label = 2;       // 按钮文案,如"本次及本会话允许"
+  string description = 3; // 次级说明,如"本会话内同类请求不再询问"
+}
+
 message ApprovalRequest {
   string request_id = 1;
   // 需要审批的动作描述,如即将执行的命令 / 将写入的文件
   ToolCallBlock action = 2;
   string reason = 3;   // agent 给出的理由
+  // ---- C1 只增不改:4~5 为 codex 0.159.2 三按钮审批新增 ----
+  repeated ApprovalOption options = 4; // 可选项列表(旧端忽略,仍见两按钮)
+  string details = 5;                  // 人话详情(proposedExecpolicyAmendment / commandActions 摘要)
 }
 
 message UsageUpdate {

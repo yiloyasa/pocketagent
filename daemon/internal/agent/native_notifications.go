@@ -303,6 +303,16 @@ func piNoticeKind(eventType string) string {
 // interaction/requestOfficialMcpAuthHeaders **不进本表**:它是反向请求,走
 // zcode.go reqHandler 兜底硬编码 UNKNOWN_REQUEST 登记(zcode 侧尚无 request
 // 分类器,已知拒答也如实入账),人话由词表读时翻译 —— 本表只管通知。
+//
+// 【2026-09-30 预收编批(证据:bundle 顶层通知注册表静态在案;无实测帧,证据
+// 分级:静态,与 session.titleUpdated 首次收编同款口径)】process/toolExecResource、
+// plugins/operationProgress、interaction/providerRuntimeHeadersCancelled 三个名字
+// 在注册表在案但探针从未抓到帧。主模型裁决:按 process/* 遥测家族同款口径
+// **预收编**为 PASSTHROUGH(只留痕不投影)—— 未来真出现即已知、直接吃词表人话,
+// 不再灌 UNKNOWN 挤占滚动窗。其中 interaction/providerRuntimeHeadersCancelled 虽在
+// interaction/* 名域,但它是**通知**(注册表在案),与反向请求
+// interaction/requestOfficialMcpAuthHeaders(刻意不入本表)不是一路 —— "本表只管
+// 通知"的边界不变。
 func zcodeNoticeKind(method string) string {
 	switch method {
 	case "state.updated", "session.updated", "settings.updated", "session.modelUpdated",
@@ -315,7 +325,10 @@ func zcodeNoticeKind(method string) string {
 		"checkpoint.created", "rewind.triggered",
 		"usage.delta", "subagent.lifecycle", "turn.terminal",
 		"process/resourceSample", "process/mcpResourceSamples",
-		"process/mcpTelemetry", "startup/storageState",
+		"process/mcpTelemetry", "process/toolExecResource",
+		"plugins/operationProgress",
+		"interaction/providerRuntimeHeadersCancelled",
+		"startup/storageState",
 		"message.upserted", "message.removed",
 		"part.started", "part.delta", "part.upserted", "part.removed",
 		"streamRecovery.updated",

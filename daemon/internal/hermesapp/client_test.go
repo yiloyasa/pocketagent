@@ -150,7 +150,19 @@ func TestFakeHermesHelperProcess(t *testing.T) {
 			notify("session/update", `{"sessionId":"fake-sess-1","update":{"sessionUpdate":"usage_update","size":1000,"used":42}}`)
 			notify("session/update", `{"sessionId":"fake-sess-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"完成"}}}`)
 			respond(*m.ID, map[string]any{"stopReason": "end_turn"})
+		case "session/cancel":
+			// ACP:取消是通知(无 id、无应答)。回显一帧 current_mode_update
+			// 供端到端断言(cancel 发出且适配器活着)。
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			notify("session/update", fmt.Sprintf(
+				`{"sessionId":%q,"update":{"sessionUpdate":"current_mode_update","currentModeId":"cancelled-echo"}}`, p.SessionID))
 		default:
+			if m.ID == nil {
+				continue // 未知通知:无 id 可应答,忽略(不崩 helper)
+			}
 			respond(*m.ID, map[string]any{})
 		}
 	}

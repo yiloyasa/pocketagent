@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
@@ -27,6 +28,14 @@ import (
 //	tool_call / tool_call_update → ToolCallUpdate(STARTED / UPDATE / FINISHED;
 //	  diff 内容块并入 JsonArgs,write_file/patch 的编辑提案实证形状)
 //	plan → 计划步骤("status|text",status 用四词口径)
+//	usage_update(size,used) → TurnServerMessage_Usage(ModelContextWindow=size,
+//	  Usage.InputTokens=used —— 手机 ContextUsageCard 的数据源,zcode/dsh 同通道)
+//
+// 【轮次取消(2026-09-30 接通)】prompt 阻塞到轮次终局,Run 用看门狗三闸收场:
+// ctx 取消(手机停止帧/CancelTurn/重入打断)、150s 无任何事件(审批等待豁免)、
+// 60 分钟单轮上限 —— 三路都先向适配器发 session/cancel 通知(ACP:无应答,
+// server.py cancel → cancel_event.set + hard interrupt)再返回,daemon 侧放弃
+// 不再等于"适配器还在跑"(旧实现只断 daemon 侧,下一轮 prompt 被挂起的实害)。
 //
 // 【审批链(2026-10-02 实证接通)】适配器在危险命令/文件编辑前发反向请求
 // session/request_permission(permissions.py/edit_approval.py),provider 装当轮
@@ -70,6 +79,7 @@ type hermesClient interface {
 	ListSessions(ctx context.Context, cursor string) (*hermesapp.SessionListResult, error)
 	SetSessionModel(ctx context.Context, sessionID, modelID string) error
 	Prompt(ctx context.Context, sessionID, text string) (string, error)
+	CancelSession(ctx context.Context, sessionID string) error
 	SetTurnHandlers(notif func(json.RawMessage), req func(id int64, method string, params json.RawMessage))
 	Respond(id int64, result any) error
 	RespondError(id int64, code int, message string) error
@@ -158,8 +168,6 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	if strings.TrimSpace(text) == "" {
 		return nil, nil, fmt.Errorf("hermes: 本轮没有文本输入")
 	}
-	p.turnMu.Lock()
-	defer p.turnMu.Unlock()
 	p.mu.Lock()
 	p.turnActive = true
 	p.mu.Unlock()
@@ -168,6 +176,19 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		p.turnActive = false
 		p.mu.Unlock()
 	}()
+
+	// 【取消要通(H1)】turnMu 的获取必须感知 ctx:前一轮挂死持锁时,排队轮次
+	// 的"停止"按钮会被这把锁吞掉(点了没反应 —— 真机实害)。拿不到就随 ctx
+	// 退出;让位后旧轮若恰好释放,接锁即还(reaper),绝不带着锁空跑。
+	acquired := make(chan struct{})
+	go func() { p.turnMu.Lock(); close(acquired) }()
+	select {
+	case <-acquired:
+	case <-ctx.Done():
+		go func() { <-acquired; p.turnMu.Unlock() }()
+		return nil, nil, ctx.Err()
+	}
+	defer p.turnMu.Unlock()
 
 	c, err := p.ensureClient(ctx)
 	if err != nil {
@@ -221,7 +242,10 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对)
 	var toolMu sync.Mutex
 	var streamErr onceError
+	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:任何一帧 = 适配器还活着
+	approvalWaiting := &atomic.Bool{}
 	notif := func(raw json.RawMessage) {
+		lastNotif.Store(time.Now().UnixMilli())
 		if streamErr.get() != nil {
 			return
 		}
@@ -232,30 +256,133 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		p.projectSessionUpdate(ev, sink, &final, toolIDs, &toolMu)
 	}
 	reqHandler := func(id int64, method string, params json.RawMessage) {
+		if method == "session/request_permission" {
+			// 审批等待是合法静默(用户在手机上想多久都行),看门狗豁免。
+			// req 钩子在 readLoop 里同步执行,等待期间通知流不动 —— 不豁免会把
+			// "用户在审批" 误判成 "任务挂起" 而误杀轮次。
+			approvalWaiting.Store(true)
+			defer approvalWaiting.Store(false)
+		}
 		p.handleRequestPermission(c, id, method, params, ctx, sink, approve)
 	}
 	c.SetTurnHandlers(notif, reqHandler)
 	defer c.SetTurnHandlers(nil, nil)
 
-	stop, err := c.Prompt(ctx, sid, text)
-	if err != nil {
+	// 【轮次取消看门狗(H1 接通 session/cancel)】prompt 阻塞到轮次终局,不能
+	// 干等(dsh/codex 同款三闸;此前 ctx 取消只会让 daemon 侧放弃,适配器还在
+	// 继续跑,下一轮 prompt 被挂起的真机实害由此而来):
+	//   1. 手机取消帧 / CancelTurn / 重入打断(ctx 取消)→ 先发 session/cancel
+	//      让适配器真停,再收 prompt 随 ctx 的返回;
+	//   2. hermesSilenceWatchdog 无任何事件(审批等待豁免)→ 判挂起,发取消收场;
+	//   3. hermesTurnCap 单轮上限 → 发取消收场。
+	outCh := make(chan hermesPromptOutcome, 1)
+	lastNotif.Store(time.Now().UnixMilli())
+	log.Printf("[hermes] session/prompt session=%s 输入=%d字", sid, len([]rune(text)))
+	go func() {
+		stop, err := c.Prompt(ctx, sid, text)
+		outCh <- hermesPromptOutcome{stop: stop, err: err}
+	}()
+
+	tick := time.NewTicker(hermesWatchdogTick)
+	defer tick.Stop()
+	var res hermesPromptOutcome
+	waitDone := false
+	for !waitDone {
+		select {
+		case res = <-outCh:
+			waitDone = true
+		case <-ctx.Done():
+			p.cancelTurn(c, sid)
+			<-outCh // prompt 随 ctx 取消返回(带缓冲 channel,必达;等 goroutine 退出)
+			// 手机断连/取消也要交回已流出的内容:server 层落库后,重连才接得上看。
+			return hermesPartialBlocks(&final), nil, ctx.Err()
+		case <-tick.C:
+			if approvalWaiting.Load() {
+				continue // 审批等待是合法静默(用户在手机上想多久都行)
+			}
+			if ms := lastNotif.Load(); ms > 0 && time.Now().UnixMilli()-ms > hermesSilenceWatchdog.Milliseconds() {
+				p.cancelTurn(c, sid)
+				return nil, nil, fmt.Errorf("hermes %v 无任何事件(任务可能未被接收,session=%s)", hermesSilenceWatchdog, sid)
+			}
+			if time.Since(turnStart) > hermesTurnCap {
+				p.cancelTurn(c, sid)
+				return nil, nil, fmt.Errorf("hermes 轮次超时(%v),已发取消", hermesTurnCap)
+			}
+		}
+	}
+
+	if res.err != nil {
 		if e := streamErr.get(); e != nil {
 			return nil, nil, e
 		}
-		return nil, nil, fmt.Errorf("hermes prompt: %w", err)
+		if ctx.Err() != nil {
+			// 与应答竞速获胜的用户停:已流出的内容照常交回。
+			return hermesPartialBlocks(&final), nil, ctx.Err()
+		}
+		return nil, nil, fmt.Errorf("hermes prompt: %w", res.err)
 	}
-	if hermesapp.StopReasonIsError(stop) {
-		return nil, nil, fmt.Errorf("hermes 轮次被拒/被取消(stopReason=%s)", stop)
+	if hermesapp.StopReasonIsError(res.stop) {
+		return nil, nil, fmt.Errorf("hermes 轮次被拒/被取消(stopReason=%s)", res.stop)
 	}
 
 	out := strings.TrimSpace(final.String())
 	if out == "" {
-		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:G:\\Hermes 未配置模型(config.yaml 的 model.default)或凭据无效", stop)
+		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:G:\\Hermes 未配置模型(config.yaml 的 model.default)或凭据无效", res.stop)
 	}
 	log.Printf("[hermes] 一轮完成 session=%s 用时 %v 回复 %d 字", sid,
 		time.Since(turnStart).Round(time.Millisecond), len([]rune(out)))
 	return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: out}}}},
 		nil, nil
+}
+
+// hermesPromptOutcome 是 prompt goroutine 的收场(形状同构 dsh 的 promptOutcome)。
+type hermesPromptOutcome struct {
+	stop string
+	err  error
+}
+
+// ---- 时长预算(与 dsh/codex 对表;包级变量仅为测试注入短值)----
+var (
+	hermesTurnCap         = 60 * time.Minute  // 单轮上限(对齐 codex/dsh)
+	hermesSilenceWatchdog = 150 * time.Second // 无任何事件的看门狗(对齐 codex/dsh)
+	hermesWatchdogTick    = 10 * time.Second  // 看门狗检查节奏
+	// hermesCancelBudget 发 session/cancel 的写入上界(通知帧只是一次管道写;
+	// 适配器挂死不读管道时宁可放弃,不陪葬轮次收尾)。
+	hermesCancelBudget = 5 * time.Second
+)
+
+// hermesPartialBlocks 已流出的正文(codex/dsh "手机断连也要交回已流出的内容"
+// 同款);空返回 nil。
+func hermesPartialBlocks(final *strings.Builder) []pb.ContentBlock {
+	partial := strings.TrimSpace(final.String())
+	if partial == "" {
+		return nil
+	}
+	return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: partial}}}}
+}
+
+// ---- 轮次取消(session/cancel 的接线)----
+
+// cancelTurn 向适配器发 session/cancel(有界预算,fire-and-forget)。【必须用
+// 新鲜的有界 ctx】三个闸口里 ctx 取消那路的 ctx 已经死了 —— 拿它发取消帧永远
+// 发不出去,适配器继续跑,轮次"停了又没停"。
+func (p *HermesProvider) cancelTurn(c hermesClient, sessionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), hermesCancelBudget)
+	defer cancel()
+	if err := c.CancelSession(ctx, sessionID); err != nil {
+		log.Printf("[hermes] session/cancel 发送失败(session=%s): %v", sessionID, err)
+		return
+	}
+	log.Printf("[hermes] 已发 session/cancel(session=%s)", sessionID)
+}
+
+// Steer 实现 agent.Steerer。hermes 的 ACP 面没有运行中插话(server.py 只有
+// /steer slash 文本重写,属适配器会话内命令,不是协议方法,daemon 不做文本级
+// 模拟),一律返回 steered=false,server 层按既有排队语义把输入留到当前轮
+// 终局后续跑(dsh 同款)。真正的"停止"不走这里:Run 的取消看门狗把 ctx 取消/
+// 静默超时翻译成 session/cancel(见 Run)。
+func (p *HermesProvider) Steer(context.Context, string, []pb.ContentBlock) (bool, string, error) {
+	return false, "", nil
 }
 
 // projectSessionUpdate 把一条已解析的 session/update 投影到 sink(从 Run 的通知
@@ -310,10 +437,19 @@ func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sin
 			Title:     "hermes · 执行计划",
 			PlanSteps: steps,
 		}}})
+	case ev.Usage != nil:
+		// 【usage_update 投影(H1)】size=上下文窗,used=窗口占用 → 手机
+		// ContextUsageCard 的数据源(zcode/dsh 同一条 TurnServerMessage_Usage
+		// 通道;InputTokens 承载"当前窗口占用",codex last/dsh used 同口径,
+		// ModelContextWindow 对齐 zcode 的窗口位 —— 手机端 usage+窗口算占用环)。
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Usage{Usage: &pb.UsageUpdate{
+			Usage:              &pb.Usage{InputTokens: ev.Usage.Used},
+			ModelContextWindow: ev.Usage.Size,
+		}}})
 	}
 	// user_message_chunk(排队回显/历史回放)/ current_mode_update /
-	// available_commands_update / usage_update / session_info_update:解析层已
-	// 具名(daemon 暂无 sink 消费方),不透传、不误当未知。
+	// available_commands_update / session_info_update:解析层已具名(daemon
+	// 暂无 sink 消费方),不透传、不误当未知。
 }
 
 // ---- 会话就绪(重挂载握手纪律:校验不能省,dsh 同款)----
