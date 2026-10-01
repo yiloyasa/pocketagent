@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -51,15 +51,16 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R as AppR
@@ -71,7 +72,6 @@ import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /**
  * 历史消息快速查看(2026-09-30 二版):左缘垂直刻度条 + **两段式**交互。
@@ -102,8 +102,14 @@ import kotlin.math.roundToInt
 
 /** 刻度条视觉宽度(10dp 规格,半透明;贴在 23dp 页边距区内,不压正文)。 */
 private val TickBarVisualWidth = 10.dp
-/** 刻度条触控宽度:视觉 10dp + 命中余量(≈24dp,横向再宽会盖正文)。 */
-private val TickBarTouchWidth = 24.dp
+/**
+ * 刻度条触控宽度(40dp)。【真机 2026-10-01】视觉条贴屏幕左缘,而 MIUI/手势导航的
+ * 返回手势带恰好也是边缘 ~24dp:x<24dp 的拖动会被系统**非确定性**吞掉(实测同一
+ * 位置 2.5s 拖动可达、6s 拖动被拦),"按在边缘上有时灵有时不灵"。触控带加宽到
+ * 40dp 后手指自然落在 15-30dp 一段 —— 稳定越过手势带;前 24dp 仍保留,能按到。
+ * 超出 23dp 页边距的部分只盖正文列最左侧 17dp 的纯文本,无交互元素,可接受。
+ */
+private val TickBarTouchWidth = 40.dp
 /** 单个刻度的高度与自然间距 —— 绘制与"手指↔下标映射"共用同一套几何。 */
 private val TickHeight = 2.dp
 private val TickGap = 7.dp
@@ -253,19 +259,36 @@ fun HistoryTickBar(
             } else -1
         }
     }
+    // 预览中跨过刻度给一次轻触感(时间刷选的标准体感,对齐系统时钟滚轮/相册裁剪);
+    // 只在指数变化时重启一次 effect,手指在两条刻度之间滑动不会连发。
+    val haptics = LocalHapticFeedback.current
+    LaunchedEffect(scrubIndex.value) {
+        if (scrubIndex.value >= 0) {
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
     Box(
         modifier
             .width(TickBarTouchWidth)
             .fillMaxHeight()
+            // 【真机 2026-10-01】向系统申请返回手势豁免(尽力而为:系统每边最多
+            // 认 200dp,整条未必全认)——配合 40dp 触控带,把"真手按在视觉刻度上
+            // 拖动被 MIUI 返回手势掐死、气泡闪现即消失"的体感压到最低。
+            .systemGestureExclusion()
             .onSizeChanged { drag.heightPx = it.height.toFloat() }
             .then(rememberHistoryDragGesture(drag, count, onOpenPanel, onJump))
             .semantics {
                 contentDescription =
                     "历史消息时间线,共 $count 条用户消息;轻点打开列表,按住拖动快速浏览"
             },
-        contentAlignment = Alignment.CenterStart,
     ) {
-        Canvas(Modifier.width(TickBarVisualWidth).fillMaxHeight()) {
+        Canvas(
+            // 视觉刻度钉在触控盒最左缘(0-10dp):触控带加宽后不能跟着居中漂移
+            Modifier
+                .align(Alignment.CenterStart)
+                .width(TickBarVisualWidth)
+                .fillMaxHeight()
+        ) {
             // 几何单源:与手指↔下标映射共用 HistoryQuickNavLogic.tickGeometry,
             // 画出来在哪、映射就算到哪,永不各说各话。
             val geo = HistoryQuickNavLogic.tickGeometry(count, size.height, tickHPx, gapPx)
@@ -333,13 +356,13 @@ fun HistoryQuickBubble(
             enter = fadeIn(PaMotion.standard()) +
                 scaleIn(PaMotion.emphasized(), initialScale = 0.92f),
             exit = fadeOut(PaMotion.nav(600f)),
-            modifier = Modifier.offset {
-                // 跟手:逐帧只重排版。X 固定贴左缘;Y = 手指 + 8dp 让位再钳制在容器内
-                IntOffset(
-                    startGapPx.roundToInt(),
-                    HistoryQuickNavLogic.bubbleTopY(
-                        drag.fingerY, bubbleHPx, drag.heightPx, yieldPx,
-                    ).roundToInt(),
+            modifier = Modifier.graphicsLayer {
+                // 【真机 2026-10-01 · 丝滑】translationX/Y 只走 draw 层,连重排版都
+                // 不进(offset{} 每帧要做一次 placement),拖动跟手更省一档;
+                // 手指 Y 状态在此延迟读,逐帧只重绘本层。
+                translationX = startGapPx
+                translationY = HistoryQuickNavLogic.bubbleTopY(
+                    drag.fingerY, bubbleHPx, drag.heightPx, yieldPx,
                 )
             },
         ) {

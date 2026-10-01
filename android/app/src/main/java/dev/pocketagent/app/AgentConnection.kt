@@ -572,6 +572,18 @@ object AgentConnection {
     private const val REMOTE_TIMEOUT_MS = 6000L
 
     /**
+     * Tailscale 候选专用的探测超时与竞速预算基线(真机 2026-10-01):DERP 冷启动
+     * 首连实测 8-20s,7s 预算会在"局域网被 AP 隔离、只差 Tailscale 能救"的场景把
+     * 唯一活路错杀成无胜者。超时 15s;竞速预算同值 +1s(其余候选 6s 先失败,
+     * Tailscale 多扛 9s)。判定:候选 IP 以 100. 开头(CGNAIT-RFC6598,无歧义)。
+     */
+    private const val TS_TIMEOUT_MS = 15_000L
+
+    /** 候选是否为 Tailscale 地址(CGNAIT 100.x)。 */
+    private fun isTailscaleAddr(cand: String) =
+        cand.substringBeforeLast(':').startsWith("100.")
+
+    /**
      * 列表类 RPC 的超时:codex 冷启动约 1~2s、子进程重启窗口更久,放宽到 20s 避免
      * 被短暂的 codex 无响应误判成"离线"。配合 daemon 侧 2.5s 同步预算,实际很少用满,
      * 主要是给 codex 上游抖动留出自愈余地(见 daemon 的 syncThreadsFromCodex)。
@@ -670,8 +682,10 @@ object AgentConnection {
      * 错误主机在 TLS 握手就被 PinTrustManager 拒绝,并行没有锁错问题。
      */
     private val connectionLock = Any()
-    fun connectWithFallback(freshChannel: Boolean = false): pocketagent.v1.HostInfo? = synchronized(connectionLock) {
+    fun connectWithFallback(freshChannel: Boolean = false): pocketagent.v1.HostInfo? {
         // A page refresh or recovery poll must not destroy healthy turn streams.
+        // 【真机 2026-10-01】放锁外:原实现在 connectionLock 里干等 8s 网络读,
+        // 是 ART "Long monitor contention 28s" 的一半来源。
         if (!freshChannel && connState.value == "ok") {
             try { return hostService().getHostInfo(GetHostInfoRequest.getDefaultInstance()) }
             catch (_: Exception) { }
@@ -685,36 +699,50 @@ object AgentConnection {
         // 但底层连接已坏不再自愈;候选地址没变时旧逻辑会复用死通道 → 只能冷启动恢复。
         // 默认 false:HomeScreen 等导航刷新不动可能仍在服务的通道。
         if (freshChannel) recycleChannel("回退连接前强制重建传输")
+        // 【真机 2026-10-01 · 锁外探测】候选探测全程不握 connectionLock —— 原实现把
+        // 整段探测圈在锁里,期间一切 connect 调用方集体挂起(实测 28.277s,waiters=2),
+        // 界面停在"检查中"酷似假死。锁只在末尾应用结论时短暂持有,临界区毫秒级。
+        // 【并行竞速恢复】serial=true 是 TOFU 阶段的临时刻意收紧、忘了放回 —— 与上方
+        // KDoc"已存指纹后恢复并行竞速"矛盾,真机实测它把每次重连拖成 23.5s。
         val outcome = CandidateProbe.run(
             cands = cands,
-            serial = true,
-            timeoutOf = { cand -> if (cand == USB_ADDR) USB_TIMEOUT_MS else REMOTE_TIMEOUT_MS },
-            budgetMs = REMOTE_TIMEOUT_MS + 1000L,
+            serial = serialModeForTofu(),
+            timeoutOf = { cand ->
+                when {
+                    cand == USB_ADDR -> USB_TIMEOUT_MS
+                    isTailscaleAddr(cand) -> TS_TIMEOUT_MS
+                    else -> REMOTE_TIMEOUT_MS
+                }
+            },
+            budgetMs = (if (cands.any { isTailscaleAddr(it) }) TS_TIMEOUT_MS else REMOTE_TIMEOUT_MS) + 1000L,
             probe = ::probeHost,
         )
-        val winner = outcome.winner
-        if (winner != null) {
-            val (cand, info) = winner
-            if (cand != address) {
-                address = cand
-                persist()
-                shutdown()
+        return synchronized(connectionLock) {
+            val winner = outcome.winner
+            if (winner != null) {
+                val (cand, info) = winner
+                if (cand != address) {
+                    address = cand
+                    persist()
+                    shutdown()
+                }
+                rememberTailscaleIp(info.tailscaleIpv4)
+                rememberLanIp(info.lanIpv4)
+                updateHostCapabilities(info.capabilitiesList)
+                markConnected(cand)
+                info
+            } else {
+                connState.value = "down"
+                connError.value = outcome.firstFailure?.let { failureFor(it, cands.first()) }
+                    ?: ConnectionDiagnostic(
+                        kind = ConnectionFailureKind.UNAVAILABLE,
+                        message = connectionFailureLabel(ConnectionFailureKind.UNAVAILABLE),
+                        detail = "没有可用的连接地址",
+                        address = address,
+                    )
+                null
             }
-            rememberTailscaleIp(info.tailscaleIpv4)
-            rememberLanIp(info.lanIpv4)
-            updateHostCapabilities(info.capabilitiesList)
-            markConnected(cand)
-            return info
         }
-        connState.value = "down"
-        connError.value = outcome.firstFailure?.let { failureFor(it, cands.first()) }
-            ?: ConnectionDiagnostic(
-                kind = ConnectionFailureKind.UNAVAILABLE,
-                message = connectionFailureLabel(ConnectionFailureKind.UNAVAILABLE),
-                detail = "没有可用的连接地址",
-                address = address,
-            )
-        return null
     }
 
     /**
@@ -1298,9 +1326,18 @@ object AgentConnection {
             var wasDown = false
             var retryDelayMs = 1000L
             var probeCount = 0L
+            // 【连续失败闸】单次探活失败 ≠ 通道已死;连续两轮才允许 freshChannel 撕通道。
+            var probeFailStreak = 0
             while (true) {
                 val ok = try {
+                    // 【真机 2026-10-01 · 重连风暴根因】探活必须 withWaitForReady:
+                    // 通道刚重建时底层传输还在 TLS 握手,不带 wait-for-ready 的 RPC
+                    // 会立刻 UNAVAILABLE;而回退探测的临时通道(probeHost)恰好带
+                    // wait-for-ready —— 于是"回退必成功、探活必失败",连续两轮就撕
+                    // 通道重建,循环永不落地(实测 26s/轮的"连接断了"风暴)。
+                    // wait-for-ready 下握手在飞就等到 ready;6s deadline 仍兜底真死。
                     val info = hostService()
+                        .withWaitForReady()
                         .withDeadlineAfter(6000, java.util.concurrent.TimeUnit.MILLISECONDS)
                         .getHostInfo(GetHostInfoRequest.getDefaultInstance())
                 // 探活成功时也刷新局域网/Tailscale 地址:换网络(家里 WiFi → 公司 WiFi)后
@@ -1312,6 +1349,9 @@ object AgentConnection {
                 updateHostCapabilities(info.capabilitiesList)
                 true
                 } catch (e: Exception) {
+                    // 【可诊断性】探活失败此前只进 connError 诊断卡、不打日志,
+                    // 真机排查重连风暴时两端日志都无迹可寻 —— 至少把异常形态落下。
+                    Log.w(TAG, "探活失败: ${e.javaClass.simpleName}: ${e.message}")
                     connError.value = failureFor(e, address)
                     // USB 自动配对(2026-09-30):物理插线场景免手输配对码。
                     // 仅回环候选 + 鉴权类失败(token 失效/未配对)时,向 daemon
@@ -1346,6 +1386,7 @@ object AgentConnection {
                         }
                     }
                     markConnected(address)
+                    probeFailStreak = 0
                     if (wasDown) {
                         // 断→通:通知全部页面刷新(host 状态/会话列表/连接卡)
                         connectionEpoch.value += 1
@@ -1358,15 +1399,23 @@ object AgentConnection {
                 } else {
                     wasDown = true
                     connState.value = "down"
+                    probeFailStreak++
                     // P0-3:断线时重试 mDNS 发现 —— 网络切换(WiFi↔蜂窝)后
                     // NsdManager 的发现常静默失效,重发一次 discover 才能再次看见电脑。
                     mdnsDiscovery?.ensureStarted()
-                    if (connectWithFallback(freshChannel = true) != null) {
-                        // connectWithFallback 已经完成一次断→通状态切换；
-                        // 下一轮探活只需保持已恢复状态，避免重复刷新页面。
-                        connectionEpoch.value += 1
-                        wasDown = false
-                        retryDelayMs = 1000L
+                    // 【连续失败闸(真机 2026-10-01)】单次探活失败(WiFi 抖动、6s 探测
+                    // 超时)不再立刻 freshChannel=true —— 原实现每轮把还活着的
+                    // WatchEvents 传输整个拆掉重连,实测 26s 一个循环的"连接断了"
+                    // 体感正源于此;连续两轮失败才认定通道真死,走全量回退。
+                    if (probeFailStreak >= 2) {
+                        if (connectWithFallback(freshChannel = true) != null) {
+                            // connectWithFallback 已经完成一次断→通状态切换；
+                            // 下一轮探活只需保持已恢复状态，避免重复刷新页面。
+                            connectionEpoch.value += 1
+                            wasDown = false
+                            retryDelayMs = 1000L
+                            probeFailStreak = 0
+                        }
                     }
                     // 网络恢复事件立即唤醒(原来只在"已连上"分支监听,断线期间
                     // WiFi↔蜂窝切换最坏要干等 10 秒退避);没有事件时 1/2/5/10 秒退避,
