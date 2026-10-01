@@ -35,7 +35,9 @@ func LocateHermes() (string, string, error) {
 		candidates = append(candidates, r)
 	}
 	candidates = append(candidates,
-		filepath.Join("G:", "Claude Code", "node_modules", "hermes-agent"), // 本机安装位(实证)
+		// 本机安装位(实证)。Go 卷符 Join 陷阱:filepath.Join("G:", ...) 产生
+		// 卷相对路径 "G:Claude Code\...",Stat 永远失败 —— 卷符必须带根 "G:\"。
+		filepath.Join(`G:\`, "Claude Code", "node_modules", "hermes-agent"),
 	)
 	if npmGlobal := npmGlobalRoot(); npmGlobal != "" {
 		candidates = append(candidates, filepath.Join(npmGlobal, "hermes-agent"))
