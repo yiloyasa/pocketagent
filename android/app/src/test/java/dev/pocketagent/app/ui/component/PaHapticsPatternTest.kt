@@ -38,4 +38,23 @@ class PaHapticsPatternTest {
         assertEquals(2, warning.size)
         assertTrue(warning[1] > confirm[1]) // warning 的脉冲时长 > confirm(更重)
     }
+
+    @Test
+    fun `全部波形形态统一_前导零与正时长_三级强度单调`() {
+        // 形态红线:createWaveform 的 timings 首位必须是前导 0,其余全为正时长
+        // —— 谁把前导 0 丢了或写出 0 时长脉冲,旧机兜底路径会直接抛异常
+        val all = PaHapticKind.entries
+        assertEquals(3, all.size) // 轻/中/重三级齐全,误删一级这里先红
+        for (kind in all) {
+            val p = paHapticPattern(kind)
+            assertEquals("前导 0", 0L, p.first())
+            assertTrue("脉冲数为奇数(前导0+成对脉冲/间隔)", p.size % 2 == 0)
+            assertTrue(p.drop(1).all { it > 0 })
+            assertTrue("单档波形总时长不得超过 200ms(触感是提示不是按摩)", p.sum() <= 200L)
+        }
+        // 三级强度单调:轻(CLOCK_TICK 同档的 confirm) < 重(warning)
+        val light = paHapticPattern(PaHapticKind.CONFIRM)[1]
+        val heavy = paHapticPattern(PaHapticKind.WARNING)[1]
+        assertTrue(light < heavy)
+    }
 }

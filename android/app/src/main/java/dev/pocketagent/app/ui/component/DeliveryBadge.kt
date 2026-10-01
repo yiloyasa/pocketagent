@@ -71,6 +71,11 @@ private fun DeliveryIconKind.drawableRes(): Int = when (this) {
  * 投递徽标:12dp 图标 + 10sp 短文案,语义色跟随状态(等待=Accent/提交=Green/
  * 拒收=Red);失败级附「点按重发」动作提示(点击本体挂在外层整条消息上)。
  *
+ * 【徽章族一致性】字阶对齐 PaEditorial.Type.State(10sp/行高 14sp,状态词字重
+ * 650 —— 与 PaStatusBadge 同一档小字度量);颜色取各语义的 *Text 小字档
+ * (10sp 对浅底对比度 ≥4.5:1 的纪律,不用图形档硬撑小字)。形通道(时钟/勾/叹号)
+ * 让红绿色弱不靠颜色也能分档。
+ *
  * @param mono hacker 终端模式用等宽字体(契约见 PaHacker),常规主题用系统字体。
  */
 @Composable
@@ -84,9 +89,10 @@ internal fun DeliveryStatusBadge(
     if (visual.label.isEmpty()) return
     // 【语义色】失败=红(必须先处理);已提交=绿(到达 daemon 的确认);
     // 等待类=Accent(进行中的中性强调)。红色永远只表示"要用户出手"。
+    // 10sp 小字一律取 *Text 档(对比度纪律),图形档只给 12dp 图标。
     val tint = when {
-        visual.failure -> PaEditorial.Denied
-        state == DELIVERY_STEERED -> PaEditorial.Running
+        visual.failure -> PaEditorial.DeniedText
+        state == DELIVERY_STEERED -> PaEditorial.RunningText
         else -> PaEditorial.AccentText
     }
     val font = if (mono) TerminalFont.chatFont else null
@@ -101,6 +107,8 @@ internal fun DeliveryStatusBadge(
         Text(
             visual.label,
             fontSize = 10.sp,
+            lineHeight = 14.sp,
+            fontWeight = FontWeight(650),
             color = tint,
             fontFamily = font,
         )
@@ -109,7 +117,8 @@ internal fun DeliveryStatusBadge(
             Text(
                 "点按重发",
                 fontSize = 10.sp,
-                color = PaEditorial.Denied,
+                lineHeight = 14.sp,
+                color = PaEditorial.DeniedText,
                 fontWeight = FontWeight.Medium,
                 fontFamily = font,
             )

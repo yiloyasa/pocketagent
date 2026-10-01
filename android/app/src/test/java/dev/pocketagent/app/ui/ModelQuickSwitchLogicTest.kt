@@ -123,4 +123,42 @@ class ModelQuickSwitchLogicTest {
     fun `未知 agent 的最近记录为空`() {
         assertTrue(ModelQuickSwitchLogic.recentOf("never-picked-agent").isEmpty())
     }
+
+    // ---- 边界补钉(2026-09-30 微交互轮)----
+
+    @Test
+    fun `空白 agentId 的选择不建档也不崩`() {
+        ModelQuickSwitchLogic.rememberPick("", "pi/x")
+        ModelQuickSwitchLogic.rememberPick("   ", "pi/x")
+        assertTrue(ModelQuickSwitchLogic.recentOf("").isEmpty())
+        assertTrue(ModelQuickSwitchLogic.recentOf("   ").isEmpty())
+    }
+
+    @Test
+    fun `最近段占满 8 个时可用表不再补位`() {
+        // 记忆里 8 个有效 id 全部仍在可用表:面板被 MRU 段占满,补足段一个不进
+        val agent = "pi-mru-f"
+        (1..8).forEach { ModelQuickSwitchLogic.rememberPick(agent, "pi/m$it") }
+        val available = (1..12).map { model("pi/m$it") }
+        val got = ModelQuickSwitchLogic.quickModels(agent, available)
+        assertEquals(ModelQuickSwitchLogic.MAX_QUICK, got.size)
+        // 全部来自最近段:MRU 序 m8..m1,m9..m12(仅可用表有的)不出现
+        assertEquals(
+            (8 downTo 1).map { "pi/m$it" },
+            got.map { it.id },
+        )
+    }
+
+    @Test
+    fun `最近段与可用表部分重叠时无重复且按最近序优先`() {
+        // MRU 2 条(1 条已失效)+ 可用表:去重后最近优先、原序补足
+        val agent = "pi-mru-g"
+        ModelQuickSwitchLogic.rememberPick(agent, "pi/gone")
+        ModelQuickSwitchLogic.rememberPick(agent, "pi/kimi")
+        val got = ModelQuickSwitchLogic.quickModels(agent, piModels + model("pi/kimi"))
+        // kimi 是唯一存活 MRU 项排最前;补足段跳过已入选的,不重复出现
+        assertEquals("pi/kimi", got.first().id)
+        assertEquals(got.size, got.map { it.id }.toSet().size)
+        assertTrue(got.none { it.id == "pi/default" })
+    }
 }

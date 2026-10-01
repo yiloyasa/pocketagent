@@ -37,8 +37,10 @@ import kotlin.math.sin
  *    本版 Compose 的 infiniteRepeatable 只收 DurationBasedAnimationSpec
  *    (spring 无固定时长进不去),所以用协程 while 循环驱动 —— 这也是"真 spring"
  *    的唯一通路,组件离开组合时协程随 LaunchedEffect 一并取消,不泄漏。
- *  - 三点相位差 160ms,节奏舒缓;只动 graphicsLayer(scale/alpha/translationY),
- *    不触发布局,流式期间逐帧文本更新也不会放大它的开销。
+ *  - 三点相位差 160ms;单点呼吸周期 ~0.82s(stiffness 95 临界阻尼,见下),
+ *    三点整体构成 600-900ms 体感区间的连续波浪;只动 graphicsLayer
+ *    (scale/alpha/translationY),不触发布局,流式期间逐帧文本更新也不会
+ *    放大它的开销。
  *
  * 【无障碍】减弱动态效果时退化为静态三点(只保留透明度差)。
  */
@@ -70,9 +72,11 @@ fun TypingDots(
             launch {
                 delay(i * 160L)
                 while (true) {
-                    // 临界阻尼低刚度 spring:半程 ~0.55s,整周期 ~1.1s,节奏与旧版一致
-                    anim.animateTo(1f, spring(dampingRatio = 1f, stiffness = 55f))
-                    anim.animateTo(0f, spring(dampingRatio = 1f, stiffness = 55f))
+                    // 临界阻尼 spring stiffness=95:ω≈9.75,半程 settle≈0.41s,
+                    // 整周期 ≈0.82s —— 落在"呼吸自然"的 600-900ms 体感区间
+                    // (旧值 55 周期 ~1.1s,肉眼可辨的"慢半拍")。
+                    anim.animateTo(1f, spring(dampingRatio = 1f, stiffness = 95f))
+                    anim.animateTo(0f, spring(dampingRatio = 1f, stiffness = 95f))
                 }
             }
         }

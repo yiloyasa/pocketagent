@@ -245,9 +245,39 @@ class SlashCommandsLogicTest {
         assertNull(SlashCommandCache.get(tid))
     }
 
-    // ---- /计划 /压缩 随能力位增减(daemon 2026-09-25 能力位对齐)----
+    // ---- 边界补钉(2026-09-30 微交互轮):词元空白、空全集、回填不重复补空格 ----
 
     @Test
+    fun `词元后敲出空白面板即收_边界是长度而非内容`() {
+        // "/" 后已敲空格 = 在敲参数:过滤回空,面板收起(裸 "/" 与 "/ " 一词之差)
+        assertTrue(filterSlashCandidates(cmds, "/ ").isEmpty())
+        assertFalse(slashPanelVisible("zcode", "/ ", cmds, offline = false, capabilities = capsAll))
+        // 制表符/换行同样算空白
+        assertTrue(filterSlashCandidates(cmds, "/goal\t").isEmpty())
+    }
+
+    @Test
+    fun `前导空白的输入不算斜杠词元`() {
+        // " /go"(先敲了空格再敲斜杠)不是唤起面板的词元 —— takeWhile 首字符即断
+        assertNull(slashTokenOf(" /go"))
+        assertNull(slashTokenOf("\n/"))
+        assertFalse(slashUnknownAgentHintVisible("echo", " /", offline = false))
+    }
+
+    @Test
+    fun `候选全集为空时过滤恒空_面板不弹`() {
+        assertTrue(filterSlashCandidates(emptyList(), "/").isEmpty())
+        assertTrue(filterSlashCandidates(emptyList(), "/goal").isEmpty())
+    }
+
+    @Test
+    fun `词元后已有空白回填不重复补空格`() {
+        // "/goal " 选 goal → 仍是 "/goal "(不会变成 "/goal  ")
+        assertEquals("/goal ", applySlashSelection("/goal ", "goal"))
+        assertEquals("/goal\t", applySlashSelection("/goal\t", "goal"))
+    }
+
+    // ---- /计划 /压缩 随能力位增减(daemon 2026-09-25 能力位对齐)----    @Test
     fun `计划伪命令只随review能力位出现`() {
         // daemon 宣告 review:codex(现仅 codex 有 StartReview 真实现)→ codex 面板出现 /计划
         assertTrue(slashCandidatesFor("codex", emptyList(), capsAll).any { it.action == SlashAction.REVIEW })

@@ -103,17 +103,22 @@ fun Modifier.longPressMenu(
     onClick: (() -> Unit)? = null,
 ): Modifier = composed {
     var rootPos by remember { mutableStateOf(Offset.Zero) }
+    // 【触感分级】菜单弹出=手势被识别的确认,轻档(CLOCK_TICK,与刻度刷选同强度)
+    // —— Telegram 同款"长按一下指尖一麻",弹出不静默,也不到中档那么重。
+    val hapticView = androidx.compose.ui.platform.LocalView.current
     this
         .onGloballyPositioned { rootPos = it.positionInRoot() }
         .pointerInput(state) {
             detectTapGestures(
                 onTap = { onClick?.invoke() },
-                onLongPress = { local -> state.show(rootPos + local) },
+                onLongPress = { local ->
+                    PaHaptics.light(hapticView)
+                    state.show(rootPos + local)
+                },
             )
         }
 }
 
-private val MENU_W = 220.dp
 private val MENU_MIN_W = 180.dp
 private val MENU_MAX_W = 240.dp
 private val ITEM_H = 44.dp
@@ -144,17 +149,27 @@ fun ContextMenu(
     val screenW = with(density) { config.screenWidthDp.dp.toPx() }
     val screenH = with(density) { config.screenHeightDp.dp.toPx() }
 
-    val menuW = with(density) { MENU_W.toPx() }
+    // 危险项红色置底(纯决策在 ContextMenuLogic,单测钉死):删除/清空这类操作
+    // 永远离常规操作最远,误触距离最大化
+    val ordered = remember(items) { ContextMenuLogic.orderedContextMenuItems(items) }
+
+    // 定位按“菜单可能到的最宽档”算:菜单 Column 是 widthIn(180..240) 弹性宽,
+    // 长标签会顶到 240;若按 220 估,右缘钳制在 240 档下会溢出屏 8px。
+    // 用上界做防出屏预算,实际更窄时只是右侧多留一点空,绝不裁切。
+    val menuW = with(density) { MENU_MAX_W.toPx() }
     val menuH = with(density) {
         // 摘要行 ~30dp + 分隔线 1dp + 每项 44dp + 上下留白 12dp
         (30 + 1 + items.size * 44 + 12).dp.toPx()
     }
     val safe = with(density) { SAFE_EDGE.toPx() }
 
-    val flipX = point.x + menuW > screenW - safe
-    val flipY = point.y + menuH > screenH - safe
-    val x = if (flipX) (point.x - menuW).coerceAtLeast(safe) else point.x
-    val y = if (flipY) (point.y - menuH).coerceAtLeast(safe) else point.y
+    // 防出屏钳制(纯决策在 ContextMenuLogic):右下优先、越界翻转、安全边兜底
+    val placement = remember(point, menuW, menuH, screenW, screenH, safe) {
+        ContextMenuLogic.menuPlacement(point.x, point.y, menuW, menuH, screenW, screenH, safe)
+    }
+    val flipX = placement.flipX
+    val flipY = placement.flipY
+    val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
 
     val visibleState = remember { MutableTransitionState(false).apply { targetState = true } }
 
@@ -177,11 +192,23 @@ fun ContextMenu(
                 visibleState = visibleState,
                 // 【动效令牌】入场从手指位置"长出来":轻微过冲的 scale + 临界阻尼 fade,
                 // spring 从当前值续走,长按连发时被打断也不跳帧(替代原 tween(120) 硬切)。
-                enter = fadeIn(PaMotion.standard()) +
-                    scaleIn(PaMotion.emphasized(), initialScale = 0.92f),
+                // 【减弱动效】系统动画缩放=0 时退化瞬时(snap 同义 PaMotion.instant,
+                // 其静态类型 AnimationSpec 传不进 fadeIn,同 AppDrawer 的既有处理)。
+                enter = if (reduceMotion) {
+                    fadeIn(androidx.compose.animation.core.snap())
+                } else {
+                    fadeIn(PaMotion.standard()) +
+                        scaleIn(PaMotion.emphasized(), initialScale = 0.92f)
+                },
                 // 退场要干脆:更大 stiffness 的 spring,让位快但不砖墙
-                exit = fadeOut(PaMotion.nav(600f)),
-                modifier = Modifier.offset { IntOffset(x.roundToInt(), y.roundToInt()) },
+                exit = if (reduceMotion) {
+                    fadeOut(androidx.compose.animation.core.snap())
+                } else {
+                    fadeOut(PaMotion.nav(600f))
+                },
+                modifier = Modifier.offset {
+                    IntOffset(placement.x.roundToInt(), placement.y.roundToInt())
+                },
             ) {
                 Column(
                     Modifier
@@ -211,14 +238,15 @@ fun ContextMenu(
                     )
                     Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
 
-                    items.forEach { item ->
+                    ordered.forEach { item ->
                         val tint = if (item.destructive) PaEditorial.Denied else PaEditorial.Ink
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .height(ITEM_H)
-                                // 按下即缩放反馈(全 app 统一 pressable),不再是只有涟漪的裸 clickable
-                                .pressable { onPick(item) }
+                                // 按下即缩放反馈(全 app 统一 pressable)+ 轻触感:
+                                // 点选=轻档(TextHandleMove),与刻度刷选同强度同族
+                                .pressable(haptic = true) { onPick(item) }
                                 .padding(horizontal = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {

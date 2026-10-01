@@ -155,3 +155,105 @@ fun approvalQueueLabel(position: Int, total: Int): String {
     val pos = position.coerceIn(1, total)
     return "共 $total 项待审批 · 当前第 $pos 项"
 }
+
+/**
+ * 请求状态 → 形通道(与四词状态同一套 [PaStatusGlyph],纯函数,单测钉死
+ * StatusGlyphMappingTest)。状态行因此是**词 + 色 + 形**三通道,色弱也可辨:
+ *  - 收到/待决定 = 空心环(等你来填,与「等待你处理」同形);
+ *  - 提交中/服务端已确认 = 实心点(进行中;组件层提交中另加转圈,形不替代动);
+ *  - 已允许 = 对勾(收尾确认);已拒绝/暂无法处理 = 叹号(要回头看)。
+ */
+fun approvalPhaseGlyph(phase: ApprovalPhase): PaStatusGlyph = when (phase) {
+    ApprovalPhase.RECEIVED, ApprovalPhase.PENDING -> PaStatusGlyph.RING
+    ApprovalPhase.SUBMITTING, ApprovalPhase.CONFIRMED -> PaStatusGlyph.DOT
+    ApprovalPhase.ALLOWED -> PaStatusGlyph.CHECK
+    ApprovalPhase.DENIED, ApprovalPhase.UNAVAILABLE -> PaStatusGlyph.EXCLAMATION
+}
+
+// ---------------------------------------------------------------- 危险分级
+
+/**
+ * 危险分级档(审批弹窗风险区的输入):**常规**(读类,默认安静)/ **高危**
+ * (删除、覆盖写入、网络外发、提升权限 —— 弹窗给出醒目但可读的风险条)。
+ *
+ * 【分级只影响提示强度,不影响可达性】高危与常规的决定按钮(尤其「拒绝」)
+ * 完全同等可达 —— 分级回答"要多大声提醒",绝不回答"要不要拦着你不许点"。
+ */
+enum class ApprovalRisk { ROUTINE, HIGH }
+
+/** 危险分级结果:[risk] 为高危时 [reasons] 非空(命中原因,去重、固定顺序)。 */
+data class ApprovalRiskSignal(val risk: ApprovalRisk, val reasons: List<String>)
+
+// 命令级危险特征(大小写不敏感;词表保守取向:宁可多提醒一句,不给破坏性
+// 操作静默放行 —— 假阳性的代价是用户多看一眼命令原文,假阴性的代价是数据)。
+private val ApprovalRiskDelete = Regex(
+    """\b(rm|rmdir|unlink|shred|del|rd|trash)\b|git\s+clean|删除""",
+    RegexOption.IGNORE_CASE,
+)
+private val ApprovalRiskOverwrite = Regex(
+    // >>? = 单个 > 或 >>(重定向写入都算);曾误写 >>?> 漏掉单 > 重定向(ApprovalRiskTest 钉住)
+    """>>?|\b(tee|dd|mv|cp)\b|sed\s+-i|mkfs|--force|覆盖""",
+    RegexOption.IGNORE_CASE,
+)
+private val ApprovalRiskNetwork = Regex(
+    """\b(curl|wget|nc|netcat|ssh|scp|sftp|rsync)\b|https?://|ftp://|git\s+(push|pull|fetch)|\b(pip3?|npm|yarn|pnpm|brew|apt-get|apt)\s+(install|add|i\b|upgrade)""",
+    RegexOption.IGNORE_CASE,
+)
+private val ApprovalRiskPrivilege = Regex(
+    """\b(sudo|doas|su|runas|chmod|chown|pkexec)\b""",
+    RegexOption.IGNORE_CASE,
+)
+
+/**
+ * 危险分级判定(纯函数,单测钉死 ApprovalRiskTest)。
+ *
+ * 两个信号源:**操作类型词**(写入/补丁/改动文件类、提权类,来自 daemon 的
+ * action 名或其人话标签 —— 「写入文件 · 仅本次」这类后缀先剥掉)与**命令原文**
+ * (删除/覆盖/网络外发/提权特征词)。命中任意一条即高危;原因按固定顺序去重,
+ * 弹窗用「 · 」并列展示。
+ */
+fun approvalRiskOf(actionKind: String, command: String): ApprovalRiskSignal {
+    val kind = actionKind.substringBefore('·').trim()
+    val reasons = LinkedHashSet<String>()
+    val writeKind = kind.contains("写入") || kind.contains("补丁") || kind.contains("修改文件") ||
+        kind.equals("write_file", true) || kind.equals("apply_patch", true) || kind.equals("file_change", true)
+    val privilegeKind = kind.contains("提升权限") || kind.contains("提权") || kind.equals("permissions", true)
+    if (writeKind) reasons.add("覆盖或改动文件")
+    if (ApprovalRiskDelete.containsMatchIn(command)) reasons.add("删除文件")
+    if (ApprovalRiskOverwrite.containsMatchIn(command)) reasons.add("覆盖或写入")
+    if (ApprovalRiskNetwork.containsMatchIn(command)) reasons.add("对外网络请求")
+    if (privilegeKind || ApprovalRiskPrivilege.containsMatchIn(command)) reasons.add("提升权限")
+    return ApprovalRiskSignal(
+        risk = if (reasons.isEmpty()) ApprovalRisk.ROUTINE else ApprovalRisk.HIGH,
+        reasons = reasons.toList(),
+    )
+}
+
+/**
+ * 危险分级 → 风险条的视觉态(纯函数,单测钉死 ApprovalRiskTest)。
+ *
+ * 【分级只变音量,不变可达性】高危 = 珊瑚警示条(词「高危操作」+ 命中原因并列,
+ * 原因用「 · 」连接,读屏一次念全);常规 = 安静一行(「常规操作」,组件层再缀
+ * 一句核对原文的提示,不摆红色吓唬读类操作)。两种档位下决定按钮(尤其拒绝)
+ * 尺寸、顺序、可用性完全一致 —— 这里的输出只描述提示条长什么样。
+ */
+data class ApprovalRiskVisual(
+    /** true = 高危警示条(珊瑚);false = 常规安静行(中性)。 */
+    val alert: Boolean,
+    /** 风险条标题词:高危操作 / 常规操作。 */
+    val headline: String,
+    /** 高危命中原因,「 · 」并列;常规档为 null(不摆空壳)。 */
+    val reasonsLabel: String?,
+)
+
+/** 风险条视觉态映射:[ApprovalRiskSignal] → 警示条/安静行的词与原因并列文本。 */
+fun approvalRiskVisualOf(signal: ApprovalRiskSignal): ApprovalRiskVisual =
+    if (signal.risk == ApprovalRisk.HIGH) {
+        ApprovalRiskVisual(
+            alert = true,
+            headline = "高危操作",
+            reasonsLabel = signal.reasons.joinToString(" · "),
+        )
+    } else {
+        ApprovalRiskVisual(alert = false, headline = "常规操作", reasonsLabel = null)
+    }

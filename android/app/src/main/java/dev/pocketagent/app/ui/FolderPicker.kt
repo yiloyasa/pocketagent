@@ -34,9 +34,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.PaSkeletonList
+import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
@@ -63,6 +66,8 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
     var showRoots by remember { mutableStateOf(true) }
     var entries by remember { mutableStateOf(listOf<DirectoryEntry>()) }
     var loading by remember { mutableStateOf(false) }
+    // 目录打不开(权限/断线)不再静默:给一句说明,用户才知道列表为什么空着
+    var error by remember { mutableStateOf<String?>(null) }
 
     fun loadDir(p: String) {
         loading = true
@@ -75,7 +80,9 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                 }.filter { it.isDir }.sortedBy { it.name.lowercase() }
                 path = p
                 showRoots = false
-            } catch (_: Exception) {
+                error = null
+            } catch (e: Exception) {
+                error = "打不开这个目录:${e.message}"
             } finally {
                 loading = false
             }
@@ -93,7 +100,9 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                 }.filter { it.isDir }
                 path = ""
                 showRoots = true
-            } catch (_: Exception) {
+                error = null
+            } catch (e: Exception) {
+                error = "读不到盘符:${e.message}"
             } finally {
                 loading = false
             }
@@ -152,25 +161,57 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                 }
             }
 
-            LazyColumn(Modifier.weight(1f, fill = false).height(420.dp)) {
-                items(entries, key = { it.path.ifEmpty { it.name } }) { e ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .pressable { if (e.isDir) loadDir(e.path.ifEmpty { joinPath(path, e.name) }) }
-                            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
-                            .padding(horizontal = 12.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_lucide_folder), null,
-                            tint = PaEditorial.Running, modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(e.name, fontSize = 14.sp, color = PaEditorial.Ink, maxLines = 1)
+            if (error != null) {
+                Text(
+                    error!!,
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .background(EditorialTone.GREY.container, RoundedCornerShape(13.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    fontSize = 12.sp,
+                    color = EditorialTone.GREY.text,
+                )
+            }
+
+            when {
+                loading && entries.isEmpty() -> {
+                    // 首次读取:骨架占位,不白屏
+                    PaSkeletonList(SkeletonKind.FILE_ROW, Modifier.height(420.dp), count = 6)
+                }
+                entries.isEmpty() && error == null -> {
+                    EmptyState(
+                        R.drawable.ic_lucide_folder,
+                        "这个文件夹是空的",
+                        "点「上级」回上一层,或换一个文件夹",
+                    )
+                }
+                else -> {
+                    LazyColumn(Modifier.weight(1f, fill = false).height(420.dp)) {
+                        items(entries, key = { it.path.ifEmpty { it.name } }) { e ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .pressable { if (e.isDir) loadDir(e.path.ifEmpty { joinPath(path, e.name) }) }
+                                    .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
+                                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                                    .padding(horizontal = 12.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_lucide_folder), null,
+                                    tint = PaEditorial.Running, modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                // 长目录名中间省略(保尾部),整行不至于只看到开头
+                                Text(
+                                    middleEllipsize(e.name, 32),
+                                    fontSize = 14.sp, color = PaEditorial.Ink, maxLines = 1,
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                        }
                     }
-                    Spacer(Modifier.height(6.dp))
                 }
             }
 

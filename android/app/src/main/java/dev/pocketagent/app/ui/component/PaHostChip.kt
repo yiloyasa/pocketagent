@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.PaStatusGlyph
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.theme.PaEditorial
@@ -51,6 +52,18 @@ fun hostStatusTone(link: PaHostLink): EditorialTone = when (link) {
     PaHostLink.CONNECTED -> EditorialTone.RUNNING
     PaHostLink.CONNECTING -> EditorialTone.NEUTRAL
     PaHostLink.OFFLINE -> EditorialTone.GREY
+}
+
+/**
+ * 连接态 → 形通道(与四词状态同一套 [PaStatusGlyph],纯函数,单测钉死
+ * StatusGlyphMappingTest):已连接=对勾(通了的确认形)/ 连接中=实心点
+ * (进行中)/ 离线=空心环(未接通)。三态颜色本就不同(绿/墨/灰),形状
+ * 是给色弱用户的第三条保险 —— 词、色、形三线同义。
+ */
+fun hostStatusGlyph(link: PaHostLink): PaStatusGlyph = when (link) {
+    PaHostLink.CONNECTED -> PaStatusGlyph.CHECK
+    PaHostLink.CONNECTING -> PaStatusGlyph.DOT
+    PaHostLink.OFFLINE -> PaStatusGlyph.RING
 }
 
 /**
@@ -162,13 +175,9 @@ fun PaHostChip(
                 )
             }
             Spacer(Modifier.height(3.dp))
-            // 状态行:8dp 状态点 + 副标题(通道/上次更新)
+            // 状态行:形通道字形(环/点/勾,与四词状态同一套)+ 副标题(通道/上次更新)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .background(tone.accent, CircleShape),
-                )
+                PaStatusGlyphSlot(hostStatusGlyph(link), tone.accent)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     caption,

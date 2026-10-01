@@ -196,6 +196,14 @@ import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaStatusBadge
 import dev.pocketagent.app.ui.component.connectionBannerCopy
+import dev.pocketagent.app.ui.component.ConnectionBannerState
+import dev.pocketagent.app.ui.component.nextConnectionBannerState
+// R2-A 消息长按上下文菜单(皮在 component/ContextMenu,只读消费):
+// 长按任意用户/回复气泡锚定弹出,动作=复制全文/选择文本/引用回复/重试发送。
+import dev.pocketagent.app.ui.component.ContextMenu
+import dev.pocketagent.app.ui.component.ContextMenuItem
+import dev.pocketagent.app.ui.component.longPressMenu
+import dev.pocketagent.app.ui.component.rememberContextMenuState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -806,6 +814,51 @@ internal fun toolCallHeadline(toolName: String, toolArgs: String, maxLen: Int = 
     return if (headline.length <= maxLen) headline else headline.take(maxLen) + "…"
 }
 
+// ---- R2-A 工具卡长输出渐进披露(纯函数,JVM 单测钉死,见 ChatToolOutputPreviewTest)----
+
+/** 预览保留头部多少字:开头是命令回显/参数确认,信息密度最高。 */
+internal const val TOOL_OUTPUT_PREVIEW_HEAD_CHARS = 2000
+
+/** 预览保留尾部多少字:错误堆栈/最终结果多在输出末尾,尾部必须留。 */
+internal const val TOOL_OUTPUT_PREVIEW_TAIL_CHARS = 400
+
+/** 隐藏量下限:差这点字不值得多一次点击,原样全显(省一次交互,不玩阉割式预览)。 */
+internal const val TOOL_OUTPUT_PREVIEW_MIN_OMITTED = 160
+
+/** 头尾之间省略段的占位提示;独立成行,渲染在预览文本中间(字符数不计入「还有 N 字」)。 */
+internal const val TOOL_OUTPUT_PREVIEW_OMITTED_MARK = "\n…(中间省略)…\n"
+
+/** 工具输出的预览结果:visible 直接渲染;truncated=false 时 visible 就是全文。 */
+data class ToolOutputPreview(
+    val visible: String,
+    val truncated: Boolean,
+    /** 被省略的真实字符数(不造数,按钮上报它)。truncated=false 恒 0。 */
+    val omittedChars: Int,
+)
+
+/**
+ * 长输出 → 头尾预览(纯函数)。参数负数一律按 0 兜底;隐藏量不足
+ * [TOOL_OUTPUT_PREVIEW_MIN_OMITTED] 时不截(可见 [ToolOutputPreview.truncated])。
+ */
+internal fun toolOutputPreview(
+    text: String,
+    headChars: Int = TOOL_OUTPUT_PREVIEW_HEAD_CHARS,
+    tailChars: Int = TOOL_OUTPUT_PREVIEW_TAIL_CHARS,
+    minOmitted: Int = TOOL_OUTPUT_PREVIEW_MIN_OMITTED,
+): ToolOutputPreview {
+    val head = headChars.coerceAtLeast(0)
+    val tail = tailChars.coerceAtLeast(0)
+    val omitted = text.length - head - tail
+    if (omitted <= minOmitted.coerceAtLeast(0)) {
+        return ToolOutputPreview(visible = text, truncated = false, omittedChars = 0)
+    }
+    return ToolOutputPreview(
+        visible = text.take(head) + TOOL_OUTPUT_PREVIEW_OMITTED_MARK + text.takeLast(tail),
+        truncated = true,
+        omittedChars = omitted,
+    )
+}
+
 @Composable
 private fun ToolCallCard(item: ChatItem, scale: Float) {
     // P0-4:常规工具卡默认折叠一行(▸ 工具名+摘要 · 状态/耗时),点击展开全量参数/输出。
@@ -907,50 +960,116 @@ private fun ToolCallCard(item: ChatItem, scale: Float) {
                 color = statusColor,
             )
         }
-        if (expanded) {
-            // 代码/参数区:石墨代码箱(#1A2430)+ 代码浅蓝字(README:代码区保留石墨深色);
-            // 黑客终端保持旧底色(显示模式行为不变)。
-            val codeBoxColor = if (PaHacker.isHacker) PaEditorial.Canvas else PaEditorial.GraphiteCode
-            val codeTextColor = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.CodeText
-            if (item.toolArgs.isNotBlank()) {
-                Text("参数", Modifier.padding(top = 8.dp), fontSize = 10.5.sp, color = ChatSubtleColor)
-                Text(
-                    item.toolArgs,
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 2.dp)
-                        .background(codeBoxColor, RoundedCornerShape(8.dp))
-                        .padding(8.dp),
-                    fontSize = (10.5f * scale).sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = codeTextColor,
-                )
-            }
-            if (item.text.isNotBlank()) {
-                Text(
-                    if (item.toolStatus == "failure") "错误" else "输出",
-                    Modifier.padding(top = 8.dp),
-                    fontSize = 10.5.sp,
-                    color = ChatSubtleColor,
-                )
-                Text(
-                    item.text,
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 2.dp)
-                        .background(codeBoxColor, RoundedCornerShape(8.dp))
-                        .padding(8.dp),
-                    fontSize = (10.5f * scale).sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (item.toolStatus == "failure") ChatDeniedColor
-                    else if (PaHacker.isHacker) PaEditorial.Muted else PaEditorial.CodeText,
-                )
-            }
-            if (item.toolArgs.isBlank() && item.text.isBlank()) {
-                Text("等待结果…", Modifier.padding(top = 8.dp), fontSize = 11.sp, color = ChatSubtleColor)
+        // 展开区出入场走 spring(PaMotion 令牌,可打断):披露动效让"多出来的内容有
+        // 来处",折叠↔展开的状态变化需要连续性,不是装饰 —— 与折叠行 chevron 转向
+        // 同一语义。hacker 终端工具块(TerminalToolBlock)不受影响。
+        // 【全限定名】Column 作用域内同名扩展会抢走解析,要的是顶层函数(同"新内容"胶囊)。
+        androidx.compose.animation.AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(PaMotion.emphasized()) + fadeIn(PaMotion.emphasized()),
+            exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
+            label = "toolCardDetails",
+        ) {
+            Column {
+                // 代码/参数区:石墨代码箱(#1A2430)+ 代码浅蓝字(README:代码区保留石墨深色);
+                // 黑客终端保持旧底色(显示模式行为不变)。
+                val codeBoxColor = if (PaHacker.isHacker) PaEditorial.Canvas else PaEditorial.GraphiteCode
+                val codeTextColor = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.CodeText
+                if (item.toolArgs.isNotBlank()) {
+                    // 标签行:段名 + 「复制」—— 代码箱自带复制口,长 JSON/命令不必靠
+                    // 长按拖选(选区工具栏在代码箱里也难用)。轻触感由 pressable 自带。
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("参数", Modifier.weight(1f), fontSize = 10.5.sp, color = ChatSubtleColor)
+                        ToolCardCopyChip("复制", item.toolArgs)
+                    }
+                    Text(
+                        item.toolArgs,
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp)
+                            .background(codeBoxColor, RoundedCornerShape(8.dp))
+                            // 高度封顶 + 纵横双向滚动:超长参数/输出不再把卡撑成一屏,
+                            // 长行保横向滚动不硬折(diff/JSON 的对齐语义,同回合 diff 口径)。
+                            .heightIn(max = 260.dp)
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState()),
+                        fontSize = (10.5f * scale).sp,
+                        fontFamily = FontFamily.Monospace,
+                        // 不折行,交给横向滚动(与 MarkdownText 代码块同一取舍)
+                        softWrap = false,
+                        color = codeTextColor,
+                    )
+                }
+                if (item.text.isNotBlank()) {
+                    val preview = remember(item.text) { toolOutputPreview(item.text) }
+                    // 长输出"展开全部"按消息留档(rememberSaveable 按 toolId):滑出屏幕
+                    // 再滚回来不丢(与折叠态同一纪律)。流式期间文本增长不重置选择。
+                    var showFullOutput by rememberSaveable(item.toolId) { mutableStateOf(false) }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (item.toolStatus == "failure") "错误" else "输出",
+                            Modifier.weight(1f),
+                            fontSize = 10.5.sp,
+                            color = ChatSubtleColor,
+                        )
+                        ToolCardCopyChip("复制", item.text)
+                    }
+                    Text(
+                        if (showFullOutput) item.text else preview.visible,
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 2.dp)
+                            .background(codeBoxColor, RoundedCornerShape(8.dp))
+                            .heightIn(max = 260.dp)
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState()),
+                        fontSize = (10.5f * scale).sp,
+                        fontFamily = FontFamily.Monospace,
+                        softWrap = false,
+                        color = if (item.toolStatus == "failure") ChatDeniedColor
+                        else if (PaHacker.isHacker) PaEditorial.Muted else PaEditorial.CodeText,
+                    )
+                    // 长输出渐进披露第二步:默认只渲染头部预览(纯函数 toolOutputPreview),
+                    // 余量按真实字符数报在按钮上(不造数);展开后可收回。
+                    if (preview.truncated) {
+                        Text(
+                            if (showFullOutput) "收起"
+                            else "展开全部(还有 ${preview.omittedChars} 字)",
+                            Modifier
+                                .pressable { showFullOutput = !showFullOutput }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ChatAccentColor,
+                        )
+                    }
+                }
+                if (item.toolArgs.isBlank() && item.text.isBlank()) {
+                    Text("等待结果…", Modifier.padding(top = 8.dp), fontSize = 11.sp, color = ChatSubtleColor)
+                }
             }
         }
     }
+}
+
+/**
+ * 工具卡展开区的「复制」小口:标签行右侧的次级文字动作,复制整段参数/输出。
+ * 低调(Subtle 11sp,与段名同档)但触感完整(pressable 自带);复制回执由
+ * [copyMessage] 的 Toast 统一给,这里不再叠一层反馈。
+ */
+@Composable
+private fun ToolCardCopyChip(label: String, payload: String) {
+    val ctx = LocalContext.current
+    Text(
+        label,
+        Modifier
+            .pressable { copyMessage(ctx, payload) }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        fontSize = 11.sp,
+        color = ChatSubtleColor,
+    )
 }
 
 /**
@@ -2846,20 +2965,39 @@ fun ChatScreen(
         }
     }
 
+    // ---- R2-A 消息长按上下文菜单(单一实例,锚点=被长按的那条消息)----
+    // 菜单本体在根层渲染(Popup,见 HistoryQuickPanel 旁);这里只持三份状态:
+    //   messageMenu        锚点坐标(component/ContextMenuState)
+    //   messageMenuTarget  被长按的消息(菜单摘要/动作都针对它)
+    //   messageSelectArmed 「选择文本」的进入请求 —— 菜单点了它之后发给时间线里
+    //                      对应 item 的局部 selectMode(LazyColumn 的 item 只能
+    //                      改自己的局部态,跨层经这一棒交接)
+    val messageMenu = rememberContextMenuState()
+    var messageMenuTarget by remember { mutableStateOf<ChatItem?>(null) }
+    var messageSelectArmed by remember { mutableStateOf<ChatItem?>(null) }
+
     val connSt = AgentConnection.connState.collectAsState().value
     val hasFailure = loadError != null ||
         st.recovering ||
         st.recoveryError != null ||
         st.errorMessage != null ||
         connSt == "down"
-    // 呈现层重连轮数(与 component/ConnectionBanner 同一口径):每整轮回退链判死
-    // (connState 落回 down)记一次,恢复清零;编辑式断线横幅用它报"正在重连(第 N 次)"。
-    var reconnectAttempts by remember { mutableStateOf(0) }
-    LaunchedEffect(connSt) {
-        when (connSt) {
-            "down" -> reconnectAttempts += 1
-            "ok" -> reconnectAttempts = 0
-            // checking 是巡检中间态:不计数、不出横幅
+    // 呈现层断连横幅状态:推进逻辑全在 component/nextConnectionBannerState(纯函数,
+    // ConnectionBannerStateTest 钉死),本屏编辑式横幅(ChatOfflineBanner)只读结果 ——
+    // 本地那份复制实现已删(它带两个已知缺陷:挂载即 down 虚计一轮;按 connDown 渲染,
+    // checking 期间横幅闪没)。状态机口径:
+    //  - 挂载即 down:可见但不虚计(prev 取挂载时现值);
+    //  - checking:断过(attempts>0)保持可见 —— 探活回退链动辄数秒,撤了再放回
+    //    就是用户看见的"横幅闪烁";没断过的首轮 checking 不出横幅;
+    //  - ok:退场且轮数清零,不弹"已恢复"成功横幅。
+    var chatBanner by remember {
+        mutableStateOf(ConnectionBannerState(visible = false, attempts = 0))
+    }
+    var chatBannerPrev by remember { mutableStateOf(AgentConnection.connState.value) }
+    LaunchedEffect(Unit) {
+        AgentConnection.connState.collect { s ->
+            chatBanner = nextConnectionBannerState(chatBannerPrev, s, chatBanner.attempts)
+            chatBannerPrev = s
         }
     }
 
@@ -3420,6 +3558,17 @@ fun ChatScreen(
                 val enterArm = prevCount != null &&
                     index == st.items.lastIndex &&
                     st.items.size > prevCount
+                // R2-A:本条消息的「选择文本」模式。长按默认开菜单(见用户/回复气泡的
+                // longPressMenu),选一段文字改为从菜单进入 —— 手柄拖选能力不丢,但不再
+                // 与菜单抢同一个长按手势。滑出屏幕即复位(remember 跟随 item 生命周期)。
+                var selectMode by remember { mutableStateOf(false) }
+                LaunchedEffect(messageSelectArmed) {
+                    // 比引用不比值:内容完全相同的两条消息只命中被长按的那一条
+                    if (messageSelectArmed === item) {
+                        selectMode = true
+                        messageSelectArmed = null
+                    }
+                }
                 MessageEnterAnimation(arm = enterArm) {
                     if (PaHacker.isHacker) {
                     // 黑客终端模式:主对话读作"终端会话"——四类 Block(输入/输出/工具/脚注),
@@ -3488,17 +3637,20 @@ fun ChatScreen(
                         // 下方右对齐(待发送→已送达→执行中;失败保留内容可重试);
                         // 黑客终端保持旧气泡(AccentDim 终端块)与原徽标位(气泡内)。
                         Column(Modifier.widthIn(max = 320.dp), horizontalAlignment = Alignment.End) {
-                            Column(
-                                Modifier
-                                    .widthIn(max = 300.dp)
-                                    // P0-2 失败级(队列满拒收)整条气泡可点击重发 —— 重试入口
-                                    // 挂在消息本体上(判定见 deliveryRetryable,动作见 retryDelivery);
-                                    // 其余投递状态点了没有可重试的东西,不武装点击。
-                                    .then(
-                                        if (deliveryRetryable(item.deliverState) && !offlineSnapshot) {
-                                            Modifier.pressable(haptic = true) { retryDelivery(item) }
-                                        } else Modifier
-                                    )
+                        Column(
+                            Modifier
+                                .widthIn(max = 300.dp)
+                                // R2-A:长按气泡 = 上下文菜单(复制全文/选择文本/引用回复,
+                                // 失败级再加「重试发送」)。P0-2 失败级(队列满拒收)的
+                                // "点按重发"保留为单击动作(longPressMenu 契约:挂了它就
+                                // 不再叠加 clickable,单击经 onClick 传入);其余投递状态
+                                // 点了没有可重试的东西,不武装点按。
+                                .longPressMenu(
+                                    messageMenu,
+                                    onClick = if (deliveryRetryable(item.deliverState) && !offlineSnapshot) {
+                                        { retryDelivery(item) }
+                                    } else null,
+                                )
                                     // 编辑式:石墨重点面(#1E2835)承载用户输入,与瓷白助手正文
                                     // 拉开层级;黑客终端模式:圆角收 6dp 读"终端块"(契约见 PaHacker)。
                                     .background(
@@ -3533,8 +3685,20 @@ fun ChatScreen(
                                     }
                                 }
                                 if (item.text.isNotBlank()) {
-                                    // 用户消息同样支持长按拖选复制(与回复气泡同一交互)
-                                    SelectionContainer {
+                                    // R2-A:长按默认开上下文菜单;要拖选一段从菜单进
+                                    // 「选择文本」(与回复气泡同一交互,见 assistant 分支注释)
+                                    if (selectMode) {
+                                        SelectionContainer {
+                                            Text(
+                                                item.text,
+                                                color = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.OnGraphite,
+                                                fontSize = (14 * uiScale).sp,
+                                                lineHeight = (21 * uiScale).sp,
+                                                // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
+                                                fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
+                                            )
+                                        }
+                                    } else {
                                         Text(
                                             item.text,
                                             color = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.OnGraphite,
@@ -3542,6 +3706,17 @@ fun ChatScreen(
                                             lineHeight = (21 * uiScale).sp,
                                             // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
                                             fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
+                                        )
+                                    }
+                                    if (selectMode) {
+                                        Text(
+                                            "完成选择",
+                                            Modifier
+                                                .pressable { selectMode = false }
+                                                .padding(top = 4.dp),
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = ChatAccentColor,
                                         )
                                     }
                                 }
@@ -3611,17 +3786,45 @@ fun ChatScreen(
                         )
                     }
                     "usage" -> Unit
-                    else -> Column(Modifier.fillMaxWidth()) {
-                        // 自定义选取复制:套 SelectionContainer 后,长按拖选任意片段,
-                        // 系统工具栏给"复制/全选"(用户反馈:旧的长按只能整条复制,没法选一段)。
-                        // 原先的"长按复制整条"手势会拦截长按事件、与选区冲突,已移除。
-                        // 【编辑式字阶】正文 14/21(README §视觉系统;黑客终端字号不变)。
-                        SelectionContainer {
+                    else -> Column(
+                        Modifier
+                            .fillMaxWidth()
+                            // R2-A:长按回复 = 上下文菜单(复制全文/选择文本/引用回复)。
+                            // 【与旧交互的衔接】此前正文套常驻 SelectionContainer,长按
+                            // 直接进拖选 —— "长按复制整条"因此被移除过一次(手势互抢)。
+                            // 现在长按优先开菜单,拖选改为菜单「选择文本」进入的显式模式
+                            // (见本 item 顶部 selectMode):两个能力都在,不再互抢手势,
+                            // 与 ChatGPT/Claude 官方 App 的消息菜单同构。
+                            .longPressMenu(messageMenu) { messageMenuTarget = item },
+                    ) {
+                        // 选择模式:手柄拖选任意片段,系统工具栏给"复制/全选";
+                        // 平时渲染普通正文,长按交给菜单。「完成选择」退出。
+                        if (selectMode) {
+                            SelectionContainer {
+                                InAppMarkdown(
+                                    text = item.text,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
+                                    onOpenUrl = onOpenBrowser,
+                                )
+                            }
+                        } else {
                             InAppMarkdown(
                                 text = item.text,
                                 modifier = Modifier.fillMaxWidth(),
                                 fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
                                 onOpenUrl = onOpenBrowser,
+                            )
+                        }
+                        if (selectMode) {
+                            Text(
+                                "完成选择",
+                                Modifier
+                                    .pressable { selectMode = false }
+                                    .padding(top = 4.dp),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ChatAccentColor,
                             )
                         }
                         // 消息里如果给了电脑上的文件路径,唯一的动作是"用浏览器打开"
@@ -3822,6 +4025,8 @@ fun ChatScreen(
                 // 离线(12):主机胶囊 OFFLINE + 上次更新时间 —— 未连接时状态仍显示
                 // 上次更新,绝不出现"正在执行"(hostChipCaption 的构造性保证);
                 // 断线横幅保留既有机制(自动重连计数/排队条数/手动重试),草稿不丢。
+                // 主机胶囊只认"已知断网"(down);横幅可见性走三态状态机 —— checking
+                // 断过也保持可见,两者口径不同是有意的(见上方 chatBanner 注释)。
                 if (connDown) {
                     PaHostChip(
                         hostName = hostName.ifBlank { "电脑" },
@@ -3831,8 +4036,10 @@ fun ChatScreen(
                                 .format(java.util.Date(it))
                         },
                     )
+                }
+                if (chatBanner.visible) {
                     ChatOfflineBanner(
-                        copy = connectionBannerCopy(reconnectAttempts, TurnSession.totalQueuedInputs()),
+                        copy = connectionBannerCopy(chatBanner.attempts, TurnSession.totalQueuedInputs()),
                         onRetry = { reloadToken++ },
                     )
                 }
@@ -4597,14 +4804,28 @@ fun ChatScreen(
                     // "开新任务"与"插进正在跑的任务(或排队)"。离线快照态一律禁用。
                     val sendEnabled = !offlineSnapshot && input.isNotBlank() && !st.recovering
                     val inserting = st.running
+                    // R2 停止可达性:运行中且输入为空 → 发送键原位变「终止」键(与
+                    // ChatGPT/Codex 移动端同位语义:拇指不动就能停),不再是灰死的箭头。
+                    // 运行中且输入非空 = P1-4 的「插入」,语义让位给输入;顶栏(黑客终端)
+                    // 与「更多」(编辑式)的终止入口原样保留作兜底。
+                    val canStopTurn = st.running && input.isBlank() && !offlineSnapshot
                     Box(
                         Modifier
                             // PA-REAL-0004:触控箱 ≥48dp(原 40dp)。Accent 圆底下沉一层保持
                             // 40dp 视觉不变(按下缩放仍作用于整体),只放大不可见命中区。
                             .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            // 发送键:按压缩放 + 触发瞬间轻触觉反馈(反馈在按下瞬间发生)
-                            .pressable(scaleDown = 0.88f, haptic = true, enabled = sendEnabled) {
-                                if (send(input)) input = ""
+                            // 发送键 = 触感分级 confirm 档(发的动作值得重反馈,不再是
+                            // 与普通点击同档的轻触);终止键 = warning 档(打断电脑端的
+                            // 活,分量比发送更重)。反馈都在触发瞬间发生。
+                            .pressable(scaleDown = 0.88f, enabled = sendEnabled || canStopTurn) {
+                                if (canStopTurn) {
+                                    PaHaptics.warning(hapticView)
+                                    TurnSession.cancelTurn(threadId)
+                                    Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    PaHaptics.confirm(hapticView)
+                                    if (send(input)) input = ""
+                                }
                             },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -4612,19 +4833,30 @@ fun ChatScreen(
                             Modifier
                                 .requiredSize(40.dp)
                                 .background(
-                                    if (sendEnabled) ChatAccentColor
-                                    else if (PaHacker.isHacker) PaEditorial.Hover else PaEditorial.Raised,
+                                    when {
+                                        canStopTurn -> ChatDeniedColor
+                                        sendEnabled -> ChatAccentColor
+                                        PaHacker.isHacker -> PaEditorial.Hover
+                                        else -> PaEditorial.Raised
+                                    },
                                     CircleShape,
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
                                 painterResource(
-                                    if (inserting) AppR.drawable.ic_lucide_list_checks
-                                    else AppR.drawable.ic_lucide_arrow_up
+                                    when {
+                                        canStopTurn -> AppR.drawable.ic_lucide_square
+                                        inserting -> AppR.drawable.ic_lucide_list_checks
+                                        else -> AppR.drawable.ic_lucide_arrow_up
+                                    }
                                 ),
-                                if (inserting) "插入运行中任务" else "发送",
-                                tint = if (sendEnabled) Color.White else ChatSubtleColor,
+                                when {
+                                    canStopTurn -> "终止任务"
+                                    inserting -> "插入运行中任务"
+                                    else -> "发送"
+                                },
+                                tint = if (sendEnabled || canStopTurn) Color.White else ChatSubtleColor,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -4740,6 +4972,46 @@ fun ChatScreen(
             onJump = { listIndex -> jumpToHistoryEntry(listIndex) },
             onDismiss = { showHistoryPanel = false },
         )
+        // R2-A 消息长按上下文菜单(单一实例):摘要行报"哪条消息",动作由
+        // chatMessageMenuActions 按消息形态给(纯函数,ChatMessageMenuTest 钉死):
+        //   复制全文(恒有,有正文才有菜单)/ 选择文本(显式进入拖选模式)/
+        //   引用回复(该消息作为引文填进输入框,保留编辑权)/ 重试发送(仅失败级)。
+        val menuTarget = messageMenuTarget
+        if (menuTarget != null && messageMenu.visible) {
+            ContextMenu(
+                state = messageMenu,
+                summary = chatMessageMenuSummary(menuTarget),
+                items = chatMessageMenuActions(
+                    retryable = deliveryRetryable(menuTarget.deliverState) && !offlineSnapshot,
+                    hasText = menuTarget.text.isNotBlank(),
+                ).map { id ->
+                    when (id) {
+                        "copy" -> ContextMenuItem("copy", "复制全文", AppR.drawable.ic_lucide_file_text)
+                        "select" -> ContextMenuItem("select", "选择文本", AppR.drawable.ic_lucide_pencil)
+                        "quote" -> ContextMenuItem("quote", "引用回复", AppR.drawable.ic_lucide_message_square)
+                        else -> ContextMenuItem("retry", "重试发送", AppR.drawable.ic_lucide_refresh_cw)
+                    }
+                },
+                onPick = { pick ->
+                    messageMenu.hide()
+                    when (pick.id) {
+                        "copy" -> copyMessage(ctx, menuTarget.text)
+                        "quote" -> {
+                            // 引用只动草稿不发送:给用户留编辑权(与语音并入同一纪律)
+                            input = quoteMessageIntoDraft(input, menuTarget.text)
+                            Toast.makeText(ctx, "已引用到输入框,补充一句即可发送", Toast.LENGTH_SHORT).show()
+                        }
+                        "select" -> messageSelectArmed = menuTarget
+                        "retry" -> retryDelivery(menuTarget)
+                    }
+                    messageMenuTarget = null
+                },
+                onDismiss = {
+                    messageMenu.hide()
+                    messageMenuTarget = null
+                },
+            )
+        }
         // 「已优化提示词[撤销]」悬浮条:置顶居中,不挤内容(组件自带 5s 计时,
         // 撤销恢复原文;离开页面自动提交 —— 本条无提交动作,等价于自动消失)。
         UndoBarHost(promptOptUndo, Modifier.align(Alignment.TopCenter))
@@ -6461,10 +6733,15 @@ private fun ExpandedInputSheet(
                     Text("完成", fontSize = 13.sp, color = PaEditorial.Ink)
                 }
                 Spacer(Modifier.width(8.dp))
+                // 发送键触感分级:大窗里发送与底栏同档(confirm 级,见输入区发送键注释)
+                val sendHapticView = LocalView.current
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .pressable(scaleDown = 0.92f, enabled = canSend) { onSend() }
+                        .pressable(scaleDown = 0.92f, enabled = canSend) {
+                            PaHaptics.confirm(sendHapticView)
+                            onSend()
+                        }
                         .background(if (canSend) PaEditorial.Primary else PaEditorial.Hover)
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 ) {
@@ -6857,6 +7134,59 @@ private fun copyMessage(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     cm.setPrimaryClip(android.content.ClipData.newPlainText("PocketAgent 消息", text))
     Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
+}
+
+// =====================================================================================
+// R2-A 消息长按上下文菜单 —— 纯决策区(零 Android 依赖,ChatMessageMenuTest 钉死)
+// 皮 = component/ContextMenu(锚点弹窗),接线在 ChatScreen(见根层渲染处)。
+// =====================================================================================
+
+/** 引用进输入框的单条引文最多带多少原文(超出截断,防长输出把草稿灌爆)。 */
+internal const val QUOTE_MAX_CHARS = 160
+
+/**
+ * 长按菜单的动作 id 列表(顺序即展示顺序;ContextMenuLogic 只调 destructive 置底,
+ * 本列表没有危险动作)。正文是菜单的前提:纯附件消息没有可复制/引用的东西,不出菜单。
+ */
+internal fun chatMessageMenuActions(retryable: Boolean, hasText: Boolean): List<String> {
+    if (!hasText) return emptyList()
+    return buildList {
+        add("copy")
+        add("select")
+        add("quote")
+        if (retryable) add("retry")
+    }
+}
+
+/**
+ * 菜单摘要行:角色词 + 换行压平后的正文开头 —— 让用户确认"这次操作针对哪条"。
+ * 无正文只报角色词;超长截断加省略号(绝不渲染整条,菜单行只有一行高)。
+ */
+internal fun chatMessageMenuSummary(item: ChatItem): String {
+    val label = if (item.role == "user") "用户消息" else "回复"
+    val head = item.text.replace("\n", " ").trim()
+    if (head.isEmpty()) return label
+    return if (head.length <= 24) "$label · $head" else "$label · ${head.take(24)}…"
+}
+
+/**
+ * 「引用回复」:把原文压成 Markdown 引文(`> ` 前缀)接进草稿,不自动发送。
+ * 空草稿直接放引文;已有草稿先空一行再接(不和原句黏行)。引文超长截断 ——
+ * 引用是"让 agent 知道我在说哪条",不是全文搬运(全文走「复制全文」)。
+ */
+internal fun quoteMessageIntoDraft(
+    draft: String,
+    quoted: String,
+    maxQuoteChars: Int = QUOTE_MAX_CHARS,
+): String {
+    val body = quoted
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString("\n") { "> $it" }
+    if (body.isEmpty()) return draft
+    val clipped = if (body.length <= maxQuoteChars) body else body.take(maxQuoteChars) + "…"
+    return if (draft.isBlank()) "$clipped\n" else "${draft.trimEnd('\n')}\n\n$clipped\n"
 }
 
 // =====================================================================================

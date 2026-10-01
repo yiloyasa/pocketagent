@@ -286,4 +286,69 @@ class HistoryQuickNavLogicTest {
         // 容器比气泡矮(极端小窗):整体居中且不为负
         assertEquals(0f, HistoryQuickNavLogic.bubbleTopY(50f, bubbleH, 100f, yield), 1e-4f)
     }
+
+    // ==== 微交互轮(2026-09-30)边界补钉:阈值等号、退化几何、相位空转 ====
+
+    @Test
+    fun `按下相位位移恰好等于 slop 即进预览_快扫不等人`() {
+        // 条件是 ">= dragSlop" 进预览:等号边界必须进(拖动不等人),差一点才算微动
+        val g = HistoryQuickNavLogic.pressed(100f)
+        assertEquals(
+            HistoryQuickNavLogic.NavGesturePhase.PREVIEW,
+            HistoryQuickNavLogic.moved(g, 100f + 8f, dragSlopPx = 8f).phase,
+        )
+        assertEquals(
+            HistoryQuickNavLogic.NavGesturePhase.PRESSED,
+            HistoryQuickNavLogic.moved(g, 100f + 7.9f, dragSlopPx = 8f).phase,
+        )
+    }
+
+    @Test
+    fun `预览相位再收到按住超时是空转_不重置也不回退`() {
+        // 计时器与移动并发的防御:held 迟到一拍,不能把已预览的手势打回或清 y
+        var g = HistoryQuickNavLogic.pressed(100f)
+        g = HistoryQuickNavLogic.moved(g, 160f, dragSlopPx = 8f)
+        val held = HistoryQuickNavLogic.held(g)
+        assertEquals(HistoryQuickNavLogic.NavGesturePhase.PREVIEW, held.phase)
+        assertEquals(160f, held.y, 1e-4f)
+    }
+
+    @Test
+    fun `容器矮于单刻度时 indexAtY 退化回 0_不崩不越界`() {
+        // 几何退化(step<=0, count>1):任何手指位置都落第 0 刻度
+        assertEquals(0, HistoryQuickNavLogic.indexAtY(50f, 5, 1f, 2f, 7f))
+        assertEquals(0, HistoryQuickNavLogic.indexAtY(-999f, 5, 1f, 2f, 7f))
+        // 等号边界:容器高恰好等于刻度高,同样退化
+        assertEquals(0, HistoryQuickNavLogic.indexAtY(50f, 5, 2f, 2f, 7f))
+    }
+
+    @Test
+    fun `两刻度几何居中且中点归属高位`() {
+        // count=2:总高 2+9=11,容器 100 → top=(100-11)/2=44.5,step=9
+        val g = HistoryQuickNavLogic.tickGeometry(2, 100f, 2f, 7f)
+        assertEquals(9f, g.step, 1e-4f)
+        assertEquals(44.5f, g.top, 1e-4f)
+        // 两刻度中点(y=50)四舍五入到高位刻度 1
+        assertEquals(1, HistoryQuickNavLogic.indexAtY(50f, 2, 100f, 2f, 7f))
+        // 中点差一丝丝就归低位
+        assertEquals(0, HistoryQuickNavLogic.indexAtY(49.9f, 2, 100f, 2f, 7f))
+    }
+
+    @Test
+    fun `容器与气泡等高时整体居中回 0_等号边界`() {
+        // containerHeightPx == bubbleHeightPx 走"容器不够高"分支,顶部 0 且不为负
+        assertEquals(0f, HistoryQuickNavLogic.bubbleTopY(60f, 120f, 120f, 8f), 1e-4f)
+    }
+
+    @Test
+    fun `向上拖同样按绝对位移判定预览与取消`() {
+        // 反方向拖:进预览、拖回起点附近取消、越过阈值跳转 —— 判定只看 |dy|
+        var g = HistoryQuickNavLogic.pressed(100f)
+        g = HistoryQuickNavLogic.moved(g, 70f, dragSlopPx = 8f)
+        assertEquals(HistoryQuickNavLogic.NavGesturePhase.PREVIEW, g.phase)
+        g = HistoryQuickNavLogic.moved(g, 85f, dragSlopPx = 8f)
+        assertEquals(HistoryQuickNavLogic.NavRelease.Cancel, released(g))
+        g = HistoryQuickNavLogic.moved(g, 80f, dragSlopPx = 8f) // |dy| == 阈值
+        assertTrue(released(g) is HistoryQuickNavLogic.NavRelease.Jump)
+    }
 }

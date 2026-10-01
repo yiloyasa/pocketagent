@@ -73,8 +73,14 @@ fun SplitButton(
 ) {
     var open by remember { mutableStateOf(false) }
     // chevron_right 旋转 90° 即指向下;展开时转到 270° 指向上。
-    // 状态动画走 PaMotion 令牌(spring):中途反向点击可从当前角度续走,不回跳。
-    val chevron by animateFloatAsState(if (open) 270f else 90f, PaMotion.standard(), label = "chevron")
+    // 状态动画走 PaMotion 令牌(spring):中途反向点击可从当前角度续走,不回跳;
+    // 减弱动效时瞬时到位(系统动画缩放=0 退 snap)。
+    val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
+    val chevron by animateFloatAsState(
+        if (open) 270f else 90f,
+        if (reduceMotion) PaMotion.instant() else PaMotion.standard(),
+        label = "chevron",
+    )
     val density = LocalDensity.current
     val buttonHeight = if (compact) 34.dp else 48.dp
     val corner = if (compact) RoundedCornerShape(10.dp) else RoundedCornerShape(14.dp)
@@ -138,9 +144,11 @@ fun SplitButton(
                     .background(PaEditorial.Hairline),
             )
             // ---- 下拉触发区 ----
+            // 【主副动作分区 ≥44dp】主区与下拉区之间给足 44dp 宽的独立触控带,
+            // 手指不会一按跨两个动作(紧凑模式原 30dp 偏窄,统一抬到 44)。
             Box(
                 Modifier
-                    .size(width = if (compact) 30.dp else 44.dp, height = buttonHeight)
+                    .size(width = 44.dp, height = buttonHeight)
                     .pressable(haptic = true) { open = !open },
                 contentAlignment = Alignment.Center,
             ) {

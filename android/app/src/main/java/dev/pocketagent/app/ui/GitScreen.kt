@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +49,9 @@ import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaHaptics
+import dev.pocketagent.app.ui.component.PaSkeletonList
+import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.theme.Pa
@@ -136,6 +141,7 @@ private fun GitScreenBody(
     // 侧边栏跟手:与主页/会话页同一套 controller
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     val scope = rememberCoroutineScope()
+    val view = LocalView.current
     var repo by remember { mutableStateOf(workspacePath ?: "") }
     var status by remember { mutableStateOf<GitStatus?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -413,7 +419,16 @@ private fun GitScreenBody(
                     "这个目录不是 Git 仓库",
                     "换一个仓库目录,或在电脑上对该目录执行 git init",
                 )
-                status == null -> {}
+                status == null -> {
+                    // 首次拉状态:骨架占位,不白屏
+                    if (busy) {
+                        PaSkeletonList(
+                            SkeletonKind.CARD_BLOCK,
+                            Modifier.fillMaxWidth().padding(top = 6.dp),
+                            count = 4,
+                        )
+                    }
+                }
                 else -> {
                     val st = status!!
 
@@ -466,54 +481,67 @@ private fun GitScreenBody(
                     Spacer(Modifier.height(10.dp))
 
                     when (tab) {
-                        // ---------- 变更:左滑暂存/取消暂存,点开看 diff ----------
+                        // ---------- 变更:按 已暂存/未暂存/未跟踪 分组,左滑暂存,点开看 diff ----------
                         0 -> {
                             if (st.changesList.isEmpty()) {
-                                Text(
-                                    "工作区干净,没有待提交的改动",
-                                    Modifier.padding(vertical = 20.dp),
-                                    fontSize = 13.sp,
-                                    color = PaEditorial.Muted,
+                                EmptyState(
+                                    AppR.drawable.ic_lucide_circle_check,
+                                    "工作区干净",
+                                    "没有待提交的改动;电脑上有新变化时点右上角「刷新」",
                                 )
                             } else {
+                                // 分组规则在 GitStatusLogic.kt(纯函数):已暂存 → 未暂存 → 未跟踪
+                                val sections = remember(st.changesList) { groupChanges(st.changesList) }
                                 LazyColumn(
                                     Modifier.weight(1f).fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    items(st.changesList, key = { it.path }) { c ->
-                                        val staged = c.stagedStatus.isNotEmpty() && c.worktreeStatus.isEmpty()
-                                        SwipeRevealRow(
-                                            rowKey = c.path,
-                                            openKey = openKey,
-                                            actions = listOf(
-                                                SwipeAction(
-                                                    "stage",
-                                                    if (staged) "取消暂存" else "暂存",
-                                                    AppR.drawable.ic_lucide_check,
-                                                    PaEditorial.Primary,
+                                    sections.forEach { (group, rows) ->
+                                        item(key = "sec-" + group.name) {
+                                            Text(
+                                                gitGroupTitle(group) + " · ${rows.size}",
+                                                Modifier.padding(start = 2.dp, top = 8.dp, bottom = 2.dp),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight(650),
+                                                color = PaEditorial.Muted,
+                                            )
+                                        }
+                                        items(rows, key = { it.path }) { c ->
+                                            val staged = c.stagedStatus.isNotEmpty() && c.worktreeStatus.isEmpty()
+                                            SwipeRevealRow(
+                                                rowKey = c.path,
+                                                openKey = openKey,
+                                                actions = listOf(
+                                                    SwipeAction(
+                                                        "stage",
+                                                        if (staged) "取消暂存" else "暂存",
+                                                        AppR.drawable.ic_lucide_check,
+                                                        PaEditorial.Primary,
+                                                    ),
+                                                    SwipeAction(
+                                                        "discard", "丢弃",
+                                                        AppR.drawable.ic_lucide_trash_2,
+                                                        Color.White, destructive = true,
+                                                    ),
                                                 ),
-                                                SwipeAction(
-                                                    "discard", "丢弃",
-                                                    AppR.drawable.ic_lucide_trash_2,
-                                                    Color.White, destructive = true,
-                                                ),
-                                            ),
-                                            onAction = { a ->
-                                                when (a.id) {
-                                                    "stage" -> stagePath(c.path, staged)
-                                                    "discard" -> pendingDiscard = c.path
-                                                }
-                                            },
-                                            rowBackground = PaEditorial.Surface,
-                                            onClick = {
-                                                if (openKey.value == c.path) {
-                                                    openKey.value = null
-                                                } else {
-                                                    openFileDiff(c.path, staged)
-                                                }
-                                            },
-                                        ) {
-                                            ChangeRow(c)
+                                                onAction = { a ->
+                                                    when (a.id) {
+                                                        "stage" -> stagePath(c.path, staged)
+                                                        // 丢弃不可恢复:进红色强确认,不在滑动里直接生效
+                                                        "discard" -> pendingDiscard = c.path
+                                                    }
+                                                },
+                                                rowBackground = PaEditorial.Surface,
+                                                onClick = {
+                                                    if (openKey.value == c.path) {
+                                                        openKey.value = null
+                                                    } else {
+                                                        openFileDiff(c.path, staged)
+                                                    }
+                                                },
+                                            ) {
+                                                ChangeRow(c)
+                                            }
                                         }
                                     }
                                     item { Spacer(Modifier.height(80.dp)) }
@@ -524,11 +552,10 @@ private fun GitScreenBody(
                         // ---------- 历史:提交列表,点开看该提交的 patch ----------
                         1 -> {
                             if (log.isEmpty()) {
-                                Text(
-                                    "没有提交历史(仓库还没有 commit)",
-                                    Modifier.padding(vertical = 20.dp),
-                                    fontSize = 13.sp,
-                                    color = PaEditorial.Muted,
+                                EmptyState(
+                                    AppR.drawable.ic_lucide_clock,
+                                    "没有提交历史",
+                                    "这个仓库还没有 commit;在电脑上提交后点「刷新」",
                                 )
                             } else {
                                 LazyColumn(
@@ -546,11 +573,10 @@ private fun GitScreenBody(
                         // ---------- 分支:切换 / 新建 ----------
                         else -> {
                             if (branches.isEmpty()) {
-                                Text(
+                                EmptyState(
+                                    AppR.drawable.ic_lucide_git_branch,
                                     "没有读到分支信息",
-                                    Modifier.padding(vertical = 20.dp),
-                                    fontSize = 13.sp,
-                                    color = PaEditorial.Muted,
+                                    "确认这个目录是 Git 仓库后点「刷新」,或换一个仓库",
                                 )
                             } else {
                                 LazyColumn(
@@ -580,7 +606,8 @@ private fun GitScreenBody(
             containerColor = PaEditorial.Surface,
             title = {
                 Text(
-                    diffTitle,
+                    // 深路径标题中间省略,保住文件名与扩展名
+                    middleEllipsize(diffTitle, 64),
                     fontSize = 14.sp, lineHeight = 20.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
                     color = PaEditorial.Ink,
@@ -603,35 +630,47 @@ private fun GitScreenBody(
         )
     }
 
-    // 丢弃单个文件的改动(危险操作,二次确认)
+    // 丢弃单个文件的改动 —— 危险级 DESTRUCTIVE(gitActionDanger):不可恢复、Git 也找不回。
+    // 红色实心确认钮 + 后果写明,与普通"确认"分级(gitDangerConfirmLabel 给出动作词)。
     pendingDiscard?.let { path ->
         AlertDialog(
             onDismissRequest = { pendingDiscard = null },
             title = { Text("丢弃改动?", fontSize = 15.sp) },
             text = {
                 Text(
-                    "将撤销 $path 上未暂存的修改,此操作不可恢复。",
+                    "将撤销 ${middleEllipsize(path, 40)} 上未暂存的修改。\n" +
+                        "未提交的内容不会进回收站,也无法通过 Git 找回,此操作不可恢复。",
                     fontSize = 12.5.sp,
                     color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    pendingDiscard = null
-                    scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                AgentConnection.gitService().discardChanges(
-                                    DiscardChangesRequest.newBuilder()
-                                        .setRepo(repo).addPaths(path).build())
+                androidx.compose.material3.Button(
+                    onClick = {
+                        pendingDiscard = null
+                        PaHaptics.warning(view)
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    AgentConnection.gitService().discardChanges(
+                                        DiscardChangesRequest.newBuilder()
+                                            .setRepo(repo).addPaths(path).build())
+                                }
+                                openKey.value = null
+                                refresh()
+                            } catch (e: Exception) {
+                                error = "丢弃失败:${e.message}"
                             }
-                            openKey.value = null
-                            refresh()
-                        } catch (e: Exception) {
-                            error = "丢弃失败:${e.message}"
                         }
-                    }
-                }) { Text("丢弃", color = EditorialTone.DENIED.text, fontWeight = FontWeight.SemiBold) }
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = PaEditorial.Denied,
+                        contentColor = Color.White,
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text(gitDangerConfirmLabel("discard"), fontWeight = FontWeight.SemiBold)
+                }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDiscard = null }) { Text("取消") }
@@ -793,6 +832,8 @@ private fun GitTab(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .pressable(haptic = true) { onClick() }
+            // 触达区 ≥44dp(工程纪律 R2-D 7):视觉仍按胶囊排,热区拉到下限
+            .heightIn(min = 44.dp)
             .background(
                 if (selected) PaEditorial.PrimaryContainer else Color.Transparent,
                 RoundedCornerShape(50),
@@ -801,6 +842,7 @@ private fun GitTab(label: String, selected: Boolean, onClick: () -> Unit) {
                 if (selected) Modifier else Modifier.border(1.dp, PaEditorial.Hairline, RoundedCornerShape(50)),
             )
             .padding(horizontal = 14.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
@@ -866,7 +908,8 @@ private fun ChangeRow(c: GitFileChange) {
             }
             Spacer(Modifier.width(9.dp))
             Text(
-                fileName,
+                // 长文件名中间省略保扩展名(FilenameDisplay 规则);目录段在下一行单独展示
+                middleEllipsize(fileName, 28),
                 Modifier.weight(1f),
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,

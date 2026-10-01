@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Card
@@ -33,11 +35,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -46,18 +50,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
+import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
-import dev.pocketagent.app.ui.component.FileKind
+import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaNavIconButton
+import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.PreviewMode
+import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.UndoBarHost
-import dev.pocketagent.app.ui.component.fileKindOf
 import dev.pocketagent.app.ui.component.parentDirectoryOf
+import dev.pocketagent.app.ui.component.pathBreadcrumbs
 import dev.pocketagent.app.ui.component.rememberUndoState
-import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.EditorialTone
@@ -66,7 +73,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pocketagent.v1.CreateDirectoryRequest
 import pocketagent.v1.DeleteEntryRequest
-import pocketagent.v1.DirectoryEntry
 import pocketagent.v1.MoveEntryRequest
 import pocketagent.v1.WriteFileRequest
 import pocketagent.v1.ListDirectoryRequest
@@ -115,9 +121,10 @@ private fun FilesScreenBody(
     // 侧边栏跟手:与主页/会话页同一套 controller
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     val scope = rememberCoroutineScope()
+    val view = LocalView.current
     var path by remember { mutableStateOf(initialPath ?: "") }
     var showRoots by remember { mutableStateOf(initialPath.isNullOrEmpty()) }
-    var entries by remember { mutableStateOf(listOf<DirectoryEntry>()) }
+    var entries by remember { mutableStateOf(listOf<FileRowModel>()) }
     // 【文件搜索】只对"当前目录已加载的条目"按名字做不区分大小写的过滤。
     // 跨目录递归搜索需要 daemon 侧的接口(现在的 SearchContent 是**内容**搜索,
     // 不是文件名搜索),所以界面上会明确写出搜索范围 —— 不做"看起来能搜全部、
@@ -128,15 +135,24 @@ private fun FilesScreenBody(
     var error by remember { mutableStateOf<String?>(null) }
     var showCreate by remember { mutableStateOf(false) } // 新建文件/文件夹
     // 不能内置预览的文件(旧版 Office / 压缩包 / 音视频):点它时给一个"下载到手机"的引导
-    var askDownload by remember { mutableStateOf<DirectoryEntry?>(null) }
+    var askDownload by remember { mutableStateOf<FileRowModel?>(null) }
     // 【文件管理】沿用会话列表的左滑范式:同一时刻最多一行展开
     val openKey = remember { mutableStateOf<Any?>(null) }
     val listState = rememberLazyListState()
     val undo = rememberUndoState()
-    var renaming by remember { mutableStateOf<DirectoryEntry?>(null) }
+    var renaming by remember { mutableStateOf<FileRowModel?>(null) }
     var renameText by remember { mutableStateOf("") }
-    var pendingDelete by remember { mutableStateOf<DirectoryEntry?>(null) }
+    var pendingDelete by remember { mutableStateOf<FileRowModel?>(null) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    // 面包屑:分段规则在 component/PathNav.kt(与文件夹选择器同一份坐标纪律)
+    val crumbs = remember(path) { pathBreadcrumbs(path) }
+    val crumbScroll = rememberScrollState()
+    // 路径越深面包屑越长:每次换目录把末端(当前层)滚进视野
+    LaunchedEffect(path) {
+        snapshotFlow { crumbScroll.maxValue }.collect { max ->
+            if (max > 0) crumbScroll.animateScrollTo(max)
+        }
+    }
 
     fun loadDir(p: String) {
         loading = true
@@ -146,9 +162,7 @@ private fun FilesScreenBody(
                     AgentConnection.fileService()
                         .listDirectory(ListDirectoryRequest.newBuilder().setPath(p).build())
                         .entriesList
-                }.sortedWith(
-                    compareByDescending<DirectoryEntry> { it.isDir }.thenBy { it.name.lowercase() },
-                )
+                }.map { it.toRowModel() }.let { sortFileRows(it) }
                 path = p
                 showRoots = false
                 error = null
@@ -162,7 +176,7 @@ private fun FilesScreenBody(
 
     /** 删除(目录递归删)。撤销时按原名重建 —— 目录只能重建空壳,
      *  撤销条文案里如实说明,不做假的"已完整恢复"。 */
-    fun deleteEntry(e: DirectoryEntry) {
+    fun deleteEntry(e: FileRowModel) {
         val parent = path
         scope.launch {
             try {
@@ -175,10 +189,14 @@ private fun FilesScreenBody(
                     )
                 }
                 openKey.value = null
+                PaHaptics.warning(view)
                 loadDir(parent)
                 undo.show(
-                    message = if (e.isDir) "已删除文件夹 ${e.name}(只能恢复空目录)"
-                    else "已删除 ${e.name}",
+                    message = if (e.isDir) {
+                        "已删除电脑上的文件夹 ${middleEllipsize(e.name, 20)}(撤销只重建空目录)"
+                    } else {
+                        "已删除电脑上的 ${middleEllipsize(e.name, 20)}(撤销恢复为空文件)"
+                    },
                     onUndo = {
                         withContext(Dispatchers.IO) {
                             if (e.isDir) {
@@ -202,7 +220,7 @@ private fun FilesScreenBody(
     }
 
     /** 重命名:daemon 没有独立 Rename,用 MoveEntry(同目录 old→new)实现。 */
-    fun renameEntry(e: DirectoryEntry, newName: String) {
+    fun renameEntry(e: FileRowModel, newName: String) {
         val sep = if (e.path.contains('/') && !e.path.contains('\\')) "/" else "\\"
         val parent = e.path.substringBeforeLast(sep, "")
         val target = if (parent.isEmpty()) newName else parent + sep + newName
@@ -214,6 +232,7 @@ private fun FilesScreenBody(
                             .setFromPath(e.path).setToPath(target).build())
                 }
                 openKey.value = null
+                PaHaptics.confirm(view)
                 loadDir(path)
             } catch (ex: Exception) {
                 error = "重命名失败:${ex.message}"
@@ -229,7 +248,7 @@ private fun FilesScreenBody(
                     AgentConnection.fileService()
                         .listRoots(ListRootsRequest.newBuilder().build())
                         .rootsList
-                }
+                }.map { it.toRowModel() }
                 path = ""
                 showRoots = true
                 error = preserveError
@@ -284,6 +303,7 @@ private fun FilesScreenBody(
                                 .setCreate(true).setTruncate(true).build())
                     }
                 }
+                PaHaptics.confirm(view)
                 loadDir(path)
             } catch (e: Exception) {
                 error = "新建失败:${e.message}"
@@ -388,17 +408,49 @@ private fun FilesScreenBody(
         // 一层残影"。裁掉越界部分,动画只在内容区内可见。
         Box(Modifier.padding(pad).fillMaxSize().clipToBounds()) {
         Column(Modifier.fillMaxSize()) {
-            if (path.isNotEmpty()) {
-                // 工作区路径面包屑(09:次级小字,完整路径可读)
-                Text(
-                    path,
-                    Modifier.padding(horizontal = PaEditorial.Space.PageMargin, vertical = 4.dp),
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = PaEditorial.Muted,
-                    maxLines = 1,
-                )
+            if (!showRoots) {
+                // 【可点级面包屑】首段"此电脑"回盘符列表,中间任一段直达那一层;
+                // 末段(当前层)不可点。横向可滚,换目录自动滚到末端。
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(crumbScroll)
+                        .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    crumbs.forEachIndexed { i, crumb ->
+                        if (i > 0) {
+                            Icon(
+                                painterResource(AppR.drawable.ic_lucide_chevron_right), null,
+                                tint = PaEditorial.Subtle, modifier = Modifier.size(12.dp),
+                            )
+                        }
+                        val isCurrent = i == crumbs.lastIndex
+                        Text(
+                            middleEllipsize(crumb.label, 20),
+                            Modifier
+                                .then(
+                                    if (!isCurrent) {
+                                        Modifier.clickable {
+                                            when {
+                                                crumb.target.isEmpty() -> loadRoots()
+                                                else -> loadDir(crumb.target)
+                                            }
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .padding(horizontal = 4.dp, vertical = 14.dp),
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isCurrent) PaEditorial.Ink else PaEditorial.Primary,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             error?.let {
                 Row(
@@ -406,10 +458,18 @@ private fun FilesScreenBody(
                         .fillMaxWidth()
                         .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp)
                         .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(it, color = EditorialTone.DENIED.text, fontSize = 13.sp, lineHeight = 18.sp)
+                    Text(
+                        it,
+                        Modifier.weight(1f),
+                        color = EditorialTone.DENIED.text, fontSize = 13.sp, lineHeight = 18.sp,
+                    )
+                    // 断线/目录打不开时给下一步:原地重试(顶层重拉盘符,目录层重进)
+                    TextButton(onClick = { if (showRoots) loadRoots() else loadDir(path) }) {
+                        Text("重试", fontSize = 12.sp, color = EditorialTone.DENIED.text)
+                    }
                 }
             }
             // ---- 搜索框(仅非"此电脑"层显示:盘符列表没有搜索的意义) ----
@@ -485,6 +545,14 @@ private fun FilesScreenBody(
                     color = PaEditorial.Muted,
                 )
             }
+            if (loading && visibleEntries.isEmpty()) {
+                // 首次加载:骨架占位,不白屏(轮廓与真实行对位:42dp 图标格 + 文本条)
+                PaSkeletonList(
+                    SkeletonKind.FILE_ROW,
+                    Modifier.weight(1f).padding(horizontal = PaEditorial.Space.PageMargin, vertical = 10.dp),
+                    count = 7,
+                )
+            } else {
             LazyColumn(
                 Modifier.weight(1f).padding(horizontal = PaEditorial.Space.PageMargin),
                 state = listState,
@@ -500,8 +568,24 @@ private fun FilesScreenBody(
                         )
                     }
                 }
+                if (visibleEntries.isEmpty() && searchQuery.isBlank() && !loading) {
+                    // 空态给真实说明 + 下一步,不白屏也不装死
+                    item(key = "__empty__") {
+                        when {
+                            showRoots -> EmptyState(
+                                AppR.drawable.ic_lucide_monitor,
+                                "没有读到任何盘符",
+                                "确认电脑端 daemon 正在运行,再点右上角「刷新」",
+                            )
+                            else -> EmptyState(
+                                AppR.drawable.ic_lucide_folder_plus,
+                                "这个文件夹是空的",
+                                "点右上角「+」新建文件或文件夹;若电脑上应有内容,点「刷新」",
+                            )
+                        }
+                    }
+                }
                 items(visibleEntries, key = { it.path }) { e ->
-                    val kind = if (e.isDir) null else fileKindOf(e.name)
                     // 【文件管理】左滑出「重命名 / 删除」,与会话列表同一套交互。
                     // 行内容里不能挂 clickable(容器独占手势),所以点击走 onClick 参数。
                     SwipeRevealRow(
@@ -534,7 +618,7 @@ private fun FilesScreenBody(
                                 // 【能力矩阵分派】能内置渲染的一律交给内置浏览器 ——
                                 // Office / PDF / Markdown / 图片 / 网页 都能排版展示,
                                 // 比在这个弹层里塞纯文本好得多。
-                                kind?.preview == PreviewMode.IN_APP -> onOpenBrowser(
+                                e.kind.preview == PreviewMode.IN_APP -> onOpenBrowser(
                                     // 【带上目录条目的 size/mtime】内置浏览器据此生成预览缓存键 ——
                                     // 文件在电脑上被改过 → mtime 变 → 键变 → 自动重拉,不会看到旧内容。
                                     "pc:" + e.path + "?_pas=" + e.sizeBytes + "&_pam=" + e.modifiedUnixMs,
@@ -550,7 +634,8 @@ private fun FilesScreenBody(
                             .padding(start = 12.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // 行首 42dp 图标方格(09:文件夹绿格 / 文件蓝格)
+                        // 行首 42dp 图标方格(09:文件夹绿格 / 文件蓝格);
+                        // 图标按 FileKind 分型(代码/表格/图片/压缩包/音视频…一眼可分)
                         Box(
                             Modifier
                                 .size(42.dp)
@@ -561,9 +646,7 @@ private fun FilesScreenBody(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                painterResource(
-                                    if (e.isDir) AppR.drawable.ic_lucide_folder else AppR.drawable.ic_lucide_file_text,
-                                ),
+                                painterResource(fileRowIcon(e.isDir, e.kind)),
                                 null,
                                 tint = if (e.isDir) PaEditorial.Running else PaEditorial.Primary,
                                 modifier = Modifier.size(20.dp),
@@ -572,34 +655,33 @@ private fun FilesScreenBody(
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                e.name,
+                                // 长文件名中间省略,保住扩展名(FilenameDisplay 规则)
+                                middleEllipsize(e.name, 26),
                                 fontSize = 15.sp, lineHeight = 21.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = PaEditorial.Ink,
                                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
-                            if (!e.isDir) {
+                            val meta = entryMetaLine(e)
+                            if (meta.isNotEmpty()) {
                                 Text(
-                                    listOfNotNull(
-                                        formatSize(e.sizeBytes),
-                                        kind?.takeIf { it != FileKind.OTHER }?.label,
-                                        if (kind?.preview == PreviewMode.IN_APP) "可预览" else "需下载打开",
-                                    ).joinToString("  ·  "),
+                                    meta,
                                     fontSize = 11.sp, lineHeight = 16.sp, color = PaEditorial.Muted, maxLines = 1,
                                 )
                             }
                         }
                         if (!e.isDir) {
-                            // 每一行都能单独下载到手机(不必先进浏览器)
+                            // 每一行都能单独下载到手机(不必先进浏览器);触达区 ≥44dp
                             IconActionButton(
                                 AppR.drawable.ic_lucide_download, "下载到手机",
                                 {
                                     PaDownloader.downloadFromPc(e.path)
+                                    PaHaptics.light(view)
                                     android.widget.Toast.makeText(
                                         ctx, "已开始下载 " + e.name, android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                                 },
-                                bg = Color.Transparent, size = 34.dp, iconSize = 16.dp,
+                                bg = Color.Transparent, size = 44.dp, iconSize = 18.dp,
                                 tint = PaEditorial.Subtle,
                             )
                         }
@@ -610,6 +692,7 @@ private fun FilesScreenBody(
                     }
                     }
                 }
+            }
             }
         }
             // 撤销条浮在内容之上(删除后给一次反悔机会)
@@ -639,7 +722,7 @@ private fun FilesScreenBody(
             ) {
                 Text("重命名", fontSize = 17.sp, color = PaEditorial.Ink)
                 Text(
-                    (if (e.isDir) "文件夹 · " else "文件 · ") + e.name,
+                    (if (e.isDir) "文件夹 · " else "文件 · ") + middleEllipsize(e.name, 30),
                     fontSize = 11.sp, color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 2.dp, bottom = 10.dp), maxLines = 1,
                 )
@@ -670,22 +753,33 @@ private fun FilesScreenBody(
         }
     }
 
-    // 删除确认:目录是递归删除,后果不可逆,必须二次确认
+    // 删除确认:动作发生在**电脑上**(不是手机本地),目录是递归删除,后果不可逆。
+    // 语义必须写清:删的是电脑上的文件;Undo 也只能有限恢复(空目录/空文件)。
     pendingDelete?.let { e ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text(if (e.isDir) "删除这个文件夹?" else "删除这个文件?", fontSize = 15.sp) },
+            title = {
+                Text(
+                    if (e.isDir) "删除电脑上的文件夹?" else "删除电脑上的文件?",
+                    fontSize = 15.sp,
+                )
+            },
             text = {
                 Text(
-                    if (e.isDir) "${e.name}\n\n文件夹内的全部内容都会一并删除,且无法恢复。"
-                    else "${e.name}\n\n删除后无法恢复。",
+                    if (e.isDir) {
+                        "「${middleEllipsize(e.name, 30)}」及其全部内容将从电脑上永久删除,不进回收站。\n\n" +
+                            "5 秒内可点「撤销」,但只能在原位置重建同名空文件夹,里面的内容找不回。"
+                    } else {
+                        "「${middleEllipsize(e.name, 30)}」将从电脑上永久删除,不进回收站。\n\n" +
+                            "5 秒内可点「撤销」,但只能恢复为同名空文件,内容找不回。"
+                    },
                     fontSize = 12.5.sp, color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    deleteEntry(e)
                     pendingDelete = null
+                    deleteEntry(e)
                 }) { Text("删除", color = EditorialTone.DENIED.text, fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
@@ -694,13 +788,12 @@ private fun FilesScreenBody(
 
     // 不能内置预览时的引导:说清楚为什么,并给一步到位的下载动作
     askDownload?.let { e ->
-        val k = fileKindOf(e.name)
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { askDownload = null },
-            title = { Text(e.name, fontSize = 15.sp, maxLines = 1) },
+            title = { Text(middleEllipsize(e.name, 30), fontSize = 15.sp, maxLines = 1) },
             text = {
                 Text(
-                    "${k.label} 这个格式没法在 App 内排版展示。\n" +
+                    "${e.kind.label} 这个格式没法在 App 内排版展示。\n" +
                         "下载到手机后,可以用系统里对应的应用打开。",
                     fontSize = 12.5.sp,
                     color = PaEditorial.Muted,
@@ -709,6 +802,7 @@ private fun FilesScreenBody(
             confirmButton = {
                 TextButton(onClick = {
                     PaDownloader.downloadFromPc(e.path)
+                    PaHaptics.light(view)
                     android.widget.Toast.makeText(
                         ctx, "已开始下载 " + e.name, android.widget.Toast.LENGTH_SHORT,
                     ).show()
@@ -783,10 +877,3 @@ private fun FilesScreenBody(
         }
     }
 }
-
-private fun formatSize(n: Long): String = when {
-    n < 1024 -> "$n B"
-    n < 1024 * 1024 -> "%.1f KB".format(n / 1024.0)
-    else -> "%.1f MB".format(n / 1024.0 / 1024.0)
-}
-

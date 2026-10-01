@@ -1244,7 +1244,7 @@ object PcFilePreview {
             val line = raw.trimEnd()
             if (line.startsWith("```")) {
                 if (inCode) {
-                    sb.append("<pre>").esc(codeBuf.toString()).append("</pre>")
+                    sb.append(codeBlockHtml(codeBuf.toString()))
                     codeBuf.setLength(0)
                 }
                 inCode = !inCode
@@ -1279,8 +1279,22 @@ object PcFilePreview {
             }
         }
         if (inList) sb.append("</ul>")
-        if (inCode && codeBuf.isNotEmpty()) sb.append("<pre>").esc(codeBuf.toString()).append("</pre>")
+        if (inCode && codeBuf.isNotEmpty()) sb.append(codeBlockHtml(codeBuf.toString()))
         sb.append("</div>")
+        return sb.toString()
+    }
+
+    /**
+     * 代码块 → 带行号的 `<pre>`(纯函数,可单测)。
+     * 等宽字体与横向滚动由全局 CSS 的 pre 规则保证;行号用 CSS counter 画在
+     * 行首伪元素上,`user-select:none` —— 复制代码时不会把行号一起带走。
+     */
+    internal fun codeBlockHtml(code: String): String {
+        val sb = StringBuilder("<pre>")
+        for (line in code.split("\n")) {
+            sb.append("<span class=\"l\">").append(esc(line)).append("</span>")
+        }
+        sb.append("</pre>")
         return sb.toString()
     }
 
@@ -1387,7 +1401,11 @@ object PcFilePreview {
           code{background:${pal.code};border-radius:4px;padding:1px 5px;
                font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
           pre{background:${pal.code};border-radius:10px;padding:12px;overflow-x:auto;
-              font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;margin:10px 0}
+              font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;margin:10px 0;counter-reset:ln}
+          pre .l{display:block;counter-increment:ln;white-space:pre}
+          pre .l:before{content:counter(ln);display:inline-block;width:2.4em;margin-right:10px;
+                        text-align:right;color:${pal.faint};opacity:.7;
+                        -webkit-user-select:none;user-select:none}
           a{color:${pal.accent};text-decoration:none}
           .more{color:${pal.faint};font-size:12px;margin:8px 0}
           .err{padding:22px 16px}

@@ -197,8 +197,18 @@ fun UndoBarHost(
         visible = item != null,
         // 【动效令牌】顶部滑入给少量过冲(sheet 的从容感),从当前值续走——
         // 连续删除时新旧提示条交替,弹簧被打断不会跳帧(替代原 tween(180/150) 硬切)。
-        enter = slideInVertically(PaMotion.sheet()) { -it } + fadeIn(PaMotion.standard()),
-        exit = slideOutVertically(PaMotion.nav(600f)) { -it } + fadeOut(PaMotion.nav(700f)),
+        // 【减弱动效】系统动画缩放=0 时退化瞬时(snap 同义 PaMotion.instant,
+        // 其静态类型 AnimationSpec 传不进 fadeIn/fadeOut,同 AppDrawer 的既有处理)。
+        enter = if (reduceMotion) {
+            fadeIn(androidx.compose.animation.core.snap())
+        } else {
+            slideInVertically(PaMotion.sheet()) { -it } + fadeIn(PaMotion.standard())
+        },
+        exit = if (reduceMotion) {
+            fadeOut(androidx.compose.animation.core.snap())
+        } else {
+            slideOutVertically(PaMotion.nav(600f)) { -it } + fadeOut(PaMotion.nav(700f))
+        },
         modifier = modifier,
     ) {
         val it0 = item ?: return@AnimatedVisibility
@@ -239,11 +249,15 @@ fun UndoBarHost(
                 // 所以 feedback != null 时立刻收起,只留结果文案 1.2 秒。
                 if (!isError && feedback == null) {
                     Spacer(Modifier.width(8.dp))
+                    val hapticView = androidx.compose.ui.platform.LocalView.current
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(10.dp))
                             // 撤销是高频连点动作:按下瞬间给缩放反馈,不用裸 clickable
                             .pressable(enabled = true) {
+                                // 【触感分级】撤销=确认级动作,统一走 PaHaptics.confirm
+                                // (中档轻击),与审批提交同强度 —— 同动作全局同强度。
+                                PaHaptics.confirm(hapticView)
                                 handled = true
                                 val scopeMarker = it0
                                 UndoScope.launch {
@@ -251,6 +265,13 @@ fun UndoBarHost(
                                     feedback = if (ok) "已恢复" else "撤销失败，请重试"
                                     if (ok) {
                                         delay(1200)
+                                        state.clear()
+                                    } else {
+                                        // 失败态也不能吊死在屏上:此时"撤销"按钮已收起,
+                                        // 提示条没有任何可点的东西,永久驻留只会变成关不掉的
+                                        // 摆设。错误文案停 3 秒自动收场(比成功态的 1.2s 长,
+                                        // 给足读清原因的时间);重试入口在宿主列表里重新操作。
+                                        delay(3000)
                                         state.clear()
                                     }
                                 }

@@ -39,6 +39,23 @@ data class EditorialStatusView(
     val detail: String? = null,
 )
 
+/**
+ * 四词状态的**形通道**(色 + 词之外的第三条语义通道,色弱也可辨)。
+ *
+ * 【为什么要有形】红绿琥珀对红绿色弱是同一团暖色,只靠色档分不开四态 ——
+ * 每态一个互不相同的形状:空心环(等用户来填)/ 实心点(进行中)/ 对勾(收尾)/
+ * 叹号(要回头看)。词已经保证了可辨,形状是让"扫一眼"也分得清的第二保险。
+ */
+enum class PaStatusGlyph { RING, DOT, CHECK, EXCLAMATION }
+
+/** 四词状态 → 形通道映射(纯函数,单测钉死 StatusGlyphMappingTest)。 */
+fun statusGlyphOf(status: EditorialStatus): PaStatusGlyph = when (status) {
+    EditorialStatus.WAITING_FOR_YOU -> PaStatusGlyph.RING
+    EditorialStatus.RUNNING -> PaStatusGlyph.DOT
+    EditorialStatus.COMPLETED -> PaStatusGlyph.CHECK
+    EditorialStatus.NOT_COMPLETED -> PaStatusGlyph.EXCLAMATION
+}
+
 // ---------------------------------------------------------------- 会话(ThreadStatus)
 
 /**

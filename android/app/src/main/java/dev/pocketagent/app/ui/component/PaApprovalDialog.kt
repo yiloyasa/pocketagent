@@ -1,5 +1,8 @@
 package dev.pocketagent.app.ui.component
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,11 +27,16 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -43,8 +51,13 @@ import androidx.compose.ui.window.DialogProperties
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.ApprovalPhase
 import dev.pocketagent.app.ui.ApprovalRequestUi
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
+import dev.pocketagent.app.ui.approvalPhaseGlyph
 import dev.pocketagent.app.ui.approvalQueueLabel
+import dev.pocketagent.app.ui.approvalRiskOf
+import dev.pocketagent.app.ui.approvalRiskVisualOf
 import dev.pocketagent.app.ui.decideEnabled
 import dev.pocketagent.app.ui.phaseTone
 import dev.pocketagent.app.ui.phaseWord
@@ -76,6 +89,18 @@ private data class ButtonTones(val container: Color, val outline: Color, val con
  * 待处理区),与 [onDecide](false) 是两条回调、两条语义 —— 第二波接线时:
  * onDismiss 落"留在待审批",onDecide 才落决定。弹窗底部常驻这句承诺。
  *
+ * 【信息层级】谁发起(Agent · 会话)→ 要做什么(目的)→ 影响范围(工作区 /
+ * 操作类型 / 命令原文)→ 风险([approvalRiskOf] 危险分级:高危 = 珊瑚警示条 +
+ * 命中原因并列;常规 = 安静一行)。分级只变提示音量,不变按钮可达性 —— 拒绝
+ * 与允许在两档下同等可达。命令原文**完整可读**:等宽字、可换行、不设行数上限
+ * (长命令随卡片纵向滚动),绝不以省略号吞掉关键信息。
+ *
+ * 【状态三通道】状态行 = 词 + 色 + 形([approvalPhaseGlyph] 与四词状态同一套
+ * 环/点/勾/叹号,提交中保持转圈);状态变化经 Crossfade 过渡不跳变,liveRegion
+ * 让读屏听到状态词。弹窗进场 spring 轻过冲([PaMotion.emphasized]),「减弱
+ * 动效」开启时直达不位移。决定提交的触感(confirm 级)由宿主在 onDecide 里
+ * 触发(PaHaptics.confirm),组件不重复触发以免双重震动。
+ *
  * 【只放必要信息】Agent 与会话、操作目的、工作区、操作类型、原始命令 + 两个
  * 按钮(README §审批弹窗状态机白名单);不放风险评分,不放多余跳转。
  *
@@ -101,6 +126,15 @@ fun PaApprovalDialog(
         onDismissRequest = onDismiss, // 关闭 = 暂不处理;与决定是两条通道
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        // 进场:spring 轻过冲(0.96 → 1.0 + 淡入);减弱动效时瞬时直达(仍有反馈,无位移)
+        val reduceMotion = rememberReduceMotion()
+        var entered by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { entered = true }
+        val enter by animateFloatAsState(
+            targetValue = if (entered) 1f else 0f,
+            animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.emphasized(),
+            label = "approvalEnter",
+        )
         val scrimInteraction = remember { MutableInteractionSource() }
         Box(
             modifier
@@ -112,6 +146,12 @@ fun PaApprovalDialog(
             val cardInteraction = remember { MutableInteractionSource() }
             Column(
                 Modifier
+                    .graphicsLayer {
+                        alpha = enter
+                        val scale = 0.96f + 0.04f * enter
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .padding(horizontal = 23.dp)
                     .widthIn(max = 360.dp)
                     .clip(RoundedCornerShape(23.dp))
@@ -143,7 +183,7 @@ private fun ApprovalBody(
                 .size(width = 36.dp, height = 4.dp)
                 .background(PaEditorial.Subtle, RoundedCornerShape(100.dp)),
         )
-        // 标题区:琥珀盾牌 + 「确认执行命令」+ 来自 Agent · 会话 + 排队数量
+        // 标题区:琥珀盾牌 + 「确认执行命令」+ 来自 Agent · 会话 + 排队数量(谁发起)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
@@ -188,27 +228,39 @@ private fun ApprovalBody(
             }
         }
         Spacer(Modifier.height(12.dp))
-        // 阶段状态行:状态词 + 语义色(双通道;liveRegion 让读屏听到状态变化)
+        // 阶段状态行:词 + 色 + 形三通道(liveRegion 让读屏听到状态变化);
+        // 状态切换经 Crossfade 过渡,不跳变。内容严格按 keyed 相位渲染,
+        // 过渡中的旧一帧不会串到新状态词。
         val word = request.phaseWord
         Row(
             Modifier
                 .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = "审批状态：$word" },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val tone = request.phaseTone
-            if (request.phase == ApprovalPhase.SUBMITTING) {
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp, color = tone.accent, modifier = Modifier.size(10.dp),
-                )
-            } else {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .background(tone.accent, RoundedCornerShape(100.dp)),
-                )
+            Crossfade(
+                targetState = request.phase,
+                animationSpec = PaMotion.standard(),
+                label = "approvalPhase",
+            ) { phase ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val keyed = request.copy(phase = phase)
+                    if (phase == ApprovalPhase.SUBMITTING) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp, color = keyed.phaseTone.accent,
+                            modifier = Modifier.size(10.dp),
+                        )
+                    } else {
+                        PaStatusGlyphSlot(approvalPhaseGlyph(phase), keyed.phaseTone.accent)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        keyed.phaseWord,
+                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontWeight = FontWeight(650),
+                        color = keyed.phaseTone.text,
+                    )
+                }
             }
-            Spacer(Modifier.width(6.dp))
-            Text(word, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight(650), color = tone.text)
         }
         Spacer(Modifier.height(8.dp))
         // 操作目的(README 白名单:操作目的;agent 给出的 reason 原文)
@@ -222,8 +274,15 @@ private fun ApprovalBody(
         ScopeRow("工作区", request.workspace)
         ScopeRow("操作类型", request.actionKind)
         Spacer(Modifier.height(10.dp))
-        // 原始命令:石墨代码箱(侧边栏/代码预览保留石墨深色的纪律)
+        // 命令原文:石墨代码箱 + 等宽字,**不设行数上限**(完整可读,长文随卡片
+        // 纵向滚动;换行保留原文结构,绝不以省略号吞关键信息)
         if (request.command.isNotBlank()) {
+            Text(
+                "命令原文",
+                fontSize = 11.sp, lineHeight = 16.sp,
+                color = PaEditorial.Muted,
+            )
+            Spacer(Modifier.height(6.dp))
             Text(
                 request.command,
                 Modifier
@@ -232,11 +291,54 @@ private fun ApprovalBody(
                     .border(1.dp, PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
                     .padding(horizontal = 14.dp, vertical = 14.dp),
                 fontSize = 12.sp, lineHeight = 18.sp,
+                fontFamily = TerminalFont.chatFont,
                 color = PaEditorial.CodeText,
-                maxLines = 6,
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
         }
+        // 风险条:危险分级只变提示音量,不变按钮可达性(高危=珊瑚警示条,常规=安静一行)
+        val risk = remember(request.actionKind, request.command) {
+            approvalRiskVisualOf(approvalRiskOf(request.actionKind, request.command))
+        }
+        if (risk.alert) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
+                    .border(1.dp, PaEditorial.Denied.copy(alpha = 0.30f), RoundedCornerShape(13.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_lucide_triangle_alert), null,
+                    tint = PaEditorial.Denied, modifier = Modifier.size(15.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(
+                        risk.headline,
+                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PaEditorial.DeniedText,
+                    )
+                    if (risk.reasonsLabel != null) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            risk.reasonsLabel,
+                            fontSize = 12.sp, lineHeight = 17.sp,
+                            color = PaEditorial.DeniedText,
+                        )
+                    }
+                }
+            }
+        } else {
+            Text(
+                "${risk.headline} · 请核对命令原文",
+                fontSize = 11.sp, lineHeight = 16.sp,
+                color = PaEditorial.Muted,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
         // 暂无法处理:原因 + 重试(失效/重复/超时/提交失败;不显示已批准)
         if (request.phase == ApprovalPhase.UNAVAILABLE) {
             Column(
@@ -261,8 +363,10 @@ private fun ApprovalBody(
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 44.dp) // README 最小触达:重试也是要点的行
                     .pressable(enabled = request.retryEnabled) { onRetry() },
                 horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     painterResource(R.drawable.ic_lucide_refresh_cw), null,
@@ -277,7 +381,7 @@ private fun ApprovalBody(
             }
             Spacer(Modifier.height(10.dp))
         }
-        // 决定按钮:拒绝 / 仅本次允许(提交中禁重复;终态锁定)
+        // 决定按钮:拒绝 / 仅本次允许(提交中禁重复;终态锁定;两档风险下同等可达)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             ApprovalButton(
                 text = if (request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == false) {
@@ -355,10 +459,14 @@ private fun ApprovalButton(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
-    val container = if (enabled) tones.container else tones.container.copy(alpha = 0.55f)
+    val container by animateColorAsState(
+        targetValue = if (enabled) tones.container else tones.container.copy(alpha = 0.55f),
+        animationSpec = PaMotion.standard(),
+        label = "approvalButtonContainer",
+    )
     Row(
         modifier
-            .heightIn(min = 50.dp)
+            .heightIn(min = 50.dp) // 决定按钮触达 ≥48dp(README 触达纪律之上再留余量)
             .background(container, shape)
             .border(1.dp, if (enabled) tones.outline else tones.outline.copy(alpha = 0.55f), shape)
             .pressable(enabled = enabled, onClick = onClick)

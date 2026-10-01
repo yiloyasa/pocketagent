@@ -52,12 +52,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -172,6 +171,9 @@ private fun rememberHistoryDragGesture(
     val openPanel by rememberUpdatedState(onOpenPanel)
     val jump by rememberUpdatedState(onJump)
     val scope = rememberCoroutineScope()
+    // 【触感分级】松手跳转=确认级动作(导航已发生),走中档 PaHaptics.confirm,
+    // 与撤销/审批提交同强度;拖动途中的跨档仍是轻档 light(见 HistoryTickBar)。
+    val hapticView = LocalView.current
     return Modifier.pointerInput(count) {
         // pointerInput 块的 receiver 是 Density:刻度几何常数在这里换算成 px
         val tickHPx = TickHeight.toPx()
@@ -200,7 +202,10 @@ private fun rememberHistoryDragGesture(
                             g, count, drag.heightPx, tickHPx, gapPx, cancelSlopPx,
                         )) {
                             HistoryQuickNavLogic.NavRelease.OpenPanel -> openPanel()
-                            is HistoryQuickNavLogic.NavRelease.Jump -> jump(r.entryIndex)
+                            is HistoryQuickNavLogic.NavRelease.Jump -> {
+                                PaHaptics.confirm(hapticView)
+                                jump(r.entryIndex)
+                            }
                             else -> {}
                         }
                         drag.apply(HistoryQuickNavLogic.canceled())
@@ -264,10 +269,12 @@ fun HistoryTickBar(
     }
     // 预览中跨过刻度给一次轻触感(时间刷选的标准体感,对齐系统时钟滚轮/相册裁剪);
     // 只在指数变化时重启一次 effect,手指在两条刻度之间滑动不会连发。
-    val haptics = LocalHapticFeedback.current
+    // 【触感分级】轻档统一走 PaHaptics.light(CLOCK_TICK):与 pressable(haptic)
+    // 同强度,且同样跟随系统「触感反馈」总开关 —— 关了全局安静,不各自为政。
+    val hapticView = LocalView.current
     LaunchedEffect(scrubIndex.value) {
         if (scrubIndex.value >= 0) {
-            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            PaHaptics.light(hapticView)
         }
     }
     Box(
@@ -330,6 +337,10 @@ fun HistoryQuickBubble(
     if (entries.isEmpty()) return
     val hacker = PaHacker.isHacker
     val density = LocalDensity.current
+    // 【减弱动效】系统动画缩放=0 时出入场退化瞬时(snap 同义 PaMotion.instant,
+    // 其静态类型 AnimationSpec 传不进 fadeIn,同 AppDrawer 的既有处理)。
+    // 跟手不受影响:气泡位置走 offset{} placement 层,与转场规格无关。
+    val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
     val bubbleW = LocalConfiguration.current.screenWidthDp.dp * BubbleWidthFraction
     val bubbleHPx = with(density) { BubbleHeight.toPx() }
     val yieldPx = with(density) { BubbleYield.toPx() }
@@ -356,9 +367,17 @@ fun HistoryQuickBubble(
             visible = drag.phase == HistoryQuickNavLogic.NavGesturePhase.PREVIEW,
             // 入场从刻度条方向"长出来"(轻微过冲 scale + fade);退场干脆
             // (nav 大 stiffness 让位)。全是 spring,拖动中被打断不跳帧。
-            enter = fadeIn(PaMotion.standard()) +
-                scaleIn(PaMotion.emphasized(), initialScale = 0.92f),
-            exit = fadeOut(PaMotion.nav(600f)),
+            enter = if (reduceMotion) {
+                fadeIn(androidx.compose.animation.core.snap())
+            } else {
+                fadeIn(PaMotion.standard()) +
+                    scaleIn(PaMotion.emphasized(), initialScale = 0.92f)
+            },
+            exit = if (reduceMotion) {
+                fadeOut(androidx.compose.animation.core.snap())
+            } else {
+                fadeOut(PaMotion.nav(600f))
+            },
             modifier = Modifier.offset {
                 // 【真机 2026-10-01 · 跟手回归 placement 层】上一轮为省一档排版
                 // 换成 graphicsLayer{translationY} 挂在 AnimatedVisibility 上,
@@ -455,13 +474,17 @@ fun HistoryQuickPanel(
     onDismiss: () -> Unit,
 ) {
     val hacker = PaHacker.isHacker
+    // 【减弱动效】scrim/面板的出入场在系统动画缩放=0 时退化瞬时(淡入保留"变了"的事实,位移不播)
+    val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
     // 返回键关闭(与抽屉/面板同层语义);visible=false 时不武装,不抢别的层。
     BackHandler(enabled = visible) { onDismiss() }
     AnimatedVisibility(
         visible = visible,
         // scrim 与面板同节奏淡入淡出;alpha 0.25 —— 能隐约看到正文,不是全黑罩
-        enter = fadeIn(PaMotion.standard()),
-        exit = fadeOut(PaMotion.nav(600f)),
+        enter = if (reduceMotion) fadeIn(androidx.compose.animation.core.snap())
+        else fadeIn(PaMotion.standard()),
+        exit = if (reduceMotion) fadeOut(androidx.compose.animation.core.snap())
+        else fadeOut(PaMotion.nav(600f)),
         label = "historyPanelScrim",
     ) {
         Box(
@@ -475,8 +498,12 @@ fun HistoryQuickPanel(
     }
     AnimatedVisibility(
         visible = visible,
-        enter = slideInHorizontally(PaMotion.emphasized()) { -it },
-        exit = slideOutHorizontally(PaMotion.standard()) { -it },
+        enter = if (reduceMotion) slideInHorizontally(androidx.compose.animation.core.snap()) { -it }
+        else slideInHorizontally(PaMotion.emphasized()) { -it },
+        // 退场与气泡/ContextMenu/UndoBar 同节奏:nav(600f) 大 stiffness,干脆让位
+        // 不砖墙(进场从容、退场干脆是全 app 浮层族的统一 spring 语义)。
+        exit = if (reduceMotion) slideOutHorizontally(androidx.compose.animation.core.snap()) { -it }
+        else slideOutHorizontally(PaMotion.nav(600f)) { -it },
     ) {
         val panelWidth = LocalConfiguration.current.screenWidthDp.dp * PanelWidthFraction
         Column(
