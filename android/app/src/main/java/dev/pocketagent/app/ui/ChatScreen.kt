@@ -1751,7 +1751,25 @@ internal fun effortsFor(
 ): List<EffortOption> {
     val modelId = selectedModelId.ifEmpty { "$selectedAgent/default" }
     val dynamic = models.firstOrNull { it.id == modelId && it.provider == selectedAgent }?.availableEffortsList.orEmpty()
-    return listOf(EffortOption("", "默认")) + dynamic.distinct().map { EffortOption(it, effortLabelOf(it)) }
+    if (dynamic.isNotEmpty()) {
+        return listOf(EffortOption("", "默认")) + dynamic.distinct().map { EffortOption(it, effortLabelOf(it)) }
+    }
+    // 【2026-10-02 修正】选中模型无动态档位时,分两种含义处理(注释与实现此前
+    // 不符,强度选择对 codex/zcode/dsh/hermes 实际瘫痪——真机实证):
+    //   a) 档位制 agent(pi,同 agent 有**任一**模型带档位)的模型没带档位:
+    //      - 未知/私有模型 → 只显示"默认",不伪造档位(RuntimeStateRegressionTest);
+    //      - "跟随桌面"(模型空串)→ 跟随该 agent 的档位(首个带档位模型的集合,
+    //        此时用户还没选具体模型,档位语义已随 agent 确定)。
+    //   b) 该 agent **从不**透出档位(codex/zcode/dsh/hermes)→ 回内置 [EFFORTS]
+    //      (codex 的取值与 turn/start effort 一致)。
+    val agentIsEffortBacked = models.any { it.provider == selectedAgent && it.availableEffortsCount > 0 }
+    if (!agentIsEffortBacked) return EFFORTS
+    if (selectedModelId.isNotBlank() && selectedModelId != "$selectedAgent/default") {
+        return listOf(EffortOption("", "默认"))
+    }
+    val agentLevels = models.firstOrNull { it.provider == selectedAgent && it.availableEffortsCount > 0 }
+        ?.availableEffortsList.orEmpty()
+    return listOf(EffortOption("", "默认")) + agentLevels.distinct().map { EffortOption(it, effortLabelOf(it)) }
 }
 
 /**

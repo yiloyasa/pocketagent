@@ -1,7 +1,6 @@
 package dev.pocketagent.app.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pocketagent.v1.ModelInfo
@@ -42,9 +41,10 @@ class ModelEffortOptionsTest {
             model("pi/zai-coding-cn/glm-5.3", "pi"), // 无动态档位
         )
         val got = effortsFor(models, "codex/gpt-5.4", "codex")
-        // 同一套内置档(id 与标签都与 EFFORTS 一致),不凭空多出动态项
-        assertEquals(listOf(""), got.map { it.id })
-        assertEquals(listOf(""), got.map { it.id })
+        // 【2026-10-02 修复】注释承诺"回内置默认档 EFFORTS",实现此前却只剩"默认"
+        // 一枚胶囊 = codex/zcode/dsh/hermes 的强度选择实际瘫痪。修复后按内置档渲染。
+        assertEquals(listOf("", "low", "medium", "high", "xhigh"), got.map { it.id })
+        assertEquals(listOf("默认", "低", "中", "高", "极高"), got.map { it.label })
     }
 
     @Test
@@ -53,15 +53,20 @@ class ModelEffortOptionsTest {
             model("codex/gpt-5.4", "codex"),
             model("pi/zai-coding-cn/glm-5.3", "pi", "off", "minimal", "low", "high"),
         )
-        // "跟随桌面配置"(模型空串)+ 会话归属 pi:档位语义已随 agent 确定
+        // "跟随桌面配置"(模型空串)+ 会话归属 pi(档位制 agent):按 pi 的档位渲染
         val got = effortsFor(models, "", "pi")
-        assertEquals(listOf(""), got.map { it.id })
+        assertEquals(listOf("", "off", "minimal", "low", "high"), got.map { it.id })
     }
 
     @Test
-    fun follow_desktop_without_any_dynamic_levels_stays_default() {
-        val models = listOf(model("codex/gpt-5.4", "codex"))
-        val got = effortsFor(models, "", "codex")
+    fun pi_unknown_model_shows_default_only_no_fabrication() {
+        // 档位制 agent(pi)的**未知模型**没带档位 → 只显示"默认",不伪造
+        // (RuntimeStateRegressionTest 同语义,两处一致)。
+        val models = listOf(
+            model("pi/zai-coding-cn/glm-5.3", "pi", "off", "low"),
+            model("pi/private/custom-v999", "pi"),
+        )
+        val got = effortsFor(models, "pi/private/custom-v999", "pi")
         assertEquals(listOf(""), got.map { it.id })
     }
 

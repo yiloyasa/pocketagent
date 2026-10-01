@@ -96,12 +96,16 @@ func (p *HermesProvider) DisplayName() string { return "Hermes" }
 
 // Models 静态可见集:真实目录需 Start+session/new(启动红线:探测不起子进程)。
 // daemon 在用户首轮时经会话内 SetSessionModel 对上 hermes 自己的模型表。
+// AvailableEfforts = hermes 的 VALID_REASONING_EFFORTS(hermes_constants.py:
+// 1300)—— 手机端强度胶囊据此渲染,写入前 daemon 亦按同表校验(IsValidReasoningEffort)。
 func (p *HermesProvider) Models() []pb.ModelInfo {
+	efforts := []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 	return []pb.ModelInfo{
 		{Id: "hermes/deepseek-flash", Provider: "hermes", DisplayName: "Hermes · DeepSeek Flash",
-			Available: true, ContextWindow: 1_000_000, SupportsThinking: true, SupportsImages: true},
+			Available: true, ContextWindow: 1_000_000, SupportsThinking: true, SupportsImages: true,
+			AvailableEfforts: efforts},
 		{Id: "hermes/default", Provider: "hermes", DisplayName: "Hermes · 默认模型(config.yaml)",
-			Available: true},
+			Available: true, AvailableEfforts: efforts},
 	}
 }
 
@@ -191,6 +195,23 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		}
 		if serr := c.SetSessionModel(ctx, sid, acpModel); serr != nil {
 			log.Printf("[hermes] 切模型失败(按默认跑): %v", serr)
+		}
+	}
+
+	// 【思考强度真实化(2026-10-02)】hermes 的强度没有运行时 RPC,唯一入口是
+	// 家目录 config.yaml 的 agent.reasoning_effort(会话创建那一刻读取)。用户在
+	// 手机上显式选了强度 → 写该键(与手动编辑 config.yaml 等价,hermes 官方配置
+	// 面;下一轮生效,本轮已按旧值创建)。空串 = 用户选"默认" = 删键回 hermes 默认。
+	// 白名单校验(VALID_REASONING_EFFORTS)在写入前做,非法档宁可不写。
+	if e := req.Thread.Effort; e != "" {
+		if hermesapp.IsValidReasoningEffort(e) {
+			if werr := hermesapp.SetReasoningEffort(e); werr != nil {
+				log.Printf("[hermes] 写强度 %s 失败(沿用 config 现值): %v", e, werr)
+			} else {
+				log.Printf("[hermes] 思考强度已设为 %s(下轮会话生效)", e)
+			}
+		} else {
+			log.Printf("[hermes] 强度 %s 不在 hermes 档位表(minimal..ultra),跳过写入", e)
 		}
 	}
 
