@@ -161,10 +161,11 @@ object TurnSession {
         if (!force && now-st.lastSnapshotAt<1500) return
         st.lastSnapshotAt=now
         val messages=st.items.filter { it.role=="user" || it.role=="assistant" || it.role=="thinking" }
-            .takeLast(60).map { dev.pocketagent.app.ui.component.ThreadSnapshot.Msg(it.role,it.text) }.toMutableList()
+            // 【深优 R2 修复】时间戳随行落快照(此前整列剥掉,恢复后日期分组退化「早前」)
+            .takeLast(60).map { dev.pocketagent.app.ui.component.ThreadSnapshot.Msg(it.role,it.text,it.sentAtMs) }.toMutableList()
         val cursor=TurnCheckpointStore.Checkpoint(threadId,messages.toList(),st.streamText,st.thinkingText,
             st.lastSequence,st.running || st.recovering,st.queuedCount,st.runningModel,st.runningEffort,st.errorMessage)
-        if(st.streamText.isNotBlank()) messages.add(dev.pocketagent.app.ui.component.ThreadSnapshot.Msg("assistant",st.streamText))
+        if(st.streamText.isNotBlank()) messages.add(dev.pocketagent.app.ui.component.ThreadSnapshot.Msg("assistant",st.streamText,System.currentTimeMillis()))
         if(messages.isNotEmpty()) cacheScope.launch {
             dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(threadId,messages)
             TurnCheckpointStore.save(cursor)

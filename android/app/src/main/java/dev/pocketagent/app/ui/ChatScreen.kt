@@ -2690,7 +2690,11 @@ fun ChatScreen(
             val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
             if (snap != null) {
                 st.items.clear()
-                st.items.addAll(snap.map { ChatItem(role = it.role, text = it.text) })
+                // 【深优 R2 修复】快照里的真实时间戳必须带上 —— 此前在这里被丢弃,
+                // 且快照非空会跳过下面的在线加载,导致历史导航的日期分组全程失效
+                st.items.addAll(snap.map {
+                    ChatItem(role = it.role, text = it.text, sentAtMs = it.savedAtMs)
+                })
                 if (st.items.isNotEmpty()) listState.scrollToItem(st.items.size - 1)
                 offlineSnapshotAt =
                     dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
@@ -2752,11 +2756,13 @@ fun ChatScreen(
                 )
                 // 【离线快照】成功后落一份本地只读副本(只留 role+text:
                 // 图片/工具结果离线圈不了,宁可少显示也不能错显示)。
+                // 【深优 R2 修复】时间戳随行保存 —— 此前整列剥掉,快照恢复后
+                // 历史导航的日期分组全部退化为「早前」。
                 dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(
                     threadId,
                     st.items
                         .filter { it.role != "tool" && it.attachments.isEmpty() && it.text.isNotBlank() }
-                        .map { dev.pocketagent.app.ui.component.ThreadSnapshot.Msg(it.role, it.text) },
+                        .map { dev.pocketagent.app.ui.component.ThreadSnapshot.Msg(it.role, it.text, it.sentAtMs) },
                 )
             }
             st.historyLoaded = true

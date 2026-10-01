@@ -8,6 +8,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,9 +54,11 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -125,8 +128,12 @@ private const val PreviewHoldMs = 120L
 /** "几乎没拖"= 取消的位移阈值:预览中松手时位移小于它就不跳转。 */
 private val CancelSlop = 20.dp
 
-/** 预览气泡:宽 ~55% 屏宽、高 120dp 单卡,贴左缘,竖直让位 8dp。 */
+/** 预览气泡:宽 ~55% 屏宽,贴左缘,竖直让位 8dp。 */
 private val BubbleWidthFraction = 0.55f
+/**
+ * 预览气泡定位钳制的名义高度(v3 气泡改自适应高度 64..200dp,定位钳制用
+ * 名义值即可——贴近真实高度,边缘出入无感知)。
+ */
 private val BubbleHeight = 120.dp
 private val BubbleYield = 8.dp
 private val BubbleStartGap = 16.dp
@@ -431,10 +438,19 @@ fun HistoryQuickBubble(
             val index = (scrubIndex.value.takeIf { it >= 0 } ?: lastScrub.value)
                 .coerceIn(0, entries.size - 1)
             val entry = entries[index]
+            // 【v3 重做】缩略图只在"指到带图消息"时解码一次,换条消息才重算 ——
+            // 拖动逐帧不解码(remember 键 = 字节数组引用 + 下标)
+            val thumb = remember(entry.thumbBytes, index) {
+                entry.thumbBytes?.let {
+                    runCatching { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }.getOrNull()
+                }
+            }
             Column(
                 Modifier
                     .width(bubbleW)
-                    .height(BubbleHeight)
+                    // 【v3】自适应高度(此前固定 120dp:内容一两行时下半截是空黑框,
+                    // 真机观感"做的很差"正是它)—— 上限 200dp 防长文撑爆
+                    .heightIn(min = 64.dp, max = 200.dp)
                     .graphicsLayer {
                         // 以左缘中点为轴缩放:气泡从刻度条方向长出来,不是从卡片中心鼓包
                         transformOrigin = TransformOrigin(0f, 0.5f)
@@ -447,55 +463,103 @@ fun HistoryQuickBubble(
                         tint = if (hacker) PaEditorial.GraphiteDrawer else PaEditorial.Raised,
                         shadowElevation = 16.dp,
                     )
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
+                // 标题(两行):消息首行,粗体
+                Text(
+                    entry.title,
+                    fontSize = 13.5.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PaEditorial.Ink,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = if (hacker) PaHacker.mono else null,
+                )
+                Spacer(Modifier.height(5.dp))
+                // 元数据行:N/M · 日期 · 图片数 —— 单行紧凑,信息密度高
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 序号:第几条/共几条(等宽对齐,拖动扫过时不跳动;实时刷选下
-                    // 气泡即"当前视口锚点"的元数据,给全量感)
                     Text(
                         HistoryQuickNavLogic.positionLabel(index, entries.size),
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                         color = PaEditorial.Primary,
                         fontWeight = FontWeight.SemiBold,
                         fontFamily = PaHacker.mono,
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        entry.title,
-                        fontSize = 14.sp,
-                        lineHeight = 19.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = PaEditorial.Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontFamily = if (hacker) PaHacker.mono else null,
-                        modifier = Modifier.weight(1f),
+                    val stamp = HistoryQuickNavLogic.historyStampOf(
+                        entry.sentAtMs, System.currentTimeMillis(),
                     )
+                    if (stamp.isNotEmpty()) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            stamp,
+                            fontSize = 10.5.sp,
+                            color = PaEditorial.Subtle,
+                            fontFamily = PaHacker.mono,
+                        )
+                    }
+                    if (entry.imageCount > 0) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "${entry.imageCount} 图",
+                            fontSize = 10.5.sp,
+                            color = PaEditorial.Subtle,
+                            fontFamily = PaHacker.mono,
+                        )
+                    }
                 }
-                Spacer(Modifier.height(3.dp))
-                // 【R2 日期上下文】真实墙钟时间(WhatsApp/Telegram 刷选日期气泡同款);
-                // 0 = 时间未知,诚实隐藏不编造
-                val stamp = HistoryQuickNavLogic.historyStampOf(
-                    entry.sentAtMs, System.currentTimeMillis(),
-                )
-                if (stamp.isNotEmpty()) {
-                    Text(
-                        stamp,
-                        fontSize = 10.5.sp,
-                        color = PaEditorial.Subtle,
-                        fontFamily = PaHacker.mono,
-                    )
-                    Spacer(Modifier.height(5.dp))
-                }
-                if (entry.summary.isNotEmpty()) {
+                // 缩略图行(带图消息):首图 44dp 圆角实图 + 计数
+                if (thumb != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            bitmap = thumb.asImageBitmap(),
+                            contentDescription = "消息图片预览",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                        )
+                        if (entry.imageCount > 1) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "+${entry.imageCount - 1}",
+                                fontSize = 11.sp,
+                                color = PaEditorial.Subtle,
+                                fontFamily = PaHacker.mono,
+                            )
+                        }
+                    }
+                } else if (entry.summary.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         entry.summary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         color = if (hacker) PaEditorial.OnGraphiteMuted else PaEditorial.Muted,
-                        maxLines = 4,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         fontFamily = if (hacker) PaHacker.mono else null,
+                    )
+                }
+                Spacer(Modifier.height(7.dp))
+                // 【v3】刷选进度条:当前条在整场对话中的位置,一跟手就看得见远近
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(if (hacker) PaEditorial.OnGraphiteSubtle else PaEditorial.Hairline),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth((index + 1f) / entries.size)
+                            .fillMaxHeight()
+                            .background(PaEditorial.Primary),
                     )
                 }
             }

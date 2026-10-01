@@ -46,6 +46,13 @@ object HistoryQuickNavLogic {
          * (气泡日期行/面板按日分组)见 0 必须隐藏或归入「早前」,绝不编造。
          */
         val sentAtMs: Long = 0,
+        /** 消息内图片附件数(0=无图);气泡据此显示缩略图行。 */
+        val imageCount: Int = 0,
+        /**
+         * 首张图片的预览字节(加载链已备好的缩略图数据);null=无缩略图。
+         * ByteArray 不参与 Entry 的相等判断(调用方只用 listIndex 定位)。
+         */
+        val thumbBytes: ByteArray? = null,
     )
 
     /** 首行截断:换行/首尾空白都收掉;超长以省略号收尾。 */
@@ -118,7 +125,15 @@ object HistoryQuickNavLogic {
                 // 既无文本也无附件的占位消息不进刻度(没有可导航的内容)
                 return@mapIndexedNotNull null
             }
-            Entry(itemIndex = i, listIndex = i + listOffset, title = title, summary = summary, sentAtMs = item.sentAtMs)
+            // 图片附件:计数含全部图片(哪怕无预览数据,消息确实有图);
+            // 缩略图只取带预览数据的(诚实降级,不放假图)
+            val imgs = item.attachments.filter { it.mediaType.startsWith("image/") }
+            Entry(
+                itemIndex = i, listIndex = i + listOffset, title = title, summary = summary,
+                sentAtMs = item.sentAtMs,
+                imageCount = imgs.size,
+                thumbBytes = imgs.firstOrNull { it.previewData != null }?.previewData,
+            )
         }
     }
 

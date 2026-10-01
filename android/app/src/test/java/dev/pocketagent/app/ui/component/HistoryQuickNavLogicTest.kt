@@ -510,3 +510,48 @@ class HistoryQuickNavFilterTest {
         assertTrue(HistoryQuickNavLogic.filterEntries(items, "不存在的词").isEmpty())
     }
 }
+
+// ---- v3 气泡:图片附件进缩略图(entriesOf 提取) ----
+
+class HistoryQuickNavThumbTest {
+
+    private fun img(name: String, bytes: ByteArray?) = dev.pocketagent.app.ui.Attachment(
+        name = name, pcPath = "", size = 1, mediaType = "image/png", previewData = bytes,
+    )
+
+    private fun pdf(name: String) = dev.pocketagent.app.ui.Attachment(
+        name = name, pcPath = "", size = 1, mediaType = "application/pdf",
+    )
+
+    @Test
+    fun `纯文本消息_无缩略图`() {
+        val e = HistoryQuickNavLogic.entriesOf(listOf(ChatItem(role = "user", text = "你好")), 0)
+        assertEquals(0, e[0].imageCount)
+        assertEquals(null, e[0].thumbBytes)
+    }
+
+    @Test
+    fun `带图消息_首图预览字节与计数进刻度`() {
+        val bytes = byteArrayOf(1, 2, 3)
+        val item = ChatItem(role = "user", text = "看这张图", attachments = listOf(img("a.png", bytes), img("b.png", bytes)))
+        val e = HistoryQuickNavLogic.entriesOf(listOf(item), 0)
+        assertEquals(1, e.size)
+        assertEquals(2, e[0].imageCount)
+        assertTrue(e[0].thumbBytes!!.contentEquals(bytes))
+    }
+
+    @Test
+    fun `非图片附件不计入图片数_无预览数据的图片不算缩略图但计数算图`() {
+        // pdf 不算图
+        val e1 = HistoryQuickNavLogic.entriesOf(listOf(ChatItem(role = "user", attachments = listOf(pdf("f.pdf")))), 0)
+        assertEquals(0, e1[0].imageCount)
+        assertEquals(null, e1[0].thumbBytes)
+        // 图片但无预览数据:计数算图,缩略图为 null(诚实降级,气泡不放假图)
+        val e2 = HistoryQuickNavLogic.entriesOf(
+            listOf(ChatItem(role = "user", text = "图", attachments = listOf(img("a.png", null)))),
+            0,
+        )
+        assertEquals(1, e2[0].imageCount)
+        assertEquals(null, e2[0].thumbBytes)
+    }
+}
