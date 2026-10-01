@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -61,6 +62,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R as AppR
@@ -70,6 +72,7 @@ import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -356,13 +359,18 @@ fun HistoryQuickBubble(
             enter = fadeIn(PaMotion.standard()) +
                 scaleIn(PaMotion.emphasized(), initialScale = 0.92f),
             exit = fadeOut(PaMotion.nav(600f)),
-            modifier = Modifier.graphicsLayer {
-                // 【真机 2026-10-01 · 丝滑】translationX/Y 只走 draw 层,连重排版都
-                // 不进(offset{} 每帧要做一次 placement),拖动跟手更省一档;
-                // 手指 Y 状态在此延迟读,逐帧只重绘本层。
-                translationX = startGapPx
-                translationY = HistoryQuickNavLogic.bubbleTopY(
-                    drag.fingerY, bubbleHPx, drag.heightPx, yieldPx,
+            modifier = Modifier.offset {
+                // 【真机 2026-10-01 · 跟手回归 placement 层】上一轮为省一档排版
+                // 换成 graphicsLayer{translationY} 挂在 AnimatedVisibility 上,
+                // 实机结果气泡定格在入场位完全不跟随 —— AV 的进出场图层接管了
+                // 该节点的绘制管线,外层 layer 的状态失效被吞。跟手必须走
+                // offset{}(placement):每帧只重排版这个 55%×120dp 小节点,
+                // 零重组、零列表重排,1:1 无延迟。
+                IntOffset(
+                    startGapPx.roundToInt(),
+                    HistoryQuickNavLogic.bubbleTopY(
+                        drag.fingerY, bubbleHPx, drag.heightPx, yieldPx,
+                    ).roundToInt(),
                 )
             },
         ) {
