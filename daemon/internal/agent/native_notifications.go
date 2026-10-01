@@ -156,12 +156,17 @@ func codexItemNoticeKind(itemType string) string {
 // model/verification 在校验列表为空时,codexNotificationEvent 会返回 nil,于是落到
 // 兜底记录。这是**已知 method 这次没东西可投影**,不是"上游发来没见过的 method"。
 // 记成 UNKNOWN 的话,诊断页天天被它占着,真正的新 method 反而显不出来。
+//
+// 【2026-10-02 起与 codexGlobalNoticeKind 同表】此前本函数只认 turn/diff/updated
+// 与 model/verification 两个名字,轮次内到达的其余已登记通知(authRecovery 两连、
+// hook/*、account/*、thread/environment/* 等 12 个 PASSTHROUGH 族,以及异线程
+// 错配的 PROJECTED 族)全部灌成 UNKNOWN —— 全局一张表、轮内另一张表,同一方法
+// 两处定性必然漂移(dsh/pi/zcode 同病根的 codex 变体)。现在直接查全局表:
+// 轮内兜底只收"没有专属分支"的方法,对它们全局表就是唯一权威定性;真正未知的方法
+// 两表同样落 UNKNOWN,口径不变。表本体与登记证据见 codex.go 的
+// codexGlobalNoticeKinds。
 func codexMethodNoticeKind(method string) string {
-	switch method {
-	case "turn/diff/updated", "model/verification":
-		return runtime.KindKnownPassthrough
-	}
-	return runtime.KindUnknownNotification
+	return codexGlobalNoticeKind(method)
 }
 
 // dshNoticeKind 给 dsh 通知的 method 分档。

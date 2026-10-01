@@ -9,7 +9,9 @@
 //	① 新建对话携带创建时快照:全局设置改了,老对话的 turn 参数不变;
 //	③ 旧线程(快照 nil)回退全局行为(升级前语义原样);
 //	④ ModelEffortCard 的会话内覆盖仍然最优先(压过快照与全局);
-//	⑤ hideReasoning 线程化:快照 true 过滤 / false 不过滤,与全局开关无关。
+//	⑤ hideReasoning 全局优先:无论有无快照,一律按当前全局开关判定
+//	  (与 pi/zcode 的 hideReasoningFor 三家一致;快照 HideReasoning 字段不参与判定,
+//	  见 codex.go HideReasoningFor 的口径注释)。
 package agent
 
 import (

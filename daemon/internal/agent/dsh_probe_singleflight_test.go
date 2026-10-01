@@ -261,6 +261,13 @@ func TestDshProbeGivesUpWhenHandshakeWaitExpires(t *testing.T) {
 // TestDshModelsProbeFailureSharedThenRecovers 并发 Models() 共享同一次失败探测
 // (只有一个探测周期、全部回 default 兜底);失败后在飞槽照常放行,下一次调用
 // 重新探测成功。
+//
+// 【为何要拉宽取样窗口(flake 根治)】本用例曾不设 newDelay:失败探测在微秒级
+// 完成,close(start) 放行的 4 个 goroutine 在全量并发下(其他包的测试二进制、
+// 真实 dsh/codex 子进程在抢 CPU/握手窗)后到的调用者会错过在飞槽、各自再开
+// 一个探测周期 —— session/new 计数断言随之偶发炸(串扰)。与上方
+// TestDshModelsConcurrentProbeSingleFlight 同款治理:150ms 慢窗口让全部调用者
+// 稳定落在同一个探测周期内,被测语义(单飞共享失败结果)不变。
 func TestDshModelsProbeFailureSharedThenRecovers(t *testing.T) {
 	sc := &slowNewClient{
 		fakeDshClient: fakeDshClient{
@@ -268,6 +275,7 @@ func TestDshModelsProbeFailureSharedThenRecovers(t *testing.T) {
 			newState: probeSessionState(t, "s-fail"),
 			newErr:   &dshapp.RPCError{Method: "session/new", Code: -32603, Message: "boom"},
 		},
+		newDelay: 150 * time.Millisecond, // 拉宽失败探测窗口:4 个调用者必须共享同一周期
 	}
 	p := NewDshProvider()
 	p.newClient = func() (dshClient, error) { return sc, nil }

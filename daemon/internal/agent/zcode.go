@@ -132,7 +132,8 @@ type ZcodeProvider struct {
 	prefs   DesktopPrefs
 
 	// TitleHandler 标题同步钩子:zcode 自动命名会话时回调(server 层落库后
-	// 双端可见)。P0 阶段 server 尚未接线该钩子,字段先留好(与 codex 同名同语义)。
+	// 双端可见)。server.New 已接线(applyZcodeTitle 落库,server.go),与 codex
+	// 同名同语义;此注释原写"P0 阶段尚未接线"已过时,更正以免误导后续排查。
 	TitleHandler func(threadID, title string)
 
 	// SubagentsHandler 原生子代理清单钩子(0.16.9 session/subagents):轮次终局

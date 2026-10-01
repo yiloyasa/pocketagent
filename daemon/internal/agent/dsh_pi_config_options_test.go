@@ -151,6 +151,55 @@ func TestDshCatalogThreadBound(t *testing.T) {
 	}
 }
 
+// TestDshCatalogThreadBoundAlreadyActiveFallsBackToSnapshot already active 兜底
+// (proto020 实测 2026-10-02:活跃会话的 resume 被原生拒绝 -32602 "session is
+// already active: <id>",且长驻桥内会话首轮之后恒活跃 —— 此前线程绑定目录读取
+// 在首轮后必然失败):回最近一次已知目录快照,不再报错;无快照显式报错不伪造;
+// 非 already active 的 resume 失败照旧显式报错。
+func TestDshCatalogThreadBoundAlreadyActiveFallsBackToSnapshot(t *testing.T) {
+	alreadyActive := func() error {
+		return &dshapp.RPCError{Method: "session/resume", Code: -32602,
+			Message: "Invalid params: session is already active: s-live"}
+	}
+
+	// ① 有快照:already active → 快照内容照常呈现,不报错。
+	fake := &fakeDshClient{resumeErr: alreadyActive()}
+	p := newTestDshProvider(t, fake)
+	p.gen.Store(1)
+	p.refreshCatalogFromResume(probeCatalogOpts(t)) // 生产由 new/resume/config_option_update 刷新
+	thread := &store.Thread{ID: "t1", AgentID: "dsh",
+		ExternalSession: store.ExternalSessionRef{SessionID: "s-live", Cwd: `G:\ws`}}
+
+	rows, err := p.ConfigOptionsCatalog(context.Background(), thread)
+	if err != nil {
+		t.Fatalf("already active 应回已知快照兜底而非报错: %v", err)
+	}
+	if len(rows) != 2 || rows[0].ID != "model" || len(rows[0].Options) != 4 {
+		t.Fatalf("快照目录应完整呈现(2 行,model 4 候选): %+v", rows)
+	}
+	if hits := fake.snapshot().resumeHits; len(hits) != 1 || hits[0] != "s-live" {
+		t.Fatalf("应恰好 resume 过一次(被拒后走兜底): %+v", hits)
+	}
+
+	// ② 无快照:already active → 显式报错(说明缺快照),不伪造目录。
+	p2 := newTestDshProvider(t, &fakeDshClient{resumeErr: alreadyActive()})
+	p2.gen.Store(1)
+	if _, err := p2.ConfigOptionsCatalog(context.Background(), thread); err == nil ||
+		!strings.Contains(err.Error(), "快照") {
+		t.Fatalf("无快照的 already active 应显式报错: %v", err)
+	}
+
+	// ③ 非 already active 的失败(cwd 不匹配,同 -32602):照旧显式报错,绝不回快照。
+	fake3 := &fakeDshClient{resumeErr: &dshapp.RPCError{Method: "session/resume", Code: -32602,
+		Message: "Invalid params: session cwd does not match: G:\\ws"}}
+	p3 := newTestDshProvider(t, fake3)
+	p3.gen.Store(1)
+	p3.refreshCatalogFromResume(probeCatalogOpts(t))
+	if _, err := p3.ConfigOptionsCatalog(context.Background(), thread); err == nil {
+		t.Fatal("cwd 不匹配不是 already active,必须显式报错")
+	}
+}
+
 // TestDshOverlayCurrent 覆盖语义:已确认灌入的项覆盖 currentValue,其余原样。
 func TestDshOverlayCurrent(t *testing.T) {
 	opts := probeCatalogOpts(t)

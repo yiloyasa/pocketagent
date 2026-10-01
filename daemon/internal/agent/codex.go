@@ -562,82 +562,155 @@ func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 	})
 }
 
-func codexGlobalNoticeKind(method string) string {
-	switch method {
+// codexGlobalNoticeKinds 是 codex 通知方法的**全局登记表**(唯一一张:全局钩子
+// 路径与轮内兜底路径共用,见 codexMethodNoticeKind)。表驱动是为了让 schema 对表
+// 测试(codex_notice_schema_20261002_test.go)能遍历全部登记项:每个登记名都必须
+// 在 vendored 0.159.2 schema 的 ServerNotification oneOf 里真实存在 —— 幻影方法
+// (如审计时误写的 thread/plan/updated,codexplanprobe 实测定案)当场被反例拦下;
+// schema 里出现而表里没有的方法,测试也要求逐个落在"明确不收清单"里,两向都钉。
+//
+// 分类依据 = "Run 路径/事件翻译层对它做了什么"(PROJECTED=确有投影帧,
+// PASSTHROUGH=已知但只留痕),与 knowledge_codex.go 词表一一对应。
+var codexGlobalNoticeKinds = map[string]string{
+	// ---- 会话级事实族(server 层经 ThreadEventHandler 同步本地库)----
 	// turn/plan/updated 是真实通知名(vendored schema + 0.156.1 二进制命中;
 	// 审计时误写的 thread/plan/updated 已由 codexplanprobe 实测定案为幻影 ——
-	// 证据 docs/verify/evidence/codex-plan-probe.log)。它在本函数的语义:全局
-	// 钩子也会收到这条通知,按"已知且确有投影"(事件流投影在 codex_events.go
-	// 的 turn/plan/updated 分支,带 plan_steps)定性,不落入 UNKNOWN 灌诊断页。
-	case "thread/archived", "thread/unarchived", "thread/deleted",
-		"thread/reverted", "thread/closed", "thread/name/updated",
-		"thread/queue/changed", "thread/status/changed", "thread/started",
-		"skills/changed", "turn/plan/updated", "thread/goal/updated",
-		"thread/goal/cleared",
-		// 0.159.2 补登:命令在等终端输入 —— 事件流有投影(codex_events.go 的
-		// terminalInteraction 分支,带指引文案),此前漏登记被当 UNKNOWN 计数;
-		// 0.159.2 起它还常有配套的 writeStdin 审批卡(codex_requests.go),
-		// 出现频率会上升,更不该灌 UNKNOWN。
-		"item/commandExecution/terminalInteraction",
-		// 2026-10-01 通宵采样批(codexliveturnprobe 活体单轮实证,0.159.2):
-		// 轮次骨架通知族。codexapp 对每条通知都是"先 global 后 notif"两路分发,
-		// 本表管的是全局那一路 —— 轮次内 Run 路径明明有投影分支,全局路径却不
-		// 认识这些方法,一次最小轮(46 条通知)就有 ~39 条灌成 UNKNOWN
-		// (zcode session/event 收编批同一病根,见 native_notifications.go 的
-		// zcodeNoticeKind 注释)。逐条判定依据 = Run 路径对它做了什么:
-		//   - warning → WARNING 状态卡(codex_events.go warning 分支);
-		//   - item/started|completed → 工具卡 STARTED/FINISHED、压缩卡、终稿聚合
-		//     (codex.go Run 的 item/started|completed 分支);
-		//   - item/agentMessage/delta → 流式正文主来源(→ AssistantDelta);
-		//   - item/reasoning/summaryTextDelta → 思考流(→ ThinkingDelta,随
-		//     HideReasoning 过滤);
-		//   - item/commandExecution/outputDelta → 工具卡 UPDATE(codex_events.go);
-		//   - thread/tokenUsage/updated → 用量帧 + Token 用量卡;
-		//   - account/rateLimits/updated → RATE_LIMIT 用量卡;
-		//   - mcpServer/startupStatus/updated → MCP 服务器状态卡;
-		//   - turn/completed → 轮次终局驱动(Run 收口 + 终稿冲洗)。
-		"warning", "turn/completed",
-		"item/started", "item/completed",
-		"item/agentMessage/delta", "item/reasoning/summaryTextDelta",
-		"item/commandExecution/outputDelta",
-		"thread/tokenUsage/updated", "account/rateLimits/updated",
-		"mcpServer/startupStatus/updated":
-		return runtime.KindKnownProjected
-	case "turn/diff/updated", "model/verification",
-		// 0.156.1 收编批(docs/verify/evidence/codex-0156-probe.log;词表在
-		// runtime/knowledge_codex.go):这些通知 daemon 只留痕/透传,不做投影,
-		// 但"已知"的定性要让台账如实记录 —— environment 接通/掉线、会话设置被
-		// 桌面端改动、配置警告/弃用提示、账号与 MCP 授权变更、后台进程退出、
-		// 0.156 生命周期钩子,以及思考摘要分段(思考流投影已有
-		// item/reasoning/summaryTextDelta,本条只补"新一段开始"的留痕)。
-		"thread/environment/connected", "thread/environment/disconnected",
-		// 2026-10-02 收编(unknown-events.json 滚动窗 200 条复盘:UNKNOWN 只剩
-		// remoteControl/status/changed 2 条):Codex 桌面端远程控制开关启停通知,
-		// 载荷 {status: enabled|disabled, serverName}。此前按"remoteControl/*
-		// 桌面面不收"维持 UNKNOWN;但它与 environment/connected|disconnected
-		// 同性质(状态变化+人话可译),留痕+词表,不做投影。收编后 codex 侧
-		// UNKNOWN 清零;其余 remoteControl/* 变体仍属明确不收清单,出现即如实
-		// UNKNOWN 留观。
-		"remoteControl/status/changed",
-		"thread/settings/updated", "configWarning", "deprecationNotice",
-		"item/reasoning/summaryPartAdded", "turn/moderationMetadata",
-		"account/updated", "account/login/completed",
-		"mcpServer/oauthLogin/completed", "process/exited",
-		"hook/started", "hook/completed",
-		// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
-		// 模型服务登录态自动恢复两连 —— 它解释"轮次莫名失败",属关键通知,
-		// daemon 无专属投影,留痕 + 词表人话。
-		"modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
-		// 2026-10-01 通宵采样批(同上活体单轮):已知但无投影,只留痕 ——
-		//   - turn/started → Run 路径只做日志 + steer 目标登记(codex.go 的
-		//     turn/started 分支),不发协议帧(zcode turn.started 同款 PASSTHROUGH);
-		//   - serverRequest/resolved → 桌面端处理完反向请求的回执,手机端无消费方
-		//     (词表词条已有,分类此前漏档)。
-		"turn/started", "serverRequest/resolved":
-		return runtime.KindKnownPassthrough
-	default:
-		return runtime.KindUnknownNotification
+	// 证据 docs/verify/evidence/codex-plan-probe.log)。事件流投影在
+	// codex_events.go 的 turn/plan/updated 分支,带 plan_steps。
+	"thread/archived":       runtime.KindKnownProjected,
+	"thread/unarchived":     runtime.KindKnownProjected,
+	"thread/deleted":        runtime.KindKnownProjected,
+	"thread/reverted":       runtime.KindKnownProjected,
+	"thread/closed":         runtime.KindKnownProjected,
+	"thread/name/updated":   runtime.KindKnownProjected,
+	"thread/queue/changed":  runtime.KindKnownProjected,
+	"thread/status/changed": runtime.KindKnownProjected,
+	"thread/started":        runtime.KindKnownProjected,
+	"skills/changed":        runtime.KindKnownProjected,
+	"turn/plan/updated":     runtime.KindKnownProjected,
+	"thread/goal/updated":   runtime.KindKnownProjected,
+	"thread/goal/cleared":   runtime.KindKnownProjected,
+	// 0.159.2 补登:命令在等终端输入 —— 事件流有投影(codex_events.go 的
+	// terminalInteraction 分支,带指引文案),此前漏登记被当 UNKNOWN 计数;
+	// 0.159.2 起它还常有配套的 writeStdin 审批卡(codex_requests.go)。
+	"item/commandExecution/terminalInteraction": runtime.KindKnownProjected,
+	// 2026-10-01 通宵采样批(codexliveturnprobe 活体单轮实证,0.159.2):
+	// 轮次骨架通知族。codexapp 对每条通知都是"先 global 后 notif"两路分发,
+	// 本表管的是全局那一路 —— 轮次内 Run 路径明明有投影分支,全局路径却不
+	// 认识这些方法,一次最小轮(46 条通知)就有 ~39 条灌成 UNKNOWN
+	// (zcode session/event 收编批同一病根)。逐条判定依据 = Run 路径对它做了什么:
+	//   - warning → WARNING 状态卡(codex_events.go warning 分支);
+	//   - item/started|completed → 工具卡 STARTED/FINISHED、压缩卡、终稿聚合
+	//     (codex.go Run 的 item/started|completed 分支);
+	//   - item/agentMessage/delta → 流式正文主来源(→ AssistantDelta);
+	//   - item/reasoning/summaryTextDelta → 思考流(→ ThinkingDelta,随
+	//     HideReasoning 过滤);
+	//   - item/commandExecution/outputDelta → 工具卡 UPDATE(codex_events.go);
+	//   - thread/tokenUsage/updated → 用量帧 + Token 用量卡;
+	//   - account/rateLimits/updated → RATE_LIMIT 用量卡;
+	//   - mcpServer/startupStatus/updated → MCP 服务器状态卡;
+	//   - turn/completed → 轮次终局驱动(Run 收口 + 终稿冲洗)。
+	"warning":                           runtime.KindKnownProjected,
+	"turn/completed":                    runtime.KindKnownProjected,
+	"item/started":                      runtime.KindKnownProjected,
+	"item/completed":                    runtime.KindKnownProjected,
+	"item/agentMessage/delta":           runtime.KindKnownProjected,
+	"item/reasoning/summaryTextDelta":   runtime.KindKnownProjected,
+	"item/commandExecution/outputDelta": runtime.KindKnownProjected,
+	"thread/tokenUsage/updated":         runtime.KindKnownProjected,
+	"account/rateLimits/updated":        runtime.KindKnownProjected,
+	"mcpServer/startupStatus/updated":   runtime.KindKnownProjected,
+
+	// ---- 2026-10-02 深接入差距修复批(证据:vendored ServerNotification.json
+	// 逐名 diff + daemon 事件翻译层逐名核对,活体轮探针日志
+	// docs/verify/evidence/codex-01592-liveturn-20261002.log)----
+	// 这 16 个方法在 0.159.2 schema 里真实存在、daemon 事件翻译层早有投影分支,
+	// 但本表此前漏登记:轮次外到达(全局钩子)一律灌 UNKNOWN,与"投影明明在"的
+	// 事实不符。逐条投影落点:
+	//   - error → ERROR/RETRY_STARTED 事件 + lastErr(codex.go Run error 分支,
+	//     codex_events.go parseCodexErrorNotification);
+	//   - guardianWarning → WARNING/GUARDIAN_REVIEW 卡(codex_events.go 与
+	//     codex_events_ext.go 双分支;全局钩子还记 guardian 结论);
+	//   - item/autoApprovalReview/started|completed、
+	//     autoApprovalReview/strictReviewRequired → GUARDIAN_REVIEW 卡
+	//     (codex_events_ext.go;全局钩子 recordGuardianNotification);
+	//   - item/plan/delta → "执行计划生成中"状态卡(codex_events.go);
+	//   - command/exec/outputDelta、process/outputDelta → 命令输出卡(base64
+	//     解码,codex_events.go;两者是 0.155 旧协议名,保留登记兼容旧二进制);
+	//   - item/fileChange/outputDelta → "命令执行过程"卡;
+	//   - item/fileChange/patchUpdated → "文件变更预览"卡 + 审批卡文件列表
+	//     累积(Run 的 changeFiles);
+	//   - item/mcpToolCall/progress → "MCP 工具进度"卡;
+	//   - model/rerouted → MODEL_REROUTED 切换卡;
+	//   - model/safetyBuffering/updated → MODEL_SAFETY 卡(codex_events_ext.go);
+	//   - thread/compacted → CONTEXT_COMPACTED 卡 + 压缩状态机重置
+	//     (codex_events.go + codex_compact.go);
+	//   - item/reasoning/textDelta → ThinkingDelta(isReasoningDeltaMethod 的
+	//     兼容名;summaryTextDelta 之外的旧式思考流载体);
+	//   - windows/worldWritableWarning → SANDBOX_WARNING 卡(codex_events_ext.go)。
+	//     【与词表"明确不收清单"的矛盾就此修正】该清单此前把它列为不收,但
+	//     codex_events_ext.go 自始就有投影分支 —— 代码在先、分类随后,按
+	//     "判定依据是我们做了什么"的口径收编为 PROJECTED(词表同批补词条)。
+	"error":                                   runtime.KindKnownProjected,
+	"guardianWarning":                         runtime.KindKnownProjected,
+	"item/autoApprovalReview/started":         runtime.KindKnownProjected,
+	"item/autoApprovalReview/completed":       runtime.KindKnownProjected,
+	"autoApprovalReview/strictReviewRequired": runtime.KindKnownProjected,
+	"item/plan/delta":                         runtime.KindKnownProjected,
+	"command/exec/outputDelta":                runtime.KindKnownProjected,
+	"process/outputDelta":                     runtime.KindKnownProjected,
+	"item/fileChange/outputDelta":             runtime.KindKnownProjected,
+	"item/fileChange/patchUpdated":            runtime.KindKnownProjected,
+	"item/mcpToolCall/progress":               runtime.KindKnownProjected,
+	"model/rerouted":                          runtime.KindKnownProjected,
+	"model/safetyBuffering/updated":           runtime.KindKnownProjected,
+	"thread/compacted":                        runtime.KindKnownProjected,
+	"item/reasoning/textDelta":                runtime.KindKnownProjected,
+	"windows/worldWritableWarning":            runtime.KindKnownProjected,
+
+	// ---- 已知但无投影,只留痕(PASSTHROUGH)----
+	"turn/diff/updated":  runtime.KindKnownPassthrough,
+	"model/verification": runtime.KindKnownPassthrough,
+	// 0.156.1 收编批(docs/verify/evidence/codex-0156-probe.log;词表在
+	// runtime/knowledge_codex.go):environment 接通/掉线、会话设置被
+	// 桌面端改动、配置警告/弃用提示、账号与 MCP 授权变更、后台进程退出、
+	// 0.156 生命周期钩子,以及思考摘要分段(思考流投影已有
+	// item/reasoning/summaryTextDelta,本条只补"新一段开始"的留痕)。
+	"thread/environment/connected":    runtime.KindKnownPassthrough,
+	"thread/environment/disconnected": runtime.KindKnownPassthrough,
+	// 2026-10-02 收编(unknown-events.json 滚动窗 200 条复盘):Codex 桌面端远程
+	// 控制开关启停通知,载荷 {status: enabled|disabled, serverName}。与
+	// environment/connected|disconnected 同性质(状态变化+人话可译),留痕+词表。
+	// 其余 remoteControl/* 变体仍属明确不收清单,出现即如实 UNKNOWN 留观。
+	"remoteControl/status/changed":    runtime.KindKnownPassthrough,
+	"thread/settings/updated":         runtime.KindKnownPassthrough,
+	"configWarning":                   runtime.KindKnownPassthrough,
+	"deprecationNotice":               runtime.KindKnownPassthrough,
+	"item/reasoning/summaryPartAdded": runtime.KindKnownPassthrough,
+	"turn/moderationMetadata":         runtime.KindKnownPassthrough,
+	"account/updated":                 runtime.KindKnownPassthrough,
+	"account/login/completed":         runtime.KindKnownPassthrough,
+	"mcpServer/oauthLogin/completed":  runtime.KindKnownPassthrough,
+	"process/exited":                  runtime.KindKnownPassthrough,
+	"hook/started":                    runtime.KindKnownPassthrough,
+	"hook/completed":                  runtime.KindKnownPassthrough,
+	// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
+	// 模型服务登录态自动恢复两连 —— 它解释"轮次莫名失败",属关键通知。
+	"modelProvider/authRecoveryStarted":   runtime.KindKnownPassthrough,
+	"modelProvider/authRecoveryCompleted": runtime.KindKnownPassthrough,
+	// 2026-10-01 通宵采样批(同上活体单轮):已知但无投影,只留痕 ——
+	//   - turn/started → Run 路径只做日志 + steer 目标登记,不发协议帧;
+	//   - serverRequest/resolved → 桌面端处理完反向请求的回执,手机端无消费方。
+	"turn/started":           runtime.KindKnownPassthrough,
+	"serverRequest/resolved": runtime.KindKnownPassthrough,
+}
+
+// codexGlobalNoticeKind 查全局登记表;表外一律 UNKNOWN_NOTIFICATION(不猜)。
+func codexGlobalNoticeKind(method string) string {
+	if kind, ok := codexGlobalNoticeKinds[method]; ok {
+		return kind
 	}
+	return runtime.KindUnknownNotification
 }
 
 // codexLateResponseLedger 判定一条"无法关联到在途请求"的 codex 响应如何入账,
@@ -1715,10 +1788,19 @@ func (p *CodexProvider) HideReasoning() bool {
 // HideReasoningFor 是 HideReasoning 的线程感知版:返回"这个线程这一轮该不该
 // 隐藏思考流"。
 //
-// 【线程化语义】有设置快照的线程("设置页更改只对新建对话生效"上线后新建的
-// 会话)一律按快照值判定,与当前全局开关无关;旧线程(快照 nil)回退全局
-// HideReasoning,保持升级前行为。Pi/ZCode 的事件过滤仍走各自 provider 的全局
-// 广播语义,未线程化(遗留对齐项,见 store.TurnSettings 注释)。
+// 【实现层次说清楚】返回 true 时,Run() 的 reasoning/delta 分支**不再向手机
+// 推送** ThinkingDelta —— 这是 daemon 侧的行为改变,不依赖 codex 是否原生支持。
+// 客户端另有一个纯显示开关 AgentConnection.showThinking(ChatScreen 用它决定
+// 要不要渲染思考卡);两者叠加时以本开关为准,客户端在写入后会把 showThinking
+// 同步为一致值,避免出现"两种开关打架"。
+//
+// 【当前口径:全局优先(2026-10-02 核实钉死)】快照字段 TurnSettings.HideReasoning
+// 虽然随快照落库,但**不参与判定** —— 无论有无快照,一律以当前全局开关为准。
+// 这是有测试钉住的既定行为(TestHideReasoningIsGlobalAcrossSnapshots,本文件族
+// codex_snapshot_test.go),且 pi/zcode 的 hideReasoningFor 同款实现、同款全局优先
+// (三家一致;"切换快照语义"必须三家一起动,此处不单边改道)。
+// 快照真正生效的七项见 Run 的装配段(approvalPolicy/sandbox/model/effort/summary)
+// 与 ConfigOverrideFor(verbosity/reasoning_summary)。
 func (p *CodexProvider) HideReasoningFor(t *store.Thread) bool {
 	return p.HideReasoning()
 }

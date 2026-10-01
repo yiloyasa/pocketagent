@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pocketagent/daemon/internal/dshapp"
@@ -65,7 +66,9 @@ func (p *DshProvider) nativeDefaultsSnapshot() map[string]string {
 // 用系统临时目录作业、用完即毁),并把已存的初始值灌进去,保证 currentValue
 // 反映设置页当前生效的语义。
 // t != nil:该会话的实时目录(session/resume 应答带 configOptions,探针修正②);
-// 轮次执行中拒绝(与共享子进程的纪律一致:不打断正在跑的流)。
+// 会话已在本桥内活跃时 resume 被原生拒绝(already active),回最近一次已知目录
+// 快照兜底(见函数体内判别);轮次执行中拒绝(与共享子进程的纪律一致:不打断
+// 正在跑的流)。
 func (p *DshProvider) ConfigOptionsCatalog(ctx context.Context, t *store.Thread) ([]NativeConfigOption, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -88,9 +91,27 @@ func (p *DshProvider) ConfigOptionsCatalog(ctx context.Context, t *store.Thread)
 	err := p.withClientCtx(ctx, dshInitBudget, func(ctx context.Context, c dshClient) error {
 		// cwd 按 rc.3 契约带上(缺失时 resume 被 -32602 拒;落库没记 cwd 的老
 		// 线程传空串,由 resume 走原参形态并如实失败,不在设置页路径上猜目录)。
-		st, err := c.SessionResume(ctx, sid, t.ExternalSession.Cwd)
-		if err != nil {
-			return fmt.Errorf("session/resume %s: %w", sid, err)
+		st, rerr := c.SessionResume(ctx, sid, t.ExternalSession.Cwd)
+		if rerr != nil {
+			// 【already active 不是失败】子进程是长驻桥:会话首轮之后就一直"活跃"
+			// 在桥内,而 0.2.0-rc.2 对活跃会话的 resume 一律拒绝(proto020 实测
+			// 2026-10-02:-32602 "Invalid params: session is already active: <id>",
+			// 活跃判定先于 cwd 比对)。此前直接把错误上抛,设置页"该会话实时原生
+			// 设置"在首轮后必然失败。与 remountSession 同一判别式:命中 already
+			// active 按会话存活处理,目录回**最近一次已知快照**(每次 session/new|
+			// resume|config_option_update 都刷新,是该会话目录的最近地面真值);
+			// 从未取样过(无快照)才显式报错,不伪造目录。
+			var re *dshapp.RPCError
+			if errors.As(rerr, &re) && re.Code == -32602 && strings.Contains(re.Message, "session is already active") {
+				snap := p.rawCatalogSnapshot()
+				if len(snap) == 0 {
+					return fmt.Errorf("session/resume %s: %w(会话在本桥内活跃,尚无已知的原生目录快照,无法呈现)", sid, rerr)
+				}
+				log.Printf("[dsh] 会话 %s 已在本桥内活跃(resume 被拒),原生设置回最近已知目录快照(%d 项)", sid, len(snap))
+				opts = snap
+				return nil
+			}
+			return fmt.Errorf("session/resume %s: %w", sid, rerr)
 		}
 		opts = st.ConfigOptions
 		return nil

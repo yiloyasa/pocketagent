@@ -22,10 +22,14 @@
 // 【明确不收清单】——桌面产品面通知,手机端没有消费方,别再翻一遍了:
 // thread/realtime/*(语音实时会话,0.159.2 起含 item/started|transcript/delta|
 // item/completed 三条正式 schema 通知)、app/*(桌面应用管理)、fs/changed
-// (桌面文件监视)、remoteControl/*(远程控制)、externalAgentConfig/*(桌面
-// 导入)、fuzzyFileSearch/*(桌面模糊搜索)、windowsSandbox/*(Windows 沙箱
-// 安装向导)、windows/worldWritableWarning、project/changed、
+// (桌面文件监视)、remoteControl/*(远程控制;status/changed 已于 2026-10-02
+// 单独收编,见上方)、externalAgentConfig/*(桌面导入)、fuzzyFileSearch/*(桌面
+// 模糊搜索)、windowsSandbox/*(Windows 沙箱安装向导)、project/changed 与
+// thread/project/updated(桌面 Projects 面:全局项目变更与会话↔项目绑定)、
 // account/gatewayOAuth/*(桌面 OAuth 网关)。
+// windows/worldWritableWarning 原列于此清单,2026-10-02 移出:codex_events_ext.go
+// 自始就有 SANDBOX_WARNING 投影分支,"手机端没有消费方"的前提不成立,已按
+// PROJECTED 收编(见下方同日词条与 codex.go 的 codexGlobalNoticeKinds)。
 // 0.156.1/0.159.2 新增的请求面方法(gatewayOAuth/*、userVerification/*、
 // project/*、memory/*、environment/*、account/bedrock/*、process/spawn、
 // mock/experimentalMethod、server/diagnostics、thread/attachment/*、
@@ -111,8 +115,8 @@ var codexEventSummaries = map[string]string{
 
 	// ---- 2026-10-01 通宵采样批(codexliveturnprobe 活体单轮实证,0.159.2)----
 	// 轮次骨架通知族:全局钩子路径此前不认识这些 method,一次最小轮 46 条通知
-	// 里 ~39 条灌 UNKNOWN(分类批同步见 codex.go 的 codexGlobalNoticeKind;
-	// warning 与 serverRequest/resolved 词条更早已有,此处只补其余十条)。
+	// 里 ~39 条灌 UNKNOWN(分类与词表同批补齐,见 codexGlobalNoticeKind 与下方
+	// 同日词条;warning 与 serverRequest/resolved 词条更早已有,此处只补其余十条)。
 	"codex\x1fturn/started":                      "Codex 已接收并开始执行这一轮任务",
 	"codex\x1fturn/completed":                    "Codex 完成了这一轮任务",
 	"codex\x1fitem/started":                      "Codex 开始处理一个条目(命令/压缩/子代理等,手机端出对应卡片)",
@@ -123,4 +127,27 @@ var codexEventSummaries = map[string]string{
 	"codex\x1fthread/tokenUsage/updated":         "Codex 上报了 token 用量(已投影为用量帧与用量卡)",
 	"codex\x1faccount/rateLimits/updated":        "Codex 上报了套餐用量限制(已投影为限额卡)",
 	"codex\x1fmcpServer/startupStatus/updated":   "一个 MCP 服务的启动状态有变化(已投影为状态卡)",
+
+	// ---- 2026-10-02 深接入差距修复批(证据:vendored 0.159.2 ServerNotification
+	// 逐名 diff + daemon 事件翻译层逐名核对;活体轮探针日志
+	// docs/verify/evidence/codex-01592-liveturn-20261002.log)----
+	// 这 14 个方法 daemon 事件翻译层早有投影分支(codex_events.go /
+	// codex_events_ext.go / Run 的 changeFiles 累积),但分类表此前漏登记、词表也
+	// 没词条:轮次外到达灌 UNKNOWN、真到达时诊断页只能给"未知事件"兜底。同批
+	// 已在 codexGlobalNoticeKinds 补登记(全部 PROJECTED),此处补人话;其中
+	// error 与 guardianWarning 词条早已有,不再重复。
+	"codex\x1fitem/autoApprovalReview/started":         "审查者开始评估 agent 想做的动作",
+	"codex\x1fitem/autoApprovalReview/completed":       "审查者给出了评估结论(手机端出审查卡)",
+	"codex\x1fautoApprovalReview/strictReviewRequired": "接下来的动作会被逐个送审后再执行",
+	"codex\x1fitem/plan/delta":                         "Codex 正在生成执行计划(已投影为计划卡)",
+	"codex\x1fcommand/exec/outputDelta":                "一条命令正在回传执行输出(旧版协议名,已投影为工具卡进度)",
+	"codex\x1fprocess/outputDelta":                     "一个后台进程正在回传输出(已投影为工具卡进度)",
+	"codex\x1fitem/fileChange/outputDelta":             "文件改动的执行输出正在回传(已投影为状态卡)",
+	"codex\x1fitem/fileChange/patchUpdated":            "Codex 更新了文件改动清单(已投影为审批卡的文件列表)",
+	"codex\x1fitem/mcpToolCall/progress":               "一个 MCP 工具调用有进度更新(已投影为状态卡)",
+	"codex\x1fitem/reasoning/textDelta":                "Codex 正在流式输出思考过程(已投影为思考流)",
+	"codex\x1fmodel/rerouted":                          "Codex 把任务切换到了另一个模型(手机端出切换卡)",
+	"codex\x1fmodel/safetyBuffering/updated":           "模型正在安全缓冲,回复可能稍慢",
+	"codex\x1fthread/compacted":                        "会话上下文已压缩,后续对话使用更紧凑的上下文",
+	"codex\x1fwindows/worldWritableWarning":            "电脑上有目录对所有用户可写,沙箱保护会打折扣",
 }

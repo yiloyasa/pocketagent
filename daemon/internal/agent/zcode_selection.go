@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"time"
 
@@ -41,7 +42,17 @@ func (p *ZcodeProvider) withControlClient(ctx context.Context, fn func(context.C
 			return err
 		}
 		p.client, p.inited = c, true
+		// 【缺口修复(2026-09-30 盘点)】与 withClientCtx 的三个 Start 点位同款:
+		// 控制路径自起的子进程也必须挂上常驻钩子。此前漏挂的后果:若 daemon
+		// 重启后第一个 zcode 操作是控制类(CurrentSelection/NativeModes/
+		// SetSessionMode/DiscoverCommands/CloseSession),这条 client 整个生命
+		// 周期没有全局通知钩子(轮次外的 startup/storageState、每分钟
+		// process/resourceSample 等全部静默丢弃,诊断台账失明)也没有未知应答
+		// 留痕钩子 —— 而后续 Run 的 withClient 看到client 非 nil 不会再补挂。
+		p.attachUnknownResponseHandler(c)
+		p.attachGlobalHandler(c)
 		p.gen.Add(1)
+		log.Printf("[zcode] app-server 子进程已启动(控制面, gen=%d)", p.gen.Load())
 	}
 	return fn(ctx, p.client)
 }

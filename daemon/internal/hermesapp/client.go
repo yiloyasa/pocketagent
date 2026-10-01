@@ -7,9 +7,22 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
 )
+
+// hermesHandlers 一组当轮钩子的原子快照:readLoop 每帧取一次快照,装卸
+// (SetTurnHandlers)与分发并发安全(dshapp 同款机制;provider 的轮次串行化
+// 保证同一时刻只有一轮在装钩子)。
+type hermesHandlers struct {
+	// Notif 每条 session/update 通知(流式投影的数据源;在 readLoop goroutine
+	// 里同步调用,必须快进快出 —— 与 zcodeapp 通知钩子同一纪律)。
+	Notif func(params json.RawMessage)
+	// Req 服务器反向请求(session/request_permission 审批桥的数据面);nil 时
+	// 该方法回落 -32601(不伪造 decision,与 dsh/codex 同红线)。
+	Req func(id int64, method string, params json.RawMessage)
+}
 
 // Client 是一条 ACP stdio 连接(python -m acp_adapter)。
 // 并发模型与 zcodeapp/dshapp 同族:请求用 pending map 关联应答,写入串行化,
@@ -26,11 +39,33 @@ type Client struct {
 	waitOnce  sync.Once
 	closeOnce sync.Once
 
-	// OnSessionUpdate 每条 session/update 通知(流式投影的数据源;在 readLoop
-	// goroutine 里同步调用,必须快进快出 —— 与 zcodeapp 通知钩子同一纪律)。
-	OnSessionUpdate func(params json.RawMessage)
+	handlerMu sync.Mutex
+	hs        atomic.Pointer[hermesHandlers]
 
 	exited chan struct{} // reap 完成后关闭(Alive 判定)
+}
+
+// SetTurnHandlers 原子装卸当轮通知/审批钩子(nil = 卸下),不影响 pending 应答。
+func (c *Client) SetTurnHandlers(notif func(json.RawMessage), req func(id int64, method string, params json.RawMessage)) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.hs.Store(&hermesHandlers{Notif: notif, Req: req})
+}
+
+// loadHandlers 取当前钩子快照(无钩子返回 nil)。
+func (c *Client) loadHandlers() *hermesHandlers { return c.hs.Load() }
+
+// Respond 回服务器反向请求(审批桥的出口;result 形状见 PermissionOutcomeSelected)。
+func (c *Client) Respond(id int64, result any) error {
+	return c.writeFrame(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+// RespondError 以协议错误回反向请求(解析失败/审批通道缺失;绝不伪造 decision)。
+func (c *Client) RespondError(id int64, code int, message string) error {
+	return c.writeFrame(map[string]any{
+		"jsonrpc": "2.0", "id": id,
+		"error": map[string]any{"code": code, "message": message},
+	})
 }
 
 type rpcResp struct {
@@ -65,8 +100,14 @@ func truncateForLog(s string, n int) string {
 
 // Start 拉起 ACP 适配器子进程(python -m acp_adapter,cwd=适配器目录)。
 func Start(pythonExe, acpDir string) (*Client, error) {
-	cmd := exec.Command(pythonExe, "-m", "acp_adapter")
-	cmd.Dir = acpDir
+	return startProcess(pythonExe, []string{"-m", "acp_adapter"}, acpDir)
+}
+
+// startProcess 是进程拉起内核(exe/args 已归一),独立出来供测试注入假子进程
+// (os.Args[0] helper 模式,dshapp 同款)。
+func startProcess(exe string, args []string, dir string) (*Client, error) {
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = dir
 	hidewin.Apply(cmd) // python 是控制台程序:不隐藏会闪黑窗
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -84,11 +125,11 @@ func Start(pythonExe, acpDir string) (*Client, error) {
 		return nil, fmt.Errorf("启动 Hermes ACP 适配器失败: %w", err)
 	}
 	c := &Client{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReaderSize(stdout, 8*1024*1024),
+		cmd:     cmd,
+		stdin:   stdin,
+		stdout:  bufio.NewReaderSize(stdout, 8*1024*1024),
 		pending: map[int64]chan rpcResp{},
-		exited: make(chan struct{}),
+		exited:  make(chan struct{}),
 	}
 	go c.readLoop()
 	go c.drainStderr(stderr)
@@ -149,6 +190,23 @@ func (c *Client) readLoop() {
 			continue // 非协议帧(库噪音)静默丢
 		}
 		switch {
+		case w.ID != nil && w.Method != "":
+			// 服务器反向请求。审批桥只认 session/request_permission;已装钩子
+			// 交给钩子应答,未装/不认识的方法一律回 method not found —— 绝不让
+			// 适配器悬挂,也绝不伪造 decision(dsh/codex 同红线)。
+			var id int64
+			if jsonErr := json.Unmarshal(w.ID, &id); jsonErr != nil {
+				continue
+			}
+			h := c.loadHandlers()
+			if w.Method == "session/request_permission" && h != nil && h.Req != nil {
+				h.Req(id, w.Method, w.Params)
+				continue
+			}
+			c.writeFrame(map[string]any{
+				"jsonrpc": "2.0", "id": w.ID,
+				"error": map[string]any{"code": -32601, "message": "method not found: " + w.Method},
+			})
 		case w.ID != nil && w.Method == "":
 			// 应答帧
 			var id int64
@@ -166,18 +224,11 @@ func (c *Client) readLoop() {
 			}
 			ch <- rpcResp{ID: id, Result: w.Result, Err: w.Error}
 		case w.Method == "session/update":
-			if c.OnSessionUpdate != nil {
-				c.OnSessionUpdate(w.Params)
+			if h := c.loadHandlers(); h != nil && h.Notif != nil {
+				h.Notif(w.Params)
 			}
 		default:
-			// 服务器反向请求/其他通知:ACP 适配器可能发 fs 能力请求等;
-			// daemon 侧一律回 method not found,不让适配器悬挂。
-			if w.ID != nil {
-				c.writeFrame(map[string]any{
-					"jsonrpc": "2.0", "id": w.ID,
-					"error": map[string]any{"code": -32601, "message": "method not found: " + w.Method},
-				})
-			}
+			// 其他通知(非 session/update):daemon 侧无消费方,静默丢。
 		}
 	}
 }

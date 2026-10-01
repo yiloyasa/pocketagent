@@ -32,7 +32,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pocketagent/daemon/internal/agency"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -277,30 +276,10 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 		// 回退到 pi 自维护的模型目录文件(~/.pi/agent/models-store.json,只读):
 		// 通用用户的 pi 都有它。经 agency 自适应编译管道提取 —— 不依赖固定
 		// schema,上游改字段/嵌套仍能出全量候选(架构适应力,非硬编码解析)。
-		if fb := agency.Compile(context.Background(), 10*time.Second,
-			agency.StoreFileSource{Path: piModelsStorePath()},
-		); len(fb) > 0 {
-			out := make([]pb.ModelInfo, 0, len(fb))
-			for _, c := range fb {
-				mi := pb.ModelInfo{
-					Id:               c.Provider + "/" + c.ID,
-					Provider:         "pi",
-					DisplayName:      c.DisplayName,
-					Available:        true,
-					ContextWindow:    int32(c.ContextWindow),
-					SupportsThinking: c.Reasoning,
-				}
-				if mi.DisplayName == "" {
-					mi.DisplayName = c.ID
-				}
-				for _, in := range c.Input {
-					if in == "image" {
-						mi.SupportsImages = true
-						break
-					}
-				}
-				out = append(out, mi)
-			}
+		// 【0.99.1 真实形状】models 是数组(非旧形态的键即 id dict),provider
+		// 继承与提取在 pi_models_store.go 的桶感知源里完成(piModelsStoreSource);
+		// 本机实跑见 cmd/pimodelsprobe —— 探针与生产走同一个 PiModelsStoreFallbackModels。
+		if out := PiModelsStoreFallbackModels(); len(out) > 0 {
 			return out
 		}
 		return nil
@@ -1103,27 +1082,32 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	if cause == errSettled {
 		// 正常终局
 	} else if userStop {
-		// 发 abort 并等它干净收尾(abort 的应答在 settled 之后到 —— 文档明说)。
+		// 发终止序列并等它干净收尾。【顺序是 0.99.1 文档配方(rpc-commands.md
+		// clear_queue/abort 两节)】"abort continues queued messages when they
+		// remain in the session" —— abort 不清原生队列,反而让队列续跑;且
+		// 0.99.1 的 abort 应答语义是"当前操作停了就回"(isIdle 只看运行态,不
+		// 看队列)。旧实现先 abort 后 clear_queue:预投递进原生队列的 followUp
+		// 会在 abort 之后被 pi 继续执行(收尾还排队跑,与"终止任务"语义相反),
+		// clear_queue 到达时队首早已出队。改为先 clear_queue(摘掉插队+排队全
+		// 部)再 abort(停当前操作,abort 内部连重试/压缩一并取消 —— bundle:
+		// abortRetry()+abortCompaction()+agent.abort()+waitForIdle),队列空了
+		// abort 之后无事可续,settled 干净到来。
 		abortStart := time.Now()
 		actx, acancel := context.WithTimeout(context.Background(), piSettleWait)
-		_, _ = c.CallCtx(actx, "abort", nil, piSettleWait)
-		// 【撤回已预投递的 followUp】pi 的 abort 只是停止本轮续跑,原生队列里
-		// 的条目会**留在队列**(下一条 prompt 的运行周期把它带出来执行 —— 证据
-		// §3)。"终止任务"的语义是连排队的也不跑,与 server 清 daemon 队列
-		// (rt.stop)对齐,这里补一次 clear_queue;对账水位随之归零,若 pi 还
-		// 会为清空发 queue_update,出队帧会把手机的排队计数一并收掉。失败只记
+		steered, followUp, cerr := stopTurnOn(actx, c)
+		// 清理成功 = 队列必空:水位直接归零,不依赖随后那条 queue_update
+		// 是否赶在事件泵收尾前到达(赶到了也只是零增量对账)。失败只记
 		// 日志:残留条目由 ClearQueuedInputs(用户显式撤回)或下轮清空兜底。
-		if _, _, cerr := clearQueueOn(actx, c); cerr != nil {
+		if cerr != nil {
 			log.Printf("[pi] 中止后清理原生排队失败(残留由显式撤回兜底) thread=%s: %v", t.ID, cerr)
 		} else {
-			// 清理成功 = 队列必空:水位直接归零,不依赖随后那条 queue_update
-			// 是否赶在事件泵收尾前到达(赶到了也只是零增量对账)。
 			p.steerMu.Lock()
 			p.fuSeen[t.ID] = 0
 			p.steerMu.Unlock()
 		}
 		acancel()
-		log.Printf("[pi] 用户中止轮次 thread=%s(abort 收尾 %s)", t.ID, time.Since(abortStart).Round(time.Millisecond))
+		log.Printf("[pi] 用户中止轮次 thread=%s(撤销插队 %d/排队 %d,abort 收尾 %s)",
+			t.ID, steered, followUp, time.Since(abortStart).Round(time.Millisecond))
 	} else {
 		// 子进程死亡 / 协议外错误
 		if !c.Alive() {
@@ -1498,6 +1482,27 @@ func clearQueueOn(ctx context.Context, c queueClearerRPC) (int, int, error) {
 		return 0, 0, &piError{code: "PI_QUEUE_CLEAR_FAILED", msg: "撤销排队输入失败: " + err.Error()}
 	}
 	return len(q.Steering), len(q.FollowUp), nil
+}
+
+// piStopClient 用户中止序列对 piapp.Client 的窄接口(单测用记录调用顺序的桩
+// 钉下发顺序,不依赖子进程;piapp.Client 的方法集天然满足,生产零适配)。
+type piStopClient interface {
+	queueClearerRPC
+	CallCtx(ctx context.Context, typ string, params map[string]any, timeout time.Duration) (json.RawMessage, error)
+}
+
+// stopTurnOn 按文档配方终止一轮:先 clear_queue 摘掉原生队列(插队+排队全撤),
+// 再 abort 停当前操作(0.99.1 bundle:abort 内部连重试/压缩/分支摘要一并取消)。
+// 【顺序即语义】"abort continues queued messages when they remain in the
+// session"(rpc-commands.md)—— 队列不清,abort 之后 pi 继续把排队跑完;
+// 先清后停,abort 之后无事可续。抽成函数让单测钉死顺序(先 abort 后清 = 排队
+// 消息在停止后仍被执行的回归)。返回撤销的 (插队, 排队) 条数与 clear_queue 的
+// 错误;abort 的错误不向上传播(abort 无应答多半是子进程临终,收尾照走,与
+// 原行为一致)。
+func stopTurnOn(ctx context.Context, c piStopClient) (steered, followUp int, err error) {
+	steered, followUp, err = clearQueueOn(ctx, c)
+	_, _ = c.CallCtx(ctx, "abort", nil, piSettleWait)
+	return steered, followUp, err
 }
 
 // ---- S 级增量能力:压缩 / 离线导出 / 动态思考档位 / 斜杠命令清单 ----
