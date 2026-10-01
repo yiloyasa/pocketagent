@@ -57,6 +57,9 @@ type Client struct {
 	// reapWithLog(与 piapp 同款,2026-09-19 补)。
 	waitOnce sync.Once
 
+	// exited:reapWithLog 收尸完成后置 1(Alive 判定:启动闪退重试用)。
+	exited atomic.Int32
+
 	// NotifHandler 当轮通知钩子(session/event 等),由 Run 按轮装上/卸下。
 	// Deprecated: 裸字段仅兼容独占客户端的旧探针。并发路径必须用 Setter；
 	// 直接赋值不得与 CallCtx、SyncHandlers 或任何 Setter 并发。
@@ -349,7 +352,22 @@ func Start(opts StartOptions) (*Client, error) {
 		log.Printf("[zcode] 启动 ZCode app-server 失败: runtime=%s cjs=%s err=%v", runtimeExe, cjs, err)
 		return nil, fmt.Errorf("启动 ZCode app-server 失败: %w", err)
 	}
+	// 【拉起环境指纹(2026-10-01 排障)】探测链拉起偶发 1 秒退且零 stderr,手动
+	// 同参复现不了 —— 差异只能在 daemon 进程环境。拉起即打两个 provider 变量的
+	// 值,死亡复现时对表即知(继承?修补?指向哪个版本缓存?)。
+	logBuiltin, logPersonal := "(unset)", "(unset)"
+	for _, kv := range cmd.Env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			switch k {
+			case zcodeEnvBuiltin:
+				logBuiltin = v
+			case zcodeEnvPersonal:
+				logPersonal = v
+			}
+		}
+	}
 	log.Printf("[zcode] ZCode 子进程已拉起 PID=%d cwd=%q runtime=%s", cmd.Process.Pid, cmd.Dir, runtimeExe)
+	log.Printf("[zcode] env: builtin=%s | personal=%s", logBuiltin, logPersonal)
 	c := &Client{
 		cmd:      cmd,
 		stdin:    stdin,
@@ -376,6 +394,14 @@ func (c *Client) readStderr(r io.Reader) {
 	})
 }
 
+// Alive 返回子进程是否仍在运行(reap 尚未收尸)。启动闪退重试判定用:
+// 进程死了 = 这次 Start 的实例已废,换新进程重试才有意义。
+func (c *Client) Alive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmd != nil && c.cmd.Process != nil && c.exited.Load() == 0
+}
+
 // PID 返回子进程 PID(日志定位用);未知返回 0。
 func (c *Client) PID() int {
 	if c.cmd != nil && c.cmd.Process != nil {
@@ -399,6 +425,7 @@ func (c *Client) reapWithLog(why string) {
 		if errors.As(err, &ee) && ee.Exited() {
 			code = ee.ExitCode()
 		}
+		c.exited.Store(1)
 		log.Printf("[zcode] ZCode 子进程退出(%s) PID=%d 退出码=%d err=%v", why, c.PID(), code, err)
 	})
 }

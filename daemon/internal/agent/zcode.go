@@ -436,6 +436,27 @@ func (p *ZcodeProvider) withClientCtx(ctx context.Context, budget time.Duration,
 			p.gen.Add(1)
 			log.Printf("[zcode] app-server 子进程已启动(gen=%d)", p.gen.Load())
 			err = try()
+			// 【启动闪退即重试一次(2026-10-01)】真机日志实证:偶发"拉起 ~1s 即
+			// exit 1 且零 stderr"(手动同参复现不出来,疑与 daemon 进程环境瞬时
+			// 状态相关),且一次失败会把这个 provider 在能力面/选择面整个判死。
+			// 死亡必在启动早期(errNoZcodeClient 路径 = 刚 Start 完),立即换一个
+			// 新进程重试代价 ~1s,能把偶发闪退从"provider 不可用"降为"慢一秒"。
+			// 重试仍死 → 原样上抛(真配置错误不该被重试掩盖)。
+			if err != nil && p.client != nil && !p.client.Alive() {
+				log.Printf("[zcode] 启动闪退(零 stderr 偶发),重试一次: err=%v", err)
+				p.client.Close()
+				p.client, p.inited = nil, false
+				c2, serr2 := zcodeapp.Start(zcodeapp.StartOptions{})
+				if serr2 != nil {
+					return serr2
+				}
+				p.client, p.inited = c2, true
+				p.attachUnknownResponseHandler(c2)
+				p.attachGlobalHandler(c2)
+				p.gen.Add(1)
+				log.Printf("[zcode] app-server 子进程已启动(重试 gen=%d)", p.gen.Load())
+				err = try()
+			}
 		}
 		return err
 	}
