@@ -99,7 +99,7 @@ func (c *Client) SessionNew(ctx context.Context, cwd string) (*SessionNewResult,
 
 // SetSessionModel 切会话模型(modelId 形如 "deepseek:deepseek-flash")。
 func (c *Client) SetSessionModel(ctx context.Context, sessionID, modelID string) error {
-	_, err := c.callCtx(ctx, "session/set_session_model", map[string]any{
+	_, err := c.callCtx(ctx, "session/set_model", map[string]any{
 		"sessionId": sessionID, "modelId": modelID,
 	})
 	return err
