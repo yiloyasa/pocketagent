@@ -171,13 +171,6 @@ func launchSpecVersion(node, bin string) (string, []string) {
 	return node, []string{bin, "--version"}
 }
 
-// InvalidateVersionCache 清空 --version 缓存(测试用)。
-func InvalidateVersionCache() {
-	dshVerMu.Lock()
-	dshVerCache, dshVerAt = "", time.Time{}
-	dshVerMu.Unlock()
-}
-
 // ---- 客户端 ----
 
 // StartOptions 启动参数。

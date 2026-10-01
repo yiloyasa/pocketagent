@@ -25,32 +25,30 @@
 
 - 手机：Kotlin + Jetpack Compose（minSdk 26 / compileSdk 35）
 - daemon：Go **1.27.1**（无 ORM / 无框架，依赖极简）
-- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 84 RPC**，8 proto / 2146 行
+- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 85 RPC**，8 proto / 2182 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**）
-- 代码：android main **91** `.kt` / test **89** `.kt`；daemon Go **417** 文件（生成 pb.go **15**，手写 **402** 含测试）
+- 代码：android main **121** `.kt` / test **141** `.kt`；daemon Go **540** 文件（生成 pb.go **15**，手写 **525** 含测试）
 - 版本：**0.2.2 / versionCode 5**
 
-### 0.3 当前状态（真值锚点 · 2026-09-25 优化轮）
+### 0.3 当前状态（真值锚点 · 2026-10-01 整理轮）
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，**代码基线** `b119f4f`（2026-09-25 三轮：收口轮 = W8/D8 迁移/WatchEvents/删除释放；优化轮 = D7 收尾 + 四块上屏 + 新消息适配；**UI 改版轮 = 磨砂玻璃设计系统 + 三线屏幕改造**）；文档同步 = 本提交，工作树应保持干净，当前提交以 `git log` 为准 |
-| daemon | **2026-09-25 17:40 已热部署新构建**（PID 72172，`_pa_rebuild_daemon.py`，旧 exe 备份 G:\paackup\pocketagentd.exe.bak-0925-174029）。**D8 迁移真实生效**：2463 文件/93.6MB 已迁至 `%LOCALAPPDATA%\PocketAgent\data`（migration.json 校验和 09d36432…，旧目录保留）。日志确认预算/协同从新目录装载、pi 0.87.1/dsh 0.1.5-rc.3 探测成功。原句存档：本轮未重启生产进程（**有意推迟到优化轮结束后一次部署**，届时迁移代码随重启生效：默认数据目录 `~/.pocketagentd` → `%LOCALAPPDATA%\PocketAgent\data`，校验+原子 rename+失败保留旧目录可回滚）。源码侧 `go test -count=1 ./...` **18 包全绿**、受影响包 `CGO_ENABLED=1 go test -race` 通过、`go build`/`go vet` 通过 |
-| 运行时控制面进度 | **W4 ✅** 用户运行边界 · **W5 ✅** 身份落盘 + 设备表 fail-closed（**端点表待决策指纹归属**）· **W6 ✅** checkpoint 文件后端 + 排队台账（丢失可见）+ 启动恢复报告 · **W6b ✅** 台账丢失明细经 `GetHostInfo.recovery` 送达手机 · **W7 ✅** 预算逐级覆盖 + 策略可在控制面自改（`SetRuntimePolicy`：校验/CAS/原子落盘/立即生效）+ 强制点接线 · **W8 ✅** 未知 response 落点 + 已知事件白名单扩容（daemon 侧）· **W9 ✅** 六家 provider 统一 Runtime 合同（memory/cache/resource/checkpoint 全部落盘可观测，D7 收尾完成）+ recovery 产出方（推导式）· **W10 ✅** 协同策略由用户电脑上的 daemon 权威持有 · **W11 ✅（JVM）** Android Runtime 区段全量接线（含 per-agent 四块数值上屏）；真机 L2 尚未执行 · **WatchEvents ✅（代码）** Android 客户端 + 断点状态机 + 恢复循环事件唤醒，实测归 L2 |
-| **本轮已完成的用户问题** | **未知消息透析（用户要求：所有 agent 同一框架、daemon 翻人话不只是术语、手机可看、折叠弹窗）**：daemon 事件翻译层（知识库 70 条覆盖四家已知方法+未知 JSON 逐字段透析+启发式意图，读时翻译老条目也翻，「翻译是摘要不是裁决」红线钉死）、proto 加 summary/digest/translation 承载（79 RPC 不变）、设置页「消息透析」入口 + PaSheet 折叠弹窗（人话摘要/字段透析表/原文/处置三键/旧 daemon 降级）。**UI 大改版（用户要求：高级感/磨砂玻璃/丝滑跟手）**：设计系统三件套（PaGlass 磨砂玻璃材质+推背模糊、PaMotion 全 spring 动效令牌、PaSheet 统一玻璃浮层）+ 聊天/首页列表抽屉/设置任务中心协同三线全量改造 + 模拟器实机视觉验收（Pixel 5 API 34：推背模糊/玻璃材质/spring 转场实测生效）。同轮：删除复活根治、断线恢复 150ms 退避+WatchEvents 立即唤醒、未知 response/request 脱敏落诊断、D8 数据目录迁移、cache/resource 落盘、per-agent recovery 上屏 |
-| **下一刀（已明确）★** | ① 手机插线 → 装最终 APK（220.2MB，sha256 429d3ccc…，含全部：黑客终端主对话/控制中心/能力门控/B 开关四家/memory 收敛/四家 session 适配器）+ L2 增量回归；② 黑客模式真机观感终审；③ memory Summarizer 生产实现（OpenAI 兼容一次性调用接 Server.Config.MemorySummarizer）+ 四层组装真实注入（需 TurnRequest 前缀字段，防双写分叉）；④ dsh 0.1.7 进 latest 重探；⑤ 决策项：fake harness 扩展（codex 反向请求路径端到端） |
-| APK | debug `build/app-debug.apk` **219.7 MB**（`cleanapk` 重建，sha256 99ed667ef76c6cef…）；**手机 8e0e7bbe 已装 v0.2.2（2026-09-25 17:45）并经 Tailscale 连通** |
-| 测试基线 | Android **91 份 XML / 712 用例 / 0 失败 / 0 错误**（2026-09-25，控制面轮后 `--rerun` 本轮）；daemon 全量包绿 + agent/server/runtime `-race` 通过；RPC **7 服务/84 RPC**；daemon **18 包全绿** + 受影响包 `-race` 通过；`pa_audit --json`：红线 **0**、提示 **1**（附录 A 挂牌例行）、通过 **6**；模拟器视觉验收证据 `docs/verify/evidence/ui-revamp/`（不入 git，结论在提交信息与 AUDIT 附录 B） |
+| Git | 分支 `main`，**代码基线** `73dbf5f`（2026-10-01：连接层四连修 + **全面优化三轮×4并发**（R1 首页/列表/设置/抽屉 → R2 聊天/审批/交互组件/文件Git → R3 主题动效根层/协同/任务离线/Markdown 渲染，调研对标 ChatGPT App/M3 Expressive/Linear/NN/g）+ **历史导航深优三轮**（R1 实时刷选 requestScrollToItem / R2 日期上下文三路数据链接真 / R3 面板搜索+最早最新快跳））；工作树保持干净，当前提交以 `git log` 为准 |
+| 连接层（真机日志实证修复） | ① `connectWithFallback` 探测移出 connectionLock（原锁内串行探测实测挂起全部调用方 **28.3s**，ART Long monitor contention 实证）+ 并行竞速恢复（serial=true 是 TOFU 阶段遗留，重连被拖到 23.5s）② 探活连续失败闸（单次失败不再撕含 WatchEvents 的健康通道，"26s/轮连接断"风暴根因）③ 探活补 `withWaitForReady`（回退临时通道带、共享探活不带 → "回退必成功探活必失败"自持循环）④ Tailscale 候选独立 15s 预算（DERP 冷启动 8-20s，7s 竞速预算会错杀唯一活路）⑤ 探活异常落日志（此前两端日志都无迹可寻） |
+| 测试基线 | Android **1233 用例 / 0 失败 / 0 错误**（基线从 712 → 1233，两轮优化 +521）；daemon 全量包绿；RPC **7 服务/85 RPC** |
+| 真机 | 手机 8e0e7bbe 已装 2026-10-01 版（211.9MB）并经 **Tailscale** 连通（校园网 AP 隔离下 LAN 不通，VPN 兜底链路实测可用）；历史导航实时刷选/面板搜索/快跳/分组均已真机截图验证（`G:\pa\pa-live*.png` / `pa-panel.png` / `pa-search.png`，不入 git） |
+| **下一刀（已明确）★** | ① daemon `GetHistory` 填充 `created_at_unix_ms`（手机侧日期分组已就绪，当前全部诚实归「早前」）② MIUI 边缘手势拦截非确定性（x<24dp 拖动偶发被系统吞，40dp 触控带+gestureExclusion 已缓解；通用用户引导"稍靠右按压"）③ FileKind 枚举快照 Mcp 色不随换盘（改组合期读取）④ SettingsScreen statusLabel 收口四词口径 ⑤ BrowserScreen 离线快照 toast 带"截至 X" |
+| 遗留小项（已核销或拍板） | ~~attachmentEntryHiddenFor 遗留壳~~（实为能力门控活代码，挂账有误）~~unknown_events.go 陈旧注释~~（实为诚实的"预留档"说明）~~InvalidateVersionCache~~（零调用真死代码，2026-10-01 已删）~~dshModelsBudget const→var~~（拍板：维持 const，无覆写需求） |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
-1. ~~170 项成果未落 git~~ → **已收编**（2026-09-22，提交 `da9a24a`）。~~遗留 3 个 `daemon/pi_probe*_tmp.js`~~ → **已清理**（2026-09-23；确认为 09-22 16:19–16:22 的 pi 调查探针，内容为硬编码开发机路径的 node/pi 拉起脚本）。
-2. **发布审核未通过**：131 用例 = 30 PASS / 2 FAIL / 99 BLOCKED；P0 / P1 / P2 代码已修，但**真机复验待手机插线**（§13）。
-3. **真机时断时续**：多轮验证依赖手机在线（Tailscale `100.92.193.109:7246`）；离线时只能跑 JVM / go 单测，UI 交互与 gRPC 联调无法实测。
-4. **codex 实验特性警告**：为支持 Default 模式反问卡，daemon 强注 `default_mode_request_user_input`，而 codex 自报其 `stage=underDevelopment` → **开启即弹警告**；抑制需写用户 `~/.codex/config.toml`（**红线封死**）→ 只能诚实降级（不支持就不显示入口）。
-5. **dsh 凭据注入链**：缺 key 时报 `no API key for provider route "deepseek-official"`；云 LLM 真实委派尚未端到端验证。
-6. **zcode 派发入口**：MCP 挂载落点待用户拍板（工作区级 `<项目>/.zcode/config.json` vs 用户级 `~/.zcode/cli/config.json`）。
-7. **演示视频工作区**：`video/pocket-agent-showcase/`（Remotion）09-22 已提交后又从工作树删除（即那 56 个 `D`）；因 live 采集无在线设备改用截图 fallback。待用户决定去留。
+1. **真机依赖**：UI 交互与 gRPC 联调依赖手机在线（USB / 局域网 / Tailscale 三档）；离线时只能跑 JVM / go 单测。当前校园网 AP 隔离使 LAN 候选不可达，Tailscale 是实际主通道（手机侧 VPN 开启）。
+2. **MIUI 边缘手势拦截**：手势导航设备上 x<24dp 的触摸会被系统非确定性吞掉（同一位置有时可达有时被拦）；已用 40dp 触控带 + systemGestureExclusion（系统上限 200dp）+ 负 offset 贴边把影响压到最低，但极左缘无法 100% 根除（系统设计如此）。
+3. **codex 实验特性警告**：为支持 Default 模式反问卡，daemon 强注 `default_mode_request_user_input`，而 codex 自报其 `stage=underDevelopment` → **开启即弹警告**；抑制需写用户 `~/.codex/config.toml`（**红线封死**）→ 只能诚实降级（不支持就不显示入口）。
+4. **dsh 凭据注入链**：缺 key 时报 `no API key for provider route "deepseek-official"`；云 LLM 真实委派尚未端到端验证。
+5. **mDNS 广播受抢占**：UDP 5353 被常驻浏览器独占时（daemon 日志有 WARNING），手机无法 mDNS 发现主机；局域网直连需手动地址或重启 daemon。
+6. **演示视频工作区**：`video/pocket-agent-showcase/`（Remotion）去留待用户决定。
 
 ### 0.5 铁律（红线，违反即打回）
 
