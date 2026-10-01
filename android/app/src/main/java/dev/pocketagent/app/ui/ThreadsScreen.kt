@@ -4,6 +4,11 @@ package dev.pocketagent.app.ui
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -12,6 +17,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -53,13 +59,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -82,8 +94,6 @@ import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaStatusBadge
-import dev.pocketagent.app.ui.component.PaSkeletonList
-import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.ThreadPins
@@ -145,10 +155,13 @@ internal fun matchesThreadSearch(query: String, title: String, workspace: String
  * 会话页返回键的目标层(纯函数,单测钉死)。
  *
  * 【顺序】抽屉 → 行内重命名 → 新建面板 → 组织/分组面板 → **搜索(临时视图状态)**
- * → 筛选(临时视图状态) → 主板块。README §侧边栏与回退:「筛选或搜索 → 先清当前
- * 临时状态」—— 搜索是新加的临时态,排在筛选之前(更晚设置的状态先被清掉)。
+ * → **状态筛选(临时视图状态)** → 筛选(临时视图状态) → 主板块。README §侧边栏
+ * 与回退:「筛选或搜索 → 先清当前临时状态」—— 搜索是新加的临时态,排在筛选之前
+ * (更晚设置的状态先被清掉);状态筛选(R1-B)与搜索同属"收窄当前列表"的临时态,
+ * 插在搜索与分组筛选之间。返回**只清临时态、不丢列表滚动位置**(列表数据是全量,
+ * 筛选只在渲染那一步做,不存在重新拉取)。
  */
-internal enum class ThreadsBackTarget { DRAWER, RENAME, NEW_THREAD, ORGANIZE, SECTION_SHEET, SEARCH, FILTER, HOME }
+internal enum class ThreadsBackTarget { DRAWER, RENAME, NEW_THREAD, ORGANIZE, SECTION_SHEET, SEARCH, STATUS_FILTER, FILTER, HOME }
 
 internal fun threadsBackTarget(
     drawerVisible: Boolean,
@@ -158,6 +171,7 @@ internal fun threadsBackTarget(
     sectionSheetOpen: Boolean,
     hasQuery: Boolean,
     filterActive: Boolean,
+    statusFilterActive: Boolean = false,
 ): ThreadsBackTarget = when {
     drawerVisible -> ThreadsBackTarget.DRAWER
     renaming -> ThreadsBackTarget.RENAME
@@ -165,6 +179,7 @@ internal fun threadsBackTarget(
     organizing -> ThreadsBackTarget.ORGANIZE
     sectionSheetOpen -> ThreadsBackTarget.SECTION_SHEET
     hasQuery -> ThreadsBackTarget.SEARCH
+    statusFilterActive -> ThreadsBackTarget.STATUS_FILTER
     filterActive -> ThreadsBackTarget.FILTER
     else -> ThreadsBackTarget.HOME
 }
@@ -200,6 +215,13 @@ fun ThreadsScreen(
     // 【agent 筛选维度】与分组/归档正交:按会话归属 agent 过滤(agent_id 缺省 = codex)。
     // 与上面的单值互斥不是一回事 —— 这里是叠加的交集(见 matchesAgentFilter)。
     var agentFilter by remember(AgentConnection.selectedAgent) { mutableStateOf(AgentConnection.selectedAgent) }
+    // 【状态筛选维度 · R1-B】全部状态 / 等待你处理 / 正在执行 / 已完成 / 未完成:
+    // 词与行内徽章同源(threadsStatusFilterOptions → EditorialStatus 四词),判定走
+    // matchesStatusFilter(与 editorialStatusOrNull 同一套映射)。同样是叠加交集的
+    // 临时视图状态,返回键在搜索之后、分组筛选之前清它(threadsBackTarget)。
+    var statusFilter by remember { mutableStateOf(THREAD_STATUS_FILTER_ALL) }
+    // 状态筛选 chips 的横向滚动:五个档位窄屏也可能放不下,与另两排同款收口。
+    val statusChipScroll = rememberScrollState()
     // 筛选维度的数据源:与主页同源(AgentConnection.hostCapabilities 共享快照),
     // 不再硬编码 agent 名单 —— 见 agentFilterOptions。
     val sharedCaps = AgentConnection.hostCapabilities.collectAsState().value
@@ -259,6 +281,7 @@ fun ThreadsScreen(
             sectionSheetOpen = sectionSheet != null,
             hasQuery = query.isNotBlank(),
             filterActive = filter != THREAD_FILTER_ALL,
+            statusFilterActive = statusFilter != THREAD_STATUS_FILTER_ALL,
         )) {
             ThreadsBackTarget.DRAWER -> drawerCtrl.close()
             ThreadsBackTarget.RENAME -> renamingId = null
@@ -266,6 +289,7 @@ fun ThreadsScreen(
             ThreadsBackTarget.ORGANIZE -> organizeTarget = null
             ThreadsBackTarget.SECTION_SHEET -> sectionSheet = null
             ThreadsBackTarget.SEARCH -> query = ""
+            ThreadsBackTarget.STATUS_FILTER -> statusFilter = THREAD_STATUS_FILTER_ALL
             ThreadsBackTarget.FILTER -> filter = THREAD_FILTER_ALL
             ThreadsBackTarget.HOME -> onBackToHome()
         }
@@ -593,6 +617,27 @@ fun ThreadsScreen(
                     ).show()
                 }
                 refresh()
+            },
+        )
+    }
+
+    /**
+     * 置顶/取消置顶(R1-B):左滑与长按菜单共用的唯一入口。
+     *
+     * 【为什么也走 UndoBar】调研 5:列表上的滑动操作不允许"发生后只留一条不可撤的
+     * Toast"。置顶虽是纯本地偏好,但"排到了列表最顶上"是一个显眼的位置变化,
+     * 误触的代价(找不到原来那条)与归档同级 —— 给同样的 5 秒撤销窗口。
+     * onCommit 留空:置顶已在 ThreadPins 落盘,撤销 = 再 toggle 一次,没有远端提交。
+     */
+    fun togglePinWithUndo(key: String, displayTitle: String) {
+        val nowPinned = ThreadPins.toggle(key)
+        pinned = ThreadPins.all()
+        openKey.value = null
+        undo.show(
+            message = (if (nowPinned) "已置顶「" else "已取消置顶「") + displayTitle + "」",
+            onUndo = {
+                ThreadPins.toggle(key)
+                pinned = ThreadPins.all()
             },
         )
     }
@@ -966,6 +1011,26 @@ fun ThreadsScreen(
                 }
             }
 
+            // ---- 状态筛选 chips:全部状态 / 等待你处理 / 正在执行 / 已完成 / 未完成 ----
+            // 【为什么单独一排】状态回答"哪几条在等我/在跑",分组回答"会话在哪个筐里",
+            // agent 回答"谁干的" —— 三个维度正交、叠加成交集,塞一排会让人以为互斥。
+            // 【恒显示】不因"当前没有该状态的会话"隐藏:灰 chip 点了是空列表,
+            // 但让人知道"有这个维度"(与 agent chips 同一纪律)。
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.weight(1f).horizontalScroll(statusChipScroll),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    threadsStatusFilterOptions().forEach { (value, label) ->
+                        EditorialFilterChip(label, statusFilter == value) { statusFilter = value }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                }
+            }
+
             // ---- 筛选 chips:全部 / 已归档 / 未分组 / 各个分组 ----
             // 【为什么并成一排】分组和归档一样,回答的都是"我要看哪一批会话" ——
             // 分两排会让人以为要先选档位再选分组。分组数量未知,所以这一排横向滚动。
@@ -1098,12 +1163,21 @@ fun ThreadsScreen(
                     // 【agent 筛选】叠加交集:分组/归档决定"哪一批会话",
                     // agent 决定"这批里看谁干的"(agent_id 缺省按 codex 归属)。
                     .filter { matchesAgentFilter(it.agentId, agentFilter) }
+                    // 【状态筛选 · R1-B】同一套四词映射(见 matchesStatusFilter):
+                    // 行内摆什么词,这里就按什么词筛;状态未知的行只命中"全部状态"。
+                    .filter {
+                        matchesStatusFilter(
+                            it.status, it.pendingApprovalsCount, it.lastTurnError, statusFilter,
+                        )
+                    }
                     // 【搜索 · 临时视图状态】标题/工作区/agent 显示名包含即命中(纯函数)。
                     .filter { matchesThreadSearch(query, it.title, it.workspace, it.agentId) }
                     .forEach { add(SessionRow.Local(it, pinKey(it, null))) }
                 // 电脑上未导入的会话只在"全部"里露面:它们没有分组信息,
                 // 放进分组视图会让用户以为"这个分组里有几条没归组的"。
-                if (filter == THREAD_FILTER_ALL) {
+                // 【状态筛选生效时同样不露面】电脑会话还没进 App,没有状态可筛 ——
+                // 硬留着会让人以为"这个状态下的会话怎么点不开"。
+                if (filter == THREAD_FILTER_ALL && statusFilter == THREAD_STATUS_FILTER_ALL) {
                     // codex 电脑会话(agent 筛到 codex/全部时显示)
                     if (matchesAgentFilter("", agentFilter)) {
                         pcThreads.distinctBy { it.id }
@@ -1129,108 +1203,109 @@ fun ThreadsScreen(
                     .thenByDescending { it.sortKey },
             )
 
-            // 去重后的展示行(区块标题的计数与列表用同一份)
+            // 去重后的展示行,拆成「置顶」与「最近更新」两区(R1-B 调研 6:
+            // 置顶区与普通区视觉分离、同一设计语言 —— 同一套行实现 + 各自的分区小标题,
+            // 不是另画一种置顶卡片)。排序已把置顶排最前,拆分只认 pinKey,不打乱组内顺序。
             val displayRows = rows.distinctBy { it.key }
-            // ---- 区块标题(设计稿 04):「最近更新」+ 会话数(模块标题 16/22) ----
-            if (!loading && displayRows.isNotEmpty()) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp, bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("最近更新", style = PaEditorial.Type.Heading, color = ed.Ink)
-                    Spacer(Modifier.weight(1f))
-                    Text("${displayRows.size} 个会话", fontSize = 12.sp, color = ed.Muted)
-                }
-            }
+            val (pinnedRows, recentRows) = splitPinnedFirst(displayRows) { it.pinKey in pinnedKeys }
             when {
                 loading && rows.isEmpty() -> {
-                    // 骨架屏:形状与真实会话行逐项对位(SESSION_ROW = 圆头像 + 两行文本条)
-                    PaSkeletonList(
-                        kind = SkeletonKind.SESSION_ROW,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
+                    // 骨架屏(R1-B 局部实现):PaSkeleton 的 SESSION_ROW 是"圆头像 + 两行",
+                    // 与真实行(42dp 方形身份图 + 标题/时间/摘要三层)对不上,载入完成切
+                    // 真实内容时整列跳一次。这里按真实行逐项对位自绘,跳变归零。
+                    ThreadsSkeletonList(Modifier.padding(top = 8.dp))
                 }
                 rows.isEmpty() -> {
                     Column(Modifier.fillMaxSize()) {
-                    pcError?.let { message ->
-                        Text(
-                            message,
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
-                                .padding(12.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp,
-                            color = EditorialTone.DENIED.text,
-                        )
-                    }
-                    // Pi/ZCode 电脑会话的读取失败:只在筛到对应 agent 时展示对应侧
-                    // 的错误(分源各记,筛"Pi"不弹 ZCode 未装的红字,反之亦然;
-                    // 空态 = 该筛选下没有任何会话,正好把失败原因讲清楚)。
-                    val agentPcMessage = when (agentFilter) {
-                        AGENT_FILTER_PI -> agentPcErrorPi
-                        AGENT_FILTER_ZCODE -> agentPcErrorZcode
-                        else -> null
-                    }
-                    agentPcMessage?.let { message ->
-                        Text(
-                            message,
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
-                                .padding(12.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp,
-                            color = EditorialTone.DENIED.text,
-                        )
+                    // 空态(调研 4:状态说明 + 下一步动作,不空白)。文案/图标/动作
+                    // 全走纯函数 threadsEmptyState(单测钉死),渲染层不再手写 when。
+                    // 电脑会话的读取失败只在"没有收窄型临时态"时展示:用户主动在搜/筛时,
+                    // 空列表先回答"没搜到",而不是岔开去讲一条读取错误。
+                    val narrowingActive = query.isNotBlank() ||
+                        agentFilter != AGENT_FILTER_ALL ||
+                        statusFilter != THREAD_STATUS_FILTER_ALL
+                    val emptyView = threadsEmptyState(
+                        anyThreads = threads.isNotEmpty(),
+                        narrowingActive = narrowingActive,
+                        showArchived = showArchived,
+                        sectionName = activeSectionName,
+                        ungrouped = filter == THREAD_FILTER_UNGROUPED,
+                    )
+                    if (!narrowingActive) {
+                        pcError?.let { message ->
+                            Text(
+                                message,
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                    .padding(12.dp),
+                                fontSize = 12.sp, lineHeight = 17.sp,
+                                color = EditorialTone.DENIED.text,
+                            )
+                        }
+                        // Pi/ZCode 电脑会话的读取失败:只在筛到对应 agent 时展示对应侧
+                        // 的错误(分源各记,筛"Pi"不弹 ZCode 未装的红字,反之亦然;
+                        // 空态 = 该筛选下没有任何会话,正好把失败原因讲清楚)。
+                        val agentPcMessage = when (agentFilter) {
+                            AGENT_FILTER_PI -> agentPcErrorPi
+                            AGENT_FILTER_ZCODE -> agentPcErrorZcode
+                            else -> null
+                        }
+                        agentPcMessage?.let { message ->
+                            Text(
+                                message,
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                    .padding(12.dp),
+                                fontSize = 12.sp, lineHeight = 17.sp,
+                                color = EditorialTone.DENIED.text,
+                            )
+                        }
                     }
                     EmptyState(
-                        iconRes = when {
-                            showArchived -> R.drawable.ic_lucide_archive
-                            activeSectionName != null -> R.drawable.ic_lucide_folder
-                            else -> R.drawable.ic_lucide_message_square
-                        },
-                        title = when {
-                            showArchived -> "没有归档的会话"
-                            activeSectionName != null ->
-                                "「${activeSectionName.ifBlank { "未命名分组" }}」还没有会话"
-                            filter == THREAD_FILTER_UNGROUPED -> "没有未分组的会话"
-                            else -> "还没有会话"
-                        },
-                        hint = when {
-                            showArchived -> "左滑会话可恢复或删除"
-                            activeSectionName != null || filter == THREAD_FILTER_UNGROUPED ->
-                                "长按会话可把它移进分组"
-                            else -> "点右上角 + 开始你的第一个任务"
-                        },
+                        iconRes = emptyView.iconRes,
+                        title = emptyView.title,
+                        hint = emptyView.hint,
                     )
+                    // 空态的下一步动作(调研 4):能走的路给成按钮,不给死胡同。
+                    when (emptyView.action) {
+                        ThreadsEmptyAction.NEW_THREAD -> Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            Button(
+                                onClick = { showNewThread = true },
+                                // 主操作:石墨重点面白字(README:主按钮用石墨)
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = PaEditorial.Graphite,
+                                ),
+                                shape = RoundedCornerShape(14.dp),
+                            ) { Text(emptyView.actionLabel, color = Color.White) }
+                        }
+                        ThreadsEmptyAction.CLEAR_FILTERS -> Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            // 一键退掉全部收窄型临时态(搜索/agent/状态);分组与归档
+                            // 不在此列 —— 它们是视图选择,得靠用户自己决定回不回。
+                            TextButton(onClick = {
+                                query = ""
+                                agentFilter = AGENT_FILTER_ALL
+                                statusFilter = THREAD_STATUS_FILTER_ALL
+                            }) { Text(emptyView.actionLabel, color = PaEditorial.Primary) }
+                        }
+                        ThreadsEmptyAction.NONE -> Unit
+                    }
                     }
                 }
                 else -> {
-                    // 留白 + 细分隔线列表(设计稿 04:普通会话不套多层卡片)
-                    LazyColumn(
-                        Modifier
-                            .fillMaxSize()
-                            // 点空白处收起已展开的行(列表条目之间的空隙与底部留白都算)
-                            .pointerInput(Unit) {
-                                detectTapGestures { if (openKey.value != null) openKey.value = null }
-                            },
-                        state = listState,
-                        contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp),
-                    ) {
-                        itemsIndexed(
-                            items = displayRows,
-                                key = { _, r ->
-                                    when (r) {
-                                        is SessionRow.Local -> "l-${r.t.id}"
-                                        is SessionRow.Pc -> "p-${r.c.id}"
-                                        is SessionRow.PcAgent -> "pa-${r.a.agentId}-${r.a.sessionId}"
-                                    }
-                                },
-                        ) { rowIndex, row ->
-                            when (row) {
+                    // 行渲染收口(R1-B):置顶区与最近区共用同一份行实现 ——
+                    // 两段 itemsIndexed 若各抄一遍 when,三处手抄迟早漂移。
+                    @Composable fun SessionRowItem(row: SessionRow, showDivider: Boolean, rowModifier: Modifier) {
+                        when (row) {
                                 is SessionRow.Local -> {
                                     val t = row.t
                                     val archived = t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
@@ -1243,7 +1318,7 @@ fun ThreadsScreen(
                                         shape = RectangleShape,
                                         // 【增删动画】淡入+位置回弹走 spring(可打断,轻):
                                         // 乐观删除/撤销还原时行平滑退场/进场,不再"啪"地消失
-                                        modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
+                                        modifier = rowModifier,
                                         actions = listOf(
                                             // 【可见可达的"移入分组"入口】之前分组只藏在长按菜单里
                                             // (没有任何可见提示,用户反馈"功能缺失")。放到左滑动作栏
@@ -1275,16 +1350,12 @@ fun ThreadsScreen(
                                         ),
                                         onAction = { a ->
                                             when (a.id) {
-                                                "pin" -> {
-                                                    ThreadPins.toggle(row.pinKey)
-                                                    pinned = ThreadPins.all()
-                                                    openKey.value = null
-                                                    Toast.makeText(
-                                                        ctx,
-                                                        if (isPinned) "已取消置顶" else "已置顶",
-                                                        Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                }
+                                                // 【置顶也给 Undo】调研 5:滑动操作不允许
+                                                // "做完只留一条不可撤的 Toast"(R1-B)。
+                                                "pin" -> togglePinWithUndo(
+                                                    row.pinKey,
+                                                    t.title.ifEmpty { "未命名" },
+                                                )
                                                 // 打开"移动到分组"面板(与长按同一面板)
                                                 "section" -> organizeTarget = t
                                                 "archive" -> archiveOptimistic(t)
@@ -1331,7 +1402,7 @@ fun ThreadsScreen(
                                         openKey = openKey,
                                         // 与本地会话行同款增删动画(见上);矩形行同编辑式列表
                                         shape = RectangleShape,
-                                        modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
+                                        modifier = rowModifier,
                                         actions = listOf(
                                             SwipeAction(
                                                 "pin",
@@ -1346,11 +1417,11 @@ fun ThreadsScreen(
                                         ),
                                         onAction = { a ->
                                             when (a.id) {
-                                                "pin" -> {
-                                                    ThreadPins.toggle(row.pinKey)
-                                                    pinned = ThreadPins.all()
-                                                    openKey.value = null
-                                                }
+                                                // 电脑 codex 会话的置顶同样给 Undo(键与导入后同源)
+                                                "pin" -> togglePinWithUndo(
+                                                    row.pinKey,
+                                                    c.title.ifEmpty { "未命名会话" },
+                                                )
                                                 "delete" -> deletePcOptimistic(c)
                                             }
                                         },
@@ -1398,7 +1469,7 @@ fun ThreadsScreen(
                                         openKey = openKey,
                                         // 与本地会话行同款增删动画(见上);矩形行同编辑式列表
                                         shape = RectangleShape,
-                                        modifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
+                                        modifier = rowModifier,
                                         actions = listOf(
                                             SwipeAction("pin", if (isPinned) "取消置顶" else "置顶", R.drawable.ic_lucide_pin, PaEditorial.Primary),
                                             SwipeAction("archive", "App归档", R.drawable.ic_lucide_archive, PaEditorial.Primary),
@@ -1408,8 +1479,11 @@ fun ThreadsScreen(
                                         onAction = { act ->
                                             openKey.value = null
                                             if (act.id == "pin") {
-                                                ThreadPins.toggle(row.pinKey)
-                                                pinned = ThreadPins.all()
+                                                // Pi/ZCode 电脑会话置顶同样给 Undo
+                                                togglePinWithUndo(
+                                                    row.pinKey,
+                                                    a.title.ifEmpty { "未命名会话" },
+                                                )
                                             } else if (key !in pendingPcActions) pcActionConfirm = a to act.id
                                         },
                                         rowBackground = ed.Canvas,
@@ -1436,12 +1510,56 @@ fun ThreadsScreen(
                                     }
                                 }
                             }
-                            // 细分隔线:行与行之间(最后一行之后不画,由底部提示收尾)
-                            if (rowIndex < displayRows.lastIndex) {
+                            // 细分隔线:行与行之间(showDivider 由分区收尾逻辑给出)
+                            if (showDivider) {
                                 HorizontalDivider(color = ed.Hairline)
                             }
+                    }
+                    // 留白 + 细分隔线列表(设计稿 04:普通会话不套多层卡片)。
+                    // 【分区头进列表】「置顶」「最近更新」作为列表 item 渲染:跟随内容滚动,
+                    // 各带各的计数(R1-B 调研 6:置顶区与普通区分离但同一设计语言)。
+                    LazyColumn(
+                        Modifier
+                            .fillMaxSize()
+                            // 点空白处收起已展开的行(列表条目之间的空隙与底部留白都算)
+                            .pointerInput(Unit) {
+                                detectTapGestures { if (openKey.value != null) openKey.value = null }
+                            },
+                        state = listState,
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp),
+                    ) {
+                        if (pinnedRows.isNotEmpty()) {
+                            item(key = "hdr-pinned") {
+                                ThreadsSectionHeader("置顶", pinnedRows.size)
+                            }
+                            itemsIndexed(
+                                items = pinnedRows,
+                                key = { _, r -> r.key },
+                            ) { _, row ->
+                                // 置顶区行后必有分区头或后继行,分隔线恒画。
+                                // animateItem 是 LazyItemScope 扩展,只能在 itemsIndexed
+                                // 作用域里调用,以参数传入共享的行实现。
+                                SessionRowItem(
+                                    row, showDivider = true,
+                                    rowModifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
+                                )
+                            }
                         }
-                        item {
+                        if (recentRows.isNotEmpty()) {
+                            item(key = "hdr-recent") {
+                                ThreadsSectionHeader("最近更新", recentRows.size)
+                            }
+                            itemsIndexed(
+                                items = recentRows,
+                                key = { _, r -> r.key },
+                            ) { index, row ->
+                                SessionRowItem(
+                                    row, showDivider = index < recentRows.lastIndex,
+                                    rowModifier = Modifier.animateItem(fadeInSpec = itemFade, fadeOutSpec = itemFade),
+                                )
+                            }
+                        }
+                        item(key = "footer") {
                             Spacer(Modifier.height(12.dp))
                             Text(
                                 "左滑可置顶或归档;长按查看更多管理操作。",
@@ -1567,6 +1685,8 @@ fun ThreadsScreen(
     // 任意多个、"移动到哪个分组"天然需要一个列表,塞进左滑动作区会超过 72% 宽度上限。
     organizeTarget?.let { t ->
         // 统一玻璃浮层 PaSheet(内容滚动与高度上限内建,不再自挂 verticalScroll)
+        val tPinned = pinKey(t, null) in pinned
+        val tArchived = t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
         PaSheet(onDismissRequest = { organizeTarget = null }) {
             // 自建分组(sections)无上限,长内容靠 PaSheet 内建滚动,"新建分组并移入…/
             // 分叉会话"不会被推出视口不可点(原 SLA-21a 诉求由 PaSheet 结构性兜住)。
@@ -1617,6 +1737,43 @@ fun ThreadsScreen(
                 SheetAction(R.drawable.ic_lucide_folder_plus, "新建分组并移入…", PaEditorial.Primary) {
                     sectionField = ""
                     sectionSheet = SectionSheet.Create(moveInto = t)
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = ed.Hairline)
+                // ---- 更多操作(R1-B 调研 5:长按菜单项齐全)----
+                // 左滑只放高频动作;"长按 = 全部管理动作"是手势可发现性的兜底入口:
+                // 忘了怎么左滑、或 TalkBack 用户,都能从这一个面板到达所有操作
+                // (SwipeRevealRow 的无障碍自定义动作与之同清单)。
+                Text(
+                    "更多操作",
+                    Modifier.padding(start = 24.dp, bottom = 2.dp),
+                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                )
+                SheetAction(
+                    R.drawable.ic_lucide_pin,
+                    if (tPinned) "取消置顶" else "置顶",
+                ) {
+                    organizeTarget = null
+                    togglePinWithUndo(pinKey(t, null), t.title.ifEmpty { "未命名" })
+                }
+                SheetAction(R.drawable.ic_lucide_pencil, "重命名") {
+                    organizeTarget = null
+                    renameField = TextFieldValue(
+                        t.title,
+                        selection = TextRange(0, t.title.length),
+                    )
+                    renamingId = t.id
+                }
+                SheetAction(
+                    R.drawable.ic_lucide_archive,
+                    if (tArchived) "恢复" else "归档",
+                ) {
+                    organizeTarget = null
+                    archiveOptimistic(t)
+                }
+                // 破坏性动作置底 + 珊瑚红(拒绝语义),与左滑动作区的 destructive 同色
+                SheetAction(R.drawable.ic_lucide_trash_2, "删除", PaEditorial.Denied) {
+                    organizeTarget = null
+                    deleteThreadOptimistic(t)
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp), color = ed.Hairline)
                 Text(
@@ -1783,6 +1940,10 @@ private fun ThreadCard(
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
+                    // ---- 第一行:标题 + 右对齐相对时间(R1-B 调研 1)----
+                    // 时间从元信息行上移到行首右侧:三条行型(本地/电脑 codex/电脑
+                    // Pi-ZCode)统一走 threadRowTime(刚刚/N 分钟前/昨天/日期),
+                    // "刚发生"一眼可见,三种行不再各有一个绝对时间口径。
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (pinned) {
                             Icon(
@@ -1793,53 +1954,72 @@ private fun ThreadCard(
                         }
                         Text(
                             t.title.ifEmpty { "(未命名)" },
-                            Modifier.weight(1f, fill = false),
+                            // weight(1f) 吃掉中段空间:时间钉在行右缘(Linear/Telegram 的
+                            // 行内锚点);长标题在剩余空间内单行截断。
+                            Modifier.weight(1f),
                             fontSize = 15.sp, lineHeight = 21.sp,
                             fontWeight = FontWeight(650),
                             color = ed.Ink,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        statusView?.let {
-                            Spacer(Modifier.width(8.dp))
-                            PaStatusBadge(it)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            threadRowTime(t.updatedAtUnixMs),
+                            fontSize = 11.sp, lineHeight = 16.sp,
+                            color = ed.Subtle,
+                            maxLines = 1,
+                        )
+                    }
+                    // ---- 第二行:摘要 + 状态徽章右锚(R1-B 调研 1)----
+                    // 摘要 = 未完成时的最后错误人话摘要(不用点进会话就能看到);
+                    // 其余是"N 条消息"的事实陈述。徽章挪到摘要行右缘:标题行只剩
+                    // 标题与时间两个锚点,层级更安静;正常无空壳行(三项皆无不占行)。
+                    val summary = statusView?.detail
+                    val countLine = if (t.messageCount > 0) "${t.messageCount} 条消息" else null
+                    if (summary != null || countLine != null || statusView != null) {
+                        Row(
+                            Modifier.padding(top = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            when {
+                                summary != null -> Text(
+                                    summary,
+                                    Modifier.weight(1f),
+                                    fontSize = 12.sp, lineHeight = 17.sp,
+                                    color = EditorialTone.DENIED.text,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                countLine != null -> Text(
+                                    countLine,
+                                    Modifier.weight(1f),
+                                    fontSize = 12.sp, lineHeight = 17.sp,
+                                    color = ed.Muted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                else -> Spacer(Modifier.weight(1f))
+                            }
+                            statusView?.let {
+                                Spacer(Modifier.width(8.dp))
+                                PaStatusBadge(it)
+                            }
                         }
                     }
-                    // 摘要行:未完成时是最后错误的人话摘要(不用点进会话就能看到);
-                    // 其余是"N 条消息"的事实陈述。正常无空壳行。
-                    val summary = statusView?.detail
-                    if (summary != null) {
-                        Text(
-                            summary,
-                            Modifier.fillMaxWidth().padding(top = 2.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp,
-                            color = EditorialTone.DENIED.text,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (t.messageCount > 0) {
-                        Text(
-                            "${t.messageCount} 条消息",
-                            Modifier.fillMaxWidth().padding(top = 2.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp,
-                            color = ed.Muted,
-                            maxLines = 1,
-                        )
-                    }
-                    // 元信息行:归属 agent · 工作区 · 时间(设计稿 04;含归档标注)
+                    // ---- 第三行:归属 agent · 工作区 · 已归档(时间已上移第一行)----
                     val archived = t.status == ThreadStatus.THREAD_STATUS_ARCHIVED
                     val meta = buildList {
-                        if (archived) add("已归档")
                         add(selectedAgentLabel(threadAgentIdOf(t.agentId)))
                         if (t.workspace.isNotEmpty()) {
                             // 带上一级目录(盘符),否则 G:\试验区 只显示"试验区"看不出在哪个盘
                             add(shortWorkspace(t.workspace))
                         }
-                        add(java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(t.updatedAtUnixMs)))
+                        if (archived) add("已归档")
                     }.joinToString("  ·  ")
                     Text(
                         meta,
-                        Modifier.fillMaxWidth().padding(top = 2.dp),
+                        Modifier.fillMaxWidth().padding(top = 3.dp),
                         fontSize = 11.sp, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
@@ -1875,25 +2055,44 @@ private fun PcSessionCard(
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                info.title.ifEmpty { "(未命名会话)" },
-                Modifier.fillMaxWidth(),
-                fontSize = 15.sp, lineHeight = 21.sp,
-                fontWeight = FontWeight(650),
-                color = ed.Ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // 第一行:标题 + 右对齐相对时间(与本地会话行同一口径 threadRowTime)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    info.title.ifEmpty { "(未命名会话)" },
+                    Modifier.weight(1f),
+                    fontSize = 15.sp, lineHeight = 21.sp,
+                    fontWeight = FontWeight(650),
+                    color = ed.Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.width(8.dp))
+                if (importing) {
+                    Text(
+                        "正在打开…",
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = PaEditorial.Primary,
+                        maxLines = 1,
+                    )
+                } else {
+                    Text(
+                        threadRowTime(info.updatedAtUnixMs),
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = ed.Subtle,
+                        maxLines = 1,
+                    )
+                }
+            }
+            // 第二行:类型 · 工作区(时间已上移第一行,三行型同语言)
             val meta = buildList {
-                add(if (importing) "正在打开…" else "codex 会话")
-                add(java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(info.updatedAtUnixMs)))
+                add("codex 会话")
                 if (info.cwd.isNotEmpty()) add(shortWorkspace(info.cwd))
             }.joinToString("  ·  ")
             Text(
                 meta,
-                Modifier.fillMaxWidth().padding(top = 2.dp),
+                Modifier.fillMaxWidth().padding(top = 3.dp),
                 fontSize = 11.sp, lineHeight = 16.sp,
-                color = if (importing) PaEditorial.Primary else ed.Subtle,
+                color = ed.Subtle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1929,29 +2128,164 @@ private fun PcAgentSessionCard(
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                info.title.ifEmpty { "(未命名会话)" },
-                Modifier.fillMaxWidth(),
-                fontSize = 15.sp, lineHeight = 21.sp,
-                fontWeight = FontWeight(650),
-                color = ed.Ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // 第一行:标题 + 右对齐相对时间(与本地/codex 行同一口径)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    info.title.ifEmpty { "(未命名会话)" },
+                    Modifier.weight(1f),
+                    fontSize = 15.sp, lineHeight = 21.sp,
+                    fontWeight = FontWeight(650),
+                    color = ed.Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.width(8.dp))
+                if (importing) {
+                    Text(
+                        "正在打开…",
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = PaEditorial.Primary,
+                        maxLines = 1,
+                    )
+                } else {
+                    Text(
+                        threadRowTime(info.updatedAtUnixMs),
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = ed.Subtle,
+                        maxLines = 1,
+                    )
+                }
+            }
+            // 第二行:类型 · 工作区(时间已上移第一行,三行型同语言)
             val meta = buildList {
-                add(if (importing) "正在打开…" else threadAgentIdOf(info.agentId) + " 会话")
-                add(java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(info.updatedAtUnixMs)))
+                add(threadAgentIdOf(info.agentId) + " 会话")
                 if (info.cwd.isNotEmpty()) add(shortWorkspace(info.cwd))
             }.joinToString("  ·  ")
             Text(
                 meta,
-                Modifier.fillMaxWidth().padding(top = 2.dp),
+                Modifier.fillMaxWidth().padding(top = 3.dp),
                 fontSize = 11.sp, lineHeight = 16.sp,
-                color = if (importing) PaEditorial.Primary else ed.Subtle,
+                color = ed.Subtle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/**
+ * 会话列表骨架(R1-B 局部实现;PaSkeleton.kt 归 R1-A 所有,未改动)。
+ *
+ * 【为什么不直接用 PaSkeletonList】PaSkeleton 的 SESSION_ROW = "圆头像 38dp +
+ * 两行文本条",与真实行(42dp 13dp 圆角身份图 + 标题/时间右锚 + 摘要/元信息)
+ * 形状对不上:载入完成切真实内容时整列高度与轮廓都会跳。骨架屏的价值就在
+ * "形状与内容零跳变"(设计规范 §2.3),所以在独占文件内做局部对位实现。
+ *
+ * 【数量】按视口高度推算(与 PaSkeletonList 同口径),避免"骨架 10 条、内容 3 条"
+ * 的收尾跳变;视口不可知(在纵向滚动容器里)时回退 7 条。
+ * 【无障碍】整块折叠为单条「正在加载」播报,不让读屏逐个念占位条。
+ */
+@Composable
+private fun ThreadsSkeletonList(modifier: Modifier = Modifier) {
+    val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics { contentDescription = "正在加载" },
+    ) {
+        val count = when {
+            maxHeight.value == Float.POSITIVE_INFINITY -> 7
+            else -> (maxHeight / 74.dp).toInt().coerceIn(4, 10)
+        }
+        Column(Modifier.fillMaxWidth()) {
+            repeat(count) { index -> ThreadsSkeletonRow(reduceMotion, index) }
+        }
+    }
+}
+
+/** 单条骨架行:42dp 身份图 + 标题条(右带时间条)+ 摘要条,与真实行逐项对位。 */
+@Composable
+private fun ThreadsSkeletonRow(reduceMotion: Boolean, index: Int) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 2.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ThreadsShimmerBox(
+            Modifier.size(PaEditorial.Space.IconBox),
+            RoundedCornerShape(13.dp),
+            reduceMotion,
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 标题条宽度按行微变:整列一个形状会显得像坏掉了
+                ThreadsShimmerBox(
+                    Modifier.fillMaxWidth(0.62f - (index % 3) * 0.08f).height(14.dp),
+                    RoundedCornerShape(6.dp), reduceMotion,
+                )
+                Spacer(Modifier.width(8.dp))
+                ThreadsShimmerBox(
+                    Modifier.width(44.dp).height(10.dp),
+                    RoundedCornerShape(5.dp), reduceMotion,
+                )
+            }
+            Spacer(Modifier.height(7.dp))
+            ThreadsShimmerBox(
+                Modifier.fillMaxWidth(0.40f - (index % 2) * 0.12f).height(10.dp),
+                RoundedCornerShape(5.dp), reduceMotion,
+            )
+        }
+    }
+}
+
+/** 高光条(R1-B 局部实现):底色 + 自左向右循环的高光带;减弱动效退化为静态色块。 */
+@Composable
+private fun ThreadsShimmerBox(
+    modifier: Modifier,
+    shape: Shape,
+    reduceMotion: Boolean,
+) {
+    if (reduceMotion) {
+        Box(modifier.clip(shape).background(PaEditorial.Hover.copy(alpha = 0.6f)))
+        return
+    }
+    val transition = rememberInfiniteTransition(label = "threadsSkeleton")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing)),
+        label = "threadsSkeletonPhase",
+    )
+    Box(
+        modifier
+            .clip(shape)
+            .drawWithCache {
+                val start = phase * (size.width + 240f) - 240f
+                val brush = Brush.linearGradient(
+                    colors = listOf(PaEditorial.Hover, PaEditorial.Surface, PaEditorial.Hover),
+                    start = Offset(start, 0f),
+                    end = Offset(start + 240f, 0f),
+                )
+                onDrawBehind { drawRect(brush) }
+            },
+    )
+}
+
+/** 分区小标题(R1-B):「置顶」「最近更新」各自带计数,与模块标题同一字阶。 */
+@Composable
+private fun ThreadsSectionHeader(title: String, count: Int) {
+    val ed = MaterialTheme.editorial
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = PaEditorial.Type.Heading, color = ed.Ink)
+        Spacer(Modifier.weight(1f))
+        Text("$count 个会话", fontSize = 12.sp, color = ed.Muted)
     }
 }
 

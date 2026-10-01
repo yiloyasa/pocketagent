@@ -57,11 +57,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,12 +75,23 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.ConnectionBanner
 import dev.pocketagent.app.ui.component.DiscoveredHost
+import dev.pocketagent.app.ui.component.HomeAgentTileState
+import dev.pocketagent.app.ui.component.HomeEmptyStateCopy
+import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaHostChip
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.PaStatusBadge
+import dev.pocketagent.app.ui.component.SkeletonKind
+import dev.pocketagent.app.ui.component.homeAgentGridNote
+import dev.pocketagent.app.ui.component.homeAgentTileLabel
+import dev.pocketagent.app.ui.component.homeAgentTileState
+import dev.pocketagent.app.ui.component.homeDiscoveryEmptyCopy
+import dev.pocketagent.app.ui.component.homeRecentEmptyCopy
+import dev.pocketagent.app.ui.component.homeShowsRecentSkeleton
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
@@ -294,6 +307,7 @@ fun HomeScreen(
 ) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    val view = LocalView.current
     var host by remember { mutableStateOf<HostInfo?>(null) }
     var recent by remember { mutableStateOf(listOf<PThread>()) }
     var showManage by remember { mutableStateOf(false) }
@@ -315,6 +329,9 @@ fun HomeScreen(
     val reconnectTick = AgentConnection.connectionEpoch.collectAsState().value
     // 最近一次数据加载成功时刻(离线时给 PaHostChip 的「上次更新」供数)
     var lastLoadedAtMs by remember { mutableStateOf(0L) }
+    // 首次加载是否已落定(成功或失败都算):列表区的骨架只在首次加载窗口出现,
+    // 重试/重连后的刷新不重置 —— 已有内容不闪骨架(判定走 homeShowsRecentSkeleton)
+    var firstLoadDone by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey, reconnectTick) {
         try {
@@ -340,6 +357,8 @@ fun HomeScreen(
         } catch (e: Exception) {
             loadError = "首页数据加载失败：${e.message ?: "连接失败"}"
         }
+        // 失败也算"落定":骨架退场,改由错误横幅 + 空态接管(骨架绝不替失败状态撒谎)
+        firstLoadDone = true
     }
 
     val connState = AgentConnection.connState.collectAsState().value
@@ -430,6 +449,7 @@ fun HomeScreen(
                 connectedHomeItems(
                     loadError = loadError,
                     onRetry = { reloadKey++ },
+                    firstLoadDone = firstLoadDone,
                     attention = attention,
                     onOpenThread = onOpenThread,
                     onOpenTaskCenter = onOpenTaskCenter,
@@ -519,6 +539,8 @@ fun HomeScreen(
                             val t = withContext(Dispatchers.IO) {
                                 AgentConnection.threadService().createThread(builder.build())
                             }
+                            // 创建成功 = 确认动作:语义触感(轻击),跟随系统触感开关
+                            PaHaptics.confirm(view)
                             onOpenThread(t.id)
                         } catch (e: Exception) {
                             Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
@@ -574,6 +596,7 @@ fun HomeScreen(
 private fun LazyListScope.connectedHomeItems(
     loadError: String?,
     onRetry: () -> Unit,
+    firstLoadDone: Boolean,
     attention: HomeAttentionGroups,
     onOpenThread: (String) -> Unit,
     onOpenTaskCenter: () -> Unit,
@@ -602,11 +625,11 @@ private fun LazyListScope.connectedHomeItems(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp)
-                    .pressable { onRetry() }
-                    // 未完成语义:珊瑚浅底 + 加深珊瑚字(语义双通道:有词有色)
+                    .pressable(haptic = true) { onRetry() }
+                    // 未完成语义:珊瑚浅底 + 加深珊瑚字(语义双通道:有词有色);
+                    // 底色即边界,不再叠同色描边(降噪)
                     .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
-                    .border(1.dp, PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -650,7 +673,7 @@ private fun LazyListScope.connectedHomeItems(
         Row(
             Modifier
                 .fillMaxWidth()
-                .pressable { onNewThread() }
+                .pressable(haptic = true) { onNewThread() }
                 .heightIn(min = 74.dp)
                 .shadow(
                     8.dp, RoundedCornerShape(18.dp),
@@ -658,8 +681,7 @@ private fun LazyListScope.connectedHomeItems(
                     ambientColor = PaEditorial.Shadow.Card.color,
                 )
                 .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-                .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -673,7 +695,7 @@ private fun LazyListScope.connectedHomeItems(
                     tint = MaterialTheme.editorial.Primary, modifier = Modifier.size(20.dp),
                 )
             }
-            Spacer(Modifier.width(13.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     "告诉 Agent 你想做什么",
@@ -701,7 +723,7 @@ private fun LazyListScope.connectedHomeItems(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
-                .pressable { onOpenBrowser() },
+                .pressable(haptic = true) { onOpenBrowser() },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -725,7 +747,7 @@ private fun LazyListScope.connectedHomeItems(
                 tint = PaEditorial.Subtle, modifier = Modifier.size(17.dp),
             )
         }
-        Hairline()
+        // 区块之间靠留白分层(下一个区块头自带 16dp 上边距),不再压尾部分割线
     }
 
     // ---- 可用 Agent:磁贴直接铺背景(README:普通内容不套多层卡) ----
@@ -741,6 +763,34 @@ private fun LazyListScope.connectedHomeItems(
                     }
                     // 补位对齐 4 列
                     repeat(4 - rowAgents.size) { Spacer(Modifier.width(72.dp)) }
+                }
+            }
+            // 空态注记:一个可用 agent 都没有时,给真实原因 + 去向(≥1 个可用不摆字)
+            homeAgentGridNote(visibleAgents.count { it.available })?.let { note ->
+                Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Text(
+                        note.title,
+                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontWeight = FontWeight(650), color = MaterialTheme.editorial.Muted,
+                    )
+                    Text(
+                        note.hint,
+                        Modifier.padding(top = 4.dp),
+                        fontSize = 11.sp, lineHeight = 17.sp, color = PaEditorial.Subtle,
+                    )
+                    Box(
+                        Modifier
+                            .padding(top = 4.dp)
+                            .heightIn(min = 44.dp)
+                            .pressable(haptic = true) { onManageAgents() },
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Text(
+                            note.actionLabel,
+                            fontSize = 13.sp, fontWeight = FontWeight(650),
+                            color = MaterialTheme.editorial.Primary,
+                        )
+                    }
                 }
             }
         }
@@ -787,9 +837,8 @@ private fun LazyListScope.connectedHomeItems(
                     desc = if (roleCount == null) "点按管理岗位配置" else "已配置 $roleCount 个岗位",
                     onClick = onOpenCollabRoles,
                 )
-                Hairline()
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             // 协同行:与主网格同一磁贴语言(透明底);多 agent 时给「添加」占位
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -804,7 +853,7 @@ private fun LazyListScope.connectedHomeItems(
                     Column(
                         Modifier
                             .width(72.dp)
-                            .pressable { onAddAgentTap() },
+                            .pressable(haptic = true) { onAddAgentTap() },
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
@@ -824,44 +873,106 @@ private fun LazyListScope.connectedHomeItems(
     item(key = "recentHeader") {
         SectionHeader("最近会话", "全部会话 →", onAction = onOpenSessions)
     }
-    recentItems(recent, disabledAgents, onOpenThread)
+    recentItems(
+        recent,
+        disabledAgents,
+        onOpenThread,
+        loading = homeShowsRecentSkeleton(connected = true, firstLoadDone, loadError),
+        emptyCopy = homeRecentEmptyCopy(recent.isNotEmpty(), currentAgentLabel),
+        onEmptyAction = onNewThread,
+    )
 }
 
 /**
- * 最近会话行组(已连接态与发现态复用):空态给"为什么没有"的说明;
- * 有数据 = 行 + 细分隔线。离线也能回看本地快照 —— 既有能力零回归。
+ * 最近会话行组(已连接态与发现态复用)。
+ *
+ * 【三通道,互斥】
+ *  - [loading]=首次加载未回 → 骨架接管(形状=最近会话行轮廓),不摆空态不转圈;
+ *  - 过滤后为空 → [RecentEmptyState]:真实状态说明 + 去向按钮([emptyCopy]/
+ *    [onEmptyAction] 齐备时);发现态没有安全去向(离线建会话必失败)只给说明;
+ *  - 有数据 = 行 + 细分隔线。离线也能回看本地快照 —— 既有能力零回归。
  */
 private fun LazyListScope.recentItems(
     recent: List<PThread>,
     disabledAgents: Set<String>,
     onOpenThread: (String) -> Unit,
+    loading: Boolean = false,
+    emptyCopy: HomeEmptyStateCopy? = null,
+    onEmptyAction: (() -> Unit)? = null,
 ) {
-    if (recent.isEmpty()) {
-        item(key = "recentEmpty") {
-            // 空状态:直接铺背景(无容器),靠留白与居中自成一块
-            Column(
-                Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Icon(
-                    painterResource(R.drawable.ic_lucide_list_checks), null,
-                    tint = PaEditorial.Subtle, modifier = Modifier.size(36.dp),
-                )
-                Text(
-                    "连接电脑后,任务会出现在这里",
-                    Modifier.padding(top = 12.dp),
-                    fontSize = 13.sp, color = MaterialTheme.editorial.Muted,
-                )
-            }
+    if (loading) {
+        item(key = "recentSkeleton") {
+            PaSkeletonList(kind = SkeletonKind.HOME_RECENT_ROW, count = 3, perRowHeight = 56.dp)
         }
+        return
+    }
+    // 最近会话同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
+    val shown = recent.filter {
+        threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent
+    }.take(6)
+    if (shown.isEmpty()) {
+        item(key = "recentEmpty") { RecentEmptyState(emptyCopy, onEmptyAction) }
     } else {
-        // 最近会话同步排除已停用 agent 的会话(归属缺省按 codex,与 threadAgentIdOf 同口径)
-        val shown = recent.filter {
-            threadAgentIdOf(it.agentId) !in disabledAgents && it.agentId.ifBlank { "codex" } == AgentConnection.selectedAgent
-        }.take(6)
         items(shown, key = { "recent-${it.id}" }) { t ->
             RecentSessionRow(t, onClick = { onOpenThread(t.id) })
             Hairline()
+        }
+    }
+}
+
+/**
+ * 最近会话空态:图标 + 真实状态说明 + 明确去向按钮(空态不空白,NN/g 空态三件套)。
+ * [copy]/[onAction] 缺位时退化为一句中性说明,绝不出现与当前状态相悖的文案。
+ */
+@Composable
+private fun RecentEmptyState(copy: HomeEmptyStateCopy?, onAction: (() -> Unit)?) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_lucide_list_checks), null,
+            tint = PaEditorial.Subtle, modifier = Modifier.size(36.dp),
+        )
+        if (copy == null) {
+            Text(
+                "没有可显示的会话",
+                Modifier.padding(top = 12.dp),
+                fontSize = 13.sp, color = MaterialTheme.editorial.Muted,
+            )
+        } else {
+            Text(
+                copy.title,
+                Modifier.padding(top = 12.dp),
+                fontSize = 13.sp, lineHeight = 20.sp,
+                fontWeight = FontWeight(650), color = PaEditorial.Muted,
+            )
+            Text(
+                copy.hint,
+                Modifier.padding(top = 4.dp),
+                fontSize = 12.sp, lineHeight = 17.sp,
+                color = MaterialTheme.editorial.Muted,
+                textAlign = TextAlign.Center,
+            )
+            if (onAction != null) {
+                // 去向按钮:主色只给"当前操作";触区压满 44dp(README §视觉系统)
+                Box(
+                    Modifier
+                        .padding(top = 16.dp)
+                        .heightIn(min = 44.dp)
+                        .pressable(haptic = true) { onAction() }
+                        .background(PaEditorial.PrimaryContainer, RoundedCornerShape(100.dp))
+                        .padding(horizontal = 20.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        copy.actionLabel,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight(650),
+                        color = MaterialTheme.editorial.Primary,
+                    )
+                }
+            }
         }
     }
 }
@@ -883,21 +994,21 @@ private fun LazyListScope.discoveryItems(
     item(key = "eyebrow") {
         Text(
             "POCKET AGENT / CONNECT",
-            Modifier.padding(top = 18.dp),
+            Modifier.padding(top = 16.dp),
             fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
             color = PaEditorial.Subtle,
         )
     }
     item(key = "hero") {
         Column {
-            Spacer(Modifier.height(9.dp))
+            Spacer(Modifier.height(8.dp))
             // 首页主标题 34/39(Display;README §视觉系统)
             Text(
                 "把电脑上的 Agent\n带到手边。",
                 style = PaEditorial.Type.Display,
                 color = PaEditorial.Ink,
             )
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
                 "找到你的电脑,配对后即可安全继续工作。",
                 fontSize = 13.sp, lineHeight = 22.sp, color = MaterialTheme.editorial.Muted,
@@ -947,7 +1058,7 @@ private fun LazyListScope.discoveryItems(
                     .align(Alignment.BottomEnd)
                     .background(MaterialTheme.editorial.Surface, RoundedCornerShape(10.dp))
                     .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 fontSize = 11.sp, color = PaEditorial.AccentText,
             )
         }
@@ -956,17 +1067,59 @@ private fun LazyListScope.discoveryItems(
         SectionHeader("发现的电脑", "重新搜索", onAction = onRefresh)
     }
     if (hosts.isEmpty()) {
-        item(key = "discoverEmpty") {
-            Text(
-                if (link == PaHostLink.CONNECTING) "正在搜索附近主机…" else "暂无发现的主机",
-                Modifier.fillMaxWidth().padding(vertical = 18.dp),
-                fontSize = 12.sp, color = MaterialTheme.editorial.Muted,
-            )
+        if (link == PaHostLink.CONNECTING) {
+            // 搜索中是加载态不是空态:骨架接管(形状=主机卡轮廓),不摆"正在…"空文
+            item(key = "discoverSkeleton") {
+                PaSkeletonList(kind = SkeletonKind.HOST_CHOICE, count = 2, perRowHeight = 75.dp)
+            }
+        } else {
+            item(key = "discoverEmpty") {
+                val copy = homeDiscoveryEmptyCopy(searching = false)!!
+                // 空态三件套:真实说明 + 怎么办 + 去向按钮(手动添加,不让人干等)
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_search), null,
+                        tint = PaEditorial.Subtle, modifier = Modifier.size(28.dp),
+                    )
+                    Text(
+                        copy.title,
+                        Modifier.padding(top = 12.dp),
+                        fontSize = 13.sp, lineHeight = 20.sp,
+                        fontWeight = FontWeight(650), color = PaEditorial.Muted,
+                    )
+                    Text(
+                        copy.hint,
+                        Modifier.padding(top = 4.dp),
+                        fontSize = 12.sp, lineHeight = 17.sp,
+                        color = MaterialTheme.editorial.Muted,
+                        textAlign = TextAlign.Center,
+                    )
+                    Box(
+                        Modifier
+                            .padding(top = 12.dp)
+                            .heightIn(min = 44.dp)
+                            .pressable(haptic = true) { onManualAdd() }
+                            .background(PaEditorial.PrimaryContainer, RoundedCornerShape(100.dp))
+                            .padding(horizontal = 20.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            copy.actionLabel,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight(650),
+                            color = MaterialTheme.editorial.Primary,
+                        )
+                    }
+                }
+            }
         }
     } else {
         items(hosts, key = { "host-${it.instanceName}" }) { h ->
             DiscoveredHostCard(host = h, onClick = { onPickHost(h) })
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
     item(key = "manualAdd") {
@@ -975,15 +1128,15 @@ private fun LazyListScope.discoveryItems(
             "+ 手动输入地址或配对码",
             Modifier
                 .fillMaxWidth()
-                .pressable { onManualAdd() }
-                .padding(vertical = 12.dp),
+                .pressable(haptic = true) { onManualAdd() }
+                .padding(vertical = 16.dp),
             fontSize = 12.sp, fontWeight = FontWeight(650), color = PaEditorial.AccentText,
         )
     }
     item(key = "bottomNote") {
         Text(
             "若电脑未出现,请确认 Pocket Agent 服务已启动;跨网络可通过已有的远程连接地址添加。",
-            Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 16.dp),
+            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp),
             fontSize = 11.sp, lineHeight = 18.sp, color = PaEditorial.Subtle,
         )
     }
@@ -1001,13 +1154,19 @@ private fun LazyListScope.discoveryItems(
 /** 11sp 以下小字的加深珊瑚色(= EditorialTone.DENIED.text,对浅底 ≥4.5:1)。 */
 private val EditorialDeniedText: Color get() = PaEditorial.DeniedText
 
-/** 区块头:模块标题 16/22 + 行尾辅助小字(可选点击动作,premium.css .section-title)。 */
+/**
+ * 区块头:模块标题 16/22 + 行尾辅助小字(可选点击动作,premium.css .section-title)。
+ *
+ * 【间距/触区】上 16 + 行高 + 下 8,总节奏与旧 23/11 相当(8dp 网格);
+ * 行尾动作的内边距把触区撑到 ~33dp 高(裸文字只有 ~17dp),保持视觉紧凑的同时
+ * 尽量靠近 README 的 44dp 下限 —— 再大就要抬高整个区块头,交由后续全局定夺。
+ */
 @Composable
 private fun SectionHeader(title: String, action: String, onAction: (() -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(top = 23.dp, bottom = 11.dp),
+            .padding(top = 16.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1020,8 +1179,8 @@ private fun SectionHeader(title: String, action: String, onAction: (() -> Unit)?
             Text(
                 action,
                 Modifier
-                    .pressable(onClick = onAction)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                    .pressable(haptic = true, onClick = onAction)
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
                 fontSize = 11.sp, color = PaEditorial.Subtle,
             )
         } else {
@@ -1048,17 +1207,17 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(bottom = 10.dp)
-            .pressable { onClick() }
+            .padding(bottom = 8.dp)
+            .pressable(haptic = true) { onClick() }
             .heightIn(min = 75.dp)
             .shadow(
                 15.dp, RoundedCornerShape(18.dp),
                 spotColor = PaEditorial.Shadow.Alert.color,
                 ambientColor = PaEditorial.Shadow.Alert.color,
             )
+            // 石墨底即边界(同色描边是隐形噪音,已减);阴影承担层级
             .background(PaEditorial.Graphite, RoundedCornerShape(18.dp))
-            .border(1.dp, PaEditorial.Graphite, RoundedCornerShape(18.dp))
-            .padding(horizontal = 17.dp, vertical = 15.dp)
+            .padding(horizontal = 16.dp, vertical = 16.dp)
             .semantics {
                 contentDescription = "$agentName 请求执行命令,来自「$title」,等待你处理"
             },
@@ -1068,7 +1227,7 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
             painterResource(R.drawable.ic_lucide_shield), null,
             tint = PaEditorial.Attention, modifier = Modifier.size(20.dp),
         )
-        Spacer(Modifier.width(11.dp))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 "$agentName 请求执行命令",
@@ -1103,8 +1262,8 @@ private fun RunningRow(thread: PThread, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .pressable { onClick() }
-            .padding(vertical = 13.dp),
+            .pressable(haptic = true) { onClick() }
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
@@ -1113,7 +1272,7 @@ private fun RunningRow(thread: PThread, onClick: () -> Unit) {
             modifier = Modifier.size(32.dp),
             contentScale = ContentScale.Crop,
         )
-        Spacer(Modifier.width(11.dp))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 thread.title.ifEmpty { "(未命名)" },
@@ -1153,8 +1312,8 @@ private fun RecentSessionRow(thread: PThread, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .pressable { onClick() }
-            .padding(vertical = 13.dp),
+            .pressable(haptic = true) { onClick() }
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
@@ -1163,7 +1322,7 @@ private fun RecentSessionRow(thread: PThread, onClick: () -> Unit) {
             modifier = Modifier.size(30.dp),
             contentScale = ContentScale.Crop,
         )
-        Spacer(Modifier.width(11.dp))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 thread.title.ifEmpty { "(未命名)" },
@@ -1203,7 +1362,7 @@ private fun QuietRow(iconRes: Int, title: String, desc: String, onClick: () -> U
         Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .pressable { onClick() },
+            .pressable(haptic = true) { onClick() },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -1238,7 +1397,7 @@ private fun DiscoveredHostCard(host: DiscoveredHost, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .pressable { onClick() }
+            .pressable(haptic = true) { onClick() }
             .heightIn(min = 75.dp)
             .background(MaterialTheme.editorial.Surface, RoundedCornerShape(18.dp))
             .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
@@ -1336,7 +1495,7 @@ private fun PairCodeSheet(
                     Modifier
                         .weight(1f)
                         .heightIn(min = 46.dp)
-                        .pressable(enabled = !busy) { onDismiss() }
+                        .pressable(haptic = true, enabled = !busy) { onDismiss() }
                         .background(PaEditorial.Raised, RoundedCornerShape(14.dp))
                         .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp)),
                     contentAlignment = Alignment.Center,
@@ -1347,7 +1506,7 @@ private fun PairCodeSheet(
                     Modifier
                         .weight(1f)
                         .heightIn(min = 46.dp)
-                        .pressable(enabled = !busy && code.length >= 4) {
+                        .pressable(haptic = true, enabled = !busy && code.length >= 4) {
                             busy = true
                             error = null
                             scope.launch {
@@ -1391,14 +1550,18 @@ private fun PairCodeSheet(
 // ---------------------------------------------------------------- agent 磁贴与浮层
 
 /**
- * agent 磁贴:官方品牌图标,可用=全彩;不可用=灰阶+降透明。
+ * agent 磁贴:官方品牌图标,三态一眼可辨且**不单靠灰度** —— 状态词落字(副文字):
+ *  - 可用:全彩 + 名称墨色 + 连接方式;
+ *  - 接入中(展示目录占位):灰度半可见(alpha .45)+「接入中」;
+ *  - 电脑端未安装:灰度近隐(alpha .22)+「电脑端未安装」。
  * [runningBadge]:该 agent 名下有运行中会话时,磁贴右上角脉冲绿点(与「正在进行」
  * 区同源)。编辑式令牌:名称墨色/灰、副文字灰,不再用主题蓝做装饰。
  */
 @Composable
 fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) {
+    val state = homeAgentTileState(a)
     Column(
-        Modifier.pressable { onClick() }.width(72.dp),
+        Modifier.pressable(haptic = true) { onClick() }.width(72.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box {
@@ -1407,9 +1570,15 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
                 contentDescription = a.name,
                 modifier = Modifier
                     .size(56.dp)
-                    .then(if (a.available) Modifier else Modifier.alpha(0.22f)),
+                    .then(
+                        when (state) {
+                            HomeAgentTileState.AVAILABLE -> Modifier
+                            HomeAgentTileState.INTEGRATING -> Modifier.alpha(0.45f)
+                            HomeAgentTileState.NOT_INSTALLED -> Modifier.alpha(0.22f)
+                        },
+                    ),
                 contentScale = ContentScale.Crop,
-                colorFilter = if (a.available) null else grayscale(),
+                colorFilter = if (state == HomeAgentTileState.AVAILABLE) null else grayscale(),
             )
             if (runningBadge) {
                 PulseDot(PaEditorial.Running, Modifier.align(Alignment.TopEnd))
@@ -1418,15 +1587,16 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
         Text(
             a.name,
             Modifier.padding(top = 6.dp),
-            fontSize = 11.5.sp,
-            color = if (a.available) PaEditorial.Ink else PaEditorial.Muted,
+            fontSize = 12.sp,
+            color = if (state == HomeAgentTileState.AVAILABLE) PaEditorial.Ink else PaEditorial.Muted,
             maxLines = 1,
         )
         Text(
             // 灰显态给真实原因:能力驱动型="电脑端未安装";未接入型="接入中"
-            if (a.available) a.method else unavailableLabel(a.id),
-            fontSize = 9.sp,
-            color = if (a.available) PaEditorial.Muted else PaEditorial.Subtle,
+            homeAgentTileLabel(state, a.method),
+            Modifier.padding(top = 2.dp),
+            fontSize = 10.sp,
+            color = if (state == HomeAgentTileState.AVAILABLE) PaEditorial.Muted else PaEditorial.Subtle,
             maxLines = 1,
         )
     }

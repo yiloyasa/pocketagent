@@ -2,6 +2,7 @@ package dev.pocketagent.app.ui.component
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -26,9 +28,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -46,13 +51,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.agentBadgeRes
+import dev.pocketagent.app.ui.agentBitmap
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.selectedAgentLabel
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
-import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.paGlass
+import dev.pocketagent.app.ui.threadAgentIdOf
 import pocketagent.v1.Thread
 import pocketagent.v1.ThreadStatus
 
@@ -90,11 +98,13 @@ fun RecentThreadsDrawer(
 
     // 跟手时进度由页面给;没有外部进度时自己播入场动画(保持组件可独立使用)。
     // 【令牌化】入场用 PaMotion.sheet(大面积位移的从容 spring,可打断)。
+    // 【draw 层读取】外部进度经 rememberUpdatedState 进 graphicsLayer 块:透明度与
+    // 位移都在 draw 阶段拿最新值,不依赖"每帧重组"(动画中段丢一帧重组也不跳变)。
+    val extProgress = rememberUpdatedState(dragProgress)
     val inner = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         if (dragProgress == null) inner.animateTo(1f, PaMotion.sheet())
     }
-    val progress = dragProgress ?: inner.value
 
     var query by remember { mutableStateOf("") }
     val filtered = remember(threads, query) {
@@ -104,14 +114,18 @@ fun RecentThreadsDrawer(
             it.title.contains(q, ignoreCase = true) || it.workspace.contains(q, ignoreCase = true)
         }
     }
+    // 任务角标:与全局抽屉同一事实来源(TaskCenter 未读数 = 待处理任务),
+    // 不自造数字 —— 角标口径全 app 唯一(README:任务角标完全相同)。
+    val unread by TaskCenter.unreadCount.collectAsState()
 
     Box(Modifier.fillMaxSize()) {
-        // 遮罩:点一下关闭。压暗色统一走 PaGlassToken.Scrim(与全局抽屉/推背同口径)
+        // 遮罩:点一下关闭。压暗色统一走 PaEditorial.Scrim —— 与全局抽屉 AppDrawer
+        // 真正同口径(此前注释声称同口径、实际用的是玻璃令牌的黑,冷色层次不一致)。
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = progress }
-                .background(PaGlassToken.Scrim)
+                .graphicsLayer { alpha = extProgress.value ?: inner.value }
+                .background(PaEditorial.Scrim)
                 .clickable { onClose() },
         )
 
@@ -119,7 +133,10 @@ fun RecentThreadsDrawer(
             Modifier
                 .width(panelWidth)
                 .fillMaxHeight()
-                .graphicsLayer { translationX = -panelWidthPx * (1f - progress) }
+                .graphicsLayer {
+                    val p = extProgress.value ?: inner.value
+                    translationX = -panelWidthPx * (1f - p)
+                }
                 // 【玻璃面板】与全局抽屉 AppDrawer 同一材质语言:半透明烟玻璃 + 右缘投影;
                 // 发丝线关(上下缘贴屏幕边),被覆盖内容的推背模糊由调用方(ChatScreen)负责
                 .paGlass(
@@ -165,9 +182,9 @@ fun RecentThreadsDrawer(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
                     .background(PaEditorial.Canvas, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 11.dp, vertical = 9.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -199,86 +216,149 @@ fun RecentThreadsDrawer(
                 }
             }
 
-            // ---------- 列表 ----------
+            // ---------- 列表(行规格与「全部会话」主列表同语言:agent 身份图 + 标题 + 元信息行) ----------
             when {
                 loading && threads.isEmpty() -> PaSkeletonList(
                     kind = SkeletonKind.SESSION_ROW,
-                    modifier = Modifier.padding(horizontal = 14.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp),
                 )
-                filtered.isEmpty() -> Text(
-                    if (query.isEmpty()) "还没有会话" else "没有匹配的会话",
-                    Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
-                    fontSize = 12.5.sp,
-                    color = PaEditorial.Subtle,
-                )
+                filtered.isEmpty() -> Row(
+                    Modifier
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                        .heightIn(min = 44.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_message_square), null,
+                        tint = PaEditorial.Subtle, modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            if (query.isEmpty()) "还没有会话" else "没有匹配的会话",
+                            fontSize = 13.sp,
+                            color = PaEditorial.Muted,
+                        )
+                        if (query.isEmpty()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "到「全部会话」新建一个,这里就会跟着更新",
+                                fontSize = 11.sp,
+                                color = PaEditorial.Subtle,
+                            )
+                        }
+                    }
+                }
                 else -> LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 14.dp, end = 14.dp, bottom = 10.dp,
+                        start = 16.dp, end = 16.dp, bottom = 8.dp,
                     ),
                 ) {
                     items(filtered, key = { it.id }) { th ->
                         val active = th.id == currentThreadId
-                        Column(
+                        Row(
                             Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 44.dp)
                                 .pressable(haptic = true) { onOpenThread(th.id) }
                                 .background(
                                     if (active) PaEditorial.PrimaryContainer else Color.Transparent,
                                     RoundedCornerShape(12.dp),
                                 )
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                th.title.ifEmpty { "(未命名)" },
-                                fontSize = 13.5.sp,
-                                color = if (active) PaEditorial.AccentText else PaEditorial.Ink,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                            // agent 身份图:与主列表(ThreadCard)同规格 —— 42dp 方格、13dp 圆角、
+                            // 按 agent_id 选图(缺省 codex)。进会话前就能认出"这是谁干的"。
+                            Image(
+                                bitmap = agentBitmap(agentBadgeRes(threadAgentIdOf(th.agentId))),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(PaEditorial.Space.IconBox)
+                                    .clip(RoundedCornerShape(13.dp)),
+                                contentScale = ContentScale.Crop,
                             )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                relativeTime(th.updatedAtUnixMs) +
-                                    if (th.workspace.isNotEmpty()) "  ·  " + shortWorkspace(th.workspace) else "",
-                                fontSize = 10.5.sp,
-                                color = PaEditorial.Subtle,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    th.title.ifEmpty { "(未命名)" },
+                                    fontSize = 15.sp, lineHeight = 21.sp,
+                                    fontWeight = FontWeight(650),
+                                    color = if (active) PaEditorial.AccentText else PaEditorial.Ink,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                // 元信息行:归属 agent · 工作区 · 最近使用(与主列表同口径;
+                                // 时间用相对时间——抽屉的诉求是"接着聊最近的",今天/昨天一眼可辨)
+                                Text(
+                                    buildList {
+                                        add(selectedAgentLabel(threadAgentIdOf(th.agentId)))
+                                        if (th.workspace.isNotEmpty()) add(shortWorkspace(th.workspace))
+                                        add(relativeTime(th.updatedAtUnixMs))
+                                    }.filter { it.isNotEmpty() }.joinToString("  ·  "),
+                                    fontSize = 11.sp, lineHeight = 16.sp,
+                                    color = PaEditorial.Subtle,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            // ---------- 底部全局入口 ----------
+            // ---------- 底部全局入口(任务角标 = 真实待处理数,与全局抽屉同源) ----------
             Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 DrawerFooterAction(R.drawable.ic_lucide_monitor, "主页", onOpenAllThreads)
                 DrawerFooterAction(R.drawable.ic_lucide_square_terminal, "终端", onOpenTerminal)
-                DrawerFooterAction(R.drawable.ic_lucide_list_checks, "任务", onOpenTaskCenter)
+                DrawerFooterAction(R.drawable.ic_lucide_list_checks, "任务", onOpenTaskCenter, badge = unread)
                 DrawerFooterAction(R.drawable.ic_lucide_settings, "设置", onOpenSettings)
             }
         }
     }
 }
 
+/**
+ * 底部图标钮:图标 + 词,双通道;[badge] > 0 时图标右上叠任务角标 —— 数字来自
+ * TaskCenter,规格(琥珀底/近白字/9sp)与全局抽屉的 DrawerBadge 同一档。
+ */
 @Composable
-private fun DrawerFooterAction(icon: Int, label: String, onClick: () -> Unit) {
+private fun DrawerFooterAction(icon: Int, label: String, onClick: () -> Unit, badge: Int = 0) {
     Column(
         Modifier
             .pressable(haptic = true) { onClick() }
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .heightIn(min = 44.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(
-            painterResource(icon), label,
-            tint = PaEditorial.Muted,
-            modifier = Modifier.size(18.dp),
-        )
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                painterResource(icon), label,
+                tint = PaEditorial.Muted,
+                modifier = Modifier.size(18.dp),
+            )
+            if (badge > 0) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .background(PaEditorial.Attention, RoundedCornerShape(7.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                ) {
+                    Text(
+                        if (badge > 99) "99+" else badge.toString(),
+                        fontSize = 9.sp, lineHeight = 11.sp,
+                        color = PaEditorial.OnGraphite, fontWeight = FontWeight(650),
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(4.dp))
         Text(label, fontSize = 10.sp, color = PaEditorial.Subtle)
     }

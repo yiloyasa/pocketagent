@@ -462,6 +462,23 @@ private fun ControlDomainBlock(
         }
         else -> null
     }
+    // 【禁用要说清"为什么"(R1-C)】开关被禁用只在状态词之外补一句原因(没读到/
+    // 读不懂/正在提交,各对应不同下一步),落在域行下方的小字位 —— 与 memory 行
+    // "还没有已接入的 Agent"同款语言。B 开关的本地 busy 不进这里(短暂瞬态,
+    // 状态词"提交中"已覆盖);原因按共享状态计算,与开关的禁用判定同源。
+    val switchDisabledReason = when (domain.id) {
+        CONTROL_DOMAIN_COLLAB ->
+            collabMasterSwitchDisabledReason(
+                collabMasterSwitchItem(domain),
+                ControlPlaneState.busyItemId != null,
+            )
+        CONTROL_DOMAIN_DIALYSIS ->
+            unknownPassthroughSwitchDisabledReason(
+                RuntimeControlState.budget,
+                ControlPlaneState.busyItemId != null,
+            )
+        else -> null
+    }
     // 【域行专用排版,不走通用 SettingRow】L2 真机挑刺(06-control-plane-full):
     // summary 长文案被行尾状态点/箭头挤压、title 与 summary 行距偏松、字阶偏大。
     // 收成专用行 —— title/summary 独占 weight(1f) 剩余宽(状态点是行尾固定小点,
@@ -476,6 +493,15 @@ private fun ControlDomainBlock(
         onClick = onClick,
         trailing = headerTrailing,
     )
+    // 【禁用原因】只解释,不渲染成错误告警:小字一行,开关可点时整行缺席(不占位)。
+    if (switchDisabledReason != null) {
+        Text(
+            switchDisabledReason,
+            Modifier.padding(start = 2.dp, top = 2.dp),
+            fontSize = 11.sp,
+            color = PaEditorial.Muted,
+        )
+    }
     // memory 行点不动 = 只有合计项(还没有 Agent 接入);补一句事实说明为什么不跳。
     if (domain.id == CONTROL_DOMAIN_MEMORY && memoryAgent == null && domain.items.isNotEmpty()) {
         Text(
@@ -528,22 +554,35 @@ private fun controlSwitchColors() = androidx.compose.material3.SwitchDefaults.co
  *
  * 【状态失真时如实】现值认不出 / 提交中 → 禁用([collabMasterSwitchState] 钉死);
  * daemon 快照里没有该项 → 头部根本不摆开关(装配点判空)。
+ * 【R1-C】开关左侧补状态词(开/关/提交中/未识别,不只靠色);切换给轻触感反馈。
  */
 @Composable
 private fun CollabMasterSwitch(
     item: ControlItemRow,
     onToggle: (ControlItemRow, Boolean) -> Unit,
 ) {
-    val state = collabMasterSwitchState(item, ControlPlaneState.busyItemId != null)
-    Switch(
-        checked = state.checked,
-        enabled = state.enabled,
-        onCheckedChange = { on -> onToggle(item, on) },
-        colors = controlSwitchColors(),
-        modifier = Modifier
-            .padding(start = 6.dp)
-            .semantics { contentDescription = "协同总开关" },
-    )
+    val busy = ControlPlaneState.busyItemId != null
+    val state = collabMasterSwitchState(item, busy)
+    val hf = androidx.compose.ui.platform.LocalHapticFeedback.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            collabMasterSwitchWord(item, busy),
+            fontSize = 11.sp,
+            color = PaEditorial.Muted,
+        )
+        Switch(
+            checked = state.checked,
+            enabled = state.enabled,
+            onCheckedChange = { on ->
+                if (state.enabled) hf.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                onToggle(item, on)
+            },
+            colors = controlSwitchColors(),
+            modifier = Modifier
+                .padding(start = 6.dp)
+                .semantics { contentDescription = "协同总开关" },
+        )
+    }
 }
 
 /**
@@ -558,21 +597,32 @@ private fun CollabMasterSwitch(
  * 【加载中禁用】预算快照缺席(还没读到/上次读取失败)时禁用 —— 把"没读到"
  * 画成"是关的"且可点,用户一按就可能写反;等快照在手再启用,如实。
  * busy 状态本地持有(本开关的提交不经过 busyItemId 通道),提交期间禁用防连点。
+ * 【R1-C】状态词(开/关/提交中/未读取)摆进标签位,禁用与状态词同源不出假状态;
+ * 切换给轻触感反馈。
  */
 @Composable
 private fun DialysisUnknownSwitch(onWriteError: (String?) -> Unit) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
+    val sharedBusy = ControlPlaneState.busyItemId != null
     val state = unknownPassthroughSwitchState(
         budget = RuntimeControlState.budget,
-        busy = busy || ControlPlaneState.busyItemId != null,
+        busy = busy || sharedBusy,
     )
+    val hf = androidx.compose.ui.platform.LocalHapticFeedback.current
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("透传", fontSize = 11.sp, color = PaEditorial.Muted)
+        Text(
+            listOf("透传", unknownPassthroughSwitchWord(RuntimeControlState.budget, busy || sharedBusy))
+                .filter { it.isNotBlank() }
+                .joinToString(" "),
+            fontSize = 11.sp,
+            color = PaEditorial.Muted,
+        )
         Switch(
             checked = state.checked,
             enabled = state.enabled,
             onCheckedChange = { on ->
+                if (state.enabled) hf.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                 busy = true
                 scope.launch {
                     onWriteError(applyUnknownPassthroughToggle(on))

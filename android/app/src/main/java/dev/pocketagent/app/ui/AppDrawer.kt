@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -40,13 +42,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -64,9 +66,11 @@ import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.PaHostLink
+import dev.pocketagent.app.ui.component.drawerFollowOffsetPx
 import dev.pocketagent.app.ui.component.hostStatusTone
 import dev.pocketagent.app.ui.component.hostStatusWord
 import dev.pocketagent.app.ui.theme.PaEditorial
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 /**
@@ -95,6 +99,10 @@ private object DrawerSkin {
     /** .drawer-head .icon-button #a9bed2。 */
     val HeadIcon = Color(0xFFA9BED2)
 }
+
+/** 面板宽:展开 330dp(面板模式)/ 收起 76dp(rail 模式)。跟手位移与宽度动画共用,两处不会算岔。 */
+private val DrawerPanelWidth = 330.dp
+private val DrawerRailWidth = 76.dp
 
 /** 侧边栏主导航项(rail 与展开态共用同一份:同序/同图标/同角标 —— README §侧边栏)。 */
 private data class DrawerEntry(
@@ -129,8 +137,11 @@ fun AppDrawer(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit = {},
-    /** 重看新手教程(抽屉「更多」分组入口;默认空实现以最小化侵入其它调用点)。 */
-    onOpenOnboarding: () -> Unit = {},
+    /**
+     * 重看新手教程(抽屉「更多」分组 + 离线态"看怎么连"的落点)。
+     * 可空:没传的页面**不渲染**教程入口 —— 与 onOpenCollab 同一纪律,不摆点了没反应的假入口。
+     */
+    onOpenOnboarding: (() -> Unit)? = null,
     /** 传了就显示"新建对话"主操作(聊天页用;其余页面各有自己的新建入口)。 */
     onNewThread: (() -> Unit)? = null,
     /** 传了就显示"网页"快捷入口(内置浏览器)。 */
@@ -210,14 +221,17 @@ fun AppDrawer(
             else -> fadeOut(PaMotion.sheet()) + slideOutHorizontally(PaMotion.sheet()) { -it }
         }
 
-        // 跟手时:整体位移 = 面板宽 × (1 - 进度)
-        val screenPx = with(LocalDensity.current) {
-            android.content.res.Resources.getSystem().displayMetrics.widthPixels.toFloat()
+        // 跟手时:整体位移 = 面板宽 × (1 - 进度)。面板宽用真实 dp 换算像素
+        // (drawerFollowOffsetPx 的口径),不再用"屏宽 × 比例"估 —— 估出来的数
+        // 和面板实际宽度差几十 px,收起态会在屏幕左缘留下一条合不拢的缝。
+        val panelPx = with(LocalDensity.current) {
+            (if (AgentConnection.drawerCollapsed) DrawerRailWidth else DrawerPanelWidth).toPx()
         }
-        val followOffset = if (progress != null) {
-            val panelPx = screenPx * (if (AgentConnection.drawerCollapsed) 0.24f else 0.86f)
-            -panelPx * (1f - progress)
-        } else 0f
+        // 【placement 层位移】进度经 rememberUpdatedState 进 offset{} 的块:块在
+        // **placement 阶段**执行,每帧直接拿到最新进度。不把 graphicsLayer 挂在
+        // AnimatedVisibility 上 —— 那条路里动画层可能吞掉纯取值链的状态失效,
+        // 表现为拖动时面板偶发不跟帧;跟手必须落在 placement 层。
+        val progressState = rememberUpdatedState(progress)
 
         AnimatedVisibility(
             visibleState = visibleState,
@@ -226,11 +240,14 @@ fun AppDrawer(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxHeight()
-                .graphicsLayer { translationX = followOffset },
+                .offset {
+                    val p = progressState.value
+                    if (p != null) IntOffset(drawerFollowOffsetPx(p, panelPx).roundToInt(), 0) else IntOffset.Zero
+                },
         ) {
-            // 折叠/展开宽度平滑过渡(rail 76dp ↔ 面板 330dp);spring 令牌,可打断
+            // 折叠/展开宽度平滑过渡(rail ↔ 面板);spring 令牌,可打断
             val panelWidth by animateDpAsState(
-                targetValue = if (collapsed) 76.dp else 330.dp,
+                targetValue = if (collapsed) DrawerRailWidth else DrawerPanelWidth,
                 animationSpec = PaMotion.standard(),
                 label = "panelWidth",
             )
@@ -244,7 +261,7 @@ fun AppDrawer(
                 onOpenTerminal = { requestClose { onOpenTerminal() } },
                 onOpenSettings = { requestClose { onOpenSettings() } },
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
-                onOpenOnboarding = { requestClose { onOpenOnboarding() } },
+                onOpenOnboarding = onOpenOnboarding?.let { cb -> { requestClose { cb() } } },
                 onOpenCollab = onOpenCollab?.let { cb -> { requestClose { cb() } } },
                 onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
                 onNewThread = onNewThread,
@@ -276,7 +293,7 @@ private fun DrawerPanel(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
-    onOpenOnboarding: () -> Unit = {},
+    onOpenOnboarding: (() -> Unit)? = null,
     onOpenCollab: (() -> Unit)? = null,
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
@@ -331,9 +348,9 @@ private fun DrawerPanel(
                     Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 18.dp),
+                        .padding(horizontal = 16.dp),
                 ) {
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(12.dp))
 
                     // ---------- 品牌头:logo 方块 + 名称 + 主机连接一行放下 ----------
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -350,7 +367,7 @@ private fun DrawerPanel(
                                 contentScale = ContentScale.Crop,
                             )
                         }
-                        Spacer(Modifier.width(11.dp))
+                        Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
                                 "PocketAgent",
@@ -374,9 +391,45 @@ private fun DrawerPanel(
                         )
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(12.dp))
                     // 头部细线(premium.css .drawer-head border #364655)
                     Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.OnGraphiteHairline))
+
+                    // ---------- 离线可执行说明(空态纪律):电脑没连上时,给一条
+                    // "现在能做什么"的路 —— 点它进新手教程的连接步骤,不摆纯报错牌 ----------
+                    if (connLink == PaHostLink.OFFLINE && onOpenOnboarding != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp)
+                                .pressable(haptic = true) { onOpenOnboarding() }
+                                .background(DrawerSkin.ActiveBg, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_monitor), null,
+                                tint = DrawerSkin.HeadOk, modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "还没连上电脑",
+                                    fontSize = 13.sp, color = PaEditorial.OnGraphite,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    "点这里,看怎么让电脑出现在手机上",
+                                    fontSize = 11.sp, color = DrawerSkin.HeadOk,
+                                )
+                            }
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_chevron_right), null,
+                                tint = DrawerSkin.HeadOk, modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
 
                     // ---------- 新建对话(仅聊天页传入了该回调) ----------
                     if (onNewThread != null) {
@@ -448,15 +501,17 @@ private fun DrawerPanel(
                         badge = 0,
                         onClick = onOpenSettings,
                     )
-                    DrawerItem(
-                        icon = R.drawable.ic_lucide_sparkles,
-                        title = "新手教程",
-                        selected = false,
-                        badge = 0,
-                        onClick = onOpenOnboarding,
-                    )
+                    if (onOpenOnboarding != null) {
+                        DrawerItem(
+                            icon = R.drawable.ic_lucide_sparkles,
+                            title = "新手教程",
+                            selected = false,
+                            badge = 0,
+                            onClick = onOpenOnboarding,
+                        )
+                    }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(16.dp))
                 } // 展开滚动内容
             } // Crossfade 双模式
         }
@@ -467,7 +522,7 @@ private fun DrawerPanel(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 13.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val model = AgentConnection.selectedModel
@@ -521,7 +576,7 @@ private fun RailContent(
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTaskCenter: () -> Unit,
-    onOpenOnboarding: () -> Unit,
+    onOpenOnboarding: (() -> Unit)?,
     onOpenCollab: (() -> Unit)?,
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
@@ -534,10 +589,10 @@ private fun RailContent(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(16.dp))
-        // Logo:点按展开完整面板(折叠态的"找回文字"入口)
+        // Logo:点按展开完整面板(折叠态的"找回文字"入口);44dp = TouchMin 点击区
         Box(
             Modifier
-                .size(46.dp)
+                .size(44.dp)
                 .clip(RoundedCornerShape(13.dp))
                 .pressable { onToggleCollapsed() },
             contentAlignment = Alignment.Center,
@@ -546,7 +601,7 @@ private fun RailContent(
                 bitmap = agentBitmap(R.mipmap.ic_launcher),
                 contentDescription = "展开侧边栏",
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.size(46.dp),
+                modifier = Modifier.size(44.dp),
             )
         }
         Spacer(Modifier.height(16.dp))
@@ -576,7 +631,10 @@ private fun RailContent(
         }
         RailIcon(R.drawable.ic_lucide_settings, "设置", onClick = onOpenSettings)
         Spacer(Modifier.height(8.dp))
-        RailIcon(R.drawable.ic_lucide_sparkles, "新手教程", onClick = onOpenOnboarding)
+        if (onOpenOnboarding != null) {
+            RailIcon(R.drawable.ic_lucide_sparkles, "新手教程", onClick = onOpenOnboarding)
+            Spacer(Modifier.height(8.dp))
+        }
         Spacer(Modifier.weight(1f))
         RailIcon(R.drawable.ic_lucide_chevron_right, "展开", onClick = onToggleCollapsed)
         Spacer(Modifier.height(12.dp))
@@ -589,7 +647,7 @@ private fun RailDivider() {
     Box(
         Modifier
             .padding(vertical = 8.dp)
-            .width(30.dp)
+            .width(32.dp)
             .height(1.dp)
             .background(PaEditorial.OnGraphiteHairline),
     )
@@ -684,8 +742,8 @@ private fun DrawerItem(
                 if (selected) DrawerSkin.ActiveBg else Color.Transparent,
                 RoundedCornerShape(12.dp),
             )
-            .padding(start = 11.dp, end = 11.dp)
-            .height(46.dp),
+            .padding(start = 12.dp, end = 12.dp)
+            .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(

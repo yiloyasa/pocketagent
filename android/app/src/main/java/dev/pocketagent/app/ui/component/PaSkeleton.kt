@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,7 +38,15 @@ import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 
 /** 骨架屏形状类型 —— 必须与真实内容逐项对位,否则切换时会跳动(设计规范 §2.3)。 */
-enum class SkeletonKind { SESSION_ROW, MESSAGE_BUBBLE, FILE_ROW, CARD_BLOCK }
+enum class SkeletonKind {
+    SESSION_ROW, MESSAGE_BUBBLE, FILE_ROW, CARD_BLOCK,
+
+    /** 首页最近会话行(30dp 圆头像 + 两行文本 + 右侧状态药丸,与 RecentSessionRow 同轮廓)。 */
+    HOME_RECENT_ROW,
+
+    /** 发现的主机卡(白卡 + 42dp 方图标格 + 两行文本,与 DiscoveredHostCard 同轮廓)。 */
+    HOST_CHOICE,
+}
 
 /**
  * 骨架屏高光块。
@@ -77,6 +86,19 @@ private fun ShimmerBox(
                 onDrawBehind { drawRect(brush) }
             },
     )
+}
+
+/**
+ * 单根高光条(公开原语):各页按真实卡片轮廓自行组合骨架时复用 ——
+ * 骨架形状必须≈真实卡片轮廓,切到真实内容时不跳动(设计规范 §2.3)。
+ * 高光带/减弱动态效果行为与 [ShimmerBox] 完全一致。
+ */
+@Composable
+fun PaSkeletonBar(
+    modifier: Modifier,
+    shape: Shape = RoundedCornerShape(8.dp),
+) {
+    ShimmerBox(modifier, shape, rememberReduceMotion())
 }
 
 /** 会话行骨架:圆形头像 38dp + 两行文本条。 */
@@ -148,6 +170,47 @@ private fun SkeletonCardBlock(reduceMotion: Boolean) {
     }
 }
 
+/** 首页最近会话行骨架:30dp 圆头像 + 两行文本条 + 右侧状态药丸(与 RecentSessionRow 同轮廓)。 */
+@Composable
+private fun SkeletonHomeRecentRow(reduceMotion: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ShimmerBox(Modifier.size(30.dp), CircleShape, reduceMotion)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            ShimmerBox(Modifier.fillMaxWidth(0.62f).height(14.dp), reduceMotion = reduceMotion)
+            Spacer(Modifier.height(6.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.42f).height(11.dp), reduceMotion = reduceMotion)
+        }
+        Spacer(Modifier.width(12.dp))
+        ShimmerBox(Modifier.width(52.dp).height(16.dp), RoundedCornerShape(100.dp), reduceMotion)
+    }
+}
+
+/** 发现主机卡骨架:白卡轮廓(18dp 圆角细线)+ 42dp 方图标格 + 两行文本条(与 DiscoveredHostCard 同轮廓)。 */
+@Composable
+private fun SkeletonHostChoice(reduceMotion: Boolean) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(PaEditorial.Surface)
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ShimmerBox(Modifier.size(42.dp), RoundedCornerShape(13.dp), reduceMotion)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            ShimmerBox(Modifier.fillMaxWidth(0.5f).height(14.dp), reduceMotion = reduceMotion)
+            Spacer(Modifier.height(6.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.68f).height(11.dp), reduceMotion = reduceMotion)
+        }
+    }
+}
+
 /**
  * 骨架屏列表(设计规范 §2.3)。
  *
@@ -182,6 +245,8 @@ fun PaSkeletonList(
                     SkeletonKind.MESSAGE_BUBBLE -> SkeletonBubble(alignEnd = index % 2 == 1, reduceMotion)
                     SkeletonKind.FILE_ROW -> SkeletonFileRow(reduceMotion)
                     SkeletonKind.CARD_BLOCK -> SkeletonCardBlock(reduceMotion)
+                    SkeletonKind.HOME_RECENT_ROW -> SkeletonHomeRecentRow(reduceMotion)
+                    SkeletonKind.HOST_CHOICE -> SkeletonHostChoice(reduceMotion)
                 }
             }
         }

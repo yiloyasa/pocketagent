@@ -48,6 +48,51 @@ internal fun collabMasterSwitchState(item: ControlItemRow?, busy: Boolean): Dire
     return DirectSwitchUiState(checked = on == true, enabled = on != null && !busy)
 }
 
+// ---- 状态词与禁用原因(R1-C:状态词辅助,不只靠色;禁用要说清"为什么") ----
+//
+// 【为什么要词不要色】开关被禁用时用户只知道"点不动",不知道是"没读到/读不懂/
+// 正在提交"里的哪一种 —— 三种的下一步动作完全不同(重连 / 重读 / 等一下)。
+// 状态词给"此刻是什么",禁用原因给"为什么动不了、该怎么办";颜色(灰)只作辅助。
+
+/**
+ * 协同总开关的状态词。null 项 = 开关不摆(装配点判空),返回空串;
+ * 提交中 > 现值未识别 > 开/关(与禁用判定同源,词和位置永不互相矛盾)。
+ */
+internal fun collabMasterSwitchWord(item: ControlItemRow?, busy: Boolean): String = when {
+    item == null -> ""
+    busy -> "提交中"
+    else -> controlToggleOn(item.current)?.let { if (it) "开" else "关" } ?: "未识别"
+}
+
+/**
+ * 协同总开关的禁用原因;null = 可点(不需要解释)。item 缺席时开关本体不渲染,
+ * 也无需原因(装配点根本不会摆出来)。
+ */
+internal fun collabMasterSwitchDisabledReason(item: ControlItemRow?, busy: Boolean): String? = when {
+    item == null -> null
+    busy -> "正在提交上一项修改,稍候自动恢复"
+    controlToggleOn(item.current) == null -> "电脑端现值「${item.current}」无法识别,已暂停直控"
+    else -> null
+}
+
+/**
+ * 未知请求透传 B 开关的状态词。快照缺席 = "未读取"(与禁用判定同源:
+ * 状态函数把缺席画成禁用,这里就绝不给"关" —— 不显示假状态)。
+ */
+internal fun unknownPassthroughSwitchWord(budget: RuntimePolicyResponse?, busy: Boolean): String = when {
+    budget == null -> "未读取"
+    busy -> "提交中"
+    unknownRequestPassthroughOn(budget.policy) -> "开"
+    else -> "关"
+}
+
+/** B 开关的禁用原因;null = 可点。缺席 = 需连接主机(结论 5:依赖主机的项断连要讲清)。 */
+internal fun unknownPassthroughSwitchDisabledReason(budget: RuntimePolicyResponse?, busy: Boolean): String? = when {
+    budget != null -> null
+    busy -> "正在读取电脑端状态"
+    else -> "尚未读到电脑端状态,连接主机后可用"
+}
+
 /**
  * 未知请求透传 B 开关的呈现态。数据源 = RuntimeControlState.budget.policy 的
  * unknown_request_passthrough(与设置页实验区同一份快照)。

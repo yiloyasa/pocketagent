@@ -13,9 +13,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,20 +45,49 @@ internal fun connectionBannerCopy(reconnectAttempt: Int, queuedInputs: Int): Str
 }
 
 /**
+ * 断连横幅状态(纯函数推进,单测钉死 ConnectionBannerStateTest)。
+ *
+ * @param visible  横幅当前是否可见
+ * @param attempts 重连轮数(每次 connState **从非 down 落回 down** 记一轮,回 ok 清零)
+ */
+internal data class ConnectionBannerState(val visible: Boolean, val attempts: Int)
+
+/**
+ * 三态状态机(断线 / 重连中 / 已恢复):
+ *  - **断线**(connState == down):可见,轮数只在一"落回"时 +1 —— 同为 down 的
+ *    连续探活失败不算新一轮(旧实现靠 LaunchedEffect(connState) 恰好也只有变化
+ *    才触发,这里把口径写成显式状态机);组件刚挂载时已在 down 不虚计一轮。
+ *  - **重连中**(connState == checking):断过(attempts > 0)就**保持可见** ——
+ *    探活回退链动辄数秒,checking 期间撤掉横幅再放回来就是用户看见的"横幅闪烁";
+ *    没断过(启动时的首轮 checking)不出横幅,不闪假警报。
+ *  - **已恢复**(connState == ok):横幅直接退场,**不弹"已恢复"的成功横幅** ——
+ *    恢复是常态,页面内容自己就是证明;多摆一条绿色横幅才是打扰。
+ */
+internal fun nextConnectionBannerState(prev: String?, next: String, attempts: Int): ConnectionBannerState = when {
+    next == "ok" -> ConnectionBannerState(visible = false, attempts = 0)
+    next == "down" -> ConnectionBannerState(
+        visible = true,
+        attempts = if (prev == "down") attempts else attempts + 1,
+    )
+    else -> ConnectionBannerState(visible = attempts > 0, attempts = attempts)
+}
+
+/**
  * 断连全局横幅(审计 P1-2):daemon 断连时三屏(Chat/Home/Threads)共用同一条
  * 状态横幅 —— 「连接已断开，正在重连(第 N 次)… N 条排队中」+ 手动重试。
- * 重连成功(connState 回 ok)自动消失。
+ *
+ * 【三态不闪】状态推进全在 [nextConnectionBannerState](纯函数,单测钉死):
+ * 断线(down)可见 → 重连中(checking)断过就保持可见 —— 探活回退链动辄数秒,
+ * checking 期间撤横幅再放回来就是"横幅闪烁" → 已恢复(ok)直接退场,不弹
+ * "已恢复"的成功横幅(恢复是常态,多摆一条绿横幅才是打扰)。
  *
  * 【只呈现,不另加重连】自动重连的探活循环是 [AgentConnection.startAutoReconnect]
  * 既有职责,本组件只读 connState 状态流;手动重试也只回调宿主屏既有的刷新入口
  * ([onRetry]),由各屏走自己的 connectWithFallback/列表刷新链,不在横幅里再起一条
  * 重连逻辑(两处重连会互相打断退避节奏)。
  *
- * 【为什么只认 "down" 不认 "checking"】checking 是连接巡检的中间态,不是"已知断网";
- * 按 != "ok" 判会在巡检瞬间闪假横幅 —— 与 ChatScreen 顶部 connState 长注释同一纪律。
- *
- * 【第 N 次怎么数】探活循环每走完一轮回退链仍失败,connState 会再次落回 "down";
- * 每次落回记一次,回 "ok" 清零。这是呈现层计数,不参与也不影响真实重连。
+ * 【第 N 次怎么数】每次 connState **从非 down 落回 down** 记一轮(回 ok 清零);
+ * 组件挂载时就已在 down 不虚计 —— 这是呈现层计数,不参与也不影响真实重连。
  *
  * 【排队条数】[TurnSession.totalQueuedInputs] 全会话排队输入只读快照 —— 断连时
  * 用户最怕"发出去的消息丢了",排队数必须一直可见(输入永不丢,审计 P1-2 口径)。
@@ -70,17 +98,18 @@ fun ConnectionBanner(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val connState by AgentConnection.connState.collectAsState()
-    // 呈现层重连轮数:每次整轮回退链判死(connState 落回 down)记一次,恢复清零
-    var reconnectAttempts by remember { mutableIntStateOf(0) }
-    LaunchedEffect(connState) {
-        when (connState) {
-            "down" -> reconnectAttempts += 1
-            "ok" -> reconnectAttempts = 0
-            // checking 是巡检中间态:不计数、不出横幅
+    // 三态状态机:prev 取挂载时的当前值,首帧已在 down 不虚计一轮
+    var banner by remember {
+        mutableStateOf(ConnectionBannerState(visible = false, attempts = 0))
+    }
+    var prev by remember { mutableStateOf(AgentConnection.connState.value) }
+    LaunchedEffect(Unit) {
+        AgentConnection.connState.collect { s ->
+            banner = nextConnectionBannerState(prev, s, banner.attempts)
+            prev = s
         }
     }
-    if (connState != "down") return
+    if (!banner.visible) return
 
     Row(
         modifier
@@ -99,7 +128,7 @@ fun ConnectionBanner(
         )
         Spacer(Modifier.width(9.dp))
         Text(
-            connectionBannerCopy(reconnectAttempts, TurnSession.totalQueuedInputs()),
+            connectionBannerCopy(banner.attempts, TurnSession.totalQueuedInputs()),
             Modifier.weight(1f),
             fontSize = 12.sp,
             color = PaEditorial.Attention,

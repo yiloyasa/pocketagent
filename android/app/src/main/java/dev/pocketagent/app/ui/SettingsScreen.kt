@@ -430,14 +430,18 @@ internal data class SettingsSearchEntry(
 
 /**
  * 设置搜索索引(静态,字符串与各分区行的 title/desc 同源 —— 改分区文案时
- * 这里一并改)。覆盖:一级导航行、Agent 与模型/外观/Daemon/用户数据各页的
- * 代表分区、运行时控制台与关于组。
+ * 这里一并改)。覆盖:一级导航行(连接 / Agent / 外观 / 数据与缓存 / 安全 / 关于
+ * 的 R1-C 新分组)、Agent 与模型/Daemon/用户数据各页的代表分区、运行时控制台。
  */
 internal fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
-    SettingsSearchEntry("外观与阅读", "显示模式 · 主题 · 字号", "通用", "appearance"),
-    SettingsSearchEntry("Daemon 桥接与输入", "连接策略 · 全局对话显示 · 语音 · 实验功能", "通用", "daemon"),
-    SettingsSearchEntry("用户数据管理", "连接 · 配对 · 下载内容 · 存储占用", "通用", "userdata"),
+    SettingsSearchEntry("连接与配对", "地址 · 配对码 · 主机指纹", "连接", "userdata"),
+    SettingsSearchEntry("Daemon 桥接与输入", "连接策略 · 对话显示 · 语音 · 实验功能", "连接", "daemon"),
+    SettingsSearchEntry("用户数据管理", "连接 · 配对 · 下载内容 · 存储占用", "连接", "userdata"),
     SettingsSearchEntry("Agent 与模型", "切换 Agent · 权限 · 模型 · MCP", "Agent", "agent"),
+    SettingsSearchEntry("外观与阅读", "显示模式 · 文字尺寸", "外观", "appearance"),
+    SettingsSearchEntry("下载与存储", "下载内容 · 缓存清理 · 存储占用", "数据与缓存", "userdata"),
+    SettingsSearchEntry("审批与沙箱", "命令要不要批准 · 文件可写范围", "安全", "agent"),
+    SettingsSearchEntry("主机信任", "首连锁定电脑指纹 · 防止连到别的机器", "安全", "userdata"),
     SettingsSearchEntry("电脑控制台", "预算 · 运行时形态 · 记忆透析", "运行时"),
     SettingsSearchEntry("版本", "版本号 · 电脑系统信息", "关于"),
     SettingsSearchEntry("显示模式", "跟随系统 · 浅色 · 深色 · 黑客终端", "外观与阅读", "appearance"),
@@ -482,11 +486,15 @@ internal fun matchRange(title: String, query: String): IntRange? {
 /**
  * 设置页(重做版:一级导航、二级编辑)。
  *
- * 【信息架构】
- *  1. 一级页 = 电脑连接卡(现状一目了然)+ 少量导航行(外观 / Agent / 用户数据 / 关于),
- *     不再放"范围分段"(全局/当前/其他三段切换把同一批设置拆到三处,实际很难找到东西);
- *  2. 所有编辑动作收进二级页:外观与阅读 / Agent 与模型 / 用户数据管理;
- *  3. 多选项设置仍统一 SplitButton;设置项不写解释性小字(字号预览除外)。
+ * 【信息架构(R1-C 调整:M3 分组语义)】
+ *  1. 一级页 = 电脑连接卡(hostStatus 槽)+ 六个卡组:连接 / Agent / 外观 /
+ *     数据与缓存 / 安全 / 关于(另有运行时=控制中心区段)。相关项聚成卡组,
+ *     组间留白 > 组内行距;每个导航行带"当前值摘要"——本地偏好断连照常出值,
+ *     依赖主机的项断连如实标"需连接主机";
+ *  2. 所有编辑动作收进二级页:连接与配对+下载与存储 → 用户数据管理 /
+ *     Daemon 桥接与输入 / 外观与阅读 / Agent 与模型(安全组的两行分别深链前两者);
+ *  3. 多选项设置仍统一 SplitButton;危险操作(撤销信任/删除数据)二次确认 +
+ *     说明后果;开关给状态词与轻触感反馈。
  *
  * 【逻辑未变】审批/沙箱/模型/思考强度照样走 writeCodex 乐观更新 + 失败回滚;
  * 连接凭证照样走 setCredentials + connectWithFallback。
@@ -1016,11 +1024,22 @@ private fun SettingsScreenBody(
 
     val connStateTop = AgentConnection.connState.collectAsState().value
     val connTransportTop = AgentConnection.connTransport.collectAsState().value
-    val connSummary = when (connStateTop) {
-        "ok" -> "已连接 · " + connTransportTop.ifEmpty { "直连" }
-        "down" -> "未连接"
-        else -> "检查中"
+    // 各导航行的"当前值摘要"(R1-C:不用点进去就知道现状)——取值映射全部在
+    // SettingsOverviewLogic 的纯函数里(单测钉死),这里只喂状态。
+    val connSummary = connectionSummary(connStateTop, connTransportTop)
+    // 桥接与输入行:全局对话显示的两项本地偏好(Compose 状态,断连可读)。
+    val bridgeSummary = localDisplayPrefsSummary(
+        AgentConnection.showThinking,
+        AgentConnection.toolDetailsExpanded,
+    )
+    // 下载与存储行:本地任务清单(断连可用),只数已完成的下载。
+    val allTasksTop by TaskCenter.tasks.collectAsState()
+    val doneDownloadsTop = allTasksTop.count {
+        it.kind == TaskCenter.Kind.DOWNLOAD && it.status == TaskCenter.Status.DONE
     }
+    // 主机信任行:随 connectionEpoch 重读(首次握手锁定后从"未锁定"变"已锁定")。
+    val epochTop = AgentConnection.connectionEpoch.collectAsState().value
+    val lockedPinTop = remember(epochTop) { AgentConnection.lockedFingerprint() }
     val themeLabel = listOf(
         "system" to "跟随系统", "light" to "浅色", "dark" to "深色",
         "hacker" to "黑客终端",
@@ -1051,7 +1070,7 @@ private fun SettingsScreenBody(
             )
         },
         hostStatus = {
-            // 当前主机(PaHostChip 唯一事实源):点进去 = 用户数据管理(原 hero 行为)。
+            // 当前主机(PaHostChip 唯一事实源):点进去 = 连接与配对(用户数据管理页顶部)。
             Column {
                 Text(
                     "当前连接",
@@ -1170,12 +1189,19 @@ private fun SettingsScreenBody(
             }
 
             if (settingsQuery.isBlank()) {
-            // 当前主机卡已上移到骨架的 hostStatus 槽(PaHostChip,点进去 = 用户数据管理)。
+            // 当前主机卡已上移到骨架的 hostStatus 槽(PaHostChip,点进去 = 连接与配对)。
+            //
+            // 【M3 分组语义(R1-C)】一级页重排为六组:连接 / Agent / 外观 / 数据与缓存 /
+            // 安全 / 关于(另有运行时=控制中心区段)。相关项聚成卡组:组间留白
+            // (GroupLabel top=16dp)> 组内行距(12dp);组头小字说明本组职责;
+            // 组内 1dp 细线分隔,组间零分割线(留白分层)。
+            // 每个导航行带"当前值摘要"—— 本地偏好类断连照常出值,依赖主机的项
+            // (审批/沙箱/电脑信息)断连如实标"需连接主机"。
 
-            // ---------- 通用 ----------
-            item(key = "general") {
+            // ---------- 连接 ----------
+            item(key = "connect") {
                 Column {
-                    GroupLabel(R.drawable.ic_lucide_sliders, "通用")
+                    GroupLabel(R.drawable.ic_lucide_globe, "连接", "通道、配对与输入桥接")
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -1183,25 +1209,23 @@ private fun SettingsScreenBody(
                             .padding(horizontal = 16.dp),
                     ) {
                         SettingRow(
-                            title = "外观与阅读",
-                            desc = "主题 · 文字尺寸 · 动效",
-                            icon = R.drawable.ic_lucide_settings,
-                            iconBox = true,
-                            value = themeLabel + " · " + uiScaleLabel,
-                            chevron = true,
-                            divider = true,
-                            onClick = { subPage = "appearance" },
-                        )
-                        SettingRow(title = "Daemon 桥接与输入", desc = "连接策略 · 全局对话显示 · 语音 · 实验功能",
-                            icon = R.drawable.ic_lucide_server, iconBox = true, chevron = true, divider = true, onClick = { subPage = "daemon" })
-                        SettingRow(
-                            title = "用户数据管理",
-                            desc = "连接 · 配对 · 下载内容",
-                            icon = R.drawable.ic_lucide_folder,
+                            title = "连接与配对",
+                            desc = "地址 · 配对码 · 主机指纹",
+                            icon = R.drawable.ic_lucide_globe,
                             iconBox = true,
                             value = connSummary,
                             chevron = true,
+                            divider = true,
                             onClick = { subPage = "userdata" },
+                        )
+                        SettingRow(
+                            title = "Daemon 桥接与输入",
+                            desc = "连接策略 · 对话显示 · 语音 · 实验功能",
+                            icon = R.drawable.ic_lucide_server,
+                            iconBox = true,
+                            value = bridgeSummary,
+                            chevron = true,
+                            onClick = { subPage = "daemon" },
                         )
                     }
                 }
@@ -1235,6 +1259,90 @@ private fun SettingsScreenBody(
             // 免得继续往这个 178KB 的文件里长内容。
             item(key = "runtime") { RuntimeSection() }
 
+            // ---------- 外观 ----------
+            item(key = "appearance") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_sliders, "外观")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .paSettingsCard()
+                            .padding(horizontal = 16.dp),
+                    ) {
+                        SettingRow(
+                            title = "外观与阅读",
+                            desc = "显示模式 · 文字尺寸",
+                            icon = R.drawable.ic_lucide_settings,
+                            iconBox = true,
+                            value = themeLabel + " · " + uiScaleLabel,
+                            chevron = true,
+                            onClick = { subPage = "appearance" },
+                        )
+                    }
+                }
+            }
+
+            // ---------- 数据与缓存 ----------
+            item(key = "data") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_folder, "数据与缓存", "都保存在这台手机上")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .paSettingsCard()
+                            .padding(horizontal = 16.dp),
+                    ) {
+                        SettingRow(
+                            title = "下载与存储",
+                            desc = "下载内容 · 缓存清理 · 存储占用",
+                            icon = R.drawable.ic_lucide_folder,
+                            iconBox = true,
+                            value = downloadStorageSummary(doneDownloadsTop),
+                            chevron = true,
+                            onClick = { subPage = "userdata" },
+                        )
+                    }
+                }
+            }
+
+            // ---------- 安全 ----------
+            item(key = "safety") {
+                Column {
+                    GroupLabel(R.drawable.ic_lucide_shield, "安全", "执行权限与主机信任")
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .paSettingsCard()
+                            .padding(horizontal = 16.dp),
+                    ) {
+                        SettingRow(
+                            title = "审批与沙箱",
+                            desc = "命令要不要批准 · 文件可写范围",
+                            icon = R.drawable.ic_lucide_shield,
+                            iconBox = true,
+                            // 依赖主机:设置快照缺席(未连接/还没读到)时如实标"需连接主机"。
+                            value = approvalSandboxSummary(
+                                settings?.approvalPolicy,
+                                settings?.sandbox,
+                                settings != null,
+                            ),
+                            chevron = true,
+                            divider = true,
+                            onClick = { subPage = "agent" },
+                        )
+                        SettingRow(
+                            title = "主机信任",
+                            desc = "首连锁定电脑指纹,防止连到别的机器",
+                            icon = R.drawable.ic_lucide_monitor,
+                            iconBox = true,
+                            value = hostTrustSummary(lockedPinTop),
+                            chevron = true,
+                            onClick = { subPage = "userdata" },
+                        )
+                    }
+                }
+            }
+
             // ---------- 关于 ----------
             item(key = "about") {
                 Column {
@@ -1256,7 +1364,7 @@ private fun SettingsScreenBody(
                             title = "电脑",
                             icon = R.drawable.ic_lucide_monitor,
                             iconBox = true,
-                            value = listOfNotNull(host?.os, host?.arch).joinToString("/").ifBlank { "—" },
+                            value = hostPlatformSummary(host?.os, host?.arch, connStateTop),
                         )
                     }
                 }
@@ -1373,9 +1481,13 @@ private fun SettingsScreenBody(
     }
 }
 
-/** 卡片外的分区标题(编辑式稿 03:11sp/Muted/字距加宽,小图标裸放)。 */
+/**
+ * 卡片外的分区标题(编辑式稿 03:11sp/Muted/字距加宽,小图标裸放)。
+ * [note] = 组头小字说明(M3 分组语义:组头顺带一句"这组管什么",只作导览,
+ * 不承载状态);空 = 不占位,一级页导览组与二级页分组都兼容。
+ */
 @Composable
-private fun GroupLabel(icon: Int, title: String) {
+private fun GroupLabel(icon: Int, title: String, note: String = "") {
     Row(
         Modifier.padding(start = 2.dp, top = 16.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1394,6 +1506,15 @@ private fun GroupLabel(icon: Int, title: String) {
             fontWeight = FontWeight(650),
             color = PaEditorial.Muted,
         )
+        if (note.isNotEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                note,
+                fontSize = 10.5.sp,
+                color = PaEditorial.Subtle,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -1799,6 +1920,30 @@ private fun AgentPage(
     onOpenCapabilities: () -> Unit,
 ) {
     SubPageScaffold(title = "Agent 与模型", onBack = onBack) {
+        // 【R1-C 结论 5】依赖主机的项断连要讲清:设置快照没读到(未连接/读取失败)时,
+        // 切 Agent 是本地动作照常可用;审批/模型/MCP 等桌面侧项如实标注,不摆假可调。
+        if (settings == null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .paSettingsCard()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_lucide_triangle_alert), null,
+                    tint = PaEditorial.Primary, modifier = Modifier.size(15.dp),
+                )
+                Spacer(Modifier.width(9.dp))
+                Text(
+                    "尚未读到电脑端设置:切换 Agent 照常可用,审批 / 模型 / MCP 等桌面侧项需连接主机后读取与修改",
+                    Modifier.weight(1f),
+                    fontSize = 11.5.sp,
+                    color = PaEditorial.Muted,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         TextButton(onClick=onRetrySettings) { Text("刷新 Agent 状态和模型",color=PaEditorial.Primary) }
         SectionBlock(icon = R.drawable.ic_lucide_cpu, title = "切换 Agent") {
             Spacer(Modifier.height(10.dp))
@@ -1885,15 +2030,30 @@ private fun AgentPage(
                     desc = "开启后保存的每一项同时写入已有会话;关闭 = 仅新建会话生效",
                     divider = true,
                     control = {
-                        Switch(
-                            checked = applyToExistingThreads,
-                            onCheckedChange = onToggleApplyToAll,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = PaEditorial.Primary,
-                                uncheckedTrackColor = PaEditorial.Raised,
-                                uncheckedBorderColor = Color.Transparent,
-                            ),
-                        )
+                        // 状态词辅助(R1-C):开关位置不只靠色,旁边给"开/关"文字;
+                        // 切换给轻触感反馈(结论 6:轻 = toggle)。
+                        val hf = androidx.compose.ui.platform.LocalHapticFeedback.current
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (applyToExistingThreads) "开" else "关",
+                                fontSize = 11.sp,
+                                color = PaEditorial.Muted,
+                            )
+                            Switch(
+                                checked = applyToExistingThreads,
+                                onCheckedChange = { on ->
+                                    hf.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove,
+                                    )
+                                    onToggleApplyToAll(on)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedTrackColor = PaEditorial.Primary,
+                                    uncheckedTrackColor = PaEditorial.Raised,
+                                    uncheckedBorderColor = Color.Transparent,
+                                ),
+                            )
+                        }
                     },
                 )
 
@@ -2829,7 +2989,8 @@ fun SettingRow(
             Modifier
                 .fillMaxWidth()
                 .then(if (onClick != null) Modifier.pressable(haptic = true) { onClick() } else Modifier)
-                .padding(vertical = 11.dp),
+                // 行距对齐 4/8dp 网格(R1-C):11dp → 12dp,行高 ≥ 48dp 触达区不变。
+                .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (icon != null) {
@@ -2977,6 +3138,11 @@ private fun UserDataPage(
     val connState = AgentConnection.connState.collectAsState().value
     val transport = AgentConnection.connTransport.collectAsState().value
     val connAddr = AgentConnection.connAddress.collectAsState().value
+    // 【R1-C 结论 2】危险操作必须二次确认 + 说明后果:本页两个不可逆动作
+    // (清除主机指纹=撤销信任;删除下载文件=清除数据)都先挂确认位,弹窗文案
+    // 写清"动什么/不动什么/可不可逆",绝不一击即中。
+    var confirmClearPin by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<TaskCenter.Task?>(null) }
 
     SubPageScaffold(title = "用户数据管理", onBack = onBack) {
         SectionBlock(icon = R.drawable.ic_lucide_globe, title = "连接") {
@@ -3119,10 +3285,8 @@ private fun UserDataPage(
                     }
                     Text(
                         "清除",
-                        Modifier.pressable(haptic = true) {
-                            AgentConnection.clearHostPin()
-                            Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
-                        },
+                        // 危险色已区分(Denied);动作本体交给确认弹窗,不一击即清。
+                        Modifier.pressable(haptic = true) { confirmClearPin = true },
                         fontSize = 11.5.sp,
                         color = PaEditorial.Denied,
                     )
@@ -3291,19 +3455,11 @@ private fun UserDataPage(
                             }
                             IconActionButton(
                                 R.drawable.ic_lucide_trash_2, "删除",
-                                {
-                                    // 条目无论如何都移除(留着只会变成打不开的死条目),
-                                    // 但提示按实际删除结果说 —— 删不掉不再谎报「已删除」。
-                                    val deleted = deleteLocalFile(ctx, d.localUri)
-                                    TaskCenter.remove(d.id)
-                                    Toast.makeText(
-                                        ctx,
-                                        if (deleted) "已删除" else "文件可能已被系统清理,条目已移除",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                },
+                                // 一击即删改成先确认(结论 2):文件本体不可恢复,
+                                // 弹窗里说清"删手机上的什么、不动电脑上的什么"。
+                                { pendingDelete = d },
                                 bg = Color.Transparent, size = 32.dp, iconSize = 15.dp,
-                                tint = PaEditorial.Subtle,
+                                tint = PaEditorial.Denied,
                             )
                         }
                         // 行间分隔:0.5dp 细线(统一卡片语言)
@@ -3319,6 +3475,71 @@ private fun UserDataPage(
             downloadUnknown = downloadUnknown,
         )
         Spacer(Modifier.height(20.dp))
+    }
+
+    // ---- 清除主机指纹(撤销信任)的二次确认:写清撤销的是什么信任、下次发生什么 ----
+    if (confirmClearPin) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClearPin = false },
+            title = { Text("清除主机指纹?", color = PaEditorial.Ink) },
+            text = {
+                Text(
+                    "手机会忘记这台电脑的指纹,下次连接时重新信任当前主机。" +
+                        "在此之前若网络中被换成另一台机器,App 不会拦截。" +
+                        "电脑上的数据与配对凭证不受影响。此操作立即生效。",
+                    color = PaEditorial.Muted, fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClearPin = false
+                    AgentConnection.clearHostPin()
+                    Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
+                }) { Text("清除", color = PaEditorial.Denied) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearPin = false }) {
+                    Text("取消", color = PaEditorial.Muted)
+                }
+            },
+            containerColor = PaEditorial.Surface,
+        )
+    }
+
+    // ---- 删除已下载文件的二次确认:删的是手机上的文件本体,电脑原件不动 ----
+    pendingDelete?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除「${target.title.ifEmpty { "未命名文件" }}」?", color = PaEditorial.Ink) },
+            text = {
+                Text(
+                    "删除手机上已下载的这份文件本体" +
+                        (if (target.sizeText.isNotBlank()) "(约 ${target.sizeText})" else "") +
+                        ",电脑上的原件不受影响。此操作不可撤销。",
+                    color = PaEditorial.Muted, fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    // 条目无论如何都移除(留着只会变成打不开的死条目),
+                    // 但提示按实际删除结果说 —— 删不掉不再谎报「已删除」。
+                    val deleted = deleteLocalFile(ctx, target.localUri)
+                    TaskCenter.remove(target.id)
+                    Toast.makeText(
+                        ctx,
+                        if (deleted) "已删除" else "文件可能已被系统清理,条目已移除",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }) { Text("删除", color = PaEditorial.Denied) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text("取消", color = PaEditorial.Muted)
+                }
+            },
+            containerColor = PaEditorial.Surface,
+        )
     }
 }
 
@@ -3704,7 +3925,8 @@ private fun CacheActionRow(
         Modifier
             .fillMaxWidth()
             .pressable(haptic = true, onClick = onClick)
-            .padding(vertical = 10.dp),
+            // 行距对齐 4/8dp 网格(R1-C):10dp → 12dp。
+            .padding(vertical = 12.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -4012,6 +4234,15 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, writer:
             )
             val optimizerAgents = models.map { it.provider }.distinct().filter {
                 "text_generation:$it" in capabilities || (capabilities.none { c -> c.startsWith("text_generation:") } && it in setOf("codex","pi","zcode"))
+            }
+            // 【R1-C 结论 5】优化按钮本体是本地开关,但"用哪个 Agent/模型"的候选来自
+            // 电脑端模型表 —— 断连时如实标注,不摆空下拉让人误以为没有可选。
+            if (models.isEmpty()) {
+                Text(
+                    "优化使用的 Agent 与模型列表需连接主机后读取",
+                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
             }
             SplitButton(label="优化使用的 Agent", mainLabel=agentDisplay(AgentConnection.optimizeAgent),
                 onMainClick={ if(optimizerAgents.isNotEmpty()) {
