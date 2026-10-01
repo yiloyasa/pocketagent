@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -3747,14 +3748,23 @@ fun ChatScreen(
                 drag = historyDrag,
                 onOpenPanel = { showHistoryPanel = true },
                 onJump = { entryIndex -> jumpToHistoryTick(entryIndex) },
-                modifier = Modifier.align(Alignment.CenterStart),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    // 【真机修正 2026-10-01】本 Box 已被 PaScreenScaffold 收进 23dp
+                    // 页边距内,直接 align 会把刻度条推进正文列(实测 bounds x=63px
+                    // 起,正压在助手文本上)——负 offset 拉回屏幕真实左缘,视觉
+                    // 10dp 全程悬在边距区,这才是不挡字的硬保证。
+                    .offset(x = -PaEditorial.Space.PageMargin),
             )
             // 按住拖动的紧凑预览气泡:只在预览期间存在(scale+fade 出入场),
-            // 松手即收 —— 平时零遮挡。align TopStart 让气泡 Y 与刻度条同坐标系。
+            // 松手即收 —— 平时零遮挡。align TopStart 让气泡 Y 与刻度条同坐标系;
+            // 同样负 offset 出页边距,内部 16dp 间隙才是"距屏幕左缘 16dp"。
             HistoryQuickBubble(
                 drag = historyDrag,
                 entries = historyEntries,
-                modifier = Modifier.align(Alignment.TopStart),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = -PaEditorial.Space.PageMargin),
             )
             // P0-1「↓ N 条新内容」胶囊:仅在用户离底且确有未读新块时浮现(PaEditorial.Primary 底)。
             // 点击平滑滚回底部、恢复跟随并清零未读(轻触觉由 pressable 自带)——
