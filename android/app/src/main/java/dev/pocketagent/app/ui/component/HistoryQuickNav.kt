@@ -33,6 +33,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -506,12 +508,15 @@ fun HistoryQuickBubble(
  *
  * 二版去遮挡:宽度 78% → 62%,scrim alpha 0.25(隐约透出正文 —— 速查不是切页);
  * 滑入滑出动画保持(spring,同族可打断)。
+ * 【R3 深优】搜索框(标题/摘要过滤,关闭即清)+「最早/最新」快跳;列表按日分组。
  *
  * @param visible 开关(宿主持有,返回键/Scrim 点击都关它)。
  * @param entries [HistoryQuickNavLogic.entriesOf] 的产物。
  * @param currentIndex 当前可见位置(高亮用,-1=无)。
  * @param onJump(listIndex) 点卡片:宿主把 LazyColumn 滚到该下标并关闭浮层。
  * @param onDismiss 关闭(Scrim 点击)。
+ * @param onJumpEarliest 「最早」快跳:滚到第一条用户消息(null = 不摆按钮)。
+ * @param onJumpLatest 「最新」快跳:回底并恢复跟随(null = 不摆按钮)。
  */
 @Composable
 fun HistoryQuickPanel(
@@ -520,12 +525,21 @@ fun HistoryQuickPanel(
     currentIndex: Int,
     onJump: (Int) -> Unit,
     onDismiss: () -> Unit,
+    onJumpEarliest: (() -> Unit)? = null,
+    onJumpLatest: (() -> Unit)? = null,
 ) {
     val hacker = PaHacker.isHacker
+    // 搜索是面板的临时视图状态:关闭即清,下次打开不带旧查询(线性返回语义)
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(visible) {
+        if (!visible) query = ""
+    }
     // 【减弱动效】scrim/面板的出入场在系统动画缩放=0 时退化瞬时(淡入保留"变了"的事实,位移不播)
     val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
     // 返回键关闭(与抽屉/面板同层语义);visible=false 时不武装,不抢别的层。
     BackHandler(enabled = visible) { onDismiss() }
+    // 【R3】过滤后的列表:搜索时只显示命中的;分组/计数都基于它
+    val filtered = HistoryQuickNavLogic.filterEntries(entries, query)
     AnimatedVisibility(
         visible = visible,
         // scrim 与面板同节奏淡入淡出;alpha 0.25 —— 能隐约看到正文,不是全黑罩
@@ -578,7 +592,7 @@ fun HistoryQuickPanel(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    "${entries.size} 条",
+                    if (query.isBlank()) "${entries.size} 条" else "${filtered.size}/${entries.size} 条",
                     fontSize = 11.5.sp,
                     color = PaEditorial.Subtle,
                     fontFamily = if (hacker) PaHacker.mono else null,
@@ -591,6 +605,82 @@ fun HistoryQuickPanel(
                 )
             }
             Spacer(Modifier.height(4.dp))
+            // ---- 【R3】搜索框:标题/摘要过滤,临时态(关闭即清) ----
+            TextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        "搜索这一场对话…",
+                        fontSize = 12.5.sp,
+                        color = PaEditorial.Subtle,
+                        fontFamily = if (hacker) PaHacker.mono else null,
+                    )
+                },
+                leadingIcon = {
+                    IconActionButton(
+                        AppR.drawable.ic_lucide_search, "搜索历史消息", {},
+                        bg = Color.Transparent, size = 30.dp, iconSize = 15.dp,
+                        tint = PaEditorial.Muted,
+                    )
+                },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconActionButton(
+                            AppR.drawable.ic_lucide_x, "清空搜索", { query = "" },
+                            bg = Color.Transparent, size = 30.dp, iconSize = 13.dp,
+                            tint = PaEditorial.Muted,
+                        )
+                    }
+                },
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = 13.sp,
+                    color = PaEditorial.Ink,
+                    fontFamily = if (hacker) PaHacker.mono else null,
+                ),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = if (hacker) PaEditorial.GraphiteCode else PaEditorial.Canvas,
+                    unfocusedContainerColor = if (hacker) PaEditorial.GraphiteCode else PaEditorial.Canvas,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    cursorColor = PaEditorial.Primary,
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .heightIn(min = 40.dp),
+            )
+            // ---- 【R3】最早/最新快跳 ----
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                if (onJumpEarliest != null) {
+                    Text(
+                        "最早",
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable(onClick = onJumpEarliest)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 12.sp,
+                        color = PaEditorial.Primary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = if (hacker) PaHacker.mono else null,
+                    )
+                }
+                if (onJumpLatest != null) {
+                    Text(
+                        "最新",
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable(onClick = onJumpLatest)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 12.sp,
+                        color = PaEditorial.Primary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = if (hacker) PaHacker.mono else null,
+                    )
+                }
+            }
             if (entries.isEmpty()) {
                 Text(
                     "还没有可跳转的用户消息",
@@ -599,11 +689,20 @@ fun HistoryQuickPanel(
                     color = PaEditorial.Subtle,
                     fontFamily = if (hacker) PaHacker.mono else null,
                 )
+            } else if (filtered.isEmpty()) {
+                // 【R3】搜索无命中:给查询词回显,不摆空壳
+                Text(
+                    "没有匹配「${query.trim()}」的消息",
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    fontSize = 12.5.sp,
+                    color = PaEditorial.Subtle,
+                    fontFamily = if (hacker) PaHacker.mono else null,
+                )
             } else {
                 // 【R2 日期上下文】按自然日分组:组头「今天/昨天/M月d日/早前」,
                 // 组内行序号沿用全量序号(group.firstIndex + i)——跳转映射不变
-                val groups = remember(entries) {
-                    HistoryQuickNavLogic.groupByDay(entries, System.currentTimeMillis())
+                val groups = remember(filtered) {
+                    HistoryQuickNavLogic.groupByDay(filtered, System.currentTimeMillis())
                 }
                 LazyColumn(
                     Modifier.fillMaxWidth(),
@@ -621,9 +720,10 @@ fun HistoryQuickPanel(
                             )
                         }
                         itemsIndexed(group.entries, key = { _, e -> e.listIndex }) { i, entry ->
-                            // 高亮/序号都以「全量 entries」为准:组内 i 只是组内序
-                            val entryIndex = group.firstIndex + i
-                            val active = entryIndex == currentIndex
+                            // 高亮/序号都以「全量 entries」为准:搜索过滤后组内序≠全量序,
+                            // 用 listIndex 反查全量下标(查不到=搜索结果不在当前视口序列,不高亮)
+                            val entryIndex = entries.indexOfFirst { it.listIndex == entry.listIndex }
+                            val active = entryIndex >= 0 && entryIndex == currentIndex
                             Row(
                                 Modifier
                                     .fillMaxWidth()

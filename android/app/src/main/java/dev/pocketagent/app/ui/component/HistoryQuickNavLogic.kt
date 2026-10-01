@@ -61,6 +61,21 @@ object HistoryQuickNavLogic {
     fun positionLabel(index: Int, count: Int): String =
         if (count <= 0) "" else "${index.coerceIn(0, count - 1) + 1}/$count"
 
+    // ==== R3 面板搜索(2026-10-01 深优):标题/摘要大小写不敏感包含匹配 ====
+
+    /**
+     * 面板搜索过滤:标题或摘要包含查询词(忽略大小写与首尾空白)即保留;
+     * 空查询原样返回。序号/跳转映射以过滤后列表在全量中的下标为准(调用方
+     * 用 entry.listIndex,天然不受过滤影响)。
+     */
+    fun filterEntries(entries: List<Entry>, query: String): List<Entry> {
+        val q = query.trim()
+        if (q.isEmpty()) return entries
+        return entries.filter {
+            it.title.contains(q, ignoreCase = true) || it.summary.contains(q, ignoreCase = true)
+        }
+    }
+
     /** 摘要截断:取首行之后的剩余内容,压成一行;空则回空串(卡片只显示标题)。 */
     fun summaryOf(text: String, max: Int = SUMMARY_MAX_CHARS): String {
         val rest = text.lineSequence().dropWhile { it.isBlank() }.drop(1)

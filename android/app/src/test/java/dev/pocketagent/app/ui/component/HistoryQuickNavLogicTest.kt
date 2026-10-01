@@ -467,3 +467,46 @@ class HistoryQuickNavDateTest {
         )
     }
 }
+
+// ---- R3 面板搜索:标题/摘要过滤(大小写不敏感包含匹配) ----
+
+class HistoryQuickNavFilterTest {
+
+    private fun e(title: String, summary: String = "") =
+        HistoryQuickNavLogic.Entry(itemIndex = 0, listIndex = 0, title = title, summary = summary)
+
+    private val items = listOf(
+        e("将我的pi更新到最新的版本", summary = "npm install"),
+        e("看一下codex和dsh有没有需要升级的", summary = "版本检查"),
+        e("Hi there", summary = "English text"),
+    )
+
+    @Test
+    fun `空查询原样返回_同一列表对象`() {
+        val out = HistoryQuickNavLogic.filterEntries(items, "")
+        assertTrue(out === items)
+        // 纯空白查询等价空查询:不过滤
+        assertTrue(HistoryQuickNavLogic.filterEntries(items, "   ") === items)
+    }
+
+    @Test
+    fun `标题命中_大小写不敏感`() {
+        // 英文大小写
+        assertEquals(1, HistoryQuickNavLogic.filterEntries(items, "HI THERE").size)
+        assertEquals(1, HistoryQuickNavLogic.filterEntries(items, "hi there").size)
+        // 中文子串
+        assertEquals(1, HistoryQuickNavLogic.filterEntries(items, "codex和dsh").size)
+    }
+
+    @Test
+    fun `摘要也参与匹配`() {
+        assertEquals(1, HistoryQuickNavLogic.filterEntries(items, "npm install").size)
+        assertEquals(1, HistoryQuickNavLogic.filterEntries(items, "版本检查").size)
+    }
+
+    @Test
+    fun `首尾空白被裁剪_无命中回空列表`() {
+        assertEquals(1, HistoryQuickNavLogic.filterEntries(items, "  pi  ").size)
+        assertTrue(HistoryQuickNavLogic.filterEntries(items, "不存在的词").isEmpty())
+    }
+}

@@ -2603,6 +2603,24 @@ fun ChatScreen(
         listState.requestScrollToItem(entry.listIndex)
     }
 
+    /**
+     * 【R3 面板快跳·最新】回底并**恢复跟随** —— 与跳历史相反的语义:用户明确
+     * 要回到对话末端看新内容,此后流式输出继续拽底。路径与「↓ N 条新内容」
+     * 胶囊一致(程序滚动标记挡住距底观测,完成后重申跟随)。
+     */
+    fun jumpToLatestFromHistory() {
+        showHistoryPanel = false
+        scope.launch {
+            programmaticScroll.set(true)
+            try {
+                listState.scrollToItem(st.items.size - 1)
+                followBottom = true
+            } finally {
+                programmaticScroll.set(false)
+            }
+        }
+    }
+
     // 距底观测:跟随状态只由"当前列表位置"裁定 —— 用户上滑出 100px 即解除跟随;
     // 手动滚回距底 100px 内即恢复跟随并清未读。程序滚动(带标记)不参与裁定。
     LaunchedEffect(listState) {
@@ -4999,6 +5017,10 @@ fun ChatScreen(
             currentIndex = historyCurrentIndex,
             onJump = { listIndex -> jumpToHistoryEntry(listIndex) },
             onDismiss = { showHistoryPanel = false },
+            onJumpEarliest = historyEntries.firstOrNull()?.let { entry ->
+                { jumpToHistoryEntry(entry.listIndex) }
+            },
+            onJumpLatest = { jumpToLatestFromHistory() },
         )
         // R2-A 消息长按上下文菜单(单一实例):摘要行报"哪条消息",动作由
         // chatMessageMenuActions 按消息形态给(纯函数,ChatMessageMenuTest 钉死):
