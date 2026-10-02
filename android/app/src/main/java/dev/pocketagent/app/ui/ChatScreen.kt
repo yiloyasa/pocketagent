@@ -4667,13 +4667,10 @@ fun ChatScreen(
                     // 文字读成一团(L2 真机挑刺);收成 top=4/bottom=0 —— 与占位文字拉开
                     // 4dp,视觉归入下方工具行一组(模型选择是"控件"不是提示文案)。
                     .padding(start = 16.dp, end = 16.dp, top = 4.dp), verticalAlignment=Alignment.CenterVertically) {
-                    // 运行中模型与强度确认:原是独立一行 tertiary 文案,合并进本行内联,
-                    // 既保留"最近跑的是什么"的信息又不额外占一层堆叠。
-                    val runningHint = if (st.runningEffort != null && st.runningModel.isNotBlank()) {
-                        val actualName = sessionModels.find { it.id == st.runningModel }?.displayName
-                            ?: modelBareName(st.runningModel)
-                        " · 最近运行：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}"
-                    } else ""
+                    // 运行中模型确认:真机上"模型 · 强度 · 最近运行: 模型 · 强度"连读
+                    // 出现"最大"重复三次(用户裁决:信息过载难读)。精简为把"最近运行"
+                    // 收进快速切换面板头部(那里才是对比"当前 vs 正在跑"的语境)。
+                    val runningHint = ""
                     val base = modelName + if (effortLabel != "默认") " · $effortLabel" else ""
                     // 切换成功行内反馈:modelFlashTick(快速面板/完整卡真实选中后 +1)驱动
                     // 模型名一次 Primary→Ink 的轻量闪光(纯绘制层动效,不造假状态;
@@ -4702,106 +4699,10 @@ fun ChatScreen(
                     Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "展开快速切换模型", tint=ChatMutedColor,modifier=Modifier.requiredSize(18.dp))
                 }
                 // 快速切换面板:锚在模型行上方弹出;focusable 让面板外点击/返回键关闭。
-                if (showQuickModels) {
-                    val quickModels = remember(sessionModels, sessionAgent) {
-                        ModelQuickSwitchLogic.quickModels(sessionAgent, sessionModels)
-                    }
-                    Popup(
-                        alignment = Alignment.BottomStart,
-                        onDismissRequest = { showQuickModels = false },
-                        properties = PopupProperties(focusable = true),
-                    ) {
-                        Column(
-                            Modifier
-                                .widthIn(max = 330.dp)
-                                // 黑客模式 GraphiteDrawer 底 + 等宽字;常规 Surface 底(同浮层口径)
-                                .background(
-                                    if (PaHacker.isHacker) PaEditorial.GraphiteDrawer else PaEditorial.Surface,
-                                    RoundedCornerShape(14.dp),
-                                )
-                                .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
-                                .padding(vertical = 6.dp),
-                        ) {
-                            val mono = if (PaHacker.isHacker) PaHacker.mono else null
-                            if (quickModels.isEmpty()) {
-                                Text(
-                                    if (sessionModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
-                                    else "暂无可快速切换的模型",
-                                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                                    fontSize = 12.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
-                                )
-                            }
-                            quickModels.forEach { qm ->
-                                val current = qm.id == effectiveModelId
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .pressable {
-                                            showQuickModels = false
-                                            applyModelPick(threadId, sessionAgent, sessionModels, qm.id)
-                                            modelFlashTick++ // 行内闪光:模型名刚真实切过一次
-                                        }
-                                        .heightIn(min = 44.dp)
-                                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            qm.label,
-                                            fontSize = 13.5.sp,
-                                            color = if (current) PaEditorial.Primary else PaEditorial.Ink,
-                                            fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                            fontFamily = mono,
-                                        )
-                                        if (qm.detail.isNotEmpty()) {
-                                            Text(
-                                                qm.detail, fontSize = 10.5.sp,
-                                                color = PaEditorial.Subtle, fontFamily = mono,
-                                            )
-                                        }
-                                    }
-                                    if (current) {
-                                        Spacer(Modifier.width(8.dp))
-                                        Icon(
-                                            painterResource(AppR.drawable.ic_lucide_check), "当前模型",
-                                            tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
-                                        )
-                                    }
-                                }
-                            }
-                            // 面板尾:「更多…」进完整选择卡(跟随桌面/全部模型/强度档位)
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                                    .height(1.dp)
-                                    .background(PaEditorial.Hairline)
-                            )
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .pressable {
-                                        showQuickModels = false
-                                        showModelCard = true
-                                    }
-                                    .heightIn(min = 44.dp)
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "更多…",
-                                    Modifier.weight(1f),
-                                    fontSize = 13.sp, color = PaEditorial.Muted, fontFamily = mono,
-                                )
-                                Icon(
-                                    painterResource(AppR.drawable.ic_lucide_chevron_right), "打开完整模型选择器",
-                                    tint = PaEditorial.Subtle, modifier = Modifier.size(15.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+                // 【2026-10-02 流畅度修复】面板从行内 Popup 挪到与 showModelCard 同层的
+                // 稳定组合位(见文件底部 showModelCard 挂载点)—— 流式输出每帧重组会
+                // 反复打断行内 Popup(真机:轮次运行中点模型行面板闪没/开不出,用户
+                // 裁决"切换不流畅"的主因)。稳定层挂载不受输入区逐帧重组影响。
                 }
                 // 第二行:工具行
                 Row(
@@ -5800,6 +5701,164 @@ fun ChatScreen(
             // 卡内真实选中 → 关卡后模型行给一次行内闪光(与快速面板同一反馈口径)
             onPicked = { modelFlashTick++ },
         )
+    }
+
+    // 【快速切换面板(2026-10-02 流畅度修复)】从输入区行内 Popup 挪到此处与
+    // showModelCard 同层的稳定组合位 —— 输入区在流式输出时每帧重组,行内 Popup
+    // 被反复打断(真机:轮次运行中点模型行,面板闪没/开不出,用户裁决"切换不
+    // 流畅"的主因)。稳定层挂载后不受逐帧重组影响。
+    if (showQuickModels) {
+        val quickModels = remember(sessionModels, sessionAgent) {
+            ModelQuickSwitchLogic.quickModels(sessionAgent, sessionModels)
+        }
+        Popup(
+            alignment = Alignment.BottomStart,
+            onDismissRequest = { showQuickModels = false },
+            properties = PopupProperties(focusable = true),
+        ) {
+            Column(
+                Modifier
+                    .widthIn(max = 330.dp)
+                    // 黑客模式 GraphiteDrawer 底 + 等宽字;常规 Surface 底(同浮层口径)
+                    .background(
+                        if (PaHacker.isHacker) PaEditorial.GraphiteDrawer else PaEditorial.Surface,
+                        RoundedCornerShape(14.dp),
+                    )
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
+                    .padding(vertical = 6.dp),
+            ) {
+                val mono = if (PaHacker.isHacker) PaHacker.mono else null
+                val effortHapticView = LocalView.current
+                // 【面板头部:当前 vs 正在跑】模型行精简后,"正在运行的模型"信息
+                // 收进这里 —— 对比语境(当前选择 vs 实际在跑)在面板里才读得通。
+                if (st.runningEffort != null && st.runningModel.isNotBlank()) {
+                    val actualName = sessionModels.find { it.id == st.runningModel }?.displayName
+                        ?: modelBareName(st.runningModel)
+                    Text(
+                        "正在运行：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}",
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                    )
+                }
+                if (quickModels.isEmpty()) {
+                    Text(
+                        if (sessionModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
+                        else "暂无可快速切换的模型",
+                        Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        fontSize = 12.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                    )
+                }
+                quickModels.forEach { qm ->
+                    val current = qm.id == effectiveModelId
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .pressable {
+                                showQuickModels = false
+                                applyModelPick(threadId, sessionAgent, sessionModels, qm.id)
+                                modelFlashTick++ // 行内闪光:模型名刚真实切过一次
+                            }
+                            .heightIn(min = 44.dp)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                qm.label,
+                                fontSize = 13.5.sp,
+                                color = if (current) PaEditorial.Primary else PaEditorial.Ink,
+                                fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                fontFamily = mono,
+                            )
+                            if (qm.detail.isNotEmpty()) {
+                                Text(
+                                    qm.detail, fontSize = 10.5.sp,
+                                    color = PaEditorial.Subtle, fontFamily = mono,
+                                )
+                            }
+                        }
+                        if (current) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                painterResource(AppR.drawable.ic_lucide_check), "当前模型",
+                                tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+                // 【思考强度行(2026-10-02 流畅度补全)】强度切换此前藏在"更多…"二级
+                // 完整卡里,一级面板只有模型 —— 用户裁决"切换不流畅"的第二主因。
+                // 这里按会话 agent 的档位集(effortsFor 同源)渲染强度胶囊,单点即切
+                // (setThreadEffort,下一轮生效语义与完整卡一致);选中态读
+                // selectedEffort 可观察值,即时高亮。
+                val quickEfforts = remember(sessionAgent, sessionModels) {
+                    effortsFor(sessionModels, effectiveModelId, sessionAgent)
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "强度",
+                        Modifier.padding(start = 6.dp),
+                        fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                    )
+                    quickEfforts.forEach { e ->
+                        val selected = AgentConnection.selectedEffort == e.id
+                        Text(
+                            e.label,
+                            Modifier
+                                .clip(RoundedCornerShape(50))
+                                .pressable {
+                                    PaHaptics.light(effortHapticView)
+                                    AgentConnection.setThreadEffort(threadId, e.id)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            fontSize = 12.sp,
+                            color = if (selected) PaEditorial.Primary else PaEditorial.Muted,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            fontFamily = mono,
+                        )
+                    }
+                }
+                // 面板尾:「更多…」进完整选择卡(跟随桌面/全部模型/强度档位)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .height(1.dp)
+                        .background(PaEditorial.Hairline)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable {
+                            showQuickModels = false
+                            showModelCard = true
+                        }
+                        .heightIn(min = 44.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "更多…",
+                        Modifier.weight(1f),
+                        fontSize = 13.sp, color = PaEditorial.Muted, fontFamily = mono,
+                    )
+                    Icon(
+                        painterResource(AppR.drawable.ic_lucide_chevron_right), "打开完整模型选择器",
+                        tint = PaEditorial.Subtle, modifier = Modifier.size(15.dp),
+                    )
+                }
+            }
+        }
     }
 
     // 上下文窗口明细:点输入栏"上下文"胶囊打开(真实用量卡,替代旧估算版)。
