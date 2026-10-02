@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pocketagent.v1.ContentBlock
@@ -72,5 +73,28 @@ class HistoryMessageMapperTest {
         assertTrue(item.text.contains("输入 120"))
         assertTrue(item.text.contains("输出 45"))
         assertTrue(item.text.contains("累计输入 1200"))
+    }
+
+    @Test
+    fun omits_total_section_when_total_usage_unset() {
+        // 历史回放 hermes 的 usage_update 从不设置 total_usage:proto 消息字段未设置
+        // 时 getter 返回默认实例而非 null,`?:` 防不住 —— 必须像 R4-T4 一样用
+        // hasTotalUsage() 判"没设置",未设置就不写"累计"段,而不是把"没报累计"
+        // 渲染成"累计输入 0 · 输出 0"。
+        val item = usageUpdateToChatItem(
+            UsageUpdate.newBuilder()
+                .setUsage(
+                    Usage.newBuilder()
+                        .setInputTokens(30)
+                        .setOutputTokens(12)
+                        .build(),
+                )
+                .build(),
+        )
+
+        assertEquals("usage", item.role)
+        assertTrue(item.text.contains("输入 30"))
+        assertTrue(item.text.contains("输出 12"))
+        assertFalse(item.text.contains("累计"))
     }
 }

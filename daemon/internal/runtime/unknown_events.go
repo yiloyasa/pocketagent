@@ -90,8 +90,10 @@ const SafetyClassUnknown = "UNKNOWN"
 //
 // 【字段的可填性各有不同,如实留空比编造好】source_agent / source_method /
 // raw_payload 在所有路径都能拿到;thread_id / turn_id 只在有轮次上下文的路径能拿到
-// (例如未知反向请求发生在某个会话里);correlation_id / task_id / protocol_version
-// 目前没有产出方,留空 —— 空字段的含义是"这一项我们没有数据",不是"这一项是空字符串"。
+// (例如未知反向请求发生在某个会话里);correlation_id 在 UNKNOWN_RESPONSE 档有
+// 产出方(dsh/pi/zcode 对不上在途请求的响应会以原始响应 id 登记,见 internal/agent
+// 的 recordUnknownResponse);task_id / protocol_version 目前没有产出方,留空 ——
+// 空字段的含义是"这一项我们没有数据",不是"这一项是空字符串"。
 type EventEnvelope struct {
 	// ID 是台账内的稳定标识(RPC 按它取详情/做确认)。它不在规格的字段清单里,
 	// 但"可查询"这件事必须有主键。
@@ -114,9 +116,11 @@ type EventEnvelope struct {
 	// NormalizedKind 取 KnownKinds() 里的任一值:两档"已知"(KNOWN_PROJECTED /
 	// KNOWN_PASSTHROUGH —— 用来把已知噪音与真未知分开)+ 三档"未知"。
 	//
-	// 【UNKNOWN_RESPONSE 目前没有生产者】它是词表里的预留档:daemon 还没有需要
-	// "保留一条未知响应"的路径。留着是给将来用,**不是有代码正在产生它** ——
-	// 在诊断页看到这个类别时,别以为真有这类流量,那说明词表被人手工填过。
+	// 【UNKNOWN_RESPONSE 有真实生产者】dsh/pi/zcode 三路收到无法关联到在途请求的
+	// 响应时,经 internal/agent 的 recordUnknownResponse(dsh.go/pi.go/zcode.go 的
+	// 响应兜底回调)按本档登记,correlation_id 记原始响应 id;codex 的迟到响应按
+	// 可识别性分流,认不出的同样落到本档。在诊断页看到它,说明真的出现过对不上号
+	// 的响应流量,不再是词表里的预留空档。
 	NormalizedKind string `json:"normalized_kind"`
 	// SafetyClass 见 SafetyClassUnknown 的说明。
 	SafetyClass string `json:"safety_class"`

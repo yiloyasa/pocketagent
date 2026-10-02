@@ -230,6 +230,7 @@ import pocketagent.v1.GitStatusRequest
 import pocketagent.v1.GitDiffRequest
 import pocketagent.v1.GitCommitRequest
 import pocketagent.v1.GetThreadHistoryRequest
+import pocketagent.v1.SearchThreadMessagesRequest
 import pocketagent.v1.GetThreadRequest
 import pocketagent.v1.ForkThreadRequest
 import pocketagent.v1.RollbackThreadRequest
@@ -1954,6 +1955,12 @@ fun ChatScreen(
     // voiceUi 只保留纯展示状态(空闲/听写/无权限/不可用)。
     var voiceUi by remember { mutableStateOf(VoiceInputUi()) }
     val voiceFx = remember { Channel<VoiceEffects>(Channel.UNLIMITED) }
+    // 【PF5 语音跨会话】切会话静音门:切走会话后,旧识别器残余的识别文本/提示一律
+    // 丢弃(不落新会话草稿);用户在新会话重新点麦克风(fx.start 消费时)解除。
+    // 故意**不**随 threadId 重建 —— 若随键重建,静音在换会话瞬间被重置为 false,
+    // 停录后仍会送达的最终转写正好漏进新会话(与目标相反)。真值流转:
+    // 置 true = 下方 LaunchedEffect(threadId);置 false = 指令消费循环的 fx.start 分支。
+    var voiceMutedBySwitch by remember { mutableStateOf(false) }
 
     // ---- 【语音交互动画】两个一次性触发器(纯 UI,不进状态机) ----
     // 【动画 ①】麦克风按下涟漪:每次点按 +1,组合层据此重放一圈"扩散 + 淡出"的圆环。
@@ -2106,23 +2113,41 @@ fun ChatScreen(
     LaunchedEffect(Unit) {
         for (fx in voiceFx) {
             Log.d("PaVoice", "指令消费 $fx")
-            if (fx.start) {
+            // 【PF5 语音跨会话】静音期过滤:切会话后旧识别器残余的 append/toast 一律
+            // 丢弃(start/stop 保留 —— stop 是切会话停录的收尾指令,start 是用户在
+            // 新会话的主动发起,顺带解除静音)。过滤纯函数见 voiceFilterMutedEffects。
+            val gate = voiceFilterMutedEffects(fx, voiceMutedBySwitch)
+            if (gate.start) {
+                voiceMutedBySwitch = false
                 startVoiceWatchdog()
                 currentVoiceRecognizer?.start()
             }
-            if (fx.stop) {
+            if (gate.stop) {
                 // 主动停止:reducer 在点击停止的瞬间已把状态置回 IDLE(见 voiceReduce)。
                 // 停止听写后,已开始的转写结果仍会经结果回调落入输入框;如后续引入
                 // "转写中"独立状态,可再补停止后的兜底提示。(此处曾挂一个"收尾看门狗",
                 // 但其超时分支的 listening 守卫在停止后恒为假,属永不触发的死代码,已删。)
                 currentVoiceRecognizer?.stopListening()
             }
-            fx.append?.let { spoken ->
+            gate.append?.let { spoken ->
                 input = joinVoiceText(input, spoken)
                 voiceLandedTick++ // 【动画 ③】文本落框触发输入框"落定"脉动(见输入区)
             }
-            fx.toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
+            gate.toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
         }
+    }
+
+    // 【PF5 语音跨会话】切换会话即停录:voiceUi/识别器都不带 threadId 键(单例复用
+    // 同一识别器实例),此前在听写中切会话,最终转写会经 fx.append 落进新会话草稿。
+    // 现在换会话瞬间:置静音(丢残余文本/提示)+ 听写进行中则归约 SessionSwitched
+    // (回 IDLE 并产出 stop 指令);未落草稿的文本整体丢弃,绝不写进新会话。
+    // 首进页面不算"切换"(voiceHomeThreadId 钉住组合首见的 threadId)。
+    val voiceHomeThreadId = remember { threadId }
+    LaunchedEffect(threadId) {
+        if (threadId == voiceHomeThreadId) return@LaunchedEffect
+        Log.d("PaVoice", "切会话 $voiceHomeThreadId → $threadId,语音静音+停录")
+        voiceMutedBySwitch = true
+        dispatchVoice(VoiceEvent.SessionSwitched)
     }
 
     var showModelCard by remember { mutableStateOf(false) }
@@ -2704,6 +2729,44 @@ fun ChatScreen(
             } finally {
                 programmaticScroll.set(false)
             }
+        }
+    }
+
+    // ---- 【全文搜索】历史浮层的 daemon RPC 接线(R4-SR4)----
+    // 防抖/命中状态/失败静默降级都在浮层(组件)内;这里只做两件事:把
+    // AgentConnection 的 blocking stub 包成 ThreadSearcher(IO 线程),以及点
+    // 全文命中时的"对齐定位跳转"—— daemon 的 sequence 与本地 listIndex 是两个
+    // 坐标系(消息分块 + 「加载更早」头部偏移),不做算术换算,按时间/文本对齐
+    // 重新定位(HistoryQuickNavLogic.locateHit 纯函数);定位不到诚实降级
+    // (Toast 提示先加载更早,不假跳)。
+    val historyFullTextSearcher = remember(threadId) {
+        HistoryQuickNavLogic.ThreadSearcher { query, limit ->
+            withContext(Dispatchers.IO) {
+                AgentConnection.threadService().searchThreadMessages(
+                    SearchThreadMessagesRequest.newBuilder()
+                        .setThreadId(threadId)
+                        .setQuery(query)
+                        .setLimit(limit)
+                        .build(),
+                ).hitsList.map {
+                    HistoryQuickNavLogic.SearchHit(
+                        sequence = it.sequence,
+                        role = it.role,
+                        snippet = it.snippet,
+                        createdAtMs = it.createdAtUnixMs,
+                    )
+                }
+            }
+        }
+    }
+
+    /** 点全文命中:能对齐到已加载条目就跳(并关浮层),不能就提示先加载更早。 */
+    val onHistoryFullTextHitClick: (HistoryQuickNavLogic.SearchHit) -> Unit = { hit ->
+        val listIndex = HistoryQuickNavLogic.locateHit(st.items.toList(), hit, historyListOffset)
+        if (listIndex != null) {
+            jumpToHistoryEntry(listIndex)
+        } else {
+            Toast.makeText(ctx, "该消息在更早的历史里，请先加载更早", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -5206,6 +5269,9 @@ fun ChatScreen(
                 { jumpToHistoryEntry(entry.listIndex) }
             },
             onJumpLatest = { jumpToLatestFromHistory() },
+            // 【全文搜索】RPC 注入(防抖在浮层内)+ 命中点击的对齐定位跳转
+            fullTextSearcher = historyFullTextSearcher,
+            onFullTextHitClick = onHistoryFullTextHitClick,
         )
         // R2-A 消息长按上下文菜单(单一实例):摘要行报"哪条消息",动作由
         // chatMessageMenuActions 按消息形态给(纯函数,ChatMessageMenuTest 钉死):
@@ -7486,6 +7552,14 @@ internal sealed interface VoiceEvent {
      * 后立刻到达,组合层恒传 false(保留参数 = 文案分流语义仍被单测锁定)。
      */
     data class DeadZoneTimeout(val firstColdLoad: Boolean = false) : VoiceEvent
+
+    /**
+     * 【PF5 语音跨会话】切换会话(组合层 LaunchedEffect(threadId) 触发):
+     * 听写进行中 → 立即回 IDLE 并产出 stop 指令停录;残余文本由组合层静音门
+     * ([voiceFilterMutedEffects])丢弃,不落新会话草稿。空闲时原地不动(但静音
+     * 照常置位 —— 用户"点了停止又立刻切会话"的场景,最终转写同样不得跨会话)。
+     */
+    data object SessionSwitched : VoiceEvent
 }
 
 /**
@@ -7542,6 +7616,13 @@ internal fun voiceReduce(current: VoiceInputUi, event: VoiceEvent): VoiceInputUi
             toast = voiceDeadZoneToast(event.firstColdLoad),
         )
     }
+    is VoiceEvent.SessionSwitched -> when {
+        // 【PF5 语音跨会话】切会话停录:听写中 → 回 IDLE + stop 指令(组合层调
+        // stopListening);空闲 → 原地不动。本事件永不产 append/toast —— 跨会话
+        // 的文本一律丢弃,也不在新会话弹旧会话的提示。
+        current.listening -> current.copy(state = VoiceInputState.IDLE, stopRecognition = true)
+        else -> current
+    }
 }
 
 /** 待执行的一次性指令(纯数据,组合层照单执行)。 */
@@ -7578,6 +7659,15 @@ internal fun applyVoiceEvent(current: VoiceInputUi, event: VoiceEvent): Pair<Voi
 /** 效果是否含待执行动作(空效果无需入队)。 */
 internal fun voiceEffectsPending(fx: VoiceEffects): Boolean =
     fx.start || fx.stop || fx.append != null || fx.toast != null
+
+/**
+ * 【PF5 语音跨会话】静音门(纯函数,JVM 单测锁定):切换会话后,旧识别器残余的
+ * 识别文本/人话提示一律丢弃 —— 文本不落新会话草稿,提示不在新会话弹出;
+ * start/stop 保留(stop 是切会话停录的收尾指令,start 由用户在新会话主动发起,
+ * 组合层消费时顺带解除静音)。muted=false 原样放行,常规路径零改动。
+ */
+internal fun voiceFilterMutedEffects(fx: VoiceEffects, muted: Boolean): VoiceEffects =
+    if (muted) fx.copy(append = null, toast = null) else fx
 
 /** 识别文本并入输入框:空输入直接放;否则补一个空格再接(不覆盖已输入内容)。 */
 internal fun joinVoiceText(existing: String, spoken: String): String = when {

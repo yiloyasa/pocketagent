@@ -253,9 +253,13 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		return nil, nil, err
 	}
 
-	// 模型选择:thread.ModelID("hermes/deepseek-flash" → "deepseek:deepseek-flash");
-	// 默认/未知不发 set(config.yaml model.default 兜底)。
-	if m := threadModelID(req.Thread); m != "" && m != "default" {
+	// 模型选择:thread.ModelID("hermes/deepseek-flash" → "deepseek:deepseek-flash";
+	// 会话内显式选择的 "hermes/deepseek:deepseek-flash" 剥前缀后带冒号原样透传)。
+	// 默认档不发 set(config.yaml model.default 兜底),守卫口径对齐 codex:按
+	// "/default" 后缀拦 —— 手机选"默认模型"落库的是带前缀完整 ID "hermes/default",
+	// 只比 "default" 拦不住,会对默认档发出注定多余的 session/set_model 并误报
+	// 切模型失败;裸 "default"(历史哨兵形)一并拦。
+	if m := threadModelID(req.Thread); m != "" && !strings.HasSuffix(m, "/default") && m != "default" {
 		acpModel := strings.TrimPrefix(m, "hermes/")
 		if !strings.Contains(acpModel, ":") {
 			acpModel = "deepseek:" + acpModel

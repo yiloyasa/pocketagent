@@ -173,12 +173,18 @@ fun riskLevelLabel(level: String): String = when (level.lowercase()) {
 
 fun usageUpdateToChatItem(update: UsageUpdate): ChatItem {
     val current = update.usage ?: Usage.getDefaultInstance()
-    val total = update.totalUsage ?: Usage.getDefaultInstance()
+    // total 与 TurnSession.projectedTotalUsage(R4-T4)同源收口:proto 消息字段未设置
+    // 时 getter 返回默认实例而非 null,`?:` 挡不住 —— 必须 hasTotalUsage() 判"没设置"。
+    // 历史回放 hermes 的 usage_update 从不设置 total_usage,这里未设置就置 null、
+    // 不写"累计"段,而不是把"daemon 没报累计"渲染成"累计输入 0 · 输出 0"。
+    val total = projectedTotalUsage(update)
     return ChatItem(
         role = "usage",
         text = buildString {
             append("本轮 Token：输入 ${current.inputTokens} · 输出 ${current.outputTokens}")
-            append("；累计输入 ${total.inputTokens} · 输出 ${total.outputTokens}")
+            if (total != null) {
+                append("；累计输入 ${total.inputTokens} · 输出 ${total.outputTokens}")
+            }
             if (current.costUsd > 0) {
                 append(" · 费用 $")
                 append("%.4f".format(java.util.Locale.US, current.costUsd))

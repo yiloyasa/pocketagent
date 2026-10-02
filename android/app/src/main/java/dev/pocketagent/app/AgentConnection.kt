@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -234,11 +235,36 @@ object AgentConnection {
         // (工厂内先写加密库、后删明文键,两步间被杀也幂等不丢 token);
         // Keystore 异常(个别 ROM)在工厂内捕获 → 降级旧明文库 + 打日志,
         // 只影响存储强度,绝不把连接/初始化弄死。
-        tokenStore = TokenStores.create(
-            secureProvider = { EncryptedTokenStore(ctx) },
-            legacy = PrefsTokenStore(ctx),
-            log = { msg -> android.util.Log.w(TAG, msg) },
-        )
+        // 【T5 启动面】上面这串(Keystore 主密钥 + EncryptedSharedPreferences 创建
+        // + 迁移 + 首次解密)在主线程要数十至上百 ms,是冷启动 jank 来源;挪到
+        // Dispatchers.IO 异步装载,完成后置位 [tokenReady] —— 探活循环首个鉴权
+        // 探测前必须等这门(防 UNAUTH 误判 → USB 静默重配对,见 tokenReady 注释)。
+        tokenLoadScope.launch {
+            var loaded = ""
+            try {
+                tokenStore = TokenStores.create(
+                    secureProvider = { EncryptedTokenStore(ctx) },
+                    legacy = PrefsTokenStore(ctx),
+                    log = { msg -> android.util.Log.w(TAG, msg) },
+                )
+                // token 从敏感库读(迁移后明文键已删;降级时敏感库即旧明文库,同样
+                // 拿得到,升级安装后旧用户无感续用)。
+                loaded = tokenStore.get(TokenMigration.KEY_TOKEN) ?: ""
+            } catch (t: Throwable) {
+                // TokenStores.create 内部已兜住 Keystore 异常,这是最后防线:
+                // 无论装载成败都要放行 tokenReady,否则只能靠 3s 超时兜底。
+                android.util.Log.w(TAG, "token 装载失败(按无 token 继续): ${t.message}")
+            } finally {
+                if (token.isEmpty()) {
+                    token = loaded
+                } else {
+                    // 极端时序:装载窗口内用户已显式写入新 token(此时 tokenStore 可能
+                    // 还是内存兜底库)—— 补落真实敏感库,防新 token 只存在于内存。
+                    persistTokenSecure()
+                }
+                tokenReady.complete(Unit)
+            }
+        }
         val cm = appCtx?.getSystemService(ConnectivityManager::class.java)
         if (cm != null && networkCallback == null) {
             networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -249,9 +275,9 @@ object AgentConnection {
         }
         prefs?.let {
             address = it.getString("addr", address) ?: address
-            // token 从敏感库读(迁移后明文键已删;降级时敏感库即旧明文库,同样拿得到,
-            // 升级安装后旧用户无感续用)。
-            token = tokenStore.get(TokenMigration.KEY_TOKEN) ?: ""
+            // token 不在这里读:敏感库创建/迁移/首次解密已挪到 Dispatchers.IO
+            // (见 init 开头的 tokenLoadScope),装载完成后回填 [token] 并置位
+            // [tokenReady],探活循环在其首个鉴权探测前等待该门。
             selectedModel = it.getString("model", "") ?: ""
             defaultModel = selectedModel
             selectedAgent = it.getString("agent", "codex") ?: "codex"
@@ -308,6 +334,58 @@ object AgentConnection {
      * 与敏感库中,不再写入 agent_conn prefs。
      */
     @Volatile private var tokenStore: TokenStore = MemoryTokenStore()
+
+    /** token 装载专用后台 scope(SupervisorJob:装载失败不牵连别的作业)。 */
+    private val tokenLoadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * 【T5 tokenReady 门】token 从敏感库装载完成(或装载失败按无 token 继续)的信号。
+     * init 已把 Keystore/EncryptedSharedPreferences 创建与首次解密挪到 Dispatchers.IO,
+     * 主线程不再等它;但**鉴权决策必须等 token 就绪**:探活循环在首个鉴权探测前
+     * await 本门(见 [startAutoReconnect])。
+     *
+     * 【为什么是硬约束(防身份 churn)】窗口期若拿空 token 去探测,daemon 回
+     * UNAUTHENTICATED,USB 场景探活失败分支会据此触发静默自动重配对
+     * (maybeAutoPairViaUsb)—— 设备在 daemon 侧被换发新身份、旧 token 作废,
+     * 等于无谓的身份翻转。门后的探测拿到的才是真实鉴权结论。
+     */
+    @Volatile private var tokenReady = CompletableDeferred<Unit>()
+
+    /** token 就绪等待上限:超时按现状(无 token)继续,绝不永久卡死探活。 */
+    private const val TOKEN_READY_TIMEOUT_MS = 3_000L
+
+    /** 仅 JVM 单测用:收短超时,避免用例真等 3s(用例后经 resetTokenGateForTest 恢复)。 */
+    @Volatile internal var tokenReadyTimeoutMsForTest: Long = TOKEN_READY_TIMEOUT_MS
+
+    /**
+     * 等 token 装载完成;最多等 [tokenReadyTimeoutMsForTest](生产 3s)。
+     * 返回 true = 已就绪(含装载失败按无 token 完成的情形);false = 超时,
+     * 调用方按现状(无 token)继续 —— Keystore 个别 ROM 卡死也不许拖死探活。
+     */
+    internal suspend fun awaitTokenReady(): Boolean =
+        kotlinx.coroutines.withTimeoutOrNull(tokenReadyTimeoutMsForTest) { tokenReady.await() } != null
+
+    /** 探活循环是否已越过 tokenReady 门(单测断言"未就绪期间不发探活 RPC"的观测点)。 */
+    @Volatile private var probeGatePassed = false
+    internal val probeGatePassedForTest: Boolean get() = probeGatePassed
+
+    /** 仅 JVM 单测用:重置 token 门(新 deferred + 清越过标记 + 恢复超时),用例前恢复现场。 */
+    internal fun resetTokenGateForTest() {
+        tokenReady = CompletableDeferred()
+        probeGatePassed = false
+        tokenReadyTimeoutMsForTest = TOKEN_READY_TIMEOUT_MS
+    }
+
+    /** 仅 JVM 单测用:直接放行 token 门(模拟 IO 装载完成)。 */
+    internal fun completeTokenReadyForTest() {
+        tokenReady.complete(Unit)
+    }
+
+    /** 仅 JVM 单测用:停掉探活循环,恢复现场(生产不可调用)。 */
+    internal fun stopAutoReconnectForTest() {
+        probeScope?.cancel()
+        probeScope = null
+    }
 
     /** Android Keystore 签名器:懒加载,首次真正用到(配对/续期)才碰 Keystore。 */
     private val keystoreSigner: DeviceKeySigner by lazy { KeystoreDeviceKeySigner() }
@@ -1113,23 +1191,26 @@ object AgentConnection {
                 .keepAliveTimeout(10, TimeUnit.SECONDS)
                 .keepAliveWithoutCalls(true)
         }
-        if (token.isNotEmpty()) {
-            builder.intercept(object : ClientInterceptor {
-                override fun <ReqT, RespT> interceptCall(
-                    method: MethodDescriptor<ReqT, RespT>,
-                    callOptions: io.grpc.CallOptions,
-                    next: io.grpc.Channel,
-                ): io.grpc.ClientCall<ReqT, RespT> {
-                    val call = next.newCall(method, callOptions)
-                    return object : io.grpc.ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(call) {
-                        override fun start(responseListener: Listener<RespT>, headers: Metadata) {
-                            headers.put(AUTH_KEY, "Bearer $token")
-                            super.start(responseListener, headers)
-                        }
+        // 【T5】拦截器无条件挂载,token 在每笔 RPC start() 时现读:token 装载已
+        // 异步化,通道可能在 token 就绪前建立,而 channel() 会缓存通道 —— 若按
+        // 建通道时刻的 token 判定是否挂拦截器,窗口期建出的通道会永久无鉴权头
+        // (直到通道被回收重建)。现读后,装载完成后的第一笔 RPC 起就带上 token。
+        builder.intercept(object : ClientInterceptor {
+            override fun <ReqT, RespT> interceptCall(
+                method: MethodDescriptor<ReqT, RespT>,
+                callOptions: io.grpc.CallOptions,
+                next: io.grpc.Channel,
+            ): io.grpc.ClientCall<ReqT, RespT> {
+                val call = next.newCall(method, callOptions)
+                return object : io.grpc.ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(call) {
+                    override fun start(responseListener: Listener<RespT>, headers: Metadata) {
+                        // 与原语义一致:无 token 时不加鉴权头(免鉴权 RPC 照常)。
+                        if (token.isNotEmpty()) headers.put(AUTH_KEY, "Bearer $token")
+                        super.start(responseListener, headers)
                     }
                 }
-            })
-        }
+            }
+        })
         return builder.build()
     }
 
@@ -1323,6 +1404,15 @@ object AgentConnection {
         probeScope = kotlinx.coroutines.CoroutineScope(
             kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
         probeScope?.launch {
+            // 【T5 tokenReady 门 · 防 churn 硬约束】token 从敏感库装载已异步化,
+            // 首个鉴权探测前必须等装载完成(上限 3s,超时按现状无 token 继续):
+            // 窗口期拿空 token 探测会被 daemon 判 UNAUTHENTICATED,USB 场景的
+            // 失败分支会触发静默自动重配对(maybeAutoPairViaUsb),造成设备身份
+            // 无谓翻转。门在此处一次挡住,循环内的鉴权决策 —— 失败分支的
+            // isAuthDenied → 自动配对、ok 分支的挑战续期/配对健康检查 —— 全部
+            // 天然在门后,无需各自等待。
+            awaitTokenReady()
+            probeGatePassed = true
             var wasDown = false
             var retryDelayMs = 1000L
             var probeCount = 0L

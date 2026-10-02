@@ -32,6 +32,7 @@ type fakeHermesClient struct {
 	loadErr error  // LoadSession 的失败注入(默认 ErrSessionNotFound 由 loadMissing 决定)
 
 	newCalls, loadCalls, listCalls, modelCalls, promptCalls int
+	modelArgs                                               []hermesModelCall // session/set_model 实参(守卫钉子)
 	loadArgs                                                [][2]string
 	loadSeenNotifHandlers                                   int // load 期间装的弃帧收集器应有
 	promptSids, promptTexts                                 []string
@@ -107,9 +108,16 @@ func (f *fakeHermesClient) ListSessions(context.Context, string) (*hermesapp.Ses
 	}}}, nil
 }
 
-func (f *fakeHermesClient) SetSessionModel(context.Context, string, string) error {
+// hermesModelCall 记一次 session/set_model 的实参(目标会话 + 换算后的模型 ID)。
+type hermesModelCall struct {
+	sessionID string
+	modelID   string
+}
+
+func (f *fakeHermesClient) SetSessionModel(_ context.Context, sessionID, modelID string) error {
 	f.mu.Lock()
 	f.modelCalls++
+	f.modelArgs = append(f.modelArgs, hermesModelCall{sessionID: sessionID, modelID: modelID})
 	f.mu.Unlock()
 	return nil
 }

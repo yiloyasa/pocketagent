@@ -498,4 +498,77 @@ class PaNotificationAndVoiceTest {
         // 默认参数 = 非首次加载(系统引擎/模型已暖):与显式 false 等价,老路径文案不变
         assertEquals(VoiceEvent.DeadZoneTimeout(firstColdLoad = false), VoiceEvent.DeadZoneTimeout())
     }
+
+    // ------------------------------------------------- PF5:语音跨会话(切会话即停录)
+
+    @Test
+    fun `语音_PF5_听写中切会话_归约SessionSwitched回空闲并只产出stop指令`() {
+        // 先经组合层统一入口消费掉 start 指令(镜像 dispatchVoice 的真实时序),
+        // 保证进入 SessionSwitched 时展示态不残留任何一次性字段。
+        val (listening, _) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
+        assertEquals(VoiceInputState.LISTENING, listening.state)
+        val ui = voiceReduce(listening, VoiceEvent.SessionSwitched)
+        // 回 IDLE + 停录指令;文本与提示一个不产 —— 跨会话残余由静音门丢弃
+        assertEquals(VoiceInputState.IDLE, ui.state)
+        val fx = pendingVoiceEffects(ui)
+        assertTrue(fx.stop)
+        assertFalse(fx.start)
+        assertNull(fx.append)
+        assertNull(fx.toast)
+    }
+
+    @Test
+    fun `语音_PF5_空闲时切会话_SessionSwitched原地不动_零指令`() {
+        val (ui, fx) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.SessionSwitched)
+        assertEquals(VoiceInputState.IDLE, ui.state)
+        assertFalse(voiceEffectsPending(fx))
+    }
+
+    @Test
+    fun `语音_PF5_静音门_muted时残余文本与提示丢弃_startStop保留`() {
+        val fx = VoiceEffects(start = true, stop = true, append = "旧会话没说完的话", toast = "识别失败,请重试")
+        // 静音期:append/toast 丢,start/stop 留(stop=停录收尾;start=新会话主动发起)
+        val gated = voiceFilterMutedEffects(fx, muted = true)
+        assertTrue(gated.start)
+        assertTrue(gated.stop)
+        assertNull(gated.append)
+        assertNull(gated.toast)
+        // 非静音:原样放行(常规路径零改动)
+        assertEquals(fx, voiceFilterMutedEffects(fx, muted = false))
+    }
+
+    @Test
+    fun `语音_PF5_跨会话链路_停录后残余结果不落新会话_重新听写解除静音`() {
+        // 镜像组合层时序:开始听写(消费 start)→ 切会话(静音 + 停录)→
+        // 旧识别器仍在收尾,延迟送达的最终转写被静音门拦下;用户在新会话
+        // 重新点麦克风,静音解除,新识别文本正常落新会话草稿。
+        var ui = VoiceInputUi()
+        var muted = false
+        fun feed(event: VoiceEvent): VoiceEffects {
+            val (display, fx) = applyVoiceEvent(ui, event)
+            ui = display
+            val gate = voiceFilterMutedEffects(fx, muted)
+            if (gate.start) muted = false
+            return gate
+        }
+        // 新会话 A 开始听写
+        assertTrue(feed(VoiceEvent.MicClicked(true, true)).start)
+        // 切到会话 B:静音 + 停录
+        muted = true
+        assertTrue(feed(VoiceEvent.SessionSwitched).stop)
+        assertEquals(VoiceInputState.IDLE, ui.state)
+        // 旧识别器收尾送达的最终转写:静音门丢弃,不写会话 B 草稿
+        val late = feed(VoiceEvent.RecognitionResults("本该落会话A的文本"))
+        assertNull(late.append)
+        assertNull(late.toast)
+        // 迟到的失败提示同样被拦
+        val lateErr = feed(VoiceEvent.RecognitionFailed(VoiceErrorKind.BUSY))
+        assertNull(lateErr.toast)
+        // 用户在会话 B 重新点麦克风:start 放行并解除静音
+        assertTrue(feed(VoiceEvent.MicClicked(true, true)).start)
+        assertFalse(muted)
+        // 新识别文本正常落会话 B 草稿
+        val fresh = feed(VoiceEvent.RecognitionResults("会话B的新文本"))
+        assertEquals("会话B的新文本", fresh.append)
+    }
 }
