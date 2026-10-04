@@ -480,6 +480,12 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 
 ## 16. 快速开始（命令速查）
 
+### 16.0 构建前置（fresh clone → 可出完整产物）
+
+- **daemon**：Go（版本对齐 `daemon/go.mod`，当前 `go 1.27.1`）。`cd daemon && go build ./...` 即可，无代码外资产。
+- **Android APK**：需 Android SDK 与 JDK（`android/build-ascii.ps1` 的 `-SdkDir` / `-JbrDir` 参数可指定，默认值见脚本 param 块）。构建入口 `android/build-ascii.ps1`：先把源码镜像到 ASCII 暂存路径再跑 gradlew（中文路径 Gradle 处理不了），并**自动下载校验**两件不入库的语音资产 —— sherpa-onnx AAR（`android/app/libs/`，见该目录 README）与 SenseVoice 模型 `model.int8.onnx` + `tokens.txt`（`android/app/src/main/assets/sensevoice/`，见该目录 README）；SHA-256 不符即中止构建，无需手工放置。
+- **桌面分发包**：`dist/windows/build.ps1` 构建 daemon + paguard 并打成 zip（含安装/卸载脚本）。
+
 ```bash
 # ── daemon（电脑上）──
 cd daemon

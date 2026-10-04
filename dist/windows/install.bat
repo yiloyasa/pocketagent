@@ -7,7 +7,10 @@ REM  作用:① 检查 codex CLI  ② 生成/读取连接 token
 REM        ③ 注册防火墙入站规则(端口)  ④ 注册看护进程计划任务
 REM        ⑤ 打印本机连接信息(供手机填写)
 REM  说明:所有路径基于脚本自身位置(%~dp0),端口等参数集中在下方变量。
-REM        本脚本需"以管理员身份运行"。幂等:已存在的规则/任务会自动跳过。
+REM        本脚本需"以管理员身份运行"。
+REM        幂等:防火墙规则与计划任务每次都无条件重建(/f 覆盖)——计划任务
+REM        的启动参数里烙有配对码,只有无条件重建才能保证它始终与当前
+REM        pocketagentd.conf 一致:改了 token 重跑本脚本即生效。
 REM  语法自检:set PA_DRYRUN=1 后运行,仅验证解析,不改动任何系统。
 REM ============================================================
 set "PORT=7246"
@@ -73,15 +76,21 @@ if not defined TOKEN (
     echo       复用已存在的 token(来自 %CONF%)
 )
 
-REM ---- 3) 注册防火墙入站规则(端口 PORT,存在即跳过) ----
+REM ---- 3) 注册防火墙入站规则(端口 PORT,无条件重建) ----
+REM 不做"存在即跳过":旧规则可能指向改过的端口或残留错误配置。netsh 对同名
+REM 规则 add 会报错,故先 delete(不存在也不报错)再 add,保证规则永远与
+REM 本脚本当前的 PORT 一致。
 echo [3/5] 注册防火墙入站规则(端口 %PORT%)...
-netsh advfirewall firewall show rule name="%RULE%" >nul 2>&1
+netsh advfirewall firewall delete rule name="%RULE%" >nul 2>&1
+netsh advfirewall firewall add rule name="%RULE%" dir=in action=allow protocol=TCP localport=%PORT% >nul 2>&1
 if errorlevel 1 (
-    netsh advfirewall firewall add rule name="%RULE%" dir=in action=allow protocol=TCP localport=%PORT% >nul 2>&1
-    echo       已添加入站规则: %RULE%
-) else (
-    echo       入站规则已存在,跳过。
+    echo.
+    echo [错误] 防火墙入站规则创建失败,手机可能无法连接,已中止。
+    echo        请确认是以管理员身份运行后重试。
+    pause
+    exit /b 1
 )
+echo       已重建入站规则: %RULE%,放行 TCP %PORT%
 
 REM ---- 4) 注册看护进程计划任务(paguard,开机自启、崩溃拉起) ----
 REM 【为什么不用 SYSTEM】codex 的登录态(auth.json)属于当前登录用户,
@@ -89,16 +98,58 @@ REM daemon 以 SYSTEM 身份拉起 codex 子进程会读不到登录态,任务�
 REM 因此计划任务以当前用户身份运行(省略 /ru 即当前用户)。
 REM 触发方式:每分钟直跑一次 paguard.exe(已在跑则自动跳过)——
 REM 开机登录后 1 分钟内自然兜底拉起;崩溃退出后最多 1 分钟也会被重新拉起。
+REM 【必须无条件 /f 重建】/tr 启动参数里烙死了 -pair-code;若"已存在即跳过",
+REM 用户删 conf 重装拿到新 token 后,任务仍用旧 token,手机必连不上。
+REM 每次带 /f 重建,任务参数永远与当前 conf 的配对码对齐。
 echo [4/5] 注册看护进程计划任务(%TASK%)...
-schtasks /query /tn "%TASK%" >nul 2>&1
-if errorlevel 1 (
-    schtasks /create /tn "%TASK%" /tr "\"%BASE%paguard.exe\" -daemon-addr 0.0.0.0:%PORT% -pair-code %TOKEN%" /sc minute /mo 1 /rl highest /f >nul 2>&1
-    echo       已创建计划任务: %TASK%(每分钟触发,当前用户身份直跑)
-) else (
-    echo       计划任务已存在,跳过。
+if not exist "%BASE%paguard.exe" (
+    echo.
+    echo [错误] 未找到 !BASE!paguard.exe
+    echo        看护进程缺失,常见原因是被杀毒软件误删或隔离。
+    echo        请确认解压目录完整、恢复被隔离文件后重试,已中止安装。
+    pause
+    exit /b 1
 )
+if not exist "%BASE%pocketagentd.exe" (
+    echo.
+    echo [错误] 未找到 !BASE!pocketagentd.exe
+    echo        daemon 主程序缺失,常见原因是被杀毒软件误删或隔离。
+    echo        请确认解压目录完整、恢复被隔离文件后重试,已中止安装。
+    pause
+    exit /b 1
+)
+schtasks /create /tn "%TASK%" /tr "\"%BASE%paguard.exe\" -daemon-addr 0.0.0.0:%PORT% -pair-code %TOKEN%" /sc minute /mo 1 /rl highest /f >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo [错误] 计划任务 %TASK% 创建失败,需要管理员权限,已中止。
+    pause
+    exit /b 1
+)
+echo       已创建/更新计划任务: %TASK%,每分钟触发,当前用户身份直跑
 REM 立即启动看护进程(它会拉起 daemon;若已在跑则自动跳过)
 schtasks /run /tn "%TASK%" >nul 2>&1
+
+REM ---- 有界存活检测:每 3 秒探一次端口,最多 30 轮(约 90 秒) ----
+REM 任务跑起来不等于安装完成,daemon 真正开始监听才算。用 netstat 轮询端口,
+REM 就绪即报成功;超时则明确报失败并指向《使用说明.txt》排查一节。
+echo       等待 daemon 开始监听端口 %PORT% ...
+set /a PA_TRIES=0
+:pa_wait_port
+netstat -ano | findstr /c:":%PORT% " >nul 2>&1
+if not errorlevel 1 goto :pa_ok
+set /a PA_TRIES+=1
+if !PA_TRIES! GEQ 30 goto :pa_timeout
+ping -n 4 127.0.0.1 >nul 2>&1
+goto :pa_wait_port
+:pa_timeout
+echo.
+echo [错误] 已等待 90 秒,端口 %PORT% 仍未开始监听,daemon 大概率没有起来。
+echo        请按《使用说明.txt》末尾「连不上?按顺序排查」一节逐项检查;
+echo        也可先双击运行一次 paguard.exe 观察报错,再重跑本脚本。
+pause
+exit /b 1
+:pa_ok
+echo       端口 %PORT% 已开始监听,daemon 已在运行。
 
 REM ---- 5) 打印本机连接信息 ----
 echo [5/5] 收集本机连接信息...

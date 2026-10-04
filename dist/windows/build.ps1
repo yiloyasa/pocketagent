@@ -8,18 +8,18 @@
 
   用法:
       powershell.exe -File build.ps1
-      powershell.exe -File build.ps1 -Port 7246 -GoBin "C:\go\bin"
+      powershell.exe -File build.ps1 -GoBin "C:\go\bin"
 
   说明:
       * 本脚本只做「构建 + 打包」,不注册防火墙 / 计划任务
         (那一步由安装包里的 install.bat 负责,在用户机器上执行)。
       * 所有路径都基于本脚本自身位置($PSScriptRoot),不硬编码绝对路径。
-      * 端口等可配置项集中在下面的 param() 里。
+      * 监听端口不在这里配置:它由包内 install.bat / uninstall.bat 顶部的
+        PORT 变量决定(改端口请同步改那两个脚本;旧版这里的 -Port 参数
+        从未真正烙进任何产物,已删除,勿再加回装饰参数)。
 #>
 
 param(
-    # 监听端口(与 install.bat / uninstall.bat 保持一致即可)
-    [int]    $Port   = 7246,
     # Go 工具链目录(需包含 go.exe);可用 -GoBin 覆盖
     [string] $GoBin  = "C:\go\bin",
     # 中间产物 / 打包暂存目录(相对本脚本)
@@ -74,7 +74,7 @@ New-Item -ItemType Directory -Path $StageDir | Out-Null
 # 使二进制自证版本(启动日志打印,产物对账不再只靠 pid)。
 Push-Location $DaemonDir
 try {
-    Write-Host "==> 构建 pocketagentd.exe (端口 $Port, 版本 $AppVersion)"
+    Write-Host "==> 构建 pocketagentd.exe (版本 $AppVersion)"
     & $go build -trimpath -ldflags "-s -w -X github.com/pocketagent/daemon/internal/version.Version=$AppVersion" `
         -o (Join-Path $StageDir "pocketagentd.exe") ./cmd/pocketagentd
     if ($LASTEXITCODE -ne 0) { throw "pocketagentd 构建失败 (exit=$LASTEXITCODE)" }
@@ -139,6 +139,26 @@ Write-Host "==> 痕迹扫描通过:$($StageFiles.Count) 个文件均未发现开
 # 压缩(已存在则覆盖)
 if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
 Compress-Archive -Path (Join-Path $StageDir "*") -DestinationPath $ZipPath -Force
+
+# ---- zip 新鲜度自检(P1-28) ----
+# 为什么要这道闸:曾出现过 zip 比同目录脚本旧 7 天仍被当新鲜产物分发的事故
+# (2026-09-23 的 zip vs 09-30 的脚本)。Compress-Archive 本身不校验"入包源文件
+# 是否比 zip 新",这里显式兜底:刚生成的 zip 的 LastWriteTime 必须不早于
+# PackageFiles 里每一个脚本/说明文件的 LastWriteTime——只要 zip 早于任一
+# 源文件(时钟回拨、打包过程中源文件被改动、未来引入"复用旧 zip"的捷径等),
+# 就视为产出过期包,Write-Error + throw 直接 Fail,绝不带病收尾。
+$ZipTime = (Get-Item -LiteralPath $ZipPath).LastWriteTime
+foreach ($f in $PackageFiles) {
+    $src = Join-Path $ScriptDir $f
+    if (-not (Test-Path -LiteralPath $src)) { continue }   # 缺文件在装包一步已告警
+    $srcTime = (Get-Item -LiteralPath $src).LastWriteTime
+    if ($srcTime -gt $ZipTime) {
+        Write-Error "zip 新鲜度检查失败:$f 的修改时间 $srcTime 比刚生成的 zip $ZipTime 新,zip 内容已过期。请清除干扰后重新运行本脚本。"
+        # Write-Error 在 Stop 下已是终止异常;再显式 throw 作双保险,确保非零退出
+        throw "zip 过期:$f 比 $ZipName 新,已中止收尾"
+    }
+}
+Write-Host "==> 新鲜度检查通过:zip 不早于全部 $($PackageFiles.Count) 个入包源文件"
 
 Write-Host ""
 Write-Host "==> 构建完成 (版本 $AppVersion):`n    $ZipPath"

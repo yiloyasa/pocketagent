@@ -4,11 +4,10 @@ setlocal enabledelayedexpansion
 REM ============================================================
 REM  PocketAgent 桌面端 卸载 (uninstall.bat)
 REM  对称清理:① 停止 daemon / 看护进程  ② 删除防火墙入站规则
-REM           ③ 删除看护进程计划任务
+REM           ③ 删除看护进程计划任务  ④ 清理系统环境变量 CODEX_BIN
 REM  注意:不删除用户数据(对话记录、pocketagentd.conf 等),如需清理请手动删除。
 REM  需"以管理员身份运行"。语法自检:set PA_DRYRUN=1 后运行。
 REM ============================================================
-set "PORT=7246"
 set "RULE=PocketAgent"
 set "TASK=PocketAgentDaemonGuard"
 
@@ -33,13 +32,13 @@ echo ============================================
 echo.
 
 REM ---- 1) 停止正在运行的进程(若存在) ----
-echo [1/3] 停止 daemon 与看护进程...
+echo [1/4] 停止 daemon 与看护进程...
 taskkill /im pocketagentd.exe /f >nul 2>&1
 taskkill /im paguard.exe /f >nul 2>&1
 echo       已尝试停止相关进程(未运行则忽略)。
 
 REM ---- 2) 删除防火墙入站规则(若存在) ----
-echo [2/3] 删除防火墙入站规则(%RULE%)...
+echo [2/4] 删除防火墙入站规则(%RULE%)...
 netsh advfirewall firewall show rule name="%RULE%" >nul 2>&1
 if not errorlevel 1 (
     netsh advfirewall firewall delete rule name="%RULE%" >nul 2>&1
@@ -49,7 +48,7 @@ if not errorlevel 1 (
 )
 
 REM ---- 3) 删除看护进程计划任务(若存在) ----
-echo [3/3] 删除看护进程计划任务(%TASK%)...
+echo [3/4] 删除看护进程计划任务(%TASK%)...
 schtasks /query /tn "%TASK%" >nul 2>&1
 if not errorlevel 1 (
     schtasks /delete /tn "%TASK%" /f >nul 2>&1
@@ -58,7 +57,16 @@ if not errorlevel 1 (
     echo       未发现计划任务,跳过。
 )
 
+REM ---- 4) 清理 install.bat 写入的系统环境变量 CODEX_BIN ----
+REM install.bat 用 "setx CODEX_BIN ... /M" 把 codex 路径写进了系统环境变量,
+REM 落点即 HKLM 的 Session Manager\Environment;reg delete 改的也是 HKLM,
+REM 同样需要与 setx /M 一致的管理员权限(本脚本开头已校验)。
+echo [4/4] 清理系统环境变量 CODEX_BIN...
+reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v CODEX_BIN /f >nul 2>&1
+echo       已尝试删除 CODEX_BIN(原本就不存在则忽略);已在运行的窗口需重开才刷新。
+
 echo.
-echo 卸载完成。用户数据(对话记录、配置)已保留,未删除。
+echo 卸载完成。防火墙规则、计划任务与系统环境变量 CODEX_BIN 已清理。
+echo 用户数据(对话记录、配置)已保留,未删除。
 echo 如需彻底清除,请手动删除桌面端目录下的 pocketagentd.conf 与数据目录。
 pause
