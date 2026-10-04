@@ -6,11 +6,7 @@ import android.graphics.BitmapFactory
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
-import android.os.Bundle
 import android.provider.OpenableColumns
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import android.widget.Toast
@@ -55,7 +51,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
@@ -96,7 +92,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -152,6 +147,11 @@ import dev.pocketagent.app.ui.prompt.PromptOptimizePreviewState
 import dev.pocketagent.app.ui.prompt.isIdle
 import dev.pocketagent.app.ui.prompt.promptOptimizeClickAllowed
 import dev.pocketagent.app.ui.prompt.reducePromptOptimizePreview
+// 【P3-T4】模型/强度选择拆分件与仓库(选中态唯一来源;页面只传 state/intent)
+import dev.pocketagent.app.ui.model.ModelEffortCard
+import dev.pocketagent.app.ui.model.ModelSelectionIntent
+import dev.pocketagent.app.ui.model.ModelSelectionReducer
+import dev.pocketagent.app.ui.model.ModelSelectionRepository
 import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
@@ -181,11 +181,21 @@ import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY
 import dev.pocketagent.app.ui.component.VOICE_ERROR_MIC_BLOCKED
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.SenseVoiceModelManager
-import dev.pocketagent.app.ui.component.SenseVoiceRecognizer
+// 【P4 Task 4/5/6】语音域层六件套(状态机/控制器/引擎适配):ChatScreen 只做接线,不再自持状态机。
+// VoiceErrorKind 取别名:本文件同包仍保留旧七类 VoiceErrorKind(SystemVoiceEngine 的单一真值源),
+// 裸名指旧枚举,域层新枚举一律用 DomainVoiceErrorKind,避免同名歧义。
+import dev.pocketagent.app.ui.voice.SenseVoiceEngine
+import dev.pocketagent.app.ui.voice.SystemVoiceEngine
+import dev.pocketagent.app.ui.voice.VoiceController
+import dev.pocketagent.app.ui.voice.VoiceEngineKind
+import dev.pocketagent.app.ui.voice.VoiceErrorKind as DomainVoiceErrorKind
+import dev.pocketagent.app.ui.voice.VoiceEvent
+import dev.pocketagent.app.ui.voice.VoicePhase
 import dev.pocketagent.app.ui.component.keyboardAwareBottomPadding
 import dev.pocketagent.app.ui.component.rememberDrawerController
 import dev.pocketagent.app.ui.component.rememberUndoState
-// VoiceEngineKind / pickVoiceEngine 定义在本文件尾部纯逻辑区(与状态机同处,JVM 单测共用)
+// pickVoiceEngine / voiceErrorText(新旧两套)/ joinVoiceText 等语音纯逻辑定义在本文件尾部
+// (旧七类映射是 ui/voice/SystemVoiceEngine 的单一真值源,JVM 单测共用)
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
@@ -226,7 +236,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -234,7 +243,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import pocketagent.v1.ApprovalRequest
 import pocketagent.v1.CodexEvent
 import pocketagent.v1.CreateThreadRequest
@@ -1144,32 +1152,26 @@ internal fun modelsForAgent(models: List<ModelInfo>, agentId: String): List<Mode
 internal fun modelBareName(id: String): String = id.substringAfter('/', id)
 
 /**
- * 【选模型的共享落点】完整选择卡(ModelEffortCard)与模型行快速切换面板
- * 共用同一份"选中之后做什么":标 selectionPending、新模型的档位表不含当前
- * 强度覆盖即清掉、写会话级(或全局)模型选择 —— 与原 ModelEffortCard.pick
- * 逐行等价,保证快速面板切模型与完整卡零语义差。顺手记一次"最近使用"
- * (ModelQuickSwitchLogic,进程内真实数据,驱动快速面板的 MRU 排序)。
+ * 【选模型的共享落点】完整选择卡(ui/model.ModelEffortCard)与模型行快速切换面板
+ * 共用同一份"选中之后做什么":标 selectionPending + 仓库 send(SelectModel)+
+ * 记一次"最近使用"(ModelQuickSwitchLogic,进程内真实数据,驱动快速面板的 MRU 排序)。
  *
- * @param modelsForEffort 档位清理判定用的模型表:完整卡传自己刚拉到的实时表
- *   (行为与旧 pick 完全一致),快速面板传会话级 sessionModels。
+ * 【P3-T4 接线③】选择本体改走 ModelSelectionRepository:乐观更新、失效 effort
+ * 清理(reducer cleanEffortFor,档位集合不含当前强度即清成"跟随默认")、会话级
+ * 缓存与 daemon 真值回填全在仓库一条链上 —— 本函数不再直写
+ * AgentConnection.selectedModel / setThreadModel / setThreadEffort
+ * (旧的三路直写是"多个 mutable 全局互相覆盖"的病根,计划 Task 3/4 收敛点)。
+ * 仓库按进入会话时 open(threadId, agentId) 登记的会话下发,这里不重复传路由。
  */
 internal fun applyModelPick(
     threadId: String,
     agentId: String,
-    modelsForEffort: List<ModelInfo>,
     id: String,
 ) {
+    // 轮次标记:显式选择即将影响下一轮 —— 在下一轮 TurnInput 确认前,巡检的
+    // 原生回填不再覆盖刚选的值(TurnSession.acceptRuntimeSelection 的闸)。
     TurnSession.state(threadId).selectionPending = true
-    val levels = effortsFor(modelsForEffort, id, agentId)
-    if (levels.none { it.id == AgentConnection.selectedEffort }) {
-        AgentConnection.setThreadEffort(threadId, "")
-    }
-    AgentConnection.selectedModel = id
-    if (threadId.isNotBlank()) {
-        AgentConnection.setThreadModel(threadId, id)
-    } else {
-        AgentConnection.setGlobalModel(id)
-    }
+    ModelSelectionRepository.send(ModelSelectionIntent.SelectModel(id))
     ModelQuickSwitchLogic.rememberPick(agentId, id)
 }
 
@@ -1999,25 +2001,19 @@ fun ChatScreen(
         )
     }
 
-    // ---- 【P1-9 语音输入】状态机 + 识别器(纯逻辑 voiceReduce 在文件尾部,可 JVM 单测) ----
-    // 【V-1 修复】一次性指令(start/stop/append/toast)不再放进 voiceUi 后靠 LaunchedEffect(voiceUi)
-    // 的 equals 重启来消费 —— 那条路依赖"两次 state 写"的时序:同值写入会被 mutableStateOf 的
-    // 结构相等策略忽略、消费写与回调写竞争时会互相覆盖,指令就被静默吞掉(真机点击零反馈的根因)。
-    // 现在事件归约**当场**取走指令、经无界 Channel 投递(不丢不重,与重组时序无关),
-    // voiceUi 只保留纯展示状态(空闲/听写/无权限/不可用)。
-    var voiceUi by remember { mutableStateOf(VoiceInputUi()) }
-    val voiceFx = remember { Channel<VoiceEffects>(Channel.UNLIMITED) }
-    // 【PF5 语音跨会话】切会话静音门:切走会话后,旧识别器残余的识别文本/提示一律
-    // 丢弃(不落新会话草稿);用户在新会话重新点麦克风(fx.start 消费时)解除。
-    // 故意**不**随 threadId 重建 —— 若随键重建,静音在换会话瞬间被重置为 false,
-    // 停录后仍会送达的最终转写正好漏进新会话(与目标相反)。真值流转:
-    // 置 true = 下方 LaunchedEffect(threadId);置 false = 指令消费循环的 fx.start 分支。
-    var voiceMutedBySwitch by remember { mutableStateOf(false) }
+    // ---- 【P4 Task 4/5/6 语音输入】VoiceController 接线(域层 ui/voice 六件套) ----
+    // 旧页面胶水(voiceUi 状态机/墙钟看门狗/识别器装配/指令 Channel)整体摘除:状态机在
+    // VoiceSessionReducer、8 秒死区看门狗(monotonic,不再依赖墙钟)在 VoiceController、
+    // 引擎适配在 SystemVoiceEngine/SenseVoiceEngine —— ChatScreen 只做三件事:
+    // 装配引擎、转发事件(Start/Stop/Permission/SessionSwitched)、消费展示态。
+    // 生命周期不依赖 Compose 重组:页面隐藏走 onPageHidden,永久销毁走 release。
+    val voiceController = remember { VoiceController(scope = scope, initialThreadId = threadId) }
+    val voiceState by voiceController.state.collectAsState()
 
     // ---- 【语音交互动画】两个一次性触发器(纯 UI,不进状态机) ----
     // 【动画 ①】麦克风按下涟漪:每次点按 +1,组合层据此重放一圈"扩散 + 淡出"的圆环。
     var micRippleTick by remember { mutableStateOf(0) }
-    // 【动画 ③】识别文本落框:append 指令消费时 +1,驱动输入框一次轻微的"落定"脉动,
+    // 【动画 ③】识别文本落框:Final 消费并入输入框时 +1,驱动输入框一次轻微的"落定"脉动,
     // 配合输入区的 animateContentSize 构成"文本飞入输入框"的过渡感。
     var voiceLandedTick by remember { mutableStateOf(0) }
 
@@ -2031,109 +2027,89 @@ fun ChatScreen(
     val sysVoiceAvailable = remember {
         runCatching { SpeechRecognizer.isRecognitionAvailable(ctx) }.getOrDefault(false)
     }
+    // 系统引擎弃用标记(旧 systemVoiceFailed 的领域化):置位后随下方键翻转改绑端侧。
+    var systemVoiceRetired by remember { mutableStateOf(false) }
+    // 当前绑定的系统引擎实例:弃用策略要读它的 roundFailed(本轮致命失败)标记。
+    var activeSystemEngine by remember { mutableStateOf<SystemVoiceEngine?>(null) }
 
-    // 【死区兜底】看门狗的跨线程共享状态:识别器回调来自识别器自己的线程、看门狗跑在
-    // 组合协程里,两边只做原子读写,不进 Compose 状态(参与重组只会带来噪声)。
-    // gotCallback = start 之后是否收到过识别器任一关键回调;watchdog = 当前这轮超时协程。
-    val voiceGotCallback = remember { AtomicBoolean(false) }
-    val voiceWatchdog = remember { AtomicReference<Job?>(null) }
-    // 【静默失败修复·回退】系统引擎是否已判死(死区超时/致命错误码):置位后识别器随
-    // remember 键翻转自动重建为端侧 SenseVoice。声明必须在 startVoiceWatchdog 之前 ——
-    // Kotlin 局部函数引用不了其后声明的局部变量(看门狗超时分支要写它)。
-    var systemVoiceFailed by remember { mutableStateOf(false) }
-
-    // 所有事件源(点击/权限回答/识别器回调)统一走这里:归约 → 指令入队 → 更新展示态
-    fun dispatchVoice(event: VoiceEvent) {
-        scope.launch(Dispatchers.Main.immediate) {
-        val (display, fx) = applyVoiceEvent(voiceUi, event)
-        if (voiceEffectsPending(fx)) {
-            Log.d("PaVoice", "event=$event 展示态=$display 指令入队=$fx")
-            voiceFx.trySend(fx)
-        } else {
-            Log.d("PaVoice", "event=$event 展示态=$display 指令=无")
+    // 引擎装配(决策表 pickVoiceEngine 钉住"系统优先 → SenseVoice 兜底"优先级):
+    //  · 系统可用且未弃用 → SystemVoiceEngine(工厂预检 + on-device 优先;预检可用但
+    //    创建失败时同样落回端侧,保持旧 createVoiceRecognizer 的回退语义);
+    //  · 否则 SenseVoice 就绪 → SenseVoiceEngine(内置模型;senseReady 翻转 = 首次解压
+    //    校验完成,识别器随键重绑,"初始化完自动可用");
+    //  · 都不行 → null(点击麦克风给人话提示,模型就绪后自动重绑)。
+    LaunchedEffect(sysVoiceAvailable, systemVoiceRetired, senseReady) {
+        val engine = when (pickVoiceEngine(sysVoiceAvailable && !systemVoiceRetired, senseReady)) {
+            VoiceEngineKind.SYSTEM_ON_DEVICE, VoiceEngineKind.SYSTEM_REMOTE -> {
+                val sys = SystemVoiceEngine.create(ctx)
+                activeSystemEngine = sys
+                sys ?: SenseVoiceEngine.create()
+            }
+            VoiceEngineKind.SENSEVOICE -> {
+                activeSystemEngine = null
+                SenseVoiceEngine.create()
+            }
+            VoiceEngineKind.UNAVAILABLE -> {
+                activeSystemEngine = null
+                null
+            }
         }
-        voiceUi = display
-        }
-    }
-
-    // 【死区兜底】start 指令消费时启动 8 秒看门狗:期间 onReadyForSpeech/onPartialResults/
-    // onResults/onError 任一回调到达即取消(见 voiceRecognizer 的 onAlive);到点仍是
-    // LISTENING 且零回调 —— 某些 ROM 预检可用但识别服务实际"死区",UI 会永远卡在脉动
-    // 图标上 —— 此时主动抛 DeadZoneTimeout 事件,状态机回 IDLE 并弹人话提示。
-    // 判定逻辑抽成纯函数 voiceDeadZoneTimedOut(JVM 单测锁定)。
-    // 【P2-d】提示文案按"是否端侧首次冷加载"分流(见 voiceDeadZoneToast,JVM 单测锁定)。
-    fun startVoiceWatchdog() {
-        voiceGotCallback.set(false)
-        voiceWatchdog.getAndSet(null)?.cancel()
-        voiceWatchdog.set(
-            scope.launch {
-                val startAt = System.currentTimeMillis()
-                delay(VOICE_DEAD_ZONE_TIMEOUT_MS)
-                val elapsedMs = System.currentTimeMillis() - startAt
-                if (voiceDeadZoneTimedOut(elapsedMs, voiceGotCallback.get()) && voiceUi.listening) {
-                    // 【静默失败修复·回退】零回调死区若发生在系统引擎上 = "预检可用但
-                    // 服务死区"的 ROM:不弃用的话用户永远循环"点击→空转 8 秒→语音服务
-                    // 无响应",端侧 SenseVoice 永远轮不上。这里记 systemVoiceFailed,
-                    // 识别器随 remember 键翻转自动重建为端侧引擎,下次点击直接走端侧。
-                    // 判定在纯函数 voiceDeadZoneShouldRetireSystem(JVM 单测锁定)。
-                    if (voiceDeadZoneShouldRetireSystem(sysVoiceAvailable && !systemVoiceFailed)) {
-                        systemVoiceFailed = true
-                    }
-                    // 【P2-d 收敛】端侧 SenseVoice 的 onAlive 在进录音态后立刻到
-                    // (真冷加载发生在停止后的转写段,有周期性回活喂狗),零回调撞满
-                    // 看门狗一律按"服务无响应"提示,不误报"正在加载语音模型"
-                    // (按"冷加载中"分流只是历史引擎的旧语义,恒传 false)。
-                    val firstColdLoad = false
-                    Log.d("PaVoice", "死区超时兜底触发 elapsed=${elapsedMs}ms firstColdLoad=$firstColdLoad")
-                    dispatchVoice(VoiceEvent.DeadZoneTimeout(firstColdLoad))
-                }
-            },
+        Log.d(
+            "PaVoice",
+            "装配语音引擎 retired=$systemVoiceRetired senseReady=$senseReady kind=${engine?.kind}",
         )
+        voiceController.bindEngine(engine)
+    }
+    // 引擎弃用策略:系统引擎本轮致命失败(roundFailed:弃用名单错误码/start 同步异常)
+    // 或系统引擎死区(8 秒零回调)→ 置弃用标记,上方键翻转自动重绑为端侧,不再原地反复
+    // 失败。端侧失败不弃用(重建要重新冷加载);绑定端侧时 activeSystemEngine=null 自然跳过。
+    LaunchedEffect(voiceState.phase, voiceState.error, voiceState.sessionId) {
+        val sys = activeSystemEngine ?: return@LaunchedEffect
+        val deadZoneOnSystem = voiceState.error == DomainVoiceErrorKind.DEAD_ZONE
+        if (voiceState.phase == VoicePhase.ERROR && !systemVoiceRetired &&
+            (sys.roundFailed || deadZoneOnSystem)
+        ) {
+            Log.d(
+                "PaVoice",
+                "系统识别本轮失败,弃用改选端侧 fatal=${sys.roundFailed} deadZone=$deadZoneOnSystem",
+            )
+            systemVoiceRetired = true
+        }
     }
 
-    // 本机优先的识别器(两级):系统识别可用用系统(在线质量好);不可用而端侧 SenseVoice
-    // 模型就绪用端侧引擎;都不行 = null(按钮降级,点击时给人话提示)。回调都回主线程统一
-    // 交给 dispatchVoice 驱动状态机;onAlive 喂死区看门狗。
-    // 【注意 key】senseReady 翻转(内置模型首次解压校验完成)时重建识别器,旧识别器经
-    // DisposableEffect(voiceRecognizer) 自动销毁 —— "初始化完自动可用"。
-    // systemVoiceFailed 声明已上移至 startVoiceWatchdog 之前(局部函数引用顺序要求)
-    val voiceRecognizer = remember(sysVoiceAvailable, systemVoiceFailed, senseReady) {
-        Log.d("PaVoice", "创建识别器开始 sys=$sysVoiceAvailable bundled=$senseReady")
-        createVoiceRecognizer(
-            ctx,
-            sysAvailable = sysVoiceAvailable && !systemVoiceFailed,
-            senseReady = senseReady,
-            onAlive = {
-                // 【死区兜底】任一关键回调到达 = 服务活着:置位并撤掉超时协程
-                voiceGotCallback.set(true)
-                voiceWatchdog.getAndSet(null)?.let {
-                    Log.d("PaVoice", "看门狗:收到识别器回调,取消死区超时")
-                    it.cancel()
-                }
-            },
-            onResult = { text -> dispatchVoice(VoiceEvent.RecognitionResults(text)) },
-            onErrorEvent = { code ->
-                // 【静默失败修复·回退】系统引擎报这些错(含 3=AUDIO_ERROR:MIUI「录音」
-                // 开关关闭时的典型表现)= 系统识别服务在本机修不好:记失败标记,remember
-                // 键翻转 → 识别器自动重建为端侧 SenseVoice,不再原地反复失败。
-                // 判定在纯函数 systemVoiceRetireNeeded(JVM 单测锁定)。
-                if (sysVoiceAvailable && !systemVoiceFailed && systemVoiceRetireNeeded(code)) {
-                    scope.launch(Dispatchers.Main.immediate) { systemVoiceFailed=true }
-                }
-                dispatchVoice(VoiceEvent.RecognitionFailed(voiceErrorKind(code)))
-            },
-        ).also { Log.d("PaVoice", "创建识别器结果 可用=${it != null}") }
-    }
     // 通知监控登记(P1-6):轮次只会从会话页发起,进页就把本会话交给通知监控,
     // 之后退出页面轮次照跑,完成/审批时才有 threadId 可发通知。
     LaunchedEffect(threadId) { PaNotifications.observeThread(threadId) }
-    // 离开页面销毁识别器(防泄漏);语音会话生命周期与页面一致
-    DisposableEffect(voiceRecognizer) {
-        onDispose { voiceRecognizer?.destroy() }
+
+    // 页面生命周期(Global Constraint:离开页面必须明确停止或静音):宿主 Activity ON_STOP
+    // → controller.onPageHidden(),Stop 语义 = 收音中停收音并交付本会话最终稿、等权限中
+    // 取消请求。永久销毁(旋转/离开组合)→ release():撤看门狗、销毁引擎、状态归零。
+    val hostVoiceLifecycle = (ctx as? ComponentActivity)?.lifecycle
+    DisposableEffect(voiceController) {
+        val voiceLifecycleObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) voiceController.onPageHidden()
+        }
+        hostVoiceLifecycle?.addObserver(voiceLifecycleObserver)
+        onDispose {
+            hostVoiceLifecycle?.removeObserver(voiceLifecycleObserver)
+            voiceController.release()
+        }
     }
+
+    // 切会话即停录:静音门 + 清草稿在 reducer(SessionSwitched),残余 Final 被静音门 +
+    // sessionId 双门丢弃,绝不落新会话。首进页面不算"切换"(voiceHomeThreadId 钉住组合首见)。
+    val voiceHomeThreadId = remember { threadId }
+    LaunchedEffect(threadId) {
+        if (threadId != voiceHomeThreadId) {
+            Log.d("PaVoice", "切会话 $voiceHomeThreadId → $threadId,语音停录+静音")
+            voiceController.send(VoiceEvent.SessionSwitched(threadId))
+        }
+    }
+
+    // 初始化失败态(如首次解压被磁盘满/进程被杀打断)给一次重试机会:prepareBundledModel
+    // 幂等(有 busy 挡板),本次点击弹原因,下次点击可能已就绪。
+    // (声明在 micPermission 之前:Kotlin 局部函数引用不了其后声明的局部变量。)
     fun reportVoiceUnavailable() {
-        // 【自愈】初始化失败态(如首次解压被磁盘满/进程被杀打断)给一次重试机会:
-        // prepareBundledModel 幂等(有 busy 挡板),本次点击弹原因,下次点击可能已就绪。
         if (!senseModelState.preparing && senseModelState.error != null) {
             SenseVoiceModelManager.prepareBundledModel()
         }
@@ -2146,60 +2122,63 @@ fun ChatScreen(
         }
         Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
     }
-    // 一次性权限申请:拒绝后状态机记为 NO_PERMISSION,下次点击可再次申请
+
+    // 一次性权限申请:拒绝后 reducer 落 ERROR+INSUFFICIENT_PERMISSIONS(人话提示走下方
+    // 错误观察器),下次点击可再次申请。授权但引擎没建起来(端侧初始化中/失败):撤掉等
+    // 权限会话并如实报真实原因(reportVoiceUnavailable,可自愈重试),不报"设备不支持"
+    // 的误导话 —— 与旧实现的"重复提示修复"口径一致。
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        Log.d("PaVoice", "权限回答 granted=$granted 识别器可用=${voiceRecognizer != null}")
-        if (granted && voiceRecognizer == null) {
-            // 【重复提示修复】授权了但引擎没建起来(端侧初始化中/失败):上面
-            // reportVoiceUnavailable 已给出真实原因(初始化中/失败可重试),不再叠加
-            // 一条"这台设备不支持语音识别"的误导提示 —— 旧实现两个 Toast 连发,
-            // 第二句是谎话(引擎只是还没就绪,不是设备不支持)。
+        Log.d("PaVoice", "权限回答 granted=$granted 引擎=${voiceController.current().engine}")
+        if (granted && voiceController.current().engine == VoiceEngineKind.UNAVAILABLE) {
+            voiceController.send(VoiceEvent.Cancel)
             reportVoiceUnavailable()
         } else {
-            dispatchVoice(VoiceEvent.PermissionAnswered(granted, voiceRecognizer != null))
-        }
-    }
-    // 消费语音指令:从通道逐条取出执行(开始/停止识别、识别文本并入输入框不自动发送、人话提示)。
-    // LaunchedEffect 只启动一次,与 voiceUi 的重组完全解耦 —— 指令必达(V-1 修复核心)。
-    val currentVoiceRecognizer by rememberUpdatedState(voiceRecognizer)
-    LaunchedEffect(Unit) {
-        for (fx in voiceFx) {
-            Log.d("PaVoice", "指令消费 $fx")
-            // 【PF5 语音跨会话】静音期过滤:切会话后旧识别器残余的 append/toast 一律
-            // 丢弃(start/stop 保留 —— stop 是切会话停录的收尾指令,start 是用户在
-            // 新会话的主动发起,顺带解除静音)。过滤纯函数见 voiceFilterMutedEffects。
-            val gate = voiceFilterMutedEffects(fx, voiceMutedBySwitch)
-            if (gate.start) {
-                voiceMutedBySwitch = false
-                startVoiceWatchdog()
-                currentVoiceRecognizer?.start()
-            }
-            if (gate.stop) {
-                // 主动停止:reducer 在点击停止的瞬间已把状态置回 IDLE(见 voiceReduce)。
-                // 停止听写后,已开始的转写结果仍会经结果回调落入输入框;如后续引入
-                // "转写中"独立状态,可再补停止后的兜底提示。(此处曾挂一个"收尾看门狗",
-                // 但其超时分支的 listening 守卫在停止后恒为假,属永不触发的死代码,已删。)
-                currentVoiceRecognizer?.stopListening()
-            }
-            gate.append?.let { spoken ->
-                setInput(joinVoiceText(input, spoken)) // 走 setInput:修订号与内容同车
-                voiceLandedTick++ // 【动画 ③】文本落框触发输入框"落定"脉动(见输入区)
-            }
-            gate.toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
+            voiceController.send(VoiceEvent.Permission(granted))
         }
     }
 
-    // 【PF5 语音跨会话】切换会话即停录:voiceUi/识别器都不带 threadId 键(单例复用
-    // 同一识别器实例),此前在听写中切会话,最终转写会经 fx.append 落进新会话草稿。
-    // 现在换会话瞬间:置静音(丢残余文本/提示)+ 听写进行中则归约 SessionSwitched
-    // (回 IDLE 并产出 stop 指令);未落草稿的文本整体丢弃,绝不写进新会话。
-    // 首进页面不算"切换"(voiceHomeThreadId 钉住组合首见的 threadId)。
-    val voiceHomeThreadId = remember { threadId }
-    LaunchedEffect(threadId) {
-        if (threadId == voiceHomeThreadId) return@LaunchedEffect
-        Log.d("PaVoice", "切会话 $voiceHomeThreadId → $threadId,语音静音+停录")
-        voiceMutedBySwitch = true
-        dispatchVoice(VoiceEvent.SessionSwitched)
+    // ---- 语音输入交互(Task 6,最小接线) ----
+    // 【裁定】识别完成默认【追加】到输入框(空格衔接,不覆盖已有内容);长按麦克风切换
+    // 【替换】模式(开关式,图标着色 + 读屏描述 + Toast 同步反馈)。两种模式都不改写
+    // 原文的大小写与标点。识别文本只并入输入框(走 setInput,修订号同车),绝不自动发送。
+    var voiceReplaceMode by remember { mutableStateOf(false) }
+    // 每轮 Final 只消费一次(以 sessionId 防重:finalText 在下一轮 Start 前一直驻留域状态)。
+    var voiceConsumedFinalForSid by remember { mutableStateOf(0L) }
+    LaunchedEffect(voiceState.phase, voiceState.sessionId) {
+        val spoken = voiceState.finalText
+        if (voiceState.phase == VoicePhase.IDLE && spoken.isNotEmpty() &&
+            voiceConsumedFinalForSid != voiceState.sessionId
+        ) {
+            voiceConsumedFinalForSid = voiceState.sessionId
+            setInput(voiceApplyToInput(input, spoken, replace = voiceReplaceMode))
+            voiceLandedTick++ // 【动画 ③】文本落框触发输入框"落定"脉动(见输入区)
+        }
+    }
+    // 错误人话提示:ERROR 相的错误分类 → 一次性 Toast。文案沿用旧口径(权限/MIUI「录音」
+    // 开关指引等),经新枚举 voiceErrorText 重载映射;下一轮 Start 清错误后同类错误可再报。
+    LaunchedEffect(voiceState.phase, voiceState.error) {
+        if (voiceState.phase == VoicePhase.ERROR && voiceState.error != null) {
+            Toast.makeText(ctx, voiceErrorText(voiceState.error!!), Toast.LENGTH_SHORT).show()
+        }
+    }
+    // 录音时长(读屏反馈用):收音相每秒 +1;停止/转写保持最后一读,下一轮清零。
+    var voiceElapsedSec by remember { mutableStateOf(0) }
+    LaunchedEffect(voiceState.phase) {
+        if (voiceState.phase == VoicePhase.STARTING || voiceState.phase == VoicePhase.LISTENING) {
+            voiceElapsedSec = 0
+            while (true) {
+                delay(1_000)
+                voiceElapsedSec++
+            }
+        }
+    }
+    // 展示态派生:会话进行中(波形/占位符/按钮语义)。STARTING 起就点亮(旧路径点击即亮),
+    // PAUSED 也算进行中(再点一次=恢复),IDLE/ERROR 是真正的空闲;权限申请中不点亮。
+    val voiceListening = when (voiceState.phase) {
+        VoicePhase.STARTING, VoicePhase.LISTENING, VoicePhase.PAUSED,
+        VoicePhase.STOPPING, VoicePhase.TRANSCRIBING,
+        -> true
+        else -> false
     }
 
     var showModelCard by remember { mutableStateOf(false) }
@@ -2583,18 +2562,17 @@ fun ChatScreen(
         if (subPrevRunning.getAndSet(st.running) && !st.running) SubAgentsState.refresh()
     }
 
-    // 【会话级模型】进入会话时恢复该会话上次选定的模型;该会话没选过则用全局默认。
-    // 修复:selectedModel 过去是全局单值,在 A 会话切模型会污染 B 会话,
-    // 退出再进又被重置成"跟随桌面配置";现在按 threadId 单独记住。
-    // 【会话级思考强度】与模型同一套语义:恢复该会话的强度覆盖值,没选过用全局默认
-    // (旧实现强度是全局单值且不落盘 —— A 会话调了强度 B 会话跟着变,重启后整个丢失)。
-    // 【键里含全局默认】在设置页改了默认模型/强度而本页还停在后台时,
-    // 默认值一变就重新断言:有覆盖值的会话不受波及,跟随默认的会话立即跟到最新值。
-    LaunchedEffect(threadId, threadAgentId, AgentConnection.defaultModel, AgentConnection.defaultEffort) {
-        AgentConnection.selectedModel =
-            AgentConnection.threadModel(threadId)?.takeIf { it.isEmpty() || it.startsWith("$threadAgentId/") } ?: AgentConnection.modelForAgent(threadAgentId)
-        AgentConnection.selectedEffort =
-            AgentConnection.threadEffort(threadId) ?: AgentConnection.effortForAgent(threadAgentId)
+    // 【P3-T4 接线①】进入会话:ModelSelectionRepository.open(threadId, agentId)
+    // —— 先读本地「上次记录」(fromCache 标注)再用 daemon 真值整树替换(仓库恢复链)。
+    // 【顺序红线】原"恢复该会话上次选定的模型/强度"的 selectedModel/selectedEffort
+    // 重断言段已整体撤除(防双写):选择事实源收敛到仓库一棵状态树,本页不再往
+    // AgentConnection.selectedModel/selectedEffort 写任何值 —— 若保留重断言,它会在
+    // 仓库真值回填后把旧缓存值写回全局,两路口径互相覆盖(计划 Task 3 收敛点)。
+    // 全局值的其它读者(侧边栏/主页/会话列表/新建会话)为波 4 待接线项。
+    val modelSelectionState by ModelSelectionRepository.state.collectAsState()
+    val modelSelection = ModelSelectionReducer.display(modelSelectionState)
+    LaunchedEffect(threadId, threadAgentId) {
+        ModelSelectionRepository.open(threadId, threadAgentId)
     }
 
     // 生效模型(全部按会话归属 agent 取,不再串别家的模型表/默认值):
@@ -2645,6 +2623,16 @@ fun ChatScreen(
                     }
                     TurnSession.acceptRuntimeSelection(threadId,native.currentModelId,
                         if(native.hasCurrentEffort()) native.currentEffort else null)
+                    // 【P3-T4 接线②】巡检回包喂仓库:仓库没有外部写入通道(交底口径
+                    // 只有 open/send/refresh 三入口),按二选一方案改调 repository.refresh()
+                    // —— GetThread(24)+ListModels(5) 真值整树替换,选择状态只有仓库
+                    // 一个写者,不再双路写。本巡检的既有职责(10s 节奏/前台门控/模型表
+                    // 合并/原生选择回填 acceptRuntimeSelection)原样保留。
+                    // 【竞态安全】refresh 自带在飞守卫(pending 非空时只更新模型表,
+                    // 不覆盖乐观投影);失败只标仓库 error,不影响本巡检。
+                    if (ModelSelectionRepository.currentThreadId() == threadId) {
+                        ModelSelectionRepository.refresh()
+                    }
                 } catch(e: kotlinx.coroutines.CancellationException) { throw e }
                 catch(_:Exception) { /* Keep last verified runtime state during network recovery. */ }
             }
@@ -4924,11 +4912,22 @@ fun ChatScreen(
                                         Text(
                                             when {
                                                 offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
-                                                // 【P1-9】听写进行中:placeholder 提示。仅 LISTENING 态展示,
-                                                // 点击停止后状态机立即回 IDLE、占位符随之切回常规文案;
-                                                // 停止听写后,已开始的转写结果仍会经结果回调落入输入框,
-                                                // 如后续引入"转写中"独立状态,可再补停止后的兜底提示。
-                                                voiceUi.listening -> "语音输入中…"
+                                                // 【P4 Task 6】识别进行中:placeholder 优先展示引擎的
+                                                // 部分转写(实时反馈);无字时按相给占位 ——
+                                                // 停止后的 STOPPING/TRANSCRIBING(端侧转写窗口)
+                                                // 显示"转写中…",出稿后回 IDLE 占位符切回常规文案。
+                                                voiceListening ->
+                                                    // 【P4 Task 6】识别中的实时反馈:优先展示引擎部分转写,
+                                                    // 没有字时按相给占位(停止后 TRANSCRIBING=转写中)。
+                                                    voiceState.partialText.ifBlank {
+                                                        if (voiceState.phase == VoicePhase.TRANSCRIBING ||
+                                                            voiceState.phase == VoicePhase.STOPPING
+                                                        ) {
+                                                            "转写中…"
+                                                        } else {
+                                                            "语音输入中…"
+                                                        }
+                                                    }
                                                 // 黑客终端模式:hint 改为指令口吻(规格文案)
                                                 PaHacker.isHacker -> "输入指令…"
                                                 else -> "继续输入,或询问当前进度…"
@@ -5200,10 +5199,10 @@ fun ChatScreen(
                     }
                     }
                     Spacer(Modifier.width(4.dp))
-                    // 【P1-9 语音输入】麦克风:无权限先申请(RECORD_AUDIO),有权限启动
-                    // 本机优先的语音识别;识别中图标区换成波形跳动柱;再点一次 =
-                    // 停止并出结果。识别文本只并入输入框,绝不自动发送(保留编辑权)。
-                    val voiceListening = voiceUi.listening
+                    // 【P4 Task 6 语音输入】麦克风:无权限先申请(RECORD_AUDIO),有权限启动
+                    // VoiceController 会话(系统识别优先,端侧 SenseVoice 兜底);识别中图标区
+                    // 换成波形跳动柱;再点一次 = 停止并交付结果。识别文本只并入输入框
+                    // (默认追加,长按切替换模式),绝不自动发送(保留编辑权)。
                     // 【动画 ②·识别中波形】4 根跳动柱替代旧的整体缩放脉动:柱间时长
                     // 错开(430/560/500/650ms)避免"同起同落"的机械感;空闲分支不挂
                     // InfiniteTransition,不空转。柱高用 scaleY 绘制层缩放,不改布局。
@@ -5246,27 +5245,59 @@ fun ChatScreen(
                     Box(
                         Modifier
                             // PA-REAL-0004:触控箱 ≥48dp(原 40dp);涟漪/波形/图标的绘制尺寸
-                            // 都不变,只是不可见的命中区放大。点击处理逻辑(语音状态机)未动。
+                            // 都不变,只是不可见的命中区放大。
                             .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            .pressable {
-                                micRippleTick++ // 【动画 ①】按下即起涟漪(不依赖识别结果)
-                                val granted = ContextCompat.checkSelfPermission(
-                                    ctx, Manifest.permission.RECORD_AUDIO,
-                                ) == PackageManager.PERMISSION_GRANTED
-                                Log.d(
-                                    "PaVoice",
-                                    "MicClicked 授权=$granted 识别器可用=${voiceRecognizer != null} " +
-                                        "sys=$sysVoiceAvailable bundled=$senseReady",
-                                )
-                                if (granted && voiceRecognizer == null) {
-                                    reportVoiceUnavailable()
-                                    return@pressable
+                            // 【P4 Task 6】点按 = 开始/停止(按相裁决);长按 = 切换追加/替换模式。
+                            .semantics {
+                                // TalkBack 单一描述(图标本体不再各挂 contentDescription,避免读两遍):
+                                // 空闲 = 模式;进行中 = 时长 + 引擎名 + 停止指引。
+                                contentDescription = if (voiceListening) {
+                                    "语音输入中,已录 $voiceElapsedSec 秒,${voiceEngineLabel(voiceState.engine)};" +
+                                        "点按停止并出稿" + if (voiceReplaceMode) ",替换模式" else ""
+                                } else if (voiceReplaceMode) {
+                                    "语音输入(替换模式):点按开始,长按切回追加模式"
+                                } else {
+                                    "语音输入:点按开始,长按切换替换模式"
                                 }
-                                dispatchVoice(
-                                    VoiceEvent.MicClicked(granted, voiceRecognizer != null),
-                                )
-                                if (!granted) micPermission.launch(Manifest.permission.RECORD_AUDIO)
-                            },
+                            }
+                            .pressableLong(
+                                onClick = {
+                                    micRippleTick++ // 【动画 ①】按下即起涟漪(不依赖识别结果)
+                                    val granted = ContextCompat.checkSelfPermission(
+                                        ctx, Manifest.permission.RECORD_AUDIO,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    when (voiceState.phase) {
+                                        // 空闲/失败:开新一轮(无权限则只申请,回答后经 Permission 事件续跑)
+                                        VoicePhase.IDLE, VoicePhase.ERROR -> {
+                                            if (granted && voiceController.current().engine == VoiceEngineKind.UNAVAILABLE) {
+                                                // 引擎没建起来(端侧初始化中/失败):如实报因,可自愈重试
+                                                reportVoiceUnavailable()
+                                            } else {
+                                                voiceController.send(VoiceEvent.Start)
+                                            }
+                                            if (!granted) micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
+                                        // 收音中/启动中:停止并交付最终转写
+                                        VoicePhase.STARTING, VoicePhase.LISTENING ->
+                                            voiceController.send(VoiceEvent.Stop)
+                                        // 暂停中:再点一次 = 恢复(同会话继续,文本累计不清)
+                                        VoicePhase.PAUSED -> voiceController.send(VoiceEvent.Start)
+                                        // 等权限弹窗/停止收尾/端侧转写中:防抖,忽略连点
+                                        VoicePhase.REQUESTING_PERMISSION, VoicePhase.STOPPING,
+                                        VoicePhase.TRANSCRIBING,
+                                        -> {}
+                                    }
+                                },
+                                onLongPress = {
+                                    voiceReplaceMode = !voiceReplaceMode
+                                    PaHaptics.light(hapticView)
+                                    Toast.makeText(
+                                        ctx,
+                                        if (voiceReplaceMode) "语音输入已切到替换模式:识别结果将覆盖输入框" else "语音输入已切到追加模式:识别结果将接在输入框后",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
+                            ),
                         contentAlignment = Alignment.Center,
                     ) {
                         // 涟漪圆环:仅动画进行中绘制(0..1),结束后自然隐藏
@@ -5299,9 +5330,11 @@ fun ChatScreen(
                                 }
                             }
                         } else {
+                            // 替换模式点亮 Accent 色(视觉反馈);读屏描述统一挂在上方
+                            // Box 的 semantics(避免读两遍),图标本体不再各挂描述。
                             Icon(
-                                painterResource(AppR.drawable.ic_lucide_mic), "语音输入",
-                                tint = ChatMutedColor,
+                                painterResource(AppR.drawable.ic_lucide_mic), null,
+                                tint = if (voiceReplaceMode) ChatAccentColor else ChatMutedColor,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -6033,14 +6066,25 @@ fun ChatScreen(
     }
 
     if (showModelCard) {
+        // 【P3-T4 拆分】卡面整体搬至 ui/model.ModelEffortCard:页面只传仓库状态与
+        // 意图出口,不再传 initialSelectedId(选中态唯一来源 =
+        // ModelSelectionReducer.display(repository.state);daemon 真值 > 乐观投影 >
+        // 「上次记录」)。运行中切换由卡面按 appliesToNextTurn 显示"将从下一轮生效"。
         ModelEffortCard(
-            threadId = threadId,
+            state = modelSelectionState,
             // 会话归属 agent:模型表/品牌图标/档位语义按它取,不用全局 selectedAgent
             // (否则在 pi 会话里开弹窗,弹的还是全局选中 agent 的模型表)。
-            agentId = sessionAgent,
-            // 初始选中态 = 生效模型 id(手机显式选择 > daemon 落库 Thread.ModelID),
-            // 点选后由卡面内部状态即时接管。
-            initialSelectedId = effectiveModelId,
+            sessionAgent = sessionAgent,
+            // 正在运行轮次的实际配置(只读对照行;卡面不写 TurnSession)
+            runtimeModel = st.runningModel,
+            runtimeEffort = st.runningEffort,
+            // 意图出口:显式选择(模型/强度/重置)在下一轮确认前不让巡检原生回填覆盖
+            onIntent = { intent ->
+                if (intent != ModelSelectionIntent.Refresh) {
+                    TurnSession.state(threadId).selectionPending = true
+                }
+                ModelSelectionRepository.send(intent)
+            },
             onDismiss = { showModelCard = false },
             // 卡内真实选中 → 关卡后模型行给一次行内闪光(与快速面板同一反馈口径)
             onPicked = { modelFlashTick++ },
@@ -6101,7 +6145,7 @@ fun ChatScreen(
                             .fillMaxWidth()
                             .pressable {
                                 showQuickModels = false
-                                applyModelPick(threadId, sessionAgent, sessionModels, qm.id)
+                                applyModelPick(threadId, sessionAgent, qm.id)
                                 modelFlashTick++ // 行内闪光:模型名刚真实切过一次
                             }
                             .heightIn(min = 44.dp)
@@ -6136,8 +6180,9 @@ fun ChatScreen(
                 // 【思考强度行(2026-10-02 流畅度补全)】强度切换此前藏在"更多…"二级
                 // 完整卡里,一级面板只有模型 —— 用户裁决"切换不流畅"的第二主因。
                 // 这里按会话 agent 的档位集(effortsFor 同源)渲染强度胶囊,单点即切
-                // (setThreadEffort,下一轮生效语义与完整卡一致);选中态读
-                // selectedEffort 可观察值,即时高亮。
+                // (下一轮生效语义与完整卡一致);【P3-T4 接线④】选中态来自仓库
+                // display(ModelSelectionReducer.display),点击改发 SelectEffort 意图
+                // —— 不再直读/直写 AgentConnection.selectedEffort 与 setThreadEffort。
                 val quickEfforts = remember(sessionAgent, sessionModels) {
                     effortsFor(sessionModels, effectiveModelId, sessionAgent)
                 }
@@ -6155,14 +6200,14 @@ fun ChatScreen(
                         fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
                     )
                     quickEfforts.forEach { e ->
-                        val selected = AgentConnection.selectedEffort == e.id
+                        val selected = modelSelection?.effort == e.id
                         Text(
                             e.label,
                             Modifier
                                 .clip(RoundedCornerShape(50))
                                 .pressable {
                                     PaHaptics.light(effortHapticView)
-                                    AgentConnection.setThreadEffort(threadId, e.id)
+                                    ModelSelectionRepository.send(ModelSelectionIntent.SelectEffort(e.id))
                                 }
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             fontSize = 12.sp,
@@ -6246,263 +6291,17 @@ fun ChatScreen(
 }
 
 /**
- * 模型/思考强度卡面弹窗 —— "弹窗的卡面"而非长抽屉:
- * 居中卡片 + 限高可滚模型列表 + 思考强度胶囊 + 性能提示语。
- *
- * 【按会话 agent 取数】模型表按 [agentId] 过滤(modelsForAgent)、品牌图标与
- * "跟随桌面"副文案按它渲染 —— 不再用全局 AgentConnection.selectedAgent:
- * pi 会话里开弹窗,列的必须是 pi 自己的模型表(图3 实锤:过去列了别家的)。
- *
- * 【选中态】初始值 = [initialSelectedId](调用方按"手机显式选择 > daemon 落库
- * Thread.ModelID"算好的生效模型);点选后由卡面内部状态接管并即时高亮,
- * 同时落"会话级模型"持久化(AgentConnection.setThreadModel)。
+ * 【P3-T4 拆分】原 ModelEffortCard(模型/思考强度卡面弹窗)已整体搬至
+ * ui/model/ModelEffortCard.kt,并从"卡内自己拉 ListModels + currentPick 内部
+ * 选中态 + 直写 AgentConnection"换血为计划 Task 4 的形态:
+ *  - 页面只传 state(ModelSelectionRepository.state)与 onIntent(意图回调);
+ *  - 选中态唯一来源 = ModelSelectionReducer.display(state)
+ *    (daemon 真值 > 乐观投影 > 「上次记录」,fromCache 标注);
+ *  - 选择动作走 ModelSelectionIntent(SelectModel/SelectEffort/ResetToDefault/
+ *    Refresh),RPC/缓存/全局状态全部收敛在 ModelSelectionRepository;
+ *  - 运行中切换按 appliesToNextTurn 显示"将从下一轮生效";
+ *  - 单行选项件见 ui/model/ModelOptionRow.kt(含窄屏可读的能力副文案)。
  */
-@Composable
-fun ModelEffortCard(
-    threadId: String = "",
-    agentId: String = "",
-    initialSelectedId: String = "",
-    onDismiss: () -> Unit,
-    // 一次真实选中(含"跟随桌面")后的回调:宿主给模型行闪光等行内反馈用
-    onPicked: () -> Unit = {},
-) {
-    // 会话归属 agent:调用方没给(旧调用点/预览)时退全局选中 agent,行为不变。
-    val sessionAgent = agentId.ifBlank { AgentConnection.selectedAgent }
-    // 强度胶囊的触感落点(独立卡面,自取 LocalView;light 档见下方 onClick)
-    val effortHapticView = LocalView.current
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(PaEditorial.Raised, RoundedCornerShape(22.dp))
-                .padding(20.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("模型与思考强度", fontSize = 17.sp, color = PaEditorial.Ink)
-                IconActionButton(
-                    AppR.drawable.ic_lucide_x, "关闭", onDismiss,
-                    bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-
-            val models = remember { mutableStateOf(listOf<ModelInfo>()) }
-            var runtimeModel by remember { mutableStateOf(TurnSession.state(threadId).runningModel) }
-            var runtimeEffort by remember { mutableStateOf(TurnSession.state(threadId).runningEffort) }
-            var loadModelError by remember { mutableStateOf<String?>(null) }
-            var modelLoading by remember { mutableStateOf(true) }
-            var refreshModels by remember { mutableStateOf(0) }
-            LaunchedEffect(sessionAgent,refreshModels) {
-                modelLoading=true
-                models.value = try {
-                    // 全局列表按会话 agent 过滤后再渲染:pi 会话不再串进
-                    // codex/zcode 的模型表(图3 实锤修复,见 modelsForAgent)。
-                    val response=withContext(Dispatchers.IO) {
-                        AgentConnection.modelServiceSlow().listModels(ListModelsRequest.newBuilder()
-                            .setAgentId(sessionAgent).setThreadId(threadId).setRefresh(true).build())
-                    }
-                    if(response.currentModelId.isNotBlank()) runtimeModel=response.currentModelId
-                    if(response.hasCurrentEffort()) runtimeEffort=response.currentEffort
-                    modelsForAgent(response.modelsList,sessionAgent)
-                } catch (e: Exception) {
-                    loadModelError=e.message ?: "模型列表暂不可用"
-                    models.value
-                }
-                modelLoading=false
-            }
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                Text(if(modelLoading) "正在同步 Agent 原生模型…" else loadModelError ?: "${models.value.count { !it.id.endsWith("/default") }} 个模型 · 来自 Agent 实时状态",
-                    Modifier.weight(1f),fontSize=11.sp,color=PaEditorial.Muted)
-                TextButton(onClick={loadModelError=null;refreshModels++}) { Text("刷新") }
-            }
-            if (runtimeModel.isNotBlank()) {
-                Text(
-                    "Agent 当前：${models.value.find { it.id==runtimeModel }?.displayName ?: modelBareName(runtimeModel)}" +
-                        (runtimeEffort?.let { " · ${effortLabelOf(it)}" } ?: ""),
-                    fontSize=11.sp, color=PaEditorial.Muted,
-                    modifier=Modifier.padding(bottom=8.dp),
-                )
-            }
-
-            /**
-             * 选定模型:会话内选择只改"本会话"(空串="跟随桌面配置",也是有效选择),
-             * 不污染全局默认,也不影响其他会话。
-             * 【选中态即时生效】currentPick 是卡面内单一选中状态:初始值来自
-             * [initialSelectedId],点选立即改它 —— 高亮不等任何 RPC/重组链。
-             * 【落点共享】选中后的动作收敛到 [applyModelPick](与模型行快速切换面板
-             * 同一份语义:档位清理/会话级选择/最近使用记忆),卡面只管自己的高亮。
-             */
-            var currentPick by remember(threadId) { mutableStateOf(initialSelectedId) }
-            fun pick(id: String) {
-                applyModelPick(threadId, sessionAgent, models.value, id)
-                onPicked()
-                currentPick = id
-            }
-
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .height(300.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                // 显式"跟随桌面配置"选项(空模型 id)
-                val followSelected = currentPick.isEmpty()
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable { pick("") }
-                        .padding(horizontal = 4.dp, vertical = 11.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 品牌图标 28dp:与下面每一行对齐,「这模型是哪个 agent 给的」一眼可辨。
-                    // tint = Color.Unspecified:品牌图标必须原色,不能被主题色染掉。
-                    agentBrandIcon(sessionAgent)?.let { res ->
-                        Icon(
-                            painterResource(res), null,
-                            tint = Color.Unspecified, modifier = Modifier.size(28.dp),
-                        )
-                        Spacer(Modifier.width(12.dp))
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "跟随桌面配置",
-                            fontSize = 15.sp,
-                            color = if (followSelected) PaEditorial.Primary else PaEditorial.Ink,
-                        )
-                        // 副文案按 agent:codex 的"跟随桌面"= 电脑端 codex 当前默认;
-                        // 其他 agent = 桌面设置页下发的全局默认(pi 侧只认 pi/ 前缀,
-                        // 见 daemon applyDesktopDefaults,指向别家时沿用自己当前模型)。
-                        Text(
-                            if (sessionAgent == "codex") "使用电脑上 codex 当前的默认模型"
-                            else "使用桌面设置下发给 ${selectedAgentLabel(sessionAgent)} 的默认模型",
-                            fontSize = 10.5.sp, color = PaEditorial.Subtle,
-                        )
-                    }
-                    if (followSelected) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_check), null,
-                            tint = PaEditorial.Primary, modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                if (models.value.isEmpty()) {
-                    Text(if(modelLoading) "加载中…" else "Agent 暂未报告模型，请刷新", fontSize = 13.sp, color = PaEditorial.Subtle, modifier = Modifier.padding(8.dp))
-                }
-                models.value.forEach { m ->
-                    val selected = m.id == currentPick
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .pressable { pick(m.id) }
-                            .padding(horizontal = 4.dp, vertical = 11.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        agentBrandIcon(sessionAgent)?.let { res ->
-                            Icon(
-                                painterResource(res), null,
-                                tint = Color.Unspecified, modifier = Modifier.size(28.dp),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                        }
-                        Column(Modifier.weight(1f)) {
-                            // 【完整显示,不截断】以前 maxLines=1 + 省略号,带后缀的长模型名
-                            // 只能读半截(用户反馈"模型名称仍未完整显示")。去掉行数上限,
-                            // 让它按需换行;displayName 为空时退回模型 id,绝不显示空白行。
-                            Text(
-                                m.displayName.ifBlank { m.id },
-                                fontSize = 15.sp,
-                                color = if (selected) PaEditorial.Primary else PaEditorial.Ink,
-                            )
-                            if (m.contextWindow > 0) {
-                                Text(
-                                    "上下文 ${m.contextWindow / 1000}k" +
-                                        if (m.supportsThinking) " · 支持思考" else "",
-                                    fontSize = 10.5.sp,
-                                    color = PaEditorial.Subtle,
-                                )
-                            }
-                        }
-                        if (selected) {
-                            Spacer(Modifier.width(8.dp))
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_check), null,
-                                tint = PaEditorial.Primary, modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
-            Spacer(Modifier.height(12.dp))
-            Text("思考强度", fontSize = 14.sp, color = PaEditorial.Ink)
-            Spacer(Modifier.height(10.dp))
-            // 档位来源(effortsFor,纯函数已单测):daemon 在模型信息里透出了
-            // 动态档位(available_efforts 非空,pi 随模型变化)就按它渲染;
-            // 没透出(codex/zcode)回内置默认档。键含所选模型/agent:切换时档位行即时刷新。
-            // 【按会话 agent】档位语义跟着会话归属走(currentPick 初始值是会话
-            // 生效模型),不再读全局 selectedAgent/selectedModel。
-            val efforts = remember(
-                models.value,
-                currentPick,
-                sessionAgent,
-                runtimeModel,
-            ) {
-                effortsFor(models.value,
-                    if(currentPick.isBlank() || currentPick=="$sessionAgent/default") runtimeModel else currentPick,
-                    sessionAgent)
-            }
-            // 【横向可滚】pi 动态全集 + "默认"最多 8 枚胶囊,窄屏一排放不下,
-            // 溢出的档位以前会被直接裁掉(点不到也看不见)。
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            ) {
-                efforts.forEach { e ->
-                    val selected = AgentConnection.selectedEffort == e.id
-                    Box(
-                        Modifier
-                            .pressable {
-                                // 强度切换 = light 档(高频低强度的刻度级反馈,触感分级
-                                // 体系;模型/档位选择卡内不惊扰)。LocalView 由卡面自取。
-                                PaHaptics.light(effortHapticView)
-                                // 按会话记住并立即持久化(与模型同一套语义):
-                                // 退出再进不回退、不污染其它会话、重启 App 不丢失。
-                                AgentConnection.setThreadEffort(threadId, e.id)
-                                TurnSession.state(threadId).selectionPending = true
-                            }
-                            .background(
-                                if (selected) PaEditorial.Primary else PaEditorial.Surface,
-                                RoundedCornerShape(50),
-                            )
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    ) {
-                        Text(
-                            e.label,
-                            fontSize = 13.sp,
-                            color = if (selected) PaEditorial.OnPrimary else PaEditorial.Muted,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                if (currentPick.isEmpty() || currentPick.endsWith("/default")) "跟随 Agent 原生当前模型；选择具体模型后显示它的实时思考档位。"
-                else "修改应用于下一次输入，执行中收到的原生状态会自动同步。",
-                fontSize = 11.sp,
-                color = PaEditorial.Subtle,
-            )
-        }
-    }
-}
 
 /** 一个可选项:label 主文案必填;description 副文案 / preview 代码块是 daemon 透传的原生字段,存在才渲染。 */
 internal data class AskOption(
@@ -7909,14 +7708,25 @@ internal fun quoteMessageIntoDraft(
 }
 
 // =====================================================================================
-// P1-9 语音输入 —— 状态机(纯逻辑,零 Android 依赖,见 PaNotificationAndVoiceTest)
+// P1-9/P4 语音输入 —— 纯逻辑区(遗留桥 + 接线纯函数)
+//
+// 【P4 Task 4/5 迁移说明】语音状态机/看门狗/识别器装配已整体迁往 ui/voice 六件套
+// (VoiceSessionReducer + VoiceController + SystemVoiceEngine/SenseVoiceEngine),
+// 旧页面胶水(voiceReduce/VoiceInputUi/VoiceEvent/PaVoiceRecognizer/
+// createVoiceRecognizer/createSystemVoiceRecognizer/startVoiceWatchdog/死区墙钟
+// 纯函数)已随接线切换整体删除。本区只保留:
+//  1. 旧七类错误映射(VoiceErrorKind/voiceErrorKind/systemVoiceRetireNeeded)——
+//     ui/voice/SystemVoiceEngine 以 import 复用其为单一真值源,不得删除或改名;
+//  2. joinVoiceText / voiceApplyToInput —— Final 落框的追加/替换纯逻辑;
+//  3. 新枚举文案映射 voiceErrorText(DomainVoiceErrorKind)重载 + voiceEngineLabel
+//     + pickVoiceEngine(域层 VoiceEngineKind 决策表)。
 // =====================================================================================
 
-/** 语音输入状态:空闲 / 听写中 / 无权限 / 设备不支持。 */
-internal enum class VoiceInputState { IDLE, LISTENING, NO_PERMISSION, UNAVAILABLE }
-
 /**
- * 识别失败的分类(与 SpeechRecognizer 错误码的映射在 glue 层 [voiceErrorKind])。
+ * 【遗留桥,勿删】识别失败的旧七类分类:与 SpeechRecognizer 错误码的映射在
+ * [voiceErrorKind],ui/voice/SystemVoiceEngine 经 `systemVoiceErrorKind` 按名搬运到
+ * 域层新枚举(ui.voice.VoiceErrorKind,新增死区/端侧三类)。本枚举不再被页面接线
+ * 直接消费,仅作为错误码→分类的单一真值源存在。
  * 【ENGINE】端侧 SenseVoice 引擎专用(识别器/录音器异常),系统识别不会产生。
  * 【MIC_BLOCKED】端侧引擎报"运行时权限已给但仍采不了音"(错误码 102):MIUI 等国产
  *  ROM 在运行时权限之外还有独立的「录音」开关,或麦克风被其他应用占用 —— 人话提示
@@ -7925,153 +7735,6 @@ internal enum class VoiceInputState { IDLE, LISTENING, NO_PERMISSION, UNAVAILABL
  */
 internal enum class VoiceErrorKind { NO_MATCH, BUSY, INSUFFICIENT_PERMISSIONS, CLIENT, OTHER, ENGINE, MIC_BLOCKED }
 
-/** 语音输入的事件(组合层与识别器回调产生)。 */
-internal sealed interface VoiceEvent {
-    /**
-     * 点击麦克风。
-     * @param hasPermission RECORD_AUDIO 运行时权限是否已授予(组合层自查)
-     * @param available 识别器是否创建成功(false = 设备不支持)
-     */
-    data class MicClicked(val hasPermission: Boolean, val available: Boolean) : VoiceEvent
-
-    /** 权限申请回答;@param available 同上(回答时才知道识别器可用性)。 */
-    data class PermissionAnswered(val granted: Boolean, val available: Boolean) : VoiceEvent
-
-    /** 识别出最终文本(可能为空 = 没听到)。 */
-    data class RecognitionResults(val text: String) : VoiceEvent
-
-    /** 识别出错。 */
-    data class RecognitionFailed(val kind: VoiceErrorKind) : VoiceEvent
-
-    /**
-     * 死区超时兜底(组合层看门狗触发):预检可用、startListening 也未同步抛,
-     * 但 8 秒内 onReadyForSpeech/onPartialResults/onResults/onError 一个回调都没有 ——
-     * 个别 ROM 的识别服务实际处于"死区",不兜底 UI 会永远卡在 LISTENING。
-     *
-     * 【P2-d】@param firstColdLoad true = 端侧引擎本识别器实例尚无一次成功识别
-     * (模型还在往内存加载):零回调多半是加载慢而非服务死区,提示文案换成
-     * "正在加载语音模型,请稍候再试"(见 [voiceDeadZoneToast])。默认 false 兼容
-     * 系统引擎与已暖场景,老路径文案不变。现役 SenseVoice 的 onAlive 在进录音态
-     * 后立刻到达,组合层恒传 false(保留参数 = 文案分流语义仍被单测锁定)。
-     */
-    data class DeadZoneTimeout(val firstColdLoad: Boolean = false) : VoiceEvent
-
-    /**
-     * 【PF5 语音跨会话】切换会话(组合层 LaunchedEffect(threadId) 触发):
-     * 听写进行中 → 立即回 IDLE 并产出 stop 指令停录;残余文本由组合层静音门
-     * ([voiceFilterMutedEffects])丢弃,不落新会话草稿。空闲时原地不动(但静音
-     * 照常置位 —— 用户"点了停止又立刻切会话"的场景,最终转写同样不得跨会话)。
-     */
-    data object SessionSwitched : VoiceEvent
-}
-
-/**
- * 语音输入的 UI 状态。start/stop/append/toast 是**一次性指令**:
- * 状态机产出后由组合层消费(pendingVoiceEffects 取出执行 → voiceEffectsConsumed 清除),
- * 状态机本身不碰任何 Android API。
- */
-internal data class VoiceInputUi(
-    val state: VoiceInputState = VoiceInputState.IDLE,
-    val startRecognition: Boolean = false,
-    val stopRecognition: Boolean = false,
-    /** 待并入输入框的识别文本(非空 = 消费时拼进输入框,不自动发送)。 */
-    val appendText: String? = null,
-    /** 待弹出的人话提示。 */
-    val toast: String? = null,
-) {
-    val listening: Boolean get() = state == VoiceInputState.LISTENING
-}
-
-/** 状态机主转移:点击/权限回答/出结果/出错。 */
-internal fun voiceReduce(current: VoiceInputUi, event: VoiceEvent): VoiceInputUi = when (event) {
-    is VoiceEvent.MicClicked -> when {
-        // 再点一次 = 停止并等结果
-        current.listening -> current.copy(state = VoiceInputState.IDLE, stopRecognition = true)
-        // 无权限:组合层负责发起申请,回答后走 PermissionAnswered;状态机原地不动
-        !event.hasPermission -> current
-        !event.available -> current.copy(state = VoiceInputState.UNAVAILABLE, toast = "这台设备不支持语音识别")
-        else -> current.copy(state = VoiceInputState.LISTENING, startRecognition = true)
-    }
-    is VoiceEvent.PermissionAnswered -> when {
-        // 【可行动化】拒绝后(尤其 MIUI 拒过两次后系统不再弹框)必须指路"去哪里开",
-        // 只说"无法语音输入"用户无路可走
-        !event.granted -> current.copy(
-            state = VoiceInputState.NO_PERMISSION,
-            toast = "没有麦克风权限:请在 系统设置→应用→PocketAgent→权限 中允许「麦克风」",
-        )
-        !event.available -> current.copy(state = VoiceInputState.UNAVAILABLE, toast = "这台设备不支持语音识别")
-        else -> current.copy(state = VoiceInputState.LISTENING, startRecognition = true)
-    }
-    is VoiceEvent.RecognitionResults -> {
-        val text = event.text.trim()
-        if (text.isEmpty()) {
-            current.copy(state = VoiceInputState.IDLE, toast = "没听到,再试一次")
-        } else {
-            current.copy(state = VoiceInputState.IDLE, appendText = text)
-        }
-    }
-    is VoiceEvent.RecognitionFailed -> current.copy(state = VoiceInputState.IDLE, toast = voiceErrorText(event.kind))
-    is VoiceEvent.DeadZoneTimeout -> {
-        // 【死区兜底】服务零响应:主动回 IDLE + 人话提示,不让 UI 卡在 LISTENING 干等。
-        // 【P2-d】端侧首次冷加载撞看门狗 ≠ 服务死区:文案按真相分流(纯函数,可单测)
-        current.copy(
-            state = VoiceInputState.IDLE,
-            toast = voiceDeadZoneToast(event.firstColdLoad),
-        )
-    }
-    is VoiceEvent.SessionSwitched -> when {
-        // 【PF5 语音跨会话】切会话停录:听写中 → 回 IDLE + stop 指令(组合层调
-        // stopListening);空闲 → 原地不动。本事件永不产 append/toast —— 跨会话
-        // 的文本一律丢弃,也不在新会话弹旧会话的提示。
-        current.listening -> current.copy(state = VoiceInputState.IDLE, stopRecognition = true)
-        else -> current
-    }
-}
-
-/** 待执行的一次性指令(纯数据,组合层照单执行)。 */
-internal data class VoiceEffects(
-    val start: Boolean,
-    val stop: Boolean,
-    val append: String?,
-    val toast: String?,
-)
-
-internal fun pendingVoiceEffects(ui: VoiceInputUi): VoiceEffects =
-    VoiceEffects(ui.startRecognition, ui.stopRecognition, ui.appendText, ui.toast)
-
-/** 指令执行后清掉一次性字段,状态本体保留。 */
-internal fun voiceEffectsConsumed(ui: VoiceInputUi): VoiceInputUi = ui.copy(
-    startRecognition = false,
-    stopRecognition = false,
-    appendText = null,
-    toast = null,
-)
-
-/**
- * 【V-1 修复】事件归约的统一入口:归约后**当场**取出一次性指令,返回
- * (清空指令的纯展示态, 待投递效果)。组合层把效果推入 Channel、把展示态写回 state ——
- * 指令投递从此不依赖"二次 state 写 + LaunchedEffect equals 重启"的时序,
- * 连续快速事件各 produce 各的指令,不会因同值状态写入被吞。
- */
-internal fun applyVoiceEvent(current: VoiceInputUi, event: VoiceEvent): Pair<VoiceInputUi, VoiceEffects> {
-    val next = voiceReduce(current, event)
-    val fx = pendingVoiceEffects(next)
-    return voiceEffectsConsumed(next) to fx
-}
-
-/** 效果是否含待执行动作(空效果无需入队)。 */
-internal fun voiceEffectsPending(fx: VoiceEffects): Boolean =
-    fx.start || fx.stop || fx.append != null || fx.toast != null
-
-/**
- * 【PF5 语音跨会话】静音门(纯函数,JVM 单测锁定):切换会话后,旧识别器残余的
- * 识别文本/人话提示一律丢弃 —— 文本不落新会话草稿,提示不在新会话弹出;
- * start/stop 保留(stop 是切会话停录的收尾指令,start 由用户在新会话主动发起,
- * 组合层消费时顺带解除静音)。muted=false 原样放行,常规路径零改动。
- */
-internal fun voiceFilterMutedEffects(fx: VoiceEffects, muted: Boolean): VoiceEffects =
-    if (muted) fx.copy(append = null, toast = null) else fx
-
 /** 识别文本并入输入框:空输入直接放;否则补一个空格再接(不覆盖已输入内容)。 */
 internal fun joinVoiceText(existing: String, spoken: String): String = when {
     existing.isBlank() -> spoken
@@ -8079,55 +7742,24 @@ internal fun joinVoiceText(existing: String, spoken: String): String = when {
     else -> "$existing $spoken"
 }
 
-// ---- 端侧兜底:引擎选择决策(纯函数,JVM 单测锁定) ----
-
-/** 语音识别引擎:系统识别(在线优先,质量好)/ 端侧 SenseVoice(离线,无 GMS 依赖的兜底)。 */
-internal enum class VoiceEngineKind { SYSTEM, SENSEVOICE, UNAVAILABLE }
+// ---- 端侧兜底:引擎选择决策(纯函数,JVM 单测锁定;枚举为 ui.voice 域层类别) ----
 
 /**
- * 引擎选择决策表(两级):
- *  · 系统可用            → SYSTEM(在线质量好,端侧只做兜底);
+ * 引擎选择决策表(两级,语义与旧表一致;接线层照单装配,见 ChatScreen 的
+ * bindEngine LaunchedEffect):
+ *  · 系统可用            → SYSTEM_ON_DEVICE(系统侧;具体 on-device/远程由
+ *    SystemVoiceEngine.create 工厂实测判定,决策表只表达"系统优先");
  *  · 系统不可用+模型就绪 → SENSEVOICE(小米等无识别服务 ROM 的落地);
  *  · 都不行              → UNAVAILABLE(点击麦克风给人话提示,内置模型初始化完成后
- *    识别器随 senseReady 重建为 SENSEVOICE,不再是 UNAVAILABLE)。
+ *    随 senseReady 重绑为 SENSEVOICE)。
  */
 internal fun pickVoiceEngine(sysAvailable: Boolean, senseReady: Boolean): VoiceEngineKind = when {
-    sysAvailable -> VoiceEngineKind.SYSTEM
+    sysAvailable -> VoiceEngineKind.SYSTEM_ON_DEVICE
     senseReady -> VoiceEngineKind.SENSEVOICE
     else -> VoiceEngineKind.UNAVAILABLE
 }
 
-// ---- 死区超时兜底(V-1 后续:start 后零回调的 ROM 服务死区) ----
-
-/** 死区超时阈值:start 指令消费后等这么久仍零回调,判定语音服务进入死区(毫秒)。 */
-internal const val VOICE_DEAD_ZONE_TIMEOUT_MS = 8_000L
-
-/**
- * 死区超时判定(纯函数,JVM 单测锁定):
- * @param elapsedMs start 指令消费至今已过的毫秒数
- * @param gotCallback 期间是否收到过识别器任一关键回调
- *   (onReadyForSpeech/onPartialResults/onResults/onError,任一到达即视为服务活着)
- * @param timeoutMs 超时阈值(默认 [VOICE_DEAD_ZONE_TIMEOUT_MS])
- * @return true = 判定死区,组合层应触发 [VoiceEvent.DeadZoneTimeout] 兜底回收状态
- */
-internal fun voiceDeadZoneTimedOut(
-    elapsedMs: Long,
-    gotCallback: Boolean,
-    timeoutMs: Long = VOICE_DEAD_ZONE_TIMEOUT_MS,
-): Boolean = !gotCallback && elapsedMs >= timeoutMs
-
-/**
- * 死区超时的人话提示(纯函数,JVM 单测锁定):
- * 【P2-d】端侧引擎首次点击要先花秒级(极端 8 秒以上)把模型载入内存,这期间
- * 零回调撞满看门狗的真相是"正在加载模型"而非"服务无响应" —— 文案说真话,引导
- * 稍候再试(此刻点重试仍有效:上一会话模型加载完成后照常收音、照常出结果)。
- *
- * @param firstColdLoad true = 端侧引擎本识别器实例尚无一次成功识别(冷加载中)
- */
-internal fun voiceDeadZoneToast(firstColdLoad: Boolean): String =
-    if (firstColdLoad) "正在加载语音模型,请稍候再试" else "语音服务无响应,请重试或检查语音服务"
-
-/** 错误分类 → 人话提示(Toast 用)。 */
+/** 旧七类错误分类 → 人话提示(Toast 用;单一真值源,新枚举文案对其委托,见下方重载)。 */
 internal fun voiceErrorText(kind: VoiceErrorKind): String = when (kind) {
     VoiceErrorKind.NO_MATCH -> "没听到,再试一次"
     VoiceErrorKind.BUSY -> "语音服务正忙,稍后再试"
@@ -8140,26 +7772,7 @@ internal fun voiceErrorText(kind: VoiceErrorKind): String = when (kind) {
         "麦克风被系统拦截:请在 系统设置→应用→PocketAgent→权限 中允许「麦克风」;小米/红米还需在 安全中心→权限管理 中允许「录音」,并确认麦克风未被通话等其他应用占用"
 }
 
-// =====================================================================================
-// P1-9 语音输入 —— 组合层胶水(SpeechRecognizer 适配)
-// =====================================================================================
-
-/**
- * SpeechRecognizer 的最小接口包装:组合层只依赖它,单测用 fake 顶替
- * (SpeechRecognizer 本体在 JVM 不可实例化)。
- */
-internal interface PaVoiceRecognizer {
-    /** 开始听写(zh-CN、自由文本模型)。 */
-    fun start()
-
-    /** 停止听写并等最终结果(再点一次麦克风的语义)。 */
-    fun stopListening()
-
-    /** 释放底层资源(离开会话页时)。 */
-    fun destroy()
-}
-
-/** SpeechRecognizer 错误码(含端侧引擎自定义码)→ 状态机分类。 */
+/** SpeechRecognizer 错误码(含端侧引擎自定义码)→ 旧七类分类(SystemVoiceEngine 单一真值源)。 */
 internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> VoiceErrorKind.NO_MATCH
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> VoiceErrorKind.BUSY
@@ -8198,150 +7811,49 @@ internal fun voiceErrorKind(code: Int): VoiceErrorKind = when (code) {
 internal fun systemVoiceRetireNeeded(code: Int): Boolean =
     code in setOf(1, 2, 3, 4, 5, 8, 9, 11, 12, 13)
 
-/**
- * 死区超时(8 秒零回调撞满看门狗)是否应弃用系统引擎(纯函数,JVM 单测锁定):
- * 只有当前选中的就是系统引擎时才弃用 —— "预检可用但服务死区"的 ROM 上不弃用会
- * 永远循环"点击→空转 8 秒→语音服务无响应";端侧 SenseVoice 的 onAlive 在进录音态
- * 后立刻到达,零回调只可能是引擎卡死(提示已覆盖),且端侧重建要重新冷加载,
- * 不因死区自动弃用。
- */
-internal fun voiceDeadZoneShouldRetireSystem(systemEngineSelected: Boolean): Boolean = systemEngineSelected
+// =====================================================================================
+// P4 Task 6 —— 语音接线纯函数(新枚举文案/引擎读屏名/落框追加与替换)
+// =====================================================================================
 
 /**
- * 创建语音识别器 —— 引擎选择统一入口(两级,语义与决策表 [pickVoiceEngine] 一致,
- * 决策表 JVM 单测锁定):
- *  · SYSTEM      → [createSystemVoiceRecognizer](在线质量好,端侧只做兜底);
- *  · SENSEVOICE  → 端侧 [SenseVoiceRecognizer](小米等无识别服务 ROM 的落地,模型内置);
- *  · UNAVAILABLE → null(点击麦克风给人话提示,内置模型初始化完成后随 senseReady 重建)。
- * 必须在主线程调用(组合层 remember 里,满足)。
- *
- * 【回调契约】onResult/onErrorEvent/onAlive 语义见 [createSystemVoiceRecognizer]。
+ * 域层错误分类(ui.voice.VoiceErrorKind)→ 人话提示(Toast 用)。
+ * 共享七类沿用旧文案(委托 [voiceErrorText],真机文案零漂移);端侧四类为新增:
+ *  · DEAD_ZONE     = 旧 voiceDeadZoneToast(false) 的"服务无响应";
+ *  · MODEL_LOADING = 旧 voiceDeadZoneToast(true) 的"加载语音模型"(冷加载分流);
+ *  · MODEL_CORRUPTED / STORAGE_FULL = 端侧模型损坏 / 磁盘空间不足(计划要求分别给文案)。
  */
-private fun createVoiceRecognizer(
-    context: Context,
-    sysAvailable: Boolean,
-    senseReady: Boolean = false,
-    onResult: (String) -> Unit,
-    onErrorEvent: (Int) -> Unit,
-    onAlive: () -> Unit = {},
-): PaVoiceRecognizer? {
-    if (sysAvailable) {
-        createSystemVoiceRecognizer(context,onResult,onErrorEvent,onAlive)?.let { return it }
-    }
-    if (senseReady) {
-        SenseVoiceModelManager.modelPath()?.let { return SenseVoiceRecognizer(it,onResult,onErrorEvent,onAlive) }
-    }
-    return null
+internal fun voiceErrorText(kind: DomainVoiceErrorKind): String = when (kind) {
+    DomainVoiceErrorKind.NO_MATCH -> voiceErrorText(VoiceErrorKind.NO_MATCH)
+    DomainVoiceErrorKind.BUSY -> voiceErrorText(VoiceErrorKind.BUSY)
+    DomainVoiceErrorKind.INSUFFICIENT_PERMISSIONS -> voiceErrorText(VoiceErrorKind.INSUFFICIENT_PERMISSIONS)
+    DomainVoiceErrorKind.CLIENT -> voiceErrorText(VoiceErrorKind.CLIENT)
+    DomainVoiceErrorKind.OTHER -> voiceErrorText(VoiceErrorKind.OTHER)
+    DomainVoiceErrorKind.ENGINE -> voiceErrorText(VoiceErrorKind.ENGINE)
+    DomainVoiceErrorKind.MIC_BLOCKED -> voiceErrorText(VoiceErrorKind.MIC_BLOCKED)
+    DomainVoiceErrorKind.DEAD_ZONE -> "语音服务无响应,请重试或检查语音服务"
+    DomainVoiceErrorKind.MODEL_LOADING -> "正在加载语音模型,请稍候再试"
+    DomainVoiceErrorKind.MODEL_CORRUPTED -> "端侧语音模型损坏:请重新安装 App 后再试"
+    DomainVoiceErrorKind.STORAGE_FULL -> "手机存储空间不足:清理存储后再试语音识别"
+}
+
+/** 引擎类别 → 读屏/日志用短名(进 contentDescription,不进正文)。 */
+internal fun voiceEngineLabel(kind: VoiceEngineKind): String = when (kind) {
+    VoiceEngineKind.SYSTEM_ON_DEVICE -> "系统识别(本机)"
+    VoiceEngineKind.SYSTEM_REMOTE -> "系统识别(在线)"
+    VoiceEngineKind.SENSEVOICE -> "端侧识别"
+    VoiceEngineKind.UNAVAILABLE -> "语音引擎未就绪"
 }
 
 /**
- * 创建系统识别器(SpeechRecognizer 包装):API31+ 且设备支持本机识别用离线引擎(更快更私密),
- * 否则回退默认识别器;整个过程失败返回 null(按钮降级为"设备不支持")。
- * 语言固定 zh-CN + 自由文本;必须在主线程调用(组合层 remember 里,满足)。
- *
- * 【V-1 修复】
- *  1. 先用 [SpeechRecognizer.isRecognitionAvailable] 预检 —— 部分无识别服务的 ROM 上
- *     createSpeechRecognizer 不抛、startListening 也全静默(连 onError 都不回调),
- *     预检不过直接返回 null,让上层走"端侧 SenseVoice 兜底"分支;
- *  2. startListening 包 try/catch,个别 ROM 会同步抛,兜底映射为 ERROR_CLIENT,
- *     让状态机回 IDLE 并弹人话提示,而不是无声卡死;
- *  3. EXTRA_PREFER_OFFLINE 改 false(在线优先):无离线包的设备上强求离线必吃错误
- *     8/5 且拿不到结果;
- *  4. 四个关键回调(ready/error/results/partial)与全链路关键节点 Log.d("PaVoice") 埋点,
- *     真机排障靠它。
- *
- * 【死区兜底】@param onAlive 在四个关键回调开头各调一次:预检可用但服务实际"死区"
- * (start 后零回调)的 ROM 上,组合层靠它区分"服务活着"与"8 秒零回调",任一回调
- * 到达即取消超时看门狗(见 [voiceDeadZoneTimedOut])。
+ * 识别完成文本并入输入框(Task 6):replace=false 追加([joinVoiceText],空格衔接,
+ * 不覆盖已有内容);replace=true 替换(覆盖输入框)。两种模式都不改写原文的大小写
+ * 与标点 —— 对英文/路径/命令逐字保留(计划全局约束)。
  */
-private fun createSystemVoiceRecognizer(
-    context: Context,
-    onResult: (String) -> Unit,
-    onErrorEvent: (Int) -> Unit,
-    onAlive: () -> Unit = {},
-): PaVoiceRecognizer? {
-    // 预检本机是否注册了识别服务(runCatching 防个别 ROM 预检本身抛)
-    val sysAvailable = runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false)
-    val onDeviceAvailable = Build.VERSION.SDK_INT >= 31 &&
-        runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
-    Log.d(
-        "PaVoice",
-        "预检 isRecognitionAvailable=$sysAvailable onDevice=$onDeviceAvailable sdk=${Build.VERSION.SDK_INT}",
-    )
-    if (!sysAvailable) return null
+internal fun voiceApplyToInput(existing: String, spoken: String, replace: Boolean): String =
+    if (replace) spoken else joinVoiceText(existing, spoken)
 
-    return runCatching {
-        val sr = if (onDeviceAvailable) {
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-        } else {
-            SpeechRecognizer.createSpeechRecognizer(context)
-        }
-        sr.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {
-                Log.d("PaVoice", "回调 onReadyForSpeech:开始收音")
-                onAlive() // 【死区兜底】关键回调到达,喂看门狗
-            }
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                Log.d("PaVoice", "回调 onError code=$error kind=${voiceErrorKind(error)}")
-                onAlive() // 【死区兜底】关键回调到达,喂看门狗
-                onErrorEvent(error)
-            }
-            override fun onResults(results: Bundle?) {
-                val text = results
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                    .orEmpty()
-                Log.d("PaVoice", "回调 onResults 文本='$text'")
-                onAlive() // 【死区兜底】关键回调到达,喂看门狗
-                onResult(text)
-            }
-            override fun onPartialResults(partialResults: Bundle?) {
-                val partial = partialResults
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                Log.d("PaVoice", "回调 onPartialResults 中间文本='$partial'")
-                onAlive() // 【死区兜底】关键回调到达,喂看门狗
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-        object : PaVoiceRecognizer {
-            override fun start() {
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-CN")
-                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                    // 【V-1】在线优先:离线只在装了离线识别包的设备上才有意义
-                    if (Build.VERSION.SDK_INT >= 23) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-                }
-                try {
-                    Log.d("PaVoice", "startListening 发起(zh-CN,在线优先)")
-                    sr.startListening(intent)
-                } catch (t: Throwable) {
-                    // 个别 ROM 同步抛(服务未就绪/SecurityException 等):兜底为 CLIENT 错误,
-                    // 状态机回 IDLE 并弹人话提示,绝不无声卡死
-                    Log.d("PaVoice", "startListening 同步异常:${t.javaClass.simpleName}: ${t.message}")
-                    onErrorEvent(SpeechRecognizer.ERROR_CLIENT)
-                }
-            }
-
-            override fun stopListening() {
-                // 停止阶段的同步异常不值得打断 UI(状态机已回 IDLE),记日志防崩
-                runCatching { sr.stopListening() }
-                    .onFailure { Log.d("PaVoice", "stopListening 异常:${it.javaClass.simpleName}") }
-            }
-
-            override fun destroy() {
-                runCatching { sr.destroy() }
-                    .onFailure { Log.d("PaVoice", "destroy 异常:${it.javaClass.simpleName}") }
-            }
-        }
-    }.getOrElse { t ->
-        Log.d("PaVoice", "创建识别器异常:${t.javaClass.simpleName}: ${t.message}")
-        null
-    }
-}
+// 【P4 Task 5 删除说明】旧识别器装配胶水 createVoiceRecognizer / createSystemVoiceRecognizer
+// (含 onResults/onPartialResults 的 transcript 全文日志、墙钟死区看门狗喂狗钩子)已整体删除:
+// 装配改由 ui/voice/SystemVoiceEngine.create(预检 + on-device 优先 + startListening 同步异常
+// 兜底)与 SenseVoiceEngine.create 接管,回调经 VoiceEngineEvent 流入 VoiceController,
+// 生产日志只记引擎/耗时/字符数/错误分类,绝不落 transcript(Global Constraint)。

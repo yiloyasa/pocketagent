@@ -5,17 +5,17 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * P1-6 本地通知 + P1-9 语音输入 的纯逻辑单测:
+ * P1-6 本地通知 + P1-9 语音 的纯逻辑单测:
  *  1. 通知触发矩阵(running→false 且前台/后台;审批出现/消失);
  *  2. 前台标志读写;extra 深链解析;通知 id 稳定与区间隔离;
- *  3. 语音按钮状态机(空闲/听写/无权限/不可用),SpeechRecognizer 以 [PaVoiceRecognizer]
- *     接口包装,这里用 fake 顶替验证"指令 → 识别器动作"的消费链。
+ *  3. 语音纯逻辑遗留桥钉子(错误码映射/落框拼接)。
+ *     【P4 Task 4/5】语音状态机/指令链/死区/静音门已迁 ui/voice,其守护单测在
+ *     VoiceSessionReducerTest(含 Controller 状态机壳),此处不再测旧胶水。
  */
 class PaNotificationAndVoiceTest {
 
@@ -225,90 +225,12 @@ class PaNotificationAndVoiceTest {
         assertTrue(detail.endsWith("…"))
     }
 
-    // ------------------------------------------------------------ 语音状态机
-
-    @Test
-    fun `语音_有权限点麦克风_进入听写并产出开始指令`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(hasPermission = true, available = true))
-        assertEquals(VoiceInputState.LISTENING, ui.state)
-        val fx = pendingVoiceEffects(ui)
-        assertTrue(fx.start)
-        assertFalse(fx.stop)
-        assertNull(fx.append)
-        assertNull(fx.toast)
-    }
-
-    @Test
-    fun `语音_无权限_状态机原地不动_由组合层去申请`() {
-        val ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(hasPermission = false, available = true))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertFalse(pendingVoiceEffects(ui).start)
-    }
-
-    @Test
-    fun `语音_权限被拒绝_记无权限并给提示`() {
-        val ui = voiceReduce(VoiceInputUi(), VoiceEvent.PermissionAnswered(granted = false, available = true))
-        assertEquals(VoiceInputState.NO_PERMISSION, ui.state)
-        // 【可行动化】拒绝后必须指路"去哪里开"(MIUI 拒过两次后系统不再弹框)
-        val toast = pendingVoiceEffects(ui).toast!!
-        assertTrue(toast.contains("系统设置"))
-        assertTrue(toast.contains("麦克风"))
-    }
-
-    @Test
-    fun `语音_授权但设备不支持_记不可用`() {
-        val ui = voiceReduce(VoiceInputUi(), VoiceEvent.PermissionAnswered(granted = true, available = false))
-        assertEquals(VoiceInputState.UNAVAILABLE, ui.state)
-        assertNotNull(pendingVoiceEffects(ui).toast)
-    }
-
-    @Test
-    fun `语音_出结果_文本并入输入框_空结果提示没听到`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        ui = voiceReduce(ui, VoiceEvent.RecognitionResults("加一个登录页"))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertEquals("加一个登录页", pendingVoiceEffects(ui).append)
-        // 空结果:不追加,只提示
-        ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        ui = voiceReduce(ui, VoiceEvent.RecognitionResults("   "))
-        assertNull(pendingVoiceEffects(ui).append)
-        assertEquals("没听到,再试一次", pendingVoiceEffects(ui).toast)
-    }
-
-    @Test
-    fun `语音_听写中再点一次_停止并出结果`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        ui = voiceReduce(ui, VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertTrue(pendingVoiceEffects(ui).stop)
-        // 随后结果到达 → 正常追加
-        ui = voiceReduce(ui, VoiceEvent.RecognitionResults("继续"))
-        assertEquals("继续", pendingVoiceEffects(ui).append)
-    }
-
-    @Test
-    fun `语音_出错_回空闲并给人话提示`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        ui = voiceReduce(ui, VoiceEvent.RecognitionFailed(VoiceErrorKind.NO_MATCH))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertEquals("没听到,再试一次", ui.toast)
-        assertEquals("语音服务正忙,稍后再试", voiceErrorText(VoiceErrorKind.BUSY))
-        assertEquals("系统语音服务权限受限,已自动切换端侧识别;若仍失败,请在系统设置里开启麦克风权限", voiceErrorText(VoiceErrorKind.INSUFFICIENT_PERMISSIONS))
-        assertEquals("语音识别不可用", voiceErrorText(VoiceErrorKind.CLIENT))
-        assertEquals("识别失败,请重试", voiceErrorText(VoiceErrorKind.OTHER))
-    }
-
-    @Test
-    fun `语音_指令消费后一次性字段清空_状态保留`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        ui = voiceEffectsConsumed(ui)
-        assertEquals(VoiceInputState.LISTENING, ui.state)
-        val fx = pendingVoiceEffects(ui)
-        assertFalse(fx.start)
-        assertFalse(fx.stop)
-        assertNull(fx.append)
-        assertNull(fx.toast)
-    }
+    // ------------------------------------------------------------ 语音纯逻辑遗留桥
+    // 【P4 Task 4/5 迁移说明】语音状态机/指令链/死区兜底/跨会话静音门已整体迁往
+    // ui/voice(VoiceSessionReducer + VoiceController,由 VoiceSessionReducerTest 全覆盖),
+    // 测已删代码的用例随之移除。这里只保留仍被 ChatScreen 尾部遗留桥提供、并被
+    // SystemVoiceEngine(错误码单一真值源)与 Final 落框接线(joinVoiceText)消费的
+    // 两个纯函数行为钉子。
 
     @Test
     fun `语音_错误码映射`() {
@@ -329,246 +251,5 @@ class PaNotificationAndVoiceTest {
         assertEquals("第一行\n第二段", joinVoiceText("第一行\n", "第二段"))
         // 全空白输入视同空输入,直接放
         assertEquals("语音文本", joinVoiceText("  ", "语音文本"))
-    }
-
-    /** SpeechRecognizer 的接口包装:单测用 fake 验证"状态机指令 → 识别器动作"。 */
-    private class FakeRecognizer : PaVoiceRecognizer {
-        var starts = 0
-        var stops = 0
-        var destroys = 0
-        override fun start() { starts++ }
-        override fun stopListening() { stops++ }
-        override fun destroy() { destroys++ }
-    }
-
-    @Test
-    fun `语音_fake识别器_按状态机指令执行start与stop`() {
-        val rec = FakeRecognizer()
-        // 组合层的消费逻辑(与 ChatScreen LaunchedEffect 一致):取指令 → 执行 → 清除
-        fun consume(current: VoiceInputUi): VoiceInputUi {
-            val fx = pendingVoiceEffects(current)
-            if (fx.start) rec.start()
-            if (fx.stop) rec.stopListening()
-            return voiceEffectsConsumed(current)
-        }
-        var ui = consume(voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true)))
-        assertEquals(1, rec.starts)
-        assertEquals(0, rec.stops)
-        // 再点一次 = 停止
-        ui = consume(voiceReduce(ui, VoiceEvent.MicClicked(true, true)))
-        assertEquals(1, rec.starts)
-        assertEquals(1, rec.stops)
-        // 空闲时点击带 no-op 消费,不会多发指令
-        consume(ui)
-        assertEquals(1, rec.starts)
-        assertEquals(1, rec.stops)
-    }
-
-    // ------------------------------------------------------------ V-1 修复回归(效果投递不丢)
-
-    @Test
-    fun `语音_V1_事件经applyVoiceEvent后效果当场取出_展示态不携带一次性字段`() {
-        // 点击:指令当场取出,展示态只剩 LISTENING
-        val (ui1, fx1) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, ui1.state)
-        assertTrue(fx1.start)
-        // 展示态永不再携带指令 —— 旧实现靠"二次消费写 + equals 重启"在这里丢效果
-        val residue = pendingVoiceEffects(ui1)
-        assertFalse(residue.start)
-        assertFalse(residue.stop)
-        assertNull(residue.append)
-        assertNull(residue.toast)
-        // 识别失败:新指令照常产出,状态回 IDLE
-        val (ui2, fx2) = applyVoiceEvent(ui1, VoiceEvent.RecognitionFailed(VoiceErrorKind.CLIENT))
-        assertEquals(VoiceInputState.IDLE, ui2.state)
-        assertEquals("语音识别不可用", fx2.toast)
-    }
-
-    @Test
-    fun `语音_V1_连续快速点击_每条指令独立入队_不因同值状态写入被吞`() {
-        // 锁嫌疑②:两次连续 MicClicked(开始→立刻停止)落在同一拍时,
-        // 旧实现两次 state 写可能同值/竞争而吞掉第二条;新实现逐事件入队,必达。
-        var ui = VoiceInputUi()
-        val queue = mutableListOf<VoiceEffects>()
-        fun feed(event: VoiceEvent) {
-            val (display, fx) = applyVoiceEvent(ui, event)
-            ui = display
-            if (voiceEffectsPending(fx)) queue.add(fx)
-        }
-        feed(VoiceEvent.MicClicked(true, true)) // 开始
-        feed(VoiceEvent.MicClicked(true, true)) // 立刻再点 = 停止
-        assertEquals(2, queue.size)
-        assertTrue(queue[0].start)
-        assertTrue(queue[1].stop)
-        // 随后结果到达,append 指令同样入队
-        feed(VoiceEvent.RecognitionResults("继续"))
-        assertEquals(3, queue.size)
-        assertEquals("继续", queue[2].append)
-        assertEquals(VoiceInputState.IDLE, ui.state)
-    }
-
-    @Test
-    fun `语音_V1_不可用设备点击_直接UNAVAILABLE并提示`() {
-        val (ui, fx) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.MicClicked(true, false))
-        assertEquals(VoiceInputState.UNAVAILABLE, ui.state)
-        assertEquals("这台设备不支持语音识别", fx.toast)
-        assertTrue(voiceEffectsPending(fx))
-    }
-
-    @Test
-    fun `语音_V1_start同步抛异常_按CLIENT错误回空闲并给人话提示`() {
-        // 胶水层把 startListening 同步异常兜底为 ERROR_CLIENT(编译期常量 = 5,字面量钉住)
-        assertEquals(VoiceErrorKind.CLIENT, voiceErrorKind(5))
-        val (ui1, _) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, ui1.state)
-        // start 抛异常 → onErrorEvent(ERROR_CLIENT) → RecognitionFailed(CLIENT)
-        val (ui2, fx2) = applyVoiceEvent(ui1, VoiceEvent.RecognitionFailed(voiceErrorKind(5)))
-        assertEquals(VoiceInputState.IDLE, ui2.state)
-        assertEquals("语音识别不可用", fx2.toast)
-        assertTrue(voiceEffectsPending(fx2))
-    }
-
-    // ------------------------------------------------------------ 死区超时兜底(V-1 后续)
-
-    @Test
-    fun `语音_死区超时判定_到达阈值且零回调才算死区`() {
-        // 未到阈值:不判定(哪怕只差 1ms)
-        assertFalse(voiceDeadZoneTimedOut(0, gotCallback = false))
-        assertFalse(voiceDeadZoneTimedOut(VOICE_DEAD_ZONE_TIMEOUT_MS - 1, gotCallback = false))
-        // 到阈值且零回调:判定死区(取等即触发,兜底宁早勿卡)
-        assertTrue(voiceDeadZoneTimedOut(VOICE_DEAD_ZONE_TIMEOUT_MS, gotCallback = false))
-        assertTrue(voiceDeadZoneTimedOut(VOICE_DEAD_ZONE_TIMEOUT_MS + 5_000, gotCallback = false))
-        // 期间收到过任一关键回调(ready/partial/results/error):服务活着,永不判定
-        assertFalse(voiceDeadZoneTimedOut(VOICE_DEAD_ZONE_TIMEOUT_MS + 60_000, gotCallback = true))
-        // 阈值可注入(看门狗实现无关,判定逻辑独立可测)
-        assertTrue(voiceDeadZoneTimedOut(1_000, gotCallback = false, timeoutMs = 1_000))
-        assertFalse(voiceDeadZoneTimedOut(999, gotCallback = false, timeoutMs = 1_000))
-    }
-
-    @Test
-    fun `语音_死区超时事件_回空闲并给人话提示_指令待消费`() {
-        // 卡在 LISTENING(零回调死区)→ 看门狗抛 DeadZoneTimeout
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, ui.state)
-        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstColdLoad = false))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertEquals("语音服务无响应,请重试或检查语音服务", pendingVoiceEffects(ui).toast)
-        // 经组合层统一入口(applyVoiceEvent)同样成立:指令当场取出,展示态干净
-        val (display, fx) = applyVoiceEvent(
-            voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true)).let { voiceEffectsConsumed(it) },
-            VoiceEvent.DeadZoneTimeout(firstColdLoad = false),
-        )
-        assertEquals(VoiceInputState.IDLE, display.state)
-        assertEquals("语音服务无响应,请重试或检查语音服务", fx.toast)
-        assertTrue(voiceEffectsPending(fx))
-        // 空闲态误收死区事件也只是幂等回 IDLE + 提示,不产生 start/stop/append
-        val (idle, fxIdle) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.DeadZoneTimeout(firstColdLoad = false))
-        assertEquals(VoiceInputState.IDLE, idle.state)
-        assertNull(fxIdle.append)
-        assertFalse(fxIdle.start)
-        assertFalse(fxIdle.stop)
-    }
-
-    // ------------------------------------------------- P2-d:端侧首次冷加载的死区分流
-
-    @Test
-    fun `语音_P2d_死区文案_端侧首次冷加载提示加载中_其余按服务无响应`() {
-        // 首次冷加载(端侧引擎本识别器尚无一次成功识别):文案说真话,引导稍候再试
-        assertEquals("正在加载语音模型,请稍候再试", voiceDeadZoneToast(firstColdLoad = true))
-        // 已跑通过一轮(模型已暖)或系统引擎:维持原"服务无响应"提示
-        assertEquals("语音服务无响应,请重试或检查语音服务", voiceDeadZoneToast(firstColdLoad = false))
-    }
-
-    @Test
-    fun `语音_P2d_死区事件_端侧首次冷加载_回空闲并提示加载中`() {
-        // 卡在 LISTENING(冷加载零回调撞满看门狗)→ 回 IDLE 不卡死,文案是"加载中"
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, ui.state)
-        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstColdLoad = true))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertEquals("正在加载语音模型,请稍候再试", pendingVoiceEffects(ui).toast)
-        // 经组合层统一入口同样成立:指令当场取出,展示态干净
-        val (display, fx) = applyVoiceEvent(
-            voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true)).let { voiceEffectsConsumed(it) },
-            VoiceEvent.DeadZoneTimeout(firstColdLoad = true),
-        )
-        assertEquals(VoiceInputState.IDLE, display.state)
-        assertEquals("正在加载语音模型,请稍候再试", fx.toast)
-        assertTrue(voiceEffectsPending(fx))
-        // 默认参数 = 非首次加载(系统引擎/模型已暖):与显式 false 等价,老路径文案不变
-        assertEquals(VoiceEvent.DeadZoneTimeout(firstColdLoad = false), VoiceEvent.DeadZoneTimeout())
-    }
-
-    // ------------------------------------------------- PF5:语音跨会话(切会话即停录)
-
-    @Test
-    fun `语音_PF5_听写中切会话_归约SessionSwitched回空闲并只产出stop指令`() {
-        // 先经组合层统一入口消费掉 start 指令(镜像 dispatchVoice 的真实时序),
-        // 保证进入 SessionSwitched 时展示态不残留任何一次性字段。
-        val (listening, _) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, listening.state)
-        val ui = voiceReduce(listening, VoiceEvent.SessionSwitched)
-        // 回 IDLE + 停录指令;文本与提示一个不产 —— 跨会话残余由静音门丢弃
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        val fx = pendingVoiceEffects(ui)
-        assertTrue(fx.stop)
-        assertFalse(fx.start)
-        assertNull(fx.append)
-        assertNull(fx.toast)
-    }
-
-    @Test
-    fun `语音_PF5_空闲时切会话_SessionSwitched原地不动_零指令`() {
-        val (ui, fx) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.SessionSwitched)
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertFalse(voiceEffectsPending(fx))
-    }
-
-    @Test
-    fun `语音_PF5_静音门_muted时残余文本与提示丢弃_startStop保留`() {
-        val fx = VoiceEffects(start = true, stop = true, append = "旧会话没说完的话", toast = "识别失败,请重试")
-        // 静音期:append/toast 丢,start/stop 留(stop=停录收尾;start=新会话主动发起)
-        val gated = voiceFilterMutedEffects(fx, muted = true)
-        assertTrue(gated.start)
-        assertTrue(gated.stop)
-        assertNull(gated.append)
-        assertNull(gated.toast)
-        // 非静音:原样放行(常规路径零改动)
-        assertEquals(fx, voiceFilterMutedEffects(fx, muted = false))
-    }
-
-    @Test
-    fun `语音_PF5_跨会话链路_停录后残余结果不落新会话_重新听写解除静音`() {
-        // 镜像组合层时序:开始听写(消费 start)→ 切会话(静音 + 停录)→
-        // 旧识别器仍在收尾,延迟送达的最终转写被静音门拦下;用户在新会话
-        // 重新点麦克风,静音解除,新识别文本正常落新会话草稿。
-        var ui = VoiceInputUi()
-        var muted = false
-        fun feed(event: VoiceEvent): VoiceEffects {
-            val (display, fx) = applyVoiceEvent(ui, event)
-            ui = display
-            val gate = voiceFilterMutedEffects(fx, muted)
-            if (gate.start) muted = false
-            return gate
-        }
-        // 新会话 A 开始听写
-        assertTrue(feed(VoiceEvent.MicClicked(true, true)).start)
-        // 切到会话 B:静音 + 停录
-        muted = true
-        assertTrue(feed(VoiceEvent.SessionSwitched).stop)
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        // 旧识别器收尾送达的最终转写:静音门丢弃,不写会话 B 草稿
-        val late = feed(VoiceEvent.RecognitionResults("本该落会话A的文本"))
-        assertNull(late.append)
-        assertNull(late.toast)
-        // 迟到的失败提示同样被拦
-        val lateErr = feed(VoiceEvent.RecognitionFailed(VoiceErrorKind.BUSY))
-        assertNull(lateErr.toast)
-        // 用户在会话 B 重新点麦克风:start 放行并解除静音
-        assertTrue(feed(VoiceEvent.MicClicked(true, true)).start)
-        assertFalse(muted)
-        // 新识别文本正常落会话 B 草稿
-        val fresh = feed(VoiceEvent.RecognitionResults("会话B的新文本"))
-        assertEquals("会话B的新文本", fresh.append)
     }
 }

@@ -11,16 +11,19 @@ import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
-import dev.pocketagent.app.ui.PaVoiceRecognizer
 
 /** Record first, then transcribe in bounded chunks. All native handles are owned
- * by the worker and released on every exit, including navigation and errors. */
+ * by the worker and released on every exit, including navigation and errors.
+ *
+ * 【P4 Task 5】不再实现旧组合层接口 ui.PaVoiceRecognizer(已随 ChatScreen 旧路径删除):
+ * 本类改由 ui/voice/SenseVoiceEngine 直接持有(start/stopListening/destroy 语义不变,
+ * 构造签名不变),回调经 VoiceEngineEvent 流入 VoiceController。 */
 internal class SenseVoiceRecognizer(
     private val path: String,
     private val onResult: (String) -> Unit,
     private val onError: (Int) -> Unit,
     private val onAlive: () -> Unit,
-) : PaVoiceRecognizer {
+) {
     private val main = Handler(Looper.getMainLooper())
     private val runner = SenseVoiceSessionRunner(
         post = { main.post(it) },
@@ -28,7 +31,7 @@ internal class SenseVoiceRecognizer(
         onResult=onResult, onError=onError, onAlive=onAlive,
         work=::runSession,
     )
-    override fun start() {
+    fun start() {
         if (!runner.start()) {
             // 【静默失败修复】忙(停止后的转写空窗)或已销毁:旧实现静默 return,
             // 用户点麦克风零反馈。销毁态的回调会随页面销毁被丢弃,无副作用。
@@ -36,8 +39,8 @@ internal class SenseVoiceRecognizer(
             main.post { onError(VOICE_ERROR_ENGINE_BUSY) }
         }
     }
-    override fun stopListening() = runner.stopListening()
-    override fun destroy() = runner.destroy()
+    fun stopListening() = runner.stopListening()
+    fun destroy() = runner.destroy()
 
     @SuppressLint("MissingPermission")
     private fun runSession(session: SenseVoiceSessionRunner.Session): String {

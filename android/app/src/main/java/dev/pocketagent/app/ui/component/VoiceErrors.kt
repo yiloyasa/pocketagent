@@ -8,6 +8,14 @@ package dev.pocketagent.app.ui.component
  * voiceErrorKind 映射共用,值与语义不变,常量名同步去遗留化(100 号码由
  * 旧名"遗留引擎异常"更名为 [VOICE_ERROR_ENGINE],见 git 历史)。
  *
+ * 【P4 Task 5 迁移对齐】错误码的分类链现在是两级:
+ *   错误码 → ChatScreen.voiceErrorKind(旧七类,单一真值源)
+ *         → ui/voice/SystemVoiceEngine.systemVoiceErrorKind 按名搬运到
+ *           ui.voice.VoiceErrorKind(新枚举,另含 DEAD_ZONE/MODEL_LOADING/
+ *           MODEL_CORRUPTED/STORAGE_FULL 四类);
+ * 端侧专用码 9/100/102/103 在 ui/voice/SenseVoiceEngine.handleError 直接映射新枚举。
+ * 本文件常量值与语义不变,消费方:SenseVoiceSession(产出码)+ 旧映射(归类码)。
+ *
  * 自定义错误码(落在 SpeechRecognizer 1..9 之外,经 voiceErrorKind 映射到
  * VoiceErrorKind.ENGINE —— "端侧引擎异常")。
  */

@@ -799,18 +799,36 @@ func (s *Server) GetThreadHistory(ctx context.Context, req *pb.GetThreadHistoryR
 	msgs = tailByRounds(msgs, int(req.Rounds))
 	out := &pb.GetThreadHistoryResponse{}
 	for _, m := range msgs {
-		blocks := make([]*pb.ContentBlock, 0, len(m.Blocks))
-		for i := range m.Blocks {
-			blocks = append(blocks, &m.Blocks[i])
-		}
-		out.Messages = append(out.Messages, &pb.ThreadMessage{
-			Role: m.Role, Blocks: blocks, CreatedAtUnixMs: m.CreatedAt,
-		})
+		out.Messages = append(out.Messages, threadMessageToPB(m))
 	}
 	// codex 目标态回读:与 GetThread 同源(打开会话即刷新,重连后以电脑端为准)。
 	// 非 codex 会话 / 读不到时为 nil,手机端不占位。
 	out.GoalDetail = s.goalDetailFor(ctx, t)
 	return out, nil
+}
+
+// threadMessageToPB 是 store.StoredMessage → wire ThreadMessage 的唯一组装点
+// (GetThreadHistory 出口;SearchThreadMessages 的 ThreadMessageHit 在
+// thread_search.go 另行同源直读,不经过这里)。在既有 role/blocks/created_at
+// 之上透传消息稳定身份:message_id/turn_id 直取 store 消息的 ID/TurnID(P3-T5
+// 产物,与 proto ThreadMessage 4~5 字段同源同域),手机端历史定位据此从
+// "空 id 退 sequence 兜底"升级为纯 id 定位。store 侧为空时照实置空、不造伪 id:
+// message_id 空 = 旧数据未迁移(理论上不可达 —— Load 与 saveLocked 双保险只补
+// 空,此处纯防御),turn_id 空 = 旧数据无轮次归属;客户端对空 id 自有 sequence
+// 兜底不报错(契约见 thread.proto)。独立成纯函数是为了让"空 ID 防御"可被直测
+// (thread_history_id_test.go),遍历语义零变化。
+func threadMessageToPB(m store.StoredMessage) *pb.ThreadMessage {
+	blocks := make([]*pb.ContentBlock, 0, len(m.Blocks))
+	for i := range m.Blocks {
+		blocks = append(blocks, &m.Blocks[i])
+	}
+	return &pb.ThreadMessage{
+		Role:            m.Role,
+		Blocks:          blocks,
+		CreatedAtUnixMs: m.CreatedAt,
+		MessageId:       m.ID,
+		TurnId:          m.TurnID,
+	}
 }
 
 // ---------- codex 目标态回读(thread/goal/get 的 RPC 出口)----------

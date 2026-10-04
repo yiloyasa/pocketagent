@@ -6,6 +6,7 @@ import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE
 import dev.pocketagent.app.ui.component.VOICE_ERROR_ENGINE_BUSY
 import dev.pocketagent.app.ui.component.VOICE_ERROR_MIC_BLOCKED
 import dev.pocketagent.app.ui.component.captureSenseVoiceAudio
+import dev.pocketagent.app.ui.voice.VoiceEngineKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,28 +14,28 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
- * 端侧 SenseVoice 兜底与语音状态机纯逻辑的守护单测。
+ * 端侧 SenseVoice 兜底与语音纯逻辑的守护单测。
  *
- * 【沿革】本文件承自旧遗留端侧引擎的回落测试(2026-09-20 该引擎整体摘除后改写):
- * 引擎选择决策表、端侧错误码映射、死区分流文案等行为钉子以改名/改写方式全部保留;
- * 随引擎移除的纯内部用例(下载状态机/zip 解压/安装编排/哈希校验/识别循环调度)按
- * 审核口径删除,用例总数不低于删前(24 例),删除清单登记于汇报与 AUDIT 附录 B。
+ * 【沿革】本文件承自旧遗留端侧引擎的回落测试(2026-09-20 该引擎整体摘除后改写);
+ * 2026-10-04 P4 Task 4/5 接线切换:语音状态机/指令链/死区文案/静音门迁 ui/voice
+ * (VoiceSessionReducerTest 守护),测旧胶水的用例随之移除,本文件只留仍活跃的纯件。
  *
  * 覆盖面:
- *  1. 引擎选择决策表(系统 SR 不可用 → 回退端侧 SenseVoice,行为钉子);
- *  2. 端侧自定义错误码(100/102/103)映射与人话提示、未定义码兜底;
- *  3. 死区超时文案分流(冷加载 vs 服务无响应);
- *  4. 采音调度(captureSenseVoiceAudio:归一化/参数校验/超长读/时长上限);
- *  5. 会话执行体生命周期(SenseVoiceSessionRunner:忙/销毁/异常码/投递时序)。
+ *  1. 引擎选择决策表(ui.voice.VoiceEngineKind;系统 SR 不可用 → 回退端侧 SenseVoice,
+ *     行为钉子;on-device/远程由 SystemVoiceEngine.create 工厂实测判定);
+ *  2. 端侧自定义错误码(100/102/103)映射与人话提示、未定义码兜底
+ *     (旧七类映射 = SystemVoiceEngine 的单一真值源,保留);
+ *  3. 采音调度(captureSenseVoiceAudio:归一化/参数校验/超长读/时长上限);
+ *  4. 会话执行体生命周期(SenseVoiceSessionRunner:忙/销毁/异常码/投递时序)。
  */
 class SenseVoiceFallbackTest {
 
     // ------------------------------------------------------------ 引擎选择决策表
 
     @Test
-    fun `引擎选择_系统可用一律SYSTEM_在线质量优先`() {
-        assertEquals(VoiceEngineKind.SYSTEM, pickVoiceEngine(sysAvailable = true, senseReady = true))
-        assertEquals(VoiceEngineKind.SYSTEM, pickVoiceEngine(sysAvailable = true, senseReady = false))
+    fun `引擎选择_系统可用一律系统侧_在线质量优先`() {
+        assertEquals(VoiceEngineKind.SYSTEM_ON_DEVICE, pickVoiceEngine(sysAvailable = true, senseReady = true))
+        assertEquals(VoiceEngineKind.SYSTEM_ON_DEVICE, pickVoiceEngine(sysAvailable = true, senseReady = false))
     }
 
     @Test
@@ -78,31 +79,6 @@ class SenseVoiceFallbackTest {
         assertEquals(VoiceErrorKind.OTHER, voiceErrorKind(101))
         assertEquals(VoiceErrorKind.OTHER, voiceErrorKind(1000))
         assertEquals(VoiceErrorKind.OTHER, voiceErrorKind(-1))
-    }
-
-    // ------------------------------------------------------------ 死区分流文案
-
-    @Test
-    fun `死区分流文案_端侧首次冷加载提示加载中_默认按服务无响应`() {
-        assertEquals("正在加载语音模型,请稍候再试", voiceDeadZoneToast(firstColdLoad = true))
-        assertEquals("语音服务无响应,请重试或检查语音服务", voiceDeadZoneToast(firstColdLoad = false))
-    }
-
-    @Test
-    fun `死区事件经状态机回空闲_文案按冷加载分流_指令待消费`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, ui.state)
-        // 冷加载分支:回 IDLE + 加载中文案
-        ui = voiceReduce(ui, VoiceEvent.DeadZoneTimeout(firstColdLoad = true))
-        assertEquals(VoiceInputState.IDLE, ui.state)
-        assertEquals("正在加载语音模型,请稍候再试", pendingVoiceEffects(ui).toast)
-        // 非冷加载(组合层现役恒传 false):服务无响应文案
-        val (display, fx) = applyVoiceEvent(VoiceInputUi(), VoiceEvent.DeadZoneTimeout(firstColdLoad = false))
-        assertEquals(VoiceInputState.IDLE, display.state)
-        assertEquals("语音服务无响应,请重试或检查语音服务", fx.toast)
-        assertTrue(voiceEffectsPending(fx))
-        assertFalse(fx.start)
-        assertFalse(fx.stop)
     }
 
     // ------------------------------------------------------------ 采音调度(captureSenseVoiceAudio)
@@ -323,7 +299,7 @@ class SenseVoiceFallbackTest {
         assertEquals(listOf("result"), results)
     }
 
-    // ------------------------------------------------------------ 系统弃用名单与死区判定(守护复钉)
+    // ------------------------------------------------------------ 系统弃用名单(守护复钉)
 
     @Test
     fun `系统弃用名单_端侧码与未知码一律不弃用`() {
@@ -337,14 +313,9 @@ class SenseVoiceFallbackTest {
         }
     }
 
-    @Test
-    fun `死区超时判定_恰好等于阈值触发_有回调或未到点不触发`() {
-        assertTrue(voiceDeadZoneTimedOut(8_000, gotCallback = false))
-        assertFalse(voiceDeadZoneTimedOut(7_999, gotCallback = false))
-        assertTrue(voiceDeadZoneTimedOut(8_001, gotCallback = false))
-        // 任一关键回调到达 = 服务活着,绝不判死
-        assertFalse(voiceDeadZoneTimedOut(9_999, gotCallback = true))
-    }
+    // 【P4 迁移说明】死区超时判定的守护用例已随墙钟看门狗删除:
+    // monotonic 化后的等价判定在 ui/voice(VoiceController 看门狗 +
+    // voiceDeadZoneShouldFire 纯函数),由 VoiceSessionReducerTest 锁定。
 
     @Test
     fun `错误码常量值迁移保真_100_102_103与摘除前一致`() {

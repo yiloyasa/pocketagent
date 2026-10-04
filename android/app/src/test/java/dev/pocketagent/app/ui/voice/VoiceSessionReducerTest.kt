@@ -2,6 +2,9 @@ package dev.pocketagent.app.ui.voice
 
 import dev.pocketagent.app.ui.component.senseVoiceErrorFatalForRound
 import dev.pocketagent.app.ui.systemVoiceRetireNeeded
+import dev.pocketagent.app.ui.voiceApplyToInput
+import dev.pocketagent.app.ui.voiceEngineLabel
+import dev.pocketagent.app.ui.voiceErrorText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -710,6 +713,50 @@ class VoiceSessionReducerTest {
         } finally {
             scope.cancel()
         }
+    }
+
+    // ------------------------------------------------------------ 10) 接线纯件(P4 Task 4/5/6 波 3 补钉)
+
+    @Test
+    fun `接线文案映射_共享七类沿用旧文案_端侧四类新增可行动`() {
+        // 共享七类:与旧路径文案逐字一致(权限/MIUI 指引零漂移,委托旧真值源)
+        assertEquals("没听到,再试一次", voiceErrorText(VoiceErrorKind.NO_MATCH))
+        assertEquals("语音服务正忙,稍后再试", voiceErrorText(VoiceErrorKind.BUSY))
+        assertEquals(
+            "系统语音服务权限受限,已自动切换端侧识别;若仍失败,请在系统设置里开启麦克风权限",
+            voiceErrorText(VoiceErrorKind.INSUFFICIENT_PERMISSIONS),
+        )
+        assertEquals("语音识别不可用", voiceErrorText(VoiceErrorKind.CLIENT))
+        assertEquals("识别失败,请重试", voiceErrorText(VoiceErrorKind.OTHER))
+        assertEquals("端侧语音引擎异常,请重试", voiceErrorText(VoiceErrorKind.ENGINE))
+        val mic = voiceErrorText(VoiceErrorKind.MIC_BLOCKED)
+        assertTrue("MIC_BLOCKED 须点名系统设置与安全中心", mic.contains("系统设置") && mic.contains("安全中心"))
+        // 新增四类:死区/冷加载/模型损坏/磁盘满 各有真相文案
+        assertEquals("语音服务无响应,请重试或检查语音服务", voiceErrorText(VoiceErrorKind.DEAD_ZONE))
+        assertEquals("正在加载语音模型,请稍候再试", voiceErrorText(VoiceErrorKind.MODEL_LOADING))
+        assertTrue(voiceErrorText(VoiceErrorKind.MODEL_CORRUPTED).contains("重新安装"))
+        assertTrue(voiceErrorText(VoiceErrorKind.STORAGE_FULL).contains("存储"))
+    }
+
+    @Test
+    fun `接线落框_追加为默认不覆盖已有内容_替换整体覆盖_不改写大小写标点`() {
+        // 追加(默认):空格衔接,不覆盖
+        assertEquals("草稿 说的", voiceApplyToInput("草稿", "说的", replace = false))
+        assertEquals("说的", voiceApplyToInput("", "说的", replace = false))
+        // 替换:覆盖输入框
+        assertEquals("新稿", voiceApplyToInput("草稿", "新稿", replace = true))
+        assertEquals("", voiceApplyToInput("草稿", "", replace = true))
+        // 英文/路径/命令逐字保留原始大小写与标点(计划全局约束),两种模式都不改写
+        assertEquals("git status --short", voiceApplyToInput("", "git status --short", replace = false))
+        assertEquals("Fix NPE at MainActivity.kt:42!", voiceApplyToInput("a", "Fix NPE at MainActivity.kt:42!", replace = true))
+    }
+
+    @Test
+    fun `接线引擎读屏名_四类各有短名`() {
+        assertEquals("系统识别(本机)", voiceEngineLabel(VoiceEngineKind.SYSTEM_ON_DEVICE))
+        assertEquals("系统识别(在线)", voiceEngineLabel(VoiceEngineKind.SYSTEM_REMOTE))
+        assertEquals("端侧识别", voiceEngineLabel(VoiceEngineKind.SENSEVOICE))
+        assertEquals("语音引擎未就绪", voiceEngineLabel(VoiceEngineKind.UNAVAILABLE))
     }
 
     // ------------------------------------------------------------ 工具

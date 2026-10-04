@@ -16,6 +16,9 @@ import org.junit.Test
  *  2. 系统识别"名义可用实际不可用"的弃用判定:错误码名单(含 3=AUDIO_ERROR)与
  *     死区超时,此前失败后引擎选择永远粘滞在系统 SR,端侧 SenseVoice 永远轮不上;
  *  3. 系统码原有映射不受新分支影响(1..13 与 100+ 互不串扰)。
+ *
+ * 【P4 Task 4/5 迁移说明】语音状态机/指令链用例已迁 ui/voice(VoiceSessionReducerTest),
+ * 本文件保留旧七类错误映射(= SystemVoiceEngine 单一真值源)与弃用名单的行为钉子。
  */
 class VoiceMicBlockedFeedbackTest {
 
@@ -41,16 +44,9 @@ class VoiceMicBlockedFeedbackTest {
         assertTrue(text.contains("占用"))
     }
 
-    @Test
-    fun `MIC_BLOCKED事件经状态机产出该提示_回空闲`() {
-        var ui = voiceReduce(VoiceInputUi(), VoiceEvent.MicClicked(true, true))
-        assertEquals(VoiceInputState.LISTENING, ui.state)
-        val (display, fx) = applyVoiceEvent(ui, VoiceEvent.RecognitionFailed(voiceErrorKind(VOICE_ERROR_MIC_BLOCKED)))
-        assertEquals(VoiceInputState.IDLE, display.state)
-        val toast = fx.toast!!
-        assertTrue(toast.contains("安全中心"))
-        assertTrue(voiceEffectsPending(fx))
-    }
+    // 【P4 迁移说明】`MIC_BLOCKED事件经状态机产出该提示_回空闲` 已随旧页面状态机
+    // (voiceReduce/applyVoiceEvent)删除:新链路的提示产出由 ui.voice.Error 事件 →
+    // 新枚举 voiceErrorText 重载承担(见 VoiceSessionReducerTest 接线文案用例)。
 
     // ------------------------------------------------------------ 系统引擎弃用判定(错误码名单)
 
@@ -80,13 +76,10 @@ class VoiceMicBlockedFeedbackTest {
 
     // ------------------------------------------------------------ 死区超时的弃用判定
 
-    @Test
-    fun `死区超时_仅当当前引擎是系统时才弃用_端侧不因死区自动弃用`() {
-        // 系统 SR"预检可用但零回调死区":必须弃用,否则永远循环"点击→空转8秒→无响应"
-        assertTrue(voiceDeadZoneShouldRetireSystem(systemEngineSelected = true))
-        // 端侧引擎死区:提示已覆盖,且端侧重建要重新冷加载,不自动弃用
-        assertFalse(voiceDeadZoneShouldRetireSystem(systemEngineSelected = false))
-    }
+    // 【P4 迁移说明】`死区超时_仅当当前引擎是系统时才弃用_端侧不因死区自动弃用`
+    // (voiceDeadZoneShouldRetireSystem)已随旧墙钟看门狗删除:monotonic 化后的
+    // 等价策略在 ChatScreen 接线(死区/roundFailed → systemVoiceRetired → 重绑端侧),
+    // 判定与分流由 VoiceSessionReducerTest 的 Controller 用例锁定。
 
     // ------------------------------------------------------------ 系统码映射回归(不被新分支吞掉)
 

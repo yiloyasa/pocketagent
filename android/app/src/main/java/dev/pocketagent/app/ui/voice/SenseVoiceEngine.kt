@@ -2,7 +2,6 @@ package dev.pocketagent.app.ui.voice
 
 import android.os.SystemClock
 import android.util.Log
-import dev.pocketagent.app.ui.PaVoiceRecognizer
 import dev.pocketagent.app.ui.component.SenseVoiceModelManager
 import dev.pocketagent.app.ui.component.SenseVoiceRecognizer
 import dev.pocketagent.app.ui.component.senseVoiceErrorFatalForRound
@@ -68,7 +67,9 @@ internal class SenseVoiceEngine private constructor(
     private val accumulated = StringBuilder()
     private var segments = 0
     private var startedAtMs = 0L
-    private var recognizer: PaVoiceRecognizer? = null
+    // 【P4 编译必修】旧组合层接口 ui.PaVoiceRecognizer 已随 ChatScreen 旧路径删除,
+    // 字段改持具体类型 SenseVoiceRecognizer(构造签名/语义不变,域层其余零改动)。
+    private var recognizer: SenseVoiceRecognizer? = null
 
     override fun start(sessionId: Long) {
         this.sessionId = sessionId

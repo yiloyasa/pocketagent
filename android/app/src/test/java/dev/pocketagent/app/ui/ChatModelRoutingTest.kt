@@ -1,6 +1,8 @@
 package dev.pocketagent.app.ui
 
+import dev.pocketagent.app.ui.model.cardIsFollowDefault
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pocketagent.v1.ModelInfo
@@ -124,5 +126,24 @@ class ChatModelRoutingTest {
     fun pi_live_window_overrides_declared_once_usage_arrives() {
         val w = pickContextWindow(live = 983_040L, modelDeclared = 1_000_000, agentDefaultDeclared = 0)
         assertEquals(983_040L, w)
+    }
+
+    // ---- 模型卡「跟随默认」判定(P3-T4:选中态来自仓库 display 的路由语义)----
+
+    /**
+     * 卡上唯一能回到"跟随默认"的路是 ResetToDefault(model/effort 双空,零值合法),
+     * 「跟随默认」行的高亮判定必须同时认两种形状:空 id(零值语义,daemon 钉死
+     * 的合法状态)与显式的 $agent/default 条目;具体模型与**别家的** default
+     * 条目都不算本会话跟随(pi 会话里出现 codex/default 不得误高亮)。
+     */
+    @Test
+    fun follow_default_detection_covers_zero_value_and_own_default_entry() {
+        assertTrue(cardIsFollowDefault("", "pi"))
+        assertTrue(cardIsFollowDefault("pi/default", "pi"))
+        assertFalse(cardIsFollowDefault("pi/zai-coding-cn/glm-5.3", "pi"))
+        assertFalse(cardIsFollowDefault("codex/default", "pi"))
+        // agent 未回填(空):只有空 id 算跟随,任何具名 default 都不算
+        assertTrue(cardIsFollowDefault("", ""))
+        assertFalse(cardIsFollowDefault("/default", ""))
     }
 }
