@@ -6,6 +6,8 @@
 // 闪一次 cmd 黑窗。paguard 编译为 windowsgui 子系统(-H=windowsgui),
 // 物理上不可能创建控制台窗口;端口探测用进程内 TCP 拨号,不再 exec
 // netstat/findstr。启动 daemon 复用 internal/hidewin(CREATE_NO_WINDOW)。
+// 注:历史上构建行曾缺 -H=windowsgui(弹窗审计 G1 缺口),现已真正
+// -H=windowsgui 化(build.ps1 构建行显式携带 + 打包前 PE 子系统断言守护)。
 //
 // 【配对码来源(安全收口)】旧实现把 -pair-code 烙在计划任务 /tr 命令行上,
 // 而任务行任何本地用户 schtasks /query /v 就能读到,token 等于明文公示。
@@ -430,7 +432,17 @@ func log(dir, format string, args ...any) {
 	fmt.Fprintf(f, "[%s] %s\n", ts, fmt.Sprintf(format, args...))
 }
 
+// exitLog 致命错误出口:stderr 照写(兼容 go run / console 调试场景),但在
+// windowsgui 子系统(-H=windowsgui,build.ps1 构建行携带并有 PE 断言守护)下
+// 没有控制台可挂,stderr 写出无人接收、失败原因就此蒸发 —— 故同步把同一条
+// 消息落进同目录 watchdog.log(install.bat / healthcheck.bat 的排查指引均指向
+// 它),GUI 化后排障不盲。exe 路径探测失败(极端态)则退化为仅 stderr,不因
+// 日志失败改写退出码。
 func exitLog(format string, args ...any) {
-	fmt.Fprintln(os.Stderr, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	fmt.Fprintln(os.Stderr, msg)
+	if exe, err := os.Executable(); err == nil {
+		log(filepath.Dir(exe), "%s", msg)
+	}
 	os.Exit(1)
 }

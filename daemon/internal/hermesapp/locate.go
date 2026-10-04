@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
 // LocateHermes 定位 ACP 适配器的启动要素:(pythonExe, acpAdapterDir)。
@@ -34,10 +36,10 @@ func LocateHermes() (string, string, error) {
 	if r := strings.TrimSpace(os.Getenv("HERMES_NPM_ROOT")); r != "" {
 		candidates = append(candidates, r)
 	}
-	// 开发机自测:用 HERMES_NPM_ROOT 环境变量指向本机 hermes-agent 安装位
-	// (勿在代码硬编码个人盘符路径 —— 会被编进二进制,触发打包痕迹闸门)。
-	if npmGlobal := npmGlobalRoot(); npmGlobal != "" {
-		candidates = append(candidates, filepath.Join(npmGlobal, "hermes-agent"))
+	// npm 全局根走 hostenv 统一派生(与 pi/dsh 同一事实来源):npm prefix 是可配置的
+	// (开发机在 G:\Claude Code),只探 %APPDATA%\npm 会"找不到明明装着的东西"。
+	for _, npmRoot := range hostenv.NpmGlobalRoots() {
+		candidates = append(candidates, filepath.Join(npmRoot, "hermes-agent"))
 	}
 	for _, root := range candidates {
 		py := filepath.Join(root, "runtime", "hermes-agent", "venv", "Scripts", "python.exe")
@@ -47,19 +49,6 @@ func LocateHermes() (string, string, error) {
 		}
 	}
 	return "", "", errHermesNotFound
-}
-
-func npmGlobalRoot() string {
-	// npm prefix -g 常见落位(Windows):%APPDATA%\npm
-	appdata, err := os.UserConfigDir()
-	if err != nil || appdata == "" {
-		return ""
-	}
-	p := filepath.Join(appdata, "npm", "node_modules")
-	if st, err := os.Stat(p); err == nil && st.IsDir() {
-		return p
-	}
-	return ""
 }
 
 var errHermesNotFound = &HermesNotFoundError{}

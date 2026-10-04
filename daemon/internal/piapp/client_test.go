@@ -3,7 +3,9 @@ package piapp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -320,4 +322,118 @@ func TestSessionSnapshotRaceFree(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// ---- 1.0.2 启动门控:就绪重试回归(2026-10-05 探针第 2/7/8 项修复)----
+
+// newDelayedFakePi 拉起"扩展绑定中"的假 pi:PA_FAKE_PI_DELAY 秒后才开始读
+// stdin(先发的命令在管道里排队)—— 与 pi 1.0.2 runRpcMode 的
+// `await rebindSession()` 完成后才 attach stdin 读循环同构。
+func newDelayedFakePi(t *testing.T, delaySecs int) *Client {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFakePiProcess$")
+	cmd.Env = append(os.Environ(), "PA_FAKE_PI_CHILD=1", fmt.Sprintf("PA_FAKE_PI_DELAY=%d", delaySecs))
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("拉起假 pi 失败: %v", err)
+	}
+	c := &Client{
+		cmd:     cmd,
+		stdin:   stdin,
+		stdout:  bufio.NewReaderSize(stdout, 64*1024),
+		pending: map[string]chan piResp{},
+		deathCh: make(chan struct{}),
+		reaped:  make(chan struct{}),
+	}
+	c.syncHandlers()
+	go c.readLoop()
+	t.Cleanup(c.Close)
+	return c
+}
+
+// 就绪前发送的首条命令:单次预算(1s)内拿不到应答 → 换 id 重试 → 子进程 3s 后
+// 开始消费管道,重试帧必须拿到应答(探针第 2 项:get_state 应答实际到达但晚于
+// 旧版 15s 单次预算的直接回归)。旧 id 的迟到应答落 unknown 被静默丢弃,无害。
+func TestCallReadyRetryUntilReady(t *testing.T) {
+	c := newDelayedFakePi(t, 3)
+	start := time.Now()
+	raw, err := c.callWithReadyRetry(context.Background(), "get_state", nil, 1*time.Second)
+	if err != nil {
+		t.Fatalf("就绪后重试应成功: %v", err)
+	}
+	if el := time.Since(start); el < 3*time.Second {
+		t.Fatalf("应等到子进程就绪(>=3s),实耗 %s", el)
+	}
+	var data struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(raw, &data) != nil || data.SessionID != "fake-session-id" {
+		t.Fatalf("get_state 应答形状不符: %s", raw)
+	}
+}
+
+// 定局失败绝不能重试:success:false(pi 已作答)单次即返,不标可重试哨兵。
+func TestCallReadyRetryStopsOnDefinitiveError(t *testing.T) {
+	c := newDelayedFakePi(t, 0)
+	start := time.Now()
+	_, err := c.callWithReadyRetry(context.Background(), "get_entries", map[string]any{"since": "bad-cursor"}, 1*time.Second)
+	if err == nil {
+		t.Fatal("success:false 必须报错")
+	}
+	if errors.Is(err, errNoAnswer) || errors.Is(err, errPiGone) {
+		t.Fatalf("定局失败不得标成可重试哨兵: %v", err)
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("success:false 应单次即返(实耗 %s,疑似重试)", el)
+	}
+}
+
+// 子进程死亡是定局:立即返回 errPiGone,不重试(不把失败探测拖满总预算)。
+func TestCallReadyRetryStopsOnDeadProcess(t *testing.T) {
+	c := &Client{pending: map[string]chan piResp{}, deathCh: make(chan struct{})}
+	c.mu.Lock()
+	c.dead = true
+	c.deathErr = errors.New("simulated exit")
+	c.mu.Unlock()
+	_, err := c.callWithReadyRetry(context.Background(), "get_state", nil, 1*time.Second)
+	if !errors.Is(err, errPiGone) {
+		t.Fatalf("死子进程应报 errPiGone, 实得 %v", err)
+	}
+}
+
+// GetState 全链路(真实 readLoop/dispatch/解析管线)在"延迟就绪"的假 pi 上成功
+// 且会话缓存回填 —— 探针第 2 项(get_state 握手)的验收形状。
+func TestGetStateAgainstDelayedFakePi(t *testing.T) {
+	c := newDelayedFakePi(t, 2)
+	st, err := c.GetState(context.Background())
+	if err != nil {
+		t.Fatalf("延迟就绪下 GetState 应成功: %v", err)
+	}
+	if c.SessionID() != "fake-session-id" || c.SessionFile() != `C:\fake\pi-session.jsonl` {
+		t.Fatalf("会话缓存未回填: file=%q id=%q", c.SessionFile(), c.SessionID())
+	}
+	if st["sessionId"] != "fake-session-id" {
+		t.Fatalf("get_state data 形状不符: %v", st)
+	}
+}
+
+// SwitchSession 全链路:switch + get_state 校验 + 缓存覆盖 —— 探针第 7 项
+// (switch_session 恢复历史)的传输层验收形状(历史内容归 get_messages/
+// get_entries,agent 层职责)。
+func TestSwitchSessionAgainstFakePi(t *testing.T) {
+	c := newDelayedFakePi(t, 0)
+	// 假 pi 的 get_state 恒回 C:\fake\pi-session.jsonl:目标必须一致才过校验
+	if err := c.SwitchSession(context.Background(), `C:\fake\pi-session.jsonl`); err != nil {
+		t.Fatalf("SwitchSession 应成功: %v", err)
+	}
+	if c.SessionFile() != `C:\fake\pi-session.jsonl` {
+		t.Fatalf("会话缓存未覆盖: %q", c.SessionFile())
+	}
 }

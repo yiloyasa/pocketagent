@@ -24,6 +24,12 @@
 // 的流式增量帧 usage 仍恒 0,但每条 assistant 消息的**最后一个增量帧(实测
 // text_end)带上该消息的真实 usage**(per-message 口径,非会话累计)—— 消费方
 // 见 internal/agent/pi.go 的 piUsageTracker。
+//
+// 【1.0.2 复测(2026-10-05 活体探针,Temp/pi-p0-probe.md + dist/bundle 核对)】
+// 方法注册表/参数/响应包络相对 0.99.1 零变化(33 命令逐一对照);唯一行为面
+// 变化是**启动门控**:runRpcMode 在扩展加载(rebindSession)完成后才开始读
+// stdin,spawn 后的首条命令可能数十秒才被消费 —— GetState/SwitchSession 据此
+// 走就绪重试(callWithReadyRetry),0.99.1 及更早版本行为不变。
 package piapp
 
 import (
@@ -155,6 +161,16 @@ func (r *UIRequest) Dialog() bool {
 }
 
 // ---- 客户端 ----
+
+// CallCtx 的两类"非答案"失败哨兵:callWithReadyRetry 据此区分"值得换 id 重试
+// 的未应答"与"立即返回的定局"。errors.Is 可判。
+var (
+	// errPiGone 子进程已退出(readLoop EOF 置死,所有 pending 立即唤醒):重试无意义。
+	errPiGone = errors.New("pi 子进程已退出")
+	// errNoAnswer 应答帧在预算内未到达(子进程活着但不消费 stdin —— 典型:
+	// pi 1.0.2 的启动门控,见 callWithReadyRetry)。
+	errNoAnswer = errors.New("等待 pi 应答超时")
+)
 
 // Client 管理一个 pi --mode rpc 子进程(= 一个 Pi 会话)。
 type Client struct {
@@ -431,7 +447,7 @@ func (c *Client) CallCtx(ctx context.Context, typ string, params map[string]any,
 	if c.dead {
 		err := c.deathErr
 		c.mu.Unlock()
-		return nil, fmt.Errorf("pi 子进程已退出: %w", err)
+		return nil, fmt.Errorf("%w: %v", errPiGone, err)
 	}
 	c.nextID++
 	id := fmt.Sprintf("pa-%d", c.nextID)
@@ -471,7 +487,7 @@ func (c *Client) CallCtx(ctx context.Context, typ string, params map[string]any,
 		return nil, fmt.Errorf("%s: %w", typ, ctx.Err())
 	case <-timer.C:
 		c.forget(id)
-		return nil, fmt.Errorf("%s: 等待 pi 应答超时(%s)", typ, timeout)
+		return nil, fmt.Errorf("%s: %w(%s)", typ, errNoAnswer, timeout)
 	}
 }
 
@@ -555,7 +571,7 @@ func (c *Client) readLoop() {
 			c.dead = true
 			c.deathErr = err
 			for id, ch := range c.pending {
-				ch <- piResp{err: fmt.Errorf("pi 子进程已退出: %w", err)}
+				ch <- piResp{err: fmt.Errorf("%w: %w", errPiGone, err)}
 				delete(c.pending, id)
 			}
 			c.mu.Unlock()
@@ -738,9 +754,61 @@ func (c *Client) Close() {
 
 // ---- 会话挂载(daemon 重启后重挂载的握手,调研 §8.3:这一步不能省)----
 
+// 就绪等待预算。【1.0.2 启动门控】pi 1.0.2 的 runRpcMode 在 `await
+// rebindSession()`(扩展加载)完成**之后**才 attachJsonlLineReader 开始读
+// stdin —— spawn 后立刻发送的命令会在管道里躺到扩展绑定结束(本机 4 个扩展包
+// 含 LSP/会话回填实测 >15s,探针留档 Temp/pi-p0-probe.md 第 2/7/8 项:首轮
+// get_state 应答实际到达但晚于 15s 预算)。单次预算因此只做"一次尝试"的上界,
+// 拿不到应答就换 id 重试,直到 pi 就绪/定局。
+const (
+	// piReadyAttempt 单次尝试的等待上界。太长会把重试节奏拖慢(30s ctx 下只试
+	// 两次),太短会在就绪前后空转:12s 在"秒级就绪"(0.99.1)与"几十秒就绪"
+	// (1.0.2+重扩展)之间取衡。
+	piReadyAttempt = 12 * time.Second
+	// piReadyTotal 调用方 ctx 无 deadline 时的总上界(绝不能无限等)。
+	piReadyTotal = 90 * time.Second
+)
+
+// callWithReadyRetry 发命令并等应答;应答未到(且子进程未死)就换 id 重试,
+// 直到拿到答案 / success:false 等定局失败 / 子进程死亡 / 调用方 ctx 到期 /
+// 总预算耗尽。
+//
+// 【为什么必须重试】见上方"1.0.2 启动门控":首条命令很可能在 pi 开始读 stdin
+// 之前就已入管道。对 0.99.1 及更早(就绪前即消费)零差异:首次尝试毫秒级拿到
+// 应答,循环当即返回 —— 无需版本探测,两代协议同一段代码。
+//
+// 【不重试什么】success:false(pi 已作答,如 switch_session 被扩展取消)、
+// 子进程死亡(errPiGone)、调用方 ctx 取消/到期 —— 都是定局。超时重试时旧 id
+// 已 forget,pi 就绪后补发的旧应答在 dispatch 落 unknown(生产无 handler,
+// 静默丢弃,无害;帧很小,管道无压力)。
+func (c *Client) callWithReadyRetry(ctx context.Context, typ string, params map[string]any, attemptBudget time.Duration) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	total := piReadyTotal
+	if dl, ok := ctx.Deadline(); ok {
+		total = time.Until(dl)
+		if total <= 0 {
+			return nil, fmt.Errorf("%s: %w", typ, ctx.Err())
+		}
+	}
+	deadline := time.Now().Add(total)
+	for {
+		raw, err := c.CallCtx(ctx, typ, params, attemptBudget)
+		if err == nil || !errors.Is(err, errNoAnswer) {
+			return raw, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, err // 没时间再试:把最后一次未应答超时报出去
+		}
+	}
+}
+
 // GetState 拉当前会话状态并刷新 SessionFile/SessionID 缓存。
+// 走就绪重试:它常是 spawn 后的第一条命令(新会话挂载路径),在 pi 1.0.2 的
+// 启动门控下要等到扩展绑定完成才有应答。
 func (c *Client) GetState(ctx context.Context) (map[string]any, error) {
-	raw, err := c.CallCtx(ctx, "get_state", nil, 15*time.Second)
+	raw, err := c.callWithReadyRetry(ctx, "get_state", nil, piReadyAttempt)
 	if err != nil {
 		return nil, err
 	}
@@ -759,8 +827,10 @@ func (c *Client) GetState(ctx context.Context) (map[string]any, error) {
 
 // SwitchSession 切到已有会话文件并校验(重挂载:先 switch,再 get_state 确认
 // sessionFile 与预期一致 —— codex 那边"不 resume 就静默吞请求"的同款教训)。
+// switch 走就绪重试:重挂载常发生在新 spawn 的子进程上(1.0.2 启动门控,见
+// callWithReadyRetry);校验用的 GetState 自带同样的重试。
 func (c *Client) SwitchSession(ctx context.Context, sessionFile string) error {
-	raw, err := c.CallCtx(ctx, "switch_session", map[string]any{"sessionPath": sessionFile}, 20*time.Second)
+	raw, err := c.callWithReadyRetry(ctx, "switch_session", map[string]any{"sessionPath": sessionFile}, piReadyAttempt)
 	if err != nil {
 		return err
 	}

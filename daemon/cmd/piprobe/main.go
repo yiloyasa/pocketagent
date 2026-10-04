@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -323,7 +324,40 @@ func (p *probe) call(typ string, extra map[string]any, timeout time.Duration) (m
 		p.mu.Lock()
 		delete(p.pending, id)
 		p.mu.Unlock()
-		return nil, fmt.Errorf("%s 等待应答超时(%s)", typ, timeout)
+		return nil, fmt.Errorf("%s %w(%s)", typ, errNoAnswer, timeout)
+	}
+}
+
+// ---- 就绪重试(pi 1.0.2 启动门控,形态与 internal/piapp callWithReadyRetry 同款)----
+//
+// pi 1.0.2 的 runRpcMode 在 `await rebindSession()`(扩展加载)完成**之后**才
+// attach stdin 读循环:spawn 后立刻发送的首条命令会在管道里躺到扩展绑定结束
+// (本机 4 扩展包实测 >15s,2026-10-05 探针第 2/7/8 项)。单次预算只做"一次
+// 尝试"的上界,未应答就换 id 重试 —— piapp 的 errNoAnswer 未导出且探针刻意
+// 不 import piapp(手写 JSONL 直测协议面),这里自带同形哨兵。
+var errNoAnswer = errors.New("等待应答超时")
+
+const (
+	piReadyAttempt = 12 * time.Second // 单次尝试上界
+	piReadyTotal   = 90 * time.Second // 重试总上界(绝不能无限等)
+)
+
+// callReady 发命令并等应答;应答未到(子进程活着但不消费 stdin)就换 id 重试,
+// 直到拿到答案 / success:false 定局 / 子进程死亡 / 总预算耗尽。
+//
+// 【只用于"可能是进程首条命令"的调用】get_state 握手(进程 A)与
+// switch_session 重挂载(进程 B 的首条命令)。握手成功即门控打开,后续命令
+// 毫秒级应答,继续走 p.call 的单次预算 —— 探针的失败探测语义保持尖锐。
+func (p *probe) callReady(typ string, extra map[string]any, attemptBudget time.Duration) (map[string]any, error) {
+	deadline := time.Now().Add(piReadyTotal)
+	for {
+		resp, err := p.call(typ, extra, attemptBudget)
+		if err == nil || !errors.Is(err, errNoAnswer) {
+			return resp, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, err // 没时间再试:把最后一次未应答超时报出去
+		}
 	}
 }
 
@@ -583,12 +617,12 @@ func (r *runner) runAll() {
 			note: "最小环境变量集(SystemRoot/USERPROFILE/TEMP/PATH 等)直接 node 拉起 cli.js --mode rpc 成功,stderr 行数:" + fmt.Sprint(p.stderrCount()), proof: proof})
 	}
 
-	// 2) get_state 握手
+	// 2) get_state 握手(进程首条命令:1.0.2 启动门控下走就绪重试)
 	var sessionFile, sessionID, modelStr string
 	if startErr != nil {
 		r.add(result{n: 2, name: "get_state 握手", status: "失败", note: "进程未启动"})
 	} else {
-		resp, err := p.call("get_state", nil, 15*time.Second)
+		resp, err := p.callReady("get_state", nil, piReadyAttempt)
 		if err != nil {
 			r.add(result{n: 2, name: "get_state 握手", status: "失败", note: err.Error()})
 		} else if ok, _ := resp["success"].(bool); !ok {
@@ -708,8 +742,8 @@ func (r *runner) runAll() {
 	}
 	time.Sleep(2 * time.Second)
 
-	// 7) switch_session + 历史完整
-	resp, err := pb.call("switch_session", map[string]any{"sessionPath": sessionFile}, 15*time.Second)
+	// 7) switch_session + 历史完整(switch 是进程 B 的首条命令:同门控,走就绪重试)
+	resp, err := pb.callReady("switch_session", map[string]any{"sessionPath": sessionFile}, piReadyAttempt)
 	if err != nil || !boolOf(resp["success"]) {
 		r.add(result{n: 7, name: "switch_session 恢复历史", status: "失败", note: fmt.Sprintf("err=%v resp=%v", err, resp)})
 	} else {

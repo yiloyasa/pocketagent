@@ -149,7 +149,7 @@ goto :pa_wait_port
 echo.
 echo [错误] 已等待 90 秒,端口 %PORT% 仍未开始监听,daemon 大概率没有起来。
 echo        请按《使用说明.txt》末尾「连不上?按顺序排查」一节逐项检查;
-echo        也可先双击运行一次 paguard.exe 观察报错,再重跑本脚本。
+echo        也可查看同目录 watchdog.log(看护进程日志)里的报错行定位原因,再重跑本脚本。
 pause
 exit /b 1
 :pa_ok

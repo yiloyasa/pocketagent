@@ -122,7 +122,7 @@ if not defined PA_BAD (
     exit /b 0
 )
 echo 结论: DEGRADED — 端口虽已监听或业务层存在异常,按下列顺序处理:
-if not defined PA_PORTUP echo  1. 端口未监听: 先双击运行一次 paguard.exe 观察报错,再以管理员身份重跑 install.bat。
+if not defined PA_PORTUP echo  1. 端口未监听: 查看同目录 watchdog.log(看护进程日志)里的报错行定位原因,再以管理员身份重跑 install.bat。
 if not defined PA_PROC echo  2. 进程缺失: 检查杀毒软件是否隔离了 pocketagentd.exe,恢复后重跑 install.bat。
 if defined PA_LOGBAD echo  3. 日志异常: daemon.log 尾部 100 行内有 panic/fatal,请查看 %LOG% 末尾定位。
 if defined PA_GRPCBAD echo  4. gRPC 级失败: 按上文提示单独运行 bridgehealth.exe 查看证书/RPC 详细报错。

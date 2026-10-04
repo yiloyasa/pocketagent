@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,9 +135,19 @@ func TestIsCursorError(t *testing.T) {
 
 // TestFakePiProcess 仅作为子进程运行(env 门禁):对 get_entries 给固定应答 ——
 // 全量 2 条;since=entrybb2/entrycc3 增量 1 条;其他 since 一律 success:false。
+// 另支持(供 client_test 的就绪重试用例):
+//   - PA_FAKE_PI_DELAY=<秒>:扫描 stdin 前先睡 N 秒 —— 模拟 pi 1.0.2 的启动
+//     门控(扩展绑定完成前不读 stdin,先发的命令在管道里排队);
+//   - get_state/switch_session:固定应答(1.0.2 bundle 实证形状)。
 func TestFakePiProcess(t *testing.T) {
 	if os.Getenv("PA_FAKE_PI_CHILD") != "1" {
 		t.Skip("仅作为 TestGetEntriesAgainstFakePi 的假 pi 子进程运行")
+	}
+	if d := os.Getenv("PA_FAKE_PI_DELAY"); d != "" {
+		var secs int
+		if _, err := fmt.Sscanf(d, "%d", &secs); err == nil && secs > 0 {
+			time.Sleep(time.Duration(secs) * time.Second)
+		}
 	}
 	if os.Getenv("PA_FAKE_PI_SILENT") == "1" {
 		// 静默模式:不回应答(供"ctx 到期必须报错"类测试用;父进程会杀掉我们)
@@ -149,38 +160,54 @@ func TestFakePiProcess(t *testing.T) {
 	defer w.Flush()
 	for in.Scan() {
 		var req struct {
-			Type  string `json:"type"`
-			ID    string `json:"id"`
-			Since string `json:"since"`
+			Type        string `json:"type"`
+			ID          string `json:"id"`
+			Since       string `json:"since"`
+			SessionPath string `json:"sessionPath"`
 		}
-		if json.Unmarshal(in.Bytes(), &req) != nil || req.Type != "get_entries" {
+		if json.Unmarshal(in.Bytes(), &req) != nil {
 			continue
 		}
 		resp := map[string]any{"type": "response", "id": req.ID}
-		switch req.Since {
-		case "":
+		switch req.Type {
+		case "get_state":
 			resp["success"] = true
 			resp["data"] = map[string]any{
-				"entries": []map[string]any{
-					{"type": "message", "id": "entryaa1", "message": map[string]any{"role": "user", "content": "hi"}},
-					{"type": "message", "id": "entrybb2", "parentId": "entryaa1",
-						"message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "hello"}}}},
-				},
-				"leafId": "entrybb2",
+				"sessionFile": `C:\fake\pi-session.jsonl`,
+				"sessionId":   "fake-session-id",
+				"isStreaming": false,
 			}
-		case "entrybb2", "entrycc3":
+		case "switch_session":
 			resp["success"] = true
-			resp["data"] = map[string]any{
-				"entries": []map[string]any{
-					{"type": "message", "id": "entrycc3", "parentId": "entrybb2",
-						"message": map[string]any{"role": "toolResult", "toolCallId": "call_1", "toolName": "bash",
-							"content": []map[string]any{{"type": "text", "text": "ok"}}, "isError": false}},
-				},
-				"leafId": "entrycc3",
+			resp["data"] = map[string]any{"cancelled": false}
+		case "get_entries":
+			switch req.Since {
+			case "":
+				resp["success"] = true
+				resp["data"] = map[string]any{
+					"entries": []map[string]any{
+						{"type": "message", "id": "entryaa1", "message": map[string]any{"role": "user", "content": "hi"}},
+						{"type": "message", "id": "entrybb2", "parentId": "entryaa1",
+							"message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "hello"}}}},
+					},
+					"leafId": "entrybb2",
+				}
+			case "entrybb2", "entrycc3":
+				resp["success"] = true
+				resp["data"] = map[string]any{
+					"entries": []map[string]any{
+						{"type": "message", "id": "entrycc3", "parentId": "entrybb2",
+							"message": map[string]any{"role": "toolResult", "toolCallId": "call_1", "toolName": "bash",
+								"content": []map[string]any{{"type": "text", "text": "ok"}}, "isError": false}},
+					},
+					"leafId": "entrycc3",
+				}
+			default:
+				resp["success"] = false
+				resp["error"] = "Entry not found: " + req.Since
 			}
 		default:
-			resp["success"] = false
-			resp["error"] = "Entry not found: " + req.Since
+			continue // 与原行为一致:无关命令不回(父进程按超时/死亡处理)
 		}
 		line, _ := json.Marshal(resp)
 		w.WriteString(string(line) + "\n")

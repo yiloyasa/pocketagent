@@ -208,7 +208,9 @@ def cmd_build(args):
     ld_d = f"-s -w {LDFLAGS_X.format(ver)}"
     # 注意: 直接 argv 列表调 go.exe,绝不经 shell(Windows shell=True = cmd.exe,红线)。
     argv_d = [go or "go", "build", "-trimpath", "-ldflags", ld_d, "-o", exe_d, "./cmd/pocketagentd"]
-    argv_g = [go or "go", "build", "-trimpath", "-ldflags", "-s -w", "-o", exe_g, "./cmd/paguard"]
+    # paguard 与 build.ps1 同步 -H=windowsgui(弹窗审计 G1):缺它则 console 子系统,
+    # 计划任务直跑闪黑窗;build.ps1 侧另有 PE subsystem==2 打包断言守护。
+    argv_g = [go or "go", "build", "-trimpath", "-ldflags", "-s -w -H=windowsgui", "-o", exe_g, "./cmd/paguard"]
     cmd_d = subprocess.list2cmdline(argv_d)
     cmd_g = subprocess.list2cmdline(argv_g)
     print(f"  版本真源: daemon/internal/version Version={ver}")

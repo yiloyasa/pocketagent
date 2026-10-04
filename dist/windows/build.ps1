@@ -80,7 +80,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "pocketagentd 构建失败 (exit=$LASTEXITCODE)" }
 
     Write-Host "==> 构建 paguard.exe (看护进程 / 看门狗)"
-    & $go build -trimpath -ldflags "-s -w" `
+    # windowsgui 子系统 = 计划任务直跑零弹窗的红线防线②(防线① = paguard 拉起
+    # daemon 用的 internal/hidewin,管的是子进程;本 flag 管的是 paguard 自身)。
+    # 缺了它 paguard.exe 是 console 子系统,计划任务每分钟直跑就闪一次黑窗
+    # (弹窗审计 G1 缺口);下方打包前 PE 子系统断言对它做产物级防回归守护。
+    & $go build -trimpath -ldflags "-s -w -H=windowsgui" `
         -o (Join-Path $StageDir "paguard.exe") ./cmd/paguard
     if ($LASTEXITCODE -ne 0) { throw "paguard 构建失败 (exit=$LASTEXITCODE)" }
 
@@ -91,6 +95,34 @@ try {
 } finally {
     Pop-Location
 }
+
+# ---- paguard.exe PE 子系统断言(windowsgui 防回归闸,打包前产物自检) ----
+# 为什么要有这道闸:paguard 必须是 windowsgui 子系统(IMAGE_SUBSYSTEM_WINDOWS_GUI
+# = 2),计划任务每分钟直跑才物理无窗;构建行漏掉 -H=windowsgui 时 Go 不报错、
+# 二进制照常产出,只有读 PE 头才验得出来。这里纯字节偏移读 subsystem 字段断言:
+#   DOS 头 0x3C 处 4 字节(LE) = e_lfanew → 该偏移处应为 PE 签名 "PE\0\0" →
+#   可选头起点 = 签名后 24 字节 → 可选头内 Subsystem 字段固定在 +68 偏移
+#   (PE32 与 PE32+ 两种可选头布局下均为 68,2 字节 LE)。
+# 与上面痕迹闸同款收口:断言失败 Write-Error + throw 双保险,绝不入包产 zip。
+$GuardExe = Join-Path $StageDir "paguard.exe"
+$peBytes = [System.IO.File]::ReadAllBytes($GuardExe)
+if ($peBytes.Length -lt 0x40 -or $peBytes[0] -ne 0x4D -or $peBytes[1] -ne 0x5A) {
+    Write-Error "paguard.exe PE 断言失败:不是有效的 PE 文件(缺 MZ 头)。已中止打包。"
+    throw "paguard.exe PE 断言失败:缺 MZ 头"
+}
+$PeOff = [BitConverter]::ToInt32($peBytes, 0x3C)
+if ($PeOff -lt 0 -or ($PeOff + 96) -gt $peBytes.Length -or
+    $peBytes[$PeOff] -ne 0x50 -or $peBytes[$PeOff + 1] -ne 0x45 -or
+    $peBytes[$PeOff + 2] -ne 0 -or $peBytes[$PeOff + 3] -ne 0) {
+    Write-Error "paguard.exe PE 断言失败:PE 签名缺失或 PE 头越界(e_lfanew=$PeOff)。已中止打包。"
+    throw "paguard.exe PE 断言失败:PE 签名缺失"
+}
+$Subsystem = [BitConverter]::ToUInt16($peBytes, $PeOff + 24 + 68)
+if ($Subsystem -ne 2) {
+    Write-Error "paguard.exe PE 断言失败:subsystem=$Subsystem(期望 2=windowsgui)。构建行丢了 -H=windowsgui,计划任务直跑将闪黑窗。已中止打包,未产出 zip。"
+    throw "paguard.exe subsystem=$Subsystem,非 windowsgui(2),已中止打包"
+}
+Write-Host "==> paguard.exe PE 子系统断言通过: subsystem=2 (windowsgui)"
 
 # ---- 组装分发目录:exe 已在前一步构建进 $StageDir,这里补脚本 / 说明,最后压成 zip ----
 # 注意:目录的「清理 + 创建」已挪到 go build 之前完成,此处不再重复,以免删掉刚构建的 exe。
