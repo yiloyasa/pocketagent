@@ -83,7 +83,7 @@ internal fun selectionSourceLabel(source: SelectionSource, sourceRaw: String): S
         SelectionSource.APP_DEFAULT -> "App 默认"
         SelectionSource.DESKTOP_DEFAULT -> "桌面默认"
         SelectionSource.NATIVE_CURRENT -> "Agent 当前值"
-        SelectionSource.UNKNOWN -> sourceRaw.ifBlank { "未知来源" }
+        SelectionSource.UNKNOWN -> sourceRaw.ifBlank { "未登记来源" }
     }
 
 /**

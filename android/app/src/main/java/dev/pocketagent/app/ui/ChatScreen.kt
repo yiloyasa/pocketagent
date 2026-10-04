@@ -210,7 +210,10 @@ import dev.pocketagent.app.ui.component.HistoryQuickBubble
 import dev.pocketagent.app.ui.component.HistoryQuickNavLogic
 import dev.pocketagent.app.ui.component.HistoryQuickPanel
 import dev.pocketagent.app.ui.component.HistoryTickBar
-import dev.pocketagent.app.ui.history.HistoryIdentityIndex
+// 【P3 Task 8】页面级长期状态分层:ChatScreen 只 collect ChatViewModel 的投影,
+// 写入经 ChatIntent 意图(状态树/纯 reducer 在 ui/chat/ChatState.kt)。
+import dev.pocketagent.app.ui.chat.ChatIntent
+import dev.pocketagent.app.ui.chat.ChatViewModel
 import dev.pocketagent.app.ui.history.HistoryLocatePlan
 import dev.pocketagent.app.ui.history.HistorySearchHit
 import dev.pocketagent.app.ui.history.HistorySearchRepository
@@ -1931,7 +1934,17 @@ fun ChatScreen(
     onGoTab: (Int) -> Unit = {},
     /** 打开内置浏览器(带地址);传空串表示只打开浏览器首页。 */
     onOpenBrowser: (String) -> Unit = {},
+    /**
+     * 【P3 Task 8 第一层分层】页面级长期状态(离线快照/历史加载/身份索引)的
+     * 持有者,由入口包装 [dev.pocketagent.app.ui.chat.ChatRoute] 构造传入;
+     * 直连调用(既有导航点)留空时在此兜底自建 —— 对外调用点零改动。
+     */
+    chat: ChatViewModel? = null,
 ) {
+    val chatVm = chat ?: remember(threadId) { ChatViewModel() }
+    // 页面级长期状态单点 collect(lifecycle 形态与既有 collectAsState 一致);
+    // 下方以同名只读投影接回,全部读点零改动,写入一律走 chatVm.send 意图。
+    val chatState by chatVm.state.collectAsState()
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
@@ -2263,34 +2276,23 @@ fun ChatScreen(
     var codexSettings by remember { mutableStateOf<CodexSettings?>(null) }
     var models by remember { mutableStateOf(listOf<ModelInfo>()) }
     var loadError by remember { mutableStateOf<String?>(null) }
-    // 聊天区当前是否是"离线快照"(决定错误条用提示色而非报错色,并提示输入框不可用)
-    var offlineSnapshot by remember { mutableStateOf(false) }
+    // 【P3 Task 8】离线快照标志已收进 ChatViewModel(ChatState)—— 此处为只读投影,
+    // 写入走 chatVm.send(见离线横幅/错误条重试/getThread 效果各写点)。
+    val offlineSnapshot = chatState.offlineSnapshot
     // 离线快照的落盘时间(横幅「离线快照 · HH:mm」用;0 = 无)
-    var offlineSnapshotAt by remember { mutableStateOf(0L) }
+    val offlineSnapshotAt = chatState.offlineSnapshotAt
     var reloadToken by remember { mutableStateOf(0) }
     // 侧边栏品牌行的电脑名(与其他页面一致)
     var hostName by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val connectionEpoch = AgentConnection.connectionEpoch.collectAsState().value
-    // 【F-D 历史按轮加载】当前已拉取的累计轮数:打开会话=设置档位起步,
-    // 「加载更早」按档位累加;重连/下拉刷新沿用累计值(视图不缩水)。
-    // 只作用于打开会话路径 —— 导出/恢复/resync 保持全量,不读这个值。
-    var historyRoundsLoaded by remember(threadId) {
-        mutableStateOf(HistoryRoundsLogic.clampRounds(AgentConnection.historyRounds))
-    }
-    // daemon 返回的是不是"被截断的尾部"(决定时间线顶部「加载更早」的显隐)
-    var historyTruncated by remember(threadId) { mutableStateOf(false) }
-    // 「加载更早」在飞(防重复点击;按钮同时换成小圈)
-    var loadingEarlier by remember(threadId) { mutableStateOf(false) }
-    // ---- 【Task 7 历史搜索/自动定位】已加载历史的消息级身份索引 ----
-    // 每条已加载 daemon 消息 → 时间线 ChatItem 连续段(message_id 主键定位的
-    // 数据底座);每次历史拉取(打开会话/加载更早/自动定位)后重建。
-    var historyIdentity by remember(threadId) {
-        mutableStateOf(HistoryIdentityIndex())
-    }
-    // 已加载最旧消息的 daemon 稳定 id(「加载更早」防重复拉取的锚点);
-    // 空 = 旧 daemon 未带 id,退「回包条数 - 已加载条数」兜底。
-    var historyOldestMessageId by remember(threadId) { mutableStateOf("") }
+    // 【P3 Task 8】以下历史加载/身份索引状态已收进 ChatViewModel(ChatState),此处为
+    // 只读投影 —— 写入一律走 chatVm.send(...) 意图(见各写点),读点零改动。
+    val historyRoundsLoaded = chatState.roundsLoaded
+    val historyTruncated = chatState.truncated
+    val loadingEarlier = chatState.loadingEarlier
+    val historyIdentity = chatState.identity
+    val historyOldestMessageId = chatState.oldestMessageId
 
     /**
      * ThreadMessage 列表 → (ChatItem 序列, 消息级身份跨度)。历史映射一条
@@ -2326,23 +2328,13 @@ fun ChatScreen(
      */
     fun prependHistoryMessages(messages: List<ThreadMessage>): Int {
         if (messages.isEmpty()) return 0
-        val anchorPos = if (historyOldestMessageId.isNotBlank()) {
-            messages.indexOfFirst { it.messageId == historyOldestMessageId }
-        } else -1
-        val newCount = if (anchorPos >= 0) {
-            anchorPos
-        } else {
-            (messages.size - historyIdentity.spans.size).coerceAtLeast(0)
-        }
+        // 【P3 Task 8】拼接量裁定与身份索引推进收进 ChatViewModel(纯 reducer);
+        // 这里只落地 st.items(对话流资产)并回传新条数(滚动锚点 delta 直接用)。
+        val newCount = chatVm.planPrepend(messages.map { it.messageId })
         if (newCount <= 0) return 0
         val (newItems, newSpans) = buildHistoryBatch(messages.take(newCount))
         st.items.addAll(0, newItems)
-        historyIdentity = historyIdentity.copy(
-            spans = newSpans + historyIdentity.spans.map { it.copy(itemStart = it.itemStart + newItems.size) },
-        )
-        if (messages.first().messageId.isNotBlank()) {
-            historyOldestMessageId = messages.first().messageId
-        }
+        chatVm.send(ChatIntent.PrependApplied(newSpans, newItems.size, messages.first().messageId))
         return newItems.size
     }
 
@@ -2865,7 +2857,8 @@ fun ChatScreen(
     // ---- 历史消息快速查看(视频样板):刻度条目 + 当前刻度 + 跳转 ----
     // 刻度 = 每条用户消息;LazyColumn 头部偏移:时间线顶部挂「加载更早」入口时
     // itemsIndexed 的下标整体 +1(与该入口的显隐条件严格一致)。
-    val historyListOffset = if (historyTruncated && !offlineSnapshot) 1 else 0
+    // 【P3 Task 8】派生式上收为 ChatState.listOffset(语义原样),此处只投影。
+    val historyListOffset = chatState.listOffset
     val historyEntries = remember(threadId, historyListOffset, st.items.size) {
         HistoryQuickNavLogic.entriesOf(st.items.toList(), historyListOffset)
     }
@@ -2991,14 +2984,18 @@ fun ChatScreen(
                     val msgs = historySearchRepository.fetchTargetMessages(plan.requestedRounds)
                     if (msgs.isEmpty()) return null
                     val grew = prependHistoryMessages(msgs) > 0
-                    if (plan.requestedRounds > historyRoundsLoaded) historyRoundsLoaded = plan.requestedRounds
+                    // 【P3 Task 8】状态写入经 ViewModel 意图(裁定逻辑原样)
+                    chatVm.send(ChatIntent.RoundsAdvancedIfBeyond(plan.requestedRounds))
                     // 截断位与身份索引可信位跟随最新回包(sequence 坐标系随之校准)
-                    historyTruncated = HistoryRoundsLogic.canLoadEarlier(
-                        firstRole = msgs.firstOrNull()?.role,
-                        roundCount = msgs.count { it.role == "user" },
-                        requestedRounds = plan.requestedRounds,
+                    chatVm.send(
+                        ChatIntent.TruncationSettled(
+                            HistoryRoundsLogic.canLoadEarlier(
+                                firstRole = msgs.firstOrNull()?.role,
+                                roundCount = msgs.count { it.role == "user" },
+                                requestedRounds = plan.requestedRounds,
+                            ),
+                        ),
                     )
-                    historyIdentity = historyIdentity.copy(fullLoaded = !historyTruncated)
                     // 拉完重定位:先主键/兼容键,再文本对齐(新到消息可能直接对上)
                     HistorySearchState.locateLoadedSpan(hit, historyIdentity)?.let {
                         return it.itemStart + historyListOffset
@@ -3106,9 +3103,8 @@ fun ChatScreen(
                     ChatItem(role = it.role, text = it.text, sentAtMs = it.savedAtMs)
                 })
                 if (st.items.isNotEmpty()) listState.scrollToItem(st.items.size - 1)
-                offlineSnapshotAt =
-                    dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
-                offlineSnapshot = true
+                // 【P3 Task 8】离线快照标志经 ViewModel 意图落位(在线路径不动身份索引)
+                chatVm.send(ChatIntent.ShowOfflineSnapshot(dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)))
                 loadError = null
             }
             // 无快照(null):不伪造内容,继续走在线加载(失败时按原有报错分支提示)
@@ -3166,15 +3162,20 @@ fun ChatScreen(
                     val (items, spans) = buildHistoryBatch(resp.messagesList)
                     st.items.clear()
                     st.items.addAll(items)
-                    historyIdentity = HistoryIdentityIndex(
-                        spans = spans,
-                        knownTotal = historyIdentity.knownTotal,
-                        fullLoaded = !truncated,
+                    // 【P3 Task 8】身份索引/最旧锚点/截断位经 ViewModel 一次落位
+                    // (knownTotal 保留在 reducer 内,普通拉取不洗掉搜索回包的全量基准)
+                    chatVm.send(
+                        ChatIntent.HistoryTailLoaded(
+                            spans = spans,
+                            oldestMessageId = resp.messagesList.first().messageId,
+                            truncated = truncated,
+                        ),
                     )
-                    historyOldestMessageId = resp.messagesList.first().messageId
                     listState.scrollToItem(st.items.size - 1)
                 }
-                historyTruncated = truncated
+                // 【P3 Task 8】截断位在 if 外落位(原语义:空回包也更新入口显隐;
+                // 非空回包与 HistoryTailLoaded 落同值,幂等)
+                chatVm.send(ChatIntent.TruncationSettled(truncated))
                 // 【离线快照】成功后落一份本地只读副本(只留 role+text:
                 // 图片/工具结果离线圈不了,宁可少显示也不能错显示)。
                 // 【深优 R2 修复】时间戳随行保存 —— 此前整列剥掉,快照恢复后
@@ -3187,9 +3188,8 @@ fun ChatScreen(
                 )
             }
             st.historyLoaded = true
-            offlineSnapshot = false
-            offlineSnapshotAt = 0
-            // 恢复在线后撤掉残留的离线提示
+            // 【P3 Task 8】恢复在线撤掉残留的离线提示(flag + 落盘时间成对清)
+            chatVm.send(ChatIntent.BackOnline)
             if (loadError?.startsWith("离线") == true) loadError = null
         } catch (e: Exception) {
             // 连不上:有快照就渲染快照 + 顶部横幅(输入同时停用),没有才报错(保持原行为)。
@@ -3200,15 +3200,17 @@ fun ChatScreen(
                 listState.scrollToItem(st.items.size - 1)
                 // 快照条目没有 daemon 身份:身份索引一并作废(离线下搜索本就不可达,
                 // 重连重建 —— 绝不让旧索引把命中指进快照列表)
-                historyIdentity = HistoryIdentityIndex()
-                historyOldestMessageId = ""
-                offlineSnapshotAt = dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
-                offlineSnapshot = true
+                // 【P3 Task 8】resetIdentity = true 对应迁出前的索引/锚点清空
+                chatVm.send(
+                    ChatIntent.ShowOfflineSnapshot(
+                        dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId),
+                        resetIdentity = true,
+                    ),
+                )
                 loadError = null
             } else {
                 loadError = "无法加载会话历史：${e.message ?: "连接失败"}"
-                offlineSnapshot = false
-                offlineSnapshotAt = 0
+                chatVm.send(ChatIntent.BackOnline)
             }
         }
     }
@@ -3228,7 +3230,7 @@ fun ChatScreen(
      */
     fun loadEarlier() {
         if (loadingEarlier || offlineSnapshot || st.running || st.recovering) return
-        loadingEarlier = true
+        chatVm.send(ChatIntent.LoadEarlierStarted)
         val anchorIndex = listState.firstVisibleItemIndex
         val anchorOffset = listState.firstVisibleItemScrollOffset
         scope.launch {
@@ -3239,21 +3241,25 @@ fun ChatScreen(
                 }
                 if (resp.messagesList.isNotEmpty()) {
                     val delta = prependHistoryMessages(resp.messagesList)
-                    historyRoundsLoaded = next
+                    chatVm.send(ChatIntent.RoundsAdvanced(next))
                     val target = if (anchorIndex <= 0) 0 else (anchorIndex + delta).coerceAtMost(st.items.size - 1)
                     listState.scrollToItem(target, if (anchorIndex <= 0) 0 else anchorOffset)
                 }
-                historyTruncated = HistoryRoundsLogic.canLoadEarlier(
-                    firstRole = resp.messagesList.firstOrNull()?.role,
-                    roundCount = resp.messagesList.count { it.role == "user" },
-                    requestedRounds = next,
-                )
                 // 身份索引的"已到全量"可信位跟随最新截断位(sequence 兼容定位用)
-                historyIdentity = historyIdentity.copy(fullLoaded = !historyTruncated)
+                // 【P3 Task 8】截断位与可信位经 ViewModel 成对落位
+                chatVm.send(
+                    ChatIntent.TruncationSettled(
+                        HistoryRoundsLogic.canLoadEarlier(
+                            firstRole = resp.messagesList.firstOrNull()?.role,
+                            roundCount = resp.messagesList.count { it.role == "user" },
+                            requestedRounds = next,
+                        ),
+                    ),
+                )
             } catch (e: Exception) {
                 Toast.makeText(ctx, "加载更早失败：${e.message ?: "连接失败"}", Toast.LENGTH_SHORT).show()
             } finally {
-                loadingEarlier = false
+                chatVm.send(ChatIntent.LoadEarlierFinished)
             }
         }
     }
@@ -3923,7 +3929,7 @@ fun ChatScreen(
                                 TurnSession.retryRecovery(threadId)
                             } else {
                                 loadError = null
-                                offlineSnapshot = false
+                                chatVm.send(ChatIntent.ClearSnapshotFlag)
                                 reloadToken++
                             }
                         }) {
@@ -3964,8 +3970,7 @@ fun ChatScreen(
                         fontSize = 11.5.sp, color = OfflineBannerText, maxLines = 2,
                     )
                     TextButton(onClick = {
-                        offlineSnapshot = false
-                        offlineSnapshotAt = 0
+                        chatVm.send(ChatIntent.ClearSnapshot)
                         reloadToken++
                     }) {
                     Text(
@@ -5534,9 +5539,8 @@ fun ChatScreen(
             onSearchSearched = { total ->
                 // 最近一次搜索回包的实扫条数 = daemon 全量消息数(sequence 坐标系
                 // 基准);身份索引随之刷新可信位。0(旧 daemon 未报)不覆盖已有值。
-                if (total > 0) {
-                    historyIdentity = historyIdentity.copy(knownTotal = total)
-                }
+                // 【P3 Task 8】落位经 ViewModel(0 不覆盖的口径在 reducer 内)
+                chatVm.send(ChatIntent.KnownTotalObserved(total))
             },
         )
         // R2-A 消息长按上下文菜单(单一实例):摘要行报"哪条消息",动作由

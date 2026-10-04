@@ -942,7 +942,7 @@ fun HistoryQuickPanel(
                                 HistorySectionLabel(
                                     s.kind.label + " · ${s.hits.size}" +
                                         (if (s.hasMore) " · 还有更多" else "") +
-                                        (if (!s.scopeKnown) " · 范围未知" else ""),
+                                        (if (!s.scopeKnown) " · 范围未确认" else ""),
                                 )
                             }
                             itemsIndexed(

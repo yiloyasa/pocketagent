@@ -188,6 +188,6 @@ class ModelEffortOptionsTest {
         assertEquals("Agent 当前值", selectionSourceLabel(SelectionSource.NATIVE_CURRENT, "native_current"))
         // 词表外新增来源:不报错,如实展示 daemon 原文;连原文都没有才落"未知来源"
         assertEquals("future_source", selectionSourceLabel(SelectionSource.UNKNOWN, "future_source"))
-        assertEquals("未知来源", selectionSourceLabel(SelectionSource.UNKNOWN, ""))
+        assertEquals("未登记来源", selectionSourceLabel(SelectionSource.UNKNOWN, ""))
     }
 }
