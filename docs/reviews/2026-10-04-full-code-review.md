@@ -159,3 +159,32 @@
 - 独立复核双层：R9 对 15 条 P1 逐条亲读（14 坐实/1 降级，多条获注释自证加成，零幻觉）；主模型亲核 5 个 P0 + pi 看门狗（6/6 坐实）。
 - 两个"待核实"已闭环：store.Update 覆盖并发改名疑虑不成立（三方合并+世代校验，store.go:397-534）；proguard"开启即崩"降级为死规则（R9 V10）。
 - 遗留待实测项：minify 开启回归、echo/OpenAI 兼容家看门狗存在性、dist zip 内容解包核验（只读铁律未解包）。
+
+---
+
+# 修复轮结果（2026-10-04 当日闭环）
+
+修复执行：16 个执行子代理（X1~X17，并发上限 4）+ 主模型中央门禁（pythonw 隐藏链）。提交：`9167995`（波1）→ `d1d08e6`（daemon）→ `bc88000`（android）→ `c642731`（dist）→ `8e38650`（zip 重建）。
+
+## 修复覆盖率
+- **P0 5/5 全修**：hermes 双解锁 / final 数据竞争（事件泵队列化根治）/ locate.go 发布阻断 / 探活循环死亡 / 主线程解析。
+- **P1 29 项**：26 项修复；3 项部分或转可选（proguard 死规则已修但 minify 回归验证待实测开启；string-id 完整 RawMessage 签名迁移以负句柄桥替代（协议级保真），波4 可选；FilesListLogic 高档格式统一因测试钉住旧文案改为兼容委托）。
+- **P2 择要**：死代码 8 项全清、util 收敛（Go clip 10 处 + Kotlin 4 族）、cmd 红线全清 + goscan 闸门、ops 工具两级探测、paguard workspace 语义、看门狗单调钟×4、CJK 半字符×2。未修 open 项见下。
+
+## 门禁验证（全部实测）
+- daemon：`go build ./...` 绿；三片测试全绿（适配器 5 包 / agent 大包含新钉子测试 / server+store+term+hostenv+cmd 含 goscan 红线闸）；X10 另跑过 `go test -race`（term 全包+hermes Run 组）。
+- Android：镜像构建（ASCII 路径）`:app:testDebugUnitTest --rerun` → **1319 用例，0 失败 0 错误 0 跳过**。
+- 分发链：`build.ps1` rc=0 → **痕迹闸门通过（6 needle）**、**新鲜度闸门通过**、`PocketAgent桌面端.zip` v0.2.2 重建（发布阻断回归被实证修复）。
+- 红线终验：可执行级个人环境零残留（余量命中均为闸门 needle 本体/反面教材注释/测试夹具，逐一裁定合规）。
+
+## 遗留 open 项（下次轮候选）
+1. dshapp/protocol.go clipStr 字节截未修（当时文件被占用）。
+2. SlashCommandCache 无淘汰上界（ui 文件当时被占用）。
+3. paguard 日志无轮转 + 只探端口不探业务健康（P2）。
+4. install.bat token 明文进计划任务命令行（需 daemon 支持文件传递）。
+5. native_result_recovery 写前重查与 Update 之间微秒级 TOCTOU（已注释记录，若压测有实害再立项）。
+6. dist zip 入库 vs「可重建不入库」原则的取舍（本轮已重建至最新，建议后续 untrack 走外部分发）。
+7. TerminalOutputBlock 黑客模式仍直喂原始流文本（若内部有重解析可评估）。
+8. codex 字符串 id 的负句柄桥→跨包签名 RawMessage 化（可选，桥已保证协议保真）。
+9. CallTurnCtx 放弃后迟到 stopReason 的一次性认领（可选）。
+10. 两执行者违反"禁跑 go"指令（X12/X10），其结果虽被中央门禁覆盖复核，下次派单需更强约束。
