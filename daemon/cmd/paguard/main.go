@@ -124,7 +124,17 @@ func main() {
 		logOffset = fi.Size()
 	}
 
-	pid, err := startDaemon(dir, addr, pair)
+	// ---- 工作区归一:conf 的 WORKSPACE 显式指路(A3 回归回改) ----
+	// 停传 -workspace 后,daemon cwd=exe 目录:用户机器(如 C:\PocketAgent)得到
+	// 合理缺省,开发机(exe 在仓库 daemon 子目录)却把工作区顶成 daemon 子目录。
+	// conf WORKSPACE 是给开发机/特殊部署的不碰红线的显式指路;install.bat 不写
+	// 此键,普通用户维持"装哪算哪"的合理缺省。
+	ws := conf.workspace
+	if ws != "" {
+		log(dir, "daemon 工作区以 %s 的 WORKSPACE=%s 为准", confFile, ws)
+	}
+
+	pid, err := startDaemon(dir, addr, pair, ws)
 	if err != nil {
 		exitLog("paguard: start daemon: %v", err)
 	}
@@ -159,17 +169,18 @@ func resolvePairCode(conf guardConf, taskLine string) (string, pairSource) {
 	}
 }
 
-// guardConf 是 pocketagentd.conf 里 paguard 关心的两个字段。
+// guardConf 是 pocketagentd.conf 里 paguard 关心的三个字段。
 type guardConf struct {
-	pairCode string
-	addr     string
+	pairCode  string
+	addr      string
+	workspace string
 }
 
 // readConf 解析与 paguard 同目录的 pocketagentd.conf(install.bat 写入的
-// KEY=VALUE 扁平格式,healthcheck.bat 同款读法)。只认 PAIR_CODE 与 ADDR 两键;
-// 键匹配不分大小写、值容忍首尾空白(与 install.bat 的 findstr /i 口径一致)。
-// 文件不存在或无目标键 → 对应字段为零值,由调用方走兼容回退;
-// 解析失败不阻断守护(conf 读不到 ≠ 守护失职,如实回退即可)。
+// KEY=VALUE 扁平格式,healthcheck.bat 同款读法)。只认 PAIR_CODE、ADDR、
+// WORKSPACE 三键;键匹配不分大小写、值容忍首尾空白(与 install.bat 的
+// findstr /i 口径一致)。文件不存在或无目标键 → 对应字段为零值,由调用方走
+// 兼容回退;解析失败不阻断守护(conf 读不到 ≠ 守护失职,如实回退即可)。
 func readConf(dir string) guardConf {
 	raw, err := os.ReadFile(filepath.Join(dir, confFile))
 	if err != nil {
@@ -192,6 +203,8 @@ func readConf(dir string) guardConf {
 			c.pairCode = v
 		case strings.EqualFold(strings.TrimSpace(k), "ADDR"):
 			c.addr = v
+		case strings.EqualFold(strings.TrimSpace(k), "WORKSPACE"):
+			c.workspace = v
 		}
 	}
 	return c
@@ -347,23 +360,29 @@ func processAlive(pid int) bool {
 	return r != 0 && code == stillActive
 }
 
-func startDaemon(dir, addr, pairCode string) (int, error) {
+func startDaemon(dir, addr, pairCode, confWorkspace string) (int, error) {
 	out, err := os.OpenFile(filepath.Join(dir, daemonLog), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return 0, err
 	}
 	defer out.Close()
 
-	// workspace 语义(P1-10 修复):不再传 -workspace=exe 上级目录 —— 那在用户
-	// 机器上(如装在 C:\PocketAgent)会把默认工作区顶成上一级甚至盘符根,agent
-	// 会话落盘根被污染。daemon 侧 -workspace 缺省值取自身 cwd
+	// workspace 语义(P1-10 修复 + A3 回归回改):不再缺省传 -workspace=exe 上级
+	// 目录 —— 那在用户机器上(如装在 C:\PocketAgent)会把默认工作区顶成上一级甚至
+	// 盘符根,agent 会话落盘根被污染。缺省不传参:daemon 侧 -workspace 取自身 cwd
 	// (cmd/pocketagentd/main.go: cwd()),而下面 cmd.Dir 已设为 exe 所在目录
 	// (=安装目录),于是不变式"用户安装 → 会话工作区=安装目录"自然成立。
-	// 开发机/特殊部署要另指工作区时,设 PA_WORKSPACE 环境变量显式覆盖
-	// (显式 env 优先于缺省;未设即不传参,行为与"装哪算哪"一致)。
+	// 【显式指路,三级优先】conf WORKSPACE > 环境变量 PA_WORKSPACE > 不传:
+	//   - conf WORKSPACE 是持久化的事实来源(开发机/特殊部署手写此键,开发机
+	//     exe 在仓库 daemon 子目录时必须显式指回仓库根);
+	//   - env PA_WORKSPACE 是无 conf 场景的临时覆盖(会话级,重启即失效);
+	//   - 两者皆无 → 不传参,"装哪算哪"。
 	args := []string{"-addr", addr}
-	if ws := strings.TrimSpace(os.Getenv("PA_WORKSPACE")); ws != "" {
+	switch ws := strings.TrimSpace(confWorkspace); {
+	case ws != "":
 		args = append(args, "-workspace", ws)
+	case os.Getenv("PA_WORKSPACE") != "":
+		args = append(args, "-workspace", strings.TrimSpace(os.Getenv("PA_WORKSPACE")))
 	}
 	if pairCode != "" {
 		args = append(args, "-pair-code", pairCode)

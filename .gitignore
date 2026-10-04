@@ -34,6 +34,8 @@ dist/windows/PocketAgent桌面端.zip
 .pocketagentd/
 .pocketagent-uploads/
 resumetest-thread.json
+# 守护链本机配置(paguard 自读;开发机含 WORKSPACE 个人路径,严禁入库)
+daemon/pocketagentd.conf
 
 # ---------- 调试产物（截图 / UI dump）----------
 # 验证过程中产生的界面截图与 uiautomator dump，可随时重新生成
@@ -79,3 +81,6 @@ desktop.ini
 # ---------- Python 字节码缓存 ----------
 __pycache__/
 daemon/*.exe.bak-*
+
+# 保留名误建条目(空文件,重启后可删;2026-10-04 收官波遗留)
+NUL

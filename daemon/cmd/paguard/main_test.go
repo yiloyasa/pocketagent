@@ -34,22 +34,23 @@ func appendRaw(t *testing.T, path, content string) {
 func TestReadConf(t *testing.T) {
 	dir := t.TempDir()
 	// 无 conf → 零值(调用方据此走兼容回退)。
-	if c := readConf(dir); c.pairCode != "" || c.addr != "" {
+	if c := readConf(dir); c.pairCode != "" || c.addr != "" || c.workspace != "" {
 		t.Fatalf("无 %s 应返回零值: %+v", confFile, c)
 	}
-	// 常规格式(install.bat 写入形态)。
-	writeConf(t, dir, "PAIR_CODE=tok-123\nADDR=0.0.0.0:7246\n")
-	if c := readConf(dir); c.pairCode != "tok-123" || c.addr != "0.0.0.0:7246" {
+	// 常规格式(install.bat 写入形态;install.bat 不写 WORKSPACE,该键由
+	// 开发机/特殊部署手写 —— A3 工作区回归的回改,见 startDaemon 优先级)。
+	writeConf(t, dir, "PAIR_CODE=tok-123\nADDR=0.0.0.0:7246\nWORKSPACE=G:\\proj\\repo\n")
+	if c := readConf(dir); c.pairCode != "tok-123" || c.addr != "0.0.0.0:7246" || c.workspace != `G:\proj\repo` {
 		t.Fatalf("常规解析失败: %+v", c)
 	}
 	// 键不分大小写 + 值容忍首尾空白 + 忽略注释/无等号行/无关键。
-	writeConf(t, dir, "\n; 注释行\n# 另一种注释\npair_code =  spaced-token  \nNoEqualsLine\nOtherKey=x\nADDR=127.0.0.1:9000\n")
-	if c := readConf(dir); c.pairCode != "spaced-token" || c.addr != "127.0.0.1:9000" {
+	writeConf(t, dir, "\n; 注释行\n# 另一种注释\npair_code =  spaced-token  \nNoEqualsLine\nOtherKey=x\nADDR=127.0.0.1:9000\nworkspace =  G:\\ws  \n")
+	if c := readConf(dir); c.pairCode != "spaced-token" || c.addr != "127.0.0.1:9000" || c.workspace != `G:\ws` {
 		t.Fatalf("大小写/空白/注释容忍失效: %+v", c)
 	}
 	// 只缺 PAIR_CODE → 该字段保持空,ADDR 照常解析(回退判定的前提)。
 	writeConf(t, dir, "ADDR=0.0.0.0:7246\n")
-	if c := readConf(dir); c.pairCode != "" || c.addr != "0.0.0.0:7246" {
+	if c := readConf(dir); c.pairCode != "" || c.addr != "0.0.0.0:7246" || c.workspace != "" {
 		t.Fatalf("缺键字段应保持空: %+v", c)
 	}
 }
