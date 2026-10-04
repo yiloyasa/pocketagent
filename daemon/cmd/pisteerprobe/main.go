@@ -19,11 +19,40 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
+// ---- 定位(与 piprobe 同款:env 覆盖 → 通用派生 → 报错退出)----
+//
+// 【为什么没有写死的默认路径】本探针曾把开发机的 node.exe 与 pi 入口写成常量:
+// 字符串常量会随探针二进制分发(规格 §2 明令禁止),且换一台机器必然不命中。
+// 开发机自测路径经 PI_NODE / PI_CLI 注入,不进代码。
+
+// piCLIRel 是 pi 在 npm 包内的入口相对路径(直接 node 调 cli.js)。
+const piCLIRel = "@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+
+func locateNode() string {
+	if p := strings.TrimSpace(os.Getenv("PI_NODE")); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return hostenv.FindNode()
+}
+
+func locateCLI() string {
+	if p := strings.TrimSpace(os.Getenv("PI_CLI")); p != "" {
+		return p
+	}
+	return hostenv.FirstFile(hostenv.PackageCandidates(piCLIRel))
+}
+
 func main() {
-	node := `C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe`
-	cli := `G:\Claude Code\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js`
+	node, cli := locateNode(), locateCLI()
+	if node == "" || cli == "" {
+		fmt.Printf("未找到 node 或 pi 入口(node=%q cli=%q)。请设 PI_NODE / PI_CLI 后重试。\n", node, cli)
+		os.Exit(1)
+	}
 	base, _ := os.MkdirTemp("", "pisteer-*")
 	defer os.RemoveAll(base)
 

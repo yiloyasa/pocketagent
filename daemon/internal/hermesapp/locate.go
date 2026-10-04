@@ -8,7 +8,7 @@
 // session/prompt → session/update 流(agent_message_chunk 正文 /
 // agent_thought_chunk 思考 / tool_call 工具)→ prompt 应答(stopReason)。
 //
-// 【凭据/模型】hermes 家目录 G:\Hermes(HERMES_HOME,.env + config.yaml +
+// 【凭据/模型】hermes 家目录(%HERMES_HOME%,.env + config.yaml +
 // auth.json)。模型由 config.yaml 的 model.default 决定;key 走 .env 的
 // DEEPSEEK_API_KEY 等(env-seeded)。daemon **只读不改**用户家配置(与
 // ~/.codex 同一红线);未配置时 ACP initialize 的 authMethods 如实上报,
@@ -34,11 +34,8 @@ func LocateHermes() (string, string, error) {
 	if r := strings.TrimSpace(os.Getenv("HERMES_NPM_ROOT")); r != "" {
 		candidates = append(candidates, r)
 	}
-	candidates = append(candidates,
-		// 本机安装位(实证)。Go 卷符 Join 陷阱:filepath.Join("G:", ...) 产生
-		// 卷相对路径 "G:Claude Code\...",Stat 永远失败 —— 卷符必须带根 "G:\"。
-		filepath.Join(`G:\`, "Claude Code", "node_modules", "hermes-agent"),
-	)
+	// 开发机自测:用 HERMES_NPM_ROOT 环境变量指向本机 hermes-agent 安装位
+	// (勿在代码硬编码个人盘符路径 —— 会被编进二进制,触发打包痕迹闸门)。
 	if npmGlobal := npmGlobalRoot(); npmGlobal != "" {
 		candidates = append(candidates, filepath.Join(npmGlobal, "hermes-agent"))
 	}

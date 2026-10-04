@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,13 +25,34 @@ var frames []string // 每条 [时间] METHOD 原始参数
 var methodCount = map[string]int{}
 
 func main() {
-	cwd := flag.String("cwd", `G:\项目1\pocketagent`, "thread/start 的工作区")
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\codex-subagent-s0.md`, "证据文件输出路径")
+	cwd := flag.String("cwd", "", "thread/start 的工作区(缺省 = 当前工作目录)")
+	out := flag.String("out", "", "证据文件输出路径(缺省写到系统临时目录)")
 	wait := flag.Duration("wait", 120*time.Second, "单轮等待 turn/completed 的上限")
-	prompt := flag.String("prompt",
-		`运行命令:curl.exe -s -o G:\pa-s0-probe-out.txt https://example.com 然后告诉我退出码。该操作需要经过审查(auto review)`,
-		"会触发审批升级的 prompt(写工作区外 + 联网)")
+	prompt := flag.String("prompt", "", "会触发审批升级的 prompt(写工作区外 + 联网);缺省写系统临时目录下的探针文件")
 	flag.Parse()
+
+	// 落点全部运行时派生(规格 §2:字符串常量会随探针二进制分发,不写死任何
+	// 个人专属绝对路径;开发机自测用 -cwd/-out/-prompt 覆盖)。
+	work := *cwd
+	if work == "" {
+		if w, err := os.Getwd(); err == nil && w != "" {
+			work = w
+		} else {
+			work, _ = os.MkdirTemp("", "codexsubagentprobe-ws")
+		}
+	}
+	reportPath := *out
+	if reportPath == "" {
+		reportPath = filepath.Join(os.TempDir(), "codex-subagent-s0.md")
+	}
+	s0Prompt := *prompt
+	if s0Prompt == "" {
+		// 语义保持:写工作区之外的文件 + 联网,才会触发审批升级(auto review)。
+		// 落点用系统临时目录,不含任何个人专属盘符/目录。
+		s0Prompt = fmt.Sprintf(
+			"运行命令:curl.exe -s -o %s https://example.com 然后告诉我退出码。该操作需要经过审查(auto review)",
+			filepath.Join(os.TempDir(), "pa-s0-probe-out.txt"))
+	}
 
 	c, err := codexapp.Start()
 	if err != nil {
@@ -80,7 +102,7 @@ func main() {
 	// 等审批请求上接管路由;默认沙箱放行的命令不会走审批,因此再把线程压成
 	// read-only + on-request,保证升级动作真的发生。
 	raw, err := c.Call("thread/start", map[string]interface{}{
-		"cwd":               *cwd,
+		"cwd":               work,
 		"approvalsReviewer": "auto_review",
 		"approvalPolicy":    "on-request",
 		"sandbox":           "read-only",
@@ -101,7 +123,7 @@ func main() {
 	fmt.Println("== thread/start ->", tid)
 
 	started := time.Now()
-	ok := runTurn(c, tid, *prompt, *wait)
+	ok := runTurn(c, tid, s0Prompt, *wait)
 	elapsed := time.Since(started).Round(time.Second)
 
 	mu.Lock()
@@ -117,8 +139,8 @@ func main() {
 	var b strings.Builder
 	b.WriteString("# codex 子代理 S0 探针证据(T-L1)\n\n")
 	b.WriteString("- 时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n")
-	b.WriteString(fmt.Sprintf("- 参数: thread/start { cwd: %s, approvalsReviewer: \"auto_review\", approvalPolicy: \"on-request\", sandbox: \"read-only\" }\n", *cwd))
-	b.WriteString("- prompt: " + *prompt + "\n")
+	b.WriteString(fmt.Sprintf("- 参数: thread/start { cwd: %s, approvalsReviewer: \"auto_review\", approvalPolicy: \"on-request\", sandbox: \"read-only\" }\n", work))
+	b.WriteString("- prompt: " + s0Prompt + "\n")
 	b.WriteString(fmt.Sprintf("- 结果: turn/completed %v(耗时 %s);subAgentActivity+collabAgentToolCall item 共 %d 条\n", ok, elapsed, nItems))
 	b.WriteString("\n## 通知方法计数\n\n")
 	keys := make([]string, 0, len(counts))
@@ -134,10 +156,10 @@ func main() {
 		b.WriteString(f + "\n")
 	}
 	b.WriteString("```\n")
-	if err := os.WriteFile(*out, []byte(b.String()), 0o644); err != nil {
-		log.Fatalf("写证据文件 %s: %v", *out, err)
+	if err := os.WriteFile(reportPath, []byte(b.String()), 0o644); err != nil {
+		log.Fatalf("写证据文件 %s: %v", reportPath, err)
 	}
-	fmt.Printf("== 完成: turn/completed=%v 耗时=%s 子代理item=%d 证据=%s ==\n", ok, elapsed, nItems, *out)
+	fmt.Printf("== 完成: turn/completed=%v 耗时=%s 子代理item=%d 证据=%s ==\n", ok, elapsed, nItems, reportPath)
 }
 
 func runTurn(c *codexapp.Client, tid, prompt string, d time.Duration) bool {

@@ -31,18 +31,21 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
-// ---- 定位(对应调研 §2:不能依赖 PATH,显式探测 + PI_BIN 式兜底)----
+// ---- 定位(对应调研 §2:不能依赖 PATH,显式探测 + env 兜底)----
+//
+// 【为什么没有写死的默认路径】本探针曾把开发机的 node.exe 与 pi 入口写成常量:
+// Go 的 -trimpath 只剥源码路径、不剥字符串常量,它们会随探针二进制分发(规格 §2
+// 明令禁止),且换一台机器必然不命中。现在与 internal/piapp 同款:env 覆盖 →
+// 用户环境通用派生(npm 标准安装位 / PATH)→ 都没有返回空串,由调用方报一句
+// 可操作的错误。开发机自测路径经 PI_NODE / PI_BIN / PI_CLI 注入,不进代码。
 
-const (
-	// 本机实测 node 位置(daemon 环境可能没有 PATH,必须显式探测)
-	defaultNode = `C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe`
-	// 本机实测 Pi 入口(不要经 pi.ps1 垫片,直接 node 调 cli.js)
-	defaultCLI = `G:\Claude Code\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js`
-)
+// piCLIRel 是 pi 在 npm 包内的入口相对路径(不要经 pi.ps1 垫片,直接 node 调 cli.js)。
+const piCLIRel = "@earendil-works/pi-coding-agent/dist/bundle/cli.js"
 
-// locateNode 找 node 可执行文件:PI_NODE → PI_BIN(CODEX_BIN 式兜底)→ 固定路径 → PATH。
+// locateNode 找 node 可执行文件:PI_NODE → PI_BIN(CODEX_BIN 式兜底)→ 通用派生 → PATH。
 func locateNode() string {
 	for _, k := range []string{"PI_NODE", "PI_BIN"} {
 		if p := strings.TrimSpace(os.Getenv(k)); p != "" {
@@ -51,21 +54,15 @@ func locateNode() string {
 			}
 		}
 	}
-	if _, err := os.Stat(defaultNode); err == nil {
-		return defaultNode
-	}
-	if p, err := exec.LookPath("node"); err == nil {
-		return p
-	}
-	return ""
+	return hostenv.FindNode()
 }
 
-// locateCLI 找 pi 的 cli.js:PI_CLI 覆盖 → 固定路径。
+// locateCLI 找 pi 的 cli.js:PI_CLI 覆盖 → npm 全局位派生;都没有返回空串。
 func locateCLI() string {
 	if p := strings.TrimSpace(os.Getenv("PI_CLI")); p != "" {
 		return p
 	}
-	return defaultCLI
+	return hostenv.FirstFile(hostenv.PackageCandidates(piCLIRel))
 }
 
 // ---- 探针主体 ----
@@ -101,19 +98,23 @@ type probe struct {
 func cleanEnv() []string {
 	home := os.Getenv("USERPROFILE")
 	if home == "" {
-		home = `C:\Users\yanzi`
+		if h, err := os.UserHomeDir(); err == nil && h != "" {
+			home = h
+		}
+	}
+	if home == "" {
+		// 兜底用系统临时目录:通用派生,不含任何个人专属常量。
+		home = os.TempDir()
 	}
 	tmp := os.Getenv("TEMP")
 	if tmp == "" {
 		tmp = filepath.Join(home, `AppData\Local\Temp`)
 	}
-	return []string{
+	env := []string{
 		"SystemRoot=C:\\Windows",
 		"windir=C:\\Windows",
 		"COMPUTERNAME=" + hostnameOrLocal(),
 		"USERPROFILE=" + home,
-		"HOMEDRIVE=" + home[:2],
-		"HOMEPATH=" + home[2:],
 		"APPDATA=" + filepath.Join(home, `AppData\Roaming`),
 		"LOCALAPPDATA=" + filepath.Join(home, `AppData\Local`),
 		"TEMP=" + tmp,
@@ -121,6 +122,11 @@ func cleanEnv() []string {
 		// node 与 Git Bash 的最小定位:Pi 在 Windows 上用 Git Bash 跑 bash 工具(调研 §2)
 		"PATH=C:\\Windows\\System32;C:\\Windows;C:\\Program Files\\Git\\bin;C:\\Program Files\\Git\\cmd",
 	}
+	// HOMEDRIVE/HOMEPATH 只在 home 是盘符路径时派生(临时目录兜底下不保证成立)。
+	if len(home) >= 2 && home[1] == ':' {
+		env = append(env, "HOMEDRIVE="+home[:2], "HOMEPATH="+home[2:])
+	}
+	return env
 }
 
 func hostnameOrLocal() string {
@@ -407,9 +413,15 @@ type result struct {
 // ---- main ----
 
 func main() {
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\pi-p0-probe.md`, "报告输出路径")
+	out := flag.String("out", "", "报告输出路径(缺省写到系统临时目录)")
 	mode := flag.String("mode", "p0", "p0 = 全量 P0 探针;s = S 级增量命令探针(export_html/compact/thinking_levels/follow_up/session_info_changed);cmds = get_commands 斜杠命令探针;m99 = 0.99.1 协议新面探针(new_session/cycle_*/bash/abort_*/disposition/follow_up_mode);fork = fork/clone 活体复核探针(分支落盘时机/新会话身份,隔离 agent 目录)")
 	flag.Parse()
+
+	// 报告落点:缺省写系统临时目录(通用派生,不写死任何个人专属绝对路径)。
+	reportPath := *out
+	if reportPath == "" {
+		reportPath = filepath.Join(os.TempDir(), "pi-p0-probe.md")
+	}
 
 	r := &runner{}
 	switch *mode {
@@ -475,13 +487,13 @@ func main() {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString("```\n")
-	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
 		fmt.Println("建目录失败:", err)
 	}
-	if err := os.WriteFile(*out, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(reportPath, []byte(b.String()), 0o644); err != nil {
 		fmt.Println("写报告失败:", err)
 	} else {
-		fmt.Println("报告已写入:", *out)
+		fmt.Println("报告已写入:", reportPath)
 	}
 }
 
@@ -524,7 +536,8 @@ func (r *runner) runAll() {
 	// 0) 环境定位 + --version(为第 1、11 项提供事实)
 	ver := ""
 	if node == "" || cli == "" {
-		r.add(result{n: 1, name: "daemon 真实环境拉起", status: "失败", note: fmt.Sprintf("node=%q cli=%q 定位失败", node, cli)})
+		r.add(result{n: 1, name: "daemon 真实环境拉起", status: "失败",
+			note: fmt.Sprintf("未找到 node/cli(node=%q cli=%q)。请设 PI_NODE / PI_BIN / PI_CLI 后重试。", node, cli)})
 		return
 	}
 	if out, err := exec.Command(node, cli, "--version").Output(); err == nil {

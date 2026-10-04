@@ -42,14 +42,18 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
-const (
-	// 本机实测 node 位置(WMI 派生环境不保证 PATH,显式探测 + DSH_NODE 兜底)
-	defaultNode = `C:\Users\yanzi\AppData\Local\Programs\Nodejs\node.exe`
-	// 本机实测 dsh 入口(ESM bin.js,不要经 dsh.cmd 垫片)
-	defaultBin = `G:\Claude Code\node_modules\@deepseek-ai\dsh\lib\bin.js`
-)
+// dshBinRel 是 dsh 在 npm 包内的 ESM 入口相对路径(不经 dsh.cmd 垫片,直接 node 调 bin.js)。
+//
+// 【为什么没有写死的默认路径】本探针曾把开发机的 node.exe 与 dsh 入口写成常量:
+// Go 的 -trimpath 只剥源码路径、不剥字符串常量,它们会随探针二进制分发(规格 §2
+// 明令禁止),且换一台机器必然不命中。现在与 internal/dshapp 同款:env 覆盖
+// (DSH_NODE / DSH_BIN)→ 用户环境通用派生(npm 标准安装位 / PATH)→ 都没有返回
+// 空串,main 里报一句可操作的错误。开发机自测路径经 env 注入,不进代码。
+const dshBinRel = "@deepseek-ai/dsh/lib/bin.js"
 
 // ---- JSON-RPC 消息 ----
 
@@ -1115,20 +1119,14 @@ func locateNode() string {
 			return p
 		}
 	}
-	if _, err := os.Stat(defaultNode); err == nil {
-		return defaultNode
-	}
-	if p, err := exec.LookPath("node"); err == nil {
-		return p
-	}
-	return ""
+	return hostenv.FindNode()
 }
 
 func locateBin() string {
 	if p := strings.TrimSpace(os.Getenv("DSH_BIN")); p != "" {
 		return p
 	}
-	return defaultBin
+	return hostenv.FirstFile(hostenv.PackageCandidates(dshBinRel))
 }
 
 func dshVersion(node, bin string) string {
@@ -1326,7 +1324,7 @@ func orDash(s string) string {
 // ---- main ----
 
 func main() {
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\dsh-p0-probe.md`, "证据报告输出路径")
+	out := flag.String("out", "", "证据报告输出路径(缺省写到系统临时目录)")
 	run := flag.String("run", "", "单项:handshake|session-new|update-granularity|permission|permwrite|cancel|resume|no-key|coldstart|configpersist|resumecompat|proto020;-all = 全部 8 项")
 	all := flag.Bool("all", false, "跑全部 8 项(默认,与空 -run 等价)")
 	// resumecompat 专用:真实 DSH_HOME 的只读来源(空 = 自动探测迁移后数据目录
@@ -1334,9 +1332,15 @@ func main() {
 	compatHome := flag.String("compat-home", "", "resumecompat:要复制的真实 DSH_HOME(只读源,副本进临时目录)")
 	flag.Parse()
 
+	// 报告落点:缺省写系统临时目录(通用派生,不写死任何个人专属绝对路径)。
+	reportPath := *out
+	if reportPath == "" {
+		reportPath = filepath.Join(os.TempDir(), "dsh-p0-probe.md")
+	}
+
 	node, bin := locateNode(), locateBin()
 	if node == "" || bin == "" {
-		fmt.Printf("定位失败 node=%q bin=%q\n", node, bin)
+		fmt.Printf("未找到 node 或 dsh 入口(node=%q bin=%q)。请设 DSH_NODE / DSH_BIN 后重试。\n", node, bin)
 		os.Exit(1)
 	}
 	ver := dshVersion(node, bin)
@@ -1506,9 +1510,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := writeReport(*out, node, bin, ver, base, r.items, r.sum, os.Getenv("DEEPSEEK_API_KEY") != ""); err != nil {
+	if err := writeReport(reportPath, node, bin, ver, base, r.items, r.sum, os.Getenv("DEEPSEEK_API_KEY") != ""); err != nil {
 		fmt.Println("写报告失败:", err)
 		os.Exit(1)
 	}
-	fmt.Println("报告已写入:", *out)
+	fmt.Println("报告已写入:", reportPath)
 }

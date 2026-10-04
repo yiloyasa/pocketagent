@@ -1446,11 +1446,18 @@ object AgentConnection {
                     // USB 自动配对(2026-09-30):物理插线场景免手输配对码。
                     // 仅回环候选 + 鉴权类失败(token 失效/未配对)时,向 daemon
                     // 问询配对码(GetPairingInfo 仅对回环应答 = 物理接触证明),
-                    // 拿到即走标准配对;成功后本轮置位让探活立即重连。
+                    // 拿到即走标准配对。配对成功后【不能 return@launch】:
+                    // startAutoReconnect 的防重入闸(probeScope != null 即 return)
+                    // 保证全进程只有这一条探活协程,return 后它就永久死亡,
+                    // 没有任何入口再把它拉起 —— 正确姿势是重置退避节奏,给
+                    // daemon 一拍配准时间后 continue 进下一轮探活。
                     if (address == USB_ADDR && e.isAuthDenied()) {
                         if (maybeAutoPairViaUsb()) {
                             connectionEpoch.value += 1
-                            return@launch
+                            retryDelayMs = 1000L   // 配对成功,立即以初始节奏重试
+                            probeFailStreak = 0
+                            delay(retryDelayMs)    // 给 daemon 一拍配准时间
+                            continue
                         }
                     }
                     false
@@ -1469,9 +1476,16 @@ object AgentConnection {
                             runtimeService().getRuntimeState(
                                 GetRuntimeStateRequest.getDefaultInstance())
                         } catch (he: Exception) {
+                            // 配对成功后同样不能 return@launch(理由同上:探活
+                            // 协程全进程唯一,return 即死透)。重置退避节奏并
+                            // continue,下一轮探活拿新 token 重新验证;健康检查
+                            // 由 probeCount % 10 门控,不会形成紧密循环。
                             if (he.isAuthDenied() && maybeAutoPairViaUsb()) {
                                 connectionEpoch.value += 1
-                                return@launch
+                                retryDelayMs = 1000L   // 配对成功,立即以初始节奏重试
+                                probeFailStreak = 0
+                                delay(retryDelayMs)    // 给 daemon 一拍配准时间
+                                continue
                             }
                         }
                     }

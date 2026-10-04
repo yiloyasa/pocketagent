@@ -12,8 +12,8 @@
 // proto 与既有生产文件零改动。
 //
 // 【证据边界(2026-09-30 本机实测)】本机三家均**无任何已持久化会话**:
-//   - Claude Code:C:\Users\yanzi\.claude 存在但无 projects/ 目录;
-//   - OpenCode:C:\Users\yanzi\.local\share\opencode 只有空的 log/ 与 repos/,
+//   - Claude Code:%HOME%\.claude 存在但无 projects/ 目录;
+//   - OpenCode:%HOME%\.local\share\opencode 只有空的 log/ 与 repos/,
 //     无 storage/(无任何会话落盘);
 //   - Hermes:全盘常见位置均未发现任何 agent 会话存储
 //     (.hermes-apple-design-research 只是技能调研工作区,非 agent 存储)。

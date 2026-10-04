@@ -180,15 +180,20 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	// 【取消要通(H1)】turnMu 的获取必须感知 ctx:前一轮挂死持锁时,排队轮次
 	// 的"停止"按钮会被这把锁吞掉(点了没反应 —— 真机实害)。拿不到就随 ctx
 	// 退出;让位后旧轮若恰好释放,接锁即还(reaper),绝不带着锁空跑。
+	// 解锁权单一所有者:两分支各自负责,绝不双解锁(select 两分支同时就绪时
+	// 随机择一,若 defer 与 reaper 并存会对已解锁的 mutex 二次 Unlock,进程
+	// 整体 fatal)。
 	acquired := make(chan struct{})
 	go func() { p.turnMu.Lock(); close(acquired) }()
 	select {
 	case <-acquired:
+		// 本轮拿到锁,唯一解锁权在本函数
+		defer p.turnMu.Unlock()
 	case <-ctx.Done():
+		// 让位:解锁权完全移交给 reaper,本函数绝不碰锁
 		go func() { <-acquired; p.turnMu.Unlock() }()
 		return nil, nil, ctx.Err()
 	}
-	defer p.turnMu.Unlock()
 
 	c, err := p.ensureClient(ctx)
 	if err != nil {
@@ -274,14 +279,10 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	var final strings.Builder
 	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对)
 	var toolMu sync.Mutex
-	var streamErr onceError
 	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:任何一帧 = 适配器还活着
 	approvalWaiting := &atomic.Bool{}
 	notif := func(raw json.RawMessage) {
 		lastNotif.Store(time.Now().UnixMilli())
-		if streamErr.get() != nil {
-			return
-		}
 		ev := hermesapp.ParseSessionUpdate(raw)
 		if ev.SessionID != sid {
 			return // 非本轮会话的帧(共享适配器上还有别的会话)不进本轮
@@ -345,9 +346,6 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	}
 
 	if res.err != nil {
-		if e := streamErr.get(); e != nil {
-			return nil, nil, e
-		}
 		if ctx.Err() != nil {
 			// 与应答竞速获胜的用户停:已流出的内容照常交回。
 			return hermesPartialBlocks(&final), nil, ctx.Err()
@@ -360,7 +358,7 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 
 	out := strings.TrimSpace(final.String())
 	if out == "" {
-		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:G:\\Hermes 未配置模型(config.yaml 的 model.default)或凭据无效", res.stop)
+		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:hermes 安装目录的 config.yaml 未配置 model.default,或凭据无效", res.stop)
 	}
 	log.Printf("[hermes] 一轮完成 session=%s 用时 %v 回复 %d 字", sid,
 		time.Since(turnStart).Round(time.Millisecond), len([]rune(out)))
@@ -702,24 +700,4 @@ func clipString(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
-}
-
-// onceError 只记第一个错误(投影路径错误不中断轮次)。
-type onceError struct {
-	mu sync.Mutex
-	e  error
-}
-
-func (o *onceError) set(err error) {
-	o.mu.Lock()
-	if o.e == nil {
-		o.e = err
-	}
-	o.mu.Unlock()
-}
-
-func (o *onceError) get() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.e
 }

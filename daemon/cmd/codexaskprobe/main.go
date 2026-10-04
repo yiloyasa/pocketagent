@@ -51,10 +51,16 @@ type turnResult struct {
 }
 
 func main() {
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\codex-askuser-t-opt.md`, "证据文件输出路径")
+	out := flag.String("out", "", "证据文件输出路径(缺省写到系统临时目录)")
 	wait := flag.Duration("wait", 120*time.Second, "单轮等待 turn/completed 的上限(探针超时保护)")
 	cwd := flag.String("cwd", "", "thread/start 的工作区(默认临时目录,不污染项目)")
 	flag.Parse()
+
+	// 报告落点:缺省写系统临时目录(通用派生,不写死任何个人专属绝对路径)。
+	reportPath := *out
+	if reportPath == "" {
+		reportPath = filepath.Join(os.TempDir(), "codex-askuser-t-opt.md")
+	}
 
 	work := *cwd
 	if work == "" {
@@ -81,7 +87,13 @@ func main() {
 	var b strings.Builder
 	b.WriteString("# T-OPT: Default 模式 request_user_input 被拒 —— 拒绝方定位探针\n\n")
 	b.WriteString("- 时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n")
-	b.WriteString("- codex: 0.155.1(CODEX_BIN=G:\\Claude Code\\codex.cmd)\n")
+	// codex 二进制写实际解析结果(codexapp.LocateCodex 的 env→PATH 探测链),
+	// 不再写死开发机路径 —— 报告如实反映本轮用的是哪个 bin。
+	codexBin, binErr := codexapp.LocateCodex()
+	if binErr != nil {
+		codexBin = binErr.Error()
+	}
+	b.WriteString("- codex: 0.155.1(CODEX_BIN=" + codexBin + ")\n")
 	b.WriteString("- 工作区: " + work + "\n")
 	b.WriteString("- 诱导 prompt: \"请调用 request_user_input 工具问我一个问题…(全文见帧)\"\n")
 	b.WriteString("- 红线: 未改用户 ~/.codex/config.toml;探针对 requestUserInput 用第一选项的真实文本作答并如实记录,其余反向请求回 error,未伪造任何 decision\n\n")
@@ -186,10 +198,10 @@ func main() {
 		b.WriteString(f + "\n")
 	}
 	b.WriteString("```\n")
-	if werr := os.WriteFile(*out, []byte(b.String()), 0o644); werr != nil {
-		log.Fatalf("写证据文件 %s: %v", *out, werr)
+	if werr := os.WriteFile(reportPath, []byte(b.String()), 0o644); werr != nil {
+		log.Fatalf("写证据文件 %s: %v", reportPath, werr)
 	}
-	fmt.Printf("== 完成: A(ask=%d) C(ask=%d) B(ask=%d) 证据=%s ==\n", resA.askSeen, resC.askSeen, resB.askSeen, *out)
+	fmt.Printf("== 完成: A(ask=%d) C(ask=%d) B(ask=%d) 证据=%s ==\n", resA.askSeen, resC.askSeen, resB.askSeen, reportPath)
 }
 
 // runScenario 起一个新线程跑一轮诱导,记录逐帧与结果。startParams 直接透传 thread/start。

@@ -20,7 +20,7 @@ package agent
 //   "sessionId":"sess_7b01b67f-…","sessionKind":"interactive","status":"idle",
 //   "title":"Pocket Agent多子智能体架构对接与全局记忆","titleSource":"generated",
 //   "updatedAt":1789760613705,
-//   "workspace":{"workspaceKey":"G:\\项目1","workspacePath":"G:\\项目1"}}, …]}
+//   "workspace":{"workspaceKey":"<示例工作区>","workspacePath":"<示例工作区>"}}, …]}
 
 import (
 	"context"

@@ -11,17 +11,17 @@ import (
 // hermes 的思考强度没有运行时 RPC:唯一入口是家目录 config.yaml 的
 // `agent.reasoning_effort`(resolve_reasoning_config,所有面共用同一收口),
 // 会话创建那一刻读取。daemon 在用户于手机上显式选择强度时写该键 —— 与用户
-// 手动编辑 config.yaml 等价(hermes 官方配置面,G:\Hermes 是 hermes 自己的家,
-// 与 ~/.codex 等只读红线无关)。
+// 手动编辑 config.yaml 等价(hermes 官方配置面,%HERMES_HOME% 是 hermes
+// 自己的家,与 ~/.codex 等只读红线无关)。
 //
 // 编辑策略(保守行级):已有 `reasoning_effort:` 键 → 原值替换;`agent:` 段内
 // 追加;两者皆无 → 文件尾追加 agent: 段。不引入 YAML 库(依赖极简红线),
 // 只处理本键的两级缩进形态;解析交给 hermes 自己的 loader。
 
 // ConfigPath 返回 hermes 家目录 config.yaml 的绝对路径。
-// 家目录定位:HERMES_HOME 环境变量(适配器同款语义)→ 默认 <盘根>\Hermes 的
-// 实证位不可移植,改为按 HERMES_HOME/缺省用户家 .hermes 顺序;本机 hermes-npm
-// 把 HERMES_HOME 指到 G:\Hermes(status 实测)。
+// 家目录定位:HERMES_HOME 环境变量(适配器同款语义)→ 缺省用户家 .hermes
+// 顺序;曾按个人盘固定安装位的实证路径硬编码,因不可移植已废弃;hermes-npm
+// 安装时会把 HERMES_HOME 指到 hermes 安装目录(status 实测)。
 func ConfigPath() string {
 	if home := strings.TrimSpace(os.Getenv("HERMES_HOME")); home != "" {
 		return filepath.Join(home, "config.yaml")

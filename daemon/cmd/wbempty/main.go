@@ -23,21 +23,39 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/pocketagent/daemon/internal/hostenv"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
-const storePath = `C:\Users\yanzi\.pocketagentd\threads.json`
+// storePath 定位 daemon 的 threads.json:优先迁移后的数据目录
+// (<LOCALAPPDATA>\PocketAgent\data),回退历史位置(家目录 .pocketagentd)。
+//
+// 【为什么不再写死绝对路径】原实现把开发机的家目录写成常量,会随探针二进制
+// 分发(规格 §2 禁止),换机必失效。数据目录的真实解析规则由 internal/hostenv
+// 统一持有,这里只做**只读**定位(现存的优先,都不存在时回退历史位置,
+// 让读失败的报错仍然指向一个说得通的位置);不调 hostenv.ResolveDataDir ——
+// 那会触发一次性迁移副作用,探针不该替 daemon 做迁移。
+func storePath() string {
+	for _, dir := range []string{hostenv.UserDataDir(), hostenv.LegacyDataDir()} {
+		p := filepath.Join(dir, "threads.json")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join(hostenv.LegacyDataDir(), "threads.json")
+}
 
 func ps(s string) *string { return &s }
 
 func codexSection() string {
-	b, err := os.ReadFile(storePath)
+	b, err := os.ReadFile(storePath())
 	if err != nil {
 		return "读失败:" + err.Error()
 	}

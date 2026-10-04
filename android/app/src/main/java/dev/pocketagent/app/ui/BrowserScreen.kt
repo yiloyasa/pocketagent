@@ -74,7 +74,7 @@ import pocketagent.v1.ReadFileRequest
  *
  * 【能打开四类东西】
  *  1. 公网地址 —— 正常 http(s) 加载;
- *  2. **电脑上的文件**(`pc:G:\...\index.html`)—— 走 daemon ReadFile 取回后渲染:
+ *  2. **电脑上的文件**(`pc:D:\...\index.html`)—— 走 daemon ReadFile 取回后渲染:
  *     html 直接渲染;xlsx/docx/csv 由 [PcFilePreview] 解析成表格/文档;md 渲染成排版页;
  *     图片转 data URL;其余文本等宽显示;二进制给提示页;
  *  3. **手机上的文件**(`content://…`)—— 任务中心/用户数据管理里点"查看"进来的
@@ -1053,7 +1053,7 @@ private fun stripPcMeta(raw: String): String {
 
 /**
  * 判断输入是不是"电脑上的路径"。
- * Windows 盘符(`G:\a\b.html` / `C:/a/b`)与 Unix 绝对路径都算。
+ * Windows 盘符(`D:\a\b.html` / `C:/a/b`)与 Unix 绝对路径都算。
  * @return 规范化后的路径,不是路径则 null
  */private fun toPcPath(raw: String): String? {
     val t = stripPcMeta(raw.trim()).removePrefix("file:///")
@@ -1111,7 +1111,7 @@ private fun startPage(): String {
           <div style="margin-top:8px;color:${p.muted};font-size:12.5px">
             · 在会话里点那条文件路径,自动在这里打开<br>
             · 也可以把路径粘到上面的地址栏,例如
-              <span style="color:${p.fg}">G:\试验区\heart-site\index.html</span><br>
+              <span style="color:${p.fg}">D:\docs\index.html</span><br>
             · 公网地址直接输入,或用它搜索
           </div>
         </div>

@@ -44,7 +44,14 @@ func main() {
 	}
 	fmt.Printf("HOST workspaces=%v shell=%s\n", host.Workspaces, host.DefaultShell)
 
-	ws := `G:\项目1`
+	// 工作区用系统临时目录(运行时派生):本探针验证的是 daemon 的 workspace/
+	// 上传/终端链路本身,不依赖任何特定磁盘位置;曾写死开发机仓库所在盘符,
+	// 字符串常量会随探针二进制分发(规格 §2 禁止)。退出时清理。
+	ws, err := os.MkdirTemp("", "pa-localverify")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(ws)
 	threads := pb.NewThreadServiceClient(conn)
 	th, err := threads.CreateThread(ctx, &pb.CreateThreadRequest{Workspace: ws})
 	if err != nil {

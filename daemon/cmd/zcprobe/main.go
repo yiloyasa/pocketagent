@@ -33,12 +33,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
-// 默认路径(本机实证):node + ZCode 桌面端自带的 agent 内核 bundle。
+// 定位(通用派生,不含任何个人专属常量):node + ZCode 桌面端自带的 agent 内核 bundle。
+//
+// 【为什么没有写死的默认路径】本探针曾把开发机路径写成常量:字符串常量会随探针
+// 二进制分发(规格 §2 明令禁止),且换一台机器必然不命中。现在:env 覆盖
+// (ZCODE_NODE / ZCODE_CJS,沿用本探针既有约定)→ 用户环境通用派生(npm 标准安装位 /
+// ZCode 桌面端标准安装位)→ 都没有返回空串,main 里报一句可操作的错误。
+// 开发机自测路径经 env 注入,不进代码。
 var (
-	nodeExe = envOr("ZCODE_NODE", `C:\Users\yanzi\AppData\Local\Programs\nodejs\node.exe`)
-	zcodeJs = envOr("ZCODE_CJS", `C:\Users\yanzi\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs`)
+	nodeExe = locateNodeExe()
+	zcodeJs = locateZcodeJs()
 )
 
 func envOr(k, def string) string {
@@ -46,6 +54,27 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// locateNodeExe 找 node:ZCODE_NODE 覆盖(存在性交给 main 的 Stat 检查报错)→ 通用派生。
+func locateNodeExe() string {
+	if p := envOr("ZCODE_NODE", ""); p != "" {
+		return p
+	}
+	return hostenv.FindNode()
+}
+
+// locateZcodeJs 找 zcode.cjs:ZCODE_CJS 覆盖 → ZCode 桌面端的标准安装位
+// (%LOCALAPPDATA%\Programs\ZCode\resources\glm\zcode.cjs,任何用户的等价位置,
+// 非个人专属);都没有返回空串。
+func locateZcodeJs() string {
+	if p := envOr("ZCODE_CJS", ""); p != "" {
+		return p
+	}
+	if la := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); la != "" {
+		return filepath.Join(la, "Programs", "ZCode", "resources", "glm", "zcode.cjs")
+	}
+	return ""
 }
 
 // wireMsg "ZCode Protocol" 一行消息(NDJSON)。
@@ -208,12 +237,16 @@ func main() {
 	subagents := flag.Bool("subagents", false, "只跑 session/subagents 实证(空态/缺参/真实委派轮次/分页,见 subagents.go)")
 	flag.Parse()
 
+	if nodeExe == "" || zcodeJs == "" {
+		fmt.Printf("未找到 node 或 zcode.cjs(node=%q cjs=%q)。请设 ZCODE_NODE / ZCODE_CJS 后重试。\n", nodeExe, zcodeJs)
+		os.Exit(1)
+	}
 	if _, err := os.Stat(nodeExe); err != nil {
-		fmt.Printf("FATAL node 不存在: %s\n", nodeExe)
+		fmt.Printf("FATAL node 不存在: %s(可用 ZCODE_NODE 指定路径)\n", nodeExe)
 		os.Exit(1)
 	}
 	if _, err := os.Stat(zcodeJs); err != nil {
-		fmt.Printf("FATAL zcode.cjs 不存在: %s\n", zcodeJs)
+		fmt.Printf("FATAL zcode.cjs 不存在: %s(可用 ZCODE_CJS 指定路径)\n", zcodeJs)
 		os.Exit(1)
 	}
 

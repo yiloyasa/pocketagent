@@ -31,12 +31,13 @@ import (
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
-const (
-	storePath = `C:\Users\yanzi\.pocketagentd\threads.json`
-	// SET_BUDGET 是"还算是人能用"的上界。修复后 daemon 的探测上界是 8s,
-	// 这里留一倍余量;超过它就意味着无界阻塞还在。
-	SET_BUDGET = 20 * time.Second
-)
+// SET_BUDGET 是"还算是人能用"的上界。修复后 daemon 的探测上界是 8s,
+// 这里留一倍余量;超过它就意味着无界阻塞还在。
+//
+// 【删除说明】本文件曾有一个写死开发机绝对路径的 storePath 常量
+// (家目录 .pocketagentd 下的 threads.json),但全文无任何引用 —— 属纯死代码,
+// 且字符串常量会随探针二进制分发(规格 §2 禁止),直接删除,不留个人路径痕迹。
+const SET_BUDGET = 20 * time.Second
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7246", "daemon 地址(ip:port)")

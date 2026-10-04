@@ -12,6 +12,8 @@ import (
 //   - `G:\项目1`          —— 本仓库在开发机上的绝对路径
 //   - "Claude Code"      —— 开发机上第三方工具的自选安装目录名
 //   - "100.92.193.109"   —— 开发机的 Tailscale 地址
+//   - `G:\Hermes`        —— 开发机上另一工作仓库的盘根路径
+//   - "试验区"            —— 开发机磁盘上承载代码与实验区的中文目录名
 //
 // 【为什么这张表要有唯一实现】发布闸门（dist/windows/build.ps1 的字节级扫描）、
 // Go 侧的源码回归钉子、以及将来可能加进 pa_audit 的规则，用的必须是同一份关键字。
@@ -20,7 +22,7 @@ import (
 //
 // 注意 "yanzi" 是小写匹配；调用方按需 ToLower 后再比。
 func developerTraceNeedles() []string {
-	return []string{"yanzi", `G:\项目1`, "Claude Code", "100.92.193.109"}
+	return []string{"yanzi", `G:\项目1`, "Claude Code", "100.92.193.109", `G:\Hermes`, "试验区"}
 }
 
 // DeveloperTracesIn 报告一段字节里命中的开发机痕迹（去重、按表内顺序）。
