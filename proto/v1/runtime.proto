@@ -166,6 +166,23 @@ message ListUnknownEventsRequest {
   int32 limit = 5;            // 最多返回条数;<=0 = 台账默认上限
 }
 
+// UserActionDescriptor 是 daemon 判定为**可以给用户看**的一个动作按钮
+// (2026-10-04 未知事件用户处理中心计划,只增不改)。
+// 【为什么由 daemon 定义而不是 Android 猜】未知事件能不能执行、要不要确认,
+// 是这台电脑的安全姿态;手机端只按本描述渲染按钮,绝不自行发明"允许"。
+message UserActionDescriptor {
+  string action_id = 1;   // 动作稳定键(如 inspect / acknowledge);客户端原样回传
+  string label = 2;       // 按钮文案(daemon 给人话,客户端不翻译)
+  string description = 3; // 一句话说明(按下之后会发生什么);空 = 无
+  // 安全声明:只有 safe=true 的动作才允许渲染成可点按钮。
+  // 【红线】UNKNOWN_REQUEST 默认不出现 safe=true 的"允许/执行"类动作。
+  bool safe = 4;
+  // true = 执行前必须再向用户要一次确认(幂等动作也可能要求确认)。
+  bool requires_confirmation = 5;
+  // true = 该动作有破坏性(如丢弃数据);UI 必须按危险样式渲染。
+  bool destructive = 6;
+}
+
 // UnknownEventSummary 是列表项。原始载荷只在 GetUnknownEvent 才给 —— 列表页不需要
 // 背着一堆可能很大的 payload。
 message UnknownEventSummary {
@@ -183,6 +200,22 @@ message UnknownEventSummary {
   // 翻译是摘要不是裁决 —— 原文永远可查(GetUnknownEvent.raw_json),冲突以原文为准。
   // 旧 daemon / 旧台账条目可能为空:客户端空值时显示方法名原文并如实说明,不得编造。
   string summary = 11;
+  // ---- 用户处理中心(只增不改:12~17 为新增,旧 daemon 不带,字段号分配登记见
+  // proto/FIELD_ALLOCATIONS.md)----
+  // 以下均为 daemon 按事件种类套**固定文案**得到的确定性人话解释(不经 LLM);
+  // 旧端 / 旧台账条目可能为空,客户端空值时降级显示方法名原文,不编造。
+  // 一行标题(说「来了个什么东西」);列表与卡片共用。
+  string plain_title = 12;
+  // 两三句话讲清「发生了什么、daemon 是怎么处理的」。
+  string plain_explanation = 13;
+  // 对当前任务的影响(如「不影响正在进行的轮次」「该请求未自动执行」)。
+  string impact = 14;
+  // true = 需要用户处理(进"需要我处理"分组);false = 仅供参考,不催办。
+  bool requires_user = 15;
+  // true = 电脑端有原生界面,可发"在电脑端打开"类动作;false = 没有,别画入口。
+  bool can_open_native = 16;
+  // daemon 判定安全的可选动作(可为空 = 只能查看/复制技术原文,别造按钮)。
+  repeated UserActionDescriptor actions = 17;
 }
 
 // UnknownEventField 是字段级透析表的一行:把这个载荷「拆开读」的结果。
@@ -216,6 +249,13 @@ message UnknownEventResponse {
   // 详细人话解读:比 summary 长 —— 字段怎么读、各部分像什么、daemon 打算怎么处理
   // (已投影/只透传/安全拒绝)。旧 daemon 为空。
   string translation = 6;
+  // ---- 用户处理中心(只增不改:7~8 为新增,旧 daemon 不带,字段号分配登记见
+  // proto/FIELD_ALLOCATIONS.md)----
+  // 建议的下一步(人话,如「可在电脑端查看原文」);空 = 无建议,客户端不占位。
+  string recommended_next_step = 7;
+  // 导出支持包(support bundle)时与本事件相关的提示(如原文会一并打包);
+  // 空 = 无,客户端不占位。
+  string support_bundle_hint = 8;
 }
 
 message AcknowledgeUnknownEventRequest {

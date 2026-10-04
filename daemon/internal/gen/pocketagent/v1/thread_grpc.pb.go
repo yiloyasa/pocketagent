@@ -55,6 +55,12 @@ const (
 	ThreadService_SetCollabRole_FullMethodName               = "/pocketagent.v1.ThreadService/SetCollabRole"
 	ThreadService_DeleteCollabRole_FullMethodName            = "/pocketagent.v1.ThreadService/DeleteCollabRole"
 	ThreadService_DispatchCollab_FullMethodName              = "/pocketagent.v1.ThreadService/DispatchCollab"
+	ThreadService_GetCollabSession_FullMethodName            = "/pocketagent.v1.ThreadService/GetCollabSession"
+	ThreadService_ListCollabSessions_FullMethodName          = "/pocketagent.v1.ThreadService/ListCollabSessions"
+	ThreadService_WatchCollabSession_FullMethodName          = "/pocketagent.v1.ThreadService/WatchCollabSession"
+	ThreadService_CancelCollabSession_FullMethodName         = "/pocketagent.v1.ThreadService/CancelCollabSession"
+	ThreadService_CancelCollabMember_FullMethodName          = "/pocketagent.v1.ThreadService/CancelCollabMember"
+	ThreadService_RetryCollabMember_FullMethodName           = "/pocketagent.v1.ThreadService/RetryCollabMember"
 )
 
 // ThreadServiceClient is the client API for ThreadService service.
@@ -182,6 +188,29 @@ type ThreadServiceClient interface {
 	// 【为什么不开"谁先谁后 / 谁汇总"的编排】那是让 daemon 替用户猜分工,既不
 	// 可预测也不可控;协同页的选人 + 角色配置已经把决策权交回用户手里。
 	DispatchCollab(ctx context.Context, in *DispatchCollabRequest, opts ...grpc.CallOption) (*DispatchCollabResponse, error)
+	// ---- 协同会话闭环:快照 / 观察 / 取消 / 重试(只增,2026-10-04 协同闭环计划)----
+	// 【为什么从"派发即完"升级成会话聚合】DispatchCollab 只回答"受理了没有",
+	// 不回答"后来怎么样了" —— 手机端离开协同页再回来,看到的是一组散落的子线程
+	// 状态,凑不出"2/3 已完成 · 1 个等待确认"。引入持久化 CollabSession 后,daemon
+	// 是协同状态的唯一事实来源:快照(Get/List)负责恢复,事件流(Watch)负责跟随,
+	// 取消/重试负责干预。全部 additive:旧客户端继续只用 DispatchCollab 不受影响。
+	// 【为什么状态是 string 不是 enum】会话/成员状态(ACCEPTED/RUNNING/COMPLETED/
+	// FAILED/CANCELLED/WAITING_APPROVAL)由 daemon 状态机定义,协议先按字符串透传;
+	// 状态集稳定后再冻结枚举,避免半成品枚举把客户端锁死在错误词表上。
+	// 单个协同会话的完整快照(会话级状态 + 全体成员卡片)。
+	GetCollabSession(ctx context.Context, in *GetCollabSessionRequest, opts ...grpc.CallOption) (*CollabSessionSnapshot, error)
+	// 列出协同会话(最简全量形态;筛选交给手机端,daemon 不猜口径)。
+	ListCollabSessions(ctx context.Context, in *ListCollabSessionsRequest, opts ...grpc.CallOption) (*ListCollabSessionsResponse, error)
+	// 订阅单个协同会话的事件流:先回放 seq > after_sequence 的既有事件,再跟随
+	// 实时事件,直至会话终局或客户端取消。断线重连后带 lastSequence 续传;
+	// 超出保留窗口时由服务端改发一帧全量 snapshot 兜底。
+	WatchCollabSession(ctx context.Context, in *WatchCollabSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CollabSessionEvent], error)
+	// 取消整个协同会话:逐成员发起取消并等待状态收敛,返回收敛后的会话快照。
+	CancelCollabSession(ctx context.Context, in *CancelCollabSessionRequest, opts ...grpc.CallOption) (*CollabSessionSnapshot, error)
+	// 只取消一个成员(对应子线程),不动其它成员。
+	CancelCollabMember(ctx context.Context, in *CancelCollabMemberRequest, opts ...grpc.CallOption) (*CollabMemberSnapshot, error)
+	// 重试一个成员:创建新的成员轮次(不覆盖旧结果),返回新成员快照。
+	RetryCollabMember(ctx context.Context, in *RetryCollabMemberRequest, opts ...grpc.CallOption) (*CollabMemberSnapshot, error)
 }
 
 type threadServiceClient struct {
@@ -564,6 +593,75 @@ func (c *threadServiceClient) DispatchCollab(ctx context.Context, in *DispatchCo
 	return out, nil
 }
 
+func (c *threadServiceClient) GetCollabSession(ctx context.Context, in *GetCollabSessionRequest, opts ...grpc.CallOption) (*CollabSessionSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollabSessionSnapshot)
+	err := c.cc.Invoke(ctx, ThreadService_GetCollabSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) ListCollabSessions(ctx context.Context, in *ListCollabSessionsRequest, opts ...grpc.CallOption) (*ListCollabSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCollabSessionsResponse)
+	err := c.cc.Invoke(ctx, ThreadService_ListCollabSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) WatchCollabSession(ctx context.Context, in *WatchCollabSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CollabSessionEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ThreadService_ServiceDesc.Streams[2], ThreadService_WatchCollabSession_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchCollabSessionRequest, CollabSessionEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ThreadService_WatchCollabSessionClient = grpc.ServerStreamingClient[CollabSessionEvent]
+
+func (c *threadServiceClient) CancelCollabSession(ctx context.Context, in *CancelCollabSessionRequest, opts ...grpc.CallOption) (*CollabSessionSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollabSessionSnapshot)
+	err := c.cc.Invoke(ctx, ThreadService_CancelCollabSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) CancelCollabMember(ctx context.Context, in *CancelCollabMemberRequest, opts ...grpc.CallOption) (*CollabMemberSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollabMemberSnapshot)
+	err := c.cc.Invoke(ctx, ThreadService_CancelCollabMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *threadServiceClient) RetryCollabMember(ctx context.Context, in *RetryCollabMemberRequest, opts ...grpc.CallOption) (*CollabMemberSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollabMemberSnapshot)
+	err := c.cc.Invoke(ctx, ThreadService_RetryCollabMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ThreadServiceServer is the server API for ThreadService service.
 // All implementations must embed UnimplementedThreadServiceServer
 // for forward compatibility.
@@ -689,6 +787,29 @@ type ThreadServiceServer interface {
 	// 【为什么不开"谁先谁后 / 谁汇总"的编排】那是让 daemon 替用户猜分工,既不
 	// 可预测也不可控;协同页的选人 + 角色配置已经把决策权交回用户手里。
 	DispatchCollab(context.Context, *DispatchCollabRequest) (*DispatchCollabResponse, error)
+	// ---- 协同会话闭环:快照 / 观察 / 取消 / 重试(只增,2026-10-04 协同闭环计划)----
+	// 【为什么从"派发即完"升级成会话聚合】DispatchCollab 只回答"受理了没有",
+	// 不回答"后来怎么样了" —— 手机端离开协同页再回来,看到的是一组散落的子线程
+	// 状态,凑不出"2/3 已完成 · 1 个等待确认"。引入持久化 CollabSession 后,daemon
+	// 是协同状态的唯一事实来源:快照(Get/List)负责恢复,事件流(Watch)负责跟随,
+	// 取消/重试负责干预。全部 additive:旧客户端继续只用 DispatchCollab 不受影响。
+	// 【为什么状态是 string 不是 enum】会话/成员状态(ACCEPTED/RUNNING/COMPLETED/
+	// FAILED/CANCELLED/WAITING_APPROVAL)由 daemon 状态机定义,协议先按字符串透传;
+	// 状态集稳定后再冻结枚举,避免半成品枚举把客户端锁死在错误词表上。
+	// 单个协同会话的完整快照(会话级状态 + 全体成员卡片)。
+	GetCollabSession(context.Context, *GetCollabSessionRequest) (*CollabSessionSnapshot, error)
+	// 列出协同会话(最简全量形态;筛选交给手机端,daemon 不猜口径)。
+	ListCollabSessions(context.Context, *ListCollabSessionsRequest) (*ListCollabSessionsResponse, error)
+	// 订阅单个协同会话的事件流:先回放 seq > after_sequence 的既有事件,再跟随
+	// 实时事件,直至会话终局或客户端取消。断线重连后带 lastSequence 续传;
+	// 超出保留窗口时由服务端改发一帧全量 snapshot 兜底。
+	WatchCollabSession(*WatchCollabSessionRequest, grpc.ServerStreamingServer[CollabSessionEvent]) error
+	// 取消整个协同会话:逐成员发起取消并等待状态收敛,返回收敛后的会话快照。
+	CancelCollabSession(context.Context, *CancelCollabSessionRequest) (*CollabSessionSnapshot, error)
+	// 只取消一个成员(对应子线程),不动其它成员。
+	CancelCollabMember(context.Context, *CancelCollabMemberRequest) (*CollabMemberSnapshot, error)
+	// 重试一个成员:创建新的成员轮次(不覆盖旧结果),返回新成员快照。
+	RetryCollabMember(context.Context, *RetryCollabMemberRequest) (*CollabMemberSnapshot, error)
 	mustEmbedUnimplementedThreadServiceServer()
 }
 
@@ -806,6 +927,24 @@ func (UnimplementedThreadServiceServer) DeleteCollabRole(context.Context, *Delet
 }
 func (UnimplementedThreadServiceServer) DispatchCollab(context.Context, *DispatchCollabRequest) (*DispatchCollabResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DispatchCollab not implemented")
+}
+func (UnimplementedThreadServiceServer) GetCollabSession(context.Context, *GetCollabSessionRequest) (*CollabSessionSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCollabSession not implemented")
+}
+func (UnimplementedThreadServiceServer) ListCollabSessions(context.Context, *ListCollabSessionsRequest) (*ListCollabSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCollabSessions not implemented")
+}
+func (UnimplementedThreadServiceServer) WatchCollabSession(*WatchCollabSessionRequest, grpc.ServerStreamingServer[CollabSessionEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchCollabSession not implemented")
+}
+func (UnimplementedThreadServiceServer) CancelCollabSession(context.Context, *CancelCollabSessionRequest) (*CollabSessionSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelCollabSession not implemented")
+}
+func (UnimplementedThreadServiceServer) CancelCollabMember(context.Context, *CancelCollabMemberRequest) (*CollabMemberSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelCollabMember not implemented")
+}
+func (UnimplementedThreadServiceServer) RetryCollabMember(context.Context, *RetryCollabMemberRequest) (*CollabMemberSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetryCollabMember not implemented")
 }
 func (UnimplementedThreadServiceServer) mustEmbedUnimplementedThreadServiceServer() {}
 func (UnimplementedThreadServiceServer) testEmbeddedByValue()                       {}
@@ -1458,6 +1597,107 @@ func _ThreadService_DispatchCollab_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ThreadService_GetCollabSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCollabSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).GetCollabSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_GetCollabSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).GetCollabSession(ctx, req.(*GetCollabSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_ListCollabSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCollabSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).ListCollabSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_ListCollabSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).ListCollabSessions(ctx, req.(*ListCollabSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_WatchCollabSession_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchCollabSessionRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ThreadServiceServer).WatchCollabSession(m, &grpc.GenericServerStream[WatchCollabSessionRequest, CollabSessionEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ThreadService_WatchCollabSessionServer = grpc.ServerStreamingServer[CollabSessionEvent]
+
+func _ThreadService_CancelCollabSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelCollabSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).CancelCollabSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_CancelCollabSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).CancelCollabSession(ctx, req.(*CancelCollabSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_CancelCollabMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelCollabMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).CancelCollabMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_CancelCollabMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).CancelCollabMember(ctx, req.(*CancelCollabMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ThreadService_RetryCollabMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetryCollabMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ThreadServiceServer).RetryCollabMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ThreadService_RetryCollabMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ThreadServiceServer).RetryCollabMember(ctx, req.(*RetryCollabMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ThreadService_ServiceDesc is the grpc.ServiceDesc for ThreadService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1601,6 +1841,26 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DispatchCollab",
 			Handler:    _ThreadService_DispatchCollab_Handler,
 		},
+		{
+			MethodName: "GetCollabSession",
+			Handler:    _ThreadService_GetCollabSession_Handler,
+		},
+		{
+			MethodName: "ListCollabSessions",
+			Handler:    _ThreadService_ListCollabSessions_Handler,
+		},
+		{
+			MethodName: "CancelCollabSession",
+			Handler:    _ThreadService_CancelCollabSession_Handler,
+		},
+		{
+			MethodName: "CancelCollabMember",
+			Handler:    _ThreadService_CancelCollabMember_Handler,
+		},
+		{
+			MethodName: "RetryCollabMember",
+			Handler:    _ThreadService_RetryCollabMember_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1612,6 +1872,11 @@ var ThreadService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "GetThreadEventsSince",
 			Handler:       _ThreadService_GetThreadEventsSince_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchCollabSession",
+			Handler:       _ThreadService_WatchCollabSession_Handler,
 			ServerStreams: true,
 		},
 	},

@@ -443,3 +443,14 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+// TranslateEnvelope 是台账信封的人话翻译入口(读时翻译):从信封取来源/方法/类别/脱敏
+// 载荷,走 TranslateEvent 同一条纯函数路径。不改信封、不写台账 —— 老条目(翻译层上线
+// 前登记的)同样能翻。
+//
+// 【它与 PresentUnknownEvent 的分工】本入口服务"技术详情"页:逐字段透析 + 处置句 +
+// 原文红线;PresentUnknownEvent(unknown_action.go)服务用户处理中心的卡片,按 kind 套
+// 固定文案。两条入口互不依赖、可以并存:一个是拆开读,一个是说人话,都不做裁决。
+func TranslateEnvelope(env EventEnvelope) Translation {
+	return TranslateEvent(env.SourceAgent, env.SourceMethod, env.NormalizedKind, env.RawPayload)
+}

@@ -149,6 +149,30 @@ service ThreadService {
   // 【为什么不开"谁先谁后 / 谁汇总"的编排】那是让 daemon 替用户猜分工,既不
   // 可预测也不可控;协同页的选人 + 角色配置已经把决策权交回用户手里。
   rpc DispatchCollab(DispatchCollabRequest) returns (DispatchCollabResponse);
+
+  // ---- 协同会话闭环:快照 / 观察 / 取消 / 重试(只增,2026-10-04 协同闭环计划)----
+  // 【为什么从"派发即完"升级成会话聚合】DispatchCollab 只回答"受理了没有",
+  // 不回答"后来怎么样了" —— 手机端离开协同页再回来,看到的是一组散落的子线程
+  // 状态,凑不出"2/3 已完成 · 1 个等待确认"。引入持久化 CollabSession 后,daemon
+  // 是协同状态的唯一事实来源:快照(Get/List)负责恢复,事件流(Watch)负责跟随,
+  // 取消/重试负责干预。全部 additive:旧客户端继续只用 DispatchCollab 不受影响。
+  // 【为什么状态是 string 不是 enum】会话/成员状态(ACCEPTED/RUNNING/COMPLETED/
+  // FAILED/CANCELLED/WAITING_APPROVAL)由 daemon 状态机定义,协议先按字符串透传;
+  // 状态集稳定后再冻结枚举,避免半成品枚举把客户端锁死在错误词表上。
+  // 单个协同会话的完整快照(会话级状态 + 全体成员卡片)。
+  rpc GetCollabSession(GetCollabSessionRequest) returns (CollabSessionSnapshot);
+  // 列出协同会话(最简全量形态;筛选交给手机端,daemon 不猜口径)。
+  rpc ListCollabSessions(ListCollabSessionsRequest) returns (ListCollabSessionsResponse);
+  // 订阅单个协同会话的事件流:先回放 seq > after_sequence 的既有事件,再跟随
+  // 实时事件,直至会话终局或客户端取消。断线重连后带 lastSequence 续传;
+  // 超出保留窗口时由服务端改发一帧全量 snapshot 兜底。
+  rpc WatchCollabSession(WatchCollabSessionRequest) returns (stream CollabSessionEvent);
+  // 取消整个协同会话:逐成员发起取消并等待状态收敛,返回收敛后的会话快照。
+  rpc CancelCollabSession(CancelCollabSessionRequest) returns (CollabSessionSnapshot);
+  // 只取消一个成员(对应子线程),不动其它成员。
+  rpc CancelCollabMember(CancelCollabMemberRequest) returns (CollabMemberSnapshot);
+  // 重试一个成员:创建新的成员轮次(不覆盖旧结果),返回新成员快照。
+  rpc RetryCollabMember(RetryCollabMemberRequest) returns (CollabMemberSnapshot);
 }
 
 // ---- /计划:发起计划审查(只增,字段号从 1 起,不碰旧消息)----
@@ -864,4 +888,99 @@ message SearchThreadMessagesResponse {
   // 无命中 = 空列表(不是错误);命中超出 limit 时截断(不回总数,客户端
   // 拿"满 limit"自行判断可能还有更多,避免为计数多做一次全扫)。
   repeated ThreadMessageHit hits = 1;
+}
+
+// ---- 协同会话闭环(只增,字段号从 1 起,不碰旧消息;字段号分配登记见
+// proto/FIELD_ALLOCATIONS.md,2026-10-04 协同闭环计划 Task 1)----
+
+// CollabSessionSnapshot 一次协同会话的完整快照:会话级状态 + 全体成员卡片。
+// daemon 是协同状态的唯一事实来源 —— 手机端打开协同页先用本消息恢复整屏,
+// 再用 WatchCollabSession 增量跟随;两者给的必须一致。
+message CollabSessionSnapshot {
+  string session_id = 1;          // 协同会话 id(DispatchCollab 返回的那个)
+  string instruction = 2;         // 用户发出的指令原文(全体成员共用的那条)
+  // 会话状态:string 口径,取值随 daemon 状态机(如 running / completed /
+  // failed / cancelled);旧 daemon 可能给空,客户端如实显示"未知",不编造。
+  string status = 3;
+  string workspace = 4;           // 协同工作区(未隔离时各成员共享)
+  int64 created_at_unix_ms = 5;   // 会话创建时刻;0 = 未知
+  int64 updated_at_unix_ms = 6;   // 会话最近更新时刻;0 = 未知
+  repeated CollabMemberSnapshot members = 7; // 全体成员卡片(顺序 = 受理顺序)
+  string error = 8;               // 会话级失败原因(人话);空 = 无
+}
+
+// CollabMemberSnapshot 协同会话里一个成员的实时卡片:它是谁、跑到哪、等什么。
+// 【为什么 pending_approvals 内嵌在成员卡上】"一个成员等审批、其他成员继续跑"
+// 是协同的常态 —— 审批挂在自己的成员卡上,才不会把整个会话误报成卡死。
+message CollabMemberSnapshot {
+  string agent_id = 1;   // 落到哪个 agent(pi / codex / …)
+  string role_id = 2;    // 扮演的协同角色 id;空 = 未用角色
+  string thread_id = 3;  // 该成员的子线程 id(取消/重试/审批都按它定位)
+  // 成员状态:string 口径(ACCEPTED / RUNNING / COMPLETED / FAILED /
+  // CANCELLED / WAITING_APPROVAL 等);空 = 未知,客户端如实显示。
+  string status = 4;
+  string model_id = 5;   // 实际使用的模型(形如 "agent/model-id")
+  string effort = 6;     // 思考强度(low / medium / high / …);空 = 默认
+  string progress = 7;   // 一句话进度(daemon 侧有界摘要,不是原始日志)
+  string summary = 8;    // 成功时的终稿摘要;失败/取消时为空,不伪造
+  string error = 9;      // 失败/取消的人话原因;空 = 无
+  // 该成员当前挂起的审批:复用既有 ApprovalRequest(带真实 thread_id/request_id),
+  // 手机端继续用 SubmitApproval 应答,不新增审批通道。旧 daemon 为空。
+  repeated ApprovalRequest pending_approvals = 10;
+  string workspace = 11; // 该成员实际的工作区(隔离 worktree 时与会话级不同)
+}
+
+// WatchCollabSessionRequest 订阅单个协同会话的事件流。
+message WatchCollabSessionRequest {
+  string session_id = 1;  // 要观察的协同会话 id
+  // 续传水位:只回放 seq 更大的事件(与 GetThreadEventsSince 同一口径);
+  // 0 = 从头回放。超出保留窗口时由服务端改发一帧全量 snapshot 兜底。
+  int64 after_sequence = 2;
+}
+
+// CollabSessionEvent 协同会话的一帧事件:要么是细粒度变化(kind + member),
+// 要么是整屏快照(snapshot)。sequence 全局单调递增,客户端记录最大值做续传。
+message CollabSessionEvent {
+  int64 sequence = 1;           // 全局单调事件序号(0 = 旧 daemon 无序号)
+  string session_id = 2;        // 归属的协同会话 id
+  string member_thread_id = 3;  // 变化涉及的成员子线程;空 = 会话级事件
+  // 事件种类:string 口径(ACCEPTED / RUNNING / COMPLETED / FAILED /
+  // CANCELLED / WAITING_APPROVAL / SNAPSHOT 等);客户端遇到不认识的取值
+  // 必须按 snapshot 兜底刷新,不得报错。
+  string kind = 4;
+  // 整屏快照:重连恢复 / 续传超窗 / 客户端不认识 kind 时的兜底真值。
+  CollabSessionSnapshot snapshot = 5;
+  // 单成员变化:与 member_thread_id 对应的成员卡片(整卡真值,非 diff)。
+  CollabMemberSnapshot member = 6;
+}
+
+// GetCollabSessionRequest 取单个协同会话快照。
+message GetCollabSessionRequest {
+  string session_id = 1;  // 协同会话 id;不存在走 gRPC NotFound(人话)
+}
+
+// ListCollabSessionsRequest 列出协同会话(最简全量形态,不做分页 ——
+// 协同会话量级远小于普通会话,分页只会让手机端多一轮接线)。
+message ListCollabSessionsRequest {
+  // true = 连已结束的(completed / failed / cancelled)一起返回;
+  // false = 只看进行中的。
+  bool include_finished = 1;
+}
+
+message ListCollabSessionsResponse {
+  repeated CollabSessionSnapshot sessions = 1; // 按创建时间倒序(新的在前)
+}
+
+message CancelCollabSessionRequest {
+  string session_id = 1;  // 要取消的协同会话 id
+}
+
+message CancelCollabMemberRequest {
+  string session_id = 1;  // 成员所属的协同会话 id
+  string thread_id = 2;   // 要取消的成员子线程 id
+}
+
+message RetryCollabMemberRequest {
+  string session_id = 1;  // 成员所属的协同会话 id
+  string thread_id = 2;   // 要重试的成员子线程 id(新轮次生成新结果,不覆盖旧值)
 }
