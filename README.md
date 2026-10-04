@@ -127,7 +127,7 @@ pocketagent/
 │   │   │                           #   MdnsDiscovery/SenseVoice*/VoiceErrors…）
 │   │   └── src/main/proto/v1/     # 契约副本（与 proto/v1/ 同步）
 │   ├── src/main/assets/           # sensevoice 模型（229MB，构建时下载）+ terminal.html
-│   ├── src/main/libs/             # sherpa-onnx AAR（构建时下载校验）
+│   ├── libs/（app/ 下，非 src/main）# sherpa-onnx AAR（构建时下载校验）
 │   └── src/test/                  # JVM 单测 81 文件
 ├── codex-schema/             # codex app-server 官方 JSON Schema 快照（能力核对，勿手改）
 ├── tools/                    # make_icons 等资源生成 + device/ 真机工具 + ops/ 运维 + audit/ 审核
