@@ -148,6 +148,7 @@ class ChatEditorialMigrationTest {
         assertEquals("提升权限", approvalActionKindLabel("permissions"))
         assertEquals("写入文件", approvalActionKindLabel("write_file"))
         // 反问类不是"审批动作",但若走错容器也有中性词可显,不露空白
-        assertEquals("未知操作", approvalActionKindLabel(""))
+        // (2026-10-04 批次0 unknown_ui 裁决:空白回退"未命名操作",见 ChatScreen approvalActionKindLabel)
+        assertEquals("未命名操作", approvalActionKindLabel(""))
     }
 }

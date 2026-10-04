@@ -115,6 +115,7 @@
 ## 7. 执行入口与度量回流
 
 - **入口脚本 `tools/audit/pa_audit.py`**（v1 已建，批10 T-PA，2026-09-21）：六条规则独立开关（`--only`/`--skip`，`--json` 机器可读）——名单 linter（对照附录 A，未登记命中即红线）、UI「未知」扫描（注释豁免）、sheet 溢出巡检（逐站处置清单）、假绿哨兵（XML 计数 + mtime）、daemon `go build`+`go vet` 基线、proto 两副本逐文件 MD5 核验；输出过/红线/提示三栏报告。定级、L1 全量、产物自证仍按 §1/§2 人工/既有脚本执行。人拿到报告只做：真机用例 + 红线裁决。
+- **升级门禁 `tools/audit/pa_upgrade_gate.py`**（批次 0 新增，2026-10-04）：`--stage baseline|contract|feature|release [--json]` 只读编排器——汇总 git 干净度/proto sync/daemon build+vet/Android 测试新鲜度/audit redline/dist 新鲜度七检查项，按阶段闸表输出 ALLOW/BLOCK；升级工作（roadmap P1~P5）每批次完成以此验收，非语义 go 退出码按环境异常提示不误报。
 - **度量四数**（每轮记录）：BLOCKED 积压数、缺陷逃逸率（自动化未拦住、真机/用户才发现的）、每轮审核耗时、回归用例累积数。
 - **框架自审**（每里程碑一次）：从没抓到过问题的检查降级；反复出现的问题加固化（变脚本/变用例）。自审结论追加到本文件附录。
 
@@ -140,6 +141,7 @@
 | `android/.../ui/HomeScreen.kt` `buildAgents` 基线目录（7 项 AgentInfo） | 展示名/图标/连接方式基线表（pa_audit roster 首轮命中） | available 字段仅为基线缺省，能力判定走 `resolveAgentAvailability`（capabilities 动态+extra 追加，新 agent 零改动进网格）；与豁免 #2 同精神。pa_audit 首轮裁定登记（2026-09-21） |
 | `android/.../ui/SettingsScreen.kt` optimizerAgents 回退 `setOf("codex","pi","zcode")` | 旧 daemon 无 text_generation capability 时的优化 agent 兜底 | 主路径 `"text_generation:$it" in capabilities` 动态判定在前，setOf 仅在 capabilities 全空时兜底（与豁免 #3 同款新旧兼容形态）。pa_audit 首轮裁定登记（2026-09-21） |
 | `daemon/internal/agent/codex.go` `isOpaqueItemType` 排除五类 | item/started/completed 已专案处理类型（contextCompaction/commandExecution/agentMessage/subAgentActivity/collabAgentToolCall）的排除清单 | 黑名单形态：默认值=主线 A 透传，新类型自动进透传，漏向安全；专案分支由 T-L1 建。批 9 审核裁定不构成名单债（2026-09-21） |
+| `android/.../ui/AgentScopeBadge.kt` `SESSION_DISPLAY_SCOPES`（声明现于 :47） | codex/pi/zcode/hermes 展示顺序名单（「会话与对话」组作用域徽章） | presentation-only：仅决定徽章展示顺序，不参与能力判定/会话路由；动态能力透传会把外部只读导入(opencode/claude-code)误纳入全局显示偏好作用域，故不能改动态源——与豁免 #2/#4 同精神。新增 agent 须同步本行+`AgentScopeBadgeTest` 防漂移用例。批次 0 裁定登记（2026-10-04） |
 
 ## 附录 B · 框架自审记录
 

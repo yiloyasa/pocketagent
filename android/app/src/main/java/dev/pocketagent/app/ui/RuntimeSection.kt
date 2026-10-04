@@ -632,6 +632,9 @@ private fun DialysisUnknownSwitch(onWriteError: (String?) -> Unit) {
             colors = controlSwitchColors(),
             modifier = Modifier
                 .padding(start = 2.dp)
+                // 【pa_audit unknown_ui 豁免(2026-10-04 裁决)】"未知请求"是名词性产品概念
+                // (unknown passthrough 功能,对应 daemon 侧 unknown_passthrough),非失败/
+                // 错误语义,AUDIT §3.3 禁令不适用 —— 保留原词。
                 .semantics { contentDescription = "未知请求透传开关(未识别操作确认)" },
         )
     }

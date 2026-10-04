@@ -38,6 +38,11 @@ import dev.pocketagent.app.ui.theme.PaEditorial
  * 全局显示偏好(「会话与对话」组:思考 / 工具 / 历史轮数)的作用域:
  * 对全部已接入 agent 生效 —— 原 Daemon 页「全局对话显示」的说明即此口径,
  * 聚拢成一级分组后用整排徽章点明"全部"。
+ *
+ * 【presentation-only】本名单仅决定徽章展示顺序,不参与能力判定/会话路由;
+ * 新增接入 agent 时须同步本行(并确认 AGENT_DISPLAY 有其显示名)。
+ * 为什么不走动态能力透传:全局显示偏好不作用于外部会话只读导入
+ * (opencode/claude-code),动态源会把它们误纳入作用域 —— 口径见 AUDIT 附录 A。
  */
 internal val SESSION_DISPLAY_SCOPES: List<String> = listOf("codex", "pi", "zcode", "hermes")
 

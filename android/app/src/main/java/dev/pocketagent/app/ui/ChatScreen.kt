@@ -1371,7 +1371,10 @@ internal fun approvalActionKindLabel(name: String): String = when (name) {
     "apply_patch" -> "应用补丁"
     "permissions" -> "提升权限"
     "write_file" -> "写入文件"
-    else -> name.ifBlank { "未知操作" }
+    // 【2026-10-04 裁决(pa_audit unknown_ui)】空白回退"未命名操作"(原"未知操作"):
+    // 语义是"上游没给名字",非"系统不知道这是什么";改词不改行为,诚实回退保留
+    // —— 不伪造工具名(AUDIT §3.3:禁显"未知/错误"字样)。
+    else -> name.ifBlank { "未命名操作" }
 }
 
 /**

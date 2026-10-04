@@ -21,7 +21,9 @@ v1 规则（每条独立开关，--only / --skip 可选）：
                   红线；最新 XML 距今 >10 分钟 → 提示疑似 Gradle UP-TO-DATE，
                   需 --rerun（本夜 7 次实锤的规则化，README §9 口径）
   go_baseline     daemon 基线：go build ./...（失败 → 红线）+ go vet ./...
-                  （有发现 → 提示；存量 protobuf 值拷贝噪音见 README §11）
+                  （有发现 → 提示；存量 protobuf 值拷贝噪音见 README §11。
+                  go 以非语义退出码(<0 或 >2，如 0xC0000142)结束 → 环境异常
+                  提示而非代码告警，请人工复跑复核）
   proto_sync      契约同步：proto/v1 与 android/app/src/main/proto/v1 两副本
                   逐文件 MD5 比对（README §3：MD5 必须一致），不一致 → 红线
                   （AUDIT §3.1 红线 3）
@@ -377,6 +379,8 @@ class RosterRule:
          "kind": "豁免", "note": "附录A#4：pa_audit 首轮裁定，展示基线目录（available 为基线缺省，能力判定走 resolveAgentAvailability 动态+extra 追加）"},
         {"file": "SettingsScreen.kt", "anchor": '"text_generation:$it" in capabilities || (capabilities.none { c -> c.startsWith("text_generation:") } && it in setOf("codex","pi","zcode"))',
          "kind": "豁免", "note": "附录A#5：pa_audit 首轮裁定，旧 daemon 无 text_generation capability 时的优化 agent 兜底（主路径动态判定在前）"},
+        {"file": "AgentScopeBadge.kt", "anchor": "internal val SESSION_DISPLAY_SCOPES",
+         "kind": "豁免", "note": "附录A#7：批次0 裁定（2026-10-04），presentation-only 展示顺序徽章，不参与能力判定；新增 agent 须同步本行+AgentScopeBadgeTest 防漂移用例"},
     ]
 
     _GO_ARRAY = re.compile(r"\[\]string\s*\{")
@@ -570,10 +574,24 @@ class FakeGreenRule:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GoBaselineRule:
-    """go build ./...（失败→红线）+ go vet ./...（有发现→提示，存量噪音见 README §11）。"""
+    """go build ./...（失败→红线）+ go vet ./...（有发现→提示，存量噪音见 README §11）。
+
+    退出码口径：go 语义退出码仅 0/1/2。越界（rc<0 含哨兵，或 rc>2，如无控制台
+    pythonw 会话下 vet 返回 0xC0000142 STATUS_DLL_INIT_FAILED）按执行环境异常
+    处理 → 提示（ENV_ABNORMAL_MSG），不把异常码当「build 失败 / vet 有发现」，
+    防止环境问题被误报成代码问题；人工复跑复核。
+    """
 
     id = "go_baseline"
     title = "daemon 基线（go build ./... + go vet ./...）"
+
+    ENV_ABNORMAL_MSG = ("go {cmd} 以异常退出码 {rc} 结束——多为执行环境问题"
+                        "（DLL 初始化/杀软拦截），非代码问题；请人工复跑复核")
+
+    @staticmethod
+    def _env_abnormal(rc: int) -> bool:
+        """go 语义退出码仅 0/1/2；越界（含负数哨兵：找不到 go / 超时）→ 环境异常。"""
+        return rc < 0 or rc > 2
 
     def _run_go(self, ctx: Ctx, args: List[str]) -> Tuple[int, str]:
         if ctx.go_runner is not None:
@@ -581,7 +599,8 @@ class GoBaselineRule:
         try:
             p = subprocess.run([ctx.go_cmd] + args, cwd=str(ctx.daemon_dir),
                                capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=600)
+                               errors="replace", timeout=600,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except FileNotFoundError:
             return -1, f"go 可执行文件找不到：{ctx.go_cmd}（--go 指定路径）"
         except subprocess.TimeoutExpired:
@@ -595,12 +614,20 @@ class GoBaselineRule:
         rc, out = self._run_go(ctx, ["build", "./..."])
         if rc == 0:
             findings.append(Finding(PASS, self.id, "go build ./... 通过"))
+        elif self._env_abnormal(rc):
+            findings.append(Finding(WARN, self.id,
+                                    self.ENV_ABNORMAL_MSG.format(cmd="build ./...", rc=rc),
+                                    tail_lines(out)))
         else:
             findings.append(Finding(RED, self.id,
                                     f"go build ./... 失败（exit {rc}）", tail_lines(out)))
         rc2, out2 = self._run_go(ctx, ["vet", "./..."])
         if rc2 == 0:
             findings.append(Finding(PASS, self.id, "go vet ./... 通过"))
+        elif self._env_abnormal(rc2):
+            findings.append(Finding(WARN, self.id,
+                                    self.ENV_ABNORMAL_MSG.format(cmd="vet ./...", rc=rc2),
+                                    tail_lines(out2)))
         else:
             findings.append(Finding(WARN, self.id,
                                     f"go vet ./... 有发现（exit {rc2}）；存量 protobuf 值拷贝噪音"
