@@ -476,21 +476,10 @@ fun budgetRows(limits: RuntimeLimits?): List<BudgetRow> {
 }
 
 /** 字节额度的人话呈现(daemon 侧按 1<<20 计的 MB,标签沿用同一口径避免换算假象)。 */
-fun formatBytesLabel(bytes: Long): String {
-    val abs = if (bytes < 0) -bytes else bytes
-    val unit: String
-    val div: Long
-    when {
-        abs >= 1L shl 30 -> { unit = "GB"; div = 1L shl 30 }
-        abs >= 1L shl 20 -> { unit = "MB"; div = 1L shl 20 }
-        abs >= 1L shl 10 -> { unit = "KB"; div = 1L shl 10 }
-        else -> { unit = "B"; div = 1L }
-    }
-    if (div == 1L) return "$bytes $unit"
-    val v = bytes.toDouble() / div
-    return if (v == Math.floor(v)) "${v.toLong()} $unit"
-    else String.format(Locale.US, "%.1f %s", v, unit)
-}
+fun formatBytesLabel(bytes: Long): String =
+    // 统一走 PaFormat.formatBytesLabel(实现随迁,输出逐字节不变),收敛见审查报告 util 节。
+    // 保留本同名门面:RuntimeStateLogic 多处调用零改动;全限定调用避免与同名 import 冲突。
+    dev.pocketagent.app.ui.component.formatBytesLabel(bytes)
 
 // ---- 协同策略 ----------------------------------------------------------------
 

@@ -21,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +45,8 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class MarkdownLineKind { PARAGRAPH, HEADING, BULLET, CODE, QUOTE, TABLE }
 
@@ -384,9 +388,18 @@ fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float 
     // 渲染前清洗:把可能在部分机型掉字形的少数符号(如 §)替换为友好形式,
     // 作为字体回退之外的兜底(见 sanitizeDisplayText)。
     //
-    // 【性能纪律】parse 与 compose 分离:解析+聚合包在 remember(source) 里,
-    // 流式追加时只在新内容到达时重算一次,不逐帧重组。
-    val blocks = remember(source) { groupMarkdownBlocks(parseMarkdownForDisplay(sanitizeDisplayText(source))) }
+    // 【性能纪律】parse 与 compose 分离,且解析异步化(审查 P1-22):
+    //   1) 解析+聚合是重 CPU 纯函数,放 produceState 里在 Dispatchers.Default 上跑,
+    //      主线程只消费结果列表 —— 不再阻塞合成帧;
+    //   2) key=source:流式追加时 source 每帧变化,produceState 会取消上一帧的解析
+    //      协程、只为最新内容解析一次(withContext 在协程被取消时不再把过期结果
+    //      写回 value),天然合并中间帧,消除"每个 delta 帧全文重解析"的 O(n²);
+    //   3) 解析函数本身仍是纯函数(可 JVM 单测),此处只挪执行线程,不改语义。
+    val blocks by produceState(emptyList<MdBlock>(), source) {
+        value = withContext(Dispatchers.Default) {
+            groupMarkdownBlocks(parseMarkdownForDisplay(sanitizeDisplayText(source)))
+        }
+    }
     Column(modifier) {
         blocks.forEach { block ->
             when (block) {

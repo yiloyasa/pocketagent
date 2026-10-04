@@ -1141,73 +1141,84 @@ fun ThreadsScreen(
             // "活跃"和"电脑"本来就是同一批 codex 会话,这里不再分两个标签页;
             // 置顶项恒排最前,其余按更新时间倒序。
             val pinnedKeys = pinned
-            val rows: List<SessionRow> = buildList {
-                // 【筛选只在渲染这一步做】threads 是全量(见 refresh 的注释),
-                // 归档/分组的判定全走同一套规则(matchesThreadFilter),
-                // 不在别处再写一遍 if —— 两处判断迟早会不一致。
-                threads
-                    .filter {
-                        matchesThreadFilter(
-                            sectionId = it.sectionId,
-                            archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
-                            filter = filter,
-                        )
+            // 【P2 · 重组缓存】filter+sort 是 O(n log n) 纯计算:以前每次重组(搜索框
+            // 每敲一个字符、任何无关状态变化)都全量重筛重排。现在按全部输入 remember ——
+            // 数据(threads/pcThreads/agentPcThreads)、筛选(filter/agentFilter/statusFilter)、
+            // 搜索(query)、置顶(pinnedKeys)任一不变就直接复用上次结果,重组只消费。
+            val rows: List<SessionRow> = remember(
+                threads, pcThreads, agentPcThreads, filter, agentFilter, statusFilter, query, pinnedKeys,
+            ) {
+                buildList {
+                    // 【筛选只在渲染这一步做】threads 是全量(见 refresh 的注释),
+                    // 归档/分组的判定全走同一套规则(matchesThreadFilter),
+                    // 不在别处再写一遍 if —— 两处判断迟早会不一致。
+                    threads
+                        .filter {
+                            matchesThreadFilter(
+                                sectionId = it.sectionId,
+                                archived = it.status == ThreadStatus.THREAD_STATUS_ARCHIVED,
+                                filter = filter,
+                            )
+                        }
+                        // 【子智能体会话不进主列表】带父链的会话 = 某个主会话派出的子代理
+                        // （codex 存根 / pi-sub-* 等）。它们与主会话平铺在同一个流里时，
+                        // "我到底有几个主会话"完全看不清 —— 用户实测反馈"太杂乱"。
+                        // 统一规则：**主列表只呈现 parentThreadId 为空的主会话**；子代理
+                        // 一律从**父会话的子代理卡**进入（那条路已具备完整能力：子对话 /
+                        // 续聊 / 兄弟切换 / 产出回填），不再作为独立条目污染主对话。
+                        .filter { it.parentThreadId.isBlank() }
+                        // 【agent 筛选】叠加交集:分组/归档决定"哪一批会话",
+                        // agent 决定"这批里看谁干的"(agent_id 缺省按 codex 归属)。
+                        .filter { matchesAgentFilter(it.agentId, agentFilter) }
+                        // 【状态筛选 · R1-B】同一套四词映射(见 matchesStatusFilter):
+                        // 行内摆什么词,这里就按什么词筛;状态未知的行只命中"全部状态"。
+                        .filter {
+                            matchesStatusFilter(
+                                it.status, it.pendingApprovalsCount, it.lastTurnError, statusFilter,
+                            )
+                        }
+                        // 【搜索 · 临时视图状态】标题/工作区/agent 显示名包含即命中(纯函数)。
+                        .filter { matchesThreadSearch(query, it.title, it.workspace, it.agentId) }
+                        .forEach { add(SessionRow.Local(it, pinKey(it, null))) }
+                    // 电脑上未导入的会话只在"全部"里露面:它们没有分组信息,
+                    // 放进分组视图会让用户以为"这个分组里有几条没归组的"。
+                    // 【状态筛选生效时同样不露面】电脑会话还没进 App,没有状态可筛 ——
+                    // 硬留着会让人以为"这个状态下的会话怎么点不开"。
+                    if (filter == THREAD_FILTER_ALL && statusFilter == THREAD_STATUS_FILTER_ALL) {
+                        // codex 电脑会话(agent 筛到 codex/全部时显示)
+                        if (matchesAgentFilter("", agentFilter)) {
+                            pcThreads.distinctBy { it.id }
+                                // 【搜索】电脑会话同样吃临时搜索词:标题/工作区/agent 名。
+                                .filter { matchesThreadSearch(query, it.title, it.cwd, "") }
+                                .forEach { add(SessionRow.Pc(it)) }
+                        }
+                        // Pi/ZCode 电脑会话(筛到对应 agent 或全部时显示;去重已在拉取时做)。
+                        // 【必须再按 agentId 过滤】一条 RPC 拿回的是 pi+zcode 混合列表,
+                        // 筛到单一 agent 时不能把另一家的电脑会话也混进来。
+                        if (agentFilter == AGENT_FILTER_ALL || agentFilter == AGENT_FILTER_PI ||
+                            agentFilter == AGENT_FILTER_ZCODE
+                        ) {
+                            agentPcThreads
+                                .filter { pcAgentVisible(it.agentId, agentFilter) }
+                                .filter { matchesThreadSearch(query, it.title, it.cwd, it.agentId) }
+                                .distinctBy { "${it.agentId}:${it.sessionId}" }
+                                .forEach { add(SessionRow.PcAgent(it)) }
+                        }
                     }
-                    // 【子智能体会话不进主列表】带父链的会话 = 某个主会话派出的子代理
-                    // （codex 存根 / pi-sub-* 等）。它们与主会话平铺在同一个流里时，
-                    // "我到底有几个主会话"完全看不清 —— 用户实测反馈"太杂乱"。
-                    // 统一规则：**主列表只呈现 parentThreadId 为空的主会话**；子代理
-                    // 一律从**父会话的子代理卡**进入（那条路已具备完整能力：子对话 /
-                    // 续聊 / 兄弟切换 / 产出回填），不再作为独立条目污染主对话。
-                    .filter { it.parentThreadId.isBlank() }
-                    // 【agent 筛选】叠加交集:分组/归档决定"哪一批会话",
-                    // agent 决定"这批里看谁干的"(agent_id 缺省按 codex 归属)。
-                    .filter { matchesAgentFilter(it.agentId, agentFilter) }
-                    // 【状态筛选 · R1-B】同一套四词映射(见 matchesStatusFilter):
-                    // 行内摆什么词,这里就按什么词筛;状态未知的行只命中"全部状态"。
-                    .filter {
-                        matchesStatusFilter(
-                            it.status, it.pendingApprovalsCount, it.lastTurnError, statusFilter,
-                        )
-                    }
-                    // 【搜索 · 临时视图状态】标题/工作区/agent 显示名包含即命中(纯函数)。
-                    .filter { matchesThreadSearch(query, it.title, it.workspace, it.agentId) }
-                    .forEach { add(SessionRow.Local(it, pinKey(it, null))) }
-                // 电脑上未导入的会话只在"全部"里露面:它们没有分组信息,
-                // 放进分组视图会让用户以为"这个分组里有几条没归组的"。
-                // 【状态筛选生效时同样不露面】电脑会话还没进 App,没有状态可筛 ——
-                // 硬留着会让人以为"这个状态下的会话怎么点不开"。
-                if (filter == THREAD_FILTER_ALL && statusFilter == THREAD_STATUS_FILTER_ALL) {
-                    // codex 电脑会话(agent 筛到 codex/全部时显示)
-                    if (matchesAgentFilter("", agentFilter)) {
-                        pcThreads.distinctBy { it.id }
-                            // 【搜索】电脑会话同样吃临时搜索词:标题/工作区/agent 名。
-                            .filter { matchesThreadSearch(query, it.title, it.cwd, "") }
-                            .forEach { add(SessionRow.Pc(it)) }
-                    }
-                    // Pi/ZCode 电脑会话(筛到对应 agent 或全部时显示;去重已在拉取时做)。
-                    // 【必须再按 agentId 过滤】一条 RPC 拿回的是 pi+zcode 混合列表,
-                    // 筛到单一 agent 时不能把另一家的电脑会话也混进来。
-                    if (agentFilter == AGENT_FILTER_ALL || agentFilter == AGENT_FILTER_PI ||
-                        agentFilter == AGENT_FILTER_ZCODE
-                    ) {
-                        agentPcThreads
-                            .filter { pcAgentVisible(it.agentId, agentFilter) }
-                            .filter { matchesThreadSearch(query, it.title, it.cwd, it.agentId) }
-                            .distinctBy { "${it.agentId}:${it.sessionId}" }
-                            .forEach { add(SessionRow.PcAgent(it)) }
-                    }
-                }
-            }.sortedWith(
-                compareByDescending<SessionRow> { it.pinKey in pinnedKeys }
-                    .thenByDescending { it.sortKey },
-            )
+                }.sortedWith(
+                    compareByDescending<SessionRow> { it.pinKey in pinnedKeys }
+                        .thenByDescending { it.sortKey },
+                )
+            }
 
             // 去重后的展示行,拆成「置顶」与「最近更新」两区(R1-B 调研 6:
             // 置顶区与普通区视觉分离、同一设计语言 —— 同一套行实现 + 各自的分区小标题,
             // 不是另画一种置顶卡片)。排序已把置顶排最前,拆分只认 pinKey,不打乱组内顺序。
-            val displayRows = rows.distinctBy { it.key }
-            val (pinnedRows, recentRows) = splitPinnedFirst(displayRows) { it.pinKey in pinnedKeys }
+            // 【同上 · 重组缓存】两步派生各自按输入 remember,与 rows 一致地不空转重算。
+            val displayRows = remember(rows) { rows.distinctBy { it.key } }
+            val (pinnedRows, recentRows) = remember(displayRows, pinnedKeys) {
+                splitPinnedFirst(displayRows) { it.pinKey in pinnedKeys }
+            }
             when {
                 loading && rows.isEmpty() -> {
                     // 骨架屏(R1-B 局部实现):PaSkeleton 的 SESSION_ROW 是"圆头像 + 两行",

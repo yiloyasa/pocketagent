@@ -2,7 +2,6 @@ package dev.pocketagent.app.ui.component
 
 import android.content.Context
 import java.io.File
-import java.security.MessageDigest
 
 /**
  * 离线存储统一入口(cacheDir 下的一块自留地)。
@@ -136,11 +135,9 @@ object OfflineStore {
         ttlMs > 0 && nowMs - lastUsedMs > ttlMs
 
     /** 缓存键:md5(原始字符串),把任意长度/含特殊字符的键映射成安全文件名(32 位十六进制)。 */
-    fun cacheKey(raw: String): String {
-        val md = MessageDigest.getInstance("MD5")
-        return md.digest(raw.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-    }
+    fun cacheKey(raw: String): String =
+        // 统一走 PaFormat.stableHashMd5,收敛见审查报告 util 节。
+        stableHashMd5(raw)
 
     // -------------------------------------------------------------- 目录与读写
 
@@ -262,12 +259,9 @@ object OfflineStore {
     fun sweepAllStale(nowMs: Long = System.currentTimeMillis()): Int =
         registry.sumOf { sweepStale(it.id, nowMs) }
 
-    private fun dirSize(dir: File): Long {
-        val files = dir.listFiles() ?: return 0L
-        var total = 0L
-        for (f in files) total += if (f.isDirectory) dirSize(f) else f.length()
-        return total
-    }
+    private fun dirSize(dir: File): Long =
+        // 统一走 PaFormat.dirSizeRecursive,收敛见审查报告 util 节。
+        dirSizeRecursive(dir)
 
     // -------------------------------------------------------------- 网页快照缓存(离线浏览)
 

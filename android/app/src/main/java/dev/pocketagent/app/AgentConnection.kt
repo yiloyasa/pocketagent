@@ -861,12 +861,6 @@ object AgentConnection {
         persist()
     }
 
-    /** 兼容旧调用:等价于把当前 selectedModel 记为全局默认。 */
-    fun persistModel() = setGlobalModel(selectedModel)
-
-    /** 兼容旧调用:等价于把当前 selectedEffort 记为全局默认。 */
-    fun persistEffort() = setGlobalEffort(selectedEffort)
-
     // ============ 全局默认模型 vs 会话级模型 ============
     // 区分两者,才能解决"在 A 会话切了模型,B 会话跟着变 / 退出再进被重置"。
     //   defaultModel  —— 会话列表里选的"默认模型"(空 = 跟随桌面配置)
@@ -1182,7 +1176,7 @@ object AgentConnection {
     private fun buildChannel(addr: String, keepAlive: Boolean): ManagedChannel {
         val builder = OkHttpChannelBuilder.forTarget(addr)
             .maxInboundMessageSize(16 * 1024 * 1024)
-        applyPinnedTls(builder)
+        applyPinnedTls(builder, addr)
         if (keepAlive) {
             builder
                 .keepAliveTime(30, TimeUnit.SECONDS)
@@ -1219,9 +1213,18 @@ object AgentConnection {
      * TrustManager = [PinTrustManager](TOFU 首连存指纹,之后不匹配即断);
      * hostnameVerifier 全放行 —— pin 的是证书指纹而非主机名,IP/域名怎么变都无所谓,
      * 校验在 TrustManager 里已经完成。
-     * SSLContext 初始化失败(极端 ROM 管制)时回退明文并打警告,至少不把连接整个弄死。
+     *
+     * 【P1 fail-closed(审查定性)】SSLContext 初始化失败(极端 ROM 管制 SSLContext)时,
+     * 原实现回退明文 —— token 与会话内容将明文过网,属于 fail-open,已废弃。现改为
+     * 抛出异常使该候选通道建立失败:多通道竞速/回退会把它按候选失败处理并尝试下一
+     * 候选([CandidateProbe] 串/并行模式均 catch Throwable 逐候选吞掉,探活循环与
+     * WatchEvents 循环自带 try/catch),与既有回退语义天然契合,不产生未捕获崩溃。
+     *
+     * 【唯一豁免:回环目标(127.0.0.1/localhost)】USB 隧道/本机场景报文不出物理主机,
+     * 攻击面等于本机进程间通信 —— 保持原"回退明文"行为,免得管制 SSL 的 ROM 上
+     * USB 直连被整个弄死。
      */
-    private fun applyPinnedTls(builder: OkHttpChannelBuilder) {
+    private fun applyPinnedTls(builder: OkHttpChannelBuilder, target: String) {
         try {
             val trustManager = PinTrustManager(pinStore)
             val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
@@ -1232,8 +1235,16 @@ object AgentConnection {
                 .sslSocketFactory(sslContext.socketFactory)
                 .hostnameVerifier { _, _ -> true }
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "TLS 初始化失败,回退明文(仅本通道): ${e.message}")
-            builder.usePlaintext()
+            // 候选地址是 "host:port" 纯文本(见 USB_ADDR/candidateAddresses),冒号前即 host。
+            val host = target.substringBeforeLast(':').trim()
+            if (host == "127.0.0.1" || host.equals("localhost", ignoreCase = true)) {
+                android.util.Log.w(TAG, "TLS 初始化失败,回环目标($host)回退明文(仅本通道): ${e.message}")
+                builder.usePlaintext()
+                return
+            }
+            // fail-closed:非回环目标绝不明文回退,让本候选直接失败,交给回退竞速换下一候选。
+            android.util.Log.w(TAG, "TLS 初始化失败,fail-closed 拒绝建立非回环通道($host): ${e.message}")
+            throw IllegalStateException("TLS 初始化失败,拒绝明文回退(非回环目标 $host): ${e.message}", e)
         }
     }
 
@@ -1254,6 +1265,17 @@ object AgentConnection {
 
     fun fileService(): FileSystemServiceGrpc.FileSystemServiceBlockingStub =
         FileSystemServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(15, java.util.concurrent.TimeUnit.SECONDS)
+
+    /**
+     * 下载专用 stub(PaDownloader 流式 ReadFile,单文件上限 512MB):
+     * 整流 10 分钟上界 + 传输层 keepalive(30s/10s,见 buildChannel 的
+     * keepAliveTime/keepAliveTimeout)兜半开连接,单块不用 15s 业务 deadline ——
+     * withDeadlineAfter 作用在整条服务端流上,>50MB 的下载必然 DEADLINE_EXCEEDED,
+     * 且失败路径会把半截文件删掉。通道与 [fileService] 同源(复用 [channel] 单例),
+     * 仅 deadline 语义不同,互不污染。
+     */
+    fun fileDownloadService(): FileSystemServiceGrpc.FileSystemServiceBlockingStub =
+        FileSystemServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(10, TimeUnit.MINUTES)
 
     fun gitService(): GitServiceGrpc.GitServiceBlockingStub =
         GitServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -1325,6 +1347,11 @@ object AgentConnection {
         var retryDelayMs = 500L
         while (currentCoroutineContext().isActive) {
             val finished = CompletableDeferred<Throwable?>()
+            // 【退避复位判定】本条流是否真正建立过:onNext 只会在服务端流真的推送数据时
+            // 回调,订阅失败的候选绝不可能触发 —— 用它区分「新流建立」与「订阅失败」,
+            // 保证复位只发生在新流建立时,而不是每轮重试都复位。onNext 在 gRPC 回调线程
+            // 执行、本协程在 await 之后读,用原子布尔避免跨线程可见性问题。
+            val streamEstablished = java.util.concurrent.atomic.AtomicBoolean(false)
             try {
                 val request = WatchEventsRequest.newBuilder()
                     .setAfterSequence(hostEventTracker.lastSequence)
@@ -1333,6 +1360,7 @@ object AgentConnection {
                     request,
                     object : StreamObserver<HostEvent> {
                         override fun onNext(value: HostEvent) {
+                            streamEstablished.set(true)
                             if (!hostEventTracker.accept(value)) return
                             if (value.sequence > 0L) {
                                 prefs?.edit()
@@ -1352,6 +1380,12 @@ object AgentConnection {
                     },
                 )
                 val err = finished.await()
+                // 【退避复位】流成功建立过(收到过事件;或被服务端优雅收流 = 订阅确实
+                // 被受理过)就把退避复位到初始节奏 —— 健康流哪怕存活数小时,断开后也
+                // 应立即以快节奏重订阅,而不是先等满 10s 高退避。订阅失败(err != null
+                // 且从未 onNext)不复位,退避照常翻倍。与探活循环「成功即复位」的既有
+                // 纪律对齐(markConnected 后 retryDelayMs 重置为初始值)。
+                if (streamEstablished.get() || err == null) retryDelayMs = 500L
                 if (err != null && currentCoroutineContext().isActive) {
                     Log.w(TAG, "WatchEvents 断开，将重订阅: ${err.message ?: err::class.java.simpleName}")
                 }

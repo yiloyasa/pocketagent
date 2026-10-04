@@ -16,6 +16,7 @@ Fixed upstream repository:
 `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`,
 revision `2365baeacb507f821a0c8120fcee3d484dba7a07`.
 The model and tokenizer checksums are pinned in `SenseVoiceModelManager`.
+Per-file names, sizes, and checksums: see `../src/main/assets/sensevoice/README.md`.
 
 Audio stays on the device with SenseVoice. A working system recognition service
 is used first; the legacy Vosk UI and download entry are removed.

@@ -79,12 +79,9 @@ object PaCache {
         runCatching { android.webkit.CookieManager.getInstance().flush() }
     }
 
-    private fun dirSize(dir: File): Long {
-        val files = dir.listFiles() ?: return 0
-        var total = 0L
-        for (f in files) total += if (f.isDirectory) dirSize(f) else f.length()
-        return total
-    }
+    private fun dirSize(dir: File): Long =
+        // 统一走 PaFormat.dirSizeRecursive,收敛见审查报告 util 节。
+        dirSizeRecursive(dir)
 }
 
 /**
@@ -122,12 +119,9 @@ object PreviewCache {
         dir = d
     }
 
-    private fun key(path: String, size: Long, mtime: Long): String {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        val digest = md.digest("$path\u0000$size\u0000$mtime".toByteArray(Charsets.UTF_8))
-        // Byte 有符号:直接 %02x 会得到 ffffff80 这种,必须掩成无符号
-        return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-    }
+    private fun key(path: String, size: Long, mtime: Long): String =
+        // 统一走 PaFormat.stableHashMd5(原 MD5 手工实现与掩码注释随迁),收敛见审查报告 util 节。
+        stableHashMd5("$path\u0000$size\u0000$mtime")
 
     /** 命中则返回字节并 touch(更新 LRU 时间);未命中/异常返回 null。 */
     fun get(path: String, size: Long, mtime: Long): ByteArray? {
@@ -167,10 +161,9 @@ object PreviewCache {
     /** 缓存总量(字节),供缓存管理页展示。 */
     fun usage(): Long = dir?.let { dirSize2(it) } ?: 0L
 
-    private fun dirSize2(dir: File): Long {
-        val files = dir.listFiles() ?: return 0
-        return files.sumOf { if (it.isDirectory) dirSize2(it) else it.length() }
-    }
+    private fun dirSize2(dir: File): Long =
+        // 统一走 PaFormat.dirSizeRecursive,收敛见审查报告 util 节。
+        dirSizeRecursive(dir)
 
     /** 清空预览缓存(用户主动)。返回释放的字节数。 */
     fun clear(): Long {

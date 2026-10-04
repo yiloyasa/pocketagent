@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -166,41 +167,21 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
      *  @param mime content:// 的真实 MIME(可为空)。**优先按 MIME 判定**:
      *  MediaStore 会给下载文件按 MIME 补后缀(md 常被存成 `xxx.md.txt`),
      *  只看后缀会把 Markdown 当纯文本渲染。 */
-    fun renderBytes(name: String, bytes: ByteArray, mime: String = "") {
-        val lower = name.lowercase()
-        val mLower = mime.lowercase()
-        when {
-            mLower.startsWith("text/markdown") || lower.endsWith(".md") || lower.endsWith(".markdown") ->
-                renderLocal(
-                    PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name, PaEditorial.IsDark),
-                    name,
-                )
-            mLower.startsWith("image/") || lower.endsWith(".png") || lower.endsWith(".jpg") ||
-                lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") ->
-                renderLocal(
-                    "<body style=\"margin:0;background:" +
-                        // 图片页底色与 pal().bg 同镜像(三盘同构,黑客盘纯黑基底)
-                        pal().bg +
-                        ";display:flex;align-items:center;" +
-                        "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
-                        "max-height:100vh\" src=\"data:image/png;base64," +
-                        android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP) +
-                        "\"></body>",
-                    name,
-                )
-            mLower.startsWith("text/html") || lower.endsWith(".html") || lower.endsWith(".htm") ->
-                renderLocal(String(bytes, Charsets.UTF_8), name)
-            else -> {
-                // 【预览配色跟主题走】否则浅色主题下打开文件,预览却是黑底
-                val structured = PcFilePreview.render(ctx, lower, bytes, PaEditorial.IsDark)
-                when {
-                    structured != null -> renderLocal(structured, name)
-                    PcFilePreview.isBinary(lower) || mLower.endsWith("octet-stream") ->
-                        renderLocal(binaryPage(name, bytes.size.toLong(), pcPath.isNotEmpty()), name)
-                    else -> renderLocal(textPage(String(bytes, Charsets.UTF_8)), name)
-                }
-            }
+    suspend fun renderBytes(name: String, bytes: ByteArray, mime: String = "") {
+        // 【P0-5:解析必须离开主线程】markdownHtml/PcFilePreview.render 是重 CPU 同步解析
+        // (xlsx ≤400 条 zip 流、docx XmlPullParser、pdf 逐页 1000px 位图),几 MB 的文件在
+        // 主线程跑就是数百 ms 至数秒的冻结。主线程只取齐主题/来源快照,解析整段切
+        // Dispatchers.Default,回 Main 后仅剩 WebView 加载(renderLocal)。
+        // 线程安全性:PcFilePreview 对 Context 的使用只有 ctx.cacheDir(线程安全的缓存目录
+        // getter);PdfRenderer 逐页渲染/Bitmap.compress 在单个后台线程串行执行是官方推荐姿势。
+        // 主题/来源态在切线程前于主线程取快照,后台段不读任何 Compose 状态。
+        val dark = PaEditorial.IsDark
+        val pageBg = pal().bg
+        val isPc = pcPath.isNotEmpty()
+        val html = withContext(Dispatchers.Default) {
+            buildPreviewHtml(ctx, name, bytes, mime, dark, pageBg, isPc)
         }
+        renderLocal(html, name)
     }
 
     /**
@@ -228,7 +209,10 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     }
                 }
                 val bytes = withContext(Dispatchers.IO) {
-                    val stream = AgentConnection.fileService().readFile(
+                    // 【预览走下载专用 stub】fileService 的 15s deadline 套在整条流上,
+                    // 64MB 上限的大文件预览必然 DEADLINE_EXCEEDED;fileDownloadService
+                    // 整流 10 分钟上界(与 PaDownloader 同款,通道同源仅 deadline 语义不同)。
+                    val stream = AgentConnection.fileDownloadService().readFile(
                         // 【必须显式给上限】max_bytes=0 表示"用服务端默认值",而默认只有 2MB ——
                         // 大一点的 xlsx/docx/pdf 会被静默截断,解析器拿到的就是半截 zip,
                         // 表现成"表格里没有可显示的数据"。这里按预览需要给足 64MB。
@@ -990,6 +974,56 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                 }
             },
         )
+    }
+}
+
+/**
+ * [BrowserScreenBody.renderBytes] 的纯解析段:字节 → 完整 HTML(P0-5)。
+ * 重 CPU 同步解析(markdownHtml / PcFilePreview.render),在 Dispatchers.Default 上跑;
+ * 只读入参与调用方在主线程取好的快照,不碰 UI/WebView/Compose 状态,可在任意线程执行。
+ * Context 仅被 PcFilePreview 用于 ctx.cacheDir(线程安全的缓存目录 getter),后台线程安全。
+ * suspend:与调用方的 withContext(Dispatchers.Default) 作用域同构,语义即"解析是挂起点"。
+ *
+ * @param dark   当前 App 是否深色主题(主线程快照)
+ * @param pageBg 图片页底色(pal().bg 的主线程快照,三盘同构)
+ * @param isPc   来源是否为电脑文件(pcPath 非空,决定二进制页的下载按钮)
+ */
+private suspend fun buildPreviewHtml(
+    ctx: Context,
+    name: String,
+    bytes: ByteArray,
+    mime: String,
+    dark: Boolean,
+    pageBg: String,
+    isPc: Boolean,
+): String {
+    val lower = name.lowercase()
+    val mLower = mime.lowercase()
+    return when {
+        mLower.startsWith("text/markdown") || lower.endsWith(".md") || lower.endsWith(".markdown") ->
+            PcFilePreview.markdownHtml(String(bytes, Charsets.UTF_8), name, dark)
+        mLower.startsWith("image/") || lower.endsWith(".png") || lower.endsWith(".jpg") ||
+            lower.endsWith(".jpeg") || lower.endsWith(".gif") || lower.endsWith(".webp") ->
+            "<body style=\"margin:0;background:" +
+                // 图片页底色与 pal().bg 同镜像(三盘同构,黑客盘纯黑基底)
+                pageBg +
+                ";display:flex;align-items:center;" +
+                "justify-content:center;height:100vh\"><img style=\"max-width:100%;" +
+                "max-height:100vh\" src=\"data:image/png;base64," +
+                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP) +
+                "\"></body>"
+        mLower.startsWith("text/html") || lower.endsWith(".html") || lower.endsWith(".htm") ->
+            String(bytes, Charsets.UTF_8)
+        else -> {
+            // 【预览配色跟主题走】否则浅色主题下打开文件,预览却是黑底
+            val structured = PcFilePreview.render(ctx, lower, bytes, dark)
+            when {
+                structured != null -> structured
+                PcFilePreview.isBinary(lower) || mLower.endsWith("octet-stream") ->
+                    binaryPage(name, bytes.size.toLong(), isPc)
+                else -> textPage(String(bytes, Charsets.UTF_8))
+            }
+        }
     }
 }
 

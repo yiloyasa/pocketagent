@@ -254,11 +254,9 @@ object ThreadSnapshot {
     fun messagesAt(threadId: String): Long =
         dir?.let { File(it, msgFileName(threadId)).takeIf { f -> f.isFile }?.lastModified() } ?: 0L
 
-    private fun msgFileName(threadId: String): String {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        return md.digest(threadId.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) } + ".json"
-    }
+    private fun msgFileName(threadId: String): String =
+        // 统一走 PaFormat.stableHashMd5(原 MD5 手工实现同款 32 位小写十六进制),收敛见审查报告 util 节。
+        stableHashMd5(threadId) + ".json"
 
     // ------------------------------------------------------------ 淘汰与限额
 

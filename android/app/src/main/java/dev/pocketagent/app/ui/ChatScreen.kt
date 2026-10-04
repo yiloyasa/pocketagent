@@ -15,6 +15,7 @@ import android.speech.SpeechRecognizer
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -207,6 +208,9 @@ import dev.pocketagent.app.ui.component.ContextMenu
 import dev.pocketagent.app.ui.component.ContextMenuItem
 import dev.pocketagent.app.ui.component.longPressMenu
 import dev.pocketagent.app.ui.component.rememberContextMenuState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -1198,6 +1202,13 @@ internal const val SCROLL_FOLLOW_THRESHOLD_PX = 100
 internal const val STREAM_BLOCK_CHARS = 24
 
 /**
+ * 流式正文喂给 InAppMarkdown 的节流间隔(ms)(审查 P1-22):delta 帧只更新
+ * displayedStream 快照,间隔内的所有中间帧自动合并,长流式不再逐帧全文重解析。
+ * 120ms 的流式视觉延迟无感。
+ */
+internal const val STREAM_RENDER_THROTTLE_MS = 120L
+
+/**
  * 当前滚动位置距底部的像素(纯函数)。
  *
  * 最后一项不在可视区(用户翻到了中间)→ 距底"无限远"(Int.MAX_VALUE);
@@ -2181,6 +2192,9 @@ fun ChatScreen(
     var rollbackBusy by remember { mutableStateOf(false) }
     // 手动压缩是低频的会话级动作,与回滚一样放在“更多”里。
     var compactBusy by remember { mutableStateOf(false) }
+    // 分叉(从最新状态 fork 新会话):防重入标记,与 rollbackBusy/compactBusy 同款 ——
+    // RPC 在途时再点只会重复发 forkThread、弹重复 Toast,闸掉。
+    var forkBusy by remember { mutableStateOf(false) }
     // "/计划"发起计划审查(review:<agentId> 位会话,现仅 codex):防重入标记,与 compactBusy 同款。
     var reviewBusy by remember { mutableStateOf(false) }
     // 【长文本大窗编辑】输入框最多 4 行,写长需求/贴代码时不够用。
@@ -2421,15 +2435,39 @@ fun ChatScreen(
     // 别家的模型名再也不会漏进本会话的芯片/弹窗。
     val sessionAgent = threadAgentId.ifBlank { AgentConnection.selectedAgent }
     val sessionModels = remember(models, sessionAgent) { modelsForAgent(models, sessionAgent) }
+    // 【P1-20 · 生命周期门控】可用面调查结论:build.gradle.kts 仅声明
+    // lifecycle-viewmodel-compose(无 lifecycle-runtime-compose,repeatOnLifecycle
+    // 不可用,且不许新增依赖);activity-compose 在用(BackHandler)→ activity 传递提供
+    // lifecycle-runtime,Lifecycle/LifecycleEventObserver 保证可用;ProcessLifecycleOwner
+    // 属 lifecycle-process,未声明不采用。故取宿主 Activity 的 Lifecycle 挂观察者:
+    // 门控闸 = 一次性 CompletableDeferred,注册观察者后复查状态(消除 START 竞态),
+    // finally 必摘观察者 —— 协程随组合销毁取消时闸被取消,观察者照样移除,零泄漏。
+    val hostLifecycle = (LocalContext.current as? ComponentActivity)?.lifecycle
     LaunchedEffect(threadId,sessionAgent,connectionEpoch) {
         while(true) {
+            // 前台门控:STOP 状态不跑 RPC;挂起等 ON_START,回前台立即补跑再进 10s 节奏
+            if (hostLifecycle != null) {
+                val gate = CompletableDeferred<Unit>()
+                val gateObserver = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_START) gate.complete(Unit)
+                }
+                hostLifecycle.addObserver(gateObserver)
+                try {
+                    if (!hostLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) gate.await()
+                } finally { hostLifecycle.removeObserver(gateObserver) }
+            }
             if(sessionAgent.isNotEmpty() && AgentConnection.connState.value=="ok") {
                 try {
                     val native=withContext(Dispatchers.IO) {
                         AgentConnection.modelServiceSlow().listModels(ListModelsRequest.newBuilder()
                             .setAgentId(sessionAgent).setThreadId(threadId).build())
                     }
-                    if(native.modelsCount>0) models=models.filter { it.provider!=sessionAgent }+native.modelsList
+                    if(native.modelsCount>0) {
+                        // 【P1-20 · 先比对再赋值】List equals 按内容逐元素比(proto ModelInfo
+                        // 实现 equals):内容没变就不换实例,消除每 10s 一次的空转重组。
+                        val merged=models.filter { it.provider!=sessionAgent }+native.modelsList
+                        if(merged!=models) models=merged
+                    }
                     TurnSession.acceptRuntimeSelection(threadId,native.currentModelId,
                         if(native.hasCurrentEffort()) native.currentEffort else null)
                 } catch(e: kotlinx.coroutines.CancellationException) { throw e }
@@ -3028,11 +3066,15 @@ fun ChatScreen(
      * 真实成立的语义,并把这句话写在按钮下面。
      */
     fun doFork() {
+        // 【防重入闸】与 doRollback/doCompact 同款:forkThread 在途时再点直接忽略,
+        // 不重复发请求、不叠 Toast。
+        if (forkBusy) return
         showMore = false
         if (st.running) {
             Toast.makeText(ctx, "任务正在执行,等它跑完再分叉", Toast.LENGTH_SHORT).show()
             return
         }
+        forkBusy = true
         scope.launch {
             try {
                 val nt = withContext(Dispatchers.IO) {
@@ -3043,6 +3085,8 @@ fun ChatScreen(
                 onOpenThread(nt.id)
             } catch (e: Exception) {
                 Toast.makeText(ctx, e.message ?: "分叉失败", Toast.LENGTH_LONG).show()
+            } finally {
+                forkBusy = false
             }
         }
     }
@@ -3724,6 +3768,30 @@ fun ChatScreen(
             )
         }
 
+        // ---- 流式正文节流快照(P1-22)----
+        // delta 帧高频直喂 InAppMarkdown,即便解析已异步化(MarkdownText 的 produceState),
+        // 高频重组 + 解析排队仍会让长流式累计 O(n²) 掉帧。这里把直喂改为 ~120ms 合并快照:
+        // 中间帧只写 displayedStream,间隔内到达的 delta 自然合并,流式视觉延迟无感。
+        // 【最终帧一致性兜底】两条路径不经 delay 立即追平:
+        //   1) 流结束(!streaming);
+        //   2) 正文被整段转存进 items(TurnSession 在工具调用开始时把 streamText 清空 ——
+        //      快照必须同步清空,否则该段会在气泡里残留成"既在历史又在气泡"的重复)。
+        // 且每次 delay 醒来都重读 st.streamText 的最新值(不沿用 collect 到的旧值),
+        // 任何时刻快照最终必等于 streamText,尾巴不丢。
+        var displayedStream by remember(st) { mutableStateOf("") }
+        LaunchedEffect(st) {
+            snapshotFlow { st.streaming to st.streamText }
+                .collect { (running, text) ->
+                    when {
+                        !running || text.isEmpty() -> displayedStream = text
+                        text != displayedStream -> {
+                            delay(STREAM_RENDER_THROTTLE_MS)
+                            displayedStream = st.streamText
+                        }
+                    }
+                }
+        }
+
         // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----
         // 【进入动画的武装记录】记住"上一帧组合时的条目数":仅在"末尾追加了新消息"
         // 的那一帧允许进入动画(见 MessageEnterAnimation)。null = 本页首帧,绝不播
@@ -4109,8 +4177,10 @@ fun ChatScreen(
                     // 【流式两相切换】等首 token(三点) → 正文流式:AnimatedContent +
                     // spring 过渡(淡入+轻微上移,可打断)。AnimatedContent 自带尺寸
                     // 过渡,相位切换时高度不跳变;正文帧间更新不重播转场(同一 targetState)。
+                    // 相位跟节流快照走(displayedStream 而非 streamText):首帧正文
+                    // 就绪前保持"三点"相位,不会闪一帧空正文。
                     AnimatedContent(
-                        targetState = st.streamText.isEmpty(),
+                        targetState = displayedStream.isEmpty(),
                         transitionSpec = {
                             (fadeIn(PaMotion.emphasized()) +
                                 slideInVertically(PaMotion.emphasized()) { it / 8 })
@@ -4138,9 +4208,10 @@ fun ChatScreen(
                             }
                         } else {
                             // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
+                            // 【P1-22】喂节流快照 displayedStream,不再逐 delta 帧直喂全文
                             Column(Modifier.fillMaxWidth()) {
                                 InAppMarkdown(
-                                    text = st.streamText,
+                                    text = displayedStream,
                                     modifier = Modifier.fillMaxWidth(),
                                     fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
                                     onOpenUrl = onOpenBrowser,

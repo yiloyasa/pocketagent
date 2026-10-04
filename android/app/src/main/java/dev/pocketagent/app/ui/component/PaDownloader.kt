@@ -60,7 +60,9 @@ object PaDownloader {
                 val display = target.second
                 var written = 0L
                 var total = 0L
-                val stream = AgentConnection.fileService().readFile(
+                // 【下载专用 stub】fileDownloadService 整流 10 分钟上界,不用 fileService
+                // 的 15s deadline —— 那是套在整条流上的,大文件必然 DEADLINE_EXCEEDED。
+                val stream = AgentConnection.fileDownloadService().readFile(
                     ReadFileRequest.newBuilder()
                         // 【必须显式给上限】max_bytes=0 在 daemon 侧表示「用服务端默认值」,
                         // 而默认只有 2MB —— 下载 20MB 的 APK 会被静默截断成 2MB(用户看到的"大小不对")。

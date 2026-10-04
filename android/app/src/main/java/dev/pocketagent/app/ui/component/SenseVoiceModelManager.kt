@@ -10,7 +10,6 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class SenseVoiceModelState(
@@ -96,16 +95,7 @@ internal object SenseVoiceModelManager {
     private fun valid(file: File, spec: SenseVoiceModelFile): Boolean =
         file.isFile && file.length() == spec.size && sha256(file) == spec.sha256
 
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(128 * 1024)
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                digest.update(buffer, 0, n)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
-    }
+    private fun sha256(file: File): String =
+        // 统一走 PaFormat.sha256File,收敛见审查报告 util 节。
+        sha256File(file)
 }

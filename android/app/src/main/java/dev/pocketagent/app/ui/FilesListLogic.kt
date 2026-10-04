@@ -72,9 +72,17 @@ fun entryMetaLine(row: FileRowModel): String {
  * 人类可读体积(带空格档位):B / KB / MB / GB。
  * 与旧 formatSize 输出同形("12 B"、"1.5 KB"),补上 GB 档 —— 老实现 >1GB
  * 会显示成 "1424.2 MB"。
+ *
+ * 【兼容委托,未整体切到 PaFormat.formatBytesLabel】两套格式有历史差异:
+ *  - 本函数 KB/MB 恒一位小数、GB 两位小数("1.0 KB"/"1.0 MB"/"1.00 GB");
+ *  - formatBytesLabel 整数塌缩且 GB 一位小数("1 KB"/"1.5 GB")。
+ * FilesListLogicTest 已把旧格式钉死(断言 "1.0 KB"/"1.0 MB"/"1.00 GB"),
+ * 直接委托会让用户可见文案变样并挂测试 —— 故保留原函数名与旧输出,作为文件
+ * 列表的兼容格式化入口;仅 B 档两者输出一致,已统一委托。是否连同测试一起
+ * 切换到 formatBytesLabel 语义,交主模型决策(见审查报告 util 节)。
  */
 fun formatFileSizeHuman(n: Long): String = when {
-    n < 1024 -> "$n B"
+    n < 1024 -> dev.pocketagent.app.ui.component.formatBytesLabel(n)
     n < 1024L * 1024 -> "%.1f KB".format(n / 1024.0)
     n < 1024L * 1024 * 1024 -> "%.1f MB".format(n / 1024.0 / 1024.0)
     else -> "%.2f GB".format(n / 1073741824.0)
