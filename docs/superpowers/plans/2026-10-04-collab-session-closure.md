@@ -225,7 +225,8 @@ data class CollabSessionState(
     val members: List<CollabMemberUi>,
     val lastSequence: Long,
     val loading: Boolean,
-    val error: String?
+    val error: String?,
+    val needsResync: Boolean = false, // 2026-10-04 批次1实现并入:纯 reducer 不能发 RPC,seq 缺口/名册外成员时标旗,仓库层拉全量
 )
 
 sealed interface CollabIntent {

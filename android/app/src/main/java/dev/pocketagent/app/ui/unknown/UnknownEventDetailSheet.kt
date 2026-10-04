@@ -132,7 +132,7 @@ fun UnknownEventDetailSheet(onDismiss: () -> Unit) {
                     onFailure = {
                         // 技术异常只进日志;界面给固定人话(评审焦点红线:详情拉取失败
                         // 不能显示技术异常堆栈)。
-                        android.util.Log.w(TAG, "未知事件详情加载失败 event=$eventId", it)
+                        android.util.Log.w(TAG, "未识别事件详情加载失败 event=$eventId", it)
                         SheetDetailState(loadFailed = true)
                     },
                 )
@@ -172,7 +172,7 @@ fun UnknownEventDetailSheet(onDismiss: () -> Unit) {
                     }
                 },
                 onFailure = { e ->
-                    android.util.Log.w(TAG, "未知事件动作失败 event=${card.eventId} action=${action.actionId}", e)
+                    android.util.Log.w(TAG, "未识别事件动作失败 event=${card.eventId} action=${action.actionId}", e)
                     messages[card.eventId] = EventResultMessage(UnknownEventCopy.ACTION_FAILED, attention = true)
                 },
             )
