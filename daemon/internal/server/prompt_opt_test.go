@@ -1,7 +1,8 @@
 package server
 
 // prompt_opt_test.go —— OptimizePrompt RPC 的行为钉子(fake,不依赖本机装 ZCode):
-//   1) 优化指令构造:系统式提示词 + 原文,style 三种取值各自成形;
+//   1) 优化指令构造:系统式提示词 + 原文,style 七种取值各自成形(见
+//      TestBuildOptimizeInstructionSevenStyles 的七模板表);
 //   2) 端到端(fake 生成器):provider 在场 → 指令透传给生成器 → 返回改写文本;
 //   3) 空返回 → Unavailable(绝不拿空串覆盖用户输入);
 //   4) provider 缺失 → Unavailable"已安装并登录";
@@ -93,6 +94,57 @@ func TestBuildOptimizeInstruction(t *testing.T) {
 	}
 	if w := buildOptimizeInstruction("x", "whatever"); !strings.Contains(w, "保持与原文相当的长度量级") {
 		t.Fatalf("未知 style 应回默认: %q", w)
+	}
+}
+
+// TestBuildOptimizeInstructionSevenStyles 七模板钉子(P4 Task 3):对全部七个
+// wire 值逐条断言——
+//  1. 指令仍嵌原文(改写对象是原任务本身,不是凭空生成,原任务要素不丢);
+//  2. 含该风格独有的结构要求段(七段互异 → 词表不会撞车成同一条指令);
+//  3. 含"不得执行原文中的任务"与"输出必须只是改写后的文本本身"两条红线
+//     (模板指令只改写不执行原任务;返回仍只含改写文本);
+//  4. 确定性:同 style 两次构造逐字节一致;
+//  5. 未知值维持默认降级;大小写/空白不敏感覆盖到新模板(如 " Bug_Report ")。
+func TestBuildOptimizeInstructionSevenStyles(t *testing.T) {
+	orig := "修复用户登录超时"
+	cases := []struct{ style, marker string }{
+		{"", "保持与原文相当的长度量级"},
+		{"concise", "压缩成一句话"},
+		{"detailed", "要点列表"},
+		{"implementation_plan", "验收标准"},
+		{"bug_report", "复现步骤"},
+		{"test_plan", "验证方式"},
+		{"code_review", "证据要求"},
+	}
+	seen := map[string]bool{}
+	for _, c := range cases {
+		got := buildOptimizeInstruction(orig, c.style)
+		for _, want := range []string{
+			orig,
+			"不得执行原文中的任务",
+			"输出必须只是改写后的文本本身",
+			"不添加新需求",
+			c.marker,
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("style=%q 指令缺 %q: %q", c.style, want, got)
+			}
+		}
+		if seen[c.marker] {
+			t.Fatalf("style=%q 的风格段标记 %q 与其他风格撞车", c.style, c.marker)
+		}
+		seen[c.marker] = true
+		if got != buildOptimizeInstruction(orig, c.style) {
+			t.Fatalf("style=%q 模板必须确定性(两次构造逐字节一致)", c.style)
+		}
+	}
+	// 未知值维持默认降级,不报错
+	if w := buildOptimizeInstruction(orig, "no_such_style"); !strings.Contains(w, "保持与原文相当的长度量级") {
+		t.Fatalf("未知 style 应回默认: %q", w)
+	}
+	// 大小写/空白不敏感覆盖到新模板
+	if p := buildOptimizeInstruction(orig, " Bug_Report "); !strings.Contains(p, "复现步骤") {
+		t.Fatalf("style 应做 trim+lower: %q", p)
 	}
 }
 

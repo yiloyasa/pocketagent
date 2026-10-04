@@ -4284,7 +4284,12 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models:
             Spacer(Modifier.height(10.dp))
             SplitButton(
                 label = "优化提示词按钮",
-                caption = "在会话输入栏显示「优化」按钮,把口语化输入改写成给 AI 的清晰指令;由下方选定的 Agent 与模型生成，会消耗对应配额",
+                // 模式说明(P4 Task 3「可解释」):七种改写模式与预览弹层风格芯片
+                // 共用同一口径(见 promptOptimizeStyleHint / daemon promptOptimizeStyleTemplates),
+                // 并写明两条红线 —— 只改写不执行、结果经确认才替换输入框。
+                caption = "在会话输入栏显示「优化」按钮,把口语化输入改写成给 AI 的清晰指令;由下方选定的 Agent 与模型生成，会消耗对应配额。" +
+                    "改写模式七种:默认(说清楚、不扩写)/精简(一句话)/详细(要点列表)/实施计划(目标·范围·验收)/排错(现象·环境·复现·期望)/" +
+                    "测试(输入·行为·验证)/代码审查(风险·影响·证据)。优化只改写、不会自动执行,结果经你确认才会替换输入框",
                 mainLabel = if (AgentConnection.optimizePromptEnabled) "开" else "关",
                 onMainClick = {
                     AgentConnection.optimizePromptEnabled = !AgentConnection.optimizePromptEnabled

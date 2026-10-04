@@ -79,6 +79,15 @@ func TestSetCollabPolicyRevisionConflict(t *testing.T) {
 // TestDispatchCollabHonoursPolicy 是生效点 ①②:扇出开关与成员数上限。
 func TestDispatchCollabHonoursPolicy(t *testing.T) {
 	srv, _ := newPolicyTestServer(t)
+	// P1 协同闭环拆除纪律:DispatchCollab 现在会创建持久化协同会话,事件经有界
+	// 队列由单消费者异步落盘 collab/events/<id>.jsonl。t.Cleanup 是 LIFO——下面
+	// 两行按「先注册队列排空、后注册轮次落定」注册,拆除时倒过来执行(先等在飞
+	// 轮次落定、再等事件队列排空,与 newCollabProvServer 同序),之后才轮到
+	// newPolicyTestServer 的 events.Close 与 t.TempDir() 的 RemoveAll;否则消费者
+	// 还在写事件文件,目录清理报 "collab\events: The directory is not empty"
+	// (批次 2 全量 -race 实测)。同款 helper 见 collab_session_test.go。
+	t.Cleanup(func() { waitCollabEventQueueDrained(t, srv) })
+	t.Cleanup(func() { waitActiveTurnsDrained(t, srv) })
 	ctx := context.Background()
 	members := []*pb.CollabMember{{AgentId: "echo"}, {AgentId: "codex"}, {AgentId: "dsh"}}
 

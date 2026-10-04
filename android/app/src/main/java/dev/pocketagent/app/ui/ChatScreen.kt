@@ -145,6 +145,13 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
+import dev.pocketagent.app.ui.prompt.GrpcPromptOptimizeRepository
+import dev.pocketagent.app.ui.prompt.PromptOptimizePreviewIntent
+import dev.pocketagent.app.ui.prompt.PromptOptimizePreviewSheet
+import dev.pocketagent.app.ui.prompt.PromptOptimizePreviewState
+import dev.pocketagent.app.ui.prompt.isIdle
+import dev.pocketagent.app.ui.prompt.promptOptimizeClickAllowed
+import dev.pocketagent.app.ui.prompt.reducePromptOptimizePreview
 import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
@@ -193,6 +200,12 @@ import dev.pocketagent.app.ui.component.HistoryQuickBubble
 import dev.pocketagent.app.ui.component.HistoryQuickNavLogic
 import dev.pocketagent.app.ui.component.HistoryQuickPanel
 import dev.pocketagent.app.ui.component.HistoryTickBar
+import dev.pocketagent.app.ui.history.HistoryIdentityIndex
+import dev.pocketagent.app.ui.history.HistoryLocatePlan
+import dev.pocketagent.app.ui.history.HistorySearchHit
+import dev.pocketagent.app.ui.history.HistorySearchRepository
+import dev.pocketagent.app.ui.history.HistorySearchState
+import dev.pocketagent.app.ui.history.MessageSpan
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
@@ -219,7 +232,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import io.grpc.Status
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -229,7 +241,6 @@ import pocketagent.v1.CreateThreadRequest
 import pocketagent.v1.CodexSettings
 import pocketagent.v1.GetCodexSettingsRequest
 import pocketagent.v1.GetHostInfoRequest
-import pocketagent.v1.OptimizePromptRequest
 import pocketagent.v1.GitStatusRequest
 import pocketagent.v1.GitDiffRequest
 import pocketagent.v1.GitCommitRequest
@@ -250,6 +261,7 @@ import pocketagent.v1.ModelInfo
 import pocketagent.v1.SetCodexSettingsRequest
 import pocketagent.v1.ApproveGuardianDeniedActionRequest
 import pocketagent.v1.Thread as PThread
+import pocketagent.v1.ThreadMessage
 import pocketagent.v1.ThreadStatus
 import pocketagent.v1.WriteFileRequest
 
@@ -1923,6 +1935,19 @@ fun ChatScreen(
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
     val st = remember(threadId) { TurnSession.state(threadId) }
     var input by st::draft
+    // ---- 输入框修订号(P4 Task 2 前置小改)----
+    // 内容每变一次 +1:优化预览的防覆盖闸拿它对比"请求发起时刻的修订号"
+    // (PromptOptimizePreviewState.inputModifiedSince),等待期间改过输入就不许
+    // 静默覆盖。所有写 input 的路径(语音并入/斜杠/引用/发送清空/大窗编辑/
+    // 优化应用)统一走 setInput,防漏计;随 threadId 重置(草稿每会话一份,
+    // 旧会话的修订号没有跨会话意义)。
+    var inputRevision by remember(threadId) { mutableStateOf(0L) }
+    fun setInput(value: String) {
+        if (value != input) {
+            input = value
+            inputRevision++
+        }
+    }
     // 语义触觉(审计 P1-5)的宿主 view:PaHaptics 统一入口以 view 取 context 并兜底
     val hapticView = LocalView.current
 
@@ -1950,10 +1975,23 @@ fun ChatScreen(
     }
 
     // ---- 提示词优化(实验功能,开关在 设置-外观与阅读,默认关)----
-    // 可见性/在飞状态走纯逻辑状态机(PromptOptimizeLogic.kt,JVM 单测钉行为);
-    // 撤销复用 app 级 UndoBar:成功替换输入后留 5 秒"已优化提示词[撤销]"窗口。
+    // 【P4 Task 2 升级】按钮 → 仓库(RPC)→ 预览弹层:结果不再直接替换输入框,
+    // 而是进 PromptOptimizePreviewState 弹层,由用户确认(可编辑候选/防覆盖
+    // 二选一/UndoBar 撤销)。按钮显隐仍走 T1 的纯逻辑状态机(PromptOptimizeLogic.kt);
+    // 预览状态机(PreviewState + reducePromptOptimizePreview)管弹层。
+    // 撤销复用 app 级 UndoBar:应用成功留 5 秒「已优化提示词[撤销]」,撤销只
+    // 恢复本次应用前的文本。
     val promptOptUndo = rememberUndoState()
     var promptOptState by remember { mutableStateOf(PromptOptimizeState()) }
+    val promptOptRepository = remember { GrpcPromptOptimizeRepository.fromAgentConnection() }
+    // 在途请求句柄与代数:新请求顶掉旧请求(取消旧协程 + 代数核对丢迟到结果),
+    // 快速连点绝不会生成多个并发替换结果。
+    var promptOptJob by remember { mutableStateOf<Job?>(null) }
+    var promptOptSeq by remember { mutableStateOf(0) }
+    // 预览弹层状态(随会话重置:换会话不残留上一会话的候选/错误)
+    var promptPreview by remember(threadId) { mutableStateOf(PromptOptimizePreviewState()) }
+    // 最近一次选择的优化风格(会话内记忆,重进页面回默认)
+    var promptStyle by remember { mutableStateOf(PromptOptimizeStyle.DEFAULT) }
     fun syncPromptOptState(text: String, offline: Boolean) {
         promptOptState = reducePromptOptimize(
             promptOptState,
@@ -2144,7 +2182,7 @@ fun ChatScreen(
                 currentVoiceRecognizer?.stopListening()
             }
             gate.append?.let { spoken ->
-                input = joinVoiceText(input, spoken)
+                setInput(joinVoiceText(input, spoken)) // 走 setInput:修订号与内容同车
                 voiceLandedTick++ // 【动画 ③】文本落框触发输入框"落定"脉动(见输入区)
             }
             gate.toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show() }
@@ -2265,6 +2303,69 @@ fun ChatScreen(
     var historyTruncated by remember(threadId) { mutableStateOf(false) }
     // 「加载更早」在飞(防重复点击;按钮同时换成小圈)
     var loadingEarlier by remember(threadId) { mutableStateOf(false) }
+    // ---- 【Task 7 历史搜索/自动定位】已加载历史的消息级身份索引 ----
+    // 每条已加载 daemon 消息 → 时间线 ChatItem 连续段(message_id 主键定位的
+    // 数据底座);每次历史拉取(打开会话/加载更早/自动定位)后重建。
+    var historyIdentity by remember(threadId) {
+        mutableStateOf(HistoryIdentityIndex())
+    }
+    // 已加载最旧消息的 daemon 稳定 id(「加载更早」防重复拉取的锚点);
+    // 空 = 旧 daemon 未带 id,退「回包条数 - 已加载条数」兜底。
+    var historyOldestMessageId by remember(threadId) { mutableStateOf("") }
+
+    /**
+     * ThreadMessage 列表 → (ChatItem 序列, 消息级身份跨度)。历史映射一条
+     * ThreadMessage ≥ 1 个 ChatItem(块拆分,见 HistoryMessageMapper),跨度
+     * 记下每条消息映射出的连续段,搜索命中才能按 message_id 找回时间线下标。
+     */
+    fun buildHistoryBatch(messages: List<ThreadMessage>): Pair<List<ChatItem>, List<MessageSpan>> {
+        val items = mutableListOf<ChatItem>()
+        val spans = mutableListOf<MessageSpan>()
+        for ((i, m) in messages.withIndex()) {
+            val start = items.size
+            items += historyToChatItems(listOf(m))
+            spans += MessageSpan(
+                messageId = m.messageId,
+                turnId = m.turnId,
+                sequenceInResponse = i,
+                itemStart = start,
+                itemCount = items.size - start,
+                role = m.role,
+            )
+        }
+        return items to spans
+    }
+
+    /**
+     * 【Task 7 加载更早升级】历史片段落地:按「已加载最旧 message id」锚点只把
+     * 回包头部的新消息**拼到列表头部**,不做整列表替换 —— daemon 幂等回尾部,
+     * 回包 = 更早新增段 + 已加载部分;锚点之前的那段才是新增。已加载条目的引用
+     * 不变,LazyColumn 不整表重组;回包没有新消息(重复拉取)时零列表变动。
+     * 旧 daemon 回包 message_id 为空时退「回包条数 - 已加载条数」条数兜底。
+     *
+     * @return 实际新拼入的 ChatItem 条数(调用方的滚动锚点 delta 直接用)。
+     */
+    fun prependHistoryMessages(messages: List<ThreadMessage>): Int {
+        if (messages.isEmpty()) return 0
+        val anchorPos = if (historyOldestMessageId.isNotBlank()) {
+            messages.indexOfFirst { it.messageId == historyOldestMessageId }
+        } else -1
+        val newCount = if (anchorPos >= 0) {
+            anchorPos
+        } else {
+            (messages.size - historyIdentity.spans.size).coerceAtLeast(0)
+        }
+        if (newCount <= 0) return 0
+        val (newItems, newSpans) = buildHistoryBatch(messages.take(newCount))
+        st.items.addAll(0, newItems)
+        historyIdentity = historyIdentity.copy(
+            spans = newSpans + historyIdentity.spans.map { it.copy(itemStart = it.itemStart + newItems.size) },
+        )
+        if (messages.first().messageId.isNotBlank()) {
+            historyOldestMessageId = messages.first().messageId
+        }
+        return newItems.size
+    }
 
     // 提示词优化:输入/开关/离线态任一变化都重算按钮可见性(单一事实来源是输入,
     // 状态机只记"请求在飞";纯逻辑见 PromptOptimizeLogic.kt,JVM 单测钉行为)。
@@ -2314,42 +2415,113 @@ fun ChatScreen(
         SlashCommandCache.put(threadId, loaded)
         slashCommands = loaded
     }
-    // 「优化」点击:RPC OptimizePrompt(daemon 侧整段预算 150s,手机端 deadline 再兜余量;
-    // 改写在电脑端真实生成,耗时数秒到数十秒)。成功替换输入 + 撤销条留原文;
-    // 失败人话 Toast(文案分类在 PromptOptimizeLogic,daemon 的人话 description 优先透传)。
-    fun optimizeCurrentInput() {
-        val original = input
-        if (original.isBlank()) return
+    // 「优化」点击(P4 Task 2):走仓库发 RPC,结果进预览弹层等用户确认,不再
+    // 直接替换输入框。daemon 侧整段预算 150s,手机端 deadline 再兜余量(仓库的
+    // 独立 deadline);失败人话由仓库分类(分类器在 PromptOptimizeLogic),进弹层
+    // 错误位。防覆盖契约:发起时记输入框修订号,应用时对比,改过就二选一。
+    fun startPromptOptimize(original: String, style: PromptOptimizeStyle) {
+        // 【busy 闸】照 doFork 先例:在途时再点直接忽略,不并发发请求、不叠弹层
+        // (快速连点绝不生成多个并发替换结果;按钮本身也随 inFlight 隐藏)。
+        if (!promptOptimizeClickAllowed(promptPreview, original)) return
         promptOptState = reducePromptOptimize(promptOptState, PromptOptimizeEvent.OptimizeStarted)
-        scope.launch {
-            try {
-                val resp = withContext(Dispatchers.IO) {
-                    AgentConnection.threadService()
-                        .withDeadlineAfter(PROMPT_OPTIMIZE_DEADLINE_S, TimeUnit.SECONDS)
-                        .optimizePrompt(
-                            OptimizePromptRequest.newBuilder().setText(original)
-                                .setAgentId(AgentConnection.optimizeAgent).setModelId(AgentConnection.optimizeModel).build(),
-                        )
+        promptPreview = reducePromptOptimizePreview(
+            promptPreview,
+            PromptOptimizePreviewIntent.Started(original, style, inputRevision),
+            inputRevision,
+        )
+        promptOptJob?.cancel() // 新请求顶掉旧请求:旧协程取消,迟到结果再按代数丢弃
+        val seq = ++promptOptSeq
+        promptOptJob = scope.launch {
+            val result = promptOptRepository.optimize(
+                PromptOptimizeRequestModel(
+                    original = original,
+                    style = style,
+                    agentId = AgentConnection.optimizeAgent,
+                    modelId = AgentConnection.optimizeModel,
+                    effort = "", // 无独立推理档位偏好,空 = daemon 默认档
+                    requestVersion = inputRevision,
+                ),
+            )
+            if (seq != promptOptSeq) return@launch // 迟到结果(已被新一轮顶掉):丢弃
+            // 按钮状态机回到闲置,并按当前输入重算可见性(失败时输入未变,
+            // LaunchedEffect(input) 不会自己重跑,必须手动 sync 一次)
+            promptOptState = reducePromptOptimize(
+                promptOptState,
+                if (result.isSuccess) PromptOptimizeEvent.OptimizeSucceeded else PromptOptimizeEvent.OptimizeFailed,
+            )
+            syncPromptOptState(input, offlineSnapshot)
+            result.fold(
+                onSuccess = { candidate ->
+                    promptPreview = reducePromptOptimizePreview(
+                        promptPreview,
+                        PromptOptimizePreviewIntent.Succeeded(candidate),
+                        inputRevision,
+                    )
+                },
+                onFailure = { e ->
+                    promptPreview = reducePromptOptimizePreview(
+                        promptPreview,
+                        PromptOptimizePreviewIntent.Failed(e.message ?: "优化失败,原文未被改动"),
+                        inputRevision,
+                    )
+                },
+            )
+        }
+    }
+
+    fun optimizeCurrentInput() = startPromptOptimize(input, promptStyle)
+
+    /** 应用候选到输入框:撤销只恢复**本次**应用前的文本(UndoBar 5 秒窗口)。 */
+    fun applyPromptCandidate(overwrite: Boolean) {
+        val s = promptPreview
+        val candidate = s.candidate?.trim() ?: return
+        // 双保险:reducer 的 Apply 闸会拒绝"已改过输入却盲应用";这里同步短路,
+        // 避免先清状态再发现不能应用的抖动。Overwrite 是用户在二选一里明选的覆盖。
+        if (!overwrite && s.inputModifiedSince(inputRevision)) return
+        val restored = input // 撤销恢复值 = 应用前输入框里的文本(覆盖时是新文本)
+        promptPreview = reducePromptOptimizePreview(
+            promptPreview,
+            if (overwrite) PromptOptimizePreviewIntent.OverwriteModified else PromptOptimizePreviewIntent.Apply,
+            inputRevision,
+        )
+        setInput(candidate)
+        promptOptUndo.show("已优化提示词", onUndo = { setInput(restored) })
+    }
+
+    /**
+     * 预览层意图分发:纯意图走 reducer,带副作用的(应用/重试/换风格/取消)落副作用。
+     * 重试/换风格统一走 [startPromptOptimize] —— 由它发 Started(规范的加载态迁移),
+     * 不先手动归约 Retry:否则 loading 先置真,会被 startPromptOptimize 自己的
+     * busy 闸拦下,请求根本发不出去。
+     */
+    fun dispatchPromptPreview(intent: PromptOptimizePreviewIntent) {
+        when (intent) {
+            is PromptOptimizePreviewIntent.EditCandidate ->
+                promptPreview = reducePromptOptimizePreview(promptPreview, intent, inputRevision)
+            is PromptOptimizePreviewIntent.Restyle -> {
+                if (!promptPreview.loading) { // 芯片在请求中已禁用,这里再闸一道
+                    promptStyle = intent.style
+                    startPromptOptimize(promptPreview.original.ifBlank { input }, intent.style)
                 }
-                val optimized = resp.optimized.trim()
-                if (optimized.isEmpty()) {
-                    // daemon 保证空返回必报错,这里只是双保险:绝不拿空串覆盖用户输入
-                    Toast.makeText(ctx, "优化结果为空,原文未被改动", Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                input = optimized
-                promptOptUndo.show("已优化提示词", onUndo = { input = original })
-            } catch (e: Exception) {
-                val status = Status.fromThrowable(e)
-                val connected = AgentConnection.connState.value == "ok"
-                Toast.makeText(
-                    ctx,
-                    optimizePromptErrorText(status.code.toString(), status.description, connected),
-                    Toast.LENGTH_LONG,
-                ).show()
-            } finally {
+            }
+            PromptOptimizePreviewIntent.Retry ->
+                startPromptOptimize(promptPreview.original.ifBlank { input }, promptStyle)
+            PromptOptimizePreviewIntent.Apply -> applyPromptCandidate(overwrite = false)
+            PromptOptimizePreviewIntent.OverwriteModified -> applyPromptCandidate(overwrite = true)
+            PromptOptimizePreviewIntent.Dismiss, PromptOptimizePreviewIntent.Undo -> {
+                if (promptPreview.loading) promptOptJob?.cancel() // 关层即停:不再为看不见的请求花配额
+                promptPreview = reducePromptOptimizePreview(promptPreview, intent, inputRevision)
                 syncPromptOptState(input, offlineSnapshot)
             }
+            // 生命周期意图(Started/Succeeded/Failed)正常只由 startPromptOptimize 的
+            // 请求流程直接经 reducer 落状态;万一从分发口进来(编程失误),也按同一条
+            // 状态机归约降级 —— 不静默吞事件、不留空白分支(Succeeded 带 loading 闸,
+            // 已关层的迟到结果会被 reducer 拒收,不会误应用)。
+            is PromptOptimizePreviewIntent.Started,
+            is PromptOptimizePreviewIntent.Succeeded,
+            is PromptOptimizePreviewIntent.Failed,
+            ->
+                promptPreview = reducePromptOptimizePreview(promptPreview, intent, inputRevision)
         }
     }
 
@@ -2773,41 +2945,99 @@ fun ChatScreen(
         }
     }
 
-    // ---- 【全文搜索】历史浮层的 daemon RPC 接线(R4-SR4)----
-    // 防抖/命中状态/失败静默降级都在浮层(组件)内;这里只做两件事:把
-    // AgentConnection 的 blocking stub 包成 ThreadSearcher(IO 线程),以及点
-    // 全文命中时的"对齐定位跳转"—— daemon 的 sequence 与本地 listIndex 是两个
-    // 坐标系(消息分块 + 「加载更早」头部偏移),不做算术换算,按时间/文本对齐
-    // 重新定位(HistoryQuickNavLogic.locateHit 纯函数);定位不到诚实降级
-    // (Toast 提示先加载更早,不假跳)。
-    val historyFullTextSearcher = remember(threadId) {
-        HistoryQuickNavLogic.ThreadSearcher { query, limit ->
-            withContext(Dispatchers.IO) {
-                AgentConnection.threadService().searchThreadMessages(
-                    SearchThreadMessagesRequest.newBuilder()
-                        .setThreadId(threadId)
-                        .setQuery(query)
-                        .setLimit(limit)
-                        .build(),
-                ).hitsList.map {
-                    HistoryQuickNavLogic.SearchHit(
-                        sequence = it.sequence,
-                        role = it.role,
-                        snippet = it.snippet,
-                        createdAtMs = it.createdAtUnixMs,
+    // ---- 【全文搜索·Task 7】daemon RPC 接线:message_id 主键定位 + 缺口自动拉取 ----
+    // 防抖与五态呈现都在浮层内;这里注入两条 RPC 通道(搜索 + 历史片段拉取,
+    // 均 IO 线程),并负责点命中后的自动定位流:message_id 命中身份索引 → 文本/
+    // 时间对齐兜底 → 缺口自动请求目标历史片段(拉完只补头部,不做整列表替换)→
+    // 滚动锚定;定位不到诚实降级(人话 Toast),绝不假跳。
+    val historySearchRepository = remember(threadId) {
+        HistorySearchRepository(
+            threadId = threadId,
+            searchRpc = { rpcThreadId, query, limit ->
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().searchThreadMessages(
+                        SearchThreadMessagesRequest.newBuilder()
+                            .setThreadId(rpcThreadId)
+                            .setQuery(query)
+                            .setLimit(limit)
+                            .build(),
                     )
+                }
+            },
+            historyRpc = { rounds ->
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService().getThreadHistory(openThreadHistoryRequest(threadId, rounds))
+                }
+            },
+        )
+    }
+
+    /**
+     * 把一条全文命中解析成 LazyColumn 下标(缺口自动拉取,有界)。
+     * 档位顺序:message_id 主键(身份索引,带角色校验)→ 文本/时间对齐兜底
+     * (下标无关,回滚/分叉后仍准)→ 都不中按计划自动拉取后重试。
+     * @return LazyColumn 下标;null = 有界努力后仍未定位(调用方给人话)。
+     * @throws Exception 拉取 RPC 失败(调用方归一为人话)。
+     */
+    suspend fun resolveHitToListIndex(hit: HistorySearchHit): Int? {
+        // 已加载档(主键 message_id,空 ID 退 sequence;坐标不可信不参与)
+        HistorySearchState.locateLoadedSpan(hit, historyIdentity)?.let {
+            return it.itemStart + historyListOffset
+        }
+        // 已加载兜底档(文本/时间对齐,身份索引过期也准)
+        HistoryQuickNavLogic.locateHit(st.items.toList(), hit, historyListOffset)?.let { return it }
+        // 缺口档:按裁定自动拉取(精确档一轮必中 / 旧 daemon 步进探索,皆有界)
+        var roundsTried = 0
+        var expansions = 0
+        while (expansions < HistorySearchState.MAX_LOCATE_EXPANSIONS) {
+            when (val plan = HistorySearchState.planHitLocate(
+                hit, historyIdentity, historyRoundsLoaded, AgentConnection.historyRounds,
+            )) {
+                is HistoryLocatePlan.Jump -> return plan.itemIndex + historyListOffset
+                is HistoryLocatePlan.Unresolvable -> return null
+                is HistoryLocatePlan.FetchTarget -> {
+                    if (plan.requestedRounds <= roundsTried) return null // 同档拉过仍未见:不重复拉
+                    roundsTried = plan.requestedRounds
+                    expansions++
+                    Toast.makeText(ctx, "正在加载更早的历史以定位…", Toast.LENGTH_SHORT).show()
+                    val msgs = historySearchRepository.fetchTargetMessages(plan.requestedRounds)
+                    if (msgs.isEmpty()) return null
+                    val grew = prependHistoryMessages(msgs) > 0
+                    if (plan.requestedRounds > historyRoundsLoaded) historyRoundsLoaded = plan.requestedRounds
+                    // 截断位与身份索引可信位跟随最新回包(sequence 坐标系随之校准)
+                    historyTruncated = HistoryRoundsLogic.canLoadEarlier(
+                        firstRole = msgs.firstOrNull()?.role,
+                        roundCount = msgs.count { it.role == "user" },
+                        requestedRounds = plan.requestedRounds,
+                    )
+                    historyIdentity = historyIdentity.copy(fullLoaded = !historyTruncated)
+                    // 拉完重定位:先主键/兼容键,再文本对齐(新到消息可能直接对上)
+                    HistorySearchState.locateLoadedSpan(hit, historyIdentity)?.let {
+                        return it.itemStart + historyListOffset
+                    }
+                    HistoryQuickNavLogic.locateHit(st.items.toList(), hit, historyListOffset)?.let { return it }
+                    if (!grew) return null // daemon 已到会话开头还没有:诚实失败
                 }
             }
         }
+        return null
     }
 
-    /** 点全文命中:能对齐到已加载条目就跳(并关浮层),不能就提示先加载更早。 */
-    val onHistoryFullTextHitClick: (HistoryQuickNavLogic.SearchHit) -> Unit = { hit ->
-        val listIndex = HistoryQuickNavLogic.locateHit(st.items.toList(), hit, historyListOffset)
-        if (listIndex != null) {
-            jumpToHistoryEntry(listIndex)
-        } else {
-            Toast.makeText(ctx, "该消息在更早的历史里，请先加载更早", Toast.LENGTH_SHORT).show()
+    /** 点全文命中:主键定位 → 缺口自动拉取 → 滚动锚定;定位不到给人话,不假跳。 */
+    val onHistoryFullTextHitClick: (HistorySearchHit) -> Unit = { hit ->
+        scope.launch {
+            val listIndex = try {
+                resolveHitToListIndex(hit)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Toast.makeText(ctx, "自动定位失败：${HistorySearchRepository.failureReason(e)}", Toast.LENGTH_SHORT).show()
+                null
+            }
+            if (listIndex != null) {
+                jumpToHistoryEntry(listIndex)
+            } else {
+                Toast.makeText(ctx, "未能定位到该消息：它可能在更早的历史里，请稍后再试", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -2934,18 +3164,29 @@ fun ChatScreen(
                         openThreadHistoryRequest(threadId, historyRoundsLoaded),
                     )
                 }
-                if (resp.messagesList.isNotEmpty()) {
-                    st.items.clear()
-                    st.items.addAll(historyToChatItems(resp.messagesList))
-                    listState.scrollToItem(st.items.size - 1)
-                }
                 // 【F-D】是否被截断决定时间线顶部「加载更早」的显隐(纯函数在
                 // HistoryRoundsLogic,JVM 单测钉住;空响应=还没有历史,不显示)
-                historyTruncated = HistoryRoundsLogic.canLoadEarlier(
+                val truncated = HistoryRoundsLogic.canLoadEarlier(
                     firstRole = resp.messagesList.firstOrNull()?.role,
                     roundCount = resp.messagesList.count { it.role == "user" },
                     requestedRounds = historyRoundsLoaded,
                 )
+                if (resp.messagesList.isNotEmpty()) {
+                    // 【Task 7】落地同时重建消息级身份索引(message_id→时间线跨度,
+                    // 搜索命中定位的数据底座)与「已加载最旧 id」锚点(加载更早
+                    // 防重复拉取用)。
+                    val (items, spans) = buildHistoryBatch(resp.messagesList)
+                    st.items.clear()
+                    st.items.addAll(items)
+                    historyIdentity = HistoryIdentityIndex(
+                        spans = spans,
+                        knownTotal = historyIdentity.knownTotal,
+                        fullLoaded = !truncated,
+                    )
+                    historyOldestMessageId = resp.messagesList.first().messageId
+                    listState.scrollToItem(st.items.size - 1)
+                }
+                historyTruncated = truncated
                 // 【离线快照】成功后落一份本地只读副本(只留 role+text:
                 // 图片/工具结果离线圈不了,宁可少显示也不能错显示)。
                 // 【深优 R2 修复】时间戳随行保存 —— 此前整列剥掉,快照恢复后
@@ -2969,6 +3210,10 @@ fun ChatScreen(
                 st.items.clear()
                 st.items.addAll(snap.map { ChatItem(role = it.role, text = it.text) })
                 listState.scrollToItem(st.items.size - 1)
+                // 快照条目没有 daemon 身份:身份索引一并作废(离线下搜索本就不可达,
+                // 重连重建 —— 绝不让旧索引把命中指进快照列表)
+                historyIdentity = HistoryIdentityIndex()
+                historyOldestMessageId = ""
                 offlineSnapshotAt = dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)
                 offlineSnapshot = true
                 loadError = null
@@ -2981,13 +3226,17 @@ fun ChatScreen(
     }
 
     /**
-     * 【F-D 加载更早】时间线顶部入口:累计轮数再加一个设置档位重拉
-     * (daemon 幂等返回尾部,整体替换 items,不是增量拼接)。
+     * 【F-D 加载更早 / Task 7 升级】时间线顶部入口:累计轮数再加一个设置档位重拉。
+     * daemon 幂等返回尾部,本次回包 = 更早新增段 + 已加载部分 —— 落地走
+     * [prependHistoryMessages]:按「已加载最旧 message id」锚点只把头部新消息
+     * 拼到列表前,**不做整列表替换**(已加载条目引用不变,不整表重组;回包没有
+     * 新消息时零列表变动,重复拉取无副作用)。旧 daemon 无 id 时退条数兜底,
+     * 行为等价旧的"整体替换但 delta 修正"。
      *
-     * 滚动锚点:替换前记 LazyListState 的 firstVisibleItem(下标+偏移),
-     * 替换后只在头部追加,旧条目整体下移 delta = 新旧条目差,锚点下标 + delta
-     * 就是原来那条消息,页面不跳动;锚点在 0(「加载更早」按钮自己)说明用户
-     * 已翻到顶,直接回列表顶部。
+     * 滚动锚点(保留):拉取前记 LazyListState 的 firstVisibleItem(下标+偏移),
+     * 头部拼接后旧条目整体下移 delta = 新拼入条目数,锚点下标 + delta 就是原来
+     * 那条消息,页面不跳动;锚点在 0(「加载更早」按钮自己)说明用户已翻到顶,
+     * 直接回列表顶部。
      */
     fun loadEarlier() {
         if (loadingEarlier || offlineSnapshot || st.running || st.recovering) return
@@ -3001,11 +3250,8 @@ fun ChatScreen(
                     AgentConnection.threadService().getThreadHistory(openThreadHistoryRequest(threadId, next))
                 }
                 if (resp.messagesList.isNotEmpty()) {
-                    val oldSize = st.items.size
-                    st.items.clear()
-                    st.items.addAll(historyToChatItems(resp.messagesList))
+                    val delta = prependHistoryMessages(resp.messagesList)
                     historyRoundsLoaded = next
-                    val delta = (st.items.size - oldSize).coerceAtLeast(0)
                     val target = if (anchorIndex <= 0) 0 else (anchorIndex + delta).coerceAtMost(st.items.size - 1)
                     listState.scrollToItem(target, if (anchorIndex <= 0) 0 else anchorOffset)
                 }
@@ -3014,6 +3260,8 @@ fun ChatScreen(
                     roundCount = resp.messagesList.count { it.role == "user" },
                     requestedRounds = next,
                 )
+                // 身份索引的"已到全量"可信位跟随最新截断位(sequence 兼容定位用)
+                historyIdentity = historyIdentity.copy(fullLoaded = !historyTruncated)
             } catch (e: Exception) {
                 Toast.makeText(ctx, "加载更早失败：${e.message ?: "连接失败"}", Toast.LENGTH_SHORT).show()
             } finally {
@@ -4558,21 +4806,21 @@ fun ChatScreen(
                                     .pressable {
                                         when (c.action) {
                                             SlashAction.GOAL -> {
-                                                input = stripSlashToken(input)
+                                                setInput(stripSlashToken(input))
                                                 slashGoalSheet = true
                                             }
                                             SlashAction.COMPACT -> {
-                                                input = stripSlashToken(input)
+                                                setInput(stripSlashToken(input))
                                                 doCompact()
                                             }
                                             SlashAction.REVIEW -> {
                                                 // "/计划":词元后已敲的文字作为审查重点
                                                 // (通常为空,daemon 有默认口径),清空输入框后发起。
                                                 val reviewFocus = stripSlashToken(input)
-                                                input = ""
+                                                setInput("")
                                                 doStartReview(reviewFocus)
                                             }
-                                            SlashAction.FILL -> input = applySlashPick(input, c, threadAgentId)
+                                            SlashAction.FILL -> setInput(applySlashPick(input, c, threadAgentId))
                                         }
                                     }
                                     .background(
@@ -4635,7 +4883,7 @@ fun ChatScreen(
                     var inputWrapLines by remember { mutableStateOf(1) }
                     BasicTextField(
                         value = input,
-                        onValueChange = { input = it },
+                        onValueChange = { setInput(it) },
                         onTextLayout = { inputWrapLines = it.lineCount },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -5085,7 +5333,7 @@ fun ChatScreen(
                                     Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
                                 } else {
                                     PaHaptics.confirm(hapticView)
-                                    if (send(input)) input = ""
+                                    if (send(input)) setInput("")
                                 }
                             },
                         contentAlignment = Alignment.Center,
@@ -5244,9 +5492,19 @@ fun ChatScreen(
                 { jumpToHistoryEntry(entry.listIndex) }
             },
             onJumpLatest = { jumpToLatestFromHistory() },
-            // 【全文搜索】RPC 注入(防抖在浮层内)+ 命中点击的对齐定位跳转
-            fullTextSearcher = historyFullTextSearcher,
+            // 【全文搜索·Task 7】仓库注入(五态呈现/失败人话在浮层,防抖不变);
+            // 命中点击走 message_id 主键自动定位(缺口自动拉取);searched_messages
+            // 回传作 sequence 兼容定位的全量基准;会话标题进命中卡(spec)。
+            searcher = historySearchRepository,
             onFullTextHitClick = onHistoryFullTextHitClick,
+            threadTitle = threadTitle,
+            onSearchSearched = { total ->
+                // 最近一次搜索回包的实扫条数 = daemon 全量消息数(sequence 坐标系
+                // 基准);身份索引随之刷新可信位。0(旧 daemon 未报)不覆盖已有值。
+                if (total > 0) {
+                    historyIdentity = historyIdentity.copy(knownTotal = total)
+                }
+            },
         )
         // R2-A 消息长按上下文菜单(单一实例):摘要行报"哪条消息",动作由
         // chatMessageMenuActions 按消息形态给(纯函数,ChatMessageMenuTest 钉死):
@@ -5274,7 +5532,7 @@ fun ChatScreen(
                         "copy" -> copyMessage(ctx, menuTarget.text)
                         "quote" -> {
                             // 引用只动草稿不发送:给用户留编辑权(与语音并入同一纪律)
-                            input = quoteMessageIntoDraft(input, menuTarget.text)
+                            setInput(quoteMessageIntoDraft(input, menuTarget.text))
                             Toast.makeText(ctx, "已引用到输入框,补充一句即可发送", Toast.LENGTH_SHORT).show()
                         }
                         "select" -> messageSelectArmed = menuTarget
@@ -5697,14 +5955,26 @@ fun ChatScreen(
     if (expandedInputOpen) {
         ExpandedInputSheet(
             value = input,
-            onValueChange = { input = it },
+            onValueChange = { setInput(it) },
             onDismiss = { expandedInputOpen = false },
             onSend = {
                 val text = input
                 expandedInputOpen = false
-                if (send(text)) input = ""
+                if (send(text)) setInput("")
             },
             canSend = !offlineSnapshot && input.isNotBlank() && !st.recovering,
+        )
+    }
+
+    // 优化预览弹层(P4 Task 2):原文/候选上下对比 + 候选可编辑 + 应用/撤销/
+    // 防覆盖二选一;常驻「保留原意,不会自动执行」说明,候选大幅变长时提示复核
+    // (纯函数 promptCandidateOverExpanded,阈值与裁定见其注释)。
+    // 不空闲即挂载(请求中/有候选/有错误),空闲时彻底不进组合。
+    if (!promptPreview.isIdle) {
+        PromptOptimizePreviewSheet(
+            state = promptPreview,
+            currentRevision = inputRevision,
+            onIntent = { dispatchPromptPreview(it) },
         )
     }
 

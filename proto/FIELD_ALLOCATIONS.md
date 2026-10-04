@@ -117,3 +117,68 @@
 | RPC | 形态 | 请求 → 响应 | 语义约定 |
 | --- | --- | --- | --- |
 | ExecuteUnknownEventAction | unary | UnknownEventActionRequest → UnknownEventActionResult | 幂等；冲突=结构化结果；白名单 daemon 侧硬编码：inspect/acknowledge/retry_later/open_native，绝不有 approve 类 |
+
+### model.proto / thread.proto —— 有效模型选择与消息稳定身份（2026-10-04）
+
+来源：`docs/superpowers/plans/2026-10-04-effective-selection-and-conversation-ux.md` Task 1 / 5 / 6。
+全部为只增不改：既有消息从现有最大号 +1 续接，旧字段号与语义一字未动。
+
+新增消息：
+
+| 消息 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| EffectiveModelSelection（model.proto） | agent_id | 1 | string | 归属 agent；空=默认 agent |
+| EffectiveModelSelection | model_id | 2 | string | 生效模型；空=跟随默认（合法取值） |
+| EffectiveModelSelection | effort | 3 | string | 生效思考强度；空=跟随默认（合法取值） |
+| EffectiveModelSelection | source | 4 | string | 来源：thread_override/app_default/desktop_default/native_current |
+| EffectiveModelSelection | applies_to_next_turn | 5 | bool | 将从下一轮生效 |
+| EffectiveModelSelection | configuration_confirmed | 6 | bool | 用户已显式确认 |
+| EffectiveModelSelection | explanation | 7 | string | 人话解释 |
+| EffectiveModelSelection | available_efforts | 8 | repeated string | 当前模型可用强度档位 |
+| MatchRange（thread.proto） | start | 1 | int32 | 命中起始码点（含，rune 口径） |
+| MatchRange | end | 2 | int32 | 命中结束码点（不含） |
+
+追加字段（既有消息，从现有最大号续接）：
+
+| 消息 | 既有最大号 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| ListModelsResponse（model.proto） | 4 | effective_selection | 5 | EffectiveModelSelection | 解析后的选择真值；缺席=旧 daemon |
+| Thread（thread.proto） | 23 | effective_selection | 24 | EffectiveModelSelection | 会话级选择真值；缺席=旧 daemon |
+| ThreadMessage（thread.proto） | 3 | message_id | 4 | string | 稳定消息 id；新消息生成，旧数据启动迁移 |
+| ThreadMessage | | turn_id | 5 | string | 所属轮次 id；空=未知 |
+| ThreadMessageHit（thread.proto） | 4 | message_id | 6 | string | 命中定位主键（sequence 降级为兼容） |
+| ThreadMessageHit | | turn_id | 7 | string | 命中所属轮次 |
+| ThreadMessageHit | | ranges | 8 | repeated MatchRange | 消息内多处命中范围 |
+| ThreadMessageHit | | from_loaded_history | 9 | bool | 命中是否来自已加载历史 |
+| SearchThreadMessagesResponse（thread.proto） | 1 | has_more | 2 | bool | 还有未返回命中（分页位，FTS 迁移预留） |
+| SearchThreadMessagesResponse | | searched_messages | 3 | int32 | 本次实扫消息条数 |
+| SearchThreadMessagesResponse | | scope | 4 | string | 范围：full_thread/local_snapshot；空=旧 daemon |
+
+**号位说明（ThreadMessageHit）**：spec 草案按"旧消息已占 1–5"分配 6–9，实测旧消息仅占
+1–4；号位 6–9 与既有字段零冲突，按 spec 原样采用。**字段 5 冻结留空、永不启用**（防止
+与任何按 spec 草稿实现的客户端撞号），已在 proto 注释与本登记表双处注明。
+
+**跨文件引用**：`EffectiveModelSelection` 定义在 model.proto，thread.proto 新增
+`import "v1/model.proto"`（无循环：model.proto 不引 thread.proto）。
+
+### thread.proto —— TurnStarted 本轮生效配置来源（2026-10-04，P3-T2）
+
+来源：模型选择四级来源收敛（daemon 侧快照真值已备好，startedFrame 一行接线）。
+扩展既有消息，从该消息现有最大号 4 续接。
+
+| 消息 | 既有最大号 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| TurnStarted（thread.proto） | 4 | source | 5 | string | 本轮实际生效配置的来源；词表与 EffectiveModelSelection.source 一致：thread_override / app_default / desktop_default / native_current；空串 = 旧 daemon 未带，客户端按"未知来源"如实处理 |
+
+### host.proto —— 线程有效选择变化通知（2026-10-04，P3-T2）
+
+来源：模型选择四级来源收敛（推送侧增量通知）。HostEvent 字段号现状：2-4 reserved
+（已删旧事件，永不复用）、5 = turn_finished、6 = sequence；oneof 新分支从 7 续接。
+host.proto 新增 `import "v1/model.proto"`（仅引用 EffectiveModelSelection，定义归
+model.proto；同 package 非限定名引用，与 thread.proto 同款形态）。
+
+| 消息 | 既有最大号 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| HostEvent（oneof event 新分支） | 6 | selection_changed | 7 | SelectionChangedNotification | 线程有效选择变化通知；daemon 重启后首轮不发，初始真值以 TurnStarted.source / 查询型 RPC 为准 |
+| SelectionChangedNotification（host.proto，新增消息） | — | thread_id | 1 | string | 发生变化的线程 id（daemon 本地线程 id） |
+| SelectionChangedNotification | | selection | 2 | EffectiveModelSelection（复用 model.proto 既有消息） | 变化后的有效选择整包（非 diff）；空 = 清回默认（合法状态） |

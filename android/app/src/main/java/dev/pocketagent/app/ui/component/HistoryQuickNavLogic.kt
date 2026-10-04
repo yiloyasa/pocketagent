@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui.component
 
 import dev.pocketagent.app.ui.ChatItem
+import dev.pocketagent.app.ui.history.HistorySearchHit
 import java.util.Calendar
 import java.util.TimeZone
 import kotlin.math.abs
@@ -360,12 +361,14 @@ object HistoryQuickNavLogic {
         return centered.coerceIn(0f, containerHeightPx - bubbleHeightPx)
     }
 
-    // ==== 全文搜索(daemon SearchThreadMessages RPC 接入,R4-SR4)====
+    // ==== 全文搜索(daemon SearchThreadMessages RPC 接入;Task 7 升级)====
     //
     // 面板搜索框非空时:本地过滤照旧(已加载条目即时命中),同时经宿主注入的
-    // [ThreadSearcher] 调 daemon 拿**全量会话**的全文命中(snippet 摘录)。全部
-    // 决策在这里做成纯函数,JVM 单测钉住(见 HistoryQuickNavSearchTest):
-    // 防抖归一化/去重、snippet→本地条目的跳转映射、RPC 失败静默降级。
+    // HistorySearchRepository 调 daemon 拿**全量会话**的全文命中。RPC 调用、
+    // proto 映射、message_id 去重与五态归一(本页/全会话/仅已下载/远端失败/
+    // 无结果)已迁到 ui/history/HistorySearchState + HistorySearchRepository
+    // (失败不再静默降级为空 —— 那会把"没搜成"伪装成"没有");这里只保留
+    // 防抖纯函数与"已加载兜底"定位档(locateHit)。
 
     /** 面板全文搜索的防抖窗口:停手这么久才发起 RPC(打字途中不发)。 */
     const val SEARCH_DEBOUNCE_MS = 400L
@@ -376,33 +379,6 @@ object HistoryQuickNavLogic {
      */
     const val SEARCH_LIMIT = 30
 
-    /**
-     * daemon 搜索的一条命中(RPC 无关的纯数据;proto 映射在宿主接线层做)。
-     *
-     * 【坐标系警告】[sequence] 是 daemon 消息数组里的 0 基下标,与本地
-     * [Entry.listIndex](LazyColumn 下标,有「加载更早」头部偏移,且一条 daemon
-     * 消息可能拆成多个 ChatItem)**不是同一坐标系** —— 两者之间不做任何算术
-     * 换算,跳转一律走 [locateHit] 按"时间/文本对齐"重新定位。
-     */
-    data class SearchHit(
-        val sequence: Int,
-        /** user / assistant(daemon 只搜正文文本块,不含思考/工具过程)。 */
-        val role: String,
-        /** 命中摘录:匹配词 + 前后文各 40 字符,截断处以 … 标示。 */
-        val snippet: String,
-        /** 消息时间戳(透传 store 值);0 = 未知。 */
-        val createdAtMs: Long,
-    )
-
-    /**
-     * 全文搜索的 RPC 注入口。宿主(ChatScreen)拿 AgentConnection 的 blocking
-     * stub 实现它(IO 线程);单测注入假实现 —— 面板与逻辑层永远不直接碰 gRPC。
-     * 实现抛异常 = 搜索失败,[runSearch] 会静默降级为空列表。
-     */
-    fun interface ThreadSearcher {
-        suspend fun search(query: String, limit: Int): List<SearchHit>
-    }
-
     /** 防抖前的查询归一化:去首尾空白;空白 = null(不发 RPC,清掉旧命中)。 */
     fun searchableQuery(raw: String): String? {
         val q = raw.trim()
@@ -411,17 +387,6 @@ object HistoryQuickNavLogic {
 
     /** 防抖去重:与上次已发起的查询相同则跳过(重组重放/光标抖动不重发 RPC)。 */
     fun shouldSkipFire(query: String, lastFired: String?): Boolean = query == lastFired
-
-    /**
-     * 发起一次搜索:失败(连接断/超时/会话不在本地库)静默降级为空列表 ——
-     * 搜索是增益面,不弹错误卡,本地过滤结果照常可用。
-     */
-    suspend fun runSearch(searcher: ThreadSearcher, query: String, limit: Int = SEARCH_LIMIT): List<SearchHit> =
-        try {
-            searcher.search(query, limit)
-        } catch (e: Exception) {
-            emptyList()
-        }
 
     /**
      * snippet → 可用于"文本包含匹配"的核:剥掉首尾省略号(截断标示,单全角
@@ -435,16 +400,20 @@ object HistoryQuickNavLogic {
     /**
      * 全文命中 → 本地已加载条目的跳转下标(LazyColumn 的 listIndex)。
      *
-     * daemon 的 sequence 与本地 listIndex 是两个坐标系(见 [SearchHit]),不换算;
-     * 按"内容/时间对齐"在已加载的 [ChatItem] 里重新定位,三档证据从强到弱:
+     * 【Task 7 定位档位】这已从"唯一跳转入口"降为**已加载兜底档**:主定位键是
+     * message_id(HistorySearchState.locateLoadedSpan,身份索引由宿主在历史拉取
+     * 接线点维护),命中不在已加载内容里时宿主自动请求目标历史片段再跳;本函数
+     * 只兜"已加载但身份索引过期/未建"的场景 —— 它按"内容/时间对齐"在已加载的
+     * [ChatItem] 里重新定位,不依赖任何下标,回滚/分叉后依然准确。三档证据从强
+     * 到弱:
      *  1. **双证**:role 一致 + created_at 精确相等(双方 >0)+ 正文包含核;
      *  2. **文本证**:正文包含核(daemon 的摘录核是正文连续子串,包含匹配
      *     已覆盖前缀情形 —— 摘录带前文,前缀匹配反而几乎永不成立);
      *  3. **时间证**:created_at 相等且条目有正文(daemon 只搜正文文本块,
      *     附件占位项不可能是命中源;工具结果被 400 字符截断时兜底)。
-     * 全都不中 → null:调用方诚实降级(提示"该消息在更早的历史里"),绝不假跳。
+     * 全都不中 → null:调用方继续走自动拉取/诚实降级,绝不假跳。
      */
-    fun locateHit(items: List<ChatItem>, hit: SearchHit, listOffset: Int): Int? {
+    fun locateHit(items: List<ChatItem>, hit: HistorySearchHit, listOffset: Int): Int? {
         val core = snippetCore(hit.snippet)
         fun pick(timeRequired: Boolean, textRequired: Boolean): Int {
             for ((i, item) in items.withIndex()) {

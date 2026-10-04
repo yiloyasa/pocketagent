@@ -140,6 +140,30 @@ func (s *Server) ListModels(ctx context.Context, req *pb.ListModelsRequest) (*pb
 			stateErrs = append(stateErrs, id+": "+agent.ErrModelsInitializing.Error())
 		}
 	}
+	// ---- 有效模型选择(2026-10-04 会话选择计划 Task 2)----
+	// 四级来源(会话覆盖 → App 默认 → 桌面默认 → agent 原生当前值)在
+	// SelectionResolver 里收敛成一个结论,随响应字段 5 下发(wire 兼容见
+	// model_selection_wire_test.go)。
+	// 【预算纪律】解析必须吃请求 ctx 的剩余预算:慢 provider(模型列表/原生
+	// 当前值迟迟不回)只允许拖垮自己的 effective_selection(缺席+StateError
+	// 注记),不许拖死其他 agent 的模型列表 —— 本函数"慢提供方不阻塞他人"
+	// 的既有门禁契约(model_list_parallel_test)。剩余预算不足时诚实缺席
+	// (同步跳过,不放弃式 goroutine —— 后者会在测试/关停拆除资源后仍摸
+	// 共享状态,-race 必炸),不伪造结论。
+	const selectionListModelsMinBudget = 200 * time.Millisecond
+	var sel *pb.EffectiveModelSelection
+	var selErr error
+	if dl, has := ctx.Deadline(); has && time.Until(dl) < selectionListModelsMinBudget {
+		selErr = fmt.Errorf("有效模型选择解析被跳过:剩余请求预算不足(某个 agent 响应过慢)")
+	} else {
+		sel, selErr = s.listModelsEffectiveSelection(ctx, req)
+	}
+	if selErr != nil {
+		stateErrs = append(stateErrs, selErr.Error())
+	} else if sel != nil {
+		out.EffectiveSelection = sel
+	}
+
 	out.StateError = strings.Join(stateErrs, "; ")
 	return out, nil
 }

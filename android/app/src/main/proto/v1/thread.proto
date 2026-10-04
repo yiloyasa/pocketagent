@@ -7,6 +7,9 @@ option java_multiple_files = true;
 option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
 
 import "v1/common.proto";
+// EffectiveModelSelection 定义在 model.proto(模型域的真值消息,Thread 与
+// ListModelsResponse 共用同一形状);这里只引用,不复制定义。
+import "v1/model.proto";
 
 // ============ 会话(Thread)服务:聊天 + agent 执行 ============
 
@@ -463,6 +466,19 @@ message ThreadMessage {
   string role = 1;               // user / assistant
   repeated ContentBlock blocks = 2;
   int64 created_at_unix_ms = 3;
+  // ---- 消息稳定身份(只增:4~5,2026-10-04 会话选择与历史体验计划 Task 5;
+  // 分配登记见 proto/FIELD_ALLOCATIONS.md)----
+  // 【为什么需要稳定 id】历史搜索/跳转原来只能靠 sequence(数组下标)定位,而
+  // 加载更早、fork、rollback 都会改变下标 → 定位漂移。message_id 是 daemon 侧
+  // 稳定身份:新消息落库时生成、永久不变;旧数据由 daemon **启动时**幂等迁移补齐
+  // (thread + index + created_at + 内容 hash;重复启动不改变已有 id)。
+  // fork/rollback/import 对 id 是保持还是重新生成的语义见 store(store.go)。
+  // 手机端历史定位一律优先用它;sequence 降级为兼容字段。空 = 旧 daemon 未带,
+  // 客户端退回 sequence 兜底,不报错。
+  string message_id = 4;
+  // 消息所属轮次的 id(daemon 侧口径,与 TurnStarted.turn_id 同域);
+  // 空 = 未知/旧数据未迁移出轮次归属。
+  string turn_id = 5;
 }
 
 message Thread {
@@ -515,6 +531,12 @@ message Thread {
   // 不带、尚未开轮的会话不带;daemon 重启后仍处于 RUNNING 的会话由 daemon
   // 记**重启时刻**(真实开始不可追溯,仅作展示锚点)。
   optional int64 turn_started_unix_ms = 23;
+  // ---- 有效模型选择(只增:24,2026-10-04 会话选择与历史体验计划 Task 1;
+  // 分配登记见 proto/FIELD_ALLOCATIONS.md)----
+  // 本会话解析后的选择真值(四级来源收敛结论 + 来源 + 生效时机 + 人话解释,
+  // 形状见 model.proto 的 EffectiveModelSelection)。旧 daemon 缺省 = 客户端按
+  // model_id(5)/effort(19) 兜底显示,不报错。
+  EffectiveModelSelection effective_selection = 24;
 }
 
 // CodexGoalDetail codex 线程目标态(thread/goal/get 应答的归一)。
@@ -748,6 +770,17 @@ message TurnStarted {
   string model_id = 2;
   optional string effort = 3;
   bool configuration_confirmed = 4;
+  // ---- 本轮生效配置来源(只增:5,P3-T2;字段号分配登记见 proto/FIELD_ALLOCATIONS.md)----
+  // 本轮实际生效的模型/思考强度配置来自哪一级(与 model.proto
+  // EffectiveModelSelection.source 的四级来源词表一致,稳定字符串,新增来源不改 proto):
+  //   thread_override  — 本会话显式覆盖(手机端选择/委派指定)
+  //   app_default      — App 侧默认(daemon 落库的默认模型)
+  //   desktop_default  — 桌面端默认(如 codex config 的当前值)
+  //   native_current   — agent 原生当前值(会话实挂的模型/强度)
+  // 语义 = 本轮实际生效配置的来源,不是"用户最后一次在哪改的"。
+  // 旧 daemon 不带 = 空串:客户端按"未知来源"如实处理(不猜、不报错)。
+  // daemon 侧快照真值已备好,startedFrame 一行接线。
+  string source = 5;
 }
 
 message TextDelta { string delta = 1; }
@@ -873,21 +906,57 @@ message SearchThreadMessagesRequest {
   int32 limit = 3;
 }
 
-// ThreadMessageHit 一条命中:sequence 是该消息在会话消息数组里的 0 基下标,
-// 与 GetThreadHistory 返回顺序一致 —— 手机端据此定位跳转/取整条正文。
-// snippet 是命中处的摘录(匹配词 + 前后文各 40 字符,截断处以 … 标示),
-// 只含文本正文;思考块/工具调用参数刻意不搜(那是过程不是正文)。
+// MatchRange 一处命中在文本里的范围(2026-10-04 会话选择与历史体验计划 Task 6,
+// 分配登记见 proto/FIELD_ALLOCATIONS.md)。
+// [start, end) 半开区间,按 Unicode 码点(rune)计 —— 与 daemon 既有 snippet 的
+// 截断口径一致(中文按字算,不吃 UTF-8 字节错位亏)。客户端只拿它做高亮渲染,
+// 异常值按钳制处理,**不作为消息定位依据**(定位看 message_id)。
+message MatchRange {
+  int32 start = 1;  // 起始码点下标(含)
+  int32 end = 2;    // 结束码点下标(不含)
+}
+
+// ThreadMessageHit 一条命中。sequence 是该消息在会话消息数组里的 0 基下标,
+// 与 GetThreadHistory 返回顺序一致 —— 它现在只是**兼容字段**:下标会随加载更早/
+// fork/rollback 漂移,定位一律优先用 message_id(6);旧 daemon 回包不带 6~9 时
+// 才退回 sequence 兜底。snippet 是命中处的摘录(匹配词 + 前后文各 40 字符,
+// 截断处以 … 标示),只含文本正文;思考块/工具调用参数刻意不搜(那是过程不是正文)。
 message ThreadMessageHit {
-  int32 sequence = 1;             // 消息在会话消息数组中的下标(0 基)
+  int32 sequence = 1;             // 消息在会话消息数组中的下标(0 基;兼容定位,见上)
   string role = 2;                // user / assistant
   string snippet = 3;             // 命中摘录(含匹配词与前后文)
   int64 created_at_unix_ms = 4;   // 消息时间戳(透传 store 值;0 = 未知)
+  // 字段 5 刻意留空:号位按 2026-10-04 spec 原样分配(6~9,spec 误以为旧消息
+  // 占到 5),为防撞号此号位冻结不再启用;登记见 proto/FIELD_ALLOCATIONS.md。
+  // ---- 命中身份与匹配范围(只增:6~9)----
+  // 命中消息的稳定 id(与 ThreadMessage.message_id 同源),定位主键。
+  string message_id = 6;
+  // 命中消息所属轮次 id(与 ThreadMessage.turn_id 同源);空 = 未知。
+  string turn_id = 7;
+  // 该消息内的命中范围,可多处(如一词多次出现);按出现顺序给。
+  repeated MatchRange ranges = 8;
+  // true = 命中来自已加载进手机时间线的历史片段(点一下就在眼前);
+  // false = 命中仍在 daemon 侧未下载的历史里(客户端需先请求目标片段再跳)。
+  // 空 = 旧 daemon,客户端按未知处理,不猜。
+  bool from_loaded_history = 9;
 }
 
 message SearchThreadMessagesResponse {
-  // 无命中 = 空列表(不是错误);命中超出 limit 时截断(不回总数,客户端
-  // 拿"满 limit"自行判断可能还有更多,避免为计数多做一次全扫)。
+  // 无命中 = 空列表(不是错误);命中超出 limit 时截断。旧客户端拿"满 limit"
+  // 自行猜测可能还有更多 —— 新客户端改读 has_more(2,权威)与 searched_messages
+  // (3,本次实扫条数),不再靠启发式;回包规模始终有界(limit 钳制在 daemon 侧)。
   repeated ThreadMessageHit hits = 1;
+  // true = 还有未返回的命中(客户端可据此提示"还有更多",为未来 FTS 迁移
+  // 预留分页语义;当前 daemon 一次性回满 limit 内命中,has_more 恒 false ——
+  // 客户端不得假设它恒 false,协议上它是真分页位)。
+  bool has_more = 2;
+  // 本次实际扫描的消息条数(诊断/展示"搜了 N 条"用;与命中数无关)。
+  int32 searched_messages = 3;
+  // 搜索覆盖范围(稳定字符串,新增口径不改 proto):
+  //   full_thread     — 全会话消息(daemon 内存 store 全量)
+  //   local_snapshot  — 仅本地快照/已加载片段(降级口径)
+  // 空 = 旧 daemon 未报,客户端按未知处理,不得臆断为 full_thread。
+  string scope = 4;
 }
 
 // ---- 协同会话闭环(只增,字段号从 1 起,不碰旧消息;字段号分配登记见

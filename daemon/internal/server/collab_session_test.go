@@ -38,6 +38,13 @@ func newCollabSessionServer(t *testing.T) *Server {
 	// 把「等在飞轮次落定」放进构造器，比要求每个用例各自记得更可靠 ——
 	// 将来新增的用例自动获得同一保证。t.Cleanup 是 LIFO：这里注册的等待先执行，
 	// 之后才轮到 t.TempDir() 的清理。
+	//
+	// P1 协同闭环追加同样的纪律给协同事件队列:DispatchCollab 起会话后,事件由
+	// 单消费者异步落盘 collab/events/<id>.jsonl。下面按「先队列、后轮次」注册,
+	// LIFO 拆除时倒过来执行 = 先等轮次落定(它们还会往队列补终局帧)、再等队列
+	// 排空,之后才轮到 RemoveAll —— 否则消费者还在写事件文件,目录清理报
+	// "collab\events: The directory is not empty"(批次 2 全量 -race 实测)。
+	t.Cleanup(func() { waitCollabEventQueueDrained(t, s) })
 	t.Cleanup(func() { waitActiveTurnsDrained(t, s) })
 	return s
 }

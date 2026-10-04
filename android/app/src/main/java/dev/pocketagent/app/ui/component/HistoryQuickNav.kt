@@ -65,14 +65,24 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
+import dev.pocketagent.app.ui.history.HistoryMatchSpan
+import dev.pocketagent.app.ui.history.HistorySearchHit
+import dev.pocketagent.app.ui.history.HistorySearchRepository
+import dev.pocketagent.app.ui.history.HistorySearchState
+import dev.pocketagent.app.ui.history.HistorySearchStatus
+import dev.pocketagent.app.ui.history.ResultsKind
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.PaHacker
@@ -582,10 +592,14 @@ fun HistoryQuickBubble(
  * @param onDismiss 关闭(Scrim 点击)。
  * @param onJumpEarliest 「最早」快跳:滚到第一条用户消息(null = 不摆按钮)。
  * @param onJumpLatest 「最新」快跳:回底并恢复跟随(null = 不摆按钮)。
- * @param fullTextSearcher 【全文搜索】宿主注入的 daemon RPC 搜索器(R4-SR4);
- *   null = 不接全文搜索(搜索框只做本地过滤)。面板只管防抖与命中状态,不碰 gRPC。
- * @param onFullTextHitClick 点全文命中:宿主按时间/文本对齐定位跳转,定位不到
- *   诚实降级(Toast 提示先加载更早),面板不猜坐标系。
+ * @param searcher 【全文搜索·Task 7 升级】宿主注入的 HistorySearchRepository
+ *   (RPC 在仓库内归一为五态);null = 不接全文搜索(搜索框只做本地过滤)。
+ *   面板只管防抖与状态呈现,不碰 gRPC;远端失败如实呈现人话,不伪装空结果。
+ * @param onFullTextHitClick 点全文命中:宿主按 message_id 主键定位(缺口自动
+ *   请求目标历史片段),定位不到诚实降级(Toast),面板不猜坐标系。
+ * @param threadTitle 会话标题(命中卡展示,spec:高亮片段+角色+日期+轮次+会话标题)。
+ * @param onSearchSearched 搜索回包的 searched_messages 上报(宿主记作"daemon
+ *   全量消息总数",sequence 兼容定位的坐标系基准;不关心可传空)。
  */
 @Composable
 fun HistoryQuickPanel(
@@ -596,46 +610,52 @@ fun HistoryQuickPanel(
     onDismiss: () -> Unit,
     onJumpEarliest: (() -> Unit)? = null,
     onJumpLatest: (() -> Unit)? = null,
-    fullTextSearcher: HistoryQuickNavLogic.ThreadSearcher? = null,
-    onFullTextHitClick: (HistoryQuickNavLogic.SearchHit) -> Unit = {},
+    searcher: HistorySearchRepository? = null,
+    onFullTextHitClick: (HistorySearchHit) -> Unit = {},
+    threadTitle: String = "",
+    onSearchSearched: (Int) -> Unit = {},
 ) {
     val hacker = PaHacker.isHacker
     // 搜索是面板的临时视图状态:关闭即清,下次打开不带旧查询(线性返回语义)
     var query by remember { mutableStateOf("") }
-    // ---- 【全文搜索】命中与在途状态(与 query 同为面板临时视图状态)----
-    var fullTextHits by remember(fullTextSearcher) {
-        mutableStateOf<List<HistoryQuickNavLogic.SearchHit>>(emptyList())
+    // ---- 【全文搜索·Task 7 五态】命中状态从"列表+在途位"升级为 HistorySearchStatus:
+    // 本页/全会话/仅已下载/远端失败/无结果 可区分;失败如实呈现人话,不再静默降级为空。----
+    var searchStatus by remember(searcher) {
+        mutableStateOf<HistorySearchStatus>(HistorySearchStatus.Idle)
     }
-    var fullTextSearching by remember(fullTextSearcher) { mutableStateOf(false) }
+    var searching by remember(searcher) { mutableStateOf(false) }
     // 上次已发起的查询(防抖去重)与在途任务(新查询到达即取消旧 RPC)
-    var lastFiredQuery by remember(fullTextSearcher) { mutableStateOf<String?>(null) }
-    var searchJob by remember(fullTextSearcher) { mutableStateOf<Job?>(null) }
+    var lastFiredQuery by remember(searcher) { mutableStateOf<String?>(null) }
+    var searchJob by remember(searcher) { mutableStateOf<Job?>(null) }
     val searchScope = rememberCoroutineScope()
-    LaunchedEffect(fullTextSearcher) {
-        // 搜索器换人(换会话等):旧命中立即作废,不留给新会话串台
+    LaunchedEffect(searcher) {
+        // 搜索器换人(换会话等):旧状态立即作废,不留给新会话串台
         lastFiredQuery = null
-        fullTextHits = emptyList()
-        fullTextSearching = false
+        searchStatus = HistorySearchStatus.Idle
+        searching = false
     }
-    LaunchedEffect(fullTextSearcher, query) {
-        if (fullTextSearcher == null) return@LaunchedEffect
+    LaunchedEffect(searcher, query) {
+        if (searcher == null) return@LaunchedEffect
         val q = HistoryQuickNavLogic.searchableQuery(query)
         if (q == null) {
-            // 清空/空白:取消在途、立刻清命中(无需防抖)
+            // 清空/空白:取消在途、立刻清状态(无需防抖)
             searchJob?.cancel()
             lastFiredQuery = null
-            fullTextSearching = false
-            fullTextHits = emptyList()
+            searching = false
+            searchStatus = HistorySearchStatus.Idle
             return@LaunchedEffect
         }
         if (HistoryQuickNavLogic.shouldSkipFire(q, lastFiredQuery)) return@LaunchedEffect
         lastFiredQuery = q
         searchJob?.cancel()
-        fullTextSearching = true
+        searching = true
         searchJob = searchScope.launch {
-            // 失败在 runSearch 内静默降级为空列表:只显本地结果,不弹错误卡
-            fullTextHits = HistoryQuickNavLogic.runSearch(fullTextSearcher, q)
-            fullTextSearching = false
+            // search 从不把失败伪装成空结果(失败在仓库内归一为 RemoteError):
+            // 五态如实到达 UI;命中数上报给宿主(sequence 兼容定位的全量基准)
+            val status = searcher.search(q, HistoryQuickNavLogic.SEARCH_LIMIT)
+            searchStatus = status
+            searching = false
+            if (status is HistorySearchStatus.Results) onSearchSearched(status.searchedMessages)
         }
     }
     LaunchedEffect(visible) {
@@ -804,12 +824,14 @@ fun HistoryQuickPanel(
                 }
                 // 【全文搜索】搜索态分两个区块:「本页命中」(本地过滤,即时)+
                 // 「全文命中」(daemon RPC,snippet 作次行);非搜索态保持原貌不加头。
-                val searching = query.isNotBlank()
+                // (queryFiltering 只管本地过滤区块的显隐;全文在途位是上面的
+                // searching 状态,由仓库五态驱动 —— 二者各管一段,不混用。)
+                val queryFiltering = query.isNotBlank()
                 LazyColumn(
                     Modifier.fillMaxWidth(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
                 ) {
-                    if (searching) {
+                    if (queryFiltering) {
                         item(key = "sec-local") {
                             HistorySectionLabel("本页命中 · ${filtered.size}")
                         }
@@ -899,14 +921,54 @@ fun HistoryQuickPanel(
                         }
                     } // itemsIndexed(组内行)
                 } // groups.forEach
-                    // ---- 区块二:全文命中(daemon RPC)----
-                    // 失败静默降级:runSearch 回空列表,区块整个不出现 —— 不弹错误卡,
-                    // 本地结果照常可用。搜索中先给一行轻提示,命中到达即替换。
-                    if (searching && fullTextSearcher != null) {
-                        if (fullTextSearching && fullTextHits.isEmpty()) {
-                            item(key = "ft-searching") {
+                    // ---- 区块二:全文命中(Task 7 五态呈现)----
+                    // 本页/全会话/仅已下载命中按口径分区标注;远端失败如实呈现人话,
+                    // 不伪装空结果(Review Focus 红线);无结果与"搜索中"各占一行。
+                    // 本地过滤区块(上)始终可用,不受远端成败影响。
+                    if (searching && searchStatus == HistorySearchStatus.Idle) {
+                        item(key = "ft-searching") {
+                            Text(
+                                "全文搜索中…",
+                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                fontSize = 12.5.sp,
+                                color = PaEditorial.Subtle,
+                                fontFamily = if (hacker) PaHacker.mono else null,
+                            )
+                        }
+                    }
+                    when (val s = searchStatus) {
+                        is HistorySearchStatus.Results -> {
+                            item(key = "sec-ft") {
+                                HistorySectionLabel(
+                                    s.kind.label + " · ${s.hits.size}" +
+                                        (if (s.hasMore) " · 还有更多" else "") +
+                                        (if (!s.scopeKnown) " · 范围未知" else ""),
+                                )
+                            }
+                            itemsIndexed(
+                                s.hits,
+                                key = { _, h ->
+                                    "ft-" + h.messageId.ifBlank { "s${h.sequence}" } +
+                                        "-${h.snippet.hashCode()}"
+                                },
+                            ) { _, hit ->
+                                HistorySearchHitCard(
+                                    hit = hit,
+                                    query = s.query,
+                                    threadTitle = threadTitle,
+                                    hacker = hacker,
+                                ) { onFullTextHitClick(hit) }
+                            }
+                        }
+                        is HistorySearchStatus.NoResults -> {
+                            item(key = "ft-none") {
                                 Text(
-                                    "全文搜索中…",
+                                    when {
+                                        s.kind == ResultsKind.DOWNLOADED_ONLY ->
+                                            "已下载内容里没有匹配「${s.query}」的消息"
+                                        s.scopeKnown -> "全会话里没有匹配「${s.query}」的消息"
+                                        else -> "没有匹配「${s.query}」的消息(电脑端未报告搜索范围)"
+                                    },
                                     Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                                     fontSize = 12.5.sp,
                                     color = PaEditorial.Subtle,
@@ -914,17 +976,12 @@ fun HistoryQuickPanel(
                                 )
                             }
                         }
-                        if (fullTextHits.isNotEmpty()) {
-                            item(key = "sec-ft") {
-                                HistorySectionLabel("全文命中 · ${fullTextHits.size}")
-                            }
-                            itemsIndexed(
-                                fullTextHits,
-                                key = { _, h -> "ft-${h.sequence}-${h.snippet.hashCode()}" },
-                            ) { _, hit ->
-                                FullTextHitRow(hit, hacker) { onFullTextHitClick(hit) }
+                        is HistorySearchStatus.RemoteError -> {
+                            item(key = "ft-error") {
+                                RemoteSearchErrorRow(s.reason, hacker)
                             }
                         }
+                        HistorySearchStatus.Idle -> {}
                     }
                 } // LazyColumn
             }
@@ -946,13 +1003,83 @@ private fun HistorySectionLabel(text: String) {
 }
 
 /**
- * 一条全文命中行:首行 = 角色标签 + 消息时间戳(daemon 透传,0 则不显时间),
- * 次行 = 命中摘录 snippet(规格:snippet 作次行)。点击 → 宿主按时间/文本对齐
- * 定位跳转;定位不到由宿主诚实降级(Toast),这里不猜坐标系。
+ * 远端搜索失败行(五态之一):如实呈现人话原因,并说明本地过滤不受影响 ——
+ * 绝不把失败静默画成"无结果"(Review Focus:失败不伪装空结果)。
  */
 @Composable
-private fun FullTextHitRow(
-    hit: HistoryQuickNavLogic.SearchHit,
+private fun RemoteSearchErrorRow(reason: String, hacker: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Text(
+            "全文搜索失败",
+            fontSize = 10.5.sp,
+            color = PaEditorial.Denied,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = PaHacker.mono,
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            reason,
+            fontSize = 12.5.sp,
+            lineHeight = 17.sp,
+            color = if (hacker) PaEditorial.OnGraphiteMuted else PaEditorial.Muted,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "本页过滤不受影响,可稍后重试。",
+            fontSize = 11.sp,
+            color = PaEditorial.Subtle,
+            fontFamily = if (hacker) PaHacker.mono else null,
+        )
+    }
+}
+
+/**
+ * 摘录高亮:把 daemon MatchRange(消息拼接空间 rune 半开区间)切进摘录文本
+ * (HistorySearchState.snippetHighlightSpans 负责坐标映射,对不齐则不高亮,
+ * 绝不画错位)。纯函数,无组合状态。
+ */
+private fun highlightedSnippet(
+    snippet: String,
+    ranges: List<HistoryMatchSpan>,
+    query: String,
+): AnnotatedString {
+    val spans = HistorySearchState.snippetHighlightSpans(snippet, ranges, query)
+    if (spans.isEmpty()) return AnnotatedString(snippet)
+    return buildAnnotatedString {
+        var cursor = 0
+        for (r in spans.sortedBy { it.first }) {
+            if (r.first < cursor) continue // 区间不重叠(daemon 保证),防御性跳过
+            append(snippet.substring(cursor, r.first))
+            withStyle(
+                SpanStyle(
+                    background = PaEditorial.PrimaryContainer,
+                    color = PaEditorial.Primary,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            ) {
+                append(snippet.substring(r.first, r.last + 1))
+            }
+            cursor = r.last + 1
+        }
+        if (cursor < snippet.length) append(snippet.substring(cursor))
+    }
+}
+
+/**
+ * 一条全文命中卡(Task 7 规格:高亮片段 + 角色 + 日期 + 所属轮次 + 会话标题)。
+ * 首行 = 角色标签 · 时间戳 · 轮次短标(空则不占位);次行 = 命中摘录(按
+ * MatchRange 高亮);末行 = 会话标题(同会话恒定,规格要求进卡)。点击 → 宿主
+ * 按 message_id 主键自动定位(缺口自动拉取),定位不到由宿主诚实降级。
+ */
+@Composable
+private fun HistorySearchHitCard(
+    hit: HistorySearchHit,
+    query: String,
+    threadTitle: String,
     hacker: Boolean,
     onClick: () -> Unit,
 ) {
@@ -985,10 +1112,21 @@ private fun FullTextHitRow(
                     fontFamily = PaHacker.mono,
                 )
             }
+            if (hit.turnId.isNotBlank()) {
+                Spacer(Modifier.width(6.dp))
+                Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "轮次 " + hit.turnId.take(8) + if (hit.turnId.length > 8) "…" else "",
+                    fontSize = 10.5.sp,
+                    color = PaEditorial.Subtle,
+                    fontFamily = PaHacker.mono,
+                )
+            }
         }
         Spacer(Modifier.height(3.dp))
         Text(
-            hit.snippet,
+            highlightedSnippet(hit.snippet, hit.ranges, query),
             fontSize = 12.5.sp,
             lineHeight = 17.sp,
             color = PaEditorial.Ink,
@@ -996,5 +1134,16 @@ private fun FullTextHitRow(
             overflow = TextOverflow.Ellipsis,
             fontFamily = if (hacker) PaHacker.mono else null,
         )
+        if (threadTitle.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "会话 · $threadTitle",
+                fontSize = 10.5.sp,
+                color = PaEditorial.Subtle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontFamily = if (hacker) PaHacker.mono else null,
+            )
+        }
     }
 }

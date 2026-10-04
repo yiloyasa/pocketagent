@@ -1020,6 +1020,14 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	// 于是"只影响本轮及之后"成立、重启 daemon 不丢,且依然不碰桌面 config.toml。
 	applyTurnOverrides(t, input)
 
+	// 【TurnSnapshot(2026-10-04 会话选择计划 Task 2)】本轮配置在覆盖应用后立即
+	// 冻结:轮次一经启动,模型/思考强度不再被任何后续选择变化改写(全局约束红线)。
+	// 快照是 immutable 值快照,Started 帧与 selection_changed 判定一律读它,绝不
+	// 回读线程的实时字段 —— 线程选择只有在轮次边界(此处/排队续跑出队)才被合法
+	// 改写,而每一次改写都会伴随一份新快照。
+	turnSnap := s.captureTurnSnapshot(t)
+	noteSelectionChanged(t.ID, turnSnap)
+
 	turnID := randomID("turn")
 
 	// W7:本轮的资源租约(规格 §6.5 的强制点)——把当前预算策略里这一 thread 的
@@ -1067,9 +1075,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		return nil
 	}
 
-	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
-		TurnId: turnID, ModelId: t.ModelID,
-	}}})
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: startedFrame(turnID, turnSnap)}})
 
 	// 2) 审批中继:provider 要审批时 → 发给手机 → 等手机答复
 	// 【R10】轮次生命周期与手机连接解耦:USB/WiFi 闪断不再杀掉电脑上正在跑
@@ -1183,6 +1189,10 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		// 换模型 = 换 provider(同 agent 内),和首轮的选择逻辑保持一致;
 		// 选不到显式失败(发 Failed 帧),绝不静默回退别的 agent。
 		applyTurnOverrides(t, &pb.TurnInput{ModelId: next.modelID, Effort: next.effort})
+		// 排队续跑 = 新的轮次边界:重取快照(红线:每轮的 Started 帧如实反映
+		// 该轮启动那一刻的实际配置;上一轮的快照不被追溯改写)。
+		turnSnap = s.captureTurnSnapshot(t)
+		noteSelectionChanged(t.ID, turnSnap)
 		provider, perr = s.providerForThread(t)
 		if perr != nil {
 			log.Printf("[turn] 排队续跑选择 provider 失败: %v", perr.Error())
@@ -1202,9 +1212,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		t.Status = pb.ThreadStatus_THREAD_STATUS_RUNNING
 		t.TurnStartedUnixMs = time.Now().UnixMilli() // 新一轮重新起算(与 Started 帧同点)
 		logStoreUpdateErr("queued-turn-start", t.ID, s.cfg.Store.Update(t))
-		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: &pb.TurnStarted{
-			TurnId: turnID, ModelId: t.ModelID,
-		}}})
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_Started{Started: startedFrame(turnID, turnSnap)}})
 		inputBlocks = next.blocks
 	}
 }

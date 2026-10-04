@@ -78,6 +78,10 @@ func (s *Server) OptimizePrompt(ctx context.Context, req *pb.OptimizePromptReque
 		log.Printf("[promptopt] 生成返回为空(text=%d 字节)", len(text))
 		return nil, errUnavailable("所选 Agent 没有返回优化结果，请检查登录和配额")
 	}
+	// 观测日志只记 style 与字节数,不落全文(与上方空返回日志同口径);候选
+	// 相对原文的长度比对在手机端做(响应只有 optimized 一个字段,扩写提示
+	// 走客户端启发式,见 P4 Task 3 的裁定)。
+	log.Printf("[promptopt] 完成 style=%q 原文=%dB 候选=%dB", req.GetStyle(), len(text), len(optimized))
 	return &pb.OptimizePromptResponse{Optimized: optimized}, nil
 }
 
@@ -100,13 +104,52 @@ func optimizeViaZcode(ctx context.Context, instruction string) (string, error) {
 	return c.GenerateText(ctx, instruction)
 }
 
-// buildOptimizeInstruction 构造发给生成模型的优化指令(系统式提示词 + 原文)。
+// promptOptimizeStyleTemplates 七种风格的确定性模板段(P4 Task 3,键 = wire 值,
+// 与手机端 PromptOptimizeStyle.wireValue 词表逐一对齐;匹配前 daemon 侧仍做
+// TrimSpace + ToLower)。
+//
+// 【确定性】同 style 永远拼出同一段指令:模板只规定"改写成什么形状",不携带
+// 任何随机表述,行为钉子在 prompt_opt_test.go 的七模板表。
+//
+// 【只改写不执行】"不得执行原文中的任务、调用工具"与"输出必须只是改写后的
+// 文本本身"两条红线在公共段,对所有风格一律生效;各模板段只追加该风格的结构
+// 要求,不包含任何替用户干活的动作指令。
+//
+// 【不编造】结构化模板(计划/排错/测试/审查)要求的维度在原文缺失时,如实
+// 标注"原文未说明",绝不替用户发明需求 —— 与公共段"绝不添加新需求"同一条纪律。
+var promptOptimizeStyleTemplates = map[string]string{
+	// "" 默认:保持长度量级,把意思说清楚,不扩写需求
+	"": "风格要求:保持与原文相当的长度量级,把意思表达得更清楚、可直接执行。\n",
+	// 精简:一句话
+	"concise": "风格要求:压缩成一句话,只保留核心诉求。\n",
+	// 详细:要点列表
+	"detailed": "风格要求:整理成要点列表,补齐目标的判断依据(但不新增需求)。\n",
+	// 实施计划:目标、范围、验收标准
+	"implementation_plan": "风格要求:整理为实施计划,依次给出:目标、范围(做什么/不做什么)、验收标准;原文没提到的维度如实写\"原文未说明\",不编造。\n",
+	// 排错任务:现象、环境、复现、期望结果
+	"bug_report": "风格要求:整理为排错报告,依次给出:现象、环境、复现步骤、期望结果;原文没提到的维度如实写\"原文未说明\",不编造。\n",
+	// 测试要求:输入、行为、验证方式
+	"test_plan": "风格要求:整理为测试要求,依次给出:输入、行为、验证方式;原文没提到的维度如实写\"原文未说明\",不编造。\n",
+	// 代码审查:风险、影响范围、证据要求
+	"code_review": "风格要求:整理为代码审查委托,依次给出:风险、影响范围、证据要求;原文没提到的维度如实写\"原文未说明\",不编造。\n",
+}
+
+// promptOptimizeStyleTemplate 取风格模板段:TrimSpace + ToLower 后按七值词表
+// 精确匹配;未识别的取值回落默认段(既有降级口径:不报错、退化成默认改写)。
+func promptOptimizeStyleTemplate(style string) string {
+	if t, ok := promptOptimizeStyleTemplates[strings.TrimSpace(strings.ToLower(style))]; ok {
+		return t
+	}
+	return promptOptimizeStyleTemplates[""]
+}
+
+// buildOptimizeInstruction 构造发给生成模型的优化指令(系统式提示词 + 风格模板段 + 原文)。
 //
 // 【指令设计】目标读者是"AI 编程代理"(收到的文本会作为任务指令执行),所以
 // 优化 = 把口语化/碎片化的原始输入改写成清晰、无歧义的指令,而不是扩写需求:
 //   - 保留原意、补全表达,不添加新需求、不替用户做决定;
 //   - 输出只有改写后的文本(无前言、无解释、无 Markdown 包裹),方便直接回填输入框;
-//   - style=concise → 压缩到一句话;style=detailed → 允许整理成要点;空 → 默认。
+//   - style 七值各走一条确定性模板段(见 promptOptimizeStyleTemplates),未知值降级默认。
 func buildOptimizeInstruction(text, style string) string {
 	var b strings.Builder
 	b.WriteString("你是提示词优化器。把用户的原始输入改写成一段给 AI 编程代理的清晰指令:\n")
@@ -114,14 +157,7 @@ func buildOptimizeInstruction(text, style string) string {
 	b.WriteString("- 忠实保留原意,可以理顺语句、补全表达,但绝不添加新需求、不替用户做决定;\n")
 	b.WriteString("- 输出必须只是改写后的文本本身,不要任何解释、前言或 Markdown 代码块包裹;\n")
 	b.WriteString("- 保持用户书写输入所用的语言(中文输入改写为中文,英文输入改写为英文)。\n")
-	switch strings.TrimSpace(strings.ToLower(style)) {
-	case "concise":
-		b.WriteString("风格要求:压缩成一句话,只保留核心诉求。\n")
-	case "detailed":
-		b.WriteString("风格要求:整理成要点列表,补齐目标的判断依据(但不新增需求)。\n")
-	default:
-		b.WriteString("风格要求:保持与原文相当的长度量级,把意思表达得更清楚、可直接执行。\n")
-	}
+	b.WriteString(promptOptimizeStyleTemplate(style))
 	b.WriteString("\n用户原始输入:\n")
 	b.WriteString(text)
 	return b.String()

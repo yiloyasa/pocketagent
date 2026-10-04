@@ -54,6 +54,10 @@ import pocketagent.v1.GetCollabSessionRequest
 import pocketagent.v1.ListCollabSessionsRequest
 import pocketagent.v1.RetryCollabMemberRequest
 import pocketagent.v1.WatchCollabSessionRequest
+import pocketagent.v1.GetThreadRequest
+import pocketagent.v1.ListModelsRequest
+import pocketagent.v1.ListModelsResponse
+import pocketagent.v1.SetDefaultModelRequest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -1390,6 +1394,42 @@ object AgentConnection {
     /** MCP 等慢调用:codex 冷启动可能 30s+,给足 90 秒 */
     fun modelServiceSlow(): ModelServiceGrpc.ModelServiceBlockingStub =
         ModelServiceGrpc.newBlockingStub(channel()).withDeadlineAfter(90, java.util.concurrent.TimeUnit.SECONDS)
+
+    // ================= 有效模型选择(P3 Task 3:typed selection access) =================
+    //
+    // 封装纪律与协同会话(getCollabSession 一族)一致:单向 RPC + 既有 deadline 档位,
+    // 这里只做"一问一写"的薄封装;缓存标注/乐观更新/失败回滚/真值回填全部归
+    // ui.model.ModelSelectionRepository,本文件不持有选择状态。
+    // 【轮次红线】这里没有任何取消/改写轮次的通道 —— 切换选择绝不触碰运行中的 Turn,
+    // 生效时机(applies_to_next_turn)由 daemon 的 EffectiveModelSelection 真值说话。
+
+    /** 取会话整卡真值(含 effective_selection(24);旧 daemon 缺省由 reducer 兜底)。 */
+    fun getThread(threadId: String): pocketagent.v1.Thread =
+        threadService().getThread(
+            GetThreadRequest.newBuilder().setThreadId(threadId).build()
+        )
+
+    /**
+     * 取模型表 + 本上下文解析后的有效选择(effective_selection(5),带
+     * available_efforts)。走 [modelServiceSlow]:与 ChatScreen 既有 ListModels
+     * 同档,codex 冷启动可能 30s+。
+     */
+    fun listModelsWithSelection(agentId: String, threadId: String): ListModelsResponse =
+        modelServiceSlow().listModels(
+            ListModelsRequest.newBuilder()
+                .setAgentId(agentId)
+                .setThreadId(threadId)
+                .build()
+        )
+
+    /** 写 App 侧默认模型(daemon 落库 → APP_DEFAULT 来源;空串 = 跟随桌面,合法取值)。
+     *  命名避开 defaultModel 属性生成的 JVM setter setDefaultModel(String)——
+     *  与 setGlobalModel 同款陷阱(见上方注释)。 */
+    fun pushAppDefaultModel(modelId: String) {
+        modelService().setDefaultModel(
+            SetDefaultModelRequest.newBuilder().setModelId(modelId).build()
+        )
+    }
 
     /**
      * 运行时控制面(W11):预算/协同策略/未知事件/运行时形态。

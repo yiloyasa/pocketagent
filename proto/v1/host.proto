@@ -6,6 +6,10 @@ option java_multiple_files = true;
 
 option go_package = "github.com/pocketagent/daemon/internal/gen/pocketagent/v1;pocketagentv1";
 
+// 模型域真值消息在本文件只作引用(EffectiveModelSelection),定义归 model.proto;
+// 同 package 内 import 后按非限定名引用(与 thread.proto 同款形态)。
+import "v1/model.proto";
+
 // ============ 主机/会话服务:发现、认证、心跳 ============
 
 service HostService {
@@ -107,6 +111,13 @@ message HostEvent {
   reserved "workspace_changed", "model_ready", "update_available";
   oneof event {
     TurnFinishedNotification turn_finished = 5; // 后台 turn 完成(推送场景)
+    // ---- 线程有效选择变化通知(只增:7,P3-T2;字段号分配登记见 proto/FIELD_ALLOCATIONS.md)----
+    // 某线程的"实际生效"模型/思考强度选择发生变化(手机端改的、电脑端改的、
+    // 委派指定落定,都归一成这一条)。【推送纪律】daemon 重启后首轮**不发**本
+    // 事件 —— UI 的初始真值来自 TurnStarted.source / 查询型 RPC(effective_
+    // selection),通知只负责"之后的增量",两路真值不互相兜底。旧 daemon 不发
+    // 本分支,手机端按"无此通知"处理,不报错。
+    SelectionChangedNotification selection_changed = 7;
   }
   // P1-5:全局单调事件序号(daemon events.jsonl),与 TurnServerMessage.sequence
   // 同一序列空间;0 = 未入事件库(旧 daemon)。
@@ -116,6 +127,17 @@ message HostEvent {
 message TurnFinishedNotification {
   string thread_id = 1;
   string summary = 2; // 一句话结果摘要,可直接进通知栏
+}
+
+// SelectionChangedNotification 某线程的"实际生效"模型/思考强度选择发生变化
+// (只增,P3-T2)。selection 是**整包真值**(EffectiveModelSelection 原样,含
+// 来源/确认态/下一轮生效标记),不是 diff —— 客户端整包覆盖本地缓存即可。
+// daemon 重启后首轮不发:初始真值以 TurnStarted.source / 查询型 RPC 为准,
+// 本通知只承担之后的增量(见 HostEvent.selection_changed 的推送纪律)。
+message SelectionChangedNotification {
+  string thread_id = 1; // 发生变化的线程 id(daemon 本地线程 id)
+  // 变化后的有效选择整包;空 = 该线程选择被清回默认(同样是合法状态)。
+  EffectiveModelSelection selection = 2;
 }
 
 // ---- P2:电脑 dev server 探测(手机一键预览,对齐原作 BrowserService)----

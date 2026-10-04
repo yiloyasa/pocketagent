@@ -6,6 +6,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -95,6 +97,15 @@ type ExternalSessionRef struct {
 
 // StoredMessage 是一轮对话的一条记录(用户输入或助手回复)。
 type StoredMessage struct {
+	// ID 消息的稳定身份("msg-" 前缀,生成规则见 deriveMessageID)。新消息在
+	// 写路径落库时生成;旧数据(无 id 字段)在 Load 装载后按 threadID+index+
+	// createdAt+内容摘要迁移补齐。一经赋值终身不变 —— 搜索定位/历史回跳/
+	// 跨重启锚点都拿它当身份,数组下标会随归档裁剪与回滚截断漂移,不配当身份。
+	// JSON tag 风格与 collab archive 先例一致(collab_store.go)。
+	ID string `json:"id"`
+	// TurnID 该消息所属轮次的 id;旧数据与无轮次上下文的消息为空(omitempty:
+	// 落盘省略,旧版本读回零感知)。server 层各写入口的 turn id 透传接线归波 2。
+	TurnID    string `json:"turn_id,omitempty"`
 	Role      string // "user" | "assistant"
 	Blocks    []pb.ContentBlock
 	CreatedAt int64
@@ -103,13 +114,15 @@ type StoredMessage struct {
 // proto 消息里带 oneof(文本/图片/工具调用),encoding/json 处理不了,
 // 所以消息块用 protojson 序列化——这是 protobuf 官方的 JSON 格式。
 type storedMessageJSON struct {
+	ID        string            `json:"id"`
+	TurnID    string            `json:"turn_id,omitempty"`
 	Role      string            `json:"role"`
 	Blocks    []json.RawMessage `json:"blocks"`
 	CreatedAt int64             `json:"created_at"`
 }
 
 func (m StoredMessage) MarshalJSON() ([]byte, error) {
-	out := storedMessageJSON{Role: m.Role, CreatedAt: m.CreatedAt}
+	out := storedMessageJSON{ID: m.ID, TurnID: m.TurnID, Role: m.Role, CreatedAt: m.CreatedAt}
 	for i := range m.Blocks {
 		raw, err := protojson.Marshal(&m.Blocks[i])
 		if err != nil {
@@ -125,6 +138,7 @@ func (m *StoredMessage) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &in); err != nil {
 		return err
 	}
+	m.ID, m.TurnID = in.ID, in.TurnID
 	m.Role, m.CreatedAt = in.Role, in.CreatedAt
 	for _, raw := range in.Blocks {
 		// 直接反序列化到切片槽位,避免 protobuf 消息按值拷贝(内嵌 MessageState 含锁)。
@@ -134,6 +148,60 @@ func (m *StoredMessage) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// ============ 消息稳定身份(P3 Task5)============
+//
+// 【为什么消息要有稳定 ID】搜索命中定位、历史回跳、跨重启锚点都靠它:数组下标
+// 会随归档裁剪/回滚截断漂移,同轮 created_at 又可能并列,都不配当身份。
+// 【幂等红线】ID 只在"空"时生成,已有非空 ID 一律原样保留 —— 重复启动、重复
+// 迁移都不改变既有 ID。生成函数自身是纯函数(无随机源):同 thread 同位置同内容
+// 必得同 ID,所以"迁移后尚未落盘进程就退了"的场景,下次启动也能推出同一批 ID,
+// 不依赖写盘时机。
+// 【生成规则】"msg-" + hex(sha256(threadID|index|createdAt|contentHash) 前 16 字节)。
+// index 取该消息**赋值那一刻**在数组中的位置(旧数据 = Load 装载后的下标,新消息
+// = 首次落库时的尾部下标)。本库消息数组实际只做尾部追加/尾部截断(server 层
+// fork/rollback/import 语义),赋值后即便下标漂移也不会改写已赋的 ID(只补空)。
+// ensureMessageIDsLocked 给 msgs 中所有空 ID 的消息补 ID(幂等,只补空)。
+// 必须在 s.mu 持锁下调用(直接改写共享切片)。
+func ensureMessageIDsLocked(threadID string, msgs []StoredMessage) {
+	for i := range msgs {
+		if msgs[i].ID != "" {
+			continue // 幂等红线:已有 ID 原样保留。
+		}
+		msgs[i].ID = deriveMessageID(threadID, i, msgs[i].CreatedAt, storedMessageContentHash(&msgs[i]))
+	}
+}
+
+// deriveMessageID 按 spec 固定拼串规则推出消息 ID:任何字段值变化(换线程、换
+// 位置、换时间、换内容)都会得到不同 ID —— threadID 参与保证了跨线程同内容消息
+// 的 ID 必然不同。
+func deriveMessageID(threadID string, index int, createdAt int64, contentHash string) string {
+	seed := fmt.Sprintf("%s|%d|%d|%s", threadID, index, createdAt, contentHash)
+	sum := sha256.Sum256([]byte(seed))
+	return "msg-" + hex.EncodeToString(sum[:16])
+}
+
+// storedMessageContentHash 对 Blocks 做确定性序列化摘要:逐块 protojson,块间以
+// "字节长度前缀+分号"拼接后整体 sha256(长度前缀消除块边界拼接歧义),返回十六进制。
+//
+// 【为什么选 protojson 而不是手写逐字段摘要】ContentBlock 是纯 oneof(text/image/
+// tool_call/tool_result/thinking)的 proto3 消息,无 map 字段、无 required,protojson
+// 在同一二进制内输出确定;且它就是本包既有的落盘序列化(MarshalJSON 同款),不
+// 引入第二套序列化事实。即使未来 protobuf-go 版本改变输出格式,也只影响"尚未赋
+// ID 的消息"的迁移结果 —— 已落库 ID 原样保留,幂等红线不受影响。
+// protojson 失败理论上不可达(proto3 无 required),一旦发生也用确定性占位文本,
+// 绝不 panic、绝不引入随机性。
+func storedMessageContentHash(m *StoredMessage) string {
+	h := sha256.New()
+	for i := range m.Blocks {
+		raw, err := protojson.Marshal(&m.Blocks[i])
+		if err != nil {
+			raw = []byte(fmt.Sprintf("unmarshalable-block-%d", i))
+		}
+		fmt.Fprintf(h, "%d:%s;", len(raw), raw)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // TurnSettings 是"新建会话那一刻生效"的设置快照:对齐会真正路由进 codex turn
@@ -287,8 +355,12 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 	if s.data.Threads == nil {
 		s.data.Threads = map[string]*Thread{}
 	}
-	for _, t := range s.data.Threads {
+	for id, t := range s.data.Threads {
 		t.generation = new(byte)
+		// 【P3 Task5 消息身份迁移】装载后统一给旧数据的消息补 ID(幂等,只补空):
+		// 只改内存、不在启动路径上写盘,启动不被阻塞 —— 下次任一保存(saveLocked)
+		// 顺带落盘生效;就算一直不保存,生成函数的确定性也保证重启后补出同一批 ID。
+		ensureMessageIDsLocked(id, t.Messages)
 	}
 	// 【P2-5 启动备份】每次成功加载,把刚读到的好版本复制为 .bak("上一次好
 	// 版本"),下次损坏自愈时日志据此指路。自动从 .bak 恢复刻意不做:把旧数据
@@ -351,6 +423,13 @@ func backupLastGood(path string, raw []byte) {
 }
 
 func (s *FileStore) saveLocked() error {
+	// 【写路径双保险】所有落库入口(Create/Update/…)汇聚于此:把新写入/漏赋 ID
+	// 的消息在落盘前补齐(幂等,只补空),新消息因此不依赖"先经过 Load 迁移"。
+	// 放在归档之前 —— 溢出归档的 jsonl 行与主文件必须携带同一套 ID,归档行才是
+	// 可定位的历史。
+	for id, t := range s.data.Threads {
+		ensureMessageIDsLocked(id, t.Messages)
+	}
 	// 落库前先归档超限的旧消息(见 store_archive.go):追加写归档成功才裁剪
 	// 内存到最近 N 条,归档失败则原样保留 —— 主文件只保留最近 N 条的前提是
 	// 溢出条目已有旁车副本,顺序不可颠倒。
@@ -459,6 +538,9 @@ func cloneMessages(in []StoredMessage) []StoredMessage {
 	}
 	out := make([]StoredMessage, len(in))
 	for i := range in {
+		// ID/TurnID 是 store 托管的身份元数据,clone(Get 快照/Update 合并都走这里)
+		// 必须原样携带,否则快照一路丢 ID,替换式合并会把已赋的 ID 洗掉。
+		out[i].ID, out[i].TurnID = in[i].ID, in[i].TurnID
 		out[i].Role, out[i].CreatedAt = in[i].Role, in[i].CreatedAt
 		if in[i].Blocks != nil {
 			out[i].Blocks = make([]pb.ContentBlock, len(in[i].Blocks))
@@ -470,12 +552,19 @@ func cloneMessages(in []StoredMessage) []StoredMessage {
 	return out
 }
 
+// messagesEqual 决定合并语义下"消息历史是否变了"。
+// 【刻意不比较 ID】ID 是 store 托管的身份元数据,不归调用方管:store 在落库时
+// 才给新消息补 ID,调用方手里的快照(新消息尚无 ID)与 store 里的状态内容一致 ——
+// 若把 ID 算进相等性,替换式合并(mergeThread 的重写分支)会被误判成
+// "history changed concurrently" 而报假错。
+// 【必须比较 TurnID】它是调用方写入的轮次归属,属于消息事实的一部分:不比较的
+// 话,"只给既有消息补 turn 标注"的更新会被判成无变化,标注在合并时被静默丢弃。
 func messagesEqual(a, b []StoredMessage) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].Role != b[i].Role || a[i].CreatedAt != b[i].CreatedAt || len(a[i].Blocks) != len(b[i].Blocks) {
+		if a[i].Role != b[i].Role || a[i].CreatedAt != b[i].CreatedAt || a[i].TurnID != b[i].TurnID || len(a[i].Blocks) != len(b[i].Blocks) {
 			return false
 		}
 		for j := range a[i].Blocks {

@@ -1709,8 +1709,15 @@ type ListModelsResponse struct {
 	CurrentModelId string                 `protobuf:"bytes,2,opt,name=current_model_id,json=currentModelId,proto3" json:"current_model_id,omitempty"`
 	CurrentEffort  *string                `protobuf:"bytes,3,opt,name=current_effort,json=currentEffort,proto3,oneof" json:"current_effort,omitempty"`
 	StateError     string                 `protobuf:"bytes,4,opt,name=state_error,json=stateError,proto3" json:"state_error,omitempty"` // metadata unavailable; never a fabricated unsupported capability
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ---- 有效模型选择(只增,字段号 5;分配登记见 proto/FIELD_ALLOCATIONS.md,
+	// 2026-10-04 会话选择与历史体验计划 Task 1)----
+	// 本请求上下文下解析后的选择真值:daemon 把"会话覆盖 → App 默认 → 桌面默认 →
+	// agent 原生当前值"四级来源收敛成一个结论(见 EffectiveModelSelection),
+	// 手机端只渲染它,不再让多个可变全局状态互相覆盖。消息缺席 = 旧 daemon,
+	// 客户端按 current_model_id(2)/current_effort(3) 兜底显示,不报错。
+	EffectiveSelection *EffectiveModelSelection `protobuf:"bytes,5,opt,name=effective_selection,json=effectiveSelection,proto3" json:"effective_selection,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ListModelsResponse) Reset() {
@@ -1769,6 +1776,13 @@ func (x *ListModelsResponse) GetStateError() string {
 		return x.StateError
 	}
 	return ""
+}
+
+func (x *ListModelsResponse) GetEffectiveSelection() *EffectiveModelSelection {
+	if x != nil {
+		return x.EffectiveSelection
+	}
+	return nil
 }
 
 type ModelInfo struct {
@@ -1876,6 +1890,133 @@ func (x *ModelInfo) GetAvailableEfforts() []string {
 	return nil
 }
 
+// EffectiveModelSelection 一个上下文下"实际生效"的模型/思考强度选择及其来源。
+//
+// 【为什么要有这条消息】手机端原来有 selectedModel/defaultModel/threadModels/
+// runtimeModel 好几个可变全局状态互相覆盖,谁也说不清最后生效的是哪个、为什么。
+// daemon 按优先级把四级来源解析成一个结论,连同"何时生效、用户是否确认过、
+// 为什么"一起下发;UI 只如实渲染,不再自己猜。
+//
+// 【零值语义(钉死,勿改)】model_id / effort 为空串 = "跟随默认",是**合法状态**,
+// 不是错误,更不是"未设置":客户端不得把空串当异常,也不得擅自改写成具体值
+// (一旦写死,用户就永远回不到"跟随默认" —— 与 SetCodexSettings.model="" 的
+// 教训同源,见本文件 SetCodexSettings 的 presence 语义注释)。
+type EffectiveModelSelection struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 归属的 agent id("codex" / "pi" / …);空 = 当前默认 agent。
+	AgentId string `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// 生效的模型 id(形如 "agent/model-id");空 = 跟随默认(合法取值,见零值语义)。
+	ModelId string `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	// 生效的思考强度(low / medium / high / …);空 = 跟随默认(合法取值)。
+	Effort string `protobuf:"bytes,3,opt,name=effort,proto3" json:"effort,omitempty"`
+	// 该结论来自哪一级来源(稳定字符串,新增来源不改 proto):
+	//   thread_override — 本会话显式覆盖(手机端选择/委派指定)
+	//   app_default     — App 侧默认(daemon 落库的默认模型)
+	//   desktop_default — 桌面端默认(如 codex config 的当前值)
+	//   native_current  — agent 原生当前值(会话实挂的模型/强度)
+	// 客户端遇到不认识的取值按"未知来源"如实显示原文,不得报错。
+	Source string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
+	// true = 这份选择尚未落进任何已开始的轮次,将从**下一轮**生效
+	// (运行中切换的正确口径:绝不改写正在运行的 Turn)。
+	AppliesToNextTurn bool `protobuf:"varint,5,opt,name=applies_to_next_turn,json=appliesToNextTurn,proto3" json:"applies_to_next_turn,omitempty"`
+	// 用户是否对这份配置显式确认过(区分"系统替你选的"与"你选过的")。
+	ConfigurationConfirmed bool `protobuf:"varint,6,opt,name=configuration_confirmed,json=configurationConfirmed,proto3" json:"configuration_confirmed,omitempty"`
+	// 人话解释:为什么生效的是这个(如"桌面默认 glm-5.3,本会话未覆盖")。
+	// UI 直接展示;空 = 无解释。
+	Explanation string `protobuf:"bytes,7,opt,name=explanation,proto3" json:"explanation,omitempty"`
+	// 当前模型实际可用的思考强度档位(daemon 从 provider 动态能力填充;
+	// 空 = 客户端用内置默认档)。与 ModelInfo.available_efforts(8) 同源口径。
+	AvailableEfforts []string `protobuf:"bytes,8,rep,name=available_efforts,json=availableEfforts,proto3" json:"available_efforts,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *EffectiveModelSelection) Reset() {
+	*x = EffectiveModelSelection{}
+	mi := &file_v1_model_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EffectiveModelSelection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EffectiveModelSelection) ProtoMessage() {}
+
+func (x *EffectiveModelSelection) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_model_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EffectiveModelSelection.ProtoReflect.Descriptor instead.
+func (*EffectiveModelSelection) Descriptor() ([]byte, []int) {
+	return file_v1_model_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *EffectiveModelSelection) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *EffectiveModelSelection) GetModelId() string {
+	if x != nil {
+		return x.ModelId
+	}
+	return ""
+}
+
+func (x *EffectiveModelSelection) GetEffort() string {
+	if x != nil {
+		return x.Effort
+	}
+	return ""
+}
+
+func (x *EffectiveModelSelection) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *EffectiveModelSelection) GetAppliesToNextTurn() bool {
+	if x != nil {
+		return x.AppliesToNextTurn
+	}
+	return false
+}
+
+func (x *EffectiveModelSelection) GetConfigurationConfirmed() bool {
+	if x != nil {
+		return x.ConfigurationConfirmed
+	}
+	return false
+}
+
+func (x *EffectiveModelSelection) GetExplanation() string {
+	if x != nil {
+		return x.Explanation
+	}
+	return ""
+}
+
+func (x *EffectiveModelSelection) GetAvailableEfforts() []string {
+	if x != nil {
+		return x.AvailableEfforts
+	}
+	return nil
+}
+
 type SetDefaultModelRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ModelId       string                 `protobuf:"bytes,1,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
@@ -1885,7 +2026,7 @@ type SetDefaultModelRequest struct {
 
 func (x *SetDefaultModelRequest) Reset() {
 	*x = SetDefaultModelRequest{}
-	mi := &file_v1_model_proto_msgTypes[22]
+	mi := &file_v1_model_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1897,7 +2038,7 @@ func (x *SetDefaultModelRequest) String() string {
 func (*SetDefaultModelRequest) ProtoMessage() {}
 
 func (x *SetDefaultModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[22]
+	mi := &file_v1_model_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1910,7 +2051,7 @@ func (x *SetDefaultModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDefaultModelRequest.ProtoReflect.Descriptor instead.
 func (*SetDefaultModelRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{22}
+	return file_v1_model_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SetDefaultModelRequest) GetModelId() string {
@@ -1930,7 +2071,7 @@ type TestModelRequest struct {
 
 func (x *TestModelRequest) Reset() {
 	*x = TestModelRequest{}
-	mi := &file_v1_model_proto_msgTypes[23]
+	mi := &file_v1_model_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1942,7 +2083,7 @@ func (x *TestModelRequest) String() string {
 func (*TestModelRequest) ProtoMessage() {}
 
 func (x *TestModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[23]
+	mi := &file_v1_model_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1955,7 +2096,7 @@ func (x *TestModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestModelRequest.ProtoReflect.Descriptor instead.
 func (*TestModelRequest) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{23}
+	return file_v1_model_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TestModelRequest) GetModelId() string {
@@ -1984,7 +2125,7 @@ type TestModelResponse struct {
 
 func (x *TestModelResponse) Reset() {
 	*x = TestModelResponse{}
-	mi := &file_v1_model_proto_msgTypes[24]
+	mi := &file_v1_model_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1996,7 +2137,7 @@ func (x *TestModelResponse) String() string {
 func (*TestModelResponse) ProtoMessage() {}
 
 func (x *TestModelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_model_proto_msgTypes[24]
+	mi := &file_v1_model_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2009,7 +2150,7 @@ func (x *TestModelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestModelResponse.ProtoReflect.Descriptor instead.
 func (*TestModelResponse) Descriptor() ([]byte, []int) {
-	return file_v1_model_proto_rawDescGZIP(), []int{24}
+	return file_v1_model_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TestModelResponse) GetOk() bool {
@@ -2197,13 +2338,14 @@ const file_v1_model_proto_rawDesc = "" +
 	"\x11ListModelsRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x18\n" +
 	"\arefresh\x18\x02 \x01(\bR\arefresh\x12\x1b\n" +
-	"\tthread_id\x18\x03 \x01(\tR\bthreadId\"\xd1\x01\n" +
+	"\tthread_id\x18\x03 \x01(\tR\bthreadId\"\xab\x02\n" +
 	"\x12ListModelsResponse\x121\n" +
 	"\x06models\x18\x01 \x03(\v2\x19.pocketagent.v1.ModelInfoR\x06models\x12(\n" +
 	"\x10current_model_id\x18\x02 \x01(\tR\x0ecurrentModelId\x12*\n" +
 	"\x0ecurrent_effort\x18\x03 \x01(\tH\x00R\rcurrentEffort\x88\x01\x01\x12\x1f\n" +
 	"\vstate_error\x18\x04 \x01(\tR\n" +
-	"stateErrorB\x11\n" +
+	"stateError\x12X\n" +
+	"\x13effective_selection\x18\x05 \x01(\v2'.pocketagent.v1.EffectiveModelSelectionR\x12effectiveSelectionB\x11\n" +
 	"\x0f_current_effort\"\xa2\x02\n" +
 	"\tModelInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
@@ -2213,6 +2355,15 @@ const file_v1_model_proto_rawDesc = "" +
 	"\x11supports_thinking\x18\x05 \x01(\bR\x10supportsThinking\x12'\n" +
 	"\x0fsupports_images\x18\x06 \x01(\bR\x0esupportsImages\x12\x1c\n" +
 	"\tavailable\x18\a \x01(\bR\tavailable\x12+\n" +
+	"\x11available_efforts\x18\b \x03(\tR\x10availableEfforts\"\xb8\x02\n" +
+	"\x17EffectiveModelSelection\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x19\n" +
+	"\bmodel_id\x18\x02 \x01(\tR\amodelId\x12\x16\n" +
+	"\x06effort\x18\x03 \x01(\tR\x06effort\x12\x16\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\x12/\n" +
+	"\x14applies_to_next_turn\x18\x05 \x01(\bR\x11appliesToNextTurn\x127\n" +
+	"\x17configuration_confirmed\x18\x06 \x01(\bR\x16configurationConfirmed\x12 \n" +
+	"\vexplanation\x18\a \x01(\tR\vexplanation\x12+\n" +
 	"\x11available_efforts\x18\b \x03(\tR\x10availableEfforts\"3\n" +
 	"\x16SetDefaultModelRequest\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\"E\n" +
@@ -2249,7 +2400,7 @@ func file_v1_model_proto_rawDescGZIP() []byte {
 	return file_v1_model_proto_rawDescData
 }
 
-var file_v1_model_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_v1_model_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_v1_model_proto_goTypes = []any{
 	(*GetCodexUsageRequest)(nil),           // 0: pocketagent.v1.GetCodexUsageRequest
 	(*RateLimitWindow)(nil),                // 1: pocketagent.v1.RateLimitWindow
@@ -2273,10 +2424,11 @@ var file_v1_model_proto_goTypes = []any{
 	(*ListModelsRequest)(nil),              // 19: pocketagent.v1.ListModelsRequest
 	(*ListModelsResponse)(nil),             // 20: pocketagent.v1.ListModelsResponse
 	(*ModelInfo)(nil),                      // 21: pocketagent.v1.ModelInfo
-	(*SetDefaultModelRequest)(nil),         // 22: pocketagent.v1.SetDefaultModelRequest
-	(*TestModelRequest)(nil),               // 23: pocketagent.v1.TestModelRequest
-	(*TestModelResponse)(nil),              // 24: pocketagent.v1.TestModelResponse
-	(*Empty)(nil),                          // 25: pocketagent.v1.Empty
+	(*EffectiveModelSelection)(nil),        // 22: pocketagent.v1.EffectiveModelSelection
+	(*SetDefaultModelRequest)(nil),         // 23: pocketagent.v1.SetDefaultModelRequest
+	(*TestModelRequest)(nil),               // 24: pocketagent.v1.TestModelRequest
+	(*TestModelResponse)(nil),              // 25: pocketagent.v1.TestModelResponse
+	(*Empty)(nil),                          // 26: pocketagent.v1.Empty
 }
 var file_v1_model_proto_depIdxs = []int32{
 	1,  // 0: pocketagent.v1.CodexUsage.primary:type_name -> pocketagent.v1.RateLimitWindow
@@ -2289,29 +2441,30 @@ var file_v1_model_proto_depIdxs = []int32{
 	14, // 7: pocketagent.v1.ListAgentConfigOptionsResponse.items:type_name -> pocketagent.v1.AgentConfigOption
 	17, // 8: pocketagent.v1.ListMcpServersResponse.servers:type_name -> pocketagent.v1.McpServerStatus
 	21, // 9: pocketagent.v1.ListModelsResponse.models:type_name -> pocketagent.v1.ModelInfo
-	19, // 10: pocketagent.v1.ModelService.ListModels:input_type -> pocketagent.v1.ListModelsRequest
-	22, // 11: pocketagent.v1.ModelService.SetDefaultModel:input_type -> pocketagent.v1.SetDefaultModelRequest
-	23, // 12: pocketagent.v1.ModelService.TestModel:input_type -> pocketagent.v1.TestModelRequest
-	6,  // 13: pocketagent.v1.ModelService.GetCodexSettings:input_type -> pocketagent.v1.GetCodexSettingsRequest
-	11, // 14: pocketagent.v1.ModelService.SetCodexSettings:input_type -> pocketagent.v1.SetCodexSettingsRequest
-	16, // 15: pocketagent.v1.ModelService.ListMcpServers:input_type -> pocketagent.v1.ListMcpServersRequest
-	0,  // 16: pocketagent.v1.ModelService.GetCodexUsage:input_type -> pocketagent.v1.GetCodexUsageRequest
-	3,  // 17: pocketagent.v1.ModelService.ListCodexCapabilities:input_type -> pocketagent.v1.ListCodexCapabilitiesRequest
-	12, // 18: pocketagent.v1.ModelService.ListAgentConfigOptions:input_type -> pocketagent.v1.ListAgentConfigOptionsRequest
-	20, // 19: pocketagent.v1.ModelService.ListModels:output_type -> pocketagent.v1.ListModelsResponse
-	25, // 20: pocketagent.v1.ModelService.SetDefaultModel:output_type -> pocketagent.v1.Empty
-	24, // 21: pocketagent.v1.ModelService.TestModel:output_type -> pocketagent.v1.TestModelResponse
-	7,  // 22: pocketagent.v1.ModelService.GetCodexSettings:output_type -> pocketagent.v1.CodexSettings
-	7,  // 23: pocketagent.v1.ModelService.SetCodexSettings:output_type -> pocketagent.v1.CodexSettings
-	18, // 24: pocketagent.v1.ModelService.ListMcpServers:output_type -> pocketagent.v1.ListMcpServersResponse
-	2,  // 25: pocketagent.v1.ModelService.GetCodexUsage:output_type -> pocketagent.v1.CodexUsage
-	5,  // 26: pocketagent.v1.ModelService.ListCodexCapabilities:output_type -> pocketagent.v1.ListCodexCapabilitiesResponse
-	15, // 27: pocketagent.v1.ModelService.ListAgentConfigOptions:output_type -> pocketagent.v1.ListAgentConfigOptionsResponse
-	19, // [19:28] is the sub-list for method output_type
-	10, // [10:19] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	22, // 10: pocketagent.v1.ListModelsResponse.effective_selection:type_name -> pocketagent.v1.EffectiveModelSelection
+	19, // 11: pocketagent.v1.ModelService.ListModels:input_type -> pocketagent.v1.ListModelsRequest
+	23, // 12: pocketagent.v1.ModelService.SetDefaultModel:input_type -> pocketagent.v1.SetDefaultModelRequest
+	24, // 13: pocketagent.v1.ModelService.TestModel:input_type -> pocketagent.v1.TestModelRequest
+	6,  // 14: pocketagent.v1.ModelService.GetCodexSettings:input_type -> pocketagent.v1.GetCodexSettingsRequest
+	11, // 15: pocketagent.v1.ModelService.SetCodexSettings:input_type -> pocketagent.v1.SetCodexSettingsRequest
+	16, // 16: pocketagent.v1.ModelService.ListMcpServers:input_type -> pocketagent.v1.ListMcpServersRequest
+	0,  // 17: pocketagent.v1.ModelService.GetCodexUsage:input_type -> pocketagent.v1.GetCodexUsageRequest
+	3,  // 18: pocketagent.v1.ModelService.ListCodexCapabilities:input_type -> pocketagent.v1.ListCodexCapabilitiesRequest
+	12, // 19: pocketagent.v1.ModelService.ListAgentConfigOptions:input_type -> pocketagent.v1.ListAgentConfigOptionsRequest
+	20, // 20: pocketagent.v1.ModelService.ListModels:output_type -> pocketagent.v1.ListModelsResponse
+	26, // 21: pocketagent.v1.ModelService.SetDefaultModel:output_type -> pocketagent.v1.Empty
+	25, // 22: pocketagent.v1.ModelService.TestModel:output_type -> pocketagent.v1.TestModelResponse
+	7,  // 23: pocketagent.v1.ModelService.GetCodexSettings:output_type -> pocketagent.v1.CodexSettings
+	7,  // 24: pocketagent.v1.ModelService.SetCodexSettings:output_type -> pocketagent.v1.CodexSettings
+	18, // 25: pocketagent.v1.ModelService.ListMcpServers:output_type -> pocketagent.v1.ListMcpServersResponse
+	2,  // 26: pocketagent.v1.ModelService.GetCodexUsage:output_type -> pocketagent.v1.CodexUsage
+	5,  // 27: pocketagent.v1.ModelService.ListCodexCapabilities:output_type -> pocketagent.v1.ListCodexCapabilitiesResponse
+	15, // 28: pocketagent.v1.ModelService.ListAgentConfigOptions:output_type -> pocketagent.v1.ListAgentConfigOptionsResponse
+	20, // [20:29] is the sub-list for method output_type
+	11, // [11:20] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_v1_model_proto_init() }
@@ -2328,7 +2481,7 @@ func file_v1_model_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_model_proto_rawDesc), len(file_v1_model_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

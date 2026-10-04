@@ -293,6 +293,13 @@ message ListModelsResponse {
   string current_model_id = 2;
   optional string current_effort = 3;
   string state_error = 4; // metadata unavailable; never a fabricated unsupported capability
+  // ---- 有效模型选择(只增,字段号 5;分配登记见 proto/FIELD_ALLOCATIONS.md,
+  // 2026-10-04 会话选择与历史体验计划 Task 1)----
+  // 本请求上下文下解析后的选择真值:daemon 把"会话覆盖 → App 默认 → 桌面默认 →
+  // agent 原生当前值"四级来源收敛成一个结论(见 EffectiveModelSelection),
+  // 手机端只渲染它,不再让多个可变全局状态互相覆盖。消息缺席 = 旧 daemon,
+  // 客户端按 current_model_id(2)/current_effort(3) 兜底显示,不报错。
+  EffectiveModelSelection effective_selection = 5;
 }
 
 message ModelInfo {
@@ -308,6 +315,44 @@ message ModelInfo {
   // (pi:get_available_thinking_levels,随模型变化 —— 实测 glm-5.3 只有
   // low/high/max;会话没挂载时回 pi 全集兜底)。codex/zcode 无动态档位 →
   // 留空 = 手机端用内置默认档(low/medium/high/xhigh)。
+  repeated string available_efforts = 8;
+}
+
+// EffectiveModelSelection 一个上下文下"实际生效"的模型/思考强度选择及其来源。
+//
+// 【为什么要有这条消息】手机端原来有 selectedModel/defaultModel/threadModels/
+// runtimeModel 好几个可变全局状态互相覆盖,谁也说不清最后生效的是哪个、为什么。
+// daemon 按优先级把四级来源解析成一个结论,连同"何时生效、用户是否确认过、
+// 为什么"一起下发;UI 只如实渲染,不再自己猜。
+//
+// 【零值语义(钉死,勿改)】model_id / effort 为空串 = "跟随默认",是**合法状态**,
+// 不是错误,更不是"未设置":客户端不得把空串当异常,也不得擅自改写成具体值
+// (一旦写死,用户就永远回不到"跟随默认" —— 与 SetCodexSettings.model="" 的
+// 教训同源,见本文件 SetCodexSettings 的 presence 语义注释)。
+message EffectiveModelSelection {
+  // 归属的 agent id("codex" / "pi" / …);空 = 当前默认 agent。
+  string agent_id = 1;
+  // 生效的模型 id(形如 "agent/model-id");空 = 跟随默认(合法取值,见零值语义)。
+  string model_id = 2;
+  // 生效的思考强度(low / medium / high / …);空 = 跟随默认(合法取值)。
+  string effort = 3;
+  // 该结论来自哪一级来源(稳定字符串,新增来源不改 proto):
+  //   thread_override — 本会话显式覆盖(手机端选择/委派指定)
+  //   app_default     — App 侧默认(daemon 落库的默认模型)
+  //   desktop_default — 桌面端默认(如 codex config 的当前值)
+  //   native_current  — agent 原生当前值(会话实挂的模型/强度)
+  // 客户端遇到不认识的取值按"未知来源"如实显示原文,不得报错。
+  string source = 4;
+  // true = 这份选择尚未落进任何已开始的轮次,将从**下一轮**生效
+  // (运行中切换的正确口径:绝不改写正在运行的 Turn)。
+  bool applies_to_next_turn = 5;
+  // 用户是否对这份配置显式确认过(区分"系统替你选的"与"你选过的")。
+  bool configuration_confirmed = 6;
+  // 人话解释:为什么生效的是这个(如"桌面默认 glm-5.3,本会话未覆盖")。
+  // UI 直接展示;空 = 无解释。
+  string explanation = 7;
+  // 当前模型实际可用的思考强度档位(daemon 从 provider 动态能力填充;
+  // 空 = 客户端用内置默认档)。与 ModelInfo.available_efforts(8) 同源口径。
   repeated string available_efforts = 8;
 }
 

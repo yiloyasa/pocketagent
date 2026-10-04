@@ -430,6 +430,10 @@ func TestIdleSweepTickerFires(t *testing.T) {
 	t.Cleanup(func() {
 		idleMemorySweepTickNanos.Store(oldTick)
 		srv.stopIdleMemorySweep()
+		// 先停未来的 tick,再等整理循环 goroutine 真正退出(含在飞那次 sweep 的
+		// Compact/Checkpoint 落盘)——否则异步 checkpoint 撞上 t.TempDir() 的
+		// RemoveAll(批次 2 实测:"checkpoints: The directory is not empty")。
+		srv.waitIdleMemorySweepStopped()
 	})
 
 	srv.ensureIdleMemorySweep()

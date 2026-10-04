@@ -609,6 +609,7 @@ type HostEvent struct {
 	// Types that are valid to be assigned to Event:
 	//
 	//	*HostEvent_TurnFinished
+	//	*HostEvent_SelectionChanged
 	Event isHostEvent_Event `protobuf_oneof:"event"`
 	// P1-5:全局单调事件序号(daemon events.jsonl),与 TurnServerMessage.sequence
 	// 同一序列空间;0 = 未入事件库(旧 daemon)。
@@ -670,6 +671,15 @@ func (x *HostEvent) GetTurnFinished() *TurnFinishedNotification {
 	return nil
 }
 
+func (x *HostEvent) GetSelectionChanged() *SelectionChangedNotification {
+	if x != nil {
+		if x, ok := x.Event.(*HostEvent_SelectionChanged); ok {
+			return x.SelectionChanged
+		}
+	}
+	return nil
+}
+
 func (x *HostEvent) GetSequence() int64 {
 	if x != nil {
 		return x.Sequence
@@ -685,7 +695,19 @@ type HostEvent_TurnFinished struct {
 	TurnFinished *TurnFinishedNotification `protobuf:"bytes,5,opt,name=turn_finished,json=turnFinished,proto3,oneof"` // 后台 turn 完成(推送场景)
 }
 
+type HostEvent_SelectionChanged struct {
+	// ---- 线程有效选择变化通知(只增:7,P3-T2;字段号分配登记见 proto/FIELD_ALLOCATIONS.md)----
+	// 某线程的"实际生效"模型/思考强度选择发生变化(手机端改的、电脑端改的、
+	// 委派指定落定,都归一成这一条)。【推送纪律】daemon 重启后首轮**不发**本
+	// 事件 —— UI 的初始真值来自 TurnStarted.source / 查询型 RPC(effective_
+	// selection),通知只负责"之后的增量",两路真值不互相兜底。旧 daemon 不发
+	// 本分支,手机端按"无此通知"处理,不报错。
+	SelectionChanged *SelectionChangedNotification `protobuf:"bytes,7,opt,name=selection_changed,json=selectionChanged,proto3,oneof"`
+}
+
 func (*HostEvent_TurnFinished) isHostEvent_Event() {}
+
+func (*HostEvent_SelectionChanged) isHostEvent_Event() {}
 
 type TurnFinishedNotification struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -739,6 +761,64 @@ func (x *TurnFinishedNotification) GetSummary() string {
 	return ""
 }
 
+// SelectionChangedNotification 某线程的"实际生效"模型/思考强度选择发生变化
+// (只增,P3-T2)。selection 是**整包真值**(EffectiveModelSelection 原样,含
+// 来源/确认态/下一轮生效标记),不是 diff —— 客户端整包覆盖本地缓存即可。
+// daemon 重启后首轮不发:初始真值以 TurnStarted.source / 查询型 RPC 为准,
+// 本通知只承担之后的增量(见 HostEvent.selection_changed 的推送纪律)。
+type SelectionChangedNotification struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId string                 `protobuf:"bytes,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"` // 发生变化的线程 id(daemon 本地线程 id)
+	// 变化后的有效选择整包;空 = 该线程选择被清回默认(同样是合法状态)。
+	Selection     *EffectiveModelSelection `protobuf:"bytes,2,opt,name=selection,proto3" json:"selection,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SelectionChangedNotification) Reset() {
+	*x = SelectionChangedNotification{}
+	mi := &file_v1_host_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SelectionChangedNotification) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SelectionChangedNotification) ProtoMessage() {}
+
+func (x *SelectionChangedNotification) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_host_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SelectionChangedNotification.ProtoReflect.Descriptor instead.
+func (*SelectionChangedNotification) Descriptor() ([]byte, []int) {
+	return file_v1_host_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SelectionChangedNotification) GetThreadId() string {
+	if x != nil {
+		return x.ThreadId
+	}
+	return ""
+}
+
+func (x *SelectionChangedNotification) GetSelection() *EffectiveModelSelection {
+	if x != nil {
+		return x.Selection
+	}
+	return nil
+}
+
 // ---- P2:电脑 dev server 探测(手机一键预览,对齐原作 BrowserService)----
 type ListDevServersRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -748,7 +828,7 @@ type ListDevServersRequest struct {
 
 func (x *ListDevServersRequest) Reset() {
 	*x = ListDevServersRequest{}
-	mi := &file_v1_host_proto_msgTypes[10]
+	mi := &file_v1_host_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -760,7 +840,7 @@ func (x *ListDevServersRequest) String() string {
 func (*ListDevServersRequest) ProtoMessage() {}
 
 func (x *ListDevServersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[10]
+	mi := &file_v1_host_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -773,7 +853,7 @@ func (x *ListDevServersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDevServersRequest.ProtoReflect.Descriptor instead.
 func (*ListDevServersRequest) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{10}
+	return file_v1_host_proto_rawDescGZIP(), []int{11}
 }
 
 // DevServer:电脑上探到的一个 HTTP 服务端口。
@@ -790,7 +870,7 @@ type DevServer struct {
 
 func (x *DevServer) Reset() {
 	*x = DevServer{}
-	mi := &file_v1_host_proto_msgTypes[11]
+	mi := &file_v1_host_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -802,7 +882,7 @@ func (x *DevServer) String() string {
 func (*DevServer) ProtoMessage() {}
 
 func (x *DevServer) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[11]
+	mi := &file_v1_host_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -815,7 +895,7 @@ func (x *DevServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DevServer.ProtoReflect.Descriptor instead.
 func (*DevServer) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{11}
+	return file_v1_host_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DevServer) GetPort() int32 {
@@ -857,7 +937,7 @@ type DevServerList struct {
 
 func (x *DevServerList) Reset() {
 	*x = DevServerList{}
-	mi := &file_v1_host_proto_msgTypes[12]
+	mi := &file_v1_host_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -869,7 +949,7 @@ func (x *DevServerList) String() string {
 func (*DevServerList) ProtoMessage() {}
 
 func (x *DevServerList) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[12]
+	mi := &file_v1_host_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -882,7 +962,7 @@ func (x *DevServerList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DevServerList.ProtoReflect.Descriptor instead.
 func (*DevServerList) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{12}
+	return file_v1_host_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DevServerList) GetServers() []*DevServer {
@@ -921,7 +1001,7 @@ type HostRecoveryReport struct {
 
 func (x *HostRecoveryReport) Reset() {
 	*x = HostRecoveryReport{}
-	mi := &file_v1_host_proto_msgTypes[13]
+	mi := &file_v1_host_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -933,7 +1013,7 @@ func (x *HostRecoveryReport) String() string {
 func (*HostRecoveryReport) ProtoMessage() {}
 
 func (x *HostRecoveryReport) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[13]
+	mi := &file_v1_host_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -946,7 +1026,7 @@ func (x *HostRecoveryReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostRecoveryReport.ProtoReflect.Descriptor instead.
 func (*HostRecoveryReport) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{13}
+	return file_v1_host_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *HostRecoveryReport) GetStatus() string {
@@ -1002,7 +1082,7 @@ type HostStoreHealth struct {
 
 func (x *HostStoreHealth) Reset() {
 	*x = HostStoreHealth{}
-	mi := &file_v1_host_proto_msgTypes[14]
+	mi := &file_v1_host_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1014,7 +1094,7 @@ func (x *HostStoreHealth) String() string {
 func (*HostStoreHealth) ProtoMessage() {}
 
 func (x *HostStoreHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[14]
+	mi := &file_v1_host_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1027,7 +1107,7 @@ func (x *HostStoreHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostStoreHealth.ProtoReflect.Descriptor instead.
 func (*HostStoreHealth) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{14}
+	return file_v1_host_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *HostStoreHealth) GetOutcome() string {
@@ -1065,7 +1145,7 @@ type HostTurnJournalHealth struct {
 
 func (x *HostTurnJournalHealth) Reset() {
 	*x = HostTurnJournalHealth{}
-	mi := &file_v1_host_proto_msgTypes[15]
+	mi := &file_v1_host_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1077,7 +1157,7 @@ func (x *HostTurnJournalHealth) String() string {
 func (*HostTurnJournalHealth) ProtoMessage() {}
 
 func (x *HostTurnJournalHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[15]
+	mi := &file_v1_host_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1090,7 +1170,7 @@ func (x *HostTurnJournalHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostTurnJournalHealth.ProtoReflect.Descriptor instead.
 func (*HostTurnJournalHealth) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{15}
+	return file_v1_host_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *HostTurnJournalHealth) GetPendingCount() int32 {
@@ -1125,7 +1205,7 @@ type HostLostQueueInput struct {
 
 func (x *HostLostQueueInput) Reset() {
 	*x = HostLostQueueInput{}
-	mi := &file_v1_host_proto_msgTypes[16]
+	mi := &file_v1_host_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1137,7 +1217,7 @@ func (x *HostLostQueueInput) String() string {
 func (*HostLostQueueInput) ProtoMessage() {}
 
 func (x *HostLostQueueInput) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[16]
+	mi := &file_v1_host_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1150,7 +1230,7 @@ func (x *HostLostQueueInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostLostQueueInput.ProtoReflect.Descriptor instead.
 func (*HostLostQueueInput) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{16}
+	return file_v1_host_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *HostLostQueueInput) GetThreadId() string {
@@ -1184,7 +1264,7 @@ type HostDeviceHealth struct {
 
 func (x *HostDeviceHealth) Reset() {
 	*x = HostDeviceHealth{}
-	mi := &file_v1_host_proto_msgTypes[17]
+	mi := &file_v1_host_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1196,7 +1276,7 @@ func (x *HostDeviceHealth) String() string {
 func (*HostDeviceHealth) ProtoMessage() {}
 
 func (x *HostDeviceHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[17]
+	mi := &file_v1_host_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1209,7 +1289,7 @@ func (x *HostDeviceHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostDeviceHealth.ProtoReflect.Descriptor instead.
 func (*HostDeviceHealth) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{17}
+	return file_v1_host_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *HostDeviceHealth) GetDegraded() bool {
@@ -1236,7 +1316,7 @@ type HostIdentityHealth struct {
 
 func (x *HostIdentityHealth) Reset() {
 	*x = HostIdentityHealth{}
-	mi := &file_v1_host_proto_msgTypes[18]
+	mi := &file_v1_host_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1248,7 +1328,7 @@ func (x *HostIdentityHealth) String() string {
 func (*HostIdentityHealth) ProtoMessage() {}
 
 func (x *HostIdentityHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[18]
+	mi := &file_v1_host_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1261,7 +1341,7 @@ func (x *HostIdentityHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostIdentityHealth.ProtoReflect.Descriptor instead.
 func (*HostIdentityHealth) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{18}
+	return file_v1_host_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *HostIdentityHealth) GetDegraded() bool {
@@ -1288,7 +1368,7 @@ type GetPairingInfoRequest struct {
 
 func (x *GetPairingInfoRequest) Reset() {
 	*x = GetPairingInfoRequest{}
-	mi := &file_v1_host_proto_msgTypes[19]
+	mi := &file_v1_host_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1300,7 +1380,7 @@ func (x *GetPairingInfoRequest) String() string {
 func (*GetPairingInfoRequest) ProtoMessage() {}
 
 func (x *GetPairingInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[19]
+	mi := &file_v1_host_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1313,7 +1393,7 @@ func (x *GetPairingInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPairingInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetPairingInfoRequest) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{19}
+	return file_v1_host_proto_rawDescGZIP(), []int{20}
 }
 
 type GetPairingInfoResponse struct {
@@ -1330,7 +1410,7 @@ type GetPairingInfoResponse struct {
 
 func (x *GetPairingInfoResponse) Reset() {
 	*x = GetPairingInfoResponse{}
-	mi := &file_v1_host_proto_msgTypes[20]
+	mi := &file_v1_host_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1342,7 +1422,7 @@ func (x *GetPairingInfoResponse) String() string {
 func (*GetPairingInfoResponse) ProtoMessage() {}
 
 func (x *GetPairingInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_host_proto_msgTypes[20]
+	mi := &file_v1_host_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1355,7 +1435,7 @@ func (x *GetPairingInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPairingInfoResponse.ProtoReflect.Descriptor instead.
 func (*GetPairingInfoResponse) Descriptor() ([]byte, []int) {
-	return file_v1_host_proto_rawDescGZIP(), []int{20}
+	return file_v1_host_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetPairingInfoResponse) GetPairingEnabled() bool {
@@ -1383,7 +1463,7 @@ var File_v1_host_proto protoreflect.FileDescriptor
 
 const file_v1_host_proto_rawDesc = "" +
 	"\n" +
-	"\rv1/host.proto\x12\x0epocketagent.v1\"\x14\n" +
+	"\rv1/host.proto\x12\x0epocketagent.v1\x1a\x0ev1/model.proto\"\x14\n" +
 	"\x12GetHostInfoRequest\"\xa1\x03\n" +
 	"\bHostInfo\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12!\n" +
@@ -1425,15 +1505,19 @@ const file_v1_host_proto_rawDesc = "" +
 	"\x13server_time_unix_ms\x18\x01 \x01(\x03R\x10serverTimeUnixMs\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\";\n" +
 	"\x12WatchEventsRequest\x12%\n" +
-	"\x0eafter_sequence\x18\x01 \x01(\x03R\rafterSequence\"\xf1\x01\n" +
+	"\x0eafter_sequence\x18\x01 \x01(\x03R\rafterSequence\"\xce\x02\n" +
 	"\tHostEvent\x12*\n" +
 	"\x11timestamp_unix_ms\x18\x01 \x01(\x03R\x0ftimestampUnixMs\x12O\n" +
-	"\rturn_finished\x18\x05 \x01(\v2(.pocketagent.v1.TurnFinishedNotificationH\x00R\fturnFinished\x12\x1a\n" +
+	"\rturn_finished\x18\x05 \x01(\v2(.pocketagent.v1.TurnFinishedNotificationH\x00R\fturnFinished\x12[\n" +
+	"\x11selection_changed\x18\a \x01(\v2,.pocketagent.v1.SelectionChangedNotificationH\x00R\x10selectionChanged\x12\x1a\n" +
 	"\bsequence\x18\x06 \x01(\x03R\bsequenceB\a\n" +
 	"\x05eventJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x11workspace_changedR\vmodel_readyR\x10update_available\"Q\n" +
 	"\x18TurnFinishedNotification\x12\x1b\n" +
 	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12\x18\n" +
-	"\asummary\x18\x02 \x01(\tR\asummary\"\x17\n" +
+	"\asummary\x18\x02 \x01(\tR\asummary\"\x82\x01\n" +
+	"\x1cSelectionChangedNotification\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\tR\bthreadId\x12E\n" +
+	"\tselection\x18\x02 \x01(\v2'.pocketagent.v1.EffectiveModelSelectionR\tselection\"\x17\n" +
 	"\x15ListDevServersRequest\"l\n" +
 	"\tDevServer\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\x05R\x04port\x12\x10\n" +
@@ -1496,57 +1580,61 @@ func file_v1_host_proto_rawDescGZIP() []byte {
 	return file_v1_host_proto_rawDescData
 }
 
-var file_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_v1_host_proto_goTypes = []any{
-	(*GetHostInfoRequest)(nil),       // 0: pocketagent.v1.GetHostInfoRequest
-	(*HostInfo)(nil),                 // 1: pocketagent.v1.HostInfo
-	(*AuthorizeRequest)(nil),         // 2: pocketagent.v1.AuthorizeRequest
-	(*ChallengeAnswer)(nil),          // 3: pocketagent.v1.ChallengeAnswer
-	(*AuthorizeResponse)(nil),        // 4: pocketagent.v1.AuthorizeResponse
-	(*PingRequest)(nil),              // 5: pocketagent.v1.PingRequest
-	(*PingResponse)(nil),             // 6: pocketagent.v1.PingResponse
-	(*WatchEventsRequest)(nil),       // 7: pocketagent.v1.WatchEventsRequest
-	(*HostEvent)(nil),                // 8: pocketagent.v1.HostEvent
-	(*TurnFinishedNotification)(nil), // 9: pocketagent.v1.TurnFinishedNotification
-	(*ListDevServersRequest)(nil),    // 10: pocketagent.v1.ListDevServersRequest
-	(*DevServer)(nil),                // 11: pocketagent.v1.DevServer
-	(*DevServerList)(nil),            // 12: pocketagent.v1.DevServerList
-	(*HostRecoveryReport)(nil),       // 13: pocketagent.v1.HostRecoveryReport
-	(*HostStoreHealth)(nil),          // 14: pocketagent.v1.HostStoreHealth
-	(*HostTurnJournalHealth)(nil),    // 15: pocketagent.v1.HostTurnJournalHealth
-	(*HostLostQueueInput)(nil),       // 16: pocketagent.v1.HostLostQueueInput
-	(*HostDeviceHealth)(nil),         // 17: pocketagent.v1.HostDeviceHealth
-	(*HostIdentityHealth)(nil),       // 18: pocketagent.v1.HostIdentityHealth
-	(*GetPairingInfoRequest)(nil),    // 19: pocketagent.v1.GetPairingInfoRequest
-	(*GetPairingInfoResponse)(nil),   // 20: pocketagent.v1.GetPairingInfoResponse
+	(*GetHostInfoRequest)(nil),           // 0: pocketagent.v1.GetHostInfoRequest
+	(*HostInfo)(nil),                     // 1: pocketagent.v1.HostInfo
+	(*AuthorizeRequest)(nil),             // 2: pocketagent.v1.AuthorizeRequest
+	(*ChallengeAnswer)(nil),              // 3: pocketagent.v1.ChallengeAnswer
+	(*AuthorizeResponse)(nil),            // 4: pocketagent.v1.AuthorizeResponse
+	(*PingRequest)(nil),                  // 5: pocketagent.v1.PingRequest
+	(*PingResponse)(nil),                 // 6: pocketagent.v1.PingResponse
+	(*WatchEventsRequest)(nil),           // 7: pocketagent.v1.WatchEventsRequest
+	(*HostEvent)(nil),                    // 8: pocketagent.v1.HostEvent
+	(*TurnFinishedNotification)(nil),     // 9: pocketagent.v1.TurnFinishedNotification
+	(*SelectionChangedNotification)(nil), // 10: pocketagent.v1.SelectionChangedNotification
+	(*ListDevServersRequest)(nil),        // 11: pocketagent.v1.ListDevServersRequest
+	(*DevServer)(nil),                    // 12: pocketagent.v1.DevServer
+	(*DevServerList)(nil),                // 13: pocketagent.v1.DevServerList
+	(*HostRecoveryReport)(nil),           // 14: pocketagent.v1.HostRecoveryReport
+	(*HostStoreHealth)(nil),              // 15: pocketagent.v1.HostStoreHealth
+	(*HostTurnJournalHealth)(nil),        // 16: pocketagent.v1.HostTurnJournalHealth
+	(*HostLostQueueInput)(nil),           // 17: pocketagent.v1.HostLostQueueInput
+	(*HostDeviceHealth)(nil),             // 18: pocketagent.v1.HostDeviceHealth
+	(*HostIdentityHealth)(nil),           // 19: pocketagent.v1.HostIdentityHealth
+	(*GetPairingInfoRequest)(nil),        // 20: pocketagent.v1.GetPairingInfoRequest
+	(*GetPairingInfoResponse)(nil),       // 21: pocketagent.v1.GetPairingInfoResponse
+	(*EffectiveModelSelection)(nil),      // 22: pocketagent.v1.EffectiveModelSelection
 }
 var file_v1_host_proto_depIdxs = []int32{
-	13, // 0: pocketagent.v1.HostInfo.recovery:type_name -> pocketagent.v1.HostRecoveryReport
+	14, // 0: pocketagent.v1.HostInfo.recovery:type_name -> pocketagent.v1.HostRecoveryReport
 	3,  // 1: pocketagent.v1.AuthorizeRequest.challenge_answer:type_name -> pocketagent.v1.ChallengeAnswer
 	9,  // 2: pocketagent.v1.HostEvent.turn_finished:type_name -> pocketagent.v1.TurnFinishedNotification
-	11, // 3: pocketagent.v1.DevServerList.servers:type_name -> pocketagent.v1.DevServer
-	14, // 4: pocketagent.v1.HostRecoveryReport.store:type_name -> pocketagent.v1.HostStoreHealth
-	15, // 5: pocketagent.v1.HostRecoveryReport.turn_journal:type_name -> pocketagent.v1.HostTurnJournalHealth
-	17, // 6: pocketagent.v1.HostRecoveryReport.devices:type_name -> pocketagent.v1.HostDeviceHealth
-	18, // 7: pocketagent.v1.HostRecoveryReport.identity:type_name -> pocketagent.v1.HostIdentityHealth
-	16, // 8: pocketagent.v1.HostTurnJournalHealth.lost_inputs:type_name -> pocketagent.v1.HostLostQueueInput
-	0,  // 9: pocketagent.v1.HostService.GetHostInfo:input_type -> pocketagent.v1.GetHostInfoRequest
-	19, // 10: pocketagent.v1.HostService.GetPairingInfo:input_type -> pocketagent.v1.GetPairingInfoRequest
-	2,  // 11: pocketagent.v1.HostService.Authorize:input_type -> pocketagent.v1.AuthorizeRequest
-	5,  // 12: pocketagent.v1.HostService.Ping:input_type -> pocketagent.v1.PingRequest
-	7,  // 13: pocketagent.v1.HostService.WatchEvents:input_type -> pocketagent.v1.WatchEventsRequest
-	10, // 14: pocketagent.v1.HostService.ListDevServers:input_type -> pocketagent.v1.ListDevServersRequest
-	1,  // 15: pocketagent.v1.HostService.GetHostInfo:output_type -> pocketagent.v1.HostInfo
-	20, // 16: pocketagent.v1.HostService.GetPairingInfo:output_type -> pocketagent.v1.GetPairingInfoResponse
-	4,  // 17: pocketagent.v1.HostService.Authorize:output_type -> pocketagent.v1.AuthorizeResponse
-	6,  // 18: pocketagent.v1.HostService.Ping:output_type -> pocketagent.v1.PingResponse
-	8,  // 19: pocketagent.v1.HostService.WatchEvents:output_type -> pocketagent.v1.HostEvent
-	12, // 20: pocketagent.v1.HostService.ListDevServers:output_type -> pocketagent.v1.DevServerList
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	10, // 3: pocketagent.v1.HostEvent.selection_changed:type_name -> pocketagent.v1.SelectionChangedNotification
+	22, // 4: pocketagent.v1.SelectionChangedNotification.selection:type_name -> pocketagent.v1.EffectiveModelSelection
+	12, // 5: pocketagent.v1.DevServerList.servers:type_name -> pocketagent.v1.DevServer
+	15, // 6: pocketagent.v1.HostRecoveryReport.store:type_name -> pocketagent.v1.HostStoreHealth
+	16, // 7: pocketagent.v1.HostRecoveryReport.turn_journal:type_name -> pocketagent.v1.HostTurnJournalHealth
+	18, // 8: pocketagent.v1.HostRecoveryReport.devices:type_name -> pocketagent.v1.HostDeviceHealth
+	19, // 9: pocketagent.v1.HostRecoveryReport.identity:type_name -> pocketagent.v1.HostIdentityHealth
+	17, // 10: pocketagent.v1.HostTurnJournalHealth.lost_inputs:type_name -> pocketagent.v1.HostLostQueueInput
+	0,  // 11: pocketagent.v1.HostService.GetHostInfo:input_type -> pocketagent.v1.GetHostInfoRequest
+	20, // 12: pocketagent.v1.HostService.GetPairingInfo:input_type -> pocketagent.v1.GetPairingInfoRequest
+	2,  // 13: pocketagent.v1.HostService.Authorize:input_type -> pocketagent.v1.AuthorizeRequest
+	5,  // 14: pocketagent.v1.HostService.Ping:input_type -> pocketagent.v1.PingRequest
+	7,  // 15: pocketagent.v1.HostService.WatchEvents:input_type -> pocketagent.v1.WatchEventsRequest
+	11, // 16: pocketagent.v1.HostService.ListDevServers:input_type -> pocketagent.v1.ListDevServersRequest
+	1,  // 17: pocketagent.v1.HostService.GetHostInfo:output_type -> pocketagent.v1.HostInfo
+	21, // 18: pocketagent.v1.HostService.GetPairingInfo:output_type -> pocketagent.v1.GetPairingInfoResponse
+	4,  // 19: pocketagent.v1.HostService.Authorize:output_type -> pocketagent.v1.AuthorizeResponse
+	6,  // 20: pocketagent.v1.HostService.Ping:output_type -> pocketagent.v1.PingResponse
+	8,  // 21: pocketagent.v1.HostService.WatchEvents:output_type -> pocketagent.v1.HostEvent
+	13, // 22: pocketagent.v1.HostService.ListDevServers:output_type -> pocketagent.v1.DevServerList
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_v1_host_proto_init() }
@@ -1554,6 +1642,7 @@ func file_v1_host_proto_init() {
 	if File_v1_host_proto != nil {
 		return
 	}
+	file_v1_model_proto_init()
 	file_v1_host_proto_msgTypes[2].OneofWrappers = []any{
 		(*AuthorizeRequest_PairCode)(nil),
 		(*AuthorizeRequest_Token)(nil),
@@ -1562,6 +1651,7 @@ func file_v1_host_proto_init() {
 	}
 	file_v1_host_proto_msgTypes[8].OneofWrappers = []any{
 		(*HostEvent_TurnFinished)(nil),
+		(*HostEvent_SelectionChanged)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1569,7 +1659,7 @@ func file_v1_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_host_proto_rawDesc), len(file_v1_host_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

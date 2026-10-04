@@ -139,6 +139,10 @@ type Server struct {
 	lastTurnSettledAt atomic.Int64
 	idleSweepOnce     sync.Once
 	idleSweepStop     context.CancelFunc
+	// idleSweepDone 整理循环 goroutine 的退出信号(ensureIdleMemorySweep 关闭):
+	// waitIdleMemorySweepStopped 用它"先停再等落定",保证测试拆除时在飞的最后一次
+	// sweep(含 checkpoint 落盘)已经做完。无生产行为变化,纯拆除纪律的接线。
+	idleSweepDone chan struct{}
 }
 
 func New(cfg Config) *Server {

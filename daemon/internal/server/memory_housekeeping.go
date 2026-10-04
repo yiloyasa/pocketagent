@@ -255,7 +255,10 @@ func (s *Server) ensureIdleMemorySweep() {
 	s.idleSweepOnce.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.idleSweepStop = cancel
+		done := make(chan struct{})
+		s.idleSweepDone = done
 		go func() {
+			defer close(done) // 循环退出即"整理已落定":waitIdleMemorySweepStopped 等的是它
 			// 周期在启动那刻取原子快照：运行中改配置不重塑已存在的 ticker
 			//（重塑=另一条并发写路径，没必要）；改完对下一个启动的循环生效。
 			ticker := time.NewTicker(idleMemorySweepTick())
@@ -265,6 +268,12 @@ func (s *Server) ensureIdleMemorySweep() {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					// 取消之后,最后一次缓存的 tick 与 Done 可能同时就绪,select
+					// 会随机挑一个 —— 这里显式复查,不让已停止的循环再多跑一次
+					// sweep(它有 checkpoint 落盘面,测试拆除要等的就是它安静)。
+					if ctx.Err() != nil {
+						return
+					}
 					s.idleMemorySweep()
 				}
 			}
@@ -276,6 +285,18 @@ func (s *Server) ensureIdleMemorySweep() {
 func (s *Server) stopIdleMemorySweep() {
 	if s != nil && s.idleSweepStop != nil {
 		s.idleSweepStop()
+	}
+}
+
+// waitIdleMemorySweepStopped 等整理循环 goroutine 真正退出——含在飞的最后一次
+// sweep 及其 Compact/Checkpoint 落盘。与 stopIdleMemorySweep 搭配使用(先停、
+// 再等落定):stop 只挡未来的 tick,已进入动作体的那次整理不因 cancel 中断,
+// 测试拆除必须等它做完,否则异步 checkpoint 撞上 t.TempDir() 的 RemoveAll
+// (批次 2 实测:"checkpoints: The directory is not empty")。
+// 【未启动过循环的 server】done 为 nil,无事可等,直接返回。
+func (s *Server) waitIdleMemorySweepStopped() {
+	if s != nil && s.idleSweepDone != nil {
+		<-s.idleSweepDone
 	}
 }
 

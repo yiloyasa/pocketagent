@@ -78,6 +78,25 @@ internal class SenseVoiceSessionRunner(
     }
 }
 
+/**
+ * 端侧错误码是否"本轮致命"(引擎本轮已不可再交付结果,适配层据此标记 roundFailed):
+ *  7(没听到)/103(引擎忙)是正常业务结果,原样重试即可;9(权限)/102(麦克风被拦)/
+ *  100(未分类引擎异常)视为本轮致命。
+ *
+ * 消费方是 ui/voice/SenseVoiceEngine:roundFailed 随 session 生命周期 —— 每次 start
+ * 重置,只描述"上一轮",不永久污染后续会话;端侧不据此自动弃用(与系统引擎的弃用
+ * 名单语义刻意不同:端侧重建要重新冷加载),只做本轮标记供诊断与未来引擎再选择
+ * 策略使用。纯函数,JVM 单测锁定(VoiceSessionReducerTest)。
+ */
+internal fun senseVoiceErrorFatalForRound(code: Int): Boolean = code != 7 && code != 103
+
+/**
+ * 【看门狗时钟契约】nowMillis 默认取 System.nanoTime()(monotonic,不受用户改系统
+ * 时间/NTP 跳变影响):采音时长上限与 8 秒零回调死区判定的喂狗链路都依赖它,绝不可
+ * 换回 System.currentTimeMillis(墙钟可回拨,会把正常听写误判成死区)。
+ * 2026-10-04 P4 Task 5 monotonic 化复核钉死:本文件是端侧链路唯一的时钟源,已单调;
+ * 旧路径 ChatScreen 看门狗的墙钟改 monotonic 随波 3 接线切换到 ui/voice/VoiceController。
+ */
 internal fun captureSenseVoiceAudio(
     read: (ShortArray, Int) -> Int,
     stopped: () -> Boolean,
