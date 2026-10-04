@@ -26,7 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -56,6 +57,12 @@ import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.collab.CollabCopy as SessionCopy
+import dev.pocketagent.app.ui.collab.CollabIntent
+import dev.pocketagent.app.ui.collab.CollabMemberUi
+import dev.pocketagent.app.ui.collab.CollabSessionReducer
+import dev.pocketagent.app.ui.collab.CollabSessionRepository
+import dev.pocketagent.app.ui.collab.CollabStatus
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
@@ -73,14 +80,20 @@ import dev.pocketagent.app.ui.theme.paPushBack
  * 普通会话是"手机 ↔ 单一 agent"的 1:1 对话流(ChatScreen);协同会话是
  * "一条指令 + N 个对等 agent 各自回报"的编排台。所以这里:
  *  1. 顶部有**石墨重点面**的说明卡(README:有明确主次关系的内容进面板)+ 分支图标;
- *  2. 下方是**按 agent 分行**的进度卡(每人一卡:身份 + 四词状态徽章 + 卡上入口),
+ *  2. 下方是**按成员分行**的进度卡(身份 + 七词状态徽章 + 卡上入口),
  *     不是混在一起的对话流;
- *  3. 共享一条指令输入,结果按成员分别回报。
+ *  3. 共享一条指令输入,结果按成员分别回报(成员原始结果 ≠ 汇总 Agent 结果)。
  *
  * 【并行对等,不是父子委派】这里没有任何"父 agent 派发子智能体"的概念;
  * 被选中的 agent 是平级协作者,各自收到同一条指令独立执行。参与者列出 daemon 报的
- * 全部协同 agent(CollabAware 门控):可用的可勾选,不可用的灰显并写明原因 ——
- * 只显示可选项,等于把"为什么不让我选它"藏进裁剪规则(结论 1)。一位失败不拖垮其余。
+ * 全部协同 agent(CollabAware 门控):可用的可勾选,不可用的灰显并写明原因。
+ * 一位失败不拖垮其余。
+ *
+ * 【P1 协同闭环(Task 6/7)后本页怎么取数】派发前的选人/角色仍在 CollabState;
+ * 派发后的会话/成员/终局全部来自 CollabSessionRepository 的单一状态树
+ * (进入页面:先 GetCollabSession 快照恢复,再 WatchCollabSession 事件流跟随;
+ * 断线保留最后真快照;seq 缺口全量重建)。取消/重试/审批入口以 CollabIntent
+ * 从成员卡发出,UI 不直接碰 gRPC,也不读任何散落的全局进度 state。
  *
  * [onOpenThread] 为 null 时不摆「查看会话」入口(没有导航通道就没有假入口)。
  */
@@ -109,12 +122,17 @@ fun CollabScreen(
     // agent 掉线/被停用后剪除失效选中项:派发判定按剪除后的集合,"已选 N 位"才与
     // 实际能派发的人数一致(归并纯函数 pruneCollabSelection,单测钉死)。
     LaunchedEffect(readyIds) { CollabState.retainSelection(readyIds) }
+    // 协同会话恢复(Task 6):进入页面 = 快照先行 + 事件流跟随;离开页面停流保快照。
+    LaunchedEffect(Unit) { CollabSessionRepository.openLatest() }
+    DisposableEffect(Unit) {
+        onDispose { CollabSessionRepository.onPageHidden() }
+    }
+
+    // 协同会话的单一状态树(daemon 真值的投影;不再读散落的 phases/threadIds)
+    val session = CollabSessionRepository.state.collectAsState().value
 
     val selected = CollabState.selected
     val roleBinding = CollabState.roleBinding
-    val phases = CollabState.phases
-    val memberErrors = CollabState.memberErrors
-    val dispatchError = CollabState.dispatchError
     val dispatching = CollabState.dispatching
     val lastInstruction = CollabState.lastInstruction
 
@@ -254,7 +272,7 @@ fun CollabScreen(
                     }
                 }
 
-                // ---- 分工与状态:逐 agent 一张进度卡(身份 + 四词徽章 + 卡上入口) ----
+                // ---- 分工与状态(Task 6/7):协同会话单一状态树驱动 ----
                 item {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
@@ -278,65 +296,83 @@ fun CollabScreen(
                     }
                 }
 
-                if (selectedAgents.isEmpty()) {
+                if (session.sessionId != null) {
+                    // ---- 会话横幅:指令回显 + "N/M 已完成 · X 个等待确认"汇总行 ----
+                    item(key = "sessionBanner") {
+                        CollabSessionBanner(
+                            session = session,
+                            onCancelSession = { CollabSessionRepository.send(CollabIntent.CancelSession) },
+                        )
+                        HorizontalHairlineEd()
+                    }
+                    if (session.members.isEmpty()) {
+                        item {
+                            Text(
+                                "还没有成员受理回执;受理后这里会逐个出现成员卡",
+                                Modifier.padding(vertical = 8.dp),
+                                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                            )
+                        }
+                    } else {
+                        // 进场 spring(结论 6):卡片从收起状态浮入,可打断;同卡内的
+                        // 状态流转不重播进场(remember 记住入场态)。
+                        itemsIndexed(
+                            session.members,
+                            key = { i, m -> "$i:" + m.threadId.ifBlank { m.agentId } },
+                        ) { _, member ->
+                            Column {
+                                val enter = remember { MutableTransitionState(false).apply { targetState = true } }
+                                AnimatedVisibility(
+                                    visibleState = enter,
+                                    enter = fadeIn(PaMotion.emphasized()) + expandVertically(PaMotion.emphasized()),
+                                    exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
+                                ) {
+                                    Column {
+                                        CollabMemberRow(
+                                            member = member,
+                                            roleName = member.roleId.takeIf { it.isNotBlank() }?.let { rid ->
+                                                CollabRolesState.roles.firstOrNull { r -> r.id == rid }
+                                            }?.let { collabRoleDisplayName(it) },
+                                            agentName = participants.firstOrNull { it.agent.id == member.agentId }?.agent?.name
+                                                ?: member.agentId,
+                                            iconRes = participants.firstOrNull { it.agent.id == member.agentId }?.agent?.iconRes
+                                                ?: R.drawable.ic_lucide_cpu,
+                                            onOpenThread = onOpenThread,
+                                            onRetry = {
+                                                CollabSessionRepository.send(CollabIntent.RetryMember(member.threadId))
+                                            },
+                                            onCancelMember = {
+                                                CollabSessionRepository.send(CollabIntent.CancelMember(member.threadId))
+                                            },
+                                            onOpenApproval = { requestId ->
+                                                // 审批去成员会话页应答(SubmitApproval 既有通道);
+                                                // 意图照发(仓库显式不处理,留审计语义)。
+                                                CollabSessionRepository.send(
+                                                    CollabIntent.OpenApproval(member.threadId, requestId)
+                                                )
+                                                onOpenThread?.invoke(member.threadId)
+                                            },
+                                        )
+                                        HorizontalHairlineEd()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // ---- 结果分区(Task 7):成员原始结果 ≠ 汇总 Agent 结果 ----
+                    item(key = "sessionResults") {
+                        CollabSessionResults(session = session, onOpenThread = onOpenThread)
+                    }
+                } else if (session.loading) {
                     item {
                         Text(
-                            "先在上面勾选这次一起干活的 agent,他们的执行进度会逐个出现在这里",
+                            SessionCopy.LOADING_RESTORE,
                             Modifier.padding(vertical = 8.dp),
                             fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
                         )
                     }
-                } else {
-                    items(selectedAgents, key = { it.id }) { agent ->
-                        // 进度卡进场 spring(结论 6):勾选瞬间卡片从收起状态浮入,
-                        // 可打断;同卡内的相位流转不重播进场(remember 记住入场态)。
-                        val enter = remember { MutableTransitionState(false).apply { targetState = true } }
-                        AnimatedVisibility(
-                            visibleState = enter,
-                            enter = fadeIn(PaMotion.emphasized()) + expandVertically(PaMotion.emphasized()),
-                            exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
-                        ) {
-                            Column {
-                                val roleId = roleBinding[agent.id]
-                                val roleName = roleId?.let { rid ->
-                                    CollabRolesState.roles.firstOrNull { r -> r.id == rid }?.let { collabRoleDisplayName(it) }
-                                }
-                                val phase = phases[agent.id] ?: CollabAgentPhase.IDLE
-                                val threadId = CollabState.threadIds[agent.id].orEmpty()
-                                CollabAgentRow(
-                                    agent = agent,
-                                    roleName = roleName,
-                                    phase = phase,
-                                    memberError = memberErrors[agent.id],
-                                    threadId = threadId,
-                                    onOpenThread = onOpenThread,
-                                    onConfigRole = { roleFor = agent.id },
-                                    onRedispatch = { CollabState.redispatchMember(agent.id) },
-                                )
-                                HorizontalHairlineEd()
-                            }
-                        }
-                    }
-                }
-
-                // ---- 整体派发失败(连 RPC 都没通):如实给原因,不粉饰 ----
-                dispatchError?.let { err ->
-                    item {
-                        Text(
-                            err,
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp)
-                                .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
-                                .padding(12.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp,
-                            color = EditorialTone.DENIED.text,
-                        )
-                    }
-                }
-
-                // ---- 已发指令回显 + 诚实等待说明(扁平行,不做底色块) ----
-                if (lastInstruction != null) {
+                } else if (lastInstruction != null) {
+                    // ---- 派发已发出、受理回执未达:七词之"已提交",如实呈现 ----
                     item {
                         Column(Modifier.padding(top = 12.dp)) {
                             Row(
@@ -355,10 +391,34 @@ fun CollabScreen(
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                CollabCopy.WAITING_DAEMON,
+                                if (dispatching) CollabCopy.BTN_DISPATCHING else SessionCopy.PROGRESS_SUBMITTED,
                                 fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
                             )
                         }
+                    }
+                } else if (selectedAgents.isEmpty()) {
+                    item {
+                        Text(
+                            "先在上面勾选这次一起干活的 agent,他们的执行进度会逐个出现在这里",
+                            Modifier.padding(vertical = 8.dp),
+                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                        )
+                    }
+                }
+
+                // ---- 错误呈现(断线说明 / 操作失败原因):如实给原文,不粉饰 ----
+                session.error?.let { err ->
+                    item {
+                        Text(
+                            err,
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                                .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                .padding(12.dp),
+                            fontSize = 12.sp, lineHeight = 17.sp,
+                            color = EditorialTone.DENIED.text,
+                        )
                     }
                 }
             }
@@ -451,7 +511,7 @@ fun CollabScreen(
     }
 }
 
-/** 细分隔线(协同页逐 agent 行之间)。 */
+/** 细分隔线(协同页逐成员行之间)。 */
 @Composable
 private fun HorizontalHairlineEd() {
     Box(
@@ -461,6 +521,415 @@ private fun HorizontalHairlineEd() {
             .height(1.dp)
             .background(MaterialTheme.editorial.Hairline),
     )
+}
+
+/**
+ * 协同会话横幅:指令原文 + 汇总行"N/M 已完成 · X 个等待确认"(Task 7:绝不
+ * 显示笼统的"运行中")+ 会话级动作(取消整个协同,禁用时给原因)。
+ *
+ * 【daemon 会话级错误的呈现】FAILED/CANCELLED 的会话带人话原因(applySessionError
+ * 生成),原样展示;成员各自的真相在成员卡上,横幅只做如实汇总。
+ */
+@Composable
+private fun CollabSessionBanner(
+    session: dev.pocketagent.app.ui.collab.CollabSessionState,
+    onCancelSession: () -> Unit,
+) {
+    val ed = MaterialTheme.editorial
+    val actions = CollabSessionReducer.sessionActions(session)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_lucide_git_branch), null,
+                tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                session.instruction.ifBlank { "协同任务" },
+                Modifier.weight(1f),
+                fontSize = 14.sp, lineHeight = 21.sp,
+                fontWeight = FontWeight(650), color = ed.Ink,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+            // 会话级七词徽章(色/形通道借四词体系,词用七词词表)
+            CollabStatusBadge(status = session.status, raw = session.statusRaw)
+        }
+        // 汇总行:比例永远在(0/3 也如实说);等待确认/未完成分段追加
+        val summary = SessionCopy.summaryLine(CollabSessionReducer.counts(session.members))
+        if (summary != null) {
+            Text(
+                summary,
+                Modifier.padding(top = 4.dp),
+                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+            )
+        }
+        // 会话级人话原因(daemon 原文;FAILED/CANCELLED 时非空)
+        if (session.sessionError.isNotBlank()) {
+            Text(
+                session.sessionError,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .padding(12.dp),
+                fontSize = 12.sp, lineHeight = 17.sp,
+                color = EditorialTone.DENIED.text,
+            )
+        }
+        // 会话级动作:取消整个协同(禁用时旁边给原因,不占"能点"的形)
+        Row(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (actions.canCancel) {
+                Row(
+                    Modifier
+                        .pressable { onCancelSession() }
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_x), null,
+                        tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(SessionCopy.ACTION_CANCEL_SESSION, fontSize = 12.sp, color = PaEditorial.Primary)
+                }
+            } else if (session.members.isNotEmpty()) {
+                Text(
+                    "${SessionCopy.ACTION_CANCEL_SESSION} · ${actions.cancelReason}",
+                    Modifier.padding(horizontal = 4.dp),
+                    fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 协同会话状态徽章:七词词表(词)+ 四词体系的色档与形(通道复用)。
+ * UNKNOWN 不进徽章 —— 返回 null,由调用方走"原文 + 降级说明"的诚实呈现。
+ */
+@Composable
+private fun CollabStatusBadge(status: CollabStatus, raw: String?) {
+    val badge = CollabSessionReducer.editorialBadgeOf(status)
+    if (badge == null) {
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                SessionCopy.statusWord(status, raw),
+                fontSize = 11.sp, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
+            )
+            Text(
+                SessionCopy.UNKNOWN_STATUS_NOTE,
+                fontSize = 10.sp, lineHeight = 14.sp,
+                color = MaterialTheme.editorial.Subtle,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    } else {
+        PaStatusBadge(
+            EditorialStatusView(status = badge, label = SessionCopy.statusWord(status, raw)),
+        )
+    }
+}
+
+/**
+ * 单个成员卡(Task 6/7):身份图 + 名称 + 角色行 + 七词状态徽章 + 进度/审批/
+ * 原因/动作。所有状态与入口都来自 daemon 成员卡真值([CollabMemberUi]);
+ * 意图(取消/重试/审批/查看)从卡上发出,经 CollabSessionRepository 落 RPC。
+ *
+ * 【禁用按钮旁必有原因】重试/取消的可点态与禁用原因同源
+ * (CollabSessionReducer.memberActions):能点的给主色入口,不能点的灰着
+ * 并写明为什么 —— 不会出现"灰着但不知道为什么"。
+ */
+@Composable
+private fun CollabMemberRow(
+    member: CollabMemberUi,
+    roleName: String?,
+    agentName: String,
+    iconRes: Int,
+    onOpenThread: ((String) -> Unit)?,
+    onRetry: () -> Unit,
+    onCancelMember: () -> Unit,
+    onOpenApproval: (String) -> Unit,
+) {
+    val ed = MaterialTheme.editorial
+    val actions = CollabSessionReducer.memberActions(member)
+    var reasonOpen by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                bitmap = agentBitmap(iconRes),
+                contentDescription = agentName,
+                modifier = Modifier
+                    .size(PaEditorial.Space.IconBox)
+                    .clip(RoundedCornerShape(13.dp)),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    agentName,
+                    fontSize = 15.sp, lineHeight = 21.sp,
+                    fontWeight = FontWeight(650), color = ed.Ink,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                if (roleName != null) {
+                    Text(
+                        "角色 · $roleName",
+                        Modifier.padding(top = 1.dp),
+                        fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            // 七词徽章的状态流转 spring(结论 6):状态一变,新徽章淡入+轻缩放浮入。
+            AnimatedContent(
+                targetState = member.status,
+                transitionSpec = {
+                    (fadeIn(PaMotion.standard()) + scaleIn(initialScale = 0.85f, animationSpec = PaMotion.standard()))
+                        .togetherWith(fadeOut(PaMotion.standard()))
+                },
+                label = "collabMemberBadge",
+            ) { st ->
+                CollabStatusBadge(status = st, raw = member.statusRaw)
+            }
+        }
+        // daemon 的一句话进度(有界摘要,不是原始日志);终局成员不叠进度行
+        if (member.progress.isNotBlank() && !member.status.isFinished) {
+            Text(
+                member.progress,
+                Modifier.padding(top = 4.dp),
+                fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // 挂起审批(该成员等的是用户,不是系统在跑):逐笔列动作 + 去确认入口
+        member.pendingApprovals.forEach { approval ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .background(ed.AttentionContainer, RoundedCornerShape(13.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    SessionCopy.APPROVAL_WAITING_PREFIX + approval.label.ifBlank { "(电脑端没有给出动作说明)" },
+                    Modifier.weight(1f),
+                    fontSize = 12.sp, lineHeight = 17.sp,
+                    color = EditorialTone.ATTENTION.text,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                if (onOpenThread != null && actions.canAnswerApproval) {
+                    Text(
+                        SessionCopy.ACTION_OPEN_APPROVAL,
+                        Modifier
+                            .pressable { onOpenApproval(approval.requestId) }
+                            .padding(start = 8.dp),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight(650),
+                        color = EditorialTone.ATTENTION.text,
+                    )
+                }
+            }
+        }
+        // 未完成成员的原因(daemon 人话原文,按成员各自展示;不改全局):
+        // 收起时两行省略 + 「查看原因」展开全文 —— 截断不给真相,展开才完整。
+        if (member.status.isFinished && !member.error.isNullOrBlank()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    member.error,
+                    Modifier.fillMaxWidth(),
+                    fontSize = 12.sp, lineHeight = 17.sp,
+                    color = EditorialTone.DENIED.text,
+                    maxLines = if (reasonOpen) Int.MAX_VALUE else 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (reasonOpen) SessionCopy.ACTION_HIDE_REASON else SessionCopy.ACTION_VIEW_REASON,
+                    Modifier
+                        .pressable { reasonOpen = !reasonOpen }
+                        .padding(top = 4.dp, bottom = 2.dp),
+                    fontSize = 12.sp, lineHeight = 17.sp,
+                    fontWeight = FontWeight(650),
+                    color = EditorialTone.DENIED.text,
+                )
+            }
+        }
+        // 卡上动作行:重试 / 取消 / 查看会话(可点 = 主色;禁用 = 灰 + 原因)。
+        Row(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            // 重试:只对已收尾成员开放(daemon 前置条件);禁用时说明为什么
+            MemberActionText(
+                label = SessionCopy.ACTION_RETRY,
+                enabled = actions.canRetry,
+                reason = actions.retryReason,
+                iconRes = R.drawable.ic_lucide_refresh_cw,
+                onClick = onRetry,
+            )
+            // 取消:只对未收尾成员开放(已收尾 = 无需取消,如实说)
+            MemberActionText(
+                label = SessionCopy.ACTION_CANCEL_MEMBER,
+                enabled = actions.canCancel,
+                reason = actions.cancelReason,
+                iconRes = R.drawable.ic_lucide_x,
+                onClick = onCancelMember,
+            )
+            // 查看会话:有子线程且有导航通道才摆(没有通道就没有假入口)
+            if (onOpenThread != null && actions.canOpenSession) {
+                Row(
+                    Modifier
+                        .pressable { onOpenThread(member.threadId) }
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_chevron_right), null,
+                        tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(SessionCopy.ACTION_OPEN_SESSION, fontSize = 12.sp, color = PaEditorial.Primary)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 单个卡上动作:可点 = 主色入口;禁用 = 灰字 + 禁用原因(Task 7:每个禁用按钮
+ * 旁边显示禁用原因,不出"灰着但不知道为什么")。禁用时不占触感、不吞点击。
+ */
+@Composable
+private fun MemberActionText(
+    label: String,
+    enabled: Boolean,
+    reason: String?,
+    iconRes: Int,
+    onClick: () -> Unit,
+) {
+    val ed = MaterialTheme.editorial
+    if (enabled) {
+        Row(
+            Modifier
+                .pressable { onClick() }
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painterResource(iconRes), null,
+                tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(label, fontSize = 12.sp, color = PaEditorial.Primary)
+        }
+    } else {
+        Text(
+            "$label · ${reason ?: "当前不可用"}",
+            Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+        )
+    }
+}
+
+/**
+ * 结果分区(Task 7):「成员原始结果」逐成员列终稿摘要/未完成原因,与
+ * 「汇总 Agent 结果」分区**分开** —— 不把成员原话冒充汇总。
+ *
+ * 【diff 纪律】不自动合并:分区里固定给"不会自动合并"的说明。比较/采用入口
+ * 的文案常量已备(COMPARE_RESULTS / CHOOSE_RESULT),P1 没有比较页与采用动作,
+ * 不摆假入口 —— "查看"入口(打开成员会话)是唯一真实接线的通道。
+ */
+@Composable
+private fun CollabSessionResults(
+    session: dev.pocketagent.app.ui.collab.CollabSessionState,
+    onOpenThread: ((String) -> Unit)?,
+) {
+    val ed = MaterialTheme.editorial
+    val finished = session.members.filter { it.status.isFinished }
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+        Text(SessionCopy.SECTION_MEMBER_RESULTS, style = PaEditorial.Type.Heading, color = ed.Ink)
+        Spacer(Modifier.height(8.dp))
+        if (finished.isEmpty()) {
+            Text(
+                SessionCopy.MEMBER_RESULTS_EMPTY,
+                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+            )
+        } else {
+            finished.forEach { member ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            member.agentId,
+                            Modifier.weight(1f),
+                            fontSize = 13.sp, lineHeight = 19.sp,
+                            fontWeight = FontWeight(650), color = ed.Ink,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        CollabStatusBadge(status = member.status, raw = member.statusRaw)
+                    }
+                    // 成员原始结果:成功 = 终稿摘要(daemon 有界截断的原文);
+                    // 未完成/已取消 = daemon 给的人话原因。各自如实,不合并。
+                    val body = member.summary.ifBlank { member.error }
+                    if (body.isNotBlank()) {
+                        Text(
+                            body,
+                            Modifier.padding(top = 4.dp),
+                            fontSize = 12.sp, lineHeight = 18.sp,
+                            color = if (member.status == CollabStatus.COMPLETED) ed.Ink else EditorialTone.DENIED.text,
+                        )
+                    }
+                    if (onOpenThread != null && member.threadId.isNotBlank()) {
+                        Row(
+                            Modifier
+                                .pressable { onOpenThread(member.threadId) }
+                                .padding(top = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                painterResource(R.drawable.ic_lucide_chevron_right), null,
+                                tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(SessionCopy.VIEW_RESULT, fontSize = 12.sp, color = PaEditorial.Primary)
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(SessionCopy.SECTION_SUMMARY_RESULT, style = PaEditorial.Type.Heading, color = ed.Ink)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            SessionCopy.SUMMARY_RESULT_NONE,
+            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            SessionCopy.DIFF_MERGE_NOTICE,
+            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+        )
+    }
 }
 
 /**
@@ -521,189 +990,6 @@ private fun CollabAgentChip(
                 fontSize = 10.sp, lineHeight = 14.sp,
                 color = stateWordColor,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/**
- * 逐 agent 进度卡(设计稿 10「分工与状态」):身份图 + 名称 + 角色行 + 四词状态徽章;
- * 一位失败不拖垮其余 —— 相位与失败原因都按成员独立展示。
- *
- * 【状态三通道(结论 2/4)】徽章 = 词(四词体系同源 PaStatusBadge)+ 色档 + 形
- * (环/点/勾/叹号,PaStatusGlyph);徽章位置的状态流转走 spring 淡入淡出(结论 6),
- * 相位变化时徽章从 0.85 缩放浮入,不硬跳。
- *
- * 【卡上入口(结论 2)】
- *  - 受理失败:「查看原因」展开 daemon 原文全文 + 「重派该 Agent」单发这一家;
- *  - 已拿到子线程:「查看会话」单独打开该成员的会话(onOpenThread 缺席时不摆 ——
- *    没有导航通道就没有假入口)。
- */
-@Composable
-private fun CollabAgentRow(
-    agent: AgentInfo,
-    roleName: String?,
-    phase: CollabAgentPhase,
-    memberError: String?,
-    threadId: String,
-    onOpenThread: ((String) -> Unit)?,
-    onConfigRole: () -> Unit,
-    onRedispatch: () -> Unit,
-) {
-    val ed = MaterialTheme.editorial
-    // 相位 → 徽章/说明/入口的唯一映射(纯函数 collabProgressView,单测钉死)。
-    val progress = collabProgressView(phase, hasThreadId = threadId.isNotBlank())
-    var reasonOpen by remember { mutableStateOf(false) }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(
-                bitmap = agentBitmap(agent.iconRes),
-                contentDescription = agent.name,
-                modifier = Modifier
-                    .size(PaEditorial.Space.IconBox)
-                    .clip(RoundedCornerShape(13.dp)),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    agent.name,
-                    fontSize = 15.sp, lineHeight = 21.sp,
-                    fontWeight = FontWeight(650), color = ed.Ink,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                if (roleName != null) {
-                    Text(
-                        "角色 · $roleName",
-                        Modifier.padding(top = 1.dp),
-                        fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            // 四词徽章的状态流转 spring(结论 6):相位一变,新徽章淡入+轻缩放浮入,
-            // 旧徽章淡出让位;spring 可打断,连点勾选/派发不会跳帧。
-            AnimatedContent(
-                targetState = phase,
-                transitionSpec = {
-                    (fadeIn(PaMotion.standard()) + scaleIn(initialScale = 0.85f, animationSpec = PaMotion.standard()))
-                        .togetherWith(fadeOut(PaMotion.standard()))
-                },
-                label = "collabPhaseBadge",
-            ) { ph ->
-                val status = collabPhaseStatus(ph)
-                if (status != null) {
-                    PaStatusBadge(status)
-                } else {
-                    Text(
-                        collabPhaseLabel(ph),
-                        fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
-                    )
-                }
-            }
-        }
-        // 徽章四词之外的一句补充(ACK/RUNNING 专有):"到哪一步了"由纯函数给,
-        // IDLE/DONE/ERROR 不叠字(IDLE 有右侧文案,DONE 徽章够,ERROR 有原因块)。
-        progress.detailLine?.let {
-            Text(
-                it,
-                Modifier.padding(top = 4.dp),
-                fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
-            )
-        }
-        // 未完成成员的原因(daemon 人话原文,按成员各自展示;不改全局):
-        // 收起时两行省略 + 「查看原因」展开全文 —— 截断不给真相,展开才完整。
-        if (phase == CollabAgentPhase.ERROR && !memberError.isNullOrBlank()) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text(
-                    memberError,
-                    Modifier.fillMaxWidth(),
-                    fontSize = 12.sp, lineHeight = 17.sp,
-                    color = EditorialTone.DENIED.text,
-                    maxLines = if (reasonOpen) Int.MAX_VALUE else 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    if (reasonOpen) CollabCopy.HIDE_REASON else CollabCopy.VIEW_REASON,
-                    Modifier
-                        .pressable { reasonOpen = !reasonOpen }
-                        .padding(top = 4.dp, bottom = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp,
-                    fontWeight = FontWeight(650),
-                    color = EditorialTone.DENIED.text,
-                )
-            }
-        }
-        // 卡上动作行(扁平行,不套容器;结论 2 的失败入口 + 成员会话入口)。
-        val showActions = progress.canRedispatch || (progress.canOpenSession && onOpenThread != null)
-        if (showActions) {
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (progress.canRedispatch) {
-                    Row(
-                        Modifier
-                            .pressable { onRedispatch() }
-                            .padding(horizontal = 4.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_lucide_refresh_cw), null,
-                            tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(CollabCopy.REDISPATCH_MEMBER, fontSize = 12.sp, color = PaEditorial.Primary)
-                    }
-                }
-                if (progress.canOpenSession && onOpenThread != null) {
-                    Row(
-                        Modifier
-                            .pressable { onOpenThread(threadId) }
-                            .padding(horizontal = 4.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_lucide_chevron_right), null,
-                            tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(CollabCopy.OPEN_SESSION, fontSize = 12.sp, color = PaEditorial.Primary)
-                    }
-                }
-            }
-        }
-        // 角色配置行(可点,复用既有角色数据);扁平行,不做底色子容器
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .pressable { onConfigRole() }
-                .padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                painterResource(R.drawable.ic_lucide_sliders), null,
-                tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                if (roleName != null) "角色:$roleName" else CollabCopy.ROLE_NONE,
-                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
-            )
-            Spacer(Modifier.weight(1f))
-            Icon(
-                painterResource(R.drawable.ic_lucide_chevron_right), null,
-                tint = ed.Subtle, modifier = Modifier.size(16.dp),
             )
         }
     }

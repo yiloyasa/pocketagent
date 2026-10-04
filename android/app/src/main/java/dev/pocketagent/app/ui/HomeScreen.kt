@@ -96,6 +96,17 @@ import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
 import dev.pocketagent.app.ui.theme.paPushBack
+import dev.pocketagent.app.ui.attention.AttentionCenterState
+import dev.pocketagent.app.ui.attention.AttentionCenterUiState
+import dev.pocketagent.app.ui.attention.AttentionFilter
+import dev.pocketagent.app.ui.attention.AttentionItem
+import dev.pocketagent.app.ui.attention.approvalAttentionItems
+import dev.pocketagent.app.ui.attention.attentionFreshnessLabel
+import dev.pocketagent.app.ui.attention.attentionNeedsMeCount
+import dev.pocketagent.app.ui.attention.filterAttention
+import dev.pocketagent.app.ui.attention.recoveryAttentionItem
+import dev.pocketagent.app.ui.attention.topAttentionSummary
+import dev.pocketagent.app.ui.attention.unknownEventAttentionItems
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -397,10 +408,33 @@ fun HomeScreen(
     // agent 磁贴「正在执行」小徽章:该 agent 名下有运行中会话(已剔除停用)就点亮
     val runningAgentIds = remember(attention) { agentIdsOfRunning(attention.running) }
 
-    // 【推背模糊】任一浮层(侧边栏/管理面板/引导弹窗/新建任务/配对)激活时,主页内容根
-    // 模糊+缩放+压暗。模糊挂在被覆盖的内容层上(整屏一次一层),不在浮层自己身上。
+    // 【Task 5 Attention Center】电脑端新消息:具备 runtime.v1 且在线时轻量刷新一次
+    // (单路 RPC,与设置页共用 RuntimeControlState.unknownEvents 同一份真值,不建
+    // 第二数据源);离线时不打 —— 中心用本地缓存 + 时间戳如实呈现。
+    val runtimeCapable = remember(sharedCaps) { runtimeControlCapable(sharedCaps) }
+    LaunchedEffect(connected, runtimeCapable) {
+        if (connected && runtimeCapable) RuntimeControlState.refreshUnknownEvents()
+    }
+    val unknownCards = remember(RuntimeControlState.unknownEvents) {
+        RuntimeControlState.unknownEvents.map { unknownEventCardModel(it) }
+    }
+    // 注意项清单 = 既有数据源的组装(未知事件 + 待审批 + 启动恢复),全纯函数映射。
+    val attentionItems = remember(unknownCards, attention, host) {
+        val recoveryReport = host?.takeIf { it.hasRecovery() }?.recovery
+        buildList<AttentionItem> {
+            addAll(unknownEventAttentionItems(unknownCards))
+            addAll(approvalAttentionItems(attention.pendingApproval))
+            recoveryAttentionItem(recoveryReport)?.let { add(it) }
+        }
+    }
+    val attentionNeedsMe = remember(attentionItems) { attentionNeedsMeCount(attentionItems) }
+    val topAttention = remember(attentionItems) { topAttentionSummary(attentionItems) }
+    var showAttentionCenter by remember { mutableStateOf(false) }
+
+    // 【推背模糊】任一浮层(侧边栏/管理面板/引导弹窗/新建任务/配对/消息中心)激活时,
+    // 主页内容根模糊+缩放+压暗。模糊挂在被覆盖的内容层上(整屏一次一层),不在浮层自己身上。
     val overlayActive = drawerCtrl.visible || showManage || guideAgent != null ||
-        showNewThread || pairHost != null
+        showNewThread || pairHost != null || showAttentionCenter
 
     // mDNS 发现列表(01 发现态的「发现的电脑」数据源;探活循环已 ensureStarted)
     val discoveredHosts = AgentConnection.mdnsDiscovery
@@ -451,6 +485,10 @@ fun HomeScreen(
                     onRetry = { reloadKey++ },
                     firstLoadDone = firstLoadDone,
                     attention = attention,
+                    attentionExists = attentionItems.isNotEmpty(),
+                    attentionNeedsMe = attentionNeedsMe,
+                    attentionTopTitle = topAttention?.title,
+                    onOpenAttention = { showAttentionCenter = true },
                     onOpenThread = onOpenThread,
                     onOpenTaskCenter = onOpenTaskCenter,
                     onNewThread = { showNewThread = true },
@@ -583,6 +621,23 @@ fun HomeScreen(
             onOpenOnboarding = onOpenOnboarding,
             onOpenBrowser = { onOpenBrowser() },
             onOpenCollab = if (multiAgent) { { onOpenCollab() } } else null,
+            // 消息中心入口(Task 5):有注意项才摆入口(无数据不摆假入口);
+            // 角标 = 需要我处理的条数。未传回调的页面(ChatScreen 等)不显示该项。
+            onOpenAttention = if (attentionItems.isNotEmpty()) { { showAttentionCenter = true } } else null,
+            attentionBadge = attentionNeedsMe,
+        )
+    }
+
+    // 消息中心浮层(Task 5):四档筛选 + 条目;离线时用缓存时刻如实标注(非实时)。
+    if (showAttentionCenter) {
+        AttentionCenterSheet(
+            items = attentionItems,
+            offline = connState != "ok",
+            cachedAtUnixMs = RuntimeControlState.unknownLoadedAtMs,
+            onDismiss = { showAttentionCenter = false },
+            onOpenThread = onOpenThread,
+            onOpenSettings = onOpenSettings,
+            onOpenCollab = if (multiAgent) onOpenCollab else null,
         )
     }
 }
@@ -598,6 +653,11 @@ private fun LazyListScope.connectedHomeItems(
     onRetry: () -> Unit,
     firstLoadDone: Boolean,
     attention: HomeAttentionGroups,
+    /** 消息中心摘要(Task 5):有无注意项 / 需要我处理的条数 / 最高优先级的标题。 */
+    attentionExists: Boolean,
+    attentionNeedsMe: Int,
+    attentionTopTitle: String?,
+    onOpenAttention: () -> Unit,
     onOpenThread: (String) -> Unit,
     onOpenTaskCenter: () -> Unit,
     onNewThread: () -> Unit,
@@ -662,6 +722,50 @@ private fun LazyListScope.connectedHomeItems(
         }
         items(attention.running.take(4), key = { "running-${it.id}" }) { t ->
             RunningRow(thread = t, onClick = { onOpenThread(t.id) })
+        }
+    }
+
+    // ---- 消息中心摘要(Task 5):只显示数量与最高优先级摘要,完整清单在中心浮层 ----
+    // 【为什么不复制详情】首页已有的待审批/运行中区各自承载详情;这里是"全屏注意项"
+    // 的总入口(含电脑端新消息与启动恢复),点击进中心浮层,不在首页摊开。
+    if (attentionExists) {
+        item(key = "attentionCenter") {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .pressable(haptic = true) { onOpenAttention() },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .background(PaEditorial.Raised, RoundedCornerShape(11.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_lucide_info), null,
+                        tint = MaterialTheme.editorial.Primary, modifier = Modifier.size(18.dp),
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (attentionNeedsMe > 0) "$attentionNeedsMe 项等待你处理" else "消息中心",
+                        fontSize = 13.sp, fontWeight = FontWeight(640), color = PaEditorial.Ink,
+                    )
+                    Text(
+                        attentionTopTitle ?: "当前没有等待处理的事项",
+                        fontSize = 11.sp, lineHeight = 16.sp,
+                        color = MaterialTheme.editorial.Muted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(
+                    painterResource(R.drawable.ic_lucide_chevron_right), null,
+                    tint = PaEditorial.Subtle, modifier = Modifier.size(17.dp),
+                )
+            }
         }
     }
 
@@ -1773,6 +1877,156 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
             // 尾部留白随列滚动:列表占满视口时底部也有呼吸空间
             Spacer(Modifier.height(30.dp))
         }
+    }
+}
+
+// ---------------------------------------------------------------- 消息中心(Task 5)
+
+/**
+ * Attention Center 浮层(统一玻璃浮层 PaSheet):四档筛选 + 条目列表。
+ *
+ * 【只做呈现与跳转】归档/排序/最高优先级都是 attention 包的纯函数(单测钉住);
+ * 点击条目回到正确会话或设置详情,返回后主页列表的滚动位置由 LazyColumn 自行保留。
+ * 【OfflineStore 纪律】offline=true 时标注「本地缓存 · 时刻」,绝不把旧数据摆成实时;
+ * 在线时不摆任何字(freshnessLabel 返回 null,不占位)。
+ */
+@Composable
+private fun AttentionCenterSheet(
+    items: List<AttentionItem>,
+    offline: Boolean,
+    cachedAtUnixMs: Long,
+    onDismiss: () -> Unit,
+    onOpenThread: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenCollab: (() -> Unit)?,
+) {
+    PaSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+            Text("消息中心", fontSize = 19.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
+            attentionFreshnessLabel(offline, cachedAtUnixMs, System.currentTimeMillis())?.let {
+                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
+            }
+            Spacer(Modifier.height(10.dp))
+            // 四档筛选:需要我处理 / 运行中 / 已完成 / 已忽略(记住上次选择)。
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AttentionFilter.values().forEach { f ->
+                    val selected = AttentionCenterUiState.filter == f
+                    Box(
+                        Modifier
+                            .pressable { AttentionCenterUiState.filter = f }
+                            .background(
+                                if (selected) PaEditorial.PrimaryContainer else PaEditorial.Raised,
+                                RoundedCornerShape(100.dp),
+                            )
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            f.label,
+                            fontSize = 12.sp,
+                            color = if (selected) MaterialTheme.editorial.Primary else MaterialTheme.editorial.Muted,
+                            fontWeight = if (selected) FontWeight(650) else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            val shown = filterAttention(
+                AttentionCenterState(
+                    items = items,
+                    filter = AttentionCenterUiState.filter,
+                    offline = offline,
+                    cachedAtUnixMs = cachedAtUnixMs,
+                ),
+            )
+            if (shown.isEmpty()) {
+                // 空档如实:这一档现在没有内容(不挪别档数据来填充)。
+                Text(
+                    "这一档暂时没有内容",
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    fontSize = 13.sp, color = MaterialTheme.editorial.Muted,
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                shown.forEachIndexed { i, item ->
+                    AttentionItemRow(item = item, onClick = {
+                        when (item) {
+                            is AttentionItem.Approval -> onOpenThread(item.id)
+                            is AttentionItem.UnknownEvent -> {
+                                if (item.threadId.isNotBlank()) {
+                                    onOpenThread(item.threadId)
+                                } else {
+                                    // 无归属的事件不虚构会话(计划红线:没有会话关联的
+                                    // 事件只进全局中心):去设置的运行时详情,并直接把
+                                    // 「电脑端新消息」弹窗打开(dialysisSheetOpen 共享状态)。
+                                    RuntimeControlState.dialysisSheetOpen = true
+                                    onOpenSettings()
+                                }
+                            }
+                            is AttentionItem.Recovery -> onOpenSettings()
+                            is AttentionItem.Collab -> onOpenCollab?.invoke()
+                        }
+                    })
+                    if (i < shown.lastIndex) {
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** 中心里的一行:标题 + 说明(未知事件附相对时间)+ 行尾动作词/状态词;点击整行跳转。 */
+@Composable
+private fun AttentionItemRow(item: AttentionItem, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .pressable(haptic = true) { onClick() }
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.title,
+                fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight(650),
+                color = PaEditorial.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            val time = (item as? AttentionItem.UnknownEvent)
+                ?.receivedAtUnixMs?.takeIf { it > 0L }
+                ?.let { relativeTimeLabel(it) }
+            val meta = listOf(item.detail.takeIf { it.isNotBlank() }, time)
+                .filterNotNull()
+                .joinToString(" · ")
+            if (meta.isNotEmpty()) {
+                Text(
+                    meta,
+                    Modifier.padding(top = 3.dp),
+                    fontSize = 11.sp, lineHeight = 16.sp,
+                    color = MaterialTheme.editorial.Muted,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        item.actionLabel?.let {
+            Text(
+                it,
+                fontSize = 12.sp, fontWeight = FontWeight(650),
+                color = MaterialTheme.editorial.Primary,
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        (item as? AttentionItem.UnknownEvent)?.let { u ->
+            Text(unknownStatusLabel(u.processingStatus), fontSize = 10.sp, color = PaEditorial.Subtle)
+            Spacer(Modifier.width(6.dp))
+        }
+        Icon(
+            painterResource(R.drawable.ic_lucide_chevron_right), null,
+            tint = PaEditorial.Subtle, modifier = Modifier.size(16.dp),
+        )
     }
 }
 

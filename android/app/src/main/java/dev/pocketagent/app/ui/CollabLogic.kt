@@ -274,6 +274,10 @@ object CollabCopy {
     const val BTN_DISPATCHING = "派发中…"
 
     // ---- 进度卡入口(结论 2:失败卡要有"查看原因"与"重派该 Agent") ----
+    // 【P1 协同闭环(Task 6/7)后】派发后的成员卡改由 CollabSessionRepository
+    // 的单一状态树驱动,入口/禁用原因/七词状态词表移至 ui.collab.CollabCopy
+    // (会话域文案);本文件的派发前文案(选人/派发按钮)与下面的相位映射
+    // (CollabAgentPhase → 四词,EditorialListWaveTest 钉死)保持原样不动。
     const val VIEW_REASON = "查看原因"
     const val HIDE_REASON = "收起原因"
     const val REDISPATCH_MEMBER = "重派该 Agent"

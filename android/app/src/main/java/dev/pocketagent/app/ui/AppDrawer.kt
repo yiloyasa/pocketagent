@@ -149,6 +149,14 @@ fun AppDrawer(
     /** 传了就显示"多 Agent 协同"导航项(首页在设备确实支持协同时才传,无能力不显示假入口)。 */
     onOpenCollab: (() -> Unit)? = null,
     /**
+     * 传了就显示"消息中心"入口(2026-10-04 用户处理中心计划 Task 5,Attention Center)。
+     * 可空:没传的页面不渲染该入口 —— 与 onOpenCollab 同一纪律,没接线不摆假入口;
+     * 首页在有注意项时才传,其他页面(ChatScreen 等)保持缺省即隐藏。
+     */
+    onOpenAttention: (() -> Unit)? = null,
+    /** 消息中心角标 = 「需要我处理」条数(与首页摘要同源;0 = 不显示角标)。 */
+    attentionBadge: Int = 0,
+    /**
      * 跟手进度(0..1)。传了就用它驱动遮罩与面板位移,不再播入场动画 ——
      * 手指在哪面板就在哪,松手由调用方吸附。
      */
@@ -263,6 +271,8 @@ fun AppDrawer(
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
                 onOpenOnboarding = onOpenOnboarding?.let { cb -> { requestClose { cb() } } },
                 onOpenCollab = onOpenCollab?.let { cb -> { requestClose { cb() } } },
+                onOpenAttention = onOpenAttention?.let { cb -> { requestClose { cb() } } },
+                attentionBadge = attentionBadge,
                 onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
                 onNewThread = onNewThread,
                 onOpenBrowser = onOpenBrowser,
@@ -295,6 +305,8 @@ private fun DrawerPanel(
     onOpenTaskCenter: () -> Unit,
     onOpenOnboarding: (() -> Unit)? = null,
     onOpenCollab: (() -> Unit)? = null,
+    onOpenAttention: (() -> Unit)? = null,
+    attentionBadge: Int = 0,
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
     onOpenBrowser: (() -> Unit)? = null,
@@ -310,6 +322,8 @@ private fun DrawerPanel(
         add(DrawerEntry(R.drawable.ic_lucide_git_branch, "Git", 3))
     }
     val connLink = homeHostLink(AgentConnection.connState.value)
+    // 消息中心:仅在调用方传了回调时出现(展开态与 rail 态同一份可达性)。
+    val showAttention = onOpenAttention != null
 
     Column(
         modifier
@@ -339,6 +353,8 @@ private fun DrawerPanel(
                     onOpenTaskCenter = onOpenTaskCenter,
                     onOpenOnboarding = onOpenOnboarding,
                     onOpenCollab = onOpenCollab,
+                    onOpenAttention = onOpenAttention,
+                    attentionBadge = attentionBadge,
                     onToggleCollapsed = onToggleCollapsed,
                     onNewThread = onNewThread,
                     onOpenBrowser = onOpenBrowser,
@@ -466,6 +482,15 @@ private fun DrawerPanel(
                             onClick = { onGoTab(e.tab) },
                         )
                     }
+                    if (showAttention) {
+                        DrawerItem(
+                            icon = R.drawable.ic_lucide_info,
+                            title = "消息中心",
+                            selected = false,
+                            badge = attentionBadge,
+                            onClick = { onOpenAttention?.invoke() },
+                        )
+                    }
                     if (onOpenCollab != null) {
                         DrawerItem(
                             icon = R.drawable.ic_lucide_share_2,
@@ -578,6 +603,8 @@ private fun RailContent(
     onOpenTaskCenter: () -> Unit,
     onOpenOnboarding: (() -> Unit)?,
     onOpenCollab: (() -> Unit)?,
+    onOpenAttention: (() -> Unit)?,
+    attentionBadge: Int,
     onToggleCollapsed: () -> Unit,
     onNewThread: (() -> Unit)? = null,
     onOpenBrowser: (() -> Unit)? = null,
@@ -616,6 +643,13 @@ private fun RailContent(
                 selected = e.tab == currentTab,
                 badge = if (e.tab == 4) unread else 0,
             ) { onGoTab(e.tab) }
+            Spacer(Modifier.height(8.dp))
+        }
+        if (onOpenAttention != null) {
+            RailIcon(
+                R.drawable.ic_lucide_info, "消息中心",
+                badge = attentionBadge,
+            ) { onOpenAttention?.invoke() }
             Spacer(Modifier.height(8.dp))
         }
         if (onOpenCollab != null) {

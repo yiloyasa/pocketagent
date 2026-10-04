@@ -13,14 +13,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -31,7 +28,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,19 +54,20 @@ import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.unknown.UnknownEventCopy
+import dev.pocketagent.app.ui.unknown.UnknownEventDetailSheet
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import pocketagent.v1.CollabPolicy
 import pocketagent.v1.ControlPlane
 import pocketagent.v1.RuntimePolicy
-import pocketagent.v1.UnknownEventSummary
 
 /**
  * 设置页的「运行时」区段(W11b)。
  *
  * 【为什么单独成文件,而不是塞进 SettingsScreen】SettingsScreen.kt 已 178KB,
- * 再加这一块(五组内容:恢复横幅 / 本机总览与形态卡 / 预算 / 消息透析弹窗 / 协同策略)
+ * 再加这一块(五组内容:恢复横幅 / 本机总览与形态卡 / 预算 / 电脑端新消息弹窗 / 协同策略)
  * 会让它彻底读不动。这里只做**排版**,所有规则(取值映射、缺席判定)都在
  * [RuntimeStateLogic] 的纯函数里被单测钉住 —— 本文件里不出现任何 if 判据。
  *
@@ -123,7 +120,9 @@ private fun RuntimeSectionBody() {
     )
 
     if (RuntimeControlState.dialysisSheetOpen) {
-        UnknownEventSheet(onDismiss = { RuntimeControlState.dialysisSheetOpen = false })
+        // 「电脑端新消息」弹窗(旧「消息透析」,2026-10-04 用户处理中心计划 Task 4 改造):
+        // 列表/详情/动作执行整体迁到 ui/unknown/UnknownEventDetailSheet。
+        UnknownEventDetailSheet(onDismiss = { RuntimeControlState.dialysisSheetOpen = false })
     }
 
     memorySheetAgent?.let { agentId ->
@@ -283,7 +282,10 @@ private fun ControlCenterSection(
                 }
                 rows.forEachIndexed { i, domain ->
                     ControlDomainBlock(
-                        domain = domain,
+                        // 【Task 4 人话入口】透析域入口标题改为「电脑端新消息」(覆盖是
+                        // 纯函数 UnknownEventCopy.entryTitleOverride,单测钉住);summary
+                        // 等其余事实照 daemon 原文,不改写。
+                        domain = domain.copy(title = UnknownEventCopy.entryTitleOverride(domain.id, domain.title)),
                         expanded = expandedDomain == domain.id,
                         divider = i < rows.lastIndex,
                         onToggleExpand = {
@@ -1179,323 +1181,9 @@ private suspend fun saveRuntimeEdit(key: String, value: Long?): String? =
         RuntimeControlState.saveBudget { b -> applyBudgetEdit(b, key, value) }
     }
 
-/**
- * 消息透析弹窗(PaSheet 统一玻璃浮层):折叠行给"一句话人话",点开一行才展开详情。
- *
- * 【为什么从设置页内嵌行改成弹窗】未知事件的详情是"原文 + 透析表 + 处置动作"的
- * 纵深内容,摊在设置页里既占地方又逼用户滚动;折叠进弹窗后,设置页只剩一个入口行,
- * 手机上一屏就能看完。
- *
- * 【详情为什么按需拉且缓存】列表(summary)很轻,payload/透析表在 GetUnknownEvent
- * 里,首次展开才拉;缓存 keyed by eventId 放在 **sheet 级**而不是行级 remember ——
- * AnimatedVisibility 收起会把行内容移出组合,行级 remember 会被丢掉,变成每次
- * 展开都重拉。sheet 级缓存覆盖"收起再展开"的场景;关掉弹窗即释放,下次打开重拉,
- * 保证看到的是 daemon 当前值。
- *
- * 【paPushBack 说明】推背模糊要挂在被覆盖的内容根上;本区段的宿主内容根在
- * SettingsScreen(其 paPushBack 只认它自己的 showApprovalPreview 状态),入口行
- * 在本文件里够不到那个根 —— 不跨文件改宿主,弹窗本体用 PaSheet 玻璃材质照常渲染。
- */
-@Composable
-private fun UnknownEventSheet(onDismiss: () -> Unit) {
-    // 最新在前:台账顺序 daemon 不承诺,排序规则由 UI 定死,同一份数据每次渲染同序。
-    val events = RuntimeControlState.unknownEvents.sortedByDescending { it.receivedAtUnixMs }
-    val ledger = unknownLedgerNote(RuntimeControlState.unknownTotal, RuntimeControlState.unknownDropped)
-    // 详情缓存(键 = eventId);detailInFlight 去重"快速收起再展开"时的并发重复拉取。
-    val details = remember { mutableStateMapOf<String, SheetDetailState>() }
-    val detailInFlight = remember { mutableSetOf<String>() }
-    var expandedId by remember { mutableStateOf<String?>(null) }
-    var rawOpenFor by remember { mutableStateOf<String?>(null) }
-    var pendingAck by remember { mutableStateOf<String?>(null) }
-    var ackFailure by remember { mutableStateOf<Pair<String, String>?>(null) }
-    val scope = rememberCoroutineScope()
-
-    PaSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-            Text(
-                "消息透析",
-                fontSize = 19.sp,
-                color = PaEditorial.Ink,
-                fontWeight = FontWeight.SemiBold,
-            )
-            ledger?.let {
-                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
-            }
-            if (events.isEmpty()) {
-                EmptyState(
-                    iconRes = R.drawable.ic_lucide_message_square,
-                    title = "最近没有需要透析的消息",
-                    hint = "电脑端发来新事件后会登记在这里",
-                )
-            } else {
-                Spacer(Modifier.height(4.dp))
-                events.forEachIndexed { i, s ->
-                    val line = unknownEventLine(s)
-                    val open = expandedId == s.eventId
-                    UnknownEventRow(
-                        summary = s,
-                        line = line,
-                        open = open,
-                        detail = details[s.eventId],
-                        rawOpen = rawOpenFor == s.eventId,
-                        pendingAck = pendingAck == s.eventId,
-                        ackFailure = ackFailure?.takeIf { it.first == s.eventId }?.second,
-                        onToggle = {
-                            expandedId = if (open) null else s.eventId
-                            rawOpenFor = null
-                            ackFailure = null
-                        },
-                        onToggleRaw = { rawOpenFor = if (rawOpenFor == s.eventId) null else s.eventId },
-                        onEnsureDetail = {
-                            if (!details.containsKey(s.eventId) && detailInFlight.add(s.eventId)) {
-                                scope.launch {
-                                    val r = RuntimeControlState.unknownEventDetail(s.eventId)
-                                    details[s.eventId] = r.fold(
-                                        onSuccess = { SheetDetailState(detail = it) },
-                                        onFailure = {
-                                            SheetDetailState(error = it.message ?: it::class.java.simpleName)
-                                        },
-                                    )
-                                    detailInFlight.remove(s.eventId)
-                                }
-                            }
-                        },
-                        onAck = { action ->
-                            pendingAck = s.eventId
-                            scope.launch {
-                                val err = RuntimeControlState.acknowledge(s.eventId, action, "")
-                                pendingAck = null
-                                // 成功时 unknownEvents 已被 daemon 回传真值就地替换,
-                                // 折叠行的状态徽标随重组更新;失败原因落在本行下方。
-                                ackFailure = if (err != null) s.eventId to err else null
-                            }
-                        },
-                    )
-                    if (i < events.lastIndex) {
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-}
-
-/** 详情拉取状态:成功带 [detail],失败带 [error];都为空 = 还在拉。 */
-private data class SheetDetailState(
-    val detail: UnknownEventResponseOf? = null,
-    val error: String? = null,
-)
-
-/**
- * 弹窗里的一条事件:折叠态一行(相对时间 + agent 名 + summary 人话),
- * 整行可点展开;展开体 = 分类/状态 + 详细解读 + 字段透析表 + 原文 + 处置动作。
- */
-@Composable
-private fun UnknownEventRow(
-    summary: UnknownEventSummary,
-    line: UnknownEventLine,
-    open: Boolean,
-    detail: SheetDetailState?,
-    rawOpen: Boolean,
-    pendingAck: Boolean,
-    ackFailure: String?,
-    onToggle: () -> Unit,
-    onToggleRaw: () -> Unit,
-    onEnsureDetail: () -> Unit,
-    onAck: (String) -> Unit,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        // ---- 折叠态:一行人话 ----
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .pressable(onClick = onToggle)
-                .padding(vertical = 10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (line.relativeTime.isNotEmpty()) {
-                    Text(line.relativeTime, fontSize = 11.sp, color = PaEditorial.Muted)
-                    Spacer(Modifier.width(8.dp))
-                }
-                if (line.sourceAgent.isNotBlank()) {
-                    Text(
-                        line.sourceAgent,
-                        fontSize = 11.sp,
-                        color = PaEditorial.Muted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(
-                    // summary 有 = daemon 的人话;无 = 回落方法名原文(降级说明在下一行)。
-                    line.summary ?: line.title,
-                    Modifier.weight(1f),
-                    fontSize = 13.sp,
-                    color = PaEditorial.Ink,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.width(6.dp))
-                Icon(
-                    painterResource(
-                        if (open) R.drawable.ic_lucide_chevron_up else R.drawable.ic_lucide_chevron_down
-                    ),
-                    contentDescription = null,
-                    tint = PaEditorial.Subtle,
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-            line.degradedNote?.let {
-                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
-            }
-        }
-
-        // ---- 展开态:spring 驱动、可打断(连点展开/收起从当前高度续走) ----
-        AnimatedVisibility(
-            visible = open,
-            enter = expandVertically(PaMotion.sheet()) + fadeIn(PaMotion.sheet()),
-            exit = shrinkVertically(PaMotion.standard()) + fadeOut(PaMotion.standard()),
-        ) {
-            LaunchedEffect(summary.eventId) {
-                // 内容进组合 = 首次展开(或再次展开);缓存命中时 onEnsureDetail 直接短路。
-                if (detail == null) onEnsureDetail()
-            }
-            Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                when {
-                    detail == null -> Text("读取中…", fontSize = 12.sp, color = PaEditorial.Muted)
-                    detail.error != null -> Text(
-                        detail.error!!,
-                        fontSize = 12.sp,
-                        color = EditorialTone.ATTENTION.accent,
-                    )
-                    else -> {
-                        val d = detail.detail!!
-                        DetailLine("归类", unknownKindLabel(summary.normalizedKind))
-                        DetailLine("状态", line.statusLabel)
-                        // 详细解读:daemon 没给(旧版本)就整块缺席,不占位。
-                        d.translation?.let {
-                            Text(
-                                it,
-                                Modifier.padding(top = 8.dp),
-                                fontSize = 12.5.sp,
-                                color = PaEditorial.Muted,
-                            )
-                        }
-                        if (d.digest.isNotEmpty()) {
-                            Text(
-                                "逐字段",
-                                Modifier.padding(top = 10.dp, bottom = 2.dp),
-                                fontSize = 11.sp,
-                                color = PaEditorial.Muted,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            d.digest.forEach { DigestRow(it) }
-                        }
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressable { onToggleRaw() }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                if (rawOpen) "收起原文" else "查看原文",
-                                fontSize = 12.sp,
-                                color = PaEditorial.Primary,
-                            )
-                            Icon(
-                                painterResource(
-                                    if (rawOpen) R.drawable.ic_lucide_chevron_up
-                                    else R.drawable.ic_lucide_chevron_down
-                                ),
-                                contentDescription = null,
-                                tint = PaEditorial.Primary,
-                                modifier = Modifier.size(13.dp),
-                            )
-                        }
-                        if (rawOpen) {
-                            Text(
-                                rawBlockText(d),
-                                Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 220.dp)
-                                    .verticalScroll(rememberScrollState())
-                                    .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
-                                    .padding(10.dp),
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = PaEditorial.CodeText,
-                            )
-                        }
-                        // 五键分两行:一行塞五个在窄屏会挤到换行截断。
-                        // 忽略(IGNORED)=明确不处理;转人工(ESCALATED)=需要人/上游接手
-                        // —— daemon 协议两值早已支持,此前只是没上屏。
-                        Row(Modifier.fillMaxWidth()) {
-                            AckButton("已查看", "INSPECTED", pendingAck, onAck)
-                            AckButton("稍后再看", "RETRY_LATER", pendingAck, onAck)
-                            AckButton("忽略", "IGNORED", pendingAck, onAck)
-                        }
-                        Row(Modifier.fillMaxWidth()) {
-                            AckButton("转人工", "ESCALATED", pendingAck, onAck)
-                            AckButton("待上游支持", "NEEDS_NATIVE_SUPPORT", pendingAck, onAck)
-                        }
-                        ackFailure?.let {
-                            Text(it, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = EditorialTone.ATTENTION.accent)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** 字段级透析表的一行:key / 含义 / 预览 三列紧凑排;daemon 没给出含义就只排两列。 */
-@Composable
-private fun DigestRow(row: UnknownEventDigestRow) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-        Text(
-            row.key,
-            Modifier.weight(0.9f),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            color = PaEditorial.Ink,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (row.meaning != null) {
-            Text(
-                row.meaning!!,
-                Modifier.weight(1f).padding(horizontal = 6.dp),
-                fontSize = 11.sp,
-                color = PaEditorial.Muted,
-            )
-        }
-        Text(
-            row.preview,
-            Modifier.weight(1.1f),
-            fontSize = 11.sp,
-            color = PaEditorial.Muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-/** 原文区内容:脱敏原文在前,"解出的字段"随后(沿用旧详情弹窗的两段式)。 */
-private fun rawBlockText(d: UnknownEventResponseOf): String =
-    listOfNotNull(
-        d.rawJson.takeIf { it.isNotBlank() },
-        d.decodedFieldsJson.takeIf { it.isNotBlank() }?.let { "解出的字段:$it" },
-    ).joinToString("\n\n").ifBlank { "(载荷为空)" }
-
-@Composable
-private fun AckButton(label: String, action: String, disabled: Boolean, onClick: (String) -> Unit) {
-    TextButton(onClick = { onClick(action) }, enabled = !disabled) {
-        Text(label, fontSize = 13.sp, color = PaEditorial.Primary)
-    }
-}
+// 「电脑端新消息」弹窗已迁往 ui/unknown/UnknownEventDetailSheet(2026-10-04
+// 未知事件用户处理中心计划 Task 4):分组列表 + 技术详情折叠 + daemon 动作表执行
+// (copy 本地剪贴板 / inspect 展开 / 状态型动作带 revision CAS 与冲突刷新)。
 
 /**
  * 内存详情/管理弹窗(PaSheet 统一玻璃浮层)。
@@ -1514,7 +1202,7 @@ private fun AckButton(label: String, action: String, disabled: Boolean, onClick:
  * 【降级】listThreadMemories 回 UNIMPLEMENTED(旧 daemon)时整弹窗换成一句事实
  * 陈述「此 daemon 版本未提供内存管理」,不摆必然失败的空清单。
  *
- * 【paPushBack 说明】与 UnknownEventSheet 同款取舍:宿主内容根在 SettingsScreen,
+ * 【paPushBack 说明】与 UnknownEventDetailSheet 同款取舍:宿主内容根在 SettingsScreen,
  * 本文件够不到那个根,弹窗本体用 PaSheet 玻璃材质照常渲染。
  */
 @Composable

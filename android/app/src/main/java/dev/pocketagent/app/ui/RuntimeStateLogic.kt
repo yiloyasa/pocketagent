@@ -41,6 +41,8 @@ import pocketagent.v1.RuntimeStateResponse
 import pocketagent.v1.SetCodexSettingsRequest
 import pocketagent.v1.SetCollabPolicyRequest
 import pocketagent.v1.SetRuntimePolicyRequest
+import pocketagent.v1.UnknownEventActionRequest
+import pocketagent.v1.UnknownEventActionResult
 import pocketagent.v1.UnknownEventResponse
 import pocketagent.v1.UnknownEventSummary
 import java.text.SimpleDateFormat
@@ -693,6 +695,14 @@ object RuntimeControlState {
     var unknownDropped by mutableStateOf(0L)
         private set
 
+    /**
+     * 最近一次未知事件清单加载成功时刻(本地时钟 unix ms;0 = 从未成功)。
+     * 【OfflineStore 同款纪律】离线/加载失败时,消费方(Attention Center)据此如实标注
+     * 「本地缓存 · N 分钟前」,不把旧数据伪装成实时 —— 宁可承认旧,不假装新。
+     */
+    var unknownLoadedAtMs by mutableStateOf(0L)
+        private set
+
     /** 分块失败原因(块 key → daemon 原文/传输原因);成功或未尝试的块不出现在这里。 */
     var sectionErrors by mutableStateOf<Map<String, String>>(emptyMap())
         private set
@@ -759,6 +769,7 @@ object RuntimeControlState {
                     unknownEvents = it.itemsList
                     unknownTotal = it.total
                     unknownDropped = it.dropped
+                    unknownLoadedAtMs = System.currentTimeMillis()
                 }
                 .onFailure { errs[SECTION_UNKNOWN] = extractRpcMessage(it) }
             sectionErrors = errs
@@ -884,6 +895,67 @@ object RuntimeControlState {
         extractRpcMessage(e)
     }
 
+    /**
+     * 轻量刷新:只拉未知事件清单,**不碰其余四块**。
+     *
+     * 【为什么单独存在】首页 Attention Center(Task 5)与「电脑端新消息」弹窗都要这
+     * 份清单;走 [load] 会连预算/协同等四路一起打,为一个角标背上五倍流量。这里与
+     * [load] 写同一份 [unknownEvents] 真值,不建第二数据源 —— 谁刷新的都算数。
+     * 【失败语义】失败不清空本地快照(离线打开时中心仍有内容可看),只不动
+     * [unknownLoadedAtMs] —— 消费方据此标注「本地缓存」,不伪装实时。
+     */
+    fun refreshUnknownEvents() {
+        scope.launch {
+            try {
+                val resp = withContext(Dispatchers.IO) {
+                    AgentConnection.runtimeService().listUnknownEvents(ListUnknownEventsRequest.getDefaultInstance())
+                }
+                unknownEvents = resp.itemsList
+                unknownTotal = resp.total
+                unknownDropped = resp.dropped
+                unknownLoadedAtMs = System.currentTimeMillis()
+            } catch (_: Exception) {
+                // 技术原因不上界面:Attention Center 的呈现层只看 unknownLoadedAtMs 决定
+                // 实时/缓存口径;错误细节留给日志与后续人工排查。
+            }
+        }
+    }
+
+    /**
+     * 执行一个未知事件用户动作(daemon 白名单:inspect/acknowledge/retry_later/
+     * open_native;**copy 是手机本地剪贴板动作,调用方不得把 copy 送到这里** ——
+     * 请求组装层 [unknownActionRequest] 已在源头拒绝)。
+     *
+     * 【CAS 必带】expected_revision = 客户端最后一次看到的 UnknownEventSummary.revision;
+     * revision 不匹配回**结构化结果**(ok=false + conflict=true + 当前 summary/
+     * new_revision),不是 gRPC 错误 —— 冲突是并发处理的正常业务态,调用方据此重拉
+     * 详情刷新,不炸 UI。
+     * 【真值就地接管】动作后(冲突时为当前)的 summary 回来即替换本地行:列表、卡片、
+     * 下一轮 CAS 的 revision 全部跟着 daemon 走,不做乐观改写。
+     */
+    suspend fun executeUnknownEventAction(
+        eventId: String,
+        expectedRevision: Long,
+        actionId: String,
+        note: String,
+    ): Result<UnknownEventActionResult> = runCatching {
+        val r = withContext(Dispatchers.IO) {
+            AgentConnection.runtimeService().executeUnknownEventAction(
+                UnknownEventActionRequest.newBuilder()
+                    .setEventId(eventId)
+                    .setExpectedRevision(expectedRevision)
+                    .setActionId(actionId)
+                    .setNote(note)
+                    .build()
+            )
+        }
+        if (r.hasSummary()) {
+            val item = r.summary
+            unknownEvents = unknownEvents.map { if (it.eventId == item.eventId) item else it }
+        }
+        r
+    }
+
     /** 展开某条未知事件的原始载荷(列表页不需要背 payload,点开才拉)。 */
     suspend fun unknownEventDetail(eventId: String): Result<UnknownEventResponseOf> =
         runCatching {
@@ -943,6 +1015,7 @@ object RuntimeControlState {
     fun reset() {
         recovery = null; overview = null; budget = null; collab = null
         unknownEvents = emptyList(); unknownTotal = 0L; unknownDropped = 0L
+        unknownLoadedAtMs = 0L
         sectionErrors = emptyMap()
         memoriesUnsupported = false
         loadState = RuntimeLoadState.LOADING
@@ -971,6 +1044,15 @@ data class UnknownEventResponseOf(
     val digest: List<UnknownEventDigestRow> = emptyList(),
     /** 详细人话解读;**null = 未提供**,同上。 */
     val translation: String? = null,
+    /**
+     * 事件摘要(含 12~17 人话字段与 revision);**null = 此 daemon 响应不带 summary**。
+     * 详情页据它校准卡片模型的 revision(动作 CAS 的输入),不另建第二份事实。
+     */
+    val summary: UnknownEventSummary? = null,
+    /** 建议的下一步(daemon 人话);**null = 未给**,UI 不占位。 */
+    val recommendedNextStep: String? = null,
+    /** 支持包提示;**null = 未给**,同上。 */
+    val supportBundleHint: String? = null,
 )
 
 /** 透析表的一行:字段名 / 值类型 / 脱敏预览 / 含义人话。 */
@@ -1003,4 +1085,8 @@ fun mapUnknownEventDetail(r: UnknownEventResponse): UnknownEventResponseOf =
             )
         },
         translation = r.translation.ifBlank { null },
+        // 新字段 7/8 与 summary 一并带出(旧 daemon 缺席 = null,UI 整块不渲染,不拼造)。
+        summary = if (r.hasSummary()) r.summary else null,
+        recommendedNextStep = r.recommendedNextStep.ifBlank { null },
+        supportBundleHint = r.supportBundleHint.ifBlank { null },
     )

@@ -25,6 +25,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
+import io.grpc.stub.ClientCallStreamObserver
+import io.grpc.stub.ClientResponseObserver
 import pocketagent.v1.AuthorizeRequest
 import pocketagent.v1.GetPairingInfoRequest
 import pocketagent.v1.GetRuntimeStateRequest
@@ -39,6 +45,15 @@ import pocketagent.v1.ModelServiceGrpc
 import pocketagent.v1.ThreadServiceGrpc
 import pocketagent.v1.RuntimeServiceGrpc
 import pocketagent.v1.WatchEventsRequest
+import pocketagent.v1.CancelCollabMemberRequest
+import pocketagent.v1.CancelCollabSessionRequest
+import pocketagent.v1.CollabMemberSnapshot
+import pocketagent.v1.CollabSessionEvent
+import pocketagent.v1.CollabSessionSnapshot
+import pocketagent.v1.GetCollabSessionRequest
+import pocketagent.v1.ListCollabSessionsRequest
+import pocketagent.v1.RetryCollabMemberRequest
+import pocketagent.v1.WatchCollabSessionRequest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -1256,6 +1271,95 @@ object AgentConnection {
 
     fun threadServiceAsync(): ThreadServiceGrpc.ThreadServiceStub =
         ThreadServiceGrpc.newStub(channel())
+
+    // ================= 协同会话闭环(P1 Task 6:typed collab access) =================
+    //
+    // 封装纪律与 WatchEvents/hostEvents 先例一致:
+    //  - 单向 RPC:blocking stub + 既有 deadline 惯例(协同快照/取消/重试都是
+    //    "读一份内存态或小 JSON + 一次落库",CancelCollabSession 的 daemon 侧
+    //    收敛等待 ≤10s,threadService() 的 20s 列表档全部兜得住,不另立档位);
+    //  - 服务端流(WatchCollabSession):async stub + StreamObserver,与
+    //    watchEventsLoop 同款 —— **不给整流 deadline**(流按事件长期存活,
+    //    20s 全流 deadline 会把它定时杀死);断线退避重订、续传水位、缺口重建
+    //    归 CollabSessionRepository,这里只做"一问一流"的薄封装。
+
+    /** 取单个协同会话快照(恢复整屏 / 缺口重建兜底)。 */
+    fun getCollabSession(sessionId: String): CollabSessionSnapshot =
+        threadService().getCollabSession(
+            GetCollabSessionRequest.newBuilder().setSessionId(sessionId).build()
+        )
+
+    /** 列出协同会话(daemon 按创建时间倒序;协同页只要进行中的那批)。 */
+    fun listCollabSessions(includeFinished: Boolean): List<CollabSessionSnapshot> =
+        threadService().listCollabSessions(
+            ListCollabSessionsRequest.newBuilder().setIncludeFinished(includeFinished).build()
+        ).sessionsList
+
+    /** 取消整个协同(daemon 逐成员取消并等收敛,返回收敛后的会话快照)。 */
+    fun cancelCollabSession(sessionId: String): CollabSessionSnapshot =
+        threadService().cancelCollabSession(
+            CancelCollabSessionRequest.newBuilder().setSessionId(sessionId).build()
+        )
+
+    /** 只取消一个成员(对应子线程;daemon 对已终局成员幂等返回原卡)。 */
+    fun cancelCollabMember(sessionId: String, threadId: String): CollabMemberSnapshot =
+        threadService().cancelCollabMember(
+            CancelCollabMemberRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setThreadId(threadId)
+                .build()
+        )
+
+    /** 重试一个成员(daemon 以新代际重建轮次,不覆盖旧结果)。 */
+    fun retryCollabMember(sessionId: String, threadId: String): CollabMemberSnapshot =
+        threadService().retryCollabMember(
+            RetryCollabMemberRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setThreadId(threadId)
+                .build()
+        )
+
+    /**
+     * 订阅单个协同会话的事件流:先回放 seq > [afterSequence] 的既有事件,再跟随
+     * 实时事件,直至服务端收流或出错(错误经 Flow 异常传播,调用方决定重订)。
+     *
+     * 【channel+collect,照 hostEvents 模式】StreamObserver.onNext trySend 进
+     * callbackFlow 的有界通道(64,与 hostEvents 的 extraBufferCapacity 同档);
+     * 通道满时丢帧不阻塞 —— 丢的是"通知",客户端凭 sequence 缺口拉快照自救,
+     * 与 daemon 侧"绝不为慢客户端阻塞事件管道"的同一条约定对偶。
+     * 取消收集(awaitClose)即取消底层 gRPC 流(beforeStart 存下的 call)。
+     */
+    fun watchCollabSession(sessionId: String, afterSequence: Long): Flow<CollabSessionEvent> =
+        callbackFlow {
+            val request = WatchCollabSessionRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setAfterSequence(afterSequence)
+                .build()
+            // 取消句柄存在 flow 块作用域(beforeStart 与 awaitClose 都从这里读写)
+            var callRef: ClientCallStreamObserver<WatchCollabSessionRequest>? = null
+            val observer = object : ClientResponseObserver<WatchCollabSessionRequest, CollabSessionEvent> {
+                override fun beforeStart(call: ClientCallStreamObserver<WatchCollabSessionRequest>) {
+                    // RPC 启动时同步回调:先把取消句柄存到外层,awaitClose 才有得用
+                    callRef = call
+                }
+
+                override fun onNext(value: CollabSessionEvent) {
+                    trySend(value)
+                }
+
+                override fun onError(t: Throwable) {
+                    close(t)
+                }
+
+                override fun onCompleted() {
+                    close()
+                }
+            }
+            threadServiceAsync().watchCollabSession(request, observer)
+            awaitClose {
+                runCatching { callRef?.cancel("协同事件流关闭", null) }
+            }
+        }.buffer(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     fun terminalServiceAsync(): TerminalServiceGrpc.TerminalServiceStub =
         TerminalServiceGrpc.newStub(channel())

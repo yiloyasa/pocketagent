@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import dev.pocketagent.app.ui.unknown.UnknownEventCopy
 import pocketagent.v1.CollabPolicy
 import pocketagent.v1.RuntimePolicy
 
@@ -133,5 +134,19 @@ class RuntimeSectionLogicTest {
         assertEquals("启动恢复", sectionLabel(RuntimeControlState.SECTION_HOST))
         assertEquals("预算", sectionLabel(RuntimeControlState.SECTION_BUDGET))
         assertEquals("某个新块", sectionLabel("某个新块"))
+    }
+
+    // ---- 电脑端新消息入口(2026-10-04 用户处理中心计划 Task 4)----
+
+    @Test
+    fun `透析域入口标题改人话其余域照daemon原文`() {
+        // 计划 Task 4:入口改「电脑端新消息」。覆盖只对 dialysis 域生效(daemon 契约
+        // 钉死的稳定 id,客户端按 id 匹配、不按 title);其余域标题是 daemon 的事实,
+        // 原样返回,不改写(daemon 文案不过客户端的手)。
+        assertEquals("电脑端新消息", UnknownEventCopy.entryTitleOverride("dialysis", "未知事件"))
+        assertEquals("资源预算", UnknownEventCopy.entryTitleOverride("budget", "资源预算"))
+        assertEquals("审批请求", UnknownEventCopy.entryTitleOverride("approvals", "审批请求"))
+        // daemon 未来新增的域:照原文透出,不猜一个"人话"替换。
+        assertEquals("新域", UnknownEventCopy.entryTitleOverride("brand-new-domain", "新域"))
     }
 }
