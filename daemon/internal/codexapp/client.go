@@ -19,8 +19,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -29,23 +31,15 @@ type Client struct {
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
-	mu           sync.Mutex
-	writeMu      sync.Mutex
-	nextID       int64
-	pending      map[int64]chan rpcResp
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	nextID  int64
+	pending map[int64]chan rpcResp
 	// abandoned 记录"调用方已按预算放弃"的探测请求(见 CallProbeCtx / giveUp):
 	// dispatch 收到无人认领的应答时先按调用代号(id)查这里,命中即静默丢弃 ——
 	// 不进 UnknownResponseHandler、不进未知事件台账。与 pending 同受 mu 保护。
-	abandoned    map[int64]abandonedProbe
-	// serverIDs 反向请求"非数字 id"回显表(见 serverRequestID / serverReplyID):
-	// dispatch 收到字符串等非数字 id 的反向请求时,分配一个负数句柄并在此登记
-	// 句柄 → 原始 id RawMessage,Respond/RespondError 应答时查表原样回显。
-	// 与 pending/abandoned 同受 mu 保护。
-	serverIDs    map[int64]serverIDEntry
-	// serverHandle 负数句柄分配器(每次递减)。我们的请求 id 从 1 递增恒为正、
-	// 数字反向请求 id 按协议为非负 —— 负数空间独占,三类 id 永不冲突。
-	serverHandle int64
-	handlerMu    sync.Mutex
+	abandoned map[int64]abandonedProbe
+	handlerMu sync.Mutex
 
 	// waitOnce 保证 cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait):意外退出
 	// (readLoop EOF,要拿退出码写死因日志)与 Close 主动收尸两条路径共用
@@ -66,9 +60,11 @@ type Client struct {
 	NotifHandler func(method string, params json.RawMessage)
 	// GlobalHandler 常驻通知钩子(先于 NotifHandler 调用,只做记录,不做流式渲染)
 	GlobalHandler func(method string, params json.RawMessage)
-	// 反向请求(服务器 → 客户端,必须应答):审批等
-	ReqHandler             func(id int64, method string, params json.RawMessage)
-	UnknownResponseHandler func(id int64, raw json.RawMessage)
+	// 反向请求(服务器 → 客户端,必须应答):审批等。id 用 RawMessage 原样透传
+	// (数字 id 原值;字符串等非数字 id 原文),应答经 Respond/RespondError 原样
+	// 回显 —— wire 合同不变,没有中间句柄(句柄桥已于 2026-10-04 删除)。
+	ReqHandler             func(id json.RawMessage, method string, params json.RawMessage)
+	UnknownResponseHandler func(id json.RawMessage, raw json.RawMessage)
 
 	// Setter 写入与 CallCtx 快照读取均受 handlerMu 保护；dispatch 只读
 	// 不可变快照且在锁外调用回调，回调可安全地发请求或卸载自身。
@@ -79,8 +75,8 @@ type Client struct {
 type codexHandlers struct {
 	global          func(method string, params json.RawMessage)
 	notif           func(method string, params json.RawMessage)
-	req             func(id int64, method string, params json.RawMessage)
-	unknownResponse func(id int64, raw json.RawMessage)
+	req             func(id json.RawMessage, method string, params json.RawMessage)
+	unknownResponse func(id json.RawMessage, raw json.RawMessage)
 }
 
 // syncHandlers 兼容旧探针的串行赋值后 CallCtx；生产写入统一用 Setter。
@@ -104,7 +100,7 @@ func (c *Client) SetGlobalHandler(handler func(string, json.RawMessage)) {
 	c.publishHandlersLocked()
 }
 
-func (c *Client) SetUnknownResponseHandler(handler func(int64, json.RawMessage)) {
+func (c *Client) SetUnknownResponseHandler(handler func(json.RawMessage, json.RawMessage)) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.UnknownResponseHandler = handler
@@ -112,7 +108,7 @@ func (c *Client) SetUnknownResponseHandler(handler func(int64, json.RawMessage))
 }
 
 // SetTurnHandlers 原子装卸当轮通知/审批钩子，不影响常驻钩子。
-func (c *Client) SetTurnHandlers(notif func(string, json.RawMessage), req func(int64, string, json.RawMessage)) {
+func (c *Client) SetTurnHandlers(notif func(string, json.RawMessage), req func(json.RawMessage, string, json.RawMessage)) {
 	c.handlerMu.Lock()
 	defer c.handlerMu.Unlock()
 	c.NotifHandler, c.ReqHandler = notif, req
@@ -174,12 +170,17 @@ func Start() (*Client, error) {
 	if CollabExtraArgs != nil {
 		args = append(args, CollabExtraArgs()...)
 	}
-	// .cmd/.bat 不能被 CreateProcess 直接执行,要经 cmd /c
+	// .cmd/.bat 不能被 CreateProcess 直接执行,要经 cmd.exe 启动;含空格路径的
+	// 引证形态必须走 scriptCmdLine 的规范式,不能依赖 exec.Command 的默认逐参
+	// 拼装(踩坑证据见 scriptCmdLine 注释)。SysProcAttr.CmdLine 是"逐字透传"
+	// 字段(hidewin.Apply 只补 HideWindow/CreationFlags,不覆盖它)。
+	var cmd *exec.Cmd
 	if len(bin) >= 4 && (bin[len(bin)-4:] == ".cmd" || bin[len(bin)-4:] == ".bat") {
-		args = append([]string{"/c", bin}, args...)
-		bin = "cmd.exe"
+		cmd = exec.Command("cmd.exe")
+		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: scriptCmdLine(bin, args)}
+	} else {
+		cmd = exec.Command(bin, args...)
 	}
-	cmd := exec.Command(bin, args...)
 	cmd.Env = os.Environ()
 	hidewin.Apply(cmd) // codex 是控制台程序:不隐藏会在用户桌面闪黑窗
 	stdin, err := cmd.StdinPipe()
@@ -207,7 +208,6 @@ func Start() (*Client, error) {
 		stdout:    bufio.NewReaderSize(stdout, 4*1024*1024),
 		pending:   map[int64]chan rpcResp{},
 		abandoned: map[int64]abandonedProbe{},
-		serverIDs: map[int64]serverIDEntry{},
 	}
 	c.syncHandlers() // readLoop 的读面就位(此刻 handler 均为 nil:上层 Start 之后才装)
 	go c.readLoop()
@@ -217,6 +217,41 @@ func Start() (*Client, error) {
 	// 绝不重复 Wait(exec.Cmd 不允许二次 Wait)。
 	go drainStderr(stderr, func(l string) { log.Printf("[codex-stderr] %s", l) })
 	return c, nil
+}
+
+// scriptCmdLine 构造 cmd.exe 的**逐字命令行**(经 SysProcAttr.CmdLine 透传,
+// 绕开 exec.Command 的逐参拼装):
+//
+//		cmd.exe /d /s /c ""<script>" <arg1> <arg2>…"
+//
+//	  - /d:跳过注册表 AutoRun 脚本,spawn 形态确定;
+//	  - /s + 最外层一对引号:cmd 对 /c 余文的引号剥离规则就此**恒定** —— 永远
+//	    只剥最外层一对,得到的执行文是 `"<script>" args...`,脚本路径的引号
+//	    无论如何不丢。脚本路径段 = `"` + bin + `"`(在最外层引号内自带一对
+//	    引号,与外层包裹叠加后线上呈现为 `""<script>"`);
+//	  - 各参数仍逐个 syscall.EscapeArg 转义(含空格的参数在子进程侧按 CRT 规则
+//	    正确还原),与最外层剥离互不干扰。
+//
+// 【为什么不能用旧形态 exec.Command("cmd.exe", "/c", bin, args...)】旧形态靠
+// Go 逐参转义得到 `cmd.exe /c "G:\Claude Code\codex.cmd" app-server …`,cmd 对
+// /c 余文有两条互斥规则:引号**恰好两个**且中间无特殊字符时原样保留;否则落
+// "剥首字符 + 剥最后一个引号"的旧规则。只要行内任何一个参数自带引号,引号数
+// 一超过 2 就落旧规则 —— 脚本路径的引号被剥掉,cmd 把第一个空格前的
+// `G:\Claude` 当命令名去执行。活体证据(本机 daemon.log,系统级 setx 遗留的
+// CODEX_BIN=G:\Claude Code\codex.cmd,路径含空格):
+//
+//	'G:\Claude' 不是内部或外部命令…
+//
+// codex provider 因此在本机整体不可用。协同注入(collab_inject 的
+// `-c mcp_servers.*.command="…"` 值自带引号)会让该失效从"偶发"变"必现"。
+// 本函数的规范引证形态对"其余参数带不带引号"免疫,是对症的修法。
+func scriptCmdLine(bin string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, `"`+bin+`"`) // 脚本路径在最外层引号内自带一对引号
+	for _, a := range args {
+		parts = append(parts, syscall.EscapeArg(a))
+	}
+	return "cmd.exe /d /s /c " + `"` + strings.Join(parts, " ") + `"`
 }
 
 // drainStderr 逐行收子进程 stderr,每行交给 line 回调(生产注入 log.Printf 落
@@ -245,11 +280,11 @@ type wireMsg struct {
 	// 旧实现锁死 *int64:一行 "id":"req-1" 会让整帧 json.Unmarshal 失败,
 	// readLoop 只剩一行 debug 日志就丢帧 —— 审批请求、事件、应答全部静默
 	// 消失且无台账。改 RawMessage 后按形状分发,见 dispatch。
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *struct {
+	ID     json.RawMessage `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *struct {
 		Code    int             `json:"code"`
 		Message string          `json:"message"`
 		Data    json.RawMessage `json:"data,omitempty"`
@@ -462,79 +497,16 @@ func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
 // 但只要它有界,就不会出现"一个请求挂住、所有 codex 操作排队等它"。
 const callTimeout = 120 * time.Second
 
-// serverIDEntry 一条待回显的非数字反向请求 id(serverIDs 的值):raw 是线上
-// 原样 id,at 用于过期清扫。
-type serverIDEntry struct {
-	raw json.RawMessage
-	at  time.Time
-}
-
-// serverIDTTL 非数字反向请求 id 登记项的保留期。审批等待上层自有预算(约 120s
-// 上限,见 handleCodexApproval),10 分钟足够宽裕;handler 始终不应答的极端情况
-// 下,登记项随下一次登记时的 TTL 清扫回收,serverIDs 不无界增长。超期后才来的
-// 应答拿到明确错误、不回写 —— 宁可让那次审批报错,不向服务器回一个错配的 id。
-const serverIDTTL = 10 * time.Minute
-
-// serverRequestID 把反向请求的原始 id RawMessage 换成 handler 应答面可用的 int64:
-//   - 数字 id:原值直通,handler 拿到的与旧实现(*int64 时代)逐字节一致;
-//   - 非数字 id(协议允许字符串;zcode 桥实测其服务器反向请求就是字符串,codex
-//     未来版本可能同样切换):分配负数句柄并在 serverIDs 登记。导出应答面
-//     Respond/RespondError 与上层审批链(internal/agent 的 codexApprovalResponder
-//     接口、各 cmd 探针)钉死 int64,不能为这种未来形状改签名 —— 以句柄做桥,
-//     应答时由 serverReplyID 查表还原原样回显。
-//
-// 只在 dispatch 的「req handler 已就位」分支调用,不会产生无人认领的登记。
-func (c *Client) serverRequestID(rawID json.RawMessage) int64 {
-	var id int64
-	if err := json.Unmarshal(rawID, &id); err == nil {
-		return id
-	}
-	cp := append(json.RawMessage(nil), rawID...) // 登记自己的副本,防外部改写
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.serverHandle--
-	h := c.serverHandle
-	if c.serverIDs == nil {
-		c.serverIDs = map[int64]serverIDEntry{} // 直构 Client 的测试路径
-	}
-	now := time.Now()
-	for hid, e := range c.serverIDs { // TTL 清扫,防无界增长(同 giveUp 的 abandoned)
-		if now.Sub(e.at) > serverIDTTL {
-			delete(c.serverIDs, hid)
-		}
-	}
-	c.serverIDs[h] = serverIDEntry{raw: cp, at: now}
-	return h
-}
-
-// serverReplyID 应答面的逆变换(Respond/RespondError 专用):数字 id 照原值
-// marshal 回显;负数句柄查 serverIDs 取回原始 RawMessage 并除名 —— 一次应答只
-// 回一次,除名后同句柄再答得到错误,不会向服务器重复回写(与上层审批链的
-// resolved 竞速守卫双保险)。
-func (c *Client) serverReplyID(id int64) (json.RawMessage, error) {
-	if id >= 0 {
-		return json.Marshal(id)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.serverIDs[id]
-	if !ok {
-		return nil, fmt.Errorf("反向请求 id 句柄 %d 已失效(已应答或超期清理),拒绝回写", id)
-	}
-	delete(c.serverIDs, id)
-	return e.raw, nil
-}
-
-// Respond 应答服务器的反向请求(审批)。id 原样回显:数字 id 回数字;字符串等
-// 非数字 id 经 serverRequestID 的句柄桥在此还原原样(未来 codex 切字符串 id 时
-// 应答仍与请求严格配对,不会挂死对方)。
-func (c *Client) Respond(id int64, result interface{}) error {
-	rawID, err := c.serverReplyID(id)
-	if err != nil {
-		return err
+// Respond 应答服务器的反向请求(审批)。id 原样回显:数字 id 回数字、字符串等
+// 非数字 id 原文透传 —— dispatch 交付给 ReqHandler 的就是线上原样 RawMessage,
+// 这里不加任何变换(wire 合同不变)。曾经的中转负数句柄桥(登记/查表/TTL 全套)
+// 已随签名的 RawMessage 化(2026-10-04)整体删除。
+func (c *Client) Respond(id json.RawMessage, result interface{}) error {
+	if !idPresent(id) {
+		return fmt.Errorf("反向请求缺少可回应的 id,拒绝回写")
 	}
 	raw, err := json.Marshal(map[string]interface{}{
-		"jsonrpc": "2.0", "id": rawID, "result": result,
+		"jsonrpc": "2.0", "id": id, "result": result,
 	})
 	if err != nil {
 		return err
@@ -553,14 +525,13 @@ func (c *Client) Respond(id int64, result interface{}) error {
 //
 // 早期实现把这两者混成一个 {"decision":"decline"},于是 token 刷新被当成
 // "用户拒绝了刷新",请求语义被彻底改写。
-func (c *Client) RespondError(id int64, code int, message string) error {
-	rawID, err := c.serverReplyID(id)
-	if err != nil {
-		return err
+func (c *Client) RespondError(id json.RawMessage, code int, message string) error {
+	if !idPresent(id) {
+		return fmt.Errorf("反向请求缺少可回应的 id,拒绝回写")
 	}
 	raw, err := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
-		"id":      rawID,
+		"id":      id,
 		"error":   map[string]interface{}{"code": code, "message": message},
 	})
 	if err != nil {
@@ -617,14 +588,14 @@ func idPresent(raw json.RawMessage) bool {
 }
 
 func (c *Client) dispatch(m *wireMsg) {
-	// 服务器反向请求(审批等,带 id,必须应答)。id 双形态:
-	//   - 数字(现行 codex app-server):原值直通,handler 拿到的与旧版一致;
-	//   - 非数字(字符串等):负数句柄桥,应答时原样回显(serverRequestID /
-	//     serverReplyID)。只读快照:与 Run 协程装卸裸字段解耦。
+	// 服务器反向请求(审批等,带 id,必须应答)。id 双形态全部**原样直通**:
+	// 数字(现行 codex app-server)与非数字(字符串等,zcode 桥实测其服务器
+	// 反向请求就是字符串)都按线上原文交给 handler,应答经 Respond/RespondError
+	// 原样回显 —— 中间无句柄(负数句柄桥已随签名 RawMessage 化删除)。
+	// 只读快照:与 Run 协程装卸裸字段解耦。
 	if m.Method != "" && idPresent(m.ID) {
 		if hs := c.hs.Load(); hs != nil && hs.req != nil {
-			id := c.serverRequestID(m.ID)
-			go hs.req(id, m.Method, m.Params)
+			go hs.req(m.ID, m.Method, m.Params)
 		}
 		return
 	}
@@ -645,42 +616,39 @@ func (c *Client) dispatch(m *wireMsg) {
 	if idPresent(m.ID) {
 		// 应答帧。自家请求 id 恒为数字(call 里 nextID 从 1 递增),只有数字
 		// 才可能命中 pending/abandoned;字符串 id 的应答不可能是我们的 ——
-		// 但绝不静默丢,照旧进 unknownResponse 台账留痕。
+		// 但绝不静默丢,照旧进 unknownResponse 台账留痕,id 参数原样透传
+		// (RawMessage 签名后不再需要 0 占位:数字与非数字都交真实 id)。
 		var id int64
-		if err := json.Unmarshal(m.ID, &id); err != nil {
-			// 非数字应答 id:id 参数按现有 int64 签名传 0 占位(0 永不命中
-			// pending/abandoned),真实 id 在完整原始帧 raw 里,足以还原诊断;
-			// 签名的 RawMessage 化牵动 internal/agent 与各 cmd 探针,另波处理。
-			if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
-				raw, _ := json.Marshal(m)
-				go hs.unknownResponse(0, raw)
+		if err := json.Unmarshal(m.ID, &id); err == nil {
+			c.mu.Lock()
+			ch, ok := c.pending[id]
+			delete(c.pending, id)
+			c.mu.Unlock()
+			if ok {
+				if m.Error != nil {
+					// 错误在传输层就转成 Go error(见 Call 的长注释:以前这里塞进
+					// 返回的 JSON,调用点的 err 判断全是死分支)。
+					ch <- rpcResp{err: fmt.Errorf("codex 返回错误 %d: %s", m.Error.Code, m.Error.Message)}
+				} else {
+					ch <- rpcResp{raw: m.Result}
+				}
+				return
 			}
-			return
+			if ap, abandoned := c.takeAbandoned(id); abandoned {
+				// 迟到的探测应答:调用方早已按预算放弃并降级(用量面板如实显示
+				// "读不到"),app-server 补发的上游错误是纯冗余证据 —— 静默丢弃,
+				// 不进 UnknownResponseHandler、不进未知事件台账(源头治理,2026-10-01;
+				// 先前的台账收编见 provider 侧 codexLateResponseLedger,仍作兜底)。
+				// PA_CODEX_DEBUG 下留一行,与 readLoop 的原始帧日志同款口径。
+				if os.Getenv("PA_CODEX_DEBUG") != "" {
+					log.Printf("[codex-debug] 丢弃已放弃探测 %s(id=%d)的迟到应答", ap.method, id)
+				}
+				return
+			}
 		}
-		c.mu.Lock()
-		ch, ok := c.pending[id]
-		delete(c.pending, id)
-		c.mu.Unlock()
-		if ok {
-			if m.Error != nil {
-				// 错误在传输层就转成 Go error(见 Call 的长注释:以前这里塞进
-				// 返回的 JSON,调用点的 err 判断全是死分支)。
-				ch <- rpcResp{err: fmt.Errorf("codex 返回错误 %d: %s", m.Error.Code, m.Error.Message)}
-			} else {
-				ch <- rpcResp{raw: m.Result}
-			}
-		} else if ap, abandoned := c.takeAbandoned(id); abandoned {
-			// 迟到的探测应答:调用方早已按预算放弃并降级(用量面板如实显示
-			// "读不到"),app-server 补发的上游错误是纯冗余证据 —— 静默丢弃,
-			// 不进 UnknownResponseHandler、不进未知事件台账(源头治理,2026-10-01;
-			// 先前的台账收编见 provider 侧 codexLateResponseLedger,仍作兜底)。
-			// PA_CODEX_DEBUG 下留一行,与 readLoop 的原始帧日志同款口径。
-			if os.Getenv("PA_CODEX_DEBUG") != "" {
-				log.Printf("[codex-debug] 丢弃已放弃探测 %s(id=%d)的迟到应答", ap.method, id)
-			}
-		} else if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
+		if hs := c.hs.Load(); hs != nil && hs.unknownResponse != nil {
 			raw, _ := json.Marshal(m)
-			go hs.unknownResponse(id, raw)
+			go hs.unknownResponse(m.ID, raw)
 		}
 	}
 }

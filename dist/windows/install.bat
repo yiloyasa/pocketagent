@@ -9,9 +9,10 @@ REM        ⑤ 打印本机连接信息(供手机填写)
 REM        ⑥ 可选:运行业务健康检查 healthcheck.bat(失败只提示,不阻断安装)
 REM  说明:所有路径基于脚本自身位置(%~dp0),端口等参数集中在下方变量。
 REM        本脚本需"以管理员身份运行"。
-REM        幂等:防火墙规则与计划任务每次都无条件重建(/f 覆盖)——计划任务
-REM        的启动参数里烙有配对码,只有无条件重建才能保证它始终与当前
-REM        pocketagentd.conf 一致:改了 token 重跑本脚本即生效。
+REM        幂等:防火墙规则与计划任务每次都无条件重建(/f 覆盖)——配对码
+REM        只存 pocketagentd.conf,不再烙进计划任务命令行(安全口径:任务行
+REM        任何本地用户 schtasks /query /v 即可读到);无条件重建保证任务行
+REM        参数(端口等)始终与当前安装一致:改了端口/换 token 重跑即生效。
 REM  语法自检:set PA_DRYRUN=1 后运行,仅验证解析,不改动任何系统。
 REM ============================================================
 set "PORT=7246"
@@ -99,9 +100,11 @@ REM daemon 以 SYSTEM 身份拉起 codex 子进程会读不到登录态,任务�
 REM 因此计划任务以当前用户身份运行(省略 /ru 即当前用户)。
 REM 触发方式:每分钟直跑一次 paguard.exe(已在跑则自动跳过)——
 REM 开机登录后 1 分钟内自然兜底拉起;崩溃退出后最多 1 分钟也会被重新拉起。
-REM 【必须无条件 /f 重建】/tr 启动参数里烙死了 -pair-code;若"已存在即跳过",
-REM 用户删 conf 重装拿到新 token 后,任务仍用旧 token,手机必连不上。
-REM 每次带 /f 重建,任务参数永远与当前 conf 的配对码对齐。
+REM 【安全收口:token 不上任务行】/tr 不再携带 -pair-code —— 计划任务命令行
+REM 任何本地用户 schtasks /query /v 即可读到,token 上任务行等于明文公示。
+REM 配对码唯一来源是第 2 步写入的 pocketagentd.conf,paguard 启动时自读。
+REM 【仍须无条件 /f 重建】保证任务行参数(端口等)始终与本脚本当前配置对齐;
+REM 旧版"任务行烙 token"的计划任务也会被本步骤替换成无 token 的新形态。
 echo [4/5] 注册看护进程计划任务(%TASK%)...
 if not exist "%BASE%paguard.exe" (
     echo.
@@ -119,7 +122,7 @@ if not exist "%BASE%pocketagentd.exe" (
     pause
     exit /b 1
 )
-schtasks /create /tn "%TASK%" /tr "\"%BASE%paguard.exe\" -daemon-addr 0.0.0.0:%PORT% -pair-code %TOKEN%" /sc minute /mo 1 /rl highest /f >nul 2>&1
+schtasks /create /tn "%TASK%" /tr "\"%BASE%paguard.exe\" -daemon-addr 0.0.0.0:%PORT%" /sc minute /mo 1 /rl highest /f >nul 2>&1
 if errorlevel 1 (
     echo.
     echo [错误] 计划任务 %TASK% 创建失败,需要管理员权限,已中止。

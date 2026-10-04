@@ -73,6 +73,9 @@ object ThreadDeletionCoordinator {
      *     一条永远点不开的记录;
      *   - 子代理预览按 threadId 缓存,**同一 id 的会话再建出来时会命中旧预览**,显示
      *     上一世的内容。
+     *   - 斜杠命令候选([SlashCommandCache])按 threadId 缓存(2026-10-04 接线):
+     *     同 id 重建的会话会命中上一世的命令列表(虽会被 daemon 侧刷新覆盖,但
+     *     删除是用户明确的意志,照删不延迟 —— 与第 4-6 条同判据)。
      * 都只在 **daemon 确认删除成功之后**才清(见 [purge] 的调用点):那时没有仍在跑的
      * 轮次,清掉条目不会丢掉"它还在跑"的可见性。
      */
@@ -81,6 +84,7 @@ object ThreadDeletionCoordinator {
         TurnSession.release(threadId)
         TaskCenter.removeByThread(threadId)
         SubAgentsState.forget(threadId)
+        SlashCommandCache.clear(threadId)
     }
 
     /**

@@ -26,7 +26,7 @@ func main() {
 	defer c.Close()
 
 	c.NotifHandler = func(method string, params json.RawMessage) {}
-	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
+	c.ReqHandler = func(id json.RawMessage, method string, params json.RawMessage) {
 		_ = c.Respond(id, map[string]string{"decision": "accept"})
 	}
 

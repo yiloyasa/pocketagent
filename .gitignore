@@ -13,6 +13,9 @@ build/
 *.ap_
 *.dex
 intermediates/
+# 发布 zip 由 dist/windows/build.ps1 重建(2026-10-04 裁决:可重建不入库,
+# 本地保留供分发;fresh clone 跑 build.ps1 即得)
+dist/windows/PocketAgent桌面端.zip
 
 # ---------- 编译出的可执行文件 ----------
 *.exe

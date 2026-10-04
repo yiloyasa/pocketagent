@@ -27,12 +27,12 @@
 package piapp
 
 import (
-	"github.com/pocketagent/daemon/internal/dshapp"
 	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pocketagent/daemon/internal/dshapp"
 	"io"
 	"log"
 	"os"

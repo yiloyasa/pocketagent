@@ -28,7 +28,7 @@ type fakeCodexResponder struct {
 	errMsgs  []string                 // RespondError 的 message
 }
 
-func (f *fakeCodexResponder) Respond(id int64, result interface{}) error {
+func (f *fakeCodexResponder) Respond(id json.RawMessage, result interface{}) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch m := result.(type) {
@@ -45,7 +45,7 @@ func (f *fakeCodexResponder) Respond(id int64, result interface{}) error {
 	return nil
 }
 
-func (f *fakeCodexResponder) RespondError(id int64, code int, message string) error {
+func (f *fakeCodexResponder) RespondError(id json.RawMessage, code int, message string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.errCodes = append(f.errCodes, code)
@@ -71,7 +71,7 @@ func TestCodexApprovalNilChannelErrors(t *testing.T) {
 	p := NewCodexProvider()
 	rsp := &fakeCodexResponder{}
 	var waiting atomic.Bool
-	p.handleCodexApproval(rsp, 7, reqApprovalCommand, "execCommandApproval",
+	p.handleCodexApproval(rsp, json.RawMessage("7"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"command":["rm","-rf","tmp"],"cwd":"."}`), nil,
 		context.Background(), func(*pb.TurnServerMessage) {}, nil, &waiting)
 	if n := rsp.resultCount(); n != 0 {
@@ -96,7 +96,7 @@ func TestCodexApprovalUserDecisionUnchanged(t *testing.T) {
 	sink := func(*pb.TurnServerMessage) {}
 
 	rspDeny := &fakeCodexResponder{}
-	p.handleCodexApproval(rspDeny, 8, reqApprovalCommand, "execCommandApproval",
+	p.handleCodexApproval(rspDeny, json.RawMessage("8"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"command":["ls"]}`), nil,
 		context.Background(), sink, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return false, "", nil
@@ -109,7 +109,7 @@ func TestCodexApprovalUserDecisionUnchanged(t *testing.T) {
 	}
 
 	rspAllow := &fakeCodexResponder{}
-	p.handleCodexApproval(rspAllow, 9, reqApprovalCommand, "execCommandApproval",
+	p.handleCodexApproval(rspAllow, json.RawMessage("9"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"command":["ls"]}`), nil,
 		context.Background(), sink, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return true, "", nil
@@ -125,7 +125,7 @@ func TestCodexApprovalChannelErrorUnchanged(t *testing.T) {
 	p := NewCodexProvider()
 	rsp := &fakeCodexResponder{}
 	var waiting atomic.Bool
-	p.handleCodexApproval(rsp, 10, reqApprovalCommand, "execCommandApproval",
+	p.handleCodexApproval(rsp, json.RawMessage("10"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"command":["ls"]}`), nil,
 		context.Background(), func(*pb.TurnServerMessage) {}, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return false, "", context.Canceled

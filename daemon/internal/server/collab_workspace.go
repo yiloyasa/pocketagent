@@ -11,9 +11,10 @@
 // 改同一份文件,这正是本任务要消灭的事故(总约束:多成员写任务必须隔离)。
 //
 // 【安全边界】所有工作区路径统一走 resolveWorkspaceDir:归一化(Clean+Abs) →
-// 护栏(guardWorkspaceRoot,清单与 fs.go guardDangerousPath 对齐,deny 判定基于
-// GetFinalPathNameByHandle 的物理最终路径 —— EvalSymlinks 在 Windows 不穿越
-// junction,门禁实测曾因此漏放)→ 物理解析 → 解析目标再护栏 → 存在性校验。
+// 护栏(guardWorkspaceRoot,与 fs.go guardDangerousPath 共用 internal/pathguard
+// 的同一份清单实现,deny 判定基于 GetFinalPathNameByHandle 的物理最终路径 ——
+// EvalSymlinks 在 Windows 不穿越 junction,门禁实测曾因此漏放)→ 物理解析 →
+// 解析目标再护栏 → 存在性校验。
 // worktree 路径由本文件从仓库根拼出(不让调用方指定),再做 Rel 防逃逸校验
 // 作为第二道防线。
 //
@@ -40,8 +41,7 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
-	"github.com/pocketagent/daemon/internal/hostenv"
-	"golang.org/x/sys/windows"
+	"github.com/pocketagent/daemon/internal/pathguard"
 )
 
 // ============ 模式与租约 ============
@@ -756,7 +756,7 @@ func (m *FileCollabWorkspaceManager) gitToplevel(ctx context.Context, dir string
 	}
 	// 与 requested 的解析口径对齐(junction/8.3 短名/大小写漂移 → 物理最终路径
 	// 归一),让随后的 Rel 防逃逸校验在一致的路径形式上比较。
-	if resolved, ok := resolvePhysicalPath(repo); ok {
+	if resolved, ok := pathguard.ResolvePhysical(repo); ok {
 		repo = resolved
 	}
 	// requested 必须真的在这个仓库里(Rel 防御:git 输出异常时不把 worktree
@@ -844,96 +844,6 @@ func rebuildWorktreeLease(repo, sessionID, memberID string, listed map[string]gi
 	}, true
 }
 
-// ============ Windows 物理路径解析(护栏的地基) ============
-
-// 【为什么不用 filepath.EvalSymlinks】门禁实测(2026-10-04,回归钉
-// TestWorkspaceGuardCatchesJunctionEscape):Windows 上 EvalSymlinks 不穿越
-// NTFS junction —— junction 指向系统临时目录根,解析结果仍是 junction 自身的
-// 路径,护栏第⑤项形同虚设(已知行为:golang/go#21028 一族,MOUNT_POINT
-// reparse point 不被按符号链接处理)。GetFinalPathNameByHandle 是 Windows 上
-// "路径物理最终形态"的权威来源:junction、符号链接、8.3 短名、大小写漂移一次
-// 归一 —— 本文件所有"解析后路径"与"清单根"的比对都以它为准。
-
-// fileGetNameNormalized / fileGetVolumeNameDos 是 GetFinalPathNameByHandle 的
-// dwFlags 取值(MSDN:FILE_NAME_NORMALIZED=0x0、VOLUME_NAME_DOS=0x0;x/sys
-// v0.47.0 未导出这两个常量,按 MSDN 原值本地定义)。
-const (
-	fileGetNameNormalized = 0x0
-	fileGetVolumeNameDos  = 0x0
-)
-
-// finalPathFirstBufferSize 首次尝试的缓冲区宽度(WCHAR);不够时按返回值扩一次。
-const finalPathFirstBufferSize = 1024
-
-// resolvePhysicalPath 返回 path 的物理最终路径;ok=false = 句柄打不开(不存在/
-// 权限不足/异常占用),调用方应回退用归一化原路径继续 —— 少解析只会退化为
-// "原始形态比对",方向安全;禁区根自身总能被打开,不会因此误放行。
-//
-// 【实现】access=0(纯查询)+ FILE_FLAG_BACKUP_SEMANTICS 是打开目录句柄的
-// 标准姿势,不需要任何读写权限;CreateFile 默认穿越 reparse point,句柄落在
-// 物理目标上,GetFinalPathNameByHandle 据此给出最终路径。
-// 【平台】仅 Windows 可编译 —— 与 hidewin/term 一致,daemon 全链本就
-// Windows-only(无 build tag 先例:hidewin.go 直用 syscall 的 Windows 字段)。
-func resolvePhysicalPath(path string) (string, bool) {
-	p, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return path, false
-	}
-	h, err := windows.CreateFile(p, 0,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		return path, false
-	}
-	defer windows.CloseHandle(h)
-
-	buf := make([]uint16, finalPathFirstBufferSize)
-	n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)),
-		fileGetNameNormalized|fileGetVolumeNameDos)
-	if n > uint32(len(buf)) {
-		// 缓冲不足:返回值 = 含结尾 null 的所需宽度,扩容重试一次(上限封顶,
-		// 防异常返回值拖出无界循环)。
-		if n > 1<<16 {
-			return path, false
-		}
-		buf = make([]uint16, n)
-		n, err = windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)),
-			fileGetNameNormalized|fileGetVolumeNameDos)
-	}
-	if err != nil || n == 0 || int(n) > len(buf) {
-		return path, false
-	}
-	out := stripDevicePathPrefix(windows.UTF16ToString(buf[:n]))
-	if out == "" {
-		return path, false
-	}
-	return filepath.Clean(out), true
-}
-
-// stripDevicePathPrefix 把 GetFinalPathNameByHandle 的设备形态前缀还原为常规
-// 路径:\\?\C:\a\b → C:\a\b;UNC 形态 \\?\UNC\srv\share\a → \\srv\share\a
-// (VOLUME_NAME_DOS 的返回几乎总带 \\?\ 前缀,不剥会与清单根比对失败)。
-func stripDevicePathPrefix(p string) string {
-	if strings.HasPrefix(p, `\\?\UNC\`) {
-		return `\\` + strings.TrimPrefix(p, `\\?\UNC\`)
-	}
-	return strings.TrimPrefix(p, `\\?\`)
-}
-
-// physicalRoot 护栏清单根的同款归一化:能打开就取物理形态,取不到(不存在/
-// 打不开)退回 Clean+Abs 形态 —— 候选与根两侧同款归一,杜绝"junction 侧已
-// 解析、根侧还是原始形态"的比对漂移。
-func physicalRoot(root string) string {
-	norm, err := filepath.Abs(filepath.Clean(root))
-	if err != nil {
-		return root
-	}
-	if p, ok := resolvePhysicalPath(norm); ok {
-		return p
-	}
-	return norm
-}
-
 // ============ 路径校验与护栏 ============
 
 // resolveWorkspaceDir 是所有工作区路径的统一入口:归一化 → 护栏(内部已按
@@ -955,7 +865,7 @@ func (m *FileCollabWorkspaceManager) resolveWorkspaceDir(raw string) (string, er
 	if err := guardWorkspaceRoot(norm, m.dataDir); err != nil {
 		return "", err
 	}
-	resolved, ok := resolvePhysicalPath(norm)
+	resolved, ok := pathguard.ResolvePhysical(norm)
 	if !ok {
 		// 打不开:先把"不存在"翻成人话(最常见的错误),其余异常按归一化
 		// 原路径继续,由随后的 os.Stat/使用环节如实暴露。
@@ -980,116 +890,59 @@ func (m *FileCollabWorkspaceManager) resolveWorkspaceDir(raw string) (string, er
 }
 
 // guardWorkspaceRoot 是协同工作区路径的最小护栏,与 fs.go 的 guardDangerousPath
-// 同一套命中清单:
+// 共用 internal/pathguard.GuardDeny 的同一份命中清单:
 //
 //	① 驱动器根/文件系统根;② %SystemRoot% 本身及其顶层子项;③ ProgramFiles 根;
 //	④ %USERPROFILE%/用户主目录根;⑤ os.TempDir() 根;
 //	⑥ daemon 数据目录 —— 唯一整棵子树都拒的条目(内部账本无合法工作区);
 //	⑦ 进程当前工作目录与可执行文件所在目录(仅目录本身)。
 //
-// 【归一化口径(2026-10-04 门禁修复)】deny 判定一律基于「物理最终路径」:
-// 候选路径与清单各根都先过 resolvePhysicalPath(junction/符号链接/8.3/大小写
-// 在源头归一),再做 Clean+Abs+小写比对。junction 指向禁区的拦截点就在这里
-// —— EvalSymlinks 不穿越 junction,原实现拿 junction 自身路径比对因此漏放
-// (回归钉:TestWorkspaceGuardCatchesJunctionEscape)。
-// 【为什么不直接复用 guardDangerousPath】它是 *Server 的方法,文案面向"删除/移动",
-// 而本管理器按规格做成自包含组件(调用方与测试都不必先构造整个 Server)。清单如
-// 有演进应两处同步(已向主模型建议后续抽成共享实现)。
+// 【收口(2026-10-04 F3)】清单判定与锚点归一全部委托 pathguard:deny 判定一律
+// 基于「物理最终路径」(候选路径与清单各根同款归一,junction/符号链接/8.3/大小写
+// 在源头消解),另叠设备前缀剥除(\\?\C:\)与管理共享回指(\\localhost\C$\...)
+// 的字符串层附加锚点。本函数只剩薄委托 + 工作区视角的面向文案(原先的自持清单
+// 实现已删,杜绝两份清单各自演化的漂移 —— 审查缺口 G1 的根因)。
 // 【语义差】这里拒的是"把 agent 的工作区安在这里":工作区意味着 agent 会在里面
 // 读、写、跑 git,命中清单同样成立 —— 宁严勿松。误杀取舍同 fs.go:除 ⑥ 外只挡
 // "根本身/顶层一层",深层路径照常可用。
 func guardWorkspaceRoot(rawPath, dataDir string) error {
-	norm, err := filepath.Abs(filepath.Clean(rawPath))
-	if err != nil {
-		return fmt.Errorf("解析路径失败: %v: %w", err, ErrWorkspaceGuarded)
+	r := pathguard.GuardDeny(rawPath, []string{dataDir})
+	if !r.Denied {
+		return nil
 	}
-	// 候选先取物理形态;打不开(不存在/异常)退回归一化原路径继续判定
-	// (存在性/目录性裁决归 resolveWorkspaceDir 的 Stat,这里不重复)。
-	physical, ok := resolvePhysicalPath(norm)
-	if !ok {
-		physical = norm
+	if r.Kind == pathguard.DenyParseFail {
+		return fmt.Errorf("解析路径失败: %v: %w", r.Err, ErrWorkspaceGuarded)
 	}
-	key := strings.ToLower(physical)
-	deny := func(reason string) error {
-		if strings.EqualFold(physical, norm) {
-			return fmt.Errorf("拒绝将 %s 用作协同工作区: %s: %w", rawPath, reason, ErrWorkspaceGuarded)
-		}
+	reason := workspaceGuardReason(r.Kind)
+	// 候选被解析到了不同的物理目标(junction 指向禁区):文案里点破,便于用户理解。
+	if r.PhysicalResolved && !strings.EqualFold(r.Physical, r.Norm) {
 		return fmt.Errorf("拒绝将 %s 用作协同工作区(它经 junction/链接解析到 %s): %s: %w",
-			rawPath, physical, reason, ErrWorkspaceGuarded)
+			rawPath, r.Physical, reason, ErrWorkspaceGuarded)
 	}
+	return fmt.Errorf("拒绝将 %s 用作协同工作区: %s: %w", rawPath, reason, ErrWorkspaceGuarded)
+}
 
-	// ① 驱动器根(Windows)/文件系统根(Unix)—— 工作区安在根上等于放 agent 进根目录
-	if vol := filepath.VolumeName(physical); vol != "" {
-		if strings.EqualFold(physical, vol+string(os.PathSeparator)) {
-			return deny("这是驱动器根目录,不能把 agent 工作区安在这里")
-		}
-	} else if physical == string(os.PathSeparator) {
-		return deny("这是文件系统根目录,不能把 agent 工作区安在这里")
+// workspaceGuardReason 命中条目 → 工作区视角的面向文案(与收口前的历史文案
+// 逐字一致;文案随语义留在调用方、清单随逻辑收口在 pathguard)。
+func workspaceGuardReason(k pathguard.DenyKind) string {
+	switch k {
+	case pathguard.DenyDriveRoot:
+		return "这是驱动器根目录,不能把 agent 工作区安在这里"
+	case pathguard.DenySystemRoot:
+		return "这是 Windows 系统目录,agent 在这里写文件会破坏系统"
+	case pathguard.DenySystemRootChild:
+		return "它位于 Windows 系统目录顶层(System32 等同层),不能作为工作区"
+	case pathguard.DenyHomeLikeRoot:
+		return "这是系统/用户主目录本身,不能作为协同工作区"
+	case pathguard.DenyDataDir:
+		return "这是 PocketAgent 自身的数据目录,里面是程序运行必需的记录,不能作为工作区"
+	case pathguard.DenyProcessCwd:
+		return "这是程序当前工作目录,不能作为协同工作区"
+	case pathguard.DenyExeDir:
+		return "这是程序安装目录,不能作为协同工作区"
+	default:
+		return "不能作为协同工作区"
 	}
-
-	// ② %SystemRoot% 本身 + 直接子项(仅顶层一层;父子两侧都是物理形态)
-	sysRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
-	if sysRoot == "" {
-		sysRoot = `C:\Windows`
-	}
-	if sysKey := strings.ToLower(physicalRoot(sysRoot)); sysKey != "" {
-		if key == sysKey {
-			return deny("这是 Windows 系统目录,agent 在这里写文件会破坏系统")
-		}
-		if strings.ToLower(filepath.Dir(physical)) == sysKey {
-			return deny("它位于 Windows 系统目录顶层(System32 等同层),不能作为工作区")
-		}
-	}
-
-	// ③④⑤ 程序目录 / 用户主目录 / 系统临时目录 —— 仅根本身
-	homeDir := ""
-	if h, herr := os.UserHomeDir(); herr == nil {
-		homeDir = h
-	}
-	for _, root := range []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-		os.Getenv("USERPROFILE"),
-		homeDir,
-		os.TempDir(),
-	} {
-		if root = strings.TrimSpace(root); root == "" {
-			continue
-		}
-		if key == strings.ToLower(physicalRoot(root)) {
-			return deny("这是系统/用户主目录本身,不能作为协同工作区")
-		}
-	}
-
-	// ⑥ daemon 数据目录 —— 整棵子树都拒(内部账本无合法工作区目标)。
-	dataRoots := []string{}
-	if dir := strings.TrimSpace(dataDir); dir != "" {
-		dataRoots = append(dataRoots, dir)
-	}
-	dataRoots = append(dataRoots, hostenv.UserDataDir(), hostenv.LegacyDataDir())
-	for _, root := range dataRoots {
-		if strings.TrimSpace(root) == "" {
-			continue
-		}
-		rel, rerr := filepath.Rel(strings.ToLower(physicalRoot(root)), key)
-		if rerr != nil {
-			continue // 跨盘等无法比较的情形:不命中
-		}
-		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
-			return deny("这是 PocketAgent 自身的数据目录,里面是程序运行必需的记录,不能作为工作区")
-		}
-	}
-
-	// ⑦ 当前工作目录 / 可执行文件所在目录 —— 仅目录本身
-	if wd, werr := os.Getwd(); werr == nil && wd != "" && key == strings.ToLower(physicalRoot(wd)) {
-		return deny("这是程序当前工作目录,不能作为协同工作区")
-	}
-	if exe, eerr := os.Executable(); eerr == nil {
-		if key == strings.ToLower(physicalRoot(filepath.Dir(exe))) {
-			return deny("这是程序安装目录,不能作为协同工作区")
-		}
-	}
-	return nil
 }
 
 // validWorkspaceSegment 校验会话/成员标识可直接拼进 worktree 目录名与分支名。

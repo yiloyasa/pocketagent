@@ -3,9 +3,11 @@
 // 【钉什么】JSON-RPC 2.0 允许 number|string id,旧 *int64 一遇字符串 id 整帧
 // 解码失败、readLoop 静默丢帧。三条路各钉一条:
 //   - 字符串 id 的应答帧 → 不可能命中 pending,但必须进 unknownResponse 台账
-//     (绝不静默丢);
-//   - 字符串 id 的反向请求 → handler 拿负数句柄,Respond 应答时原样回显字符串 id;
-//   - 数字 id 的反向请求 → 行为与旧版逐字节一致(句柄即原值)。
+//     (绝不静默丢),且 id 原样透传(RawMessage 签名后不再 0 占位);
+//   - 字符串 id 的反向请求 → handler 拿到原文 id,Respond 应答时原样回显字符串 id
+//     (2026-10-04 起直透:负数句柄桥已随签名 RawMessage 化整体删除);
+//   - 数字 id 的反向请求/应答 → 行为与旧版逐字节一致(id 原样回显数字)。
+//
 // 另钉 writeWithBudget:stdin 卡死时写按预算超时返回,不再无限期阻塞调用方。
 package codexapp
 
@@ -27,7 +29,6 @@ func newStringIDTestClient(t *testing.T) (*Client, <-chan string) {
 		stdin:     pw,
 		pending:   map[int64]chan rpcResp{},
 		abandoned: map[int64]abandonedProbe{},
-		serverIDs: map[int64]serverIDEntry{},
 	}
 	lines := make(chan string, 4)
 	go func() {
@@ -40,12 +41,12 @@ func newStringIDTestClient(t *testing.T) (*Client, <-chan string) {
 	return c, lines
 }
 
-// 字符串 id 的应答帧:进 unknownResponse 台账,id 参数按 int64 签名传 0 占位,
-// 完整原始帧里保留真实 id —— 绝不静默丢。
+// 字符串 id 的应答帧:进 unknownResponse 台账,id 原样透传(完整原始帧同在,
+// 双保险可还原)—— 绝不静默丢。
 func TestDispatchStringIDResponseGoesToLedger(t *testing.T) {
 	c := &Client{pending: map[int64]chan rpcResp{}}
 	got := make(chan unknownProbe, 4)
-	c.UnknownResponseHandler = func(id int64, raw json.RawMessage) {
+	c.UnknownResponseHandler = func(id json.RawMessage, raw json.RawMessage) {
 		got <- unknownProbe{id: id, raw: string(raw)}
 	}
 	c.syncHandlers()
@@ -53,8 +54,8 @@ func TestDispatchStringIDResponseGoesToLedger(t *testing.T) {
 	c.dispatch(&wireMsg{ID: json.RawMessage(`"req-1"`), Result: json.RawMessage(`{"late":true}`)})
 	select {
 	case p := <-got:
-		if p.id != 0 {
-			t.Fatalf("非数字应答 id 应以 0 占位(int64 签名限制),得到 %d", p.id)
+		if string(p.id) != `"req-1"` {
+			t.Fatalf("非数字应答 id 应原样透传(RawMessage 签名),得到 %s", p.id)
 		}
 		if !strings.Contains(p.raw, `"id":"req-1"`) || !strings.Contains(p.raw, "late") {
 			t.Fatalf("台账必须保留完整原始帧(真实 id 在里面): %s", p.raw)
@@ -64,29 +65,29 @@ func TestDispatchStringIDResponseGoesToLedger(t *testing.T) {
 	}
 }
 
-// 字符串 id 的反向请求:handler 拿负数句柄;Respond 查表原样回显字符串 id;
-// 句柄一次应答即除名,重复应答得到错误、不重复回写。
+// 字符串 id 的反向请求:handler 拿到的 id 与线上原文逐字节一致;Respond 原样
+// 回显字符串 id —— 中间无句柄、无登记,不查表、不出错。
 func TestDispatchStringIDServerRequestEchoesOriginalID(t *testing.T) {
 	c, lines := newStringIDTestClient(t)
-	handles := make(chan int64, 1)
-	c.ReqHandler = func(id int64, method string, _ json.RawMessage) {
-		handles <- id
+	got := make(chan json.RawMessage, 1)
+	c.ReqHandler = func(id json.RawMessage, method string, _ json.RawMessage) {
+		got <- id
 	}
 	c.syncHandlers()
 
 	c.dispatch(&wireMsg{Method: "applyPatch/approval", ID: json.RawMessage(`"srv-9"`)})
-	var h int64
+	var h json.RawMessage
 	select {
-	case h = <-handles:
-		if h >= 0 {
-			t.Fatalf("非数字 id 应换负数句柄(与正数 id 空间隔离),得到 %d", h)
+	case h = <-got:
+		if string(h) != `"srv-9"` {
+			t.Fatalf("handler 应拿到线上原样 id,得到 %s", h)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("字符串 id 反向请求未送达 ReqHandler")
 	}
 
 	if err := c.Respond(h, map[string]string{"decision": "accept"}); err != nil {
-		t.Fatalf("句柄应答不应报错: %v", err)
+		t.Fatalf("原样 id 应答不应报错: %v", err)
 	}
 	select {
 	case line := <-lines:
@@ -97,21 +98,24 @@ func TestDispatchStringIDServerRequestEchoesOriginalID(t *testing.T) {
 		t.Fatal("未读到应答帧")
 	}
 
-	// 同句柄第二次应答:查表落空,报错且不再回写(与上层 resolved 守卫双保险)。
-	if err := c.Respond(h, map[string]string{"decision": "accept"}); err == nil {
-		t.Fatal("句柄已除名,重复应答应报错")
+	// RespondError 同样原样回显(直透对两种应答面一致)。
+	if err := c.RespondError(h, -32601, "不支持"); err != nil {
+		t.Fatalf("RespondError 原样 id 应答不应报错: %v", err)
 	}
 	select {
 	case line := <-lines:
-		t.Fatalf("重复应答不得回写: %s", line)
-	case <-time.After(100 * time.Millisecond):
+		if !strings.Contains(line, `"id":"srv-9"`) || !strings.Contains(line, "-32601") {
+			t.Fatalf("RespondError 必须原样回显字符串 id: %s", line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未读到 RespondError 应答帧")
 	}
 }
 
-// 数字 id 的反向请求:句柄即原值,应答回显数字 —— 与旧版(*int64 时代)逐字节一致。
+// 数字 id 的反向请求/应答:id 原样回显数字 —— 与旧版(*int64 时代)逐字节一致。
 func TestRespondNumericIDEchoesVerbatim(t *testing.T) {
 	c, lines := newStringIDTestClient(t)
-	if err := c.Respond(7, map[string]string{"decision": "accept"}); err != nil {
+	if err := c.Respond(json.RawMessage("7"), map[string]string{"decision": "accept"}); err != nil {
 		t.Fatalf("数字 id 应答不应报错: %v", err)
 	}
 	select {
@@ -121,6 +125,23 @@ func TestRespondNumericIDEchoesVerbatim(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("未读到应答帧")
+	}
+}
+
+// 缺失/null 的 id 不可回应:Respond 拒绝回写,绝不向服务器发出 "id":null 的
+// 协议残帧(id:null 按 JSON-RPC 2.0 等价于无 id,应答无从配对)。
+func TestRespondRejectsAbsentID(t *testing.T) {
+	c, lines := newStringIDTestClient(t)
+	if err := c.Respond(nil, map[string]string{"decision": "accept"}); err == nil {
+		t.Fatal("nil id 应拒绝回写")
+	}
+	if err := c.RespondError(json.RawMessage("null"), -32601, "不支持"); err == nil {
+		t.Fatal("null id 应拒绝回写")
+	}
+	select {
+	case line := <-lines:
+		t.Fatalf("拒绝路径不得有任何回写: %s", line)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

@@ -94,11 +94,12 @@ type CodexProvider struct {
 	compactMu    sync.Mutex
 	compactState map[string]compactState
 
-	// 正在等手机应答的反向请求(codex 侧 JSON-RPC id → 解决信号 channel)。
-	// codex 通过 serverRequest/resolved 通知"该请求已在桌面端被解决"时,
-	// 我们据此提前结束等待、不再 Respond,并让手机端撤掉审批卡(幽灵卡治理)。
+	// 正在等手机应答的反向请求(codex 侧 JSON-RPC id 的归一键 → 解决信号
+	// channel,见 codexRequestIDKey)。codex 通过 serverRequest/resolved 通知
+	// "该请求已在桌面端被解决"时,我们据此提前结束等待、不再 Respond,并让
+	// 手机端撤掉审批卡(幽灵卡治理)。
 	pendingReqMu    sync.Mutex
-	pendingResolved map[int64]chan struct{}
+	pendingResolved map[string]chan struct{}
 
 	// ---- P1-4:运行中插话(turn/steer)----
 	// 我们的 threadID → 当前运行中轮次的 codex threadId + turnId。
@@ -157,7 +158,7 @@ func NewCodexProvider() *CodexProvider {
 		guardianReviews: map[string]*GuardianReview{},
 		guardianLatest:  map[string]string{},
 		compactState:    map[string]compactState{},
-		pendingResolved: map[int64]chan struct{}{},
+		pendingResolved: map[string]chan struct{}{},
 		activeSteer:     map[string]steerTarget{},
 	}
 	// ---- 第 28 轮:三类只读查询的缓存接线 ----
@@ -191,51 +192,54 @@ func NewCodexProvider() *CodexProvider {
 	return p
 }
 
+// codexRequestIDKey 把反向请求 id(json.RawMessage)归一成登记/台账用的字符串键:
+// 数字形态转十进制字符串(与旧 int64 时代的台账口径逐字节一致)、字符串形态去
+// 引号原样、其余形态用原文。同一 id 的两条来路 —— 反向请求帧的 id 与
+// serverRequest/resolved 通知的 requestId —— 在任一形态下都归到同一个键,
+// resolved 竞速守卫与未知事件台账因此对双形态 id 都成立。
+func codexRequestIDKey(raw json.RawMessage) string {
+	var n int64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return strconv.FormatInt(n, 10)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return strings.TrimSpace(string(raw))
+}
+
 // registerPendingServerRequest 登记"正在等手机应答"的反向请求,
 // 返回一个在该请求被 codex 侧解决时关闭的 channel(见 serverRequest/resolved)。
-func (p *CodexProvider) registerPendingServerRequest(id int64) <-chan struct{} {
+func (p *CodexProvider) registerPendingServerRequest(id json.RawMessage) <-chan struct{} {
 	ch := make(chan struct{})
 	p.pendingReqMu.Lock()
-	p.pendingResolved[id] = ch
+	p.pendingResolved[codexRequestIDKey(id)] = ch
 	p.pendingReqMu.Unlock()
 	return ch
 }
 
 // unregisterPendingServerRequest 正常结束(拿到手机应答)时清理登记,防 map 泄漏。
-func (p *CodexProvider) unregisterPendingServerRequest(id int64) {
+func (p *CodexProvider) unregisterPendingServerRequest(id json.RawMessage) {
 	p.pendingReqMu.Lock()
-	delete(p.pendingResolved, id)
+	delete(p.pendingResolved, codexRequestIDKey(id))
 	p.pendingReqMu.Unlock()
 }
 
 // resolvePendingServerRequest codex 通知某反向请求已被解决:关闭对应信号。
+// 通知里的 requestId 与当初反向请求帧的 id 同形,经同一归一(见
+// codexRequestIDKey)必然命中同一登记项。
 func (p *CodexProvider) resolvePendingServerRequest(rawID json.RawMessage) {
-	id := parseServerRequestID(rawID)
-	if id == 0 {
+	key := codexRequestIDKey(rawID)
+	if key == "" {
 		return
 	}
 	p.pendingReqMu.Lock()
-	if ch, ok := p.pendingResolved[id]; ok {
-		delete(p.pendingResolved, id)
+	if ch, ok := p.pendingResolved[key]; ok {
+		delete(p.pendingResolved, key)
 		close(ch)
 	}
 	p.pendingReqMu.Unlock()
-}
-
-// parseServerRequestID codex 的 RequestId 在 JSON 里可能是数字或字符串,
-// 统一成 int64(0 = 解析失败;codex 的 JSON-RPC id 从 1 起,0 不会撞真实 id)。
-func parseServerRequestID(raw json.RawMessage) int64 {
-	var n int64
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-			return v
-		}
-	}
-	return 0
 }
 
 func (p *CodexProvider) ID() string          { return "codex" }
@@ -536,9 +540,12 @@ func (p *CodexProvider) withClientCtx(ctx context.Context, budget time.Duration,
 // 这里只做**廉价记录**(加锁写 map / 回调),绝不碰 sink 与手机网络:
 // 它在 readLoop 里被同步调用,一旦阻塞,整条事件管道都会卡住。
 func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
-	c.SetUnknownResponseHandler(func(id int64, raw json.RawMessage) {
+	c.SetUnknownResponseHandler(func(id json.RawMessage, raw json.RawMessage) {
 		method, kind := codexLateResponseLedger(raw)
-		recordUnknownResponseAs(kind, "codex", method, strconv.FormatInt(id, 10), raw)
+		// id 双形态直透后的台账口径:数字转十进制串(与旧 int64 时代逐字节
+		// 一致),字符串形态原样 —— 台账里首次能看到字符串 id 的真实值
+		// (旧实现此处恒记 0 占位)。
+		recordUnknownResponseAs(kind, "codex", method, codexRequestIDKey(id), raw)
 	})
 	c.SetGlobalHandler(func(method string, params json.RawMessage) {
 		recordProviderEvent("codex", method, codexThreadIDOf(params), codexGlobalNoticeKind(method), params)
@@ -931,10 +938,11 @@ func approvalCommand(raw json.RawMessage) string {
 }
 
 // codexApprovalResponder codexapp.Client 的应答面(最小接口,单测可注 fake,
-// 不依赖真子进程;zcode 的 zcodeResponder 同款模式)。
+// 不依赖真子进程;zcode 的 zcodeResponder 同款模式)。id 用 RawMessage 与
+// codexapp 的签名同形:数字原值、字符串原文,应答原样回显。
 type codexApprovalResponder interface {
-	Respond(id int64, result interface{}) error
-	RespondError(id int64, code int, message string) error
+	Respond(id json.RawMessage, result interface{}) error
+	RespondError(id json.RawMessage, code int, message string) error
 }
 
 // handleCodexApproval 处理一个已识别为"问人"的反向请求:构造审批卡 → 问手机 →
@@ -943,7 +951,7 @@ type codexApprovalResponder interface {
 // 【P1-1】approve==nil 属审批通道缺失(TestModel 诊断 RPC 等路径传 nil):
 // 回 JSON-RPC error 让 codex 按通道故障处理,绝不替用户伪造 denied 决定
 // (与下方 askErr 分支同口径:基础设施问题不伪装成用户意志)。
-func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id int64, kind codexRequestKind, method string, params json.RawMessage, files []string, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
+func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.RawMessage, kind codexRequestKind, method string, params json.RawMessage, files []string, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
 	// 【第二条规则】按类别构造真实的审批卡,再问手机。
 	call := buildApprovalCall(kind, method, params, files)
 	if approve == nil {
@@ -975,7 +983,7 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id int64
 		allow, choice, askErr = out.allow, out.choice, out.err
 	case <-resolved:
 		// 迟到的手机应答会落进 outCh(带缓冲),由 GC 回收,无泄漏。
-		log.Printf("[codex] 反向请求 %s(id=%d)已在桌面端被解决,不再等待手机审批", method, id)
+		log.Printf("[codex] 反向请求 %s(id=%s)已在桌面端被解决,不再等待手机审批", method, codexRequestIDKey(id))
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
 			Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
 		}}})
@@ -1427,7 +1435,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 		}
 	}()
-	reqHandler := func(id int64, method string, params json.RawMessage) {
+	reqHandler := func(id json.RawMessage, method string, params json.RawMessage) {
 		log.Printf("[codex] 反向请求 %s 原始参数: %.400s", method, string(params))
 		kind := classifyCodexRequest(method)
 

@@ -19,10 +19,10 @@
 // 【设计纪律】只测不改:本文件不触碰任何生产代码;对 fs.go/collab_workspace.go/
 // unknown_actions.go/paguard/cmd 入口的一律是只读断言。守护性文本钉(三/四)读的是
 // 源码文件本身,不是运行产物 —— 注释里逐条说明为什么文本钉在这里是合适的强度。
-// 【skip 门语义】TestGuardDangerousPath{BareDriveRelative,JunctionEscape,
-// DriveRootDeviceForm,AdminShareLoopback} 四条是"期望已定义(拒绝)、实现未到位"
-// 的占位守卫:护栏一旦加固,用例自动从 skip 转为常态拒绝守卫;当前 skip 文本即
-// 缺口证据,逐条转 security-regression 报告由主模型裁决(本执行器不改生产代码)。
+// 【skip 门语义(2026-10-04 A2 更新)】原 TestGuardDangerousPath{BareDriveRelative,
+// JunctionEscape,DriveRootDeviceForm,AdminShareLoopback} 四条 skip 门对应的
+// 缺口 G1-G4 已随清单收口(internal/pathguard)修复,四条全部转为常态拒绝守卫;
+// 现存的 skip 只剩"环境造不出 junction"这一类确定性环境豁免,不再是代码缺口。
 
 package server
 
@@ -128,33 +128,28 @@ func TestGuardDangerousPathDenyList(t *testing.T) {
 	}
 }
 
-// TestGuardDangerousPathBareDriveRelative 裸盘符形态(`C:`,无反斜杠)。
-// 【skip 门】方案期望「盘根变体(`C:\`、`c:\\`、`C:`)全拒」;当前实现里
-// filepath.Abs("C:") 按盘符相对路径解析成 <cwd>\C:(Go 语义:IsAbs("C:")=false),
-// 不命中 ① 驱动器根规则(len<=3)。护栏今天给不出明确拒绝,由后续 os.Remove 对
-// 该畸形形态的文件系统报错兜底 —— 方案期望与实现存在缺口,本执行器禁改 fs.go,
-// 以 skip 门占位:护栏加固后自动转为常态守卫。已转 security-regression 报告。
+// TestGuardDangerousPathBareDriveRelative 裸盘符形态(`C:`,无反斜杠)必须被拒。
+// 【G2 已转常态守卫(2026-10-04 A2)】`C:` 是"盘符相对路径"引用(指向 C 盘当前
+// 目录),filepath.Abs 会把它归一成 <cwd>\C: 的无意义形态而漏检;pathguard 在
+// Clean/Abs 之前按字节形态识别裸盘符,归①驱动器根族拒绝。
 func TestGuardDangerousPathBareDriveRelative(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("盘符相对形态是 Windows 专属")
 	}
 	s := &Server{cfg: Config{DataDir: t.TempDir()}}
-	if err := s.guardDangerousPath(`C:`); err != nil {
-		return // 期望成立:裸盘符已被拒绝
+	if err := s.guardDangerousPath(`C:`); err == nil {
+		t.Fatal("裸盘符 C: 必须被拒绝(盘符相对路径引用按①驱动器根族;" +
+			"拒绝必须发生在 Clean/Abs 之前,否则被归一成 <cwd>\\C: 漏检)")
 	}
-	t.Skip("已知边界:guardDangerousPath 归一化只做 Clean+Abs+小写,`C:` 被 Abs 解析为 " +
-		"<cwd>\\C: 形态而不命中①驱动器根规则(len<=3),护栏未给出明确拒绝(方案期望盘根变体全拒)。 " +
-		"修复落地后本用例自动转为常态守卫;裁决归主模型,证据见 security-regression 报告")
 }
 
 // TestGuardDangerousPathJunctionEscape junction 指向禁区根必须被拒。
-// 形态学 collab_workspace_test.TestWorkspaceGuardCatchesJunctionEscape:
+// 【G1 已转常态守卫(2026-10-04 A2)】两路护栏(删除/移动、协同工作区)已收口
+// 到 internal/pathguard 同一份实现,deny 锚点一律取 GetFinalPathNameByHandle
+// 物理最终路径 —— junction 在源头解析到禁区根,原始形态与解析形态全部拦截,
+// 收口前"同一 junction 一个拒一个放行"的清单漂移不再可能。对照组断言同时钉
+// 协同工作区入口,双入口同结论。
 // mklink /J 不需要管理员权限,创建失败(策略限制)则 t.Skip 保持确定性。
-// 【skip 门】协同工作区护栏(guardWorkspaceRoot)已按 2026-10-04 门禁修复改为
-// GetFinalPathNameByHandle 物理路径判定;删除/移动护栏(guardDangerousPath)仍是
-// Clean+Abs+小写(其「归一化边界」注释自述不解析符号链接)—— 同一 junction,
-// 一个拒一个放行,属两套清单实现漂移。本执行器禁改 fs.go,以 skip 门占位并附
-// 对照组证据:修复(引入物理解析)落地后本用例自动转为常态守卫。
 func TestGuardDangerousPathJunctionEscape(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("junction 是 Windows 专属")
@@ -169,16 +164,12 @@ func TestGuardDangerousPathJunctionEscape(t *testing.T) {
 		t.Fatalf("junction 应已创建: %v", err)
 	}
 	s := &Server{cfg: Config{DataDir: t.TempDir()}}
-	if err := s.guardDangerousPath(link); err != nil {
-		return // 期望成立:删除/移动护栏已拦下指向禁区根的 junction
+	if err := s.guardDangerousPath(link); err == nil {
+		t.Fatal("junction 指向系统临时目录根必须被删除/移动护栏拒绝(物理锚点比对)")
 	}
-	// 对照组:同一 junction,物理解析版护栏应拒绝 —— 非 nil 即证明 junction 真实
-	// 落在禁区、缺口只在删除/移动护栏这一侧(排除"环境没建出真 junction"的假阳)。
-	wsVerdict := guardWorkspaceRoot(link, "")
-	t.Skipf("已知边界:guardDangerousPath 仅 Clean+Abs+小写归一(fs.go 归一化边界注释自述不解析"+
-		"符号链接),junction 指向禁区根按链接自身路径比对 → 放行;对照组 guardWorkspaceRoot(物理解析版)"+
-		"对同一 junction 的判定 err=%v(非 nil 即缺口只在删除/移动护栏)。与协同护栏修复不一致,已转报告裁决;"+
-		"修复落地后本用例自动转为常态守卫", wsVerdict)
+	if err := guardWorkspaceRoot(link, ""); err == nil {
+		t.Fatal("同一 junction 经协同工作区护栏必须同样拒绝(共享清单两入口同结论)")
+	}
 }
 
 // TestGuardDangerousPathUNCFormsHaveExplicitVerdict UNC 形态(\\server\share)。
@@ -201,37 +192,89 @@ func TestGuardDangerousPathUNCFormsHaveExplicitVerdict(t *testing.T) {
 	}
 }
 
-// TestGuardDangerousPathDriveRootDeviceForm 设备形态盘根(\\?\C:\)。
-// 【skip 门】方案要求盘根变体全拒;\\?\C:\ 经 Clean+Abs 后长度 >3,不命中
-// ① 驱动器根规则(len<=3)。手机 UI 不会产出该形态(ListRoots 给的是 `C:\`),
-// 风险面是伪造 RPC;修复(归一化剥 \\?\ 前缀或引入物理解析)落地后自动转常态守卫。
+// TestGuardDangerousPathDriveRootDeviceForm 设备形态盘根(\\?\C:\)必须被拒。
+// 【G3 已转常态守卫(2026-10-04 A2)】设备形态经 Clean+Abs 长度>3,旧 len<=3 规则
+// 漏检;pathguard 的物理锚点剥 \\?\ 前缀(盘根句柄总能打开,GetFinalPathNameByHandle
+// 返回 \\?\C:\ → C:\)命中①驱动器根;异常环境下打不开句柄时另有剥前缀附加锚点兜底。
 func TestGuardDangerousPathDriveRootDeviceForm(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("设备形态路径是 Windows 专属")
 	}
 	s := &Server{cfg: Config{DataDir: t.TempDir()}}
-	if err := s.guardDangerousPath(`\\?\C:\`); err != nil {
-		return // 期望成立:设备形态盘根已被拒绝
+	if err := s.guardDangerousPath(`\\?\C:\`); err == nil {
+		t.Fatal(`设备形态盘根 \\?\C:\ 必须被拒绝(剥 \\?\ 前缀后命中①驱动器根;` +
+			"UI 不可达、风险面是伪造 RPC)")
 	}
-	t.Skip("已知边界:`\\\\?\\C:\\` 设备形态长度>3,不命中①驱动器根规则(len<=3);" +
-		"UI 不可达、风险面是伪造 RPC。修复落地后本用例自动转为常态守卫;已转 security-regression 报告")
 }
 
-// TestGuardDangerousPathAdminShareLoopback 管理共享回指本机(\\localhost\C$\...)。
-// 【skip 门】`\\localhost\C$\Windows` 语义上就是本机 C:\Windows(经管理共享回指),
-// 但小写形态与 ② 清单根不一致,当前不拒。前置缓冲:枚举 admin share 需要管理员
-// 令牌,风险低于本地路径;与 junction 同族的归一化缺口,修复落地后自动转常态守卫。
+// TestGuardDangerousPathAdminShareLoopback 管理共享回指本机(\\localhost\C$\...)
+// 必须被拒。\\localhost\C$\Windows 语义上就是本机 C:\Windows(经管理共享回指)。
+// 【G4 已转常态守卫(2026-10-04 A2)】枚举管理共享需要管理员令牌,物理解析在
+// 普通权限下打不开句柄;pathguard 在字符串层把回指 X$ 管理共享别名归一为
+// X:\ 路径后比对,命中②系统目录。环回主机名与本机名两种形态都钉。
 func TestGuardDangerousPathAdminShareLoopback(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("管理共享路径是 Windows 专属")
 	}
 	s := &Server{cfg: Config{DataDir: t.TempDir()}}
-	if err := s.guardDangerousPath(`\\localhost\C$\Windows`); err != nil {
-		return // 期望成立:管理共享回指本机系统目录已被拒绝
+	for _, p := range []string{
+		`\\localhost\C$\Windows`,
+		`\\127.0.0.1\C$\Windows`,
+	} {
+		if err := s.guardDangerousPath(p); err == nil {
+			t.Fatalf("管理共享回指本机系统目录(%s)必须被拒绝(X$ 别名归一后命中②系统目录)", p)
+		}
 	}
-	t.Skip("已知边界:`\\\\localhost\\C$\\Windows` 与②清单根的小写形态不一致,当前不拒 " +
-		"(经管理共享回指本机系统目录;枚举需管理员令牌作前置缓冲)。与 junction 同族的归一化缺口," +
-		"修复落地后本用例自动转为常态守卫;已转 security-regression 报告")
+}
+
+// TestGuardDelegationConsistency 两路委托一致性:同一路径经删除/移动护栏
+// (guardDangerousPath)与协同工作区护栏(guardWorkspaceRoot)必须同结论。
+// 【背景】2026-10-04 之前的缺口正是两份清单各自演化(同一 junction 一拒一放);
+// 收口后两入口共用地 pathguard.GuardDeny 的同一份清单与同一套锚点归一,本用例
+// 钉住"再漂移即红"。断言只比"拒/放结论",错误文案与哨兵错误类型本就分视角
+// (删除/移动 vs 协同工作区),不在此对账。
+func TestGuardDelegationConsistency(t *testing.T) {
+	dataDir := t.TempDir()
+	s := &Server{cfg: Config{DataDir: dataDir}}
+
+	cases := []struct{ name, path string }{
+		{"盘根", `C:\`},
+		{"裸盘符", `C:`},
+		{"设备形态盘根", `\\?\C:\`},
+		{"管理共享回指", `\\localhost\C$\Windows`},
+		{"Temp 根", filepath.Clean(os.TempDir())},
+		{"数据目录根本身", dataDir},
+		{"数据目录深层", filepath.Join(dataDir, "collab", "artifacts", "sess", "m1")},
+		{"Temp 根子目录(放行)", filepath.Join(t.TempDir(), "deep", "ok")},
+		{"尚未创建的路径(放行)", filepath.Join(t.TempDir(), "not-yet-created")},
+		{"数据目录的兄弟目录(放行)", filepath.Join(filepath.Dir(dataDir), "sibling", "deep")},
+		{"UNC 远端共享(放行)", `\\server\share\docs`},
+		{"相对路径形态(归一后落在 cwd 子层,放行)", filepath.Join("rel-consistency", "dir", "file.txt")},
+	}
+	if sysRoot := strings.TrimSpace(os.Getenv("SystemRoot")); sysRoot != "" {
+		cases = append(cases,
+			struct{ name, path string }{"系统目录", sysRoot},
+			struct{ name, path string }{"系统目录顶层子项", filepath.Join(sysRoot, "System32")},
+		)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		cases = append(cases, struct{ name, path string }{"用户主目录", home})
+	}
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		cases = append(cases, struct{ name, path string }{"进程工作目录", wd})
+	}
+	if exe, err := os.Executable(); err == nil {
+		cases = append(cases, struct{ name, path string }{"可执行文件所在目录", filepath.Dir(exe)})
+	}
+
+	for _, c := range cases {
+		fsDenied := s.guardDangerousPath(c.path) != nil
+		wsDenied := guardWorkspaceRoot(c.path, dataDir) != nil
+		if fsDenied != wsDenied {
+			t.Errorf("两路委托结论漂移 %s(%s):删除/移动护栏拒绝=%v,协同工作区护栏拒绝=%v",
+				c.path, c.name, fsDenied, wsDenied)
+		}
+	}
 }
 
 // TestDeleteEntryGuardRejectsBeforeDelete handler 级端到端:DeleteEntry 必须在
@@ -395,12 +438,11 @@ func TestServerPackageHasNoPlaintextDowngrade(t *testing.T) {
 // 变成机器可查的回归面。守护性文本钉:paguard 是随发布包分发的二进制,源码里
 // 出现字面量凭据/个人路径 = 随二进制分发(规格 §2 明令禁止),文本级断言即够。
 //
-// 【与本批方案口径的差异,如实声明】方案原文要求"断言不含 -pair-code 字面量注入
-// 路径";实际源码中 `-pair-code` 作为旗标名与转发参数**合法存在**(计划任务 /tr
-// 经它把 conf 里的配对码传给 daemon,install.bat:121),按字面钉"不含"必然假红。
-// 本钉改钉同缺口下机器可查且当前为真的三个锚点:①旗标默认值必须为空(二进制不
-// 携带内置凭据);②零环境注入(CODEX_BIN 否决的操作面);③代码区无盘符绝对路径与
-// codex.cmd 字面量。差异已转 security-regression 报告由主模型裁决。
+// 【锚点口径(安全收口 2026-10-04 后更新)】配对码只存 pocketagentd.conf;计划任务
+// /tr 不带 token(安全收口 2026-10-04);paguard 自读 conf 转发(任务行 -pair-code
+// 仅旧计划任务兼容回退)。`-pair-code` 仍作为旗标名合法存在,按字面钉"不含"必然
+// 假红;本钉钉机器可查的三个锚点:①旗标默认值必须为空(二进制不携带内置凭据);
+// ②零环境注入(CODEX_BIN 否决的操作面);③代码区无盘符绝对路径与 codex.cmd 字面量。
 func TestPaguardSourceNoInjectedCredentialsOrPaths(t *testing.T) {
 	src := string(readFileOrFatal(t, securityPinSourcePath(t, "..", "..", "cmd", "paguard", "main.go")))
 

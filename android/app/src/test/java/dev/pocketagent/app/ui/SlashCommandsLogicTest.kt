@@ -9,6 +9,7 @@ package dev.pocketagent.app.ui
 //      codex 技能填自然语言「请使用 <名称> 技能:」;pi 真命令走 "/命令 " 回填(pi 原生展开);
 //   5) 词元清理:stripSlashToken 摘掉 "/词元"(伪命令执行后输入框不留残词);
 //   6) 缓存:按会话存取、空列表不入缓存(下次进会话重拉)、可清理;
+//      LRU 上限 128 会话、get 命中即 touch(2026-10-04 有界化,审查 open 项 2);
 //   7) "/计划" "/压缩" 随能力位增减:daemon 宣告 review/compact:<agentId>
 //      (2026-09-25 能力位对齐,基线 511269d)才出现在候选里,缺位绝不摆
 //      点了必败的假入口;失败文案按错误形状分流(daemon 业务错误透传 description,
@@ -243,6 +244,42 @@ class SlashCommandsLogicTest {
         assertEquals(cmds, SlashCommandCache.get(tid))
         SlashCommandCache.clear(tid)
         assertNull(SlashCommandCache.get(tid))
+    }
+
+    @Test
+    fun `缓存 LRU 上限淘汰最久未访问会话`() {
+        val a = listOf(SlashCommandInfo("a", "", ""))
+        val b = listOf(SlashCommandInfo("b", "", ""))
+        // 塞满上限再放 1 条:最早进入且未再访问的会话被淘汰(访问序 LRU,审查 open 项 2)
+        repeat(SlashCommandCache.MAX_CACHED_THREADS) { i ->
+            SlashCommandCache.put("th-lru-$i", a)
+        }
+        SlashCommandCache.put("th-lru-new", b)
+        assertNull(SlashCommandCache.get("th-lru-0")) // 最旧被淘汰
+        assertEquals(a, SlashCommandCache.get("th-lru-1")) // 次旧仍在上限内
+        assertEquals(b, SlashCommandCache.get("th-lru-new")) // 最新健在
+        // 收尾:清掉本测试占的槽,不影响其他用例
+        repeat(SlashCommandCache.MAX_CACHED_THREADS) { i -> SlashCommandCache.clear("th-lru-$i") }
+        SlashCommandCache.clear("th-lru-new")
+    }
+
+    @Test
+    fun `缓存 get 命中即 touch 免于淘汰`() {
+        val a = listOf(SlashCommandInfo("a", "", ""))
+        val b = listOf(SlashCommandInfo("b", "", ""))
+        repeat(SlashCommandCache.MAX_CACHED_THREADS) { i ->
+            SlashCommandCache.put("th-touch-$i", a)
+        }
+        // 摸最旧的会话(命中即 touch,挪到访问序末尾)再放 1 条新会话:
+        // 让位的是"未访问的次旧",不是刚被摸过的活跃会话
+        assertEquals(a, SlashCommandCache.get("th-touch-0"))
+        SlashCommandCache.put("th-touch-new", b)
+        assertEquals(a, SlashCommandCache.get("th-touch-0")) // touch 过的存活
+        assertNull(SlashCommandCache.get("th-touch-1")) // 未访问的次旧淘汰
+        assertEquals(b, SlashCommandCache.get("th-touch-new"))
+        // 收尾:清掉本测试占的槽,不影响其他用例
+        repeat(SlashCommandCache.MAX_CACHED_THREADS) { i -> SlashCommandCache.clear("th-touch-$i") }
+        SlashCommandCache.clear("th-touch-new")
     }
 
     // ---- 边界补钉(2026-09-30 微交互轮):词元空白、空全集、回填不重复补空格 ----

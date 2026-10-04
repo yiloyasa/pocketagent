@@ -232,4 +232,3 @@ func TestHermesSessionMCPSourceWiring(t *testing.T) {
 		t.Fatalf("未接线应返回 nil,实得 %v", got)
 	}
 }
-

@@ -9,8 +9,8 @@ import (
 //
 // 统一遍历语义(2026-10-01 定稿,替代早期双分支版本):
 //   - 对每个 dict 的每个键值对 k→v:
-//       · v 是 dict 且是「模型条目」→ 收编为候选(id = 值内 id 别名,**或键名 k**);
-//       · 否则递归下钻(idHint=k,provider 继承)。
+//     · v 是 dict 且是「模型条目」→ 收编为候选(id = 值内 id 别名,**或键名 k**);
+//     · 否则递归下钻(idHint=k,provider 继承)。
 //   - 「模型条目」判定:id 非空(值内 id 别名或键名)且命中至少一个辅助键
 //     (name/reasoning/contextWindow/input 等)。两者皆无 = 普通容器,下钻。
 //   - provider 继承:祖先键名(zai-coding-cn: {...} 的子树内 provider=zai-coding-cn)。

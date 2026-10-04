@@ -13,8 +13,8 @@ import (
 
 	"github.com/pocketagent/daemon/internal/codexapp"
 	"github.com/pocketagent/daemon/internal/dshapp"
-	"github.com/pocketagent/daemon/internal/hermesapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/hermesapp"
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/store"
 )

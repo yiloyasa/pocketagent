@@ -47,7 +47,7 @@ func main() {
 		notifLog = append(notifLog, fmt.Sprintf("[%6.1fs] %s %s", time.Since(startTime).Seconds(), method, s))
 	}
 	c.NotifHandler = collectNotif
-	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
+	c.ReqHandler = func(id json.RawMessage, method string, params json.RawMessage) {
 		_ = c.Respond(id, map[string]string{"decision": "accept"})
 	}
 

@@ -4412,8 +4412,16 @@ fun ChatScreen(
                     if (PaHacker.isHacker) {
                     // 黑客终端模式:流式输出块(块尾 braille 转轮,80ms/帧);
                     // 等首 token 时正文为空,TerminalOutputBlock 只渲染转轮本身。
+                    // 【节流(审查 open 项 7,2026-10-04 评估收口)】TerminalOutputBlock
+                    // 正文并非纯文本:内部走 MarkdownText → produceState(key=source)
+                    // 对每次 source 变化全文重解析 parseMarkdownForDisplay。直喂
+                    // st.streamText = 每个 delta 帧一次全文重解析(解析虽在
+                    // Dispatchers.Default、且有取消合并,长流式仍是累计 O(n²) 的
+                    // CPU 热点)。改喂上方 displayedStream(120ms 合并快照,P1-22
+                    // 同一数据源),与非黑客路径同一节流口径;终帧一致性由该快照的
+                    // 「!streaming 立即追平」语义兜底,尾巴不丢。
                     TerminalOutputBlock(
-                        st.streamText, uiScale,
+                        displayedStream, uiScale,
                         onOpenUrl = onOpenBrowser,
                         streaming = true,
                     )
@@ -6940,7 +6948,12 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
     }
 
     val visibleState = remember { androidx.compose.animation.core.MutableTransitionState(false) }
-    visibleState.targetState = true
+    // 组合期不得写状态(Compose 快照红线:组合中写 State 的时序不受快照系统保护,
+    // 审查 2026-10-04 :6802 项):首帧以 target=false 组合,LaunchedEffect 在首帧后
+    // 推进 targetState → AnimatedVisibility 的 visible 经历 false→true 翻转,声明的
+    // slideInHorizontally 入场照播(旧写法组合期即置 true,首帧 visible 恒 true,
+    // 这条入场动画此前从未真正播过)。
+    LaunchedEffect(Unit) { visibleState.targetState = true }
 
     Box(
         Modifier

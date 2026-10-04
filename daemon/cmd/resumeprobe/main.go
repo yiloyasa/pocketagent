@@ -32,8 +32,8 @@ func main() {
 		}
 		fmt.Printf("[%s] NOTIF %s %.200s\n", time.Now().Format("15:04:05.000"), method, string(params))
 	}
-	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
-		fmt.Printf("[%s] REQ(id=%d) %s %.200s\n", time.Now().Format("15:04:05.000"), id, method, string(params))
+	c.ReqHandler = func(id json.RawMessage, method string, params json.RawMessage) {
+		fmt.Printf("[%s] REQ(id=%s) %s %.200s\n", time.Now().Format("15:04:05.000"), string(id), method, string(params))
 		_ = c.Respond(id, map[string]string{"decision": "accept"})
 	}
 

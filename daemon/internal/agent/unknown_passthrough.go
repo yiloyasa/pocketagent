@@ -230,7 +230,7 @@ func (p *ZcodeProvider) handleZcodeUnknownRequest(rawID json.RawMessage, method,
 // 返回 false = 未消费(开关关/审批通道缺失/拒绝/超时/通道故障),调用方交回
 // reqUnknown 分支的既有路径:-32601 + UNKNOWN_REQUEST 台账,与 OFF 态走同一段
 // 代码,台账口径天然一致。
-func (p *CodexProvider) consumeCodexUnknownRequest(rsp codexApprovalResponder, id int64, method, threadID string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) bool {
+func (p *CodexProvider) consumeCodexUnknownRequest(rsp codexApprovalResponder, id json.RawMessage, method, threadID string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) bool {
 	if !unknownPassthroughQuery() {
 		return false
 	}
@@ -258,7 +258,7 @@ func (p *CodexProvider) consumeCodexUnknownRequest(rsp codexApprovalResponder, i
 	case out = <-outCh:
 	case <-resolved:
 		// 迟到的手机应答落进带缓冲的 outCh,由 GC 回收,无泄漏。
-		log.Printf("[codex] 未知请求 %s(id=%d)已在桌面端被解决,不再等待手机确认", method, id)
+		log.Printf("[codex] 未知请求 %s(id=%s)已在桌面端被解决,不再等待手机确认", method, codexRequestIDKey(id))
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
 			Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
 		}}})

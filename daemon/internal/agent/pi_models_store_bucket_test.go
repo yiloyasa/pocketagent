@@ -185,11 +185,11 @@ func TestPiModelsStoreFallbackFrom(t *testing.T) {
 
 // pbModelInfoShape 把断言字段收拢成一个可比较形状(避免直接比较 pb 消息)。
 type pbModelInfoShape struct {
-	display  string
-	window   int32
-	thinking bool
-	images   bool
-	provider string
+	display   string
+	window    int32
+	thinking  bool
+	images    bool
+	provider  string
 	available bool
 }
 

@@ -81,8 +81,8 @@ func main() {
 				}
 			}
 		},
-		func(id int64, method string, params json.RawMessage) {
-			full := fmt.Sprintf("method=%s id=%d params=%s", method, id, string(params))
+		func(id json.RawMessage, method string, params json.RawMessage) {
+			full := fmt.Sprintf("method=%s id=%s params=%s", method, string(id), string(params))
 			mu.Lock()
 			approvals = append(approvals, full)
 			mu.Unlock()

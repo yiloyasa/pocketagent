@@ -36,10 +36,16 @@ type Client struct {
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
-	mu        sync.Mutex
-	writeMu   sync.Mutex
-	nextID    int64
-	pending   map[int64]chan rpcResp
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	nextID  int64
+	pending map[int64]chan rpcResp
+	// abandoned 记录"调用方已放弃"的轮次长调用(见 CallTurnCtx / giveUpTurn):
+	// readLoop 收到无人认领的应答时先查这里,命中即一次性认领(记日志含
+	// stopReason 摘要)后除名 —— 取消轮次的终局(stopReason=cancelled 等)从
+	// "落未知应答处置口静默丢"变为"留痕可见",但绝不复活轮次。与 pending
+	// 同受 mu 保护(形态学 codexapp abandonedProbe,2026-10-04)。
+	abandoned map[int64]abandonedTurn
 	waitOnce  sync.Once
 	closeOnce sync.Once
 
@@ -250,9 +256,16 @@ func (c *Client) readLoop() {
 			}
 			c.mu.Unlock()
 			if !ok {
-				continue // 迟到应答静默丢(与 codex CallProbeCtx 同口径):CallCtx
-				// 放弃路径已把 id 从 pending 除名,除名后迟到的帧落进本分支
-				// (hermesapp 的未知应答处置口;ch 带缓冲且无人等待,不悬挂)。
+				// 迟到应答:先查 abandoned(已放弃的轮次长调用,见 CallTurnCtx/
+				// giveUpTurn)—— 命中即一次性认领:记一条含 stopReason 摘要的
+				// 日志后除名,轮次不复活(取消轮次的终局从"静默丢"变"留痕
+				// 可见",看门狗/取消路径可从日志消费该事实)。未命中才是真正的
+				// 未知应答,照旧静默丢(hermesapp 的未知应答处置口;ch 带缓冲且
+				// 无人等待,不悬挂)。
+				if ap, claimed := c.takeAbandoned(id); claimed {
+					c.logAbandonedTurnClaim(ap, id, w.Result, w.Error)
+				}
+				continue
 			}
 			ch <- rpcResp{ID: id, Result: w.Result, Err: w.Error}
 		case w.Method == "session/update":
@@ -351,8 +364,12 @@ func (c *Client) CallCtx(ctx context.Context, method string, params any) (json.R
 // CallTurnCtx 发一个**活到整轮结束**的请求并等应答,两路 select(ch / ctx.Done),
 // 无兜底 timer —— 专供 session/prompt:长流式轮次轻松超 2 分钟,Run 的 ctx 又无
 // deadline,120s 兜底会把长轮次误杀成假死超时。其存活由调用方的 hermes 看门狗
-// 三闸(150s 静默 + 60min 上限 + 审批豁免)与 ctx 取消治理;放弃路径与 CallCtx
-// 同款 forget 除名,迟到应答落 readLoop 未知应答处置口。
+// 三闸(150s 静默 + 60min 上限 + 审批豁免)与 ctx 取消治理。
+// 【放弃路径(与 CallCtx 的差别)】ctx 取消(手机停/重入打断/看门狗闸)除名
+// pending 之外还把 id 记入 abandoned(见 giveUpTurn):此后迟到的 stopReason
+// 应答被 readLoop 一次性认领留痕(日志),而不是落未知应答处置口静默丢 ——
+// 取消轮次的终局可见,轮次不复活。短控制调用 CallCtx 语义不变,迟到应答仍走
+// 处置口静默丢(对齐 codexapp 只有探测调用选择加入 abandoned 的先例)。
 func (c *Client) CallTurnCtx(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	return c.call(ctx, method, params, false)
 }
@@ -397,10 +414,16 @@ func (c *Client) call(ctx context.Context, method string, params any, budget boo
 		}
 		return resp.Result, nil
 	case <-ctx.Done():
-		c.forget(id) // 除名:迟到应答落入 readLoop 未知应答处置口,不再悬挂等待者
+		if budget {
+			c.forget(id) // 短控制调用:除名后迟到应答照旧走处置口静默丢(语义不变)
+		} else {
+			// 轮次长调用:除名之外登记 abandoned,迟到的 stopReason 应答被
+			// readLoop 一次性认领留痕(见 giveUpTurn)。
+			c.giveUpTurn(id, method)
+		}
 		return nil, fmt.Errorf("hermes ACP %s: %w", method, ctx.Err())
 	case <-timeout:
-		c.forget(id) // 同上:callTimeout 兜底放弃路径与 ctx 放弃完全同待遇
+		c.forget(id) // callTimeout 兜底只作用于 budget=true(短控制调用),同 forget 口径
 		return nil, fmt.Errorf("hermes ACP %s: 等待应答超时(%s)", method, callTimeout)
 	}
 }
@@ -410,6 +433,89 @@ func (c *Client) forget(id int64) {
 	c.mu.Lock()
 	delete(c.pending, id)
 	c.mu.Unlock()
+}
+
+// abandonedTurn 一次"调用方已放弃"的轮次长调用的记账:readLoop 用 id 认出它的
+// 迟到应答并一次性认领留痕(日志含 stopReason 摘要);method 仅用于该日志。
+type abandonedTurn struct {
+	method string
+	at     time.Time
+}
+
+// abandonedTurnTTL 是已放弃轮次 id 的记账保留期:取消后适配器的终局应答通常
+// 随 session/cancel 立刻到达;60s 还没来的按过期清理,防 abandoned 无界增长。
+// 过期后真有应答到达,回落处置口静默丢(极端陈旧的孤儿不再特殊对待)。
+// 【承载形态与可测性(门禁裁定:测试绝不能睡真实 60s 时钟)】TTL 扫描在
+// giveUpTurn 登记时**同步**做(now 取扫时值):没有 ticker/After、没有后台清扫
+// 协程,所以不需要注入可驱动时钟 —— 包级 var 收紧到毫秒级即可让全档 TTL 断言
+// 零等待驱动。生产路径严禁改写本值(测试收尾负责还原默认)。
+var abandonedTurnTTL = 60 * time.Second
+
+// abandonedTurnCap 是 abandoned 集的容量上限:轮次长调用经 provider 串行化,
+// 同时在途的放弃记账个位数即够;32 是纯防御上界,满时淘汰 id 最小(最早发起)
+// 的一条。TTL 扫描 + 容量双闸,集合恒有界(≤32)。
+const abandonedTurnCap = 32
+
+// giveUpTurn 在轮次长调用的调用方放弃等待时收尾:同一把锁内完成 pending 除名与
+// abandoned 登记(分派侧不会看到中间态),顺带做 TTL 扫描与容量淘汰。
+// 与 codexapp giveUp(probe=true) 同形态;区别仅在过期/容量参数(轮次取消的
+// 终局应答来得比探测快得多,60s/32 足够)。
+func (c *Client) giveUpTurn(id int64, method string) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	now := time.Now()
+	for aid, ap := range c.abandoned {
+		if now.Sub(ap.at) > abandonedTurnTTL {
+			delete(c.abandoned, aid)
+		}
+	}
+	if len(c.abandoned) >= abandonedTurnCap {
+		var oldest int64
+		for aid := range c.abandoned {
+			if oldest == 0 || aid < oldest {
+				oldest = aid
+			}
+		}
+		delete(c.abandoned, oldest)
+	}
+	if c.abandoned == nil {
+		c.abandoned = map[int64]abandonedTurn{} // 直构 Client 的测试路径
+	}
+	c.abandoned[id] = abandonedTurn{method: method, at: now}
+	c.mu.Unlock()
+}
+
+// takeAbandoned 认领一条已放弃轮次的迟到应答:命中即除名(一次应答只认领一次,
+// 同 id 再来的重复帧回落处置口,不当成无限重复的留痕)。
+func (c *Client) takeAbandoned(id int64) (abandonedTurn, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ap, ok := c.abandoned[id]
+	if ok {
+		delete(c.abandoned, id)
+	}
+	return ap, ok
+}
+
+// logAbandonedTurnClaim 留痕一条已认领的迟到轮次应答:优先摘 stopReason(prompt
+// 终局的唯一载荷,acp.go Prompt 同一形状),错误帧与认不出的形状各给一行摘要。
+// 只写日志,不复活轮次、不写事件流 —— 看门狗/取消路径要消费时从 daemon.log 取证。
+func (c *Client) logAbandonedTurnClaim(ap abandonedTurn, id int64, result json.RawMessage, rpcErr *rpcError) {
+	switch {
+	case rpcErr != nil:
+		log.Printf("[hermes-acp] 已放弃轮次 %s(id=%d)迟到应答: 错误 %v", ap.method, id, rpcErr)
+	default:
+		var out struct {
+			StopReason string `json:"stopReason"`
+		}
+		if json.Unmarshal(result, &out) == nil && out.StopReason != "" {
+			log.Printf("[hermes-acp] 已放弃轮次 %s(id=%d)迟到终局: stopReason=%s(留痕,轮次不复活)",
+				ap.method, id, out.StopReason)
+		} else {
+			log.Printf("[hermes-acp] 已放弃轮次 %s(id=%d)迟到应答: %s",
+				ap.method, id, truncateForLog(string(result), 200))
+		}
+	}
 }
 
 // killSegvGuard Windows 下 Kill 已够( TerminateProcess);保留下列常量防误删说明。

@@ -18,7 +18,7 @@ import (
 func TestDispatchUnknownResponseFallsBackToHandler(t *testing.T) {
 	c := &Client{pending: map[int64]chan rpcResp{}}
 	got := make(chan unknownProbe, 4)
-	c.UnknownResponseHandler = func(id int64, raw json.RawMessage) {
+	c.UnknownResponseHandler = func(id json.RawMessage, raw json.RawMessage) {
 		got <- unknownProbe{id: id, raw: string(raw)}
 	}
 	c.syncHandlers()
@@ -27,8 +27,8 @@ func TestDispatchUnknownResponseFallsBackToHandler(t *testing.T) {
 	c.dispatch(&wireMsg{ID: int64ID(99), Result: json.RawMessage(`{"answer":"orphan"}`)})
 	select {
 	case p := <-got:
-		if p.id != 99 {
-			t.Fatalf("应带原 id,得到 %d", p.id)
+		if string(p.id) != "99" {
+			t.Fatalf("应带原 id,得到 %s", p.id)
 		}
 		if !strings.Contains(p.raw, "orphan") || !strings.Contains(p.raw, `"id":99`) {
 			t.Fatalf("应带完整原始帧(留痕要能还原上游答了什么): %s", p.raw)
@@ -64,6 +64,6 @@ func TestDispatchUnknownResponseFallsBackToHandler(t *testing.T) {
 
 // unknownProbe 兜底回调的捕获样本(避免直接共享变量跨 goroutine 读写,-race 必报)。
 type unknownProbe struct {
-	id  int64
+	id  json.RawMessage // handler 收到的原样 id(数字/字符串皆原文)
 	raw string
 }

@@ -18,6 +18,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -248,7 +249,7 @@ func TestCodexApprovalCancelOptionEndsTurn(t *testing.T) {
 	sink := func(*pb.TurnServerMessage) {}
 
 	rspV2 := &fakeCodexResponder{}
-	p.handleCodexApproval(rspV2, 21, reqApprovalCommand, "item/commandExecution/requestApproval",
+	p.handleCodexApproval(rspV2, json.RawMessage("21"), reqApprovalCommand, "item/commandExecution/requestApproval",
 		json.RawMessage(`{"itemId":"i1","kind":"command","command":"dangerous"}`), nil,
 		context.Background(), sink, approveWithNote(false, `{"option":"cancel"}`), &waiting)
 	if n := rspV2.resultCount(); n != 1 || rspV2.results[0]["decision"] != "cancel" {
@@ -256,7 +257,7 @@ func TestCodexApprovalCancelOptionEndsTurn(t *testing.T) {
 	}
 
 	rspLegacy := &fakeCodexResponder{}
-	p.handleCodexApproval(rspLegacy, 22, reqApprovalCommand, "execCommandApproval",
+	p.handleCodexApproval(rspLegacy, json.RawMessage("22"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"callId":"c1","command":["dangerous"]}`), nil,
 		context.Background(), sink, approveWithNote(false, `{"option":"abort"}`), &waiting)
 	if n := rspLegacy.resultCount(); n != 1 || rspLegacy.results[0]["decision"] != "abort" {
@@ -272,7 +273,7 @@ func TestCodexApprovalAcceptForSessionOption(t *testing.T) {
 	sink := func(*pb.TurnServerMessage) {}
 
 	rspV2 := &fakeCodexResponder{}
-	p.handleCodexApproval(rspV2, 23, reqApprovalCommand, "item/commandExecution/requestApproval",
+	p.handleCodexApproval(rspV2, json.RawMessage("23"), reqApprovalCommand, "item/commandExecution/requestApproval",
 		json.RawMessage(`{"itemId":"i1","kind":"command","command":"npm test"}`), nil,
 		context.Background(), sink, approveWithNote(true, `{"option":"acceptForSession"}`), &waiting)
 	if n := rspV2.resultCount(); n != 1 || rspV2.results[0]["decision"] != "acceptForSession" {
@@ -280,7 +281,7 @@ func TestCodexApprovalAcceptForSessionOption(t *testing.T) {
 	}
 
 	rspLegacy := &fakeCodexResponder{}
-	p.handleCodexApproval(rspLegacy, 24, reqApprovalCommand, "execCommandApproval",
+	p.handleCodexApproval(rspLegacy, json.RawMessage("24"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"callId":"c1","command":["npm","test"]}`), nil,
 		context.Background(), sink, approveWithNote(true, `{"option":"approved_for_session"}`), &waiting)
 	if n := rspLegacy.resultCount(); n != 1 || rspLegacy.results[0]["decision"] != "approved_for_session" {
@@ -313,7 +314,7 @@ func TestCodexApprovalOldPhoneUnchanged(t *testing.T) {
 	}
 	for i, c := range cases {
 		rsp := &fakeCodexResponder{}
-		p.handleCodexApproval(rsp, int64(30+i), c.kind, c.method,
+		p.handleCodexApproval(rsp, json.RawMessage(strconv.Itoa(30+i)), c.kind, c.method,
 			json.RawMessage(c.params), nil,
 			context.Background(), sink, approveWithNote(c.allow, ""), &waiting)
 		if n := rsp.resultCount(); n != 1 || rsp.results[0]["decision"] != c.want {
@@ -329,7 +330,7 @@ func TestCodexApprovalNoteEnvelopeDoesNotLeakIntoAskUser(t *testing.T) {
 	var waiting atomic.Bool
 	sink := func(*pb.TurnServerMessage) {}
 	rsp := &fakeCodexResponder{}
-	p.handleCodexApproval(rsp, 40, reqAskUser, "item/tool/requestUserInput",
+	p.handleCodexApproval(rsp, json.RawMessage("40"), reqAskUser, "item/tool/requestUserInput",
 		json.RawMessage(`{"itemId":"i1","questions":[{"id":"q1","question":"用哪个?","options":[{"label":"A"}]}]}`), nil,
 		context.Background(), sink, approveWithNote(true, `{"q1":{"answers":["A"]}}`), &waiting)
 	if n := rsp.resultCount(); n != 1 {

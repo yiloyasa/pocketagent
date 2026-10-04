@@ -3,11 +3,12 @@
 //
 // 【为什么必须钉】面板是"无鉴权 HTTP + 写通道"的组合,错一处就是安全事故或
 // 静默丢写:
-//  - 绑到非回环 = 管理面对整个局域网敞开(红线,启动即拒必须成立);
-//  - POST 落到错的 CollabPolicy/RuntimePolicy 字段 = "改 A 结果 B 变了";
-//  - CAS 丢失(ExpectedRevision 没带)= 两个界面互相覆盖;
-//  - 词表外的 key 被放行 = 白名单红线名存实亡;
-//  - 页面里混进 token/key = 鉴权信息外泄(红线 2)。
+//   - 绑到非回环 = 管理面对整个局域网敞开(红线,启动即拒必须成立);
+//   - POST 落到错的 CollabPolicy/RuntimePolicy 字段 = "改 A 结果 B 变了";
+//   - CAS 丢失(ExpectedRevision 没带)= 两个界面互相覆盖;
+//   - 词表外的 key 被放行 = 白名单红线名存实亡;
+//   - 页面里混进 token/key = 鉴权信息外泄(红线 2)。
+//
 // 这些都是静态看不出来的错误,只有测试能拦。
 package panel
 
@@ -29,10 +30,10 @@ import (
 type fakeCtrl struct {
 	mu sync.Mutex
 
-	plane     *pb.ControlPlane
-	collab    *pb.CollabPolicy
-	collabRev uint64
-	runtime   *pb.RuntimePolicy
+	plane      *pb.ControlPlane
+	collab     *pb.CollabPolicy
+	collabRev  uint64
+	runtime    *pb.RuntimePolicy
 	runtimeRev uint64
 
 	setCollabCalls  int
@@ -142,12 +143,12 @@ func postForm(t *testing.T, h http.Handler, path string, form url.Values) *http.
 
 func TestStartRejectsNonLoopback(t *testing.T) {
 	for _, addr := range []string{
-		"0.0.0.0:7455",    // 全部 IPv4 接口
+		"0.0.0.0:7455",     // 全部 IPv4 接口
 		"192.168.1.7:7455", // 局域网地址
-		":7455",           // 空 host = 全部接口
-		"[::]:7455",       // 全部 IPv6 接口
-		"",                // 空地址
-		"7455",            // 缺 host
+		":7455",            // 空 host = 全部接口
+		"[::]:7455",        // 全部 IPv6 接口
+		"",                 // 空地址
+		"7455",             // 缺 host
 	} {
 		url, stop, err := Start(addr, newFake())
 		if err == nil {
@@ -196,14 +197,14 @@ func TestIndexRendersDomainsAndToggleForms(t *testing.T) {
 	}
 	body := w.Body.String()
 	for _, want := range []string{
-		"资源预算", "多 Agent 协同", "未知事件",      // 八域卡片(骨架)
-		`action="/api/collab"`,                  // 协同开关表单
-		`action="/api/unknown"`,                 // B 开关表单
-		`name="key" value="collab"`,             // 白名单键入参
+		"资源预算", "多 Agent 协同", "未知事件", // 八域卡片(骨架)
+		`action="/api/collab"`,      // 协同开关表单
+		`action="/api/unknown"`,     // B 开关表单
+		`name="key" value="collab"`, // 白名单键入参
 		`name="key" value="delegate"`,
 		`name="key" value="fanout"`,
-		`name="value" value="off"`,              // 总开关当前"开" → 表单切到关
-		`content="10"`,                          // meta refresh 10s
+		`name="value" value="off"`, // 总开关当前"开" → 表单切到关
+		`content="10"`,             // meta refresh 10s
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("面板页面缺少 %q\n%s", want, body)
@@ -270,7 +271,10 @@ func TestPostCollabToggleWritesSameChannel(t *testing.T) {
 func TestPostCollabDelegateAndFanout(t *testing.T) {
 	f := newFake()
 	h := Handler(f)
-	for _, tc := range []struct{ key string; wantSet func(*pb.CollabPolicy) bool }{
+	for _, tc := range []struct {
+		key     string
+		wantSet func(*pb.CollabPolicy) bool
+	}{
 		{"delegate", func(p *pb.CollabPolicy) bool { return p.GetNativeDelegateEnabled() }},
 		{"fanout", func(p *pb.CollabPolicy) bool { return p.GetFanoutEnabled() }},
 	} {

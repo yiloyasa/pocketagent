@@ -5,10 +5,10 @@ package agent
 // Compile 产出全量候选。目录文件缺失/损坏 = 空列表(宁缺毋假)。
 
 import (
-	"strings"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 

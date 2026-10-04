@@ -11,7 +11,7 @@ package dev.pocketagent.app.ui
 // 按会话进程内缓存(见 SlashCommandCache)。RPC 调用与 Compose 状态写在
 // ChatScreen(与 PromptOptimizeLogic 同款分工:纯逻辑可测,副作用留 UI)。
 
-import java.util.concurrent.ConcurrentHashMap
+import java.util.LinkedHashMap
 
 /** 手机端 RPC 的 deadline(秒)。daemon 侧整段预算 20s(冷启 + session/resume),再兜余量。 */
 internal const val SLASH_COMMANDS_DEADLINE_S = 30L
@@ -297,23 +297,40 @@ internal const val SLASH_REVIEW_FALLBACK = "发起计划审查失败"
 /**
  * 命令列表的进程内缓存(按会话):进会话、重连、下拉刷新时才真正发 RPC,
  * 每敲一个字符零开销。daemon 侧另有 10 分钟 TTL 缓存兜子进程频率,两侧各管各的。
+ *
+ * 【淘汰口径(审查 open 项 2,2026-10-04 收口)】LRU 上限 [MAX_CACHED_THREADS]
+ * 个会话:
+ *   - 访问序 = [get] 命中即 touch(accessOrder=true 的 LinkedHashMap 语义),
+ *     面板开着连续敲字符的活跃会话不会被误淘;
+ *   - 超限在 [put] 时淘汰最久未访问的会话(LinkedHashMap removeEldestEntry,
+ *     均摊 O(1));重度用户(反复进出上百会话)内存有界,不再无界增长;
+ *   - [clear](会话删除,接线点 ThreadDeletionCoordinator.purgeInMemory)不受
+ *     上限影响,用户明确的删除照旧立即清。
+ * 【为何不用 ConcurrentHashMap】访问序 LRU 的 get 本身是结构性变更(touch 要
+ * 挪序),ConcurrentHashMap 表达不了;缓存条目 ≤128、读写都是低频面(进出会话
+ * /下拉刷新),synchronized 足够。
  */
 internal object SlashCommandCache {
-    private val byThread = ConcurrentHashMap<String, List<SlashCommandInfo>>()
+    /** 缓存会话数上限:128 个会话 × 每会话几十条命令文本,内存量级可忽略。 */
+    internal const val MAX_CACHED_THREADS = 128
 
-    /** 命中返回缓存列表;未命中返回 null(空列表也视为未命中,下次进会话重拉)。 */
-    fun get(threadId: String): List<SlashCommandInfo>? {
-        val v = byThread[threadId] ?: return null
-        return if (v.isEmpty()) null else v
+    private val byThread = object : LinkedHashMap<String, List<SlashCommandInfo>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SlashCommandInfo>>): Boolean =
+            size > MAX_CACHED_THREADS
+    }
+
+    /** 命中返回缓存列表(touch 访问序);未命中返回 null(空列表不入缓存,恒未命中)。 */
+    fun get(threadId: String): List<SlashCommandInfo>? = synchronized(byThread) {
+        byThread[threadId]?.takeIf { it.isNotEmpty() }
     }
 
     /** 空列表不入缓存:新 zcode 会话在电脑上落地后,下次进会话就能拉到命令。 */
     fun put(threadId: String, commands: List<SlashCommandInfo>) {
-        if (commands.isNotEmpty()) byThread[threadId] = commands
+        if (commands.isNotEmpty()) synchronized(byThread) { byThread[threadId] = commands }
     }
 
-    /** 会话删除/显式失效时清理(当前 UI 未接删除路径,留作手柄)。 */
+    /** 会话删除/显式失效时清理(ThreadDeletionCoordinator.purgeInMemory 已接线)。 */
     fun clear(threadId: String) {
-        byThread.remove(threadId)
+        synchronized(byThread) { byThread.remove(threadId) }
     }
 }

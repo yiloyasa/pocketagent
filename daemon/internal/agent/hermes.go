@@ -349,7 +349,7 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	//     goroutine 并发读 —— 无锁数据竞争的 P0,由此根治)。
 	//   收尸:先 close(notifStop) 再 <-notifDone,消费者退出后 Run 才读 final
 	//     —— 这是消灭竞争的关键顺序(见 stopPump 与各 return 路径)。
-	var final strings.Builder // 仅消费者 goroutine 写;收尸(stopPump)后 Run 才读
+	var final strings.Builder   // 仅消费者 goroutine 写;收尸(stopPump)后 Run 才读
 	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对;仅消费者访问)
 	var toolMu sync.Mutex
 	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:readLoop 收到任何一帧 = 适配器还活着

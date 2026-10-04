@@ -118,14 +118,14 @@ func TestDispatchSnapshotRaceFree(t *testing.T) {
 // 反向请求同样走快照(ReqHandler 在轮内装卸,与 readLoop 并发)。
 func TestDispatchReverseRequestViaSnapshot(t *testing.T) {
 	c := &Client{pending: map[int64]chan rpcResp{}}
-	ids := make(chan int64, 1)
-	c.ReqHandler = func(id int64, _ string, _ json.RawMessage) { ids <- id }
+	ids := make(chan json.RawMessage, 1)
+	c.ReqHandler = func(id json.RawMessage, _ string, _ json.RawMessage) { ids <- id }
 	c.syncHandlers()
 	c.dispatch(&wireMsg{Method: "serverRequest", ID: int64ID(7)})
 	select {
 	case id := <-ids:
-		if id != 7 {
-			t.Fatalf("id 不符: %d", id)
+		if string(id) != "7" {
+			t.Fatalf("id 不符: %s", id)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("反向请求未送达快照中的 ReqHandler")

@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
-	"github.com/pocketagent/daemon/internal/hostenv"
+	"github.com/pocketagent/daemon/internal/pathguard"
 )
 
 const (
@@ -313,10 +313,9 @@ func (s *Server) MoveEntry(ctx context.Context, req *pb.MoveEntryRequest) (*pb.E
 // 任意源 os.Rename,零围栏 —— 通用用户在手机端一次误操作即可删掉 C:\Windows
 // 或整块盘根,不可逆。产品面向通用用户,不能指望路径都长在理解范围内。
 //
-// 【命中清单】归一化(filepath.Clean+Abs,小写比较,Windows 大小写不敏感)后,
-// 目标命中以下任一项即拒:
+// 【命中清单】目标命中以下任一项即拒:
 //
-//	① 驱动器根(如 C:\,len<=3)—— 递归删等于清盘;
+//	① 驱动器根(如 C:\,含裸盘符 X:、设备形态 \\?\X:\ 变体)—— 递归删等于清盘;
 //	② %SystemRoot%(默认 C:\Windows)本身,以及它的直接子项(仅顶层一层,
 //	   不含更深层)—— System32 等同层目录/文件没有手机端可合法删除的对象;
 //	③ %ProgramFiles% 与 %ProgramFiles(x86)% 根本身;
@@ -327,91 +326,51 @@ func (s *Server) MoveEntry(ctx context.Context, req *pb.MoveEntryRequest) (*pb.E
 //	   等内部账本,删除任何一员都破坏完整性,不存在合法删除目标;
 //	⑦ 进程当前工作目录与可执行文件所在目录(仅目录本身)。
 //
-// 【误杀取舍】除 ⑥ 外清单只挡"根/顶层本身",不挡深层路径:C:\Users\<u>\Documents
-// 及其内容照常可删;真有合法目录恰好顶着这些名字的概率远小于误删系统目录的
-// 代价,两害取其重,宁严勿松。
-// 【归一化边界】8.3 短名与符号链接不解析,属已知边界(手机端列出的是真实名)。
+// 【清单收口(2026-10-04 F3)】清单判定与锚点归一已收口至 internal/pathguard,
+// 与协同工作区护栏(guardWorkspaceRoot)共用同一份实现:比对锚点一律取
+// GetFinalPathNameByHandle 物理最终路径(junction/符号链接/8.3 短名/大小写一次
+// 归一),另叠设备前缀剥除与管理共享回指(X$)别名两类字符串层附加锚点 ——
+// 审查缺口 G1(junction 逃逸两护栏漂移)/G2(裸盘符)/G3(设备形态盘根)/
+// G4(管理共享回指)均在该共享实现内修复。本函数只剩薄委托 + 删除/移动
+// 视角的面向文案。
+// 【误杀取舍】(在 pathguard 清单定义里执行,此处复述)除 ⑥ 外清单只挡
+// "根/顶层本身",不挡深层路径:C:\Users\<u>\Documents 及其内容照常可删;
+// 真有合法目录恰好顶着这些名字的概率远小于误删系统目录的代价,两害取其重,
+// 宁严勿松。
 // 【不设围栏的路径】WriteFile(单文件覆盖写,见其 P1-2 范围说明)、MoveEntry 的
 // ToPath(用户自由命名的新位置)、CreateDirectory(只增不删)。
 func (s *Server) guardDangerousPath(rawPath string) error {
-	norm, err := filepath.Abs(filepath.Clean(rawPath))
-	if err != nil {
-		return errInvalidArg("解析路径失败: " + err.Error())
+	r := pathguard.GuardDeny(rawPath, []string{s.cfg.DataDir})
+	if !r.Denied {
+		return nil
 	}
-	key := strings.ToLower(norm)
-	deny := func(reason string) error {
-		return errInvalidArg(fmt.Sprintf("拒绝删除/移动 %s: %s", rawPath, reason))
+	if r.Kind == pathguard.DenyParseFail {
+		return errInvalidArg("解析路径失败: " + r.Err.Error())
 	}
+	return errInvalidArg(fmt.Sprintf("拒绝删除/移动 %s: %s", rawPath, dangerousPathReason(r.Kind)))
+}
 
-	// ① 驱动器根
-	if len(norm) <= 3 {
-		return deny("这是驱动器根目录,删除会清空整块磁盘")
+// dangerousPathReason 命中条目 → 删除/移动视角的面向文案(与收口前的历史
+// 文案逐字一致;文案随语义留在调用方、清单随逻辑收口在 pathguard)。
+func dangerousPathReason(k pathguard.DenyKind) string {
+	switch k {
+	case pathguard.DenyDriveRoot:
+		return "这是驱动器根目录,删除会清空整块磁盘"
+	case pathguard.DenySystemRoot:
+		return "这是 Windows 系统目录,删除后系统将无法启动"
+	case pathguard.DenySystemRootChild:
+		return "它位于 Windows 系统目录顶层(System32 等同层),不是可以删除的内容"
+	case pathguard.DenyHomeLikeRoot:
+		return "这是系统/用户主目录本身,不是可以删除的普通文件夹"
+	case pathguard.DenyDataDir:
+		return "这是 PocketAgent 自身的数据目录,里面是程序运行必需的记录,删除会损坏数据"
+	case pathguard.DenyProcessCwd:
+		return "这是程序当前工作目录,删除会影响程序自身运行"
+	case pathguard.DenyExeDir:
+		return "这是程序安装目录,删除会破坏 PocketAgent 本体"
+	default:
+		return "命中不可逆路径保护清单"
 	}
-
-	// ② %SystemRoot% 本身 + 直接子项(仅顶层一层)
-	sysRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
-	if sysRoot == "" {
-		sysRoot = `C:\Windows`
-	}
-	if sysKey := strings.ToLower(filepath.Clean(sysRoot)); sysKey != "" {
-		if key == sysKey {
-			return deny("这是 Windows 系统目录,删除后系统将无法启动")
-		}
-		if strings.ToLower(filepath.Dir(norm)) == sysKey {
-			return deny("它位于 Windows 系统目录顶层(System32 等同层),不是可以删除的内容")
-		}
-	}
-
-	// ③④⑤ 程序目录 / 用户主目录 / 系统临时目录 —— 仅根本身
-	homeDir := ""
-	if h, herr := os.UserHomeDir(); herr == nil {
-		homeDir = h
-	}
-	for _, root := range []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-		os.Getenv("USERPROFILE"),
-		homeDir,
-		os.TempDir(),
-	} {
-		if root = strings.TrimSpace(root); root == "" {
-			continue
-		}
-		if key == strings.ToLower(filepath.Clean(root)) {
-			return deny("这是系统/用户主目录本身,不是可以删除的普通文件夹")
-		}
-	}
-
-	// ⑥ daemon 数据目录 —— 整棵子树都拒(内部账本无合法删除目标)。
-	// 小写后再 Rel,与 isKnownWorkspaceUpload 的 rel 判定同款式样。
-	dataRoots := []string{}
-	if dir := strings.TrimSpace(s.cfg.DataDir); dir != "" {
-		dataRoots = append(dataRoots, dir)
-	}
-	dataRoots = append(dataRoots, hostenv.UserDataDir(), hostenv.LegacyDataDir())
-	for _, root := range dataRoots {
-		if strings.TrimSpace(root) == "" {
-			continue
-		}
-		rel, rerr := filepath.Rel(strings.ToLower(filepath.Clean(root)), key)
-		if rerr != nil {
-			continue // 跨盘等无法比较的情形:不命中
-		}
-		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
-			return deny("这是 PocketAgent 自身的数据目录,里面是程序运行必需的记录,删除会损坏数据")
-		}
-	}
-
-	// ⑦ 当前工作目录 / 可执行文件所在目录 —— 仅目录本身
-	if wd, werr := os.Getwd(); werr == nil && wd != "" && key == strings.ToLower(filepath.Clean(wd)) {
-		return deny("这是程序当前工作目录,删除会影响程序自身运行")
-	}
-	if exe, eerr := os.Executable(); eerr == nil {
-		if key == strings.ToLower(filepath.Clean(filepath.Dir(exe))) {
-			return deny("这是程序安装目录,删除会破坏 PocketAgent 本体")
-		}
-	}
-	return nil
 }
 
 func (s *Server) SearchContent(req *pb.SearchContentRequest, stream pb.FileSystemService_SearchContentServer) error {

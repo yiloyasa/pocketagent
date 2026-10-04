@@ -48,7 +48,7 @@ func TestCodexUnknownRequestPassthroughAllow(t *testing.T) {
 		}
 		return true, "", nil
 	}
-	ok := p.consumeCodexUnknownRequest(rsp, 41, codexPassthroughProbeMethod, "th-cx1",
+	ok := p.consumeCodexUnknownRequest(rsp, json.RawMessage("41"), codexPassthroughProbeMethod, "th-cx1",
 		json.RawMessage(`{"token":"secret-cx","x":1}`), context.Background(),
 		func(*pb.TurnServerMessage) {}, approve, &waiting)
 	if !ok {
@@ -97,7 +97,7 @@ func TestCodexUnknownRequestPassthroughDenyFallsToLegacy(t *testing.T) {
 	rsp := &fakeCodexResponder{}
 	var waiting atomic.Bool
 	asked := false
-	ok := p.consumeCodexUnknownRequest(rsp, 42, "futureDept/codexDeny", "th-cx2",
+	ok := p.consumeCodexUnknownRequest(rsp, json.RawMessage("42"), "futureDept/codexDeny", "th-cx2",
 		json.RawMessage(`{"x":1}`), context.Background(),
 		func(*pb.TurnServerMessage) {}, func(context.Context, *pb.ToolCallBlock) (bool, string, error) {
 			asked = true
@@ -130,7 +130,7 @@ func TestCodexUnknownRequestPassthroughChannelFailureFallsToLegacy(t *testing.T)
 	var waiting atomic.Bool
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 	defer cancel()
-	ok := p.consumeCodexUnknownRequest(rsp, 43, "futureDept/codexTimeout", "th-cx3",
+	ok := p.consumeCodexUnknownRequest(rsp, json.RawMessage("43"), "futureDept/codexTimeout", "th-cx3",
 		json.RawMessage(`{"x":1}`), ctx,
 		func(*pb.TurnServerMessage) {}, func(c context.Context, _ *pb.ToolCallBlock) (bool, string, error) {
 			<-c.Done() // 用户不点,直到超时
@@ -154,7 +154,7 @@ func TestCodexUnknownRequestPassthroughOffIsLegacy(t *testing.T) {
 	p := NewCodexProvider()
 	rsp := &fakeCodexResponder{}
 	var waiting atomic.Bool
-	ok := p.consumeCodexUnknownRequest(rsp, 44, "futureDept/codexOff", "th-cx4",
+	ok := p.consumeCodexUnknownRequest(rsp, json.RawMessage("44"), "futureDept/codexOff", "th-cx4",
 		json.RawMessage(`{"x":1}`), context.Background(),
 		func(*pb.TurnServerMessage) {}, func(context.Context, *pb.ToolCallBlock) (bool, string, error) {
 			t.Error("OFF 态绝不得询问手机(开关没开就没有确认卡)")
@@ -177,7 +177,7 @@ func TestCodexUnknownRequestPassthroughResolvedRace(t *testing.T) {
 	rsp := &fakeCodexResponder{}
 	var waiting atomic.Bool
 	var sinkFrames []*pb.TurnServerMessage
-	ok := p.consumeCodexUnknownRequest(rsp, 45, "futureDept/codexResolved", "th-cx5",
+	ok := p.consumeCodexUnknownRequest(rsp, json.RawMessage("45"), "futureDept/codexResolved", "th-cx5",
 		json.RawMessage(`{"x":1}`), context.Background(),
 		func(m *pb.TurnServerMessage) { sinkFrames = append(sinkFrames, m) },
 		func(context.Context, *pb.ToolCallBlock) (bool, string, error) {

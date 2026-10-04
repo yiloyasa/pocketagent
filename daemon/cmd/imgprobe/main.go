@@ -138,8 +138,8 @@ func startProbeServer(ec *eventCollector) (*codexapp.Client, error) {
 		fmt.Printf("  [%s] NOTIF %s\n", time.Now().Format("15:04:05.000"), method)
 		ec.add(method, params)
 	}
-	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
-		fmt.Printf("  [%s] REQ(id=%d) %s %.200s\n", time.Now().Format("15:04:05.000"), id, method, string(params))
+	c.ReqHandler = func(id json.RawMessage, method string, params json.RawMessage) {
+		fmt.Printf("  [%s] REQ(id=%s) %s %.200s\n", time.Now().Format("15:04:05.000"), string(id), method, string(params))
 		_ = c.Respond(id, map[string]string{"decision": "accept"})
 	}
 	if _, err := c.Call("initialize", map[string]interface{}{"clientInfo": map[string]string{"name": "imgprobe-resume", "version": "0.2"}}); err != nil {
@@ -449,8 +449,8 @@ func main() {
 		fmt.Println(line)
 		events = append(events, line)
 	}
-	c.ReqHandler = func(id int64, method string, params json.RawMessage) {
-		fmt.Printf("[%s] REQ(id=%d) %s %.200s\n", time.Now().Format("15:04:05.000"), id, method, string(params))
+	c.ReqHandler = func(id json.RawMessage, method string, params json.RawMessage) {
+		fmt.Printf("[%s] REQ(id=%s) %s %.200s\n", time.Now().Format("15:04:05.000"), string(id), method, string(params))
 		_ = c.Respond(id, map[string]string{"decision": "accept"})
 	}
 

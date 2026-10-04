@@ -227,7 +227,7 @@ func runScenario(c *codexapp.Client, name string, startParams map[string]interfa
 				}
 			}
 		},
-		func(id int64, method string, params json.RawMessage) {
+		func(id json.RawMessage, method string, params json.RawMessage) {
 			record(name, "REQ/"+method, params)
 			if method == "item/tool/requestUserInput" {
 				var a struct {

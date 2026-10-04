@@ -3,10 +3,11 @@
 // 【背景】fetchUsageUncached 的两个 account/* 探测超时放弃后,app-server 补发的
 // 迟到 error 帧曾每个探测窗在未知事件台账积 24 条(先收编为 KNOWN_PASSTHROUGH,
 // 2026-10-01 起源头治理:CallProbeCtx + dispatch 按 id 丢弃)。本文件钉死三条:
-//   ① 预算内正常应答仍原路生效,且不误入丢弃通道(能力位语义不变);
-//   ② 超时放弃后,同 id 的迟到应答被静默丢弃 —— UnknownResponseHandler 不触发;
-//      而**从未被请求**的孤儿帧照旧走兜底留痕 —— 一帧流里完成 A/B 对照;
-//   ③ CallCtx(其他探测/普通调用)的迟到应答语义一字不变:放弃后到达仍走兜底。
+//
+//	① 预算内正常应答仍原路生效,且不误入丢弃通道(能力位语义不变);
+//	② 超时放弃后,同 id 的迟到应答被静默丢弃 —— UnknownResponseHandler 不触发;
+//	   而**从未被请求**的孤儿帧照旧走兜底留痕 —— 一帧流里完成 A/B 对照;
+//	③ CallCtx(其他探测/普通调用)的迟到应答语义一字不变:放弃后到达仍走兜底。
 package codexapp
 
 import (
@@ -85,7 +86,7 @@ func TestCallProbeCtxDeliversResponseWithinBudget(t *testing.T) {
 func TestCallProbeCtxDropsLateResponseAfterGiveUp(t *testing.T) {
 	c, ids := newProbeTestClient(t)
 	fired := make(chan unknownProbe, 4)
-	c.UnknownResponseHandler = func(id int64, raw json.RawMessage) {
+	c.UnknownResponseHandler = func(id json.RawMessage, raw json.RawMessage) {
 		fired <- unknownProbe{id: id, raw: string(raw)}
 	}
 	c.syncHandlers()
@@ -121,8 +122,8 @@ func TestCallProbeCtxDropsLateResponseAfterGiveUp(t *testing.T) {
 	c.dispatch(&wireMsg{ID: int64ID(bogus), Result: json.RawMessage(`{"orphan":true}`)})
 	select {
 	case p := <-fired:
-		if p.id != bogus {
-			t.Fatalf("对照孤儿帧应带原 id %d,得到 %d", bogus, p.id)
+		if string(p.id) != "424242" {
+			t.Fatalf("对照孤儿帧应带原 id %d,得到 %s", bogus, p.id)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("孤儿帧未走兜底(对照失败:丢弃通道不该挡住真未知)")
@@ -133,7 +134,7 @@ func TestCallProbeCtxDropsLateResponseAfterGiveUp(t *testing.T) {
 func TestCallCtxLateResponseStillFallsBackToHandler(t *testing.T) {
 	c, ids := newProbeTestClient(t)
 	fired := make(chan unknownProbe, 4)
-	c.UnknownResponseHandler = func(id int64, raw json.RawMessage) {
+	c.UnknownResponseHandler = func(id json.RawMessage, raw json.RawMessage) {
 		fired <- unknownProbe{id: id, raw: string(raw)}
 	}
 	c.syncHandlers()
@@ -158,8 +159,8 @@ func TestCallCtxLateResponseStillFallsBackToHandler(t *testing.T) {
 	c.dispatch(&wireMsg{ID: int64ID(idCopy), Result: json.RawMessage(`{"late":true}`)})
 	select {
 	case p := <-fired:
-		if p.id != id {
-			t.Fatalf("CallCtx 迟到应答应带原 id 入兜底: want %d got %d", id, p.id)
+		if string(p.id) != string(int64ID(id)) {
+			t.Fatalf("CallCtx 迟到应答应带原 id 入兜底: want %s got %s", int64ID(id), p.id)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("CallCtx 的迟到应答必须仍走兜底留痕(其他探测语义不得被改)")

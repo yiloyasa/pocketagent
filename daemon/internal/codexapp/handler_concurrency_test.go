@@ -14,7 +14,7 @@ func TestCallCtxConcurrentHandlerPublication(t *testing.T) {
 	install := func(on bool) {
 		if on {
 			c.SetGlobalHandler(func(string, json.RawMessage) {})
-			c.SetTurnHandlers(func(string, json.RawMessage) {}, func(int64, string, json.RawMessage) {})
+			c.SetTurnHandlers(func(string, json.RawMessage) {}, func(json.RawMessage, string, json.RawMessage) {})
 		} else {
 			c.SetGlobalHandler(nil)
 			c.SetTurnHandlers(nil, nil)
@@ -60,7 +60,7 @@ func TestHandlerSettersPublishImmediatelyAndPreserveGlobal(t *testing.T) {
 		turn++
 		// Callback invocation must be outside handlerMu: uninstall can reenter.
 		c.SetTurnHandlers(nil, nil)
-	}, func(int64, string, json.RawMessage) {})
+	}, func(json.RawMessage, string, json.RawMessage) {})
 	c.dispatch(&wireMsg{Method: method, Params: raw})
 	c.dispatch(&wireMsg{Method: method, Params: raw})
 	if global != 2 || turn != 1 {

@@ -99,8 +99,8 @@ func main() {
 			frames = append(frames, fmt.Sprintf("[%s] %s %s", ts(), method, clipStr(p, 300)))
 		}
 		mu.Unlock()
-	}, func(id int64, method string, params json.RawMessage) {
-		addf("[%s] REQ(id=%d) %s %s", ts(), id, method, clipStr(string(params), 600))
+	}, func(id json.RawMessage, method string, params json.RawMessage) {
+		addf("[%s] REQ(id=%s) %s %s", ts(), string(id), method, clipStr(string(params), 600))
 		// 审批类反向请求一律 accept:探针场景自担(S0 同款惯例),让轮次能走完。
 		_ = c.Respond(id, map[string]string{"decision": "accept"})
 	})

@@ -145,3 +145,35 @@ func TestStartAppendsCollabExtraArgs(t *testing.T) {
 		}
 	}
 }
+
+// TestScriptCmdLineQuotesSpacedPath 引证形态钉子(2026-10-05,CODEX_BIN 含空格
+// 修复):.cmd/.bat 经 cmd.exe 启动时,命令行必须是 `cmd.exe /d /s /c ""脚本"
+// 参数…"` 的规范引证 —— 最外层一对引号 + /s 保证 cmd 恒定只剥最外层,脚本路径
+// 引号永不丢失;其余参数逐个 syscall.EscapeArg。活体踩坑:本机 CODEX_BIN=
+// G:\Claude Code\codex.cmd(含空格),旧形态 `cmd /c "G:\Claude Code\codex.cmd"
+// args…` 在行内任一参数自带引号(协同注入的 -c 值)时引号数 >2,cmd 落入
+// "剥首字符+最后一个引号"旧规则,报 `'G:\Claude' 不是内部或外部命令`,
+// codex provider 整体不可用(daemon.log 实证)。
+func TestScriptCmdLineQuotesSpacedPath(t *testing.T) {
+	got := scriptCmdLine(`G:\Claude Code\codex.cmd`,
+		[]string{"app-server", "-c", "notify=[]", "--disable", "apps"})
+	// 脚本路径必须整体在引号里,且位于最外层引号对之内(cmd /s 剥掉最外层后,
+	// 执行文以 "G:\Claude Code\codex.cmd" 开头)。
+	if !strings.HasPrefix(got, `cmd.exe /d /s /c ""G:\Claude Code\codex.cmd" `) {
+		t.Fatalf("脚本路径必须被引住且整体包裹在最外层引号对内: %s", got)
+	}
+	if !strings.HasSuffix(got, `"`) {
+		t.Fatalf("最外层引号必须闭合(/s 剥离后执行文才完整): %s", got)
+	}
+	// 参数逐个在场且 daemonScopeArgs 的引号敏感值(notify=[])原样透传。
+	for _, want := range []string{"app-server", "-c", "notify=[]", "--disable", "apps"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("参数 %q 必须在场: %s", want, got)
+		}
+	}
+	// 不含空格的脚本路径同样成立(形态统一,不给两套规则留分叉)。
+	simple := scriptCmdLine(`C:\bin\codex.cmd`, []string{"app-server"})
+	if !strings.HasPrefix(simple, `cmd.exe /d /s /c ""C:\bin\codex.cmd" app-server"`) {
+		t.Fatalf("无空格路径应走同一规范形态: %s", simple)
+	}
+}
