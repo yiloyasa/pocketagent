@@ -11,6 +11,13 @@ package server
 // 【刻意不做的编排】这里不实现"谁先谁后、谁汇总谁的结论"。那是让 daemon 替
 // 用户猜分工,既不可预测也不可控;选人 + 角色配置已经把决策权交回用户手里,
 // daemon 只负责把同一条指令忠实扇出给所有成员。
+//
+// 【P1 协同闭环(Task 3/4)】DispatchCollab 从"派发后撒手"升级为"创建持久化
+// 协同会话 + 逐成员受理":受理成功只写 ACCEPTED→RUNNING(绝不写 DONE),
+// 失败成员写 FAILED+人话原因,成员轮次的全部出口经 finalizeMember 恰好落一次
+// 终局。状态机/持久化/事件管道在 collab_session_state.go 与
+// collab_session_events.go;本文件保留 RPC 面:策略闸、角色解析、成员轮次主体
+// (runCollabMember)与六个协同 RPC 的接线。
 
 import (
 	"context"
@@ -19,7 +26,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
@@ -29,12 +38,26 @@ import (
 // 同源(模型跑飞 / 工具卡死),没必要给出第二个时长让人去记。真要区分时再拆。
 const maxCollabTurnDuration = maxDelegateTurnDuration
 
-// DispatchCollab 受理一次协同扇出:为每个成员各建一个子线程并起飞轮次。
+// collabMemberSpec RPC 层解析出的单个成员:角色人设已拼进任务文本,
+// agent/model/effort/workspace 已定;err 非空 = 受理前就注定失败。
+type collabMemberSpec struct {
+	agentID   string
+	roleID    string
+	model     string
+	effort    string
+	workspace string
+	task      string
+	err       string
+}
+
+// DispatchCollab 受理一次协同扇出:先创建持久化会话,再逐成员受理(建子线程、
+// 起飞轮次),响应里每个成员仍按请求顺序给出 thread_id。
 //
 // 【为什么 RPC 只负责"受理"而不等结果】四个 agent 同时跑完可能要很久,让手机
-// 端干等到最后一个完成是不可用的。所以这里把每个成员的子线程 id 立刻返回,
-// 前端按 thread_id 用既有 ThreadService 查询各自状态回填相位 —— 于是界面上
-// 每个 agent 的进度是**独立、实时**的,而不是等齐了才一起显示。
+// 端干等到最后一个完成是不可用的。所以这里把每个成员的子线程 id 立刻返回;
+// 与旧版不同的是,受理结果同时落进协同会话快照 —— 前端既可按 thread_id 用
+// 既有 ThreadService 回填相位,也可用 GetCollabSession/WatchCollabSession 从
+// daemon 真值恢复整屏(旧客户端的响应形状不变:仍是 SessionId + Items)。
 //
 // 【为什么一个成员失败不影响其它成员】并行协作的语义就是"各自去干":某一家
 // 的 agent 没装好,不该让其它三家一起陪葬。失败的成员在 items 里给**人话原因**,
@@ -64,118 +87,160 @@ func (s *Server) DispatchCollab(ctx context.Context, req *pb.DispatchCollabReque
 			len(req.GetMembers()), max))
 	}
 
-	sessionID := randomID("collab")
-	items := make([]*pb.DispatchCollabItem, 0, len(req.GetMembers()))
+	// 角色解析在 RPC 层(配置便利,不是引擎能力),受理与起飞在协调器。
+	specs := make([]collabMemberSpec, 0, len(req.GetMembers()))
 	for _, m := range req.GetMembers() {
-		// 顺序一致:返回项与请求成员一一对应,前端按位置回填每个 agent 的相位,
-		// 不需要拿 agent_id 反查自己的那一项(重名成员也不会错位)。
-		items = append(items, s.acceptCollabMember(ctx, sessionID, instruction, m, req.GetWorkspace()))
+		specs = append(specs, s.resolveCollabMemberSpec(m, instruction, req.GetWorkspace()))
 	}
-	log.Printf("[collab] 协同扇出 %s: 成员 %d,受理 %d", sessionID, len(items), countAcked(items))
-	return &pb.DispatchCollabResponse{SessionId: sessionID, Items: items}, nil
-}
-
-// acceptCollabMember 受理单个成员:解析 agent 与角色 → 建子线程 → 起飞轮次。
-func (s *Server) acceptCollabMember(
-	ctx context.Context, sessionID, instruction string, m *pb.CollabMember, defaultWS string,
-) *pb.DispatchCollabItem {
-	agentID := strings.TrimSpace(m.GetAgentId())
-	taskText := instruction
-	var model, effort string
-	workspace := strings.TrimSpace(defaultWS)
-
-	// 角色:提供"我是谁、长期怎么干"以及 model/effort/workspace 的兜底值。
-	// 显式给的值优先(与委派同一条规则,免得两处优先级不一致让人困惑)。
-	if rid := strings.TrimSpace(m.GetRoleId()); rid != "" {
-		role, ok := s.cfg.Store.GetCollabRole(rid)
-		if !ok {
-			return &pb.DispatchCollabItem{
-				AgentId: agentID,
-				Error:   errRoleUndefined(rid, s.cfg.Store.ListCollabRoles()).Error(),
-			}
+	members := make([]DispatchMember, len(specs))
+	for i, sp := range specs {
+		dm := DispatchMember{
+			AgentID: sp.agentID, RoleID: sp.roleID, ModelID: sp.model,
+			Effort: sp.effort, Workspace: sp.workspace, Task: sp.task,
 		}
-		if agentID == "" {
-			agentID = role.AgentID
+		if sp.err != "" {
+			dm.AcceptError = sp.err
 		}
-		model = firstNonEmpty(model, role.Model)
-		effort = firstNonEmpty(effort, role.Effort)
-		workspace = firstNonEmpty(workspace, role.Workspace)
-		taskText = collabRoleTask(role, instruction)
+		members[i] = dm
 	}
-	if agentID == "" {
-		return &pb.DispatchCollabItem{
-			Error: "该协同成员没指定 agent:请给它选一个 agent,或配一个「已设置目标 agent」的协同角色",
-		}
-	}
-
-	// 建子线程:agent 不存在由 CreateThread 动态列举当前可用 agent 并人话报错,
-	// 这里不重复做存在性裁决(单一裁决点)。
-	th, err := s.CreateThread(ctx, &pb.CreateThreadRequest{
-		AgentId:   agentID,
-		Workspace: workspace,
-		ModelId:   model,
+	snap, err := s.collabCoordinatorFor().Dispatch(ctx, DispatchRequest{
+		Instruction: instruction,
+		Workspace:   strings.TrimSpace(req.GetWorkspace()),
+		Members:     members,
 	})
 	if err != nil {
-		return &pb.DispatchCollabItem{AgentId: agentID, Error: err.Error()}
+		return nil, err
 	}
-	t, ok := s.cfg.Store.Get(th.GetId())
-	if !ok {
-		return &pb.DispatchCollabItem{
-			AgentId:  agentID,
-			ThreadId: th.GetId(),
-			Error:    "子线程建出来后读不回来(存储异常),本次协同未起飞",
+	// 响应项与请求成员一一对应(按位置回填,重名成员也不会错位)——旧形状不变。
+	items := make([]*pb.DispatchCollabItem, 0, len(snap.GetMembers()))
+	for _, m := range snap.GetMembers() {
+		items = append(items, &pb.DispatchCollabItem{
+			AgentId:  m.GetAgentId(),
+			ThreadId: m.GetThreadId(),
+			// ack = 受理(子线程已建、轮次已起飞),**不等于**执行成功 ——
+			// 结果看子线程状态/协同快照。受理失败(含建线程成功但落卡失败)
+			// 一律 Ack=false + 人话原因。
+			Ack:   m.GetThreadId() != "" && m.GetStatus() != string(store.CollabStatusFailed),
+			Error: m.GetError(),
+		})
+	}
+	log.Printf("[collab] 协同扇出 %s: 成员 %d,受理 %d", snap.GetSessionId(), len(items), countAcked(items))
+	return &pb.DispatchCollabResponse{SessionId: snap.GetSessionId(), Items: items}, nil
+}
+
+// resolveCollabMemberSpec 解析单个成员:agent 与角色 → 谁、用什么模型/强度/
+// 工作区、干什么(角色人设拼进任务文本)。显式给的值优先(与委派同一条规则)。
+func (s *Server) resolveCollabMemberSpec(m *pb.CollabMember, instruction, defaultWS string) collabMemberSpec {
+	out := collabMemberSpec{
+		agentID:   strings.TrimSpace(m.GetAgentId()),
+		roleID:    strings.TrimSpace(m.GetRoleId()),
+		workspace: strings.TrimSpace(defaultWS),
+		task:      instruction,
+	}
+	if out.roleID != "" {
+		role, ok := s.cfg.Store.GetCollabRole(out.roleID)
+		if !ok {
+			out.err = errRoleUndefined(out.roleID, s.cfg.Store.ListCollabRoles()).Error()
+			return out
 		}
+		if out.agentID == "" {
+			out.agentID = role.AgentID
+		}
+		out.model = firstNonEmpty(out.model, role.Model)
+		out.effort = firstNonEmpty(out.effort, role.Effort)
+		out.workspace = firstNonEmpty(out.workspace, role.Workspace)
+		out.task = collabRoleTask(role, instruction)
 	}
-	t.Effort = effort
-	// 【为什么不设 ParentThreadID】协同会话 id 不是一个真实线程,挂上去会造出
-	// 一条指向不存在的父链 —— 手机端按本地 id 匹配父子,匹配不上就是一张永远
-	// 点不亮的孤儿卡,那正是本项目反复在修的假象。协同的归组由前端的
-	// session_id 负责,不借用父链语义。
-	if err := s.cfg.Store.Update(t); err != nil {
-		return &pb.DispatchCollabItem{AgentId: agentID, ThreadId: t.ID, Error: err.Error()}
+	if out.agentID == "" {
+		out.err = "该协同成员没指定 agent:请给它选一个 agent,或配一个「已设置目标 agent」的协同角色"
 	}
-
-	// 起飞:并行。RPC 不等它跑完,所以这里用 goroutine;每个成员互不阻塞。
-	go s.runCollabMember(t.ID, taskText, sessionID)
-
-	// ack = 受理(子线程已建、轮次已起飞),**不等于**执行成功 —— 结果看子线程
-	// 状态。把受理冒充成功是本项目一贯的红线。
-	return &pb.DispatchCollabItem{AgentId: agentID, ThreadId: t.ID, Ack: true}
+	return out
 }
 
 // runCollabMember 在后台跑完一个协同成员的一整轮。
 //
 // 【为什么重新起一个 context 而不是用 RPC 的 ctx】RPC 一返回,它的 ctx 就被
 // 取消;异步轮次若沿用,会在刚起飞的瞬间被整体杀掉 —— 表现为"状态永远是收到,
-// 但什么都没跑"。所以这里用**脱离取消链**的独立 context,自己管超时。
-// 取舍:RPC 取消后无法再远程叫停这一轮,这是"要并行就得让它活着"的必然代价。
-func (s *Server) runCollabMember(threadID, task, sessionID string) {
+// 但什么都没跑"。所以这里用**脱离取消链**的独立 context,自己管超时;用户要
+// 叫停走 CancelTurn/CancelCollabMember 的取消链路(经 activeTurns 命中这里的
+// cancel 函数),不再有"RPC 取消后无法叫停"的空洞。
+//
+// 【终局恰好一次】本函数所有出口都只填写 outcome,由 defer 的 finalizeMember
+// 统一落库/发事件 —— COMPLETED/FAILED/CANCELLED/WAITING_APPROVAL 各有其位:
+// 取消优先于失败(用户叫停的轮次不被错误伪装),完成必须来自真实终稿。
+func (s *Server) runCollabMember(sessionID, threadID, task string, gen int) {
+	coord := s.collabCoordinatorFor()
+	var outcome collabMemberOutcome
+	defer func() { coord.finalizeMember(sessionID, threadID, gen, outcome) }()
+
 	runCtx, cancel := context.WithTimeout(context.Background(), maxCollabTurnDuration)
 	defer cancel()
 
 	t, ok := s.cfg.Store.Get(threadID)
 	if !ok {
-		log.Printf("[collab] 成员线程 %s 起飞前已不存在(可能被删除),跳过", threadID)
+		log.Printf("[collab] 成员线程 %s 起飞前已不存在(可能被删除),按失败终局落库", threadID)
+		outcome = collabMemberOutcome{status: store.CollabStatusFailed, errText: "成员线程起飞前已不存在(可能被删除)"}
 		return
 	}
 	lease, lerr := s.activeTurns.acquire(runCtx, t.ID, cancel)
 	if lerr != nil {
-		log.Printf("[collab] 成员 %s 获取轮次租约失败: %v", threadID, lerr)
+		outcome = collabMemberOutcome{status: store.CollabStatusFailed, errText: fmt.Sprintf("获取轮次租约失败:%v", lerr)}
 		return
 	}
 	defer s.activeTurns.Clear(t.ID, lease)
 
-	provider, perr := s.providerForThread(t)
-	if perr != nil {
-		log.Printf("[collab] 成员 %s 选 provider 失败: %v", threadID, perr)
+	// 受理-起飞窗口的取消竞态闸:会话级取消不等待刚起飞的轮次。
+	if coord.runSuperseded(sessionID, threadID, gen) {
+		outcome = collabMemberOutcome{status: store.CollabStatusCancelled, errText: "轮次起飞前已被取消"}
 		return
 	}
 
-	// 过程帧本次不下发(与委派的 v1 形态一致);思考仍随 assistant 消息落库。
-	childSink, thinkBuf := thinkingRecorder(func(ev *pb.TurnServerMessage) {})
-	// 准则 4:无用户在环,审批一律拒绝,绝不代拟"同意"。
-	approve := func(_ context.Context, _ *pb.ToolCallBlock) (bool, string, error) {
-		return false, "协同子任务暂无审批通道,已拒绝该操作", nil
+	provider, perr := s.providerForThread(t)
+	if perr != nil {
+		outcome = collabMemberOutcome{status: store.CollabStatusFailed, errText: perr.Error()}
+		return
+	}
+
+	// 过程帧 → 有界事件转换器:只留进度/工具边界的低频摘要,原始大文本不进
+	// 协同通道(要看全文去子线程历史);思考仍随 assistant 消息落库。
+	card := &collabMemberCard{c: coord, sessionID: sessionID, threadID: threadID, gen: gen}
+	childSink, thinkBuf := thinkingRecorder(card.sink())
+
+	// 审批中继:复用 turnApprovals + SubmitApproval 的既有链路 —— 成员卡上的
+	// pending_approvals 只是同一份真相的映射(request_id 真实、thread_id 就是
+	// 本成员线程),不新增审批通道,也不代用户同意。
+	approvals := newTurnApprovals()
+	s.approvalSessions.Store(t.ID, approvals)
+	defer s.approvalSessions.CompareAndDelete(t.ID, approvals)
+	approve := func(actx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
+		reqID := randomID("apr")
+		approvalCh := approvals.add(reqID)
+		request := &pb.ApprovalRequest{RequestId: reqID, Action: call, Reason: agent.ApprovalReason(call)}
+		request.Options, request.Details = approvalCardExtras(call)
+		approvals.attach(request)
+		// 挂到成员卡(WAITING_APPROVAL 帧),然后等待真实应答。
+		coord.memberApprovalWaiting(sessionID, threadID, gen, request, true)
+		defer func() {
+			approvals.remove(reqID)
+			childSink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{
+				ApprovalResolved: &pb.ApprovalResolved{RequestId: reqID, Note: "审批已结束"},
+			}})
+		}()
+		waitCtx, waitCancel := context.WithTimeout(actx, collabApprovalWaitTimeout)
+		defer waitCancel()
+		var decision *pb.ApprovalDecision
+		select {
+		case decision = <-approvalCh:
+		case <-waitCtx.Done():
+			// 无人应答 ≠ 同意:按拒绝继续(绝不代拟"同意"),成员卡同步摘下
+			// 挂起审批 —— 协同成员无人值守,不能为一笔回不了的审批把整轮吊死。
+			coord.memberApprovalWaiting(sessionID, threadID, gen, request, false)
+			return false, "协同审批等待超时(2 分钟),已按拒绝继续", nil
+		case <-runCtx.Done():
+			return false, "", runCtx.Err()
+		}
+		coord.memberApprovalWaiting(sessionID, threadID, gen, request, false)
+		return decision.Approved, approvalNoteWithOption(decision), nil
 	}
 
 	t.Messages = append(t.Messages, store.StoredMessage{
@@ -190,10 +255,101 @@ func (s *Server) runCollabMember(threadID, task, sessionID string) {
 	logStoreUpdateErr("collab-member-start", t.ID, s.cfg.Store.Update(t))
 	taskBlocks := t.Messages[len(t.Messages)-1].Blocks
 
-	if _, _, rerr := s.runTurnOnce(runCtx, provider, randomID("turn"), t,
-		taskBlocks, childSink, thinkBuf, approve); rerr != nil {
-		log.Printf("[collab] 会话 %s 成员 %s 轮次失败: %v", sessionID, threadID, rerr)
+	// 受理(ACCEPTED)与执行(RUNNING)的分界线在这里立牌。
+	coord.transitionRunning(sessionID, threadID, gen)
+
+	summary, userStopped, rerr := s.runTurnOnce(runCtx, provider, randomID("turn"), t,
+		taskBlocks, childSink, thinkBuf, approve)
+	switch {
+	case userStopped:
+		// 取消优先于失败:用户/会话叫停的轮次,终局是"已取消",不被错误伪装
+		// (取消引发的 ctx 错误原样带上,供排查)。
+		outcome = collabMemberOutcome{status: store.CollabStatusCancelled, errText: "成员已被取消"}
+		if rerr != nil {
+			if re, ok := rerr.(*turnRunError); ok {
+				outcome.errText = "成员已取消(" + runtime.ClipRunesEllipsis(re.err.Error(), 160) + ")"
+			}
+		}
+	case rerr != nil:
+		errText := rerr.Error()
+		if re, ok := rerr.(*turnRunError); ok {
+			errText = re.err.Error()
+		}
+		outcome = collabMemberOutcome{status: store.CollabStatusFailed, errText: errText}
+	default:
+		outcome = collabMemberOutcome{status: store.CollabStatusCompleted, summary: summary}
 	}
+}
+
+// ---- 协同会话观察与操作 RPC(Task 1 协议增量的 daemon 落点)----
+
+// GetCollabSession 会话全量快照(手机端打开协同页的第一步:整屏恢复)。
+func (s *Server) GetCollabSession(ctx context.Context, req *pb.GetCollabSessionRequest) (*pb.CollabSessionSnapshot, error) {
+	if strings.TrimSpace(req.GetSessionId()) == "" {
+		return nil, errInvalidArg("缺少协同会话 id")
+	}
+	return s.collabCoordinatorFor().Snapshot(ctx, req.GetSessionId())
+}
+
+// ListCollabSessions 协同会话列表(最简全量形态;includeFinished 控制是否带
+// 已结束的)。
+func (s *Server) ListCollabSessions(ctx context.Context, req *pb.ListCollabSessionsRequest) (*pb.ListCollabSessionsResponse, error) {
+	coord := s.collabCoordinatorFor()
+	out := &pb.ListCollabSessionsResponse{}
+	for _, sess := range coord.listSessions(ctx, req.GetIncludeFinished()) {
+		out.Sessions = append(out.Sessions, coord.sessionToPb(sess))
+	}
+	return out, nil
+}
+
+// WatchCollabSession 订阅单个会话的事件流:先回放 after 之后的持久化事件,
+// 再实时转发;断线重连按 after_sequence 续传,超出保留窗口收到全量快照兜底。
+func (s *Server) WatchCollabSession(req *pb.WatchCollabSessionRequest, stream pb.ThreadService_WatchCollabSessionServer) error {
+	ctx := stream.Context()
+	events, err := s.collabCoordinatorFor().Watch(ctx, req.GetSessionId(), req.GetAfterSequence())
+	if err != nil {
+		return err
+	}
+	for ev := range events {
+		if err := stream.Send(ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CancelCollabSession 取消整个会话:逐成员发起取消并等状态收敛(有界等待,
+// 超时降级为人话错误 —— 收敛仍会继续,只是不让你干等)。
+func (s *Server) CancelCollabSession(ctx context.Context, req *pb.CancelCollabSessionRequest) (*pb.CollabSessionSnapshot, error) {
+	if strings.TrimSpace(req.GetSessionId()) == "" {
+		return nil, errInvalidArg("缺少协同会话 id")
+	}
+	return s.collabCoordinatorFor().CancelSession(ctx, req.GetSessionId())
+}
+
+// CancelCollabMember 取消单个成员:只取消对应子线程(复用 CancelTurn 链路),
+// 状态由成员轮次自己收敛落库。
+func (s *Server) CancelCollabMember(ctx context.Context, req *pb.CancelCollabMemberRequest) (*pb.CollabMemberSnapshot, error) {
+	if strings.TrimSpace(req.GetSessionId()) == "" || strings.TrimSpace(req.GetThreadId()) == "" {
+		return nil, errInvalidArg("缺少协同会话 id 或成员线程 id")
+	}
+	return s.collabCoordinatorFor().CancelMember(ctx, req.GetSessionId(), req.GetThreadId())
+}
+
+// RetryCollabMember 以新代际重建成员轮次(旧结果保留在事件流/线程历史里)。
+// 与 Dispatch 同过协同策略闸 —— 策略关掉时"重新派发"同样不该发生。
+func (s *Server) RetryCollabMember(ctx context.Context, req *pb.RetryCollabMemberRequest) (*pb.CollabMemberSnapshot, error) {
+	if strings.TrimSpace(req.GetSessionId()) == "" || strings.TrimSpace(req.GetThreadId()) == "" {
+		return nil, errInvalidArg("缺少协同会话 id 或成员线程 id")
+	}
+	policy := s.collabPolicySnapshot()
+	if !policy.CollabEnabled() {
+		return nil, errFailedPrecondition("协同已在运行时策略里关闭(可在控制面重新开启)")
+	}
+	if !policy.Fanout() {
+		return nil, errFailedPrecondition("协同扇出已在运行时策略里关闭(可在控制面重新开启)")
+	}
+	return s.collabCoordinatorFor().RetryMember(ctx, req.GetSessionId(), req.GetThreadId())
 }
 
 // ---- 辅助 ----

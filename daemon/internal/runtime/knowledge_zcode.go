@@ -102,7 +102,7 @@ var zcodeEventSummaries = map[string]string{
 	// 主模型裁决:按 process/* 遥测家族同款口径预收编为 PASSTHROUGH —— 未来真出现
 	// 即已知,不再灌 UNKNOWN。措辞按通知名直译+家族同款(诊断数据/只留痕),载荷
 	// 到手后以 Detail 的"以原文为准"红线兜底,届时可按实测校准。
-	"zcode\x1fprocess/toolExecResource":                     "ZCode 上报了工具执行资源采样(诊断数据,daemon 只留痕)",
-	"zcode\x1fplugins/operationProgress":                    "ZCode 上报了插件操作进度(诊断数据,daemon 只留痕)",
-	"zcode\x1finteraction/providerRuntimeHeadersCancelled":  "ZCode 通知提供方运行时鉴权头流程已取消(桌面端职责域,daemon 只留痕)",
+	"zcode\x1fprocess/toolExecResource":                    "ZCode 上报了工具执行资源采样(诊断数据,daemon 只留痕)",
+	"zcode\x1fplugins/operationProgress":                   "ZCode 上报了插件操作进度(诊断数据,daemon 只留痕)",
+	"zcode\x1finteraction/providerRuntimeHeadersCancelled": "ZCode 通知提供方运行时鉴权头流程已取消(桌面端职责域,daemon 只留痕)",
 }

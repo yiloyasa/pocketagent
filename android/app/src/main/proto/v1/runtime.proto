@@ -65,6 +65,17 @@ service RuntimeService {
   // 【单域降级】某个域的状态取不到时,该域单独降级为 status_code=2 并说明原因,
   // 其余域照常返回 —— 总览页不该被一个域的故障掀翻。
   rpc GetControlPlane(GetControlPlaneRequest) returns (ControlPlane);
+  // ---- 未知事件用户动作执行(2026-10-04 用户处理中心计划,只增)----
+  // 执行一个由 UnknownEventSummary.actions 声明过的安全动作。动作白名单在
+  // daemon 侧硬编码:inspect / acknowledge / retry_later / open_native;
+  // **绝不**提供 approve/execute 类动作 —— 未知请求永远不能被"一键放行"
+  // (与 UserActionDescriptor.safe 的红线同一纪律)。
+  // 【幂等】同一动作重复提交不产生副作用:返回当前状态(ok=true + 最新
+  // summary/new_revision),客户端重复点击、多设备同时处理都安全。
+  // 【冲突是结构化结果不是 error】expected_revision 与当前 revision 不一致时
+  // 回 conflict=true + 人话 detail,gRPC status 不承载业务冲突 —— 客户端据此
+  // 重新拉取详情(GetUnknownEvent)再决定,不炸 UI。
+  rpc ExecuteUnknownEventAction(UnknownEventActionRequest) returns (UnknownEventActionResult);
 }
 
 message GetRuntimePolicyRequest {}
@@ -269,6 +280,48 @@ message AcknowledgeUnknownEventRequest {
 
 message AcknowledgeUnknownEventResponse {
   UnknownEventSummary item = 1;
+}
+
+// ---- 未知事件用户动作执行(只增,字段号从 1 起,不碰旧消息;字段号分配登记见
+// proto/FIELD_ALLOCATIONS.md,2026-10-04 用户处理中心计划)----
+
+// UnknownEventActionRequest 执行一个未知事件上的安全动作。
+// action_id 必须来自该事件 UnknownEventSummary.actions 里声明过的取值;
+// 客户端不得自造动作 —— daemon 按白名单(inspect / acknowledge / retry_later /
+// open_native)二次校验,白名单之外一律拒绝,绝不出现 approve/放行类动作。
+message UnknownEventActionRequest {
+  string event_id = 1;  // 目标未知事件 id(台账里的 event_id)
+  // 乐观并发控制:客户端最后一次看到的 UnknownEventSummary.revision。
+  // 不一致 = 事件已被别处处理过 → 结果 conflict=true(见 ActionResult,
+  // 不是 gRPC error)。0 = 不做 CAS(仅 inspect 这类纯读动作允许)。
+  int64 expected_revision = 2;
+  string action_id = 3; // 要执行的动作 id(白名单内;来自 actions[].action_id)
+  // 可选备注(如 acknowledge 时用户写的一句话);空 = 无。客户端有备注输入
+  // 时必须透传,不得始终传空(与 AcknowledgeUnknownEventRequest.note 同纪律)。
+  string note = 4;
+}
+
+// UnknownEventActionResult 动作执行的结构化结果。
+// 【为什么是结构化结果而不是 gRPC error】"已被别处处理过"不是传输层故障:
+// 冲突走 conflict=true + 人话 detail,正常完成走 ok=true —— 客户端一眼分清
+// "该重拉详情"还是"成了",不会把冲突渲染成红屏报错。
+message UnknownEventActionResult {
+  // 动作已执行成功(幂等重复提交返回当前状态时同样 ok=true)。
+  bool ok = 1;
+  // true = expected_revision 不匹配,事件已被别处处理过;detail 说明现状,
+  // 客户端应重新拉取 GetUnknownEvent / 用 new_revision 重试。
+  bool conflict = 2;
+  // 人话说明:成功 = 实际做了什么;冲突 = 被处理成了什么状态;如实给,不编造。
+  string detail = 3;
+  // 执行后(冲突时为当前)的台账条目真值,客户端就地刷新列表与卡片。
+  UnknownEventSummary summary = 4;
+  // 技术详情:复用既有 UnknownEventResponse 形态(raw_json / decoded_fields_json /
+  // digest / translation 等原样可用,详情页直接整包渲染)。
+  // 【复用说明】其内嵌的 summary 字段在本场景冗余(本消息字段 4 已给),
+  // 客户端以本消息顶层 summary 为准,忽略 technical.summary。
+  UnknownEventResponse technical = 5;
+  // 执行后的台账 revision;冲突时返回当前值,客户端拿它做下一次 expected_revision。
+  int64 new_revision = 6;
 }
 
 // ---- 协同策略(规格 §11)----------------------------------------------------

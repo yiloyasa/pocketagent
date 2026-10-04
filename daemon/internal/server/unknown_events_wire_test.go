@@ -3,11 +3,11 @@
 //
 // 【为什么只钉 proto 层】人话文案怎么生成(PresentUnknownEvent)归 runtime 侧
 // 后续任务;这里钉的是"只增不改"的兼容语义本身:
-//   1. 新字段(12~17 / 7~8)全字段往返保真 —— 改号/改型在这里就红;
-//   2. 旧字段(1~11 / 1~6)零改动 —— 旧字段在新消息里往返不丢;
-//   3. "旧客户端忽略新字段"模拟 —— 只填部分旧字段 + 新字段的wire,
-//      解析回来旧字段一个不少(真正的旧 APK 按 proto3 未知字段语义丢弃
-//      新字段,同一性质:字段缺席/多余都不影响其余字段解析)。
+//  1. 新字段(12~17 / 7~8)全字段往返保真 —— 改号/改型在这里就红;
+//  2. 旧字段(1~11 / 1~6)零改动 —— 旧字段在新消息里往返不丢;
+//  3. "旧客户端忽略新字段"模拟 —— 只填部分旧字段 + 新字段的wire,
+//     解析回来旧字段一个不少(真正的旧 APK 按 proto3 未知字段语义丢弃
+//     新字段,同一性质:字段缺席/多余都不影响其余字段解析)。
 package server
 
 import (
@@ -177,5 +177,91 @@ func TestUnknownEventSummaryPartialWireKeepsOldFields(t *testing.T) {
 	if got.GetPlainTitle() == "" || got.GetImpact() == "" || !got.GetRequiresUser() ||
 		len(got.GetActions()) != 1 {
 		t.Fatalf("新字段往返丢失: %+v", &got)
+	}
+}
+
+// TestUnknownEventActionRequestWireRoundTrip 动作执行请求 4 字段(1~4)往返保真。
+// expected_revision 承载乐观并发控制,类型/号被改动会让客户端的 CAS 静默失效。
+func TestUnknownEventActionRequestWireRoundTrip(t *testing.T) {
+	in := &pb.UnknownEventActionRequest{
+		EventId:          "ue-2",
+		ExpectedRevision: 7,
+		ActionId:         "acknowledge", // 白名单内取值;approve 类永不入列
+		Note:             "已确认,不影响当前任务",
+	}
+	wire, err := proto.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal 失败: %v", err)
+	}
+	var got pb.UnknownEventActionRequest
+	if err := proto.Unmarshal(wire, &got); err != nil {
+		t.Fatalf("unmarshal 失败: %v", err)
+	}
+	if !proto.Equal(in, &got) {
+		t.Fatalf("请求往返不一致:\n want %+v\n got  %+v", in, &got)
+	}
+	if got.GetExpectedRevision() != 7 || got.GetActionId() != "acknowledge" {
+		t.Fatalf("revision/动作 id 往返丢失: %+v", &got)
+	}
+}
+
+// TestUnknownEventActionResultWireRoundTrip 动作执行结果两种形态往返:
+// 成功(ok=true,带 summary/technical/new_revision)与冲突(ok=false,
+// conflict=true,detail 人话说明)—— 冲突是结构化结果而非 gRPC error,
+// 协议层必须保证 conflict 与 detail 能独立表达,客户端才不必靠状态码猜。
+func TestUnknownEventActionResultWireRoundTrip(t *testing.T) {
+	okShape := &pb.UnknownEventActionResult{
+		Ok:     true,
+		Detail: "已标记为已查看。",
+		Summary: &pb.UnknownEventSummary{
+			EventId:          "ue-2",
+			SourceMethod:     "native/unknown_request",
+			Revision:         8,
+			ProcessingStatus: "INSPECTED",
+		},
+		// technical 复用既有 UnknownEventResponse 形态;其内嵌 summary 在本场景
+		// 冗余(顶层字段 4 已给),客户端按顶层取 —— 这里照样填,证明可整包往返。
+		Technical: &pb.UnknownEventResponse{
+			RawJson: `{"x":1}`,
+			Digest:  []*pb.UnknownEventField{{Key: "x", Kind: "number", Preview: "1"}},
+		},
+		NewRevision: 8,
+	}
+	wire, err := proto.Marshal(okShape)
+	if err != nil {
+		t.Fatalf("成功形态 marshal 失败: %v", err)
+	}
+	var gotOk pb.UnknownEventActionResult
+	if err := proto.Unmarshal(wire, &gotOk); err != nil {
+		t.Fatalf("成功形态 unmarshal 失败: %v", err)
+	}
+	if !proto.Equal(okShape, &gotOk) {
+		t.Fatalf("成功形态往返不一致:\n want %+v\n got  %+v", okShape, &gotOk)
+	}
+	if !gotOk.GetOk() || gotOk.GetSummary().GetEventId() != "ue-2" ||
+		gotOk.GetTechnical().GetRawJson() == "" || gotOk.GetNewRevision() != 8 {
+		t.Fatalf("成功形态关键字段往返丢失: %+v", &gotOk)
+	}
+
+	conflictShape := &pb.UnknownEventActionResult{
+		Conflict:    true, // ok 保持 false:冲突不是成功
+		Detail:      "该事件已在电脑端被处理,请刷新后查看最新状态。",
+		Summary:     &pb.UnknownEventSummary{EventId: "ue-2", Revision: 9},
+		NewRevision: 9,
+	}
+	wire2, err := proto.Marshal(conflictShape)
+	if err != nil {
+		t.Fatalf("冲突形态 marshal 失败: %v", err)
+	}
+	var gotConflict pb.UnknownEventActionResult
+	if err := proto.Unmarshal(wire2, &gotConflict); err != nil {
+		t.Fatalf("冲突形态 unmarshal 失败: %v", err)
+	}
+	if !proto.Equal(conflictShape, &gotConflict) {
+		t.Fatalf("冲突形态往返不一致:\n want %+v\n got  %+v", conflictShape, &gotConflict)
+	}
+	if gotConflict.GetOk() || !gotConflict.GetConflict() ||
+		gotConflict.GetDetail() == "" || gotConflict.GetNewRevision() != 9 {
+		t.Fatalf("冲突形态结构失真(冲突必须可独立表达): %+v", &gotConflict)
 	}
 }

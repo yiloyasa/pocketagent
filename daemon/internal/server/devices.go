@@ -58,11 +58,11 @@ type deviceRegistry struct {
 	oneShotMu    sync.Mutex
 	oneShotCodes map[string]int64
 	devices      map[string]*deviceRecord
-	challenges  map[string]*pendingChallenge
-	nowFunc     func() time.Time // 可注入时钟(单测用过期路径)
-	randomFunc  func([]byte) (int, error)
-	degraded    bool  // 【规格 §8.2】设备表损坏(JSON 非法/条目残缺)→ 降级态:暂停远程认证
-	degradedErr error // 触发降级的原因,供日志与诊断
+	challenges   map[string]*pendingChallenge
+	nowFunc      func() time.Time // 可注入时钟(单测用过期路径)
+	randomFunc   func([]byte) (int, error)
+	degraded     bool  // 【规格 §8.2】设备表损坏(JSON 非法/条目残缺)→ 降级态:暂停远程认证
+	degradedErr  error // 触发降级的原因,供日志与诊断
 }
 
 func newDeviceRegistry(dataDir, pairCode string) *deviceRegistry {

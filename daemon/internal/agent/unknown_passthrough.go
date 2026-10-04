@@ -104,6 +104,23 @@ func buildUnknownRequestCall(agentID, method string, params json.RawMessage) *pb
 // "用户授权的试探应答"与"伪造业务结果"(后者永远不会发生,前者必须可查证)。
 const unknownPassthroughLedgerNote = "用户已在手机查看脱敏原文并允许;已回空对象 {}(尽力应答,非业务结果)"
 
+// unknownRequestSafeRejectionFact —— UNKNOWN_REQUEST「被安全拒绝(回协议错误)」
+// 这一事实的承载说明(2026-10-04 未知事件用户处理中心计划 Task 3 追加,零行为变更)。
+//
+// 【事实在哪、由谁承载】B 开关关/用户拒绝/超时/通道故障时,本文件的各透传入口
+// 返回 false,交回调用方的既有安全拒绝路径:dsh.go / zcode.go / codex.go 的未知
+// 请求分支回 -32601 并把 UNKNOWN_REQUEST 写进台账(pi 无 -32601 形状,走
+// cancelled:true 兜底,见 consumePiUnknownUIRequest 拒绝路)。台账条目
+// (EventEnvelope,normalized_kind=UNKNOWN_REQUEST)就是这一事实的既有载体:
+// id/序号/时间/方法/线程/脱敏原文/处置状态俱全。server 层读出时经
+// runtime.PresentUnknownEvent 生成"没有自动执行"的人话呈现,随 UnknownEventSummary
+// 新字段(12~17)下发 —— "被安全拒绝"对用户可见的形态由此而来,不再需要新结构。
+//
+// 【为什么本文件不追加承载字段】"拒绝"是这些函数的返回 false,不是新状态;再造
+// 一个字段等于第二份真值。逐次过程有既有日志(log.Printf),终局有台账留痕 ——
+// 两处已足够,冻结结构零改动。若未来需要"拒绝原因细分"(超时 vs 用户拒绝),
+// 应走台账 note 或 steward 侧协议字段,不在 provider 结构体上就地生长。
+
 // handleDshUnknownRequest dsh 的未知反向请求透传确认(B 开关 ON 时由
 // handleDshRequest 的未知分支调用)。
 //

@@ -188,6 +188,7 @@ const (
 type CollabWorkspaceManager interface {
     Prepare(ctx context.Context, sessionID, memberID, requested string, mode CollabWorkspaceMode) (WorkspaceLease, error)
     Cleanup(ctx context.Context, lease WorkspaceLease, keepArtifacts bool) error
+    Recover(ctx context.Context) ([]WorkspaceLease, error) // daemon 重启后对账重建（2026-10-04 批次1实现时并入）
 }
 ```
 

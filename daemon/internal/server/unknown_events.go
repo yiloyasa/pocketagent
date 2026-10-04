@@ -65,6 +65,12 @@ func (s *Server) ListUnknownEvents(_ context.Context, req *pb.ListUnknownEventsR
 	return resp, nil
 }
 
+// unknownSupportBundleHint 是 support_bundle_hint(字段 8)的固定文案,由 server 层
+// 直填(2026-10-04 未知事件用户处理中心计划,主模型裁决):支持包引导不是事件的
+// 语义,固定一句即可 —— 排查时维护者最需要的是技术详情里的 correlation id,
+// 提示语把它指出来;对全部 kind 一视同仁(它与事件内容无关)。
+const unknownSupportBundleHint = "如需进一步处理，可联系维护者并提供技术详情中的 correlation id。"
+
 // GetUnknownEvent 取单条详情(含脱敏后的原始载荷)。
 func (s *Server) GetUnknownEvent(_ context.Context, req *pb.GetUnknownEventRequest) (*pb.UnknownEventResponse, error) {
 	log := s.unknownLog()
@@ -80,12 +86,25 @@ func (s *Server) GetUnknownEvent(_ context.Context, req *pb.GetUnknownEventReque
 		// 显示成"事件存在但没有内容"。
 		return nil, errNotFound("找不到该未知事件(可能已被更早的记录挤出保留窗口)")
 	}
+	return buildUnknownEventResponse(e), nil
+}
+
+// buildUnknownEventResponse 把台账条目翻成详情响应(详情 RPC 与动作执行器的
+// inspect 共用同一份能力,见 unknown_actions.go):原文/字段透析/翻译/建议下一步/
+// 支持包提示。两个入口必须同一份产出 —— 否则"点动作按钮看到的"和"直接拉详情
+// 看到的"会互相矛盾。
+// 【新字段 7/8 从这里出】recommended_next_step 来自 PresentUnknownEvent 的确定性
+// 输出(词表外 kind 为空,客户端不占位);support_bundle_hint 是 server 层固定文案。
+func buildUnknownEventResponse(e runtime.EventEnvelope) *pb.UnknownEventResponse {
 	tr := translateEventSafely(e)
+	pres := presentUnknownEventSafely(e)
 	resp := &pb.UnknownEventResponse{
-		Summary:           unknownSummaryToProto(e),
-		RawJson:           e.RawPayload,
-		DecodedFieldsJson: e.DecodedFields,
-		Note:              e.Note,
+		Summary:             unknownSummaryToProto(e),
+		RawJson:             e.RawPayload,
+		DecodedFieldsJson:   e.DecodedFields,
+		Note:                e.Note,
+		RecommendedNextStep: pres.RecommendedNextStep,
+		SupportBundleHint:   unknownSupportBundleHint,
 	}
 	// 字段级透析表:与 Translation 同源(读时翻译),已知事件同样有 ——
 	// "daemon 已把这条投影成思考过程"配上关键字段,比方法名有用得多。
@@ -95,7 +114,7 @@ func (s *Server) GetUnknownEvent(_ context.Context, req *pb.GetUnknownEventReque
 		})
 	}
 	resp.Translation = tr.Detail
-	return resp, nil
+	return resp
 }
 
 // AcknowledgeUnknownEvent 记录处置动作。
@@ -126,7 +145,14 @@ func (s *Server) AcknowledgeUnknownEvent(_ context.Context, req *pb.AcknowledgeU
 // 做了什么",未知方法翻成"它长什么样、像不像错误"。
 // 【翻译失败宁可留空】翻译是摘要不是裁决:任何异常下都宁可不给,也不给一份
 // 可能错的翻译误导人工排查(与 runtime 侧"不编造"红线同一取向)。
+//
+// 【新字段 12~17(用户处理中心)读时注入】presentUnknownEventSafely 调
+// runtime.PresentUnknownEvent 生成确定性呈现,随 wire 返回 —— 与 Summary 同为
+// 读时生成:台账里存的仍是原始事实,文案升级后老事件立刻享受新文案,不用迁移。
+// 词表外的 kind(KNOWN_*/空/未来值)呈现全空,客户端按协议降级显示方法名原文。
+// 事件与线程的关联仍走既有 thread_id/turn_id 通路,server 不新增字段、不虚构归属。
 func unknownSummaryToProto(e runtime.EventEnvelope) *pb.UnknownEventSummary {
+	pres := presentUnknownEventSafely(e)
 	return &pb.UnknownEventSummary{
 		EventId:          e.ID,
 		Sequence:         e.Sequence,
@@ -139,7 +165,48 @@ func unknownSummaryToProto(e runtime.EventEnvelope) *pb.UnknownEventSummary {
 		ProcessingStatus: e.ProcessingStatus,
 		Revision:         e.Revision,
 		Summary:          translateEventSafely(e).Summary,
+		PlainTitle:       pres.PlainTitle,
+		PlainExplanation: pres.PlainExplanation,
+		Impact:           pres.Impact,
+		RequiresUser:     pres.RequiresUser,
+		CanOpenNative:    pres.CanOpenNative,
+		Actions:          unknownActionsToProto(pres.Actions),
 	}
+}
+
+// unknownActionsToProto 把 runtime 的固定动作表映射成 UserActionDescriptor
+// (字段一一对应,不改写不过滤)。
+// 【红线沿袭】动作内容完全来自 runtime 的动作表 —— 那张表就是安全边界本身
+// (unknown_action_test 逐 kind 反证它不含"允许"类动作);server 层只做逐字段
+// 搬运,表里没有的动作在这里不可能长出来。执行侧另有白名单封口,见 unknown_actions.go。
+func unknownActionsToProto(as []runtime.UnknownUserAction) []*pb.UserActionDescriptor {
+	if len(as) == 0 {
+		return nil
+	}
+	out := make([]*pb.UserActionDescriptor, 0, len(as))
+	for _, a := range as {
+		out = append(out, &pb.UserActionDescriptor{
+			ActionId:             a.ID,
+			Label:                a.Label,
+			Description:          a.Description,
+			Safe:                 a.Safe,
+			RequiresConfirmation: a.RequiresConfirmation,
+			Destructive:          a.Destructive,
+		})
+	}
+	return out
+}
+
+// presentUnknownEventSafely 包装纯函数呈现:极端输入下 panic 也降级为空呈现,
+// 绝不让列表/详情 RPC 因摘要失败而报错(与 translateEventSafely 同款取舍) ——
+// 呈现失败只影响人话摘要,不影响事件落账与主轮次。
+func presentUnknownEventSafely(e runtime.EventEnvelope) (pres runtime.UnknownPresentation) {
+	defer func() {
+		if recover() != nil {
+			pres = runtime.UnknownPresentation{}
+		}
+	}()
+	return runtime.PresentUnknownEvent(e)
 }
 
 // translateEventSafely 包装纯函数翻译:极端输入下 panic 也降级为空翻译,

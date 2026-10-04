@@ -92,3 +92,28 @@
 | UnknownEventSummary | actions | 17 | repeated UserActionDescriptor | 安全可选动作 |
 | UnknownEventResponse | recommended_next_step | 7 | string | 建议下一步 |
 | UnknownEventResponse | support_bundle_hint | 8 | string | 支持包导出提示 |
+
+### runtime.proto —— 未知事件用户动作执行（2026-10-04，P2-T6 接线）
+
+来源：`docs/superpowers/plans/2026-10-04-unknown-event-action-center.md` Task 6（daemon 侧执行器已就绪，本次补 proto 接线）。
+
+新增消息（字段号从 1 起，不碰任何既有消息）：
+
+| 消息 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| UnknownEventActionRequest | event_id | 1 | string | 目标事件 id |
+| UnknownEventActionRequest | expected_revision | 2 | int64 | 乐观并发控制（0 = 不做 CAS） |
+| UnknownEventActionRequest | action_id | 3 | string | 白名单动作 id |
+| UnknownEventActionRequest | note | 4 | string | 可选备注 |
+| UnknownEventActionResult | ok | 1 | bool | 执行成功（含幂等重复） |
+| UnknownEventActionResult | conflict | 2 | bool | revision 冲突（结构化结果，非 error） |
+| UnknownEventActionResult | detail | 3 | string | 人话说明 |
+| UnknownEventActionResult | summary | 4 | UnknownEventSummary | 执行后/当前的台账真值 |
+| UnknownEventActionResult | technical | 5 | UnknownEventResponse（复用既有详情消息） | 技术详情整包 |
+| UnknownEventActionResult | new_revision | 6 | int64 | 执行后 revision |
+
+新增 RPC（RuntimeService）：
+
+| RPC | 形态 | 请求 → 响应 | 语义约定 |
+| --- | --- | --- | --- |
+| ExecuteUnknownEventAction | unary | UnknownEventActionRequest → UnknownEventActionResult | 幂等；冲突=结构化结果；白名单 daemon 侧硬编码：inspect/acknowledge/retry_later/open_native，绝不有 approve 类 |

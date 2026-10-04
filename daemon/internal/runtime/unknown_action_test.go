@@ -138,7 +138,7 @@ func TestPresentUnknownEventRequestSnapshot(t *testing.T) {
 func TestPresentUnknownEventResponseSnapshot(t *testing.T) {
 	got := PresentUnknownEvent(EventEnvelope{
 		SourceAgent: "zcode", SourceMethod: "lateReply",
-		CorrelationID: "resp-42",
+		CorrelationID:  "resp-42",
 		NormalizedKind: KindUnknownResponse, SafetyClass: SafetyClassUnknown,
 		RawPayload: `{"result":"[redacted]"}`,
 	})

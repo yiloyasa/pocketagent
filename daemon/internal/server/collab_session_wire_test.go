@@ -3,11 +3,12 @@
 //
 // 【为什么只钉 proto 层】本文件不构造协同会话的任何 daemon 侧实现 —— 那是
 // collab_session_test.go 们的职责。这里钉的是"协议形状"本身:
-//   1. 新消息全字段 marshal→unmarshal 保真 —— 任何字段在序列化往返后变值/
-//      丢失,都说明字段号或类型被破坏;协同状态要靠快照+事件流恢复,保真是底线。
-//   2. 全零值消息合法 —— 旧 daemon 返回的空快照必须能被新客户端安静地解析,
-//      不能炸(与"旧字段解码不丢失,新字段被旧客户端忽略"互为镜像)。
-//   3. kind 的字符串词表 —— WatchCollabSession 事件种类按 string 口径透传。
+//  1. 新消息全字段 marshal→unmarshal 保真 —— 任何字段在序列化往返后变值/
+//     丢失,都说明字段号或类型被破坏;协同状态要靠快照+事件流恢复,保真是底线。
+//  2. 全零值消息合法 —— 旧 daemon 返回的空快照必须能被新客户端安静地解析,
+//     不能炸(与"旧字段解码不丢失,新字段被旧客户端忽略"互为镜像)。
+//  3. kind 的字符串词表 —— WatchCollabSession 事件种类按 string 口径透传。
+//
 // 【说明】daemon/internal/server 目前没有 ACCEPTED/RUNNING/... 的 Go 常量
 // (实现归后续任务),故本文件只在 proto 层钉词表:测试里的字面量即协议约定,
 // daemon 侧实现落地时应引用/复归此处词表,不得另造一套。
@@ -35,15 +36,15 @@ func TestCollabSessionSnapshotWireRoundTrip(t *testing.T) {
 		Error:           "",
 		Members: []*pb.CollabMemberSnapshot{
 			{
-				AgentId:   "pi",
-				RoleId:    "reviewer",
-				ThreadId:  "th-member-1",
-				Status:    "WAITING_APPROVAL",
-				ModelId:   "pi/test-model",
-				Effort:    "high",
-				Progress:  "等待审批:要写入 src/login.go",
-				Summary:   "", // 等待中的成员没有终稿,不允许伪造
-				Error:     "",
+				AgentId:  "pi",
+				RoleId:   "reviewer",
+				ThreadId: "th-member-1",
+				Status:   "WAITING_APPROVAL",
+				ModelId:  "pi/test-model",
+				Effort:   "high",
+				Progress: "等待审批:要写入 src/login.go",
+				Summary:  "", // 等待中的成员没有终稿,不允许伪造
+				Error:    "",
 				PendingApprovals: []*pb.ApprovalRequest{
 					{RequestId: "req-1", Reason: "需要写入文件"},
 				},

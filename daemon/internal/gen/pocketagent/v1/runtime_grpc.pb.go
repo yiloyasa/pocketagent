@@ -19,19 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RuntimeService_GetRuntimePolicy_FullMethodName        = "/pocketagent.v1.RuntimeService/GetRuntimePolicy"
-	RuntimeService_SetRuntimePolicy_FullMethodName        = "/pocketagent.v1.RuntimeService/SetRuntimePolicy"
-	RuntimeService_GetResourceUsage_FullMethodName        = "/pocketagent.v1.RuntimeService/GetResourceUsage"
-	RuntimeService_ListUnknownEvents_FullMethodName       = "/pocketagent.v1.RuntimeService/ListUnknownEvents"
-	RuntimeService_GetUnknownEvent_FullMethodName         = "/pocketagent.v1.RuntimeService/GetUnknownEvent"
-	RuntimeService_AcknowledgeUnknownEvent_FullMethodName = "/pocketagent.v1.RuntimeService/AcknowledgeUnknownEvent"
-	RuntimeService_GetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/GetCollabPolicy"
-	RuntimeService_SetCollabPolicy_FullMethodName         = "/pocketagent.v1.RuntimeService/SetCollabPolicy"
-	RuntimeService_GetRuntimeState_FullMethodName         = "/pocketagent.v1.RuntimeService/GetRuntimeState"
-	RuntimeService_GetAgentRuntime_FullMethodName         = "/pocketagent.v1.RuntimeService/GetAgentRuntime"
-	RuntimeService_ListThreadMemories_FullMethodName      = "/pocketagent.v1.RuntimeService/ListThreadMemories"
-	RuntimeService_ClearThreadMemory_FullMethodName       = "/pocketagent.v1.RuntimeService/ClearThreadMemory"
-	RuntimeService_GetControlPlane_FullMethodName         = "/pocketagent.v1.RuntimeService/GetControlPlane"
+	RuntimeService_GetRuntimePolicy_FullMethodName          = "/pocketagent.v1.RuntimeService/GetRuntimePolicy"
+	RuntimeService_SetRuntimePolicy_FullMethodName          = "/pocketagent.v1.RuntimeService/SetRuntimePolicy"
+	RuntimeService_GetResourceUsage_FullMethodName          = "/pocketagent.v1.RuntimeService/GetResourceUsage"
+	RuntimeService_ListUnknownEvents_FullMethodName         = "/pocketagent.v1.RuntimeService/ListUnknownEvents"
+	RuntimeService_GetUnknownEvent_FullMethodName           = "/pocketagent.v1.RuntimeService/GetUnknownEvent"
+	RuntimeService_AcknowledgeUnknownEvent_FullMethodName   = "/pocketagent.v1.RuntimeService/AcknowledgeUnknownEvent"
+	RuntimeService_GetCollabPolicy_FullMethodName           = "/pocketagent.v1.RuntimeService/GetCollabPolicy"
+	RuntimeService_SetCollabPolicy_FullMethodName           = "/pocketagent.v1.RuntimeService/SetCollabPolicy"
+	RuntimeService_GetRuntimeState_FullMethodName           = "/pocketagent.v1.RuntimeService/GetRuntimeState"
+	RuntimeService_GetAgentRuntime_FullMethodName           = "/pocketagent.v1.RuntimeService/GetAgentRuntime"
+	RuntimeService_ListThreadMemories_FullMethodName        = "/pocketagent.v1.RuntimeService/ListThreadMemories"
+	RuntimeService_ClearThreadMemory_FullMethodName         = "/pocketagent.v1.RuntimeService/ClearThreadMemory"
+	RuntimeService_GetControlPlane_FullMethodName           = "/pocketagent.v1.RuntimeService/GetControlPlane"
+	RuntimeService_ExecuteUnknownEventAction_FullMethodName = "/pocketagent.v1.RuntimeService/ExecuteUnknownEventAction"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -97,6 +98,17 @@ type RuntimeServiceClient interface {
 	// 【单域降级】某个域的状态取不到时,该域单独降级为 status_code=2 并说明原因,
 	// 其余域照常返回 —— 总览页不该被一个域的故障掀翻。
 	GetControlPlane(ctx context.Context, in *GetControlPlaneRequest, opts ...grpc.CallOption) (*ControlPlane, error)
+	// ---- 未知事件用户动作执行(2026-10-04 用户处理中心计划,只增)----
+	// 执行一个由 UnknownEventSummary.actions 声明过的安全动作。动作白名单在
+	// daemon 侧硬编码:inspect / acknowledge / retry_later / open_native;
+	// **绝不**提供 approve/execute 类动作 —— 未知请求永远不能被"一键放行"
+	// (与 UserActionDescriptor.safe 的红线同一纪律)。
+	// 【幂等】同一动作重复提交不产生副作用:返回当前状态(ok=true + 最新
+	// summary/new_revision),客户端重复点击、多设备同时处理都安全。
+	// 【冲突是结构化结果不是 error】expected_revision 与当前 revision 不一致时
+	// 回 conflict=true + 人话 detail,gRPC status 不承载业务冲突 —— 客户端据此
+	// 重新拉取详情(GetUnknownEvent)再决定,不炸 UI。
+	ExecuteUnknownEventAction(ctx context.Context, in *UnknownEventActionRequest, opts ...grpc.CallOption) (*UnknownEventActionResult, error)
 }
 
 type runtimeServiceClient struct {
@@ -237,6 +249,16 @@ func (c *runtimeServiceClient) GetControlPlane(ctx context.Context, in *GetContr
 	return out, nil
 }
 
+func (c *runtimeServiceClient) ExecuteUnknownEventAction(ctx context.Context, in *UnknownEventActionRequest, opts ...grpc.CallOption) (*UnknownEventActionResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnknownEventActionResult)
+	err := c.cc.Invoke(ctx, RuntimeService_ExecuteUnknownEventAction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -300,6 +322,17 @@ type RuntimeServiceServer interface {
 	// 【单域降级】某个域的状态取不到时,该域单独降级为 status_code=2 并说明原因,
 	// 其余域照常返回 —— 总览页不该被一个域的故障掀翻。
 	GetControlPlane(context.Context, *GetControlPlaneRequest) (*ControlPlane, error)
+	// ---- 未知事件用户动作执行(2026-10-04 用户处理中心计划,只增)----
+	// 执行一个由 UnknownEventSummary.actions 声明过的安全动作。动作白名单在
+	// daemon 侧硬编码:inspect / acknowledge / retry_later / open_native;
+	// **绝不**提供 approve/execute 类动作 —— 未知请求永远不能被"一键放行"
+	// (与 UserActionDescriptor.safe 的红线同一纪律)。
+	// 【幂等】同一动作重复提交不产生副作用:返回当前状态(ok=true + 最新
+	// summary/new_revision),客户端重复点击、多设备同时处理都安全。
+	// 【冲突是结构化结果不是 error】expected_revision 与当前 revision 不一致时
+	// 回 conflict=true + 人话 detail,gRPC status 不承载业务冲突 —— 客户端据此
+	// 重新拉取详情(GetUnknownEvent)再决定,不炸 UI。
+	ExecuteUnknownEventAction(context.Context, *UnknownEventActionRequest) (*UnknownEventActionResult, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -348,6 +381,9 @@ func (UnimplementedRuntimeServiceServer) ClearThreadMemory(context.Context, *Cle
 }
 func (UnimplementedRuntimeServiceServer) GetControlPlane(context.Context, *GetControlPlaneRequest) (*ControlPlane, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetControlPlane not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ExecuteUnknownEventAction(context.Context, *UnknownEventActionRequest) (*UnknownEventActionResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteUnknownEventAction not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -604,6 +640,24 @@ func _RuntimeService_GetControlPlane_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_ExecuteUnknownEventAction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnknownEventActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ExecuteUnknownEventAction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ExecuteUnknownEventAction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ExecuteUnknownEventAction(ctx, req.(*UnknownEventActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -662,6 +716,10 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetControlPlane",
 			Handler:    _RuntimeService_GetControlPlane_Handler,
+		},
+		{
+			MethodName: "ExecuteUnknownEventAction",
+			Handler:    _RuntimeService_ExecuteUnknownEventAction_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

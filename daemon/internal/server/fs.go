@@ -315,16 +315,17 @@ func (s *Server) MoveEntry(ctx context.Context, req *pb.MoveEntryRequest) (*pb.E
 //
 // 【命中清单】归一化(filepath.Clean+Abs,小写比较,Windows 大小写不敏感)后,
 // 目标命中以下任一项即拒:
-//   ① 驱动器根(如 C:\,len<=3)—— 递归删等于清盘;
-//   ② %SystemRoot%(默认 C:\Windows)本身,以及它的直接子项(仅顶层一层,
-//      不含更深层)—— System32 等同层目录/文件没有手机端可合法删除的对象;
-//   ③ %ProgramFiles% 与 %ProgramFiles(x86)% 根本身;
-//   ④ %USERPROFILE% 根本身;
-//   ⑤ os.TempDir() 根本身;
-//   ⑥ daemon 自身数据目录(cfg.DataDir 优先,另含 hostenv 标准/旧版位置)
-//      —— ⑥ 是唯一"整棵子树都拒"的条目:里面全是 threads.json、events.jsonl
-//      等内部账本,删除任何一员都破坏完整性,不存在合法删除目标;
-//   ⑦ 进程当前工作目录与可执行文件所在目录(仅目录本身)。
+//
+//	① 驱动器根(如 C:\,len<=3)—— 递归删等于清盘;
+//	② %SystemRoot%(默认 C:\Windows)本身,以及它的直接子项(仅顶层一层,
+//	   不含更深层)—— System32 等同层目录/文件没有手机端可合法删除的对象;
+//	③ %ProgramFiles% 与 %ProgramFiles(x86)% 根本身;
+//	④ %USERPROFILE% 根本身;
+//	⑤ os.TempDir() 根本身;
+//	⑥ daemon 自身数据目录(cfg.DataDir 优先,另含 hostenv 标准/旧版位置)
+//	   —— ⑥ 是唯一"整棵子树都拒"的条目:里面全是 threads.json、events.jsonl
+//	   等内部账本,删除任何一员都破坏完整性,不存在合法删除目标;
+//	⑦ 进程当前工作目录与可执行文件所在目录(仅目录本身)。
 //
 // 【误杀取舍】除 ⑥ 外清单只挡"根/顶层本身",不挡深层路径:C:\Users\<u>\Documents
 // 及其内容照常可删;真有合法目录恰好顶着这些名字的概率远小于误删系统目录的
