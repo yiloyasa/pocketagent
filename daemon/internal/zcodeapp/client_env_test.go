@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 )
 
 func TestEnvHasNonEmpty(t *testing.T) {
@@ -45,49 +44,6 @@ func TestDropEnv(t *testing.T) {
 	}
 	if len(dropEnv(got, "NOPE")) != 1 {
 		t.Fatal("剥不存在的变量应原样返回")
-	}
-}
-
-func TestNewestBuiltinProviderConfig(t *testing.T) {
-	root := t.TempDir()
-	mk := func(rel string, age time.Duration) string {
-		dir := filepath.Join(root, rel)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		p := filepath.Join(dir, "zcode-builtin.json")
-		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		past := time.Now().Add(-age)
-		if err := os.Chtimes(p, past, past); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	old := mk("runtime/provider/windows-x86_64/3.12.2/endpoint-aaa", 2*time.Hour)
-	newest := mk("runtime/provider/windows-x86_64/3.12.3/endpoint-bbb", 1*time.Minute)
-	// 干扰项:同名文件但不是 zcode-builtin.json 的目录、深一层配置、空目录
-	mk("runtime/provider/windows-x86_64/3.12.3/endpoint-bbb/nested", 0) // 更新但更深,不该被选中
-	if err := os.MkdirAll(filepath.Join(root, "runtime/provider/windows-x86_64/3.12.4/endpoint-ccc"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	got := newestBuiltinProviderConfig(root)
-	if got != newest {
-		t.Fatalf("应取 mtime 最新的命中文件:\n got  %s\n want %s", got, newest)
-	}
-	if got == old {
-		t.Fatal("不应选中旧版本")
-	}
-	// 根目录不存在:返回空串,不 panic
-	if got := newestBuiltinProviderConfig(filepath.Join(root, "nope")); got != "" {
-		t.Fatalf("缺失根目录应返回空串,得到 %s", got)
-	}
-}
-
-func TestNewestBuiltinProviderConfigEmpty(t *testing.T) {
-	if got := newestBuiltinProviderConfig(t.TempDir()); got != "" {
-		t.Fatalf("空 runtime 目录应返回空串,得到 %s", got)
 	}
 }
 

@@ -16,7 +16,7 @@
 //
 // 【用法】go run ./cmd/codexplanprobe
 //
-//	(可选 -out 自定义证据路径,默认 docs/verify/evidence/codex-plan-probe.log)
+//	(可选 -out 自定义证据路径,缺省写到系统临时目录)
 package main
 
 import (
@@ -45,9 +45,16 @@ var (
 )
 
 func main() {
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\codex-plan-probe.log`, "证据输出路径")
+	out := flag.String("out", "", "证据输出路径(缺省写到系统临时目录)")
 	binFlag := flag.String("bin", "", "原生 codex.exe 路径(默认从 LocateCodex 自动解析)")
 	flag.Parse()
+
+	// 证据落点:缺省写系统临时目录(通用派生,不写死任何个人专属绝对路径
+	// —— 字符串常量会随探针二进制分发,规格 §2 明令禁止)。
+	outPath := *out
+	if outPath == "" {
+		outPath = filepath.Join(os.TempDir(), "codex-plan-probe.log")
+	}
 
 	rep := &report{}
 	// ---- A/B 两级证据 ----
@@ -85,10 +92,10 @@ func main() {
 	live(rep)
 
 	body := []byte(rep.text.String())
-	if err := os.WriteFile(*out, body, 0o644); err != nil {
+	if err := os.WriteFile(outPath, body, 0o644); err != nil {
 		log.Fatalf("写证据文件: %v", err)
 	}
-	fmt.Printf("证据已写入 %s(%d 字节)\n", *out, len(body))
+	fmt.Printf("证据已写入 %s(%d 字节)\n", outPath, len(body))
 	fmt.Print(rep.summary.String())
 }
 

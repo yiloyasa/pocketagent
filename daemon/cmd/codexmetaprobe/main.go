@@ -22,8 +22,9 @@
 //  3. 反向扫描出的"新增候选"按命名语义给建议归类;证不出语义的如实标
 //     UNKNOWN,不猜(证据分级 C)。
 //
-// 【用法】go run ./cmd/codexmetaprobe -out docs\verify\evidence\codex-0156-probe.log
-// (可选 -bin 直接指向原生 codex.exe;默认从 codex.cmd 包装器自动解析)
+// 【用法】go run ./cmd/codexmetaprobe
+// (-out 缺省写系统临时目录,可显式指定证据落点;-bin 直接指向原生 codex.exe,
+// 默认从 codex.cmd 包装器自动解析)
 package main
 
 import (
@@ -51,18 +52,25 @@ func main() {
 	schemaPath := flag.String("schema",
 		defaultSchemaPath(),
 		"vendored 协议 schema 路径(方法面的 0.155.1 基线)")
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\codex-0156-probe.log`, "证据输出路径")
+	out := flag.String("out", "", "证据输出路径(缺省写到系统临时目录)")
 	bin := flag.String("bin", "", "原生 codex.exe 路径(默认从 LocateCodex 的结果自动解析)")
 	flag.Parse()
+
+	// 证据落点:缺省写系统临时目录(通用派生,不写死任何个人专属绝对路径
+	// —— 字符串常量会随探针二进制分发,规格 §2 明令禁止)。
+	outPath := *out
+	if outPath == "" {
+		outPath = filepath.Join(os.TempDir(), "codex-0156-probe.log")
+	}
 
 	rep := &report{}
 	run(*schemaPath, *bin, rep)
 
 	body := []byte(rep.text.String())
-	if err := os.WriteFile(*out, body, 0o644); err != nil {
+	if err := os.WriteFile(outPath, body, 0o644); err != nil {
 		log.Fatalf("写证据文件: %v", err)
 	}
-	fmt.Printf("证据已写入 %s(%d 字节)\n", *out, len(body))
+	fmt.Printf("证据已写入 %s(%d 字节)\n", outPath, len(body))
 	fmt.Print(rep.summary.String())
 }
 
@@ -510,14 +518,24 @@ func clipStr(s string, n int) string {
 }
 
 func defaultSchemaPath() string {
-	// 仓库相对定位;从任何 cwd 跑都先试命令行目录。
-	for _, p := range []string{
-		`G:\项目1\pocketagent\codex-schema\codex_app_server_protocol.v2.schemas.json`,
-		`codex-schema\codex_app_server_protocol.v2.schemas.json`,
-	} {
+	// 通用派生:从当前目录逐级向上找仓库相对的 vendored schema(在任何 cwd
+	// 跑都能定位到所属仓库);找不到回落仓库相对路径,由 -schema 显式覆盖。
+	// 不写死任何个人专属绝对路径。
+	rel := filepath.Join("codex-schema", "codex_app_server_protocol.v2.schemas.json")
+	dir, err := os.Getwd()
+	if err != nil {
+		return rel
+	}
+	for {
+		p := filepath.Join(dir, rel)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
-	return `codex-schema\codex_app_server_protocol.v2.schemas.json`
+	return rel
 }

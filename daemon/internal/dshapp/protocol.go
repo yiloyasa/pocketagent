@@ -548,15 +548,6 @@ func PermissionOutcomeSelected(optionID string) map[string]interface{} {
 	}
 }
 
-// PermissionOutcomeCancelled 构造"取消"应答(超时/断线走拒绝选项而非 cancel
-// —— cancel 语义是"用户没答",dsh 侧行为未知;拒绝选项是失败安全且语义明确。
-// 本函数保留给"选项表完全无法解析"的兜底)。
-func PermissionOutcomeCancelled() map[string]interface{} {
-	return map[string]interface{}{
-		"outcome": map[string]interface{}{"outcome": "cancelled"},
-	}
-}
-
 // ---- 错误归一化(探针修正③)----
 
 // IsMissingCredential 按 code+message 归一化缺 key 错误。

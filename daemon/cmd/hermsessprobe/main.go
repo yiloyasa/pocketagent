@@ -10,7 +10,7 @@
 //     以 prompt 终局 stopReason=cancelled 为 cancel_event 生效的可观察证据,
 //     并核实取消后增量停止流动(适配器 hard interrupt 真停)。
 //
-// 红线:只读 G:\Hermes 用户配置;工作区用临时目录,不在用户家写任何文件;
+// 红线:只读 hermes 家目录(见 HERMES_HOME)用户配置;工作区用临时目录,不在用户家写任何文件;
 // 只读上游 checkout(不写 runtime/hermes-agent 内任何文件)。
 package main
 

@@ -8,7 +8,7 @@
 //     以独立适配器 session/load 回读该会话的 CurrentModelID 作正向证据。
 //
 // 红线:HERMES_HOME 用 -home 指到沙箱(强度写入落沙箱 config.yaml,绝不碰
-// G:\Hermes);工作区用临时目录;凭据文件由调用方预先拷入沙箱(本探针只读)。
+// hermes 家目录(见 HERMES_HOME));工作区用临时目录;凭据文件由调用方预先拷入沙箱(本探针只读)。
 package main
 
 import (

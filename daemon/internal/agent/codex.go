@@ -16,8 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
 	"github.com/pocketagent/daemon/internal/codexapp"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
@@ -1406,8 +1404,13 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}
 	// readLoop 里同步调 NotifHandler:慢 sink(手机网络背压)会阻塞整条管道,
 	// 后续事件全部积压。这里只入队,由单消费者 goroutine 保序分发。
+	// turnStartRef 是看门狗的单调参照:喂值点存"距参照的单调毫秒数",判定式
+	// 用同一参照求差,差值即静默时长 —— 免疫墙钟 NTP 跳变(旧实现两侧各取
+	// UnixMilli,跳变可误杀/漏杀)。不复用下方 turnStart:它声明在后,闭包
+	// 作用域不可达;60 分钟上限仍用 turnStart(time.Since 本就单调,维持原状)。
+	turnStartRef := time.Now()
 	notifHandler := func(method string, params json.RawMessage) {
-		lastNotif.Store(time.Now().UnixMilli())
+		lastNotif.Store(time.Since(turnStartRef).Milliseconds()) // 单调毫秒,免疫墙钟跳变
 		select {
 		case notifCh <- notifMsg{method: method, params: params}:
 		case <-notifStop:
@@ -1563,7 +1566,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}
 	log.Printf("[codex] turn/start thread=%s %v 输入=%d字 图片=%d张", codexTID, logParams, userText.Len(), len(userImgs))
 
-	lastNotif.Store(time.Now().UnixMilli())
+	lastNotif.Store(time.Since(turnStartRef).Milliseconds()) // 初喂:单调毫秒,免疫墙钟跳变
 	turnStart := time.Now()
 	if _, err := p.client.Call("turn/start", startParams); err != nil {
 		return nil, nil, fmt.Errorf("turn/start: %w", err)
@@ -1591,7 +1594,11 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		case <-tick.C:
 			// 审批等待是合法静默(用户在手机上想多久都行),看门狗跳过
 			if !approvalWaiting.Load() {
-				if ms := lastNotif.Load(); ms > 0 && time.Now().UnixMilli()-ms > 150_000 {
+				// 单调口径:ms 与判定两侧共用 turnStartRef,差值即静默时长,
+				// 免疫墙钟 NTP 跳变。ms>=0:初喂在等待循环前必然发生,旧 ms>0
+				// 防的"未喂值"态已不可达;且喂值恰落在参照同一毫秒(0 值)时
+				// 不再被误判成未喂 —— 判定恒生效,与旧实现行为一致。
+				if ms := lastNotif.Load(); ms >= 0 && time.Since(turnStartRef).Milliseconds()-ms > 150_000 {
 					_, _ = p.client.Call("turn/interrupt", map[string]string{"threadId": codexTID})
 					mu.Lock()
 					partial := streamText.String()
@@ -1638,7 +1645,6 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		return nil, &pb.Usage{}, nil
 	}
 	blocks := []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}}
-	_ = protojson.Marshal
 	return blocks, &pb.Usage{}, nil
 }
 

@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/runtime"
 )
 
 // journalPreviewLimit 预览截断长度(按 rune 计 —— 中文句子按字符,不是字节)。
@@ -183,9 +185,6 @@ func (j *turnJournal) flushLocked() {
 // truncatePreview 取前 n 个字符(按 rune,中文按字),超出即截断(不加省略号:
 // 预览长度本身是定长上界,报告里逐条输出时不会撑爆日志)。
 func truncatePreview(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n])
+	// 统一走 runtime.ClipRunes,收敛见审查报告 util 节。
+	return runtime.ClipRunes(s, n)
 }

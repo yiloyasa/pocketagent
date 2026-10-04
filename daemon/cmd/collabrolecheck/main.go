@@ -28,11 +28,27 @@ import (
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/hostenv"
 	"github.com/pocketagent/daemon/internal/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 )
+
+// resolveDataDir 定位 daemon 数据目录:优先迁移后的数据目录
+// (<LOCALAPPDATA>\PocketAgent\data),回退历史位置(家目录 .pocketagentd)。
+// 只读两级探测,与 cmd/wbempty 的 storePath 同款:按本工具实际要读的
+// pair-code.txt 探测,现存的优先,都不存在时回退历史位置,让读失败的报错
+// 仍指向一个说得通的位置。不调 hostenv.ResolveDataDir —— 那会触发一次性
+// 迁移副作用,探针不该替 daemon 做迁移。
+func resolveDataDir() string {
+	for _, dir := range []string{hostenv.UserDataDir(), hostenv.LegacyDataDir()} {
+		if _, err := os.Stat(filepath.Join(dir, "pair-code.txt")); err == nil {
+			return dir
+		}
+	}
+	return hostenv.LegacyDataDir()
+}
 
 func main() {
 	log.SetFlags(0)
@@ -42,11 +58,7 @@ func main() {
 
 	dir := *dataDir
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatalf("取用户目录失败: %v", err)
-		}
-		dir = filepath.Join(home, ".pocketagentd")
+		dir = resolveDataDir()
 	}
 
 	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // 本机诊断探针

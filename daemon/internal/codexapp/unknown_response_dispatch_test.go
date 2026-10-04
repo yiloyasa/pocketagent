@@ -24,7 +24,7 @@ func TestDispatchUnknownResponseFallsBackToHandler(t *testing.T) {
 	c.syncHandlers()
 
 	// ① 未匹配:回调带原 id + 完整帧。
-	c.dispatch(&wireMsg{ID: int64Ptr(99), Result: json.RawMessage(`{"answer":"orphan"}`)})
+	c.dispatch(&wireMsg{ID: int64ID(99), Result: json.RawMessage(`{"answer":"orphan"}`)})
 	select {
 	case p := <-got:
 		if p.id != 99 {
@@ -42,7 +42,7 @@ func TestDispatchUnknownResponseFallsBackToHandler(t *testing.T) {
 	c.mu.Lock()
 	c.pending[5] = pending
 	c.mu.Unlock()
-	c.dispatch(&wireMsg{ID: int64Ptr(5), Result: json.RawMessage(`{"ok":true}`)})
+	c.dispatch(&wireMsg{ID: int64ID(5), Result: json.RawMessage(`{"ok":true}`)})
 	select {
 	case r := <-pending:
 		if r.err != nil || string(r.raw) != `{"ok":true}` {
@@ -59,7 +59,7 @@ func TestDispatchUnknownResponseFallsBackToHandler(t *testing.T) {
 
 	// ③ 没装 handler:静默忽略,不得 panic(readLoop 里的 panic 带走整条管道)。
 	c2 := &Client{pending: map[int64]chan rpcResp{}}
-	c2.dispatch(&wireMsg{ID: int64Ptr(7), Result: json.RawMessage(`{}`)})
+	c2.dispatch(&wireMsg{ID: int64ID(7), Result: json.RawMessage(`{}`)})
 }
 
 // unknownProbe 兜底回调的捕获样本(避免直接共享变量跨 goroutine 读写,-race 必报)。

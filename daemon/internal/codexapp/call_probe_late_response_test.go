@@ -62,7 +62,7 @@ func TestCallProbeCtxDeliversResponseWithinBudget(t *testing.T) {
 
 	id := <-ids
 	idCopy := id
-	c.dispatch(&wireMsg{ID: &idCopy, Result: json.RawMessage(`{"rateLimits":{"planType":"pro"}}`)})
+	c.dispatch(&wireMsg{ID: int64ID(idCopy), Result: json.RawMessage(`{"rateLimits":{"planType":"pro"}}`)})
 
 	select {
 	case o := <-done:
@@ -109,7 +109,7 @@ func TestCallProbeCtxDropsLateResponseAfterGiveUp(t *testing.T) {
 
 	// a) 迟到的真 id 应答:静默丢弃,UnknownResponseHandler 不得触发。
 	idCopy := id
-	c.dispatch(&wireMsg{ID: &idCopy, Result: json.RawMessage(`{"late":"upstream error"}`)})
+	c.dispatch(&wireMsg{ID: int64ID(idCopy), Result: json.RawMessage(`{"late":"upstream error"}`)})
 	select {
 	case p := <-fired:
 		t.Fatalf("已放弃探测的迟到应答不得触发兜底: %+v", p)
@@ -118,7 +118,7 @@ func TestCallProbeCtxDropsLateResponseAfterGiveUp(t *testing.T) {
 
 	// b) 对照:从未被请求的孤儿帧仍走兜底留痕(台账管道对真未知保持睁眼)。
 	bogus := int64(424242)
-	c.dispatch(&wireMsg{ID: &bogus, Result: json.RawMessage(`{"orphan":true}`)})
+	c.dispatch(&wireMsg{ID: int64ID(bogus), Result: json.RawMessage(`{"orphan":true}`)})
 	select {
 	case p := <-fired:
 		if p.id != bogus {
@@ -155,7 +155,7 @@ func TestCallCtxLateResponseStillFallsBackToHandler(t *testing.T) {
 	}
 
 	idCopy := id
-	c.dispatch(&wireMsg{ID: &idCopy, Result: json.RawMessage(`{"late":true}`)})
+	c.dispatch(&wireMsg{ID: int64ID(idCopy), Result: json.RawMessage(`{"late":true}`)})
 	select {
 	case p := <-fired:
 		if p.id != id {

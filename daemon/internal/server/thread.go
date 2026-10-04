@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"sort"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 	"google.golang.org/protobuf/proto"
 )
@@ -1088,9 +1088,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	defer rt.stop(s.turnQueue, t.ID)
 
 	// 后台读手:继续收手机后续帧(审批/取消/运行中新输入),分发给对应通道
-	readerDone := make(chan struct{})
 	go func() {
-		defer close(readerDone)
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
@@ -1671,8 +1669,6 @@ func sortKeys(m map[string]bool) []string {
 	return out
 }
 
-var _ = io.EOF
-
 // derefBlocks []*ContentBlock → []ContentBlock
 func derefBlocks(in []*pb.ContentBlock) []pb.ContentBlock {
 	out := make([]pb.ContentBlock, 0, len(in))
@@ -1707,11 +1703,8 @@ func firstUserText(blocks []pb.ContentBlock) string {
 }
 
 func truncateTitle(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	// 统一走 runtime.ClipRunesEllipsis,收敛见审查报告 util 节。
+	return runtime.ClipRunesEllipsis(s, n)
 }
 
 // activeTurns 记录每线程正在执行的 turn 的取消函数(重入打断用)。

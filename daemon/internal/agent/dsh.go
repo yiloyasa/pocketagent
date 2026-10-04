@@ -739,8 +739,13 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 	notifCh := make(chan notifMsg, 4096)
 	notifStop := make(chan struct{})
 	notifDone := make(chan struct{})
+	// turnStartRef 是看门狗的单调参照:喂值点存"距参照的单调毫秒数",判定式
+	// 用同一参照求差,差值即静默时长 —— 免疫墙钟 NTP 跳变(旧实现两侧各取
+	// UnixMilli,跳变可误杀/漏杀)。不复用下方 turnStart:它声明在后,闭包
+	// 作用域不可达;轮次上限仍用 turnStart(time.Since 本就单调,维持原状)。
+	turnStartRef := time.Now()
 	notifHandler := func(method string, params json.RawMessage) {
-		st.lastNotif.Store(time.Now().UnixMilli())
+		st.lastNotif.Store(time.Since(turnStartRef).Milliseconds()) // 单调毫秒,免疫墙钟跳变
 		enqueued.Add(1)
 		select {
 		case notifCh <- notifMsg{method: method, params: params}:
@@ -792,7 +797,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 	}
 	outCh := make(chan promptOutcome, 1)
 	log.Printf("[dsh] session/prompt session=%s 输入=%d字", sid, userText.Len())
-	st.lastNotif.Store(time.Now().UnixMilli())
+	st.lastNotif.Store(time.Since(turnStartRef).Milliseconds()) // 初喂:单调毫秒,免疫墙钟跳变
 	turnStart := time.Now()
 	go func() {
 		raw, err := p.client.Prompt(ctx, sid, blocks)
@@ -820,7 +825,10 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 			if st.approvalWaiting.Load() {
 				continue // 审批等待是合法静默(用户在手机上想多久都行)
 			}
-			if ms := st.lastNotif.Load(); ms > 0 && time.Now().UnixMilli()-ms > dshSilenceWatchdog.Milliseconds() {
+			// 单调口径:ms 与判定两侧共用 turnStartRef,差值即静默时长,
+			// 免疫墙钟 NTP 跳变。ms>=0 同 codex:初喂在等待循环前必然发生,
+			// 旧 ms>0 防的"未喂值"态已不可达,判定恒生效。
+			if ms := st.lastNotif.Load(); ms >= 0 && time.Since(turnStartRef).Milliseconds()-ms > dshSilenceWatchdog.Milliseconds() {
 				p.client.Cancel(sid)
 				return nil, nil, fmt.Errorf("dsh %v 无任何事件(任务可能未被接收,session=%s)", dshSilenceWatchdog, sid)
 			}
@@ -1092,12 +1100,6 @@ func dshSessionEntry(entries []dshapp.SessionListEntry, ext store.ExternalSessio
 		}
 	}
 	return dshapp.SessionListEntry{}, false
-}
-
-// dshSessionListed 双因子在列判定(dshSessionEntry 的谓词形态;既有回归钉用)。
-func dshSessionListed(entries []dshapp.SessionListEntry, ext store.ExternalSessionRef) bool {
-	_, ok := dshSessionEntry(entries, ext)
-	return ok
 }
 
 func (p *DshProvider) setDshThreadRef(id string, ref threadRef) {

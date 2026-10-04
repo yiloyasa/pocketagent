@@ -14,6 +14,7 @@ import (
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/hermesapp"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
@@ -128,10 +129,68 @@ func (p *HermesProvider) ApplyPrefs(prefs DesktopPrefs) {
 	p.prefs = prefs
 }
 
+// ---- 生命周期预算(R2:懒启动两道闸都对齐四家,消灭无界挂起/无界排队)----
+
+// hermesInitBudget ACP initialize 握手的专属上界(zcodeInitBudget=15s 同口径,
+// 取宽档;codex clientInitBudget=8s 为紧档)。为什么握手要专门给上界:适配器
+// "进程起来了但 initialize 永不回"是最坏情况,它发生在 ensureClient 内且全程
+// 持有 lifeMu —— 无上界 = 该轮无界挂起 + 其它调用方在锁上无界排队(codex
+// clientInitBudget 注释同款教训)。必须用新建的预算 ctx:调用方(Run)的 ctx
+// 常无截止时间,复用它等于没有上界。
+const hermesInitBudget = 15 * time.Second
+
+// errHermesBusy 是 hermes 自己的忙哨兵(zcode ErrZcodeBusy 同款载体 busySentinelError
+// 与形状:如实文案 + Unwrap 到包级 ErrBusy,调用方按 errors.Is(err, ErrBusy) 统一
+// 识别忙态;文案不窜用别家)。
+var errHermesBusy = &busySentinelError{msg: "hermes 正忙(另一个操作正在初始化/探测),请稍后重试"}
+
+// lockLife 有界排队获取生命周期锁(zcode/dsh 同款):先 TryLock(无争用零开销),
+// 失败后在 wait 窗口内 25ms 间隔重试 —— 排队而非立即拒绝,把"低频用户路径
+// 刚好撞上初始化"的瞬时争用吸收成先后等待;窗口耗尽(持有方真卡死)才返回
+// false → 调用方回忙哨兵,保留 TryLock 模式"一个卡死的操作不拖住全线"的底线。
+// wait <= 0 退化为纯 TryLock 语义(与 zcode 同款,给测试留"立即忙"断言口)。
+func (p *HermesProvider) lockLife(wait time.Duration) bool {
+	if p.lifeMu.TryLock() {
+		return true
+	}
+	if wait <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		time.Sleep(25 * time.Millisecond)
+		if p.lifeMu.TryLock() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+	}
+}
+
 // ensureClient 懒启动:定位运行时 → 拉适配器 → ACP initialize(能力快照)。
+//
+// 【有界两闸(R2,对齐 zcode withClientCtx / codex clientInitBudget)】
+//  1. lifeMu 有界排队(lockLife):旧实现裸 Lock 无上界,前一轮初始化挂死持锁时
+//     后续调用方全部无界排队。排队窗口 = min(hermesLockWait, 调用方自身剩余
+//     截止时间),绝不超过调用方本来就愿意等待的时长,ctx 传导语义不受影响;
+//     窗口耗尽回忙哨兵(人话文案,errors.Is→ErrBusy)。
+//  2. initialize 握手专属预算(hermesInitBudget):新建预算 ctx,不复用调用方
+//     ctx(常无截止时间);预算 ctx 的 cancel 经 defer 全路径释放;初始化失败时
+//     已拉起的适配器进程一并 Close,不留半初始化客户端,lifeMu 随 defer 释放。
 func (p *HermesProvider) ensureClient(ctx context.Context) (hermesClient, error) {
-	p.lifeMu.Lock()
+	// 排队窗口 = min(hermesLockWait, 调用方自己的剩余截止时间)(zcode 同款)。
+	wait := hermesLockWait
+	if d, hasDeadline := ctx.Deadline(); hasDeadline {
+		if rem := time.Until(d); rem < wait {
+			wait = rem
+		}
+	}
+	if !p.lockLife(wait) {
+		return nil, errHermesBusy
+	}
 	defer p.lifeMu.Unlock()
+
 	if p.client != nil && p.client.Alive() {
 		return p.client, nil
 	}
@@ -142,13 +201,17 @@ func (p *HermesProvider) ensureClient(ctx context.Context) (hermesClient, error)
 	if p.newClient == nil {
 		p.newClient = defaultNewHermesClient
 	}
+	// 握手专属预算:从 context.Background() 打底新建,与调用方 ctx 的取消/截止
+	// 解耦 —— Run 的 ctx 常无 deadline,复用它 = 握手挂死该轮无界悬着。
+	ictx, icancel := context.WithTimeout(context.Background(), hermesInitBudget)
+	defer icancel()
 	c, err := p.newClient()
 	if err != nil {
 		return nil, err
 	}
-	init, err := c.Initialize(ctx)
+	init, err := c.Initialize(ictx)
 	if err != nil {
-		c.Close()
+		c.Close() // 释放已拉起的适配器进程:初始化失败不占资源、不留半初始化引用
 		return nil, fmt.Errorf("hermes ACP initialize: %w", err)
 	}
 	if init != nil {
@@ -274,21 +337,58 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		}
 	}
 
-	// 当轮钩子:通知(readLoop goroutine 同步回调,必须快进快出)+ 反向请求
-	// (session/request_permission 审批桥)。别的会话的帧按 sessionId 分流丢弃。
-	var final strings.Builder
-	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对)
+	// 当轮钩子 + 事件泵(codex/zcode/dsh/pi 同款"4096 缓冲队列 + 单消费者保序"):
+	// readLoop 里同步调 notif 钩子,慢 sink(手机网络背压)/审批等待会堵死整条
+	// 通知管道。分工:
+	//   生产者(notif 闭包,readLoop goroutine):lastNotif 看门狗刻度(readLoop
+	//     收到帧即算活,含别会话的帧)→ 解析 → 本会话过滤 → 入队。4096 满宁可
+	//     阻塞保序不丢帧(四家同语义);notifStop 是收尸期逃生口。绝不触碰
+	//     final/sink/toolIDs —— 它们只归消费者所有。
+	//   消费者(单 goroutine):逐条 projectSessionUpdate。final/toolIDs/sink 只
+	//     被这一个 goroutine 读写(旧实现 notif 在 readLoop 同步写 final、Run
+	//     goroutine 并发读 —— 无锁数据竞争的 P0,由此根治)。
+	//   收尸:先 close(notifStop) 再 <-notifDone,消费者退出后 Run 才读 final
+	//     —— 这是消灭竞争的关键顺序(见 stopPump 与各 return 路径)。
+	var final strings.Builder // 仅消费者 goroutine 写;收尸(stopPump)后 Run 才读
+	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对;仅消费者访问)
 	var toolMu sync.Mutex
-	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:任何一帧 = 适配器还活着
+	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:readLoop 收到任何一帧 = 适配器还活着
 	approvalWaiting := &atomic.Bool{}
+	type hermesNotifMsg struct {
+		ev  hermesapp.StreamEvent // 已解析的 session/update(生产者侧解析)
+		raw json.RawMessage       // 原始帧(载荷对齐四家惯例,留诊断扩展)
+	}
+	notifCh := make(chan hermesNotifMsg, 4096)
+	notifStop := make(chan struct{})
+	notifDone := make(chan struct{})
+	// enqueued/processed 组成排空栅栏(dsh 同款):update 通知与 prompt 应答分路
+	// 竞速,终局先到时先把已入队帧消费完再读终稿,否则尾部正文可能丢。
+	var enqueued, processed atomic.Int64
 	notif := func(raw json.RawMessage) {
-		lastNotif.Store(time.Now().UnixMilli())
+		lastNotif.Store(time.Since(turnStart).Milliseconds()) // 单调毫秒(距 turnStart),免疫墙钟跳变
 		ev := hermesapp.ParseSessionUpdate(raw)
 		if ev.SessionID != sid {
 			return // 非本轮会话的帧(共享适配器上还有别的会话)不进本轮
 		}
-		p.projectSessionUpdate(ev, sink, &final, toolIDs, &toolMu)
+		enqueued.Add(1)
+		select {
+		case notifCh <- hermesNotifMsg{ev: ev, raw: raw}:
+		case <-notifStop:
+			enqueued.Add(-1) // 逃生未入队:回退计数,保排空栅栏账目平衡
+		}
 	}
+	go func() {
+		defer close(notifDone)
+		for {
+			select {
+			case nm := <-notifCh:
+				p.projectSessionUpdate(nm.ev, sink, &final, toolIDs, &toolMu)
+				processed.Add(1)
+			case <-notifStop:
+				return
+			}
+		}
+	}()
 	reqHandler := func(id int64, method string, params json.RawMessage) {
 		if method == "session/request_permission" {
 			// 审批等待是合法静默(用户在手机上想多久都行),看门狗豁免。
@@ -297,10 +397,26 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 			approvalWaiting.Store(true)
 			defer approvalWaiting.Store(false)
 		}
+		// req 路径的 sink 直接在 readLoop goroutine 上调用,不经队列 —— 与四家
+		// 同款(codex handleCodexApproval / dsh handleDshRequest 亦如此):审批卡
+		// 必须即时弹出,排进事件队列反会被慢消费冻结;它与消费者 goroutine 的
+		// sink 并发由 sink 自身的并发安全约定承担(server 层同一通道),final/
+		// toolIDs 在 req 路径不被触碰,不引入新的竞争面。
 		p.handleRequestPermission(c, id, method, params, ctx, sink, approve)
 	}
+	// 【泵安装】从这里起 readLoop 的帧改走 notifCh 队列;卸载统一由 stopPump 负责。
 	c.SetTurnHandlers(notif, reqHandler)
-	defer c.SetTurnHandlers(nil, nil)
+	// stopPump 收尸(幂等,sync.Once 防双 close):先卸钩子(断新帧入队)→
+	// close(notifStop)(生产者逃生、消费者退出)→ <-notifDone(消费者真正退出)。
+	// 此后 final 归 Run 独占,读点无竞争。挂在 defer 上兜底覆盖 Run 的每一条
+	// return;凡要读 final 的路径,另在读取前显式调 stopPump()(return 语句的
+	// 表达式先于 defer 求值,靠 defer 读不到"收尸后"的 final)。
+	stopPump := sync.OnceFunc(func() {
+		c.SetTurnHandlers(nil, nil)
+		close(notifStop)
+		<-notifDone
+	})
+	defer stopPump()
 
 	// 【轮次取消看门狗(H1 接通 session/cancel)】prompt 阻塞到轮次终局,不能
 	// 干等(dsh/codex 同款三闸;此前 ctx 取消只会让 daemon 侧放弃,适配器还在
@@ -310,7 +426,7 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	//   2. hermesSilenceWatchdog 无任何事件(审批等待豁免)→ 判挂起,发取消收场;
 	//   3. hermesTurnCap 单轮上限 → 发取消收场。
 	outCh := make(chan hermesPromptOutcome, 1)
-	lastNotif.Store(time.Now().UnixMilli())
+	lastNotif.Store(time.Since(turnStart).Milliseconds()) // 初喂:单调毫秒,免疫墙钟跳变
 	log.Printf("[hermes] session/prompt session=%s 输入=%d字", sid, len([]rune(text)))
 	go func() {
 		stop, err := c.Prompt(ctx, sid, text)
@@ -328,13 +444,19 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		case <-ctx.Done():
 			p.cancelTurn(c, sid)
 			<-outCh // prompt 随 ctx 取消返回(带缓冲 channel,必达;等 goroutine 退出)
+			// 收尸后再读 final(消费者已退出,独占读无竞争)。取消路径不排空
+			// (dsh 同款:用户要的是"停",已落定的正文照交,未消费尾帧随泵弃)。
+			stopPump()
 			// 手机断连/取消也要交回已流出的内容:server 层落库后,重连才接得上看。
 			return hermesPartialBlocks(&final), nil, ctx.Err()
 		case <-tick.C:
 			if approvalWaiting.Load() {
 				continue // 审批等待是合法静默(用户在手机上想多久都行)
 			}
-			if ms := lastNotif.Load(); ms > 0 && time.Now().UnixMilli()-ms > hermesSilenceWatchdog.Milliseconds() {
+			// 单调口径:ms 与判定两侧共用 turnStart(Run 开头,单调),差值即
+			// 静默时长,免疫墙钟 NTP 跳变。ms>=0 同 codex:初喂在等待循环前
+			// 必然发生,旧 ms>0 防的"未喂值"态已不可达,判定恒生效。
+			if ms := lastNotif.Load(); ms >= 0 && time.Since(turnStart).Milliseconds()-ms > hermesSilenceWatchdog.Milliseconds() {
 				p.cancelTurn(c, sid)
 				return nil, nil, fmt.Errorf("hermes %v 无任何事件(任务可能未被接收,session=%s)", hermesSilenceWatchdog, sid)
 			}
@@ -346,8 +468,9 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	}
 
 	if res.err != nil {
+		stopPump() // 收尸后再读 final(仅 ctx.Err 分支读);纯 prompt 错误分支靠 defer 收尸
 		if ctx.Err() != nil {
-			// 与应答竞速获胜的用户停:已流出的内容照常交回。
+			// 与应答竞速获胜的用户停:已流出的内容照常交回(不排空,dsh 同款)。
 			return hermesPartialBlocks(&final), nil, ctx.Err()
 		}
 		return nil, nil, fmt.Errorf("hermes prompt: %w", res.err)
@@ -356,6 +479,10 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		return nil, nil, fmt.Errorf("hermes 轮次被拒/被取消(stopReason=%s)", res.stop)
 	}
 
+	// 排空栅栏(dsh drainEvents 同款):先把已入队帧消费完(尾部正文不丢),
+	// 再收尸 —— 消费者退出后 final 归 Run 独占,以下读点无竞争。
+	drainEvents(&enqueued, &processed)
+	stopPump()
 	out := strings.TrimSpace(final.String())
 	if out == "" {
 		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:hermes 安装目录的 config.yaml 未配置 model.default,或凭据无效", res.stop)
@@ -380,6 +507,10 @@ var (
 	// hermesCancelBudget 发 session/cancel 的写入上界(通知帧只是一次管道写;
 	// 适配器挂死不读管道时宁可放弃,不陪葬轮次收尾)。
 	hermesCancelBudget = 5 * time.Second
+	// hermesLockWait lifeMu 的有界排队窗口(zcodeLockWait/dshLockWait 同档 15s;
+	// 排队而非立即拒绝的依据见 lockLife 注释)。包级变量仅为测试注入短值,
+	// 与 zcodeLockWait 同惯例。
+	hermesLockWait = 15 * time.Second
 )
 
 // hermesPartialBlocks 已流出的正文(codex/dsh "手机断连也要交回已流出的内容"
@@ -416,8 +547,9 @@ func (p *HermesProvider) Steer(context.Context, string, []pb.ContentBlock) (bool
 	return false, "", nil
 }
 
-// projectSessionUpdate 把一条已解析的 session/update 投影到 sink(从 Run 的通知
-// 钩子里调;只处理本轮会话的帧)。
+// projectSessionUpdate 把一条已解析的 session/update 投影到 sink(只从 Run 的
+// 事件泵单消费者 goroutine 里调;只处理本轮会话的帧。final/toolIDs/sink 仅被
+// 这个 goroutine 读写,是消灭 P0 数据竞争的所有权边界)。
 func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sink, final *strings.Builder, toolIDs map[string]int, toolMu *sync.Mutex) {
 	switch {
 	case ev.MessageChunk != "":
@@ -695,9 +827,6 @@ func threadModelID(t *store.Thread) string {
 }
 
 func clipString(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n])
-	}
-	return s
+	// 统一走 runtime.ClipRunes,收敛见审查报告 util 节。
+	return runtime.ClipRunes(s, n)
 }

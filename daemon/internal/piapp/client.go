@@ -486,11 +486,38 @@ func (c *Client) forget(id string) {
 	c.mu.Unlock()
 }
 
-func (c *Client) writeLine(raw []byte) error {
+// writeBudget 单帧写入 stdin 的等待预算。pi 的单行可带数 MB base64 图片
+// (读缓冲 8MB 的另一半),子进程卡死/不读管道时裸 Write 会无限阻塞 —— 持
+// writeMu 期间堵死会把所有后续写(乃至 Close)一起冻住。
+const writeBudget = 5 * time.Second
+
+// writeWithBudget 在 budget 时间内尝试完成一次 stdin 写。写序语义不变:
+// Write 仍受 writeMu 串行化(预算只限制"等 Write 返回"的时长,不绕过互斥)。
+//
+// 【已知语义】超时返回 error 后,执行 Write 的 goroutine 无法取消,**写可能
+// 仍在后台完成**(帧最终可能落进管道)。调用方按失败处理即可:协议层要么
+// 放弃本轮、要么随子进程一起被判死;os.File 允许多 goroutine 并发调用,
+// 超时后残留的 Write 与后续 Write/Close 并发不会 panic。
+func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_, err := c.stdin.Write(append(raw, '\n'))
-	return err
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.stdin.Write(data)
+		errCh <- err
+	}()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case err := <-errCh:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("写入 pi 子进程 stdin 超时(>%s),写可能仍在后台完成", budget)
+	}
+}
+
+func (c *Client) writeLine(raw []byte) error {
+	return c.writeWithBudget(append(raw, '\n'), writeBudget)
 }
 
 // RespondUI 回写 extension_ui_response(dialog 应答)。

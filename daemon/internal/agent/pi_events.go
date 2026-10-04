@@ -18,6 +18,7 @@ import (
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 )
 
 // ---- message_update.assistantMessageEvent ----
@@ -743,12 +744,9 @@ func MapAssistantStop(raw json.RawMessage) (*pb.CodexEvent, bool) {
 
 // clipRunes 按 rune 截断(工具输出进 pb 前限长,防单帧过大)。
 func clipRunes(s string, n int) string {
-	if n <= 0 || len(s) <= n {
-		return s
+	if n <= 0 {
+		return s // 原语义:n<=0 视为不设限(真实调用方均传大正数),收敛时保留
 	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	// 统一走 runtime.ClipRunesEllipsis,收敛见审查报告 util 节。
+	return runtime.ClipRunesEllipsis(s, n)
 }

@@ -84,7 +84,8 @@ func TestFakeProcessCancelRoundtrip(t *testing.T) {
 	waitUpdate(t, ch, "current_mode_update")
 }
 
-// TestCancelSessionNilCtx nil ctx 合法(与 CallCtx 同口径:退化为无超时)。
+// TestCancelSessionNilCtx nil ctx 合法(CancelSession 自身无内部超时,退化为
+// 无超时;与传输层 CallCtx 的 120s 兜底是两回事 —— 那只罩短控制调用)。
 func TestCancelSessionNilCtx(t *testing.T) {
 	c, _, sIn := pipeClient(t)
 	lines := make(chan []byte, 4)

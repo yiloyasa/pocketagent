@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -101,15 +102,24 @@ func startDaemon(dir, addr, pairCode string) error {
 	}
 	defer out.Close()
 
-	// 与旧 watchdog.bat 完全一致的启动参数:cwd=daemon 目录,workspace=仓库根。
-	args := []string{"-addr", addr, "-workspace", filepath.Clean(filepath.Join(dir, ".."))}
+	// workspace 语义(P1-10 修复):不再传 -workspace=exe 上级目录 —— 那在用户
+	// 机器上(如装在 C:\PocketAgent)会把默认工作区顶成上一级甚至盘符根,agent
+	// 会话落盘根被污染。daemon 侧 -workspace 缺省值取自身 cwd
+	// (cmd/pocketagentd/main.go: cwd()),而下面 cmd.Dir 已设为 exe 所在目录
+	// (=安装目录),于是不变式"用户安装 → 会话工作区=安装目录"自然成立。
+	// 开发机/特殊部署要另指工作区时,设 PA_WORKSPACE 环境变量显式覆盖
+	// (显式 env 优先于缺省;未设即不传参,行为与"装哪算哪"一致)。
+	args := []string{"-addr", addr}
+	if ws := strings.TrimSpace(os.Getenv("PA_WORKSPACE")); ws != "" {
+		args = append(args, "-workspace", ws)
+	}
 	if pairCode != "" {
 		args = append(args, "-pair-code", pairCode)
 	}
 	cmd := exec.Command(filepath.Join(dir, "pocketagentd.exe"), args...)
 	cmd.Dir = dir
 	// 【为什么不再注入 CODEX_BIN 默认值】旧实现在环境未设 CODEX_BIN 时注入一条
-	// 写死的开发机路径（G:\Claude Code\codex.cmd）：它作为字符串常量进 paguard.exe
+	// 写死的开发机 codex.cmd 绝对路径（已否决注入）：它作为字符串常量进 paguard.exe
 	// 随发布包分发（规格 §2 明令禁止），且在用户机器上必然不存在 —— 后果不只是
 	// 泄漏，而是**覆盖**掉 daemon 自己的定位链，把"能找到 codex"变成"找不到"。
 	// 未设即不注入：cmd.Env 保持 nil 时 exec 继承父进程环境，用户自己的 CODEX_BIN

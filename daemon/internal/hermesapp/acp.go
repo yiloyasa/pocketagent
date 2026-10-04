@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // InitializeResult 是 initialize 应答(agentCapabilities 按 0.9.0 实测形状:
@@ -448,8 +447,11 @@ func ParseSessionUpdate(params json.RawMessage) StreamEvent {
 
 // Prompt 发一轮输入并阻塞到轮次终局。流式增量经 OnSessionUpdate 钩子实时回调
 // (挂钩要在调用本方法前完成);返回值 = stopReason(end_turn / refusal / cancelled…)。
+// 【长调用,无 120s 兜底】本方法阻塞到整轮结束(长流式轮次轻松超 2 分钟),走
+// CallTurnCtx(两路 select,无 callTimeout)—— 兜底会把长轮次误杀成假死超时;
+// 存活由 hermes 看门狗三闸(150s 静默 + 60min 上限 + 审批豁免)与 ctx 取消治理。
 func (c *Client) Prompt(ctx context.Context, sessionID, text string) (string, error) {
-	raw, err := c.callCtx(ctx, "session/prompt", map[string]any{
+	raw, err := c.CallTurnCtx(ctx, "session/prompt", map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": text}},
 	})
@@ -473,8 +475,8 @@ func (c *Client) Prompt(ctx context.Context, sessionID, text string) (string, er
 // CancelSession 发 session/cancel 通知,叫停一个正在跑的轮次。协议上没有受理
 // 回执 —— 返回错误仅代表写入失败/超时,"是否真停了"以 prompt 侧的终局应答
 // (stopReason=cancelled)或调用方自己的 ctx 返回为准。
-// 【超时安全】stdin 管道写串行(writeMu)且可能因适配器挂死不读而阻塞:按
-// 调用方 ctx 有界等待,超时即放弃。放弃的写 goroutine 可能仍占着 writeMu ——
+// 【超时安全】stdin 写在 writeFrame 里有 5s 预算(writeWithBudget):适配器挂死
+// 不读管道时,取消帧最迟 5s 返回错误;即便预算内没写完,后台写也可能仍在进行 ——
 // 那时连接已无救,调用方会 Close 收尸;轮次收尾绝不能陪葬在取消帧上。
 func (c *Client) CancelSession(ctx context.Context, sessionID string) error {
 	if ctx == nil {
@@ -579,23 +581,11 @@ func (c *Client) callCtx(ctx context.Context, method string, params any) (json.R
 	if ctx == nil {
 		ctx = context.Background() // nil ctx 合法(无超时语义;旧路径实测如此调用)
 	}
-	type result struct {
-		raw json.RawMessage
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		raw, err := c.Call(method, params)
-		done <- result{raw, err}
-	}()
-	select {
-	case r := <-done:
-		return r.raw, r.err
-	case <-ctx.Done():
-		// 放弃:迟到应答经 readLoop 静默丢(pending 已随 reap/清理);调用方按
-		// 超时降级。适配器进程由调用方 Close 收尸。
-		return nil, ctx.Err()
-	}
+	// 直接走传输层 CallCtx(ctx.Done/ch 两路 select + 放弃时从 pending 除名)。
+	// 曾经的 goroutine 包装(`go func(){ c.Call; done<-r }()` + ctx.Done 即弃)在
+	// 放弃后会留下一个永挂 <-ch 的僵尸 goroutine,pending 表项要等 reap 才清 ——
+	// 子进程僵死即无界累积(codexapp client.go goroutine 包装僵尸坑点名的同款)。
+	return c.CallCtx(ctx, method, params)
 }
 
 // StopReasonIsError 桌面适配器把 provider 失败也包装成 end_turn + 错误正文
@@ -605,5 +595,3 @@ func (c *Client) callCtx(ctx context.Context, method string, params any) (json.R
 func StopReasonIsError(stop string) bool {
 	return strings.EqualFold(stop, "refusal") || strings.EqualFold(stop, "cancelled")
 }
-
-var _ = time.Second // 预留(超时预算由调用方定)

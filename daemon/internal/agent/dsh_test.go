@@ -821,6 +821,14 @@ func TestDshModelSpec(t *testing.T) {
 	}
 }
 
+// dshSessionListed 双因子在列判定(dshSessionEntry 的谓词形态;既有回归钉用)。
+// 【来源】原在生产文件 dsh.go,生产零调用,移入测试文件私有化 —— 回归钉的
+// 归属在测试,生产代码不留无调用方。
+func dshSessionListed(entries []dshapp.SessionListEntry, ext store.ExternalSessionRef) bool {
+	_, ok := dshSessionEntry(entries, ext)
+	return ok
+}
+
 func TestDshSessionListed(t *testing.T) {
 	entries := []dshapp.SessionListEntry{{SessionID: "s1", Cwd: `G:\ws`}}
 	if !dshSessionListed(entries, store.ExternalSessionRef{SessionID: "s1", Cwd: `g:\WS`}) {

@@ -207,8 +207,4 @@ func TestPermissionOutcomeShape(t *testing.T) {
 	if string(b) != want {
 		t.Fatalf("selected 应答形状不符:\n got=%s\nwant=%s", b, want)
 	}
-	cx, _ := json.Marshal(PermissionOutcomeCancelled())
-	if !strings.Contains(string(cx), `"cancelled"`) {
-		t.Fatalf("cancelled 应答形状不符: %s", cx)
-	}
 }

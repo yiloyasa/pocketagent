@@ -35,6 +35,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/agent"
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
@@ -53,13 +54,10 @@ const subagentOutputClipRunes = 2000
 // 一个中文字劈成半个字节序列。
 func clipRunesOr(s string, n int) string {
 	if n <= 0 {
-		return s
+		return s // 原语义:n<=0 视为不设限(fallback),helper 的空串语义不适用,故守卫留在本层
 	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	// 统一走 runtime.ClipRunesEllipsis,收敛见审查报告 util 节。
+	return runtime.ClipRunesEllipsis(s, n)
 }
 
 // subagentHistoryBudget 单次 thread/read 全量拉取的整段上界(与 zcode 拉历史

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/runtime"
 )
 
 // EchoProvider 不调任何大模型 API,把收到的话"演"一遍 agent 的完整过程:
@@ -86,11 +87,8 @@ func (e *EchoProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appr
 }
 
 func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	// 统一走 runtime.ClipRunesEllipsis,收敛见审查报告 util 节。
+	return runtime.ClipRunesEllipsis(s, n)
 }
 
 func blockText(t string) pb.ContentBlock {

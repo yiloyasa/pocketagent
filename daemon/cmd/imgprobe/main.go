@@ -6,7 +6,8 @@ package main
 // 观察 codex 是否报错、模型回复是否与图片内容相关 —— 拿"codex 真看到图"的证据。
 // 同时打印 model/list 里每个模型的 inputModalities(daemon 侧能力门控的数据源)。
 //
-// 【用法】imgprobe [图片绝对路径] [提问];不传参数时用项目里现成的手机截图。
+// 【用法】imgprobe [图片绝对路径] [提问];不传参数时自生成一张已知内容的
+// 测试图(与 resume 模式同款),不再依赖仓库里现成的截图文件。
 // 纯文本探针见 cmd/turnprobe(结构完全同款:initialize → thread/start → turn/start)。
 //
 // 【resume 模式】imgprobe resume —— 图片输入的 resume 生命周期定性实验:
@@ -412,13 +413,25 @@ func main() {
 		return
 	}
 
-	imgPath := `G:\项目1\pocketagent\.pocketagent-uploads\1789676343748_0_Screenshot_2026-09-18-04-18-52-945_dev.pocketagent.app.png`
+	// 缺省图片:探针自生成一张已知内容的测试图(makeProbeImage,与 resume
+	// 模式同款)。不写死任何个人专属绝对路径 —— 那会随源码/二进制分发,且
+	// 换台机器必然不存在;显式传参(os.Args[1])仍是第一优先。
 	question := "这张截图里是什么内容?一句话描述你看到的主要东西。如果你实际看不到图片,请只回答 NO_IMAGE。"
+	imgPath := ""
 	if len(os.Args) > 1 {
 		imgPath = os.Args[1]
 	}
 	if len(os.Args) > 2 {
 		question = os.Args[2]
+	}
+	if imgPath == "" {
+		rand.Seed(time.Now().UnixNano())
+		img, err := makeProbeImage()
+		if err != nil {
+			log.Fatal("生成缺省测试图片:", err)
+		}
+		defer os.Remove(img.path)
+		imgPath = img.path
 	}
 	if _, err := os.Stat(imgPath); err != nil {
 		log.Fatal("图片不存在:", err)

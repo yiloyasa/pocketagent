@@ -68,6 +68,15 @@ func TestAutoAnswerRuntimePreferencesShape(t *testing.T) {
 		Method: "session/requestRuntimePreferences",
 		Params: json.RawMessage(`{"sessionId":"sess_x","scope":"runtime-materialization"}`),
 	})
+	// 应答已改 goroutine 异步回写(见 client.go autoAnswer,对齐 P2-5 派发模式):
+	// 照抄 TestReqHandlerFalseFallsBackTo32601 的轮询等帧,保证确定性。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), `"preflight-v1"`) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	out := buf.String()
 	var resp struct {
 		ID     json.RawMessage `json:"id"`
@@ -99,6 +108,14 @@ func TestAutoAnswerStoragePathReady(t *testing.T) {
 		Method: "startup/storagePath",
 		Params: json.RawMessage(`{"path":"C:\\x"}`),
 	})
+	// 应答已改 goroutine 异步回写:同款轮询等帧(见 TestReqHandlerFalseFallsBackTo32601)。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), `"startup/storagePathReady"`) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	out := buf.String()
 	if !strings.Contains(out, `"method":"startup/storagePathReady"`) {
 		t.Fatalf("storagePath 应答应带 method 标记: %s", out)
@@ -115,6 +132,15 @@ func TestUnknownServerRequestGetsError(t *testing.T) {
 		Method: "elicitation/create",
 		Params: json.RawMessage(`{}`),
 	})
+	// 无 handler 的兜底 -32601 已改 goroutine 异步回写(见 client.go dispatch):
+	// 同款轮询等帧(见 TestReqHandlerFalseFallsBackTo32601)。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), `-32601`) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	out := buf.String()
 	if !strings.Contains(out, `-32601`) {
 		t.Fatalf("未实现的反向请求应回 -32601: %s", out)

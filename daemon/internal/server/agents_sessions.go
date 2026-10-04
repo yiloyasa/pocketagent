@@ -267,11 +267,13 @@ func (s *Server) ImportAgentThread(ctx context.Context, req *pb.ImportAgentThrea
 		(sessionFile != "" && s.cfg.Store.IsTombstoned(sessionFile)) {
 		return nil, errFailedPrecondition("会话已被删除;如需恢复请先清除删除记录")
 	}
-	if err := s.cfg.Store.SetSessionHidden(agentID, sessionID, false); err != nil {
-		return nil, errInternal(err)
-	}
+	// 参数校验必须在 SetSessionHidden(false) 之前:否则"参数非法返回错误"的
+	// 请求已经先产生了"解除隐藏"的副作用 —— 非法请求不该有任何副作用。
 	if sessionID == "" && sessionFile == "" {
 		return nil, errInvalidArg("session_id 与 session_file 至少要有一个,否则无法续聊重挂载")
+	}
+	if err := s.cfg.Store.SetSessionHidden(agentID, sessionID, false); err != nil {
+		return nil, errInternal(err)
 	}
 	// 已导入过:直接复用现有线程(不重复建)。判定键 = agent + 外部会话 id;
 	// 没有 id(理论上不发生)时退回文件路径匹配。

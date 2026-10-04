@@ -5,8 +5,8 @@
 // 按手机审批卡同款逻辑裁决(默认自动允许,-deny 演练拒绝),并逐变体对表
 // session/update 流(流式完整度)。
 //
-// 红线:工作区用临时目录(不在 G:\Hermes 与上游 checkout 写任何文件);
-// G:\Hermes 用户配置只读。
+// 红线:工作区用临时目录(不在 hermes 家目录(见 HERMES_HOME)与上游 checkout 写任何文件);
+// hermes 家目录(见 HERMES_HOME)用户配置只读。
 package main
 
 import (

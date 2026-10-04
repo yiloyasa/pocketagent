@@ -1775,8 +1775,13 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	finish := func() { doneOnce.Do(func() { close(done) }) }
 
 	c := p.client
+	// turnStartRef 是看门狗的单调参照:喂值点存"距参照的单调毫秒数",判定式
+	// 用同一参照求差,差值即静默时长 —— 免疫墙钟 NTP 跳变(旧实现两侧各取
+	// UnixMilli,跳变可误杀/漏杀)。不复用下方 turnStart:它声明在后,闭包
+	// 作用域不可达;60 分钟上限仍用 turnStart(time.Since 本就单调,维持原状)。
+	turnStartRef := time.Now()
 	notifHandler := func(method string, params json.RawMessage) {
-		lastNotif.Store(time.Now().UnixMilli())
+		lastNotif.Store(time.Since(turnStartRef).Milliseconds()) // 单调毫秒,免疫墙钟跳变
 		select {
 		case notifCh <- notifMsg{method: method, params: params}:
 		case <-notifStop:
@@ -1967,7 +1972,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}
 
 	// 4) 等结束 + 看门狗(与 codex 同口径:150s 无事件且不在等审批 = 失败)
-	lastNotif.Store(time.Now().UnixMilli())
+	lastNotif.Store(time.Since(turnStartRef).Milliseconds()) // 初喂:单调毫秒,免疫墙钟跳变
 	turnStart := time.Now()
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
@@ -1988,7 +1993,10 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			return nil, nil, ctx.Err()
 		case <-tick.C:
 			if !approvalWaiting.Load() {
-				if ms := lastNotif.Load(); ms > 0 && time.Now().UnixMilli()-ms > zcodeWatchdogSilence.Milliseconds() {
+				// 单调口径:ms 与判定两侧共用 turnStartRef,差值即静默时长,
+				// 免疫墙钟 NTP 跳变。ms>=0 同 codex:初喂在等待循环前必然发生,
+				// 旧 ms>0 防的"未喂值"态已不可达,判定恒生效。
+				if ms := lastNotif.Load(); ms >= 0 && time.Since(turnStartRef).Milliseconds()-ms > zcodeWatchdogSilence.Milliseconds() {
 					_, _ = p.client.Call("session/stop", map[string]string{"sessionId": sid})
 					mu.Lock()
 					partial := streamText.String()

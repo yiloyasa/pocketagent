@@ -60,6 +60,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -323,10 +324,18 @@ func tempWorkspace() map[string]string {
 }
 
 // truncateForLog 日志/报错用:应答原文截断到 200 字节,避免刷屏。
+// 200 字节预算不变,但回退到最后一个完整 rune 的边界再截 —— 修复 CJK 半字符
+// 缺陷:此前 raw[:200] 可能把一个多字节汉字劈成非法 UTF-8,日志里出乱码。
+// (字节预算语义不适合走 runtime.ClipRunes 的 rune 计数口径,故本函数就地修,
+// 不做委托。)
 func truncateForLog(raw json.RawMessage) string {
 	const max = 200
 	if len(raw) > max {
-		return string(raw[:max]) + "…"
+		limit := max
+		for limit > 0 && !utf8.RuneStart(raw[limit]) {
+			limit--
+		}
+		return string(raw[:limit]) + "…"
 	}
 	return string(raw)
 }

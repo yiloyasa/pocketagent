@@ -70,13 +70,19 @@ func main() {
 	home, _ := os.UserHomeDir()
 	agentDir := flag.String("agentdir", filepath.Join(home, ".pocketagentd", "pi-subvis-probe"), "探针专用 pi agent 目录(隔离)")
 	ws := flag.String("ws", filepath.Join(os.TempDir(), "pa-pi-subvis-ws"), "探针工作区")
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\pi-subagent-capture.md`, "证据文件输出路径")
+	out := flag.String("out", "", "证据文件输出路径(缺省写到系统临时目录)")
 	wait := flag.Duration("wait", 6*time.Minute, "等待 agent_settled 的上限")
 	postwait := flag.Duration("postwait", 25*time.Second, "settled 后继续收帧的窗口")
 	prompt := flag.String("prompt",
 		`用 scout 子代理调研当前目录:列出有哪些文件,并各用一句话说明每个文件的内容。子代理完成后,把它的结论完整告诉我。`,
 		"诱导 pi-subagents 的 prompt")
 	flag.Parse()
+
+	// 证据落点:缺省写系统临时目录(通用派生,不写死任何个人专属绝对路径
+	// —— 字符串常量会随探针二进制分发,规格 §2 明令禁止)。
+	if *out == "" {
+		*out = filepath.Join(os.TempDir(), "pi-subagent-capture.md")
+	}
 
 	log.SetFlags(log.Ltime)
 

@@ -241,51 +241,6 @@ func builtinProviderConfigForCJS(cjs, v2 string) string {
 	return scopedBuiltinProviderConfig(cjs, v2)
 }
 
-// newestBuiltinProviderConfig 在 <v2>/runtime/provider 下找 mtime 最新的
-// zcode-builtin.json(平台/版本/endpoint 目录名不写死,跟随桌面端演进)。
-// 找不到返回空串。
-func newestBuiltinProviderConfig(v2 string) string {
-	root := filepath.Join(v2, "runtime", "provider")
-	var best string
-	var bestAt time.Time
-	platforms, err := os.ReadDir(root)
-	if err != nil {
-		return ""
-	}
-	for _, plat := range platforms {
-		if !plat.IsDir() {
-			continue
-		}
-		versions, err := os.ReadDir(filepath.Join(root, plat.Name()))
-		if err != nil {
-			continue
-		}
-		for _, ver := range versions {
-			if !ver.IsDir() {
-				continue
-			}
-			endpoints, err := os.ReadDir(filepath.Join(root, plat.Name(), ver.Name()))
-			if err != nil {
-				continue
-			}
-			for _, ep := range endpoints {
-				if !ep.IsDir() {
-					continue
-				}
-				p := filepath.Join(root, plat.Name(), ver.Name(), ep.Name(), "zcode-builtin.json")
-				fi, err := os.Stat(p)
-				if err != nil {
-					continue
-				}
-				if best == "" || fi.ModTime().After(bestAt) {
-					best, bestAt = p, fi.ModTime()
-				}
-			}
-		}
-	}
-	return best
-}
-
 // envHasNonEmpty 环境切片里某变量是否存在且非空(Windows 下变量名不区分大小写,
 // 但 os.Environ 由我们自己的进程产出,名字与常量一致,直接精确比对即可)。
 func envHasNonEmpty(env []string, key string) bool {
@@ -524,11 +479,37 @@ func (c *Client) forget(id int64) {
 	c.mu.Unlock()
 }
 
-func (c *Client) writeLine(raw []byte) error {
+// writeBudget 单帧写入 stdin 的等待预算。子进程卡死/不读管道时裸 Write 会
+// 无限阻塞 —— 持 writeMu 期间堵死会把所有后续写(乃至 Close)一起冻住。
+const writeBudget = 5 * time.Second
+
+// writeWithBudget 在 budget 时间内尝试完成一次 stdin 写。写序语义不变:
+// Write 仍受 writeMu 串行化(预算只限制"等 Write 返回"的时长,不绕过互斥)。
+//
+// 【已知语义】超时返回 error 后,执行 Write 的 goroutine 无法取消,**写可能
+// 仍在后台完成**(帧最终可能落进管道)。调用方按失败处理即可:协议层要么
+// 放弃本轮、要么随子进程一起被判死;os.File 允许多 goroutine 并发调用,
+// 超时后残留的 Write 与后续 Write/Close 并发不会 panic。
+func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_, err := c.stdin.Write(append(raw, '\n'))
-	return err
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.stdin.Write(data)
+		errCh <- err
+	}()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case err := <-errCh:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("写入 ZCode 子进程 stdin 超时(>%s),写可能仍在后台完成", budget)
+	}
+}
+
+func (c *Client) writeLine(raw []byte) error {
+	return c.writeWithBudget(append(raw, '\n'), writeBudget)
 }
 
 // Respond 应答服务器反向请求(rawID 原样回显 —— 服务器的 id 是字符串)。
@@ -606,7 +587,13 @@ func (c *Client) dispatch(m *wireMsg) {
 			}()
 			return
 		}
-		_ = c.RespondError(m.ID, -32601, "PocketAgent 未实现该反向请求: "+m.Method)
+		// 无 handler 的兜底 -32601 同样走异步派发:stdin 写可能因子进程不读
+		// 管道而阻塞(预算见 writeWithBudget),失败应答的路径必须保持可达、
+		// 但绝不允许堵读泵 —— 对齐上方【P2-5】goroutine 分发模式。
+		id, method := m.ID, m.Method
+		go func() {
+			_ = c.RespondError(id, -32601, "PocketAgent 未实现该反向请求: "+method)
+		}()
 	case m.Method != "":
 		// 先给常驻钩子(后台事实),再给当轮钩子(转流给手机),顺序与 codexapp 相同:
 		// 当轮钩子在轮次结束后会被卸下,收尾瞬间到达的事件必须还有人接。
@@ -678,15 +665,24 @@ func (c *Client) autoAnswer(m *wireMsg) bool {
 		}()
 		return true
 	case "startup/storagePath":
-		_ = c.Respond(m.ID, map[string]interface{}{"method": "startup/storagePathReady", "reuse": true})
+		// 应答形状是静态的,但 stdin 写本身可能阻塞(见 writeWithBudget):
+		// 异步派发,不让 readLoop 等一次 Write(对齐【P2-5】goroutine 分发模式;
+		// autoAnswer 同步返回 true 的"已受理"语义不变)。
+		id := m.ID
+		go func() {
+			_ = c.Respond(id, map[string]interface{}{"method": "startup/storagePathReady", "reuse": true})
+		}()
 		return true
 	case "session/requestRuntimePreferences":
-		_ = c.Respond(m.ID, map[string]interface{}{
-			"nativeSearchEnhancementsEnabled":      false,
-			"memoryEnabled":                        false,
-			"askUserQuestionAutoResolutionEnabled": false,
-			"modelContextBudgetStrategy":           "preflight-v1",
-		})
+		id := m.ID
+		go func() {
+			_ = c.Respond(id, map[string]interface{}{
+				"nativeSearchEnhancementsEnabled":      false,
+				"memoryEnabled":                        false,
+				"askUserQuestionAutoResolutionEnabled": false,
+				"modelContextBudgetStrategy":           "preflight-v1",
+			})
+		}()
 		return true
 	}
 	return false

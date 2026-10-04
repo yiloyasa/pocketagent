@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/runtime"
 )
 
 // piSessionsLimit 一次最多列出的会话数:按修改时间取最近的,ScanPiSessions
@@ -236,12 +238,8 @@ func ReadPiSessionHistory(sessionFile string) ([]PiSessionMessage, error) {
 }
 
 // clipTitleRunes 按 rune 截断标题(中文标题不能拦腰截出乱码)。
-// 【为什么不复用 pi_events.go 的 clipRunes】那份给工具输出限长,末尾追加"…"
-// 表示截断;标题要的是干净的前 40 字,语义不同,不强行共用。
 func clipTitleRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n])
-	}
-	return s
+	// 统一走 runtime.ClipRunes,收敛见审查报告 util 节(原"标题不加省略号"
+	// 语义即 A 类硬截,与 ClipRunes 一致)。
+	return runtime.ClipRunes(s, n)
 }

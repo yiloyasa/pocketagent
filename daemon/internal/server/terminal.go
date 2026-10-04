@@ -128,5 +128,3 @@ func (s *Server) CloseTerminal(ctx context.Context, req *pb.CloseTerminalRequest
 	s.cfg.Terminals.Close(req.SessionId)
 	return &pb.Empty{}, nil
 }
-
-var _ = io.EOF

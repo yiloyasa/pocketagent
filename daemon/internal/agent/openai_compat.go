@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
@@ -398,5 +399,12 @@ func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "\n...[截断]"
+	// 保持字节预算 n 不变,但回退到最后一个完整 rune 的边界再截 —— 修复 CJK
+	// 半字符缺陷:此前 s[:n] 可能把一个多字节汉字劈成非法 UTF-8,发给 OpenAI
+	// 兼容端点会成乱码。
+	limit := n
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit] + "\n...[截断]"
 }

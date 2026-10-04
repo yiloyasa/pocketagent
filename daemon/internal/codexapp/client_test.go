@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -120,7 +121,7 @@ func TestDispatchReverseRequestViaSnapshot(t *testing.T) {
 	ids := make(chan int64, 1)
 	c.ReqHandler = func(id int64, _ string, _ json.RawMessage) { ids <- id }
 	c.syncHandlers()
-	c.dispatch(&wireMsg{Method: "serverRequest", ID: int64Ptr(7)})
+	c.dispatch(&wireMsg{Method: "serverRequest", ID: int64ID(7)})
 	select {
 	case id := <-ids:
 		if id != 7 {
@@ -131,11 +132,13 @@ func TestDispatchReverseRequestViaSnapshot(t *testing.T) {
 	}
 	// 未发布快照(hs==nil):静默忽略,不得 panic
 	c2 := &Client{pending: map[int64]chan rpcResp{}}
-	c2.dispatch(&wireMsg{Method: "serverRequest", ID: int64Ptr(8)})
+	c2.dispatch(&wireMsg{Method: "serverRequest", ID: int64ID(8)})
 	c2.dispatch(&wireMsg{Method: "thread/archived"})
 }
 
-func int64Ptr(v int64) *int64 { return &v }
+// int64ID 测试造"数字 id"帧:wireMsg.ID 是 RawMessage(见 wireMsg 注释),
+// 数字 id 以十进制字面形态放入,json.Marshal 回原始帧时仍是 `"id":7` 形状。
+func int64ID(v int64) json.RawMessage { return json.RawMessage(strconv.FormatInt(v, 10)) }
 
 // errWriter 模拟已断的 stdin。
 type errWriter struct{}

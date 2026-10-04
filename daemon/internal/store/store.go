@@ -202,6 +202,12 @@ type persistedData struct {
 	Tombstones map[string]int64 `json:"tombstones,omitempty"`
 }
 
+// maxMessagesInMemory 内存与主文件(threads.json)里每个会话保留的**最近**消息
+// 条数上限。超出部分在落库前归档到旁车文件(见 store_archive.go):归档成功才
+// 裁剪,失败则整条路径 fail-open(消息原样保留,下次再试)—— 上限只为防膨胀,
+// 绝不成为丢消息的入口。Load 不读归档,内存只持有主文件里的最近 N 条。
+const maxMessagesInMemory = 2000
+
 // LoadOutcome 说明"本次 NewFileStore 是从哪条路把 threads.json 读进来的"。
 //
 // 【为什么要有机器可读的来源】P2-5 给 store 加了三条加载路径(正常加载 /
@@ -345,6 +351,10 @@ func backupLastGood(path string, raw []byte) {
 }
 
 func (s *FileStore) saveLocked() error {
+	// 落库前先归档超限的旧消息(见 store_archive.go):追加写归档成功才裁剪
+	// 内存到最近 N 条,归档失败则原样保留 —— 主文件只保留最近 N 条的前提是
+	// 溢出条目已有旁车副本,顺序不可颠倒。
+	s.archiveOverflowLocked()
 	raw, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		return err

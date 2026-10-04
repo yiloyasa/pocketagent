@@ -243,6 +243,9 @@ func (m *Manager) Open(sessionID, cwd, shell string, cols, rows int, env map[str
 		_ = err
 	}
 
+	// 退出码只能由 Wait goroutine 在 cmd.Wait() 返回后计算(ProcessState 由
+	// Wait 写入,pump 并发读它是数据竞争),经容量 1 的 channel 发布给 pump。
+	exitCodeCh := make(chan int, 1)
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -253,19 +256,31 @@ func (m *Manager) Open(sessionID, cwd, shell string, cols, rows int, env map[str
 				s.broadcast(out)
 			}
 			if err != nil {
-				s.close(execExitCode(cmd, err))
+				// 非 EOF 的读错误:沿用旧语义直接记 1(不碰 ProcessState,无竞争);
+				// EOF(shell 退出致管道关闭):等 Wait goroutine 发布真实退出码。
+				// EOF 前提下 Wait 必然随即返回,此等待有界。
+				code := 1
+				if err == io.EOF {
+					code = <-exitCodeCh
+				}
+				s.close(code)
 				return
 			}
 		}
 	}()
 	go func() {
 		_ = cmd.Wait()
-		s.close(execExitCode(cmd, nil))
+		code := execExitCode(cmd, nil) // Wait 返回后本 goroutine 独占 ProcessState,读取安全
+		exitCodeCh <- code
+		s.close(code)
 	}()
 
 	return s, nil
 }
 
+// execExitCode 计算退出码。【只能在 Wait goroutine 内、cmd.Wait() 返回之后
+// 调用】ProcessState 由 Wait 写入,其它 goroutine 读它是数据竞争;pump 侧的
+// 退出码一律经 exitCodeCh 从 Wait goroutine 获取,不得直接调本函数。
 func execExitCode(cmd *pty.Cmd, readErr error) int {
 	if readErr != nil && readErr != io.EOF {
 		return 1

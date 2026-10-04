@@ -65,6 +65,7 @@ package term
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -172,12 +173,40 @@ func spawnShellIgnoreWindow() (restore func()) {
 	}
 }
 
+// ptyWriteBudget 是单次 PTY 写入的墙钟预算:conhost 僵死/输入管道满时,裸
+// Write 可能永不返回,server 侧 stream handler goroutine 会随之永久泄漏
+// (读侧有 pump+close 兜底,写侧此前没有)。命名对齐其他包的 xxxBudget 惯例
+// (hermesCancelBudget/statusBudget 同款)。
+const ptyWriteBudget = 5 * time.Second
+
+// ptyWriteWithBudget 给一次 PTY 写入加时间预算:裸 Write 丢进独立 goroutine,
+// select 在【锁外】等它完成或超时。本路径全程不持任何锁(consoleMu 只串行化
+// 控制台切换/广播,Session.mu 只管读者名单),预算等待不会放大持锁者。
+//
+// 超时后写可能仍在后台完成(goroutine 无从撤销;会话关闭、pty 句柄释放后该
+// Write 会带错返回,经缓冲 channel 收尸,不泄漏)。但终端输入属幂等性弱的
+// 场景(迟到的字节会打进稍后的提示符),超时一律按会话已坏对待:返回人话
+// 错误,由调用方终止/废弃该会话,不再复用。
+func (s *Session) ptyWriteWithBudget(data []byte, budget time.Duration) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := s.pty.Write(data)
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(budget):
+		return fmt.Errorf("终端写入超时(%v):conhost 可能已僵死,按会话已坏处理", budget)
+	}
+}
+
 // writeInput 是 Session.Write 的实现:对 0x03 / 0x1c 做翻译,其余透传。
 func (s *Session) writeInput(data []byte) error {
 	actions := translateInput(data)
 	for _, a := range actions {
 		if len(a.data) > 0 {
-			if _, err := s.pty.Write(a.data); err != nil {
+			if err := s.ptyWriteWithBudget(a.data, ptyWriteBudget); err != nil {
 				return err
 			}
 		}
@@ -204,6 +233,6 @@ func (s *Session) sendInterrupt(isBreak bool) error {
 			}
 		}
 	}
-	_, err := s.pty.Write(ctrlBreakSeq)
-	return err
+	// 回退通道同样是写路径:conhost 僵死时裸 Write 同样会挂死,共享同一预算。
+	return s.ptyWriteWithBudget(ctrlBreakSeq, ptyWriteBudget)
 }

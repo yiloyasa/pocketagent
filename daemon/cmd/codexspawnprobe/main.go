@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -49,14 +50,28 @@ func addf(format string, a ...any) {
 }
 
 func main() {
-	cwd := flag.String("cwd", `G:\项目1\pocketagent`, "thread/start 的工作区")
-	out := flag.String("out", `G:\项目1\pocketagent\docs\verify\evidence\codex-subagent-spawn-capture.md`, "证据文件输出路径")
+	cwd := flag.String("cwd", "", "thread/start 的工作区(缺省当前工作目录)")
+	out := flag.String("out", "", "证据文件输出路径(缺省写到系统临时目录)")
 	wait := flag.Duration("wait", 7*time.Minute, "单轮等待 turn/completed 的上限")
 	postwait := flag.Duration("postwait", 40*time.Second, "turn/completed 后继续收尾帧的窗口(子代理收尾通知可能滞后)")
 	prompt := flag.String("prompt",
 		`请用 collab 工具的 spawnAgent 派发一个名为 worker 的子代理。任务给它:列出 daemon/internal 目录下的子目录名,并各用一句话说明每个目录的用途(只读调研,不要修改任何文件)。派发后先告诉我"已派发";等子代理完成后,把它的结论完整汇报给我。`,
 		"诱导 spawnAgent 的 prompt")
 	flag.Parse()
+
+	// 缺省派生:cwd 缺省取当前工作目录(工作区语义),out 缺省写系统临时目录
+	// (通用派生,不写死任何个人专属绝对路径 —— 字符串常量会随探针二进制
+	// 分发,规格 §2 明令禁止)。取不到 cwd 是人话错误,由 -cwd 显式解困。
+	if *cwd == "" {
+		d, err := os.Getwd()
+		if err != nil {
+			log.Fatalf("获取当前工作目录失败(可用 -cwd 显式指定): %v", err)
+		}
+		*cwd = d
+	}
+	if *out == "" {
+		*out = filepath.Join(os.TempDir(), "codex-subagent-spawn-capture.md")
+	}
 
 	deadline := time.Now().Add(*wait + *postwait + 3*time.Minute)
 

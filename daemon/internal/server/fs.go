@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
 const (
@@ -133,6 +134,11 @@ func totalIf(first bool, v int64) int64 {
 // WriteFile 整写文件。带乐观锁(对齐原作 WriteWorkspaceTextFile 的 expected_modified_at_ms):
 // expected > 0 时先核对磁盘上的修改时间,不等(含文件已被删)则拒绝写入,
 // 防止手机与电脑并行编辑互相覆盖。expected = 0 时不校验,兼容旧客户端与"强制覆盖"。
+//
+// 【P1-2 范围说明】本 handler 不设 guardDangerousPath 路径围栏(2026-10-04 审查
+// 裁决维持现状):写入是受 gRPC 消息上限约束的单文件覆盖/创建,危害半径与
+// "整棵目录树消失"的删除/移动完全不同级;附件路径另有 isKnownWorkspaceUpload
+// 专项校验,手机编辑已有乐观锁防互相覆盖。
 func (s *Server) WriteFile(ctx context.Context, req *pb.WriteFileRequest) (*pb.WriteFileResponse, error) {
 	path, err := filepath.Abs(req.Path)
 	if err != nil {
@@ -271,6 +277,12 @@ func (s *Server) CreateDirectory(ctx context.Context, req *pb.CreateDirectoryReq
 }
 
 func (s *Server) DeleteEntry(ctx context.Context, req *pb.DeleteEntryRequest) (*pb.Empty, error) {
+	// 【P1-2 护栏】递归与非递归都过 guardDangerousPath:非递归删高危根内单个
+	// 文件危害有限,但根本身永远不该从这里消失 —— 保持简单,命中清单即拒,
+	// 宁严勿松(清单与取舍详见 guardDangerousPath 注释)。
+	if err := s.guardDangerousPath(req.Path); err != nil {
+		return nil, err
+	}
 	if req.Recursive {
 		if err := os.RemoveAll(req.Path); err != nil {
 			return nil, errInternal(err)
@@ -284,10 +296,121 @@ func (s *Server) DeleteEntry(ctx context.Context, req *pb.DeleteEntryRequest) (*
 }
 
 func (s *Server) MoveEntry(ctx context.Context, req *pb.MoveEntryRequest) (*pb.Empty, error) {
+	// 【P1-2 护栏】只查移动源(FromPath):护栏防的是"既有内容从系统/程序位置
+	// 消失";目标(ToPath)是用户自由命名的新位置,拦它只会误伤合法的重命名与
+	// 归档,不设围栏(后续若做回收站再统一收紧)。
+	if err := s.guardDangerousPath(req.FromPath); err != nil {
+		return nil, err
+	}
 	if err := os.Rename(req.FromPath, req.ToPath); err != nil {
 		return nil, errInternal(err)
 	}
 	return &pb.Empty{}, nil
+}
+
+// guardDangerousPath 是删除/移动源路径的最小护栏(2026-10-04 P1-2)。
+// 背景:DeleteEntry 曾对任意绝对路径直接 os.RemoveAll(recursive)、MoveEntry 对
+// 任意源 os.Rename,零围栏 —— 通用用户在手机端一次误操作即可删掉 C:\Windows
+// 或整块盘根,不可逆。产品面向通用用户,不能指望路径都长在理解范围内。
+//
+// 【命中清单】归一化(filepath.Clean+Abs,小写比较,Windows 大小写不敏感)后,
+// 目标命中以下任一项即拒:
+//   ① 驱动器根(如 C:\,len<=3)—— 递归删等于清盘;
+//   ② %SystemRoot%(默认 C:\Windows)本身,以及它的直接子项(仅顶层一层,
+//      不含更深层)—— System32 等同层目录/文件没有手机端可合法删除的对象;
+//   ③ %ProgramFiles% 与 %ProgramFiles(x86)% 根本身;
+//   ④ %USERPROFILE% 根本身;
+//   ⑤ os.TempDir() 根本身;
+//   ⑥ daemon 自身数据目录(cfg.DataDir 优先,另含 hostenv 标准/旧版位置)
+//      —— ⑥ 是唯一"整棵子树都拒"的条目:里面全是 threads.json、events.jsonl
+//      等内部账本,删除任何一员都破坏完整性,不存在合法删除目标;
+//   ⑦ 进程当前工作目录与可执行文件所在目录(仅目录本身)。
+//
+// 【误杀取舍】除 ⑥ 外清单只挡"根/顶层本身",不挡深层路径:C:\Users\<u>\Documents
+// 及其内容照常可删;真有合法目录恰好顶着这些名字的概率远小于误删系统目录的
+// 代价,两害取其重,宁严勿松。
+// 【归一化边界】8.3 短名与符号链接不解析,属已知边界(手机端列出的是真实名)。
+// 【不设围栏的路径】WriteFile(单文件覆盖写,见其 P1-2 范围说明)、MoveEntry 的
+// ToPath(用户自由命名的新位置)、CreateDirectory(只增不删)。
+func (s *Server) guardDangerousPath(rawPath string) error {
+	norm, err := filepath.Abs(filepath.Clean(rawPath))
+	if err != nil {
+		return errInvalidArg("解析路径失败: " + err.Error())
+	}
+	key := strings.ToLower(norm)
+	deny := func(reason string) error {
+		return errInvalidArg(fmt.Sprintf("拒绝删除/移动 %s: %s", rawPath, reason))
+	}
+
+	// ① 驱动器根
+	if len(norm) <= 3 {
+		return deny("这是驱动器根目录,删除会清空整块磁盘")
+	}
+
+	// ② %SystemRoot% 本身 + 直接子项(仅顶层一层)
+	sysRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	if sysKey := strings.ToLower(filepath.Clean(sysRoot)); sysKey != "" {
+		if key == sysKey {
+			return deny("这是 Windows 系统目录,删除后系统将无法启动")
+		}
+		if strings.ToLower(filepath.Dir(norm)) == sysKey {
+			return deny("它位于 Windows 系统目录顶层(System32 等同层),不是可以删除的内容")
+		}
+	}
+
+	// ③④⑤ 程序目录 / 用户主目录 / 系统临时目录 —— 仅根本身
+	homeDir := ""
+	if h, herr := os.UserHomeDir(); herr == nil {
+		homeDir = h
+	}
+	for _, root := range []string{
+		os.Getenv("ProgramFiles"),
+		os.Getenv("ProgramFiles(x86)"),
+		os.Getenv("USERPROFILE"),
+		homeDir,
+		os.TempDir(),
+	} {
+		if root = strings.TrimSpace(root); root == "" {
+			continue
+		}
+		if key == strings.ToLower(filepath.Clean(root)) {
+			return deny("这是系统/用户主目录本身,不是可以删除的普通文件夹")
+		}
+	}
+
+	// ⑥ daemon 数据目录 —— 整棵子树都拒(内部账本无合法删除目标)。
+	// 小写后再 Rel,与 isKnownWorkspaceUpload 的 rel 判定同款式样。
+	dataRoots := []string{}
+	if dir := strings.TrimSpace(s.cfg.DataDir); dir != "" {
+		dataRoots = append(dataRoots, dir)
+	}
+	dataRoots = append(dataRoots, hostenv.UserDataDir(), hostenv.LegacyDataDir())
+	for _, root := range dataRoots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		rel, rerr := filepath.Rel(strings.ToLower(filepath.Clean(root)), key)
+		if rerr != nil {
+			continue // 跨盘等无法比较的情形:不命中
+		}
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
+			return deny("这是 PocketAgent 自身的数据目录,里面是程序运行必需的记录,删除会损坏数据")
+		}
+	}
+
+	// ⑦ 当前工作目录 / 可执行文件所在目录 —— 仅目录本身
+	if wd, werr := os.Getwd(); werr == nil && wd != "" && key == strings.ToLower(filepath.Clean(wd)) {
+		return deny("这是程序当前工作目录,删除会影响程序自身运行")
+	}
+	if exe, eerr := os.Executable(); eerr == nil {
+		if key == strings.ToLower(filepath.Clean(filepath.Dir(exe))) {
+			return deny("这是程序安装目录,删除会破坏 PocketAgent 本体")
+		}
+	}
+	return nil
 }
 
 func (s *Server) SearchContent(req *pb.SearchContentRequest, stream pb.FileSystemService_SearchContentServer) error {

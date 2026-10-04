@@ -15,17 +15,33 @@ import (
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/hostenv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
+
+// certPath 定位 daemon 的自签证书:优先迁移后的数据目录
+// (<LOCALAPPDATA>\PocketAgent\data),回退历史位置(家目录 .pocketagentd)。
+// 只读两级探测,与 cmd/wbempty 的 storePath 同款:现存的优先,都不存在时
+// 回退历史位置,让读失败的报错仍指向一个说得通的位置。不调
+// hostenv.ResolveDataDir —— 那会触发一次性迁移副作用,诊断工具不该替
+// daemon 做迁移。
+func certPath() string {
+	for _, dir := range []string{hostenv.UserDataDir(), hostenv.LegacyDataDir()} {
+		p := filepath.Join(dir, "certs", "server-cert.pem")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join(hostenv.LegacyDataDir(), "certs", "server-cert.pem")
+}
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7246", "daemon endpoint")
 	thread := flag.String("thread", "", "optional thread to reconcile with its native terminal record")
 	agentID := flag.String("agent", "", "optional native model catalog and settings to read")
 	flag.Parse()
-	home, _ := os.UserHomeDir()
-	raw, err := os.ReadFile(filepath.Join(home, ".pocketagentd", "certs", "server-cert.pem"))
+	raw, err := os.ReadFile(certPath())
 	if err != nil {
 		log.Fatal(err)
 	}
