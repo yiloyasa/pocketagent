@@ -50,6 +50,17 @@ import (
 // 这条既有红线在这里延伸为「绝不自动搬用户数据」—— 搬迁由用户显式决定。
 //
 // 这里只负责在沿用历史位置时把事实打印出来：数据在哪，用户就该知道。
+// isLoopbackHost 报告监听地址的 host 部分是否指向本机回环
+// (-plaintext 回环硬限制的判定器,SplitHostPort 已剥去 IPv6 方括号):
+// localhost(不分大小写)或 127.0.0.0/8、::1 等回环 IP。
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func main() {
 	addr := flag.String("addr", ":7246", "gRPC 监听地址")
 	dataDir := flag.String("data", "", "数据目录(线程存储、token)")
@@ -62,7 +73,7 @@ func main() {
 	workspace := flag.String("workspace", cwd(), "默认工作区")
 	// 应急回退:P0-1 起默认 TLS(自签证书 + 手机端指纹锁定);
 	// 极端情况(证书文件损坏等)可用 -plaintext 暂时回明文。
-	plaintext := flag.Bool("plaintext", false, "应急回退:关闭 TLS 走明文 gRPC(强烈不建议)")
+	plaintext := flag.Bool("plaintext", false, "应急回退:关闭 TLS 走明文 gRPC(仅限本机回环监听;强烈不建议)")
 	// P0-3:mDNS 局域网自动发现。手机在"没填过地址/换了新 WiFi"时靠它找到本机;
 	// 关闭只影响便利性,手动填地址仍可用。
 	mdnsEnable := flag.Bool("mdns", true, "启用 mDNS 局域网自动发现(_pocketagent._tcp)")
@@ -227,8 +238,31 @@ func main() {
 
 	// TLS 凭证:首启自动生成自签证书(ECDSA P-256,20 年),之后一直复用。
 	var grpcOpts []grpc.ServerOption
+	// listenAddr 是真正交给 net.Listen 的地址:TLS 分支原样用 -addr;明文应急分支
+	// 按下方 F2 裁决强制回环。
+	listenAddr := *addr
 	if *plaintext {
 		log.Printf("WARNING: PLAINTEXT MODE ENABLED - gRPC 正在明文传输,token 与会话内容可被同网络者窃听,仅限应急使用!")
+		// 【F2 回环硬限制(2026-10-04 裁决,对齐 -insecure-no-auth 先例)】明文应急
+		// 只允许回环:token 与会话内容不过 TLS,听非回环等于向局域网/公网裸奔。
+		//   - 用户显式给了非回环地址 → 拒绝启动,给人话出路(改用默认 TLS);
+		//   - 未显式指地址(默认 ":7246" 全接口)→ 自动压回 127.0.0.1:PORT,应急仍可用。
+		// mDNS 广告块仍读 *addr:它只取端口,且明文回环本就不该向局域网宣告,零触碰。
+		addrExplicit := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "addr" {
+				addrExplicit = true
+			}
+		})
+		if host, port, splitErr := net.SplitHostPort(listenAddr); splitErr != nil {
+			log.Fatalf("-plaintext 应急明文要求 host:port 形式的监听地址,当前 %q 无法解析: %v", listenAddr, splitErr)
+		} else if !isLoopbackHost(host) {
+			if addrExplicit {
+				log.Fatalf("-plaintext 应急明文仅允许回环;局域网/公网明文监听被禁止——请改用默认 TLS")
+			}
+			listenAddr = net.JoinHostPort("127.0.0.1", port)
+			log.Printf("WARNING: -plaintext 明文应急未显式指地址,监听已从 %q 压回回环 %s(明文只允许本机)", *addr, listenAddr)
+		}
 	} else {
 		cert, err := tlscert.Ensure(*dataDir)
 		if err != nil {
@@ -318,9 +352,9 @@ func main() {
 		RuntimeBackend: agent.SharedRuntimeBackend(),
 	})
 
-	lis, err := net.Listen("tcp", *addr)
+	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		log.Fatalf("监听 %s 失败: %v", *addr, err)
+		log.Fatalf("监听 %s 失败: %v", listenAddr, err)
 	}
 
 	gs := grpc.NewServer(append([]grpc.ServerOption{

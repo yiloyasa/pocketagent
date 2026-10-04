@@ -3,10 +3,13 @@
 // "空 id 退 sequence 兜底"升级为纯 id 定位):
 // ① 显式 ID/TurnID 的 store 消息逐条透传;limit 尾截后 id 仍跟着各自消息走;
 // ② 旧格式 threads.json(消息无 id/turn_id 字段)经启动迁移后回包带稳定 id、
-//    turn_id 照实置空;
+//
+//	turn_id 照实置空;
+//
 // ③ 组装点纯函数 threadMessageToPB 对"store 空 ID/TurnID"照实置空的防御直测
-//    (FileStore 在 Load 与 saveLocked 双保险只补空,端到端构造不出空 ID,
-//    故在组装点层面验证;空 turn_id 的端到端路径由 ② 覆盖)。
+//
+//	(FileStore 在 Load 与 saveLocked 双保险只补空,端到端构造不出空 ID,
+//	故在组装点层面验证;空 turn_id 的端到端路径由 ② 覆盖)。
 package server
 
 import (

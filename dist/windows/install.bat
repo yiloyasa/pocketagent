@@ -6,6 +6,7 @@ REM  PocketAgent 桌面端 一键安装 (install.bat)
 REM  作用:① 检查 codex CLI  ② 生成/读取连接 token
 REM        ③ 注册防火墙入站规则(端口)  ④ 注册看护进程计划任务
 REM        ⑤ 打印本机连接信息(供手机填写)
+REM        ⑥ 可选:运行业务健康检查 healthcheck.bat(失败只提示,不阻断安装)
 REM  说明:所有路径基于脚本自身位置(%~dp0),端口等参数集中在下方变量。
 REM        本脚本需"以管理员身份运行"。
 REM        幂等:防火墙规则与计划任务每次都无条件重建(/f 覆盖)——计划任务
@@ -150,6 +151,22 @@ pause
 exit /b 1
 :pa_ok
 echo       端口 %PORT% 已开始监听,daemon 已在运行。
+
+REM ---- 业务健康检查:可选,失败不阻断安装 ----
+REM 端口监听只证明传输层就绪;业务级健康(gRPC 证书钉扎往返、daemon 进程、
+REM 运行日志无 panic/fatal)由包内 healthcheck.bat 确认:有 bridgehealth.exe
+REM 走 gRPC 级,没有则退端口级组合。DEGRADED 只打印指引不中止——安装的硬性
+REM 目标(防火墙/计划任务/端口监听)此时已全部达成,/nopause 不打断安装流程。
+echo       业务健康: healthcheck.bat
+if exist "%BASE%healthcheck.bat" (
+    call "%BASE%healthcheck.bat" /nopause
+    if errorlevel 1 (
+        echo [提示] 业务健康检查为 DEGRADED: 不阻断安装,按上方指引处理即可,
+        echo        可随时重跑 %BASE%healthcheck.bat 复查。
+    )
+) else (
+    echo       包内未找到 healthcheck.bat,已跳过业务健康检查。
+)
 
 REM ---- 5) 打印本机连接信息 ----
 echo [5/5] 收集本机连接信息...

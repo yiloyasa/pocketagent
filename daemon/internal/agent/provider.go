@@ -111,6 +111,26 @@ var (
 	_ PrefsAware = (*DshProvider)(nil)
 )
 
+// TestFakeSurface 是测试工厂 seam(2026-10-04 发布验证计划 Task 1;零业务逻辑):
+// deterministic fake agent(daemon/internal/testagent 的 FakeAgent)必须与真
+// provider 同构实现的完整**provider 面** —— 基础 Provider + server 层会类型
+// 断言探测的可选能力(Steerer 运行中插话 / CollabAware 协同委派)。
+//
+// 【为什么是组合接口而不是工厂钩子】依赖方向是 testagent → agent(消费本包的
+// Provider/Sink/ApprovalHook/TurnRequest),本包反向 import testagent 即成环,
+// 类型化的 FakeAgentFactory/Scenario 只能落在 testagent 包;本包不能为测试开
+// provider 表(server.Config.Providers)之外的第二灌入点。所以 seam 落成这份
+// 契约:fake 侧在 testagent/fake_agent.go 底部以
+// `var _ agent.TestFakeSurface = (*FakeAgent)(nil)` 镜像断言 —— server 层给
+// 真 provider 新增任何可选能力探测时,两侧名单必须同步,漂移在编译期暴露。
+// (错误侧的结构化诊断 ErrorInfoCarrier 是**错误值**的接口,实现者形如
+// dshRunError/codexRunError;fake 的对应物 ExitError 的断言在 testagent 包。)
+type TestFakeSurface interface {
+	Provider
+	Steerer
+	CollabAware
+}
+
 // DesktopPrefsFromStore 从持久化存储组装一份完整偏好快照。
 // server 的设置广播(SetCodexSettings)与启动灌入(New)共用同一来源,
 // 保证两条路径灌进 provider 的值永远一致(model/effort 取全局默认的落盘字段)。

@@ -2,9 +2,9 @@
   PocketAgent 桌面端构建脚本 (build.ps1)
   ============================================================
   从仓库源码构建「发布版」daemon 与看护进程,并把它们连同
-  install.bat / uninstall.bat / 使用说明.txt / version.txt(版本烙印,
-  取自 daemon/internal/version)一起打包成可分发的
-  zip —— 即最终交给用户的 "PocketAgent桌面端.zip"。
+  install.bat / healthcheck.bat / uninstall.bat / 使用说明.txt /
+  version.txt(版本烙印,取自 daemon/internal/version)
+  一起打包成可分发的 zip —— 即最终交给用户的 "PocketAgent桌面端.zip"。
 
   用法:
       powershell.exe -File build.ps1
@@ -68,7 +68,7 @@ $env:PATH = "$GoBin;" + $env:PATH
 if (Test-Path $StageDir) { Remove-Item $StageDir -Recurse -Force | Out-Null }
 New-Item -ItemType Directory -Path $StageDir | Out-Null
 
-# ---- 进入 daemon 目录,构建两个可执行文件 ----
+# ---- 进入 daemon 目录,构建三个可执行文件 ----
 # -trimpath 去掉绝对路径, -ldflags "-s -w" 去掉符号表与调试信息,体积更小;
 # pocketagentd 额外用 -X 把 $AppVersion 烙进 internal/version.Version(T-27),
 # 使二进制自证版本(启动日志打印,产物对账不再只靠 pid)。
@@ -83,6 +83,11 @@ try {
     & $go build -trimpath -ldflags "-s -w" `
         -o (Join-Path $StageDir "paguard.exe") ./cmd/paguard
     if ($LASTEXITCODE -ne 0) { throw "paguard 构建失败 (exit=$LASTEXITCODE)" }
+
+    Write-Host "==> 构建 bridgehealth.exe (业务健康探针,供包内 healthcheck.bat 优先调用)"
+    & $go build -trimpath -ldflags "-s -w" `
+        -o (Join-Path $StageDir "bridgehealth.exe") ./cmd/bridgehealth
+    if ($LASTEXITCODE -ne 0) { throw "bridgehealth 构建失败 (exit=$LASTEXITCODE)" }
 } finally {
     Pop-Location
 }
@@ -94,8 +99,9 @@ try {
 # 用 Ascii 编码避免 BOM 混入版本号)
 Set-Content -Path (Join-Path $StageDir "version.txt") -Value $AppVersion -Encoding Ascii
 
-# 随包附带的文件(与本脚本同目录)
-$PackageFiles = @("install.bat", "uninstall.bat", "使用说明.txt")
+# 随包附带的文件(与本脚本同目录)。bridgehealth.exe 不在此列:它与上面两个
+# exe 一样由 go build 直接产出到 $StageDir,天然被下方痕迹闸全目录扫描覆盖。
+$PackageFiles = @("install.bat", "healthcheck.bat", "uninstall.bat", "使用说明.txt")
 foreach ($f in $PackageFiles) {
     $src = Join-Path $ScriptDir $f
     if (Test-Path $src) {
@@ -162,4 +168,4 @@ Write-Host "==> 新鲜度检查通过:zip 不早于全部 $($PackageFiles.Count)
 
 Write-Host ""
 Write-Host "==> 构建完成 (版本 $AppVersion):`n    $ZipPath"
-Write-Host "    内含:`n      pocketagentd.exe  (daemon 主程序)`n      paguard.exe       (看护进程)`n      version.txt       (版本号,与仓库 internal/version 对账)`n      install.bat      (一键安装)`n      uninstall.bat    (卸载)`n      使用说明.txt     (小白教程)"
+Write-Host "    内含:`n      pocketagentd.exe  (daemon 主程序)`n      paguard.exe       (看护进程)`n      bridgehealth.exe  (业务健康探针,gRPC 证书钉扎级)`n      version.txt       (版本号,与仓库 internal/version 对账)`n      install.bat      (一键安装)`n      healthcheck.bat  (业务健康检查)`n      uninstall.bat    (卸载)`n      使用说明.txt     (小白教程)"
