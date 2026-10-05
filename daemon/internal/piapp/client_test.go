@@ -331,8 +331,14 @@ func TestSessionSnapshotRaceFree(t *testing.T) {
 // `await rebindSession()` 完成后才 attach stdin 读循环同构。
 func newDelayedFakePi(t *testing.T, delaySecs int) *Client {
 	t.Helper()
+	return newFakePiChildEnv(t, delaySecs)
+}
+
+// newFakePiChildEnv 同上,但可给假 pi 子进程追加 env(如 PA_FAKE_PI_EXPECT_MODEL)。
+func newFakePiChildEnv(t *testing.T, delaySecs int, extraEnv ...string) *Client {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestFakePiProcess$")
-	cmd.Env = append(os.Environ(), "PA_FAKE_PI_CHILD=1", fmt.Sprintf("PA_FAKE_PI_DELAY=%d", delaySecs))
+	cmd.Env = append(append(os.Environ(), "PA_FAKE_PI_CHILD=1", fmt.Sprintf("PA_FAKE_PI_DELAY=%d", delaySecs)), extraEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("StdinPipe: %v", err)
@@ -435,5 +441,50 @@ func TestSwitchSessionAgainstFakePi(t *testing.T) {
 	}
 	if c.SessionFile() != `C:\fake\pi-session.jsonl` {
 		t.Fatalf("会话缓存未覆盖: %q", c.SessionFile())
+	}
+}
+
+// ---- set_model 的 provider 维度(1.0.2 find 谓词;真机 15d/15e 回退根因)----
+
+// 拆解纯函数:首段 provider、其余整体 modelId(openrouter 类含 "/" 的模型 id
+// 不误伤);缺 "/" 或段空一律拒绝。
+func TestSplitPiModelSpec(t *testing.T) {
+	check := func(spec, wantProvider, wantModelID string, wantOK bool) {
+		t.Helper()
+		provider, modelID, ok := splitPiModelSpec(spec)
+		if ok != wantOK || provider != wantProvider || modelID != wantModelID {
+			t.Fatalf("splitPiModelSpec(%q) = (%q,%q,%v), 期望 (%q,%q,%v)",
+				spec, provider, modelID, ok, wantProvider, wantModelID, wantOK)
+		}
+	}
+	check("zai-coding-cn/glm-5.3", "zai-coding-cn", "glm-5.3", true)
+	check("openrouter/meta-llama/llama-3", "openrouter", "meta-llama/llama-3", true)
+	check("glm-5.3", "", "", false)        // 无 provider 段(旧形状祸根)
+	check("zai-coding-cn/", "", "", false) // 空 modelId
+	check("/glm-5.3", "", "", false)       // 空 provider
+	check("", "", "", false)               // 空规格
+}
+
+// 无 provider 段的规格必须本地拒绝(不发 provider 缺省的 set_model —— 那正是
+// 1.0.2 恒 "Model not found: undefined/…" → 跨轮次静默回退的旧形状)。
+func TestSetModelRejectsProviderLessSpec(t *testing.T) {
+	c := newDelayedFakePi(t, 0)
+	err := c.SetModel(context.Background(), "deepseek-flash")
+	if err == nil || !strings.Contains(err.Error(), "无效 Pi 模型规格") {
+		t.Fatalf("无 provider 段的规格应本地拒绝: %v", err)
+	}
+}
+
+// 线上形状断言:期望二元组经 PA_FAKE_PI_EXPECT_MODEL 注入假 pi,只有线上帧的
+// provider/modelId 恰为该值才应答成功 —— SetModel("zai-coding-cn/glm-5.3")
+// 成功即证明拆解后字段在场且原样上送;值不符的规格被 fake 以 success:false
+// 拒绝(防"字段在场但值错"的退化)。
+func TestSetModelWireShape(t *testing.T) {
+	c := newFakePiChildEnv(t, 0, "PA_FAKE_PI_EXPECT_MODEL=zai-coding-cn/glm-5.3")
+	if err := c.SetModel(context.Background(), "zai-coding-cn/glm-5.3"); err != nil {
+		t.Fatalf("provider/id 拆解后应原样上送(fake 按二元组校验): %v", err)
+	}
+	if err := c.SetModel(context.Background(), "deepseek/deepseek-chat"); err == nil {
+		t.Fatal("值不符的二元组应被 fake 拒绝(success:false 必须变成 error)")
 	}
 }

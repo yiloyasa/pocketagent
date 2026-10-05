@@ -752,6 +752,52 @@ func (c *Client) Close() {
 	}
 }
 
+// ---- 会话模型(set_model)----
+
+// piModelBudget set_model 的等待上界:目录查找 + 会话级状态切换,本地毫秒级;
+// 30s 对齐 agent 侧 piCallBudget 的既有量级(此前调用点传的就是它)。
+const piModelBudget = 30 * time.Second
+
+// splitPiModelSpec 拆解 daemon 侧 pi 模型规格 "<provider>/<modelId>"
+// (Thread.ModelID 去掉 "pi/" 前缀后的形态,如 "zai-coding-cn/glm-5.3")。
+// 首段作 provider、其余整体作 modelId(模型 id 自身可含 "/",如 openrouter 的
+// "meta-llama/…",不得误伤);拆解先例 = agent/pi_selection.go 的 strings.Cut。
+func splitPiModelSpec(spec string) (provider, modelID string, ok bool) {
+	provider, modelID, ok = strings.Cut(spec, "/")
+	// 拒绝路径两段一律回空(全有或全无,拒绝结果不携带半截结论)
+	if !ok {
+		// 无 "/" = 无 provider 段:不得把整段塞回 provider(旧形状祸根),整体拒绝
+		return "", "", false
+	}
+	if provider == "" || modelID == "" {
+		return "", "", false
+	}
+	return provider, modelID, true
+}
+
+// SetModel 切换 Pi 会话当前模型。
+//
+// 【为什么必须拆出 provider】pi 的 set_model handler 按二元组定位模型:
+//
+//	find(m => m.provider === command.provider && m.id === command.modelId)
+//
+// provider 缺省(undefined)永不匹配 → "Model not found: undefined/…" → pi 层
+// 沿用当前模型 —— 1.0.2 真机实证(15d/15e):选中的模型只生效一轮,随后跨轮次
+// 静默回退。发送 {provider, modelId} 对 0.99.1 无害:JSON 帧多余字段被忽略,
+// 且 0.99.1 起模型身份就是 provider+id 二元组(get_state.model 与
+// models-store 均带 provider;daemon 0.99.1 生产路径 pi_selection.go 本就发送
+// 此形状)。
+// modelSpec 无 "/" 或段为空 = 无效规格:本地拒绝不发(旧形状发必败的
+// {"modelId": spec},失败语义同样是"沿用当前模型",这里只是把失败提前且可判)。
+func (c *Client) SetModel(ctx context.Context, modelSpec string) error {
+	provider, modelID, ok := splitPiModelSpec(modelSpec)
+	if !ok {
+		return fmt.Errorf("无效 Pi 模型规格(需 provider/modelId): %q", modelSpec)
+	}
+	_, err := c.CallCtx(ctx, "set_model", map[string]any{"provider": provider, "modelId": modelID}, piModelBudget)
+	return err
+}
+
 // ---- 会话挂载(daemon 重启后重挂载的握手,调研 §8.3:这一步不能省)----
 
 // 就绪等待预算。【1.0.2 启动门控】pi 1.0.2 的 runRpcMode 在 `await

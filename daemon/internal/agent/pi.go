@@ -486,20 +486,20 @@ func (p *PiProvider) mount(ctx context.Context, t *store.Thread, c piMountClient
 // applyModel 把 Thread.ModelID("pi/<provider>/<model>")与 effort 映射成
 // set_model / set_thinking_level。失败只记日志:模型不可用是"降级继续",
 // 不是"整轮失败"(Pi 会话本身有自己的当前模型)。
+//
+// 【1.0.2 set_model 必须 provider+modelId 二元组】pi handler 按
+// find(m => m.provider === command.provider && m.id === command.modelId) 定位,
+// 缺 provider 的旧形状({"modelId": spec})恒 "Model not found" → 每轮 applyModel
+// 都失败 → 跨轮次静默回退旧模型(真机 15d/15e 实证)。改走 piapp.SetModel:
+// 拆解与 pi_selection.go 先例同形;无 "/" 的遗留规格本地被拒,降级语义不变。
 func (p *PiProvider) applyModel(ctx context.Context, c *piapp.Client, t *store.Thread) {
 	spec := strings.TrimPrefix(t.ModelID, "pi/")
 	if spec == "" || spec == t.ModelID || spec == "default" {
 		// 不是 pi/ 前缀或 default:跟随 Pi 当前配置(探针确认 get_state.model 即当前)。
 		return
 	}
-	if prov, model, ok := strings.Cut(spec, "/"); ok {
-		if _, err := c.CallCtx(ctx, "set_model", map[string]any{"provider": prov, "modelId": model}, piCallBudget); err != nil {
-			log.Printf("[pi] set_model %s 失败(沿用当前模型): %v", spec, err)
-		}
-	} else {
-		if _, err := c.CallCtx(ctx, "set_model", map[string]any{"modelId": spec}, piCallBudget); err != nil {
-			log.Printf("[pi] set_model %s 失败(沿用当前模型): %v", spec, err)
-		}
+	if err := c.SetModel(ctx, spec); err != nil {
+		log.Printf("[pi] set_model %s 失败(沿用当前模型): %v", spec, err)
 	}
 	if t.Effort != "" {
 		if _, err := c.CallCtx(ctx, "set_thinking_level", map[string]any{"level": t.Effort}, piCallBudget); err != nil {
@@ -611,11 +611,10 @@ func (p *PiProvider) applyDesktopDefaults(ctx context.Context, c *piapp.Client, 
 		return
 	}
 	// 模型跟随:桌面默认是 pi 模型才下发,否则沿用 Pi 当前配置。
+	// 【1.0.2】走 SetModel(provider+modelId 二元组),与 applyModel 同理。
 	if ms := strings.TrimPrefix(model, "pi/"); ms != "" && ms != model && ms != "default" {
-		if prov, mid, ok := strings.Cut(ms, "/"); ok {
-			if _, err := c.CallCtx(ctx, "set_model", map[string]any{"provider": prov, "modelId": mid}, piCallBudget); err != nil {
-				log.Printf("[pi] 桌面默认 set_model %s 失败(沿用当前模型): %v", ms, err)
-			}
+		if err := c.SetModel(ctx, ms); err != nil {
+			log.Printf("[pi] 桌面默认 set_model %s 失败(沿用当前模型): %v", ms, err)
 		}
 	}
 	// 思考强度:线程显式 > 桌面默认。【顺带补漏】applyModel 只在线程显式指定

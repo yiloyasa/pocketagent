@@ -135,10 +135,13 @@ func TestIsCursorError(t *testing.T) {
 
 // TestFakePiProcess 仅作为子进程运行(env 门禁):对 get_entries 给固定应答 ——
 // 全量 2 条;since=entrybb2/entrycc3 增量 1 条;其他 since 一律 success:false。
-// 另支持(供 client_test 的就绪重试用例):
+// 另支持(供 client_test 的就绪重试/set_model 用例):
 //   - PA_FAKE_PI_DELAY=<秒>:扫描 stdin 前先睡 N 秒 —— 模拟 pi 1.0.2 的启动
 //     门控(扩展绑定完成前不读 stdin,先发的命令在管道里排队);
-//   - get_state/switch_session:固定应答(1.0.2 bundle 实证形状)。
+//   - get_state/switch_session:固定应答(1.0.2 bundle 实证形状);
+//   - set_model:按 1.0.2 语义校验 provider+modelId 二元组(缺任一即
+//     "Model not found");PA_FAKE_PI_EXPECT_MODEL 设 "<provider>/<modelId>" 时
+//     进一步要求二元组恰为该值 —— 父进程据此断言线上帧"字段在场且正确"。
 func TestFakePiProcess(t *testing.T) {
 	if os.Getenv("PA_FAKE_PI_CHILD") != "1" {
 		t.Skip("仅作为 TestGetEntriesAgainstFakePi 的假 pi 子进程运行")
@@ -149,6 +152,7 @@ func TestFakePiProcess(t *testing.T) {
 			time.Sleep(time.Duration(secs) * time.Second)
 		}
 	}
+	expectModel := os.Getenv("PA_FAKE_PI_EXPECT_MODEL")
 	if os.Getenv("PA_FAKE_PI_SILENT") == "1" {
 		// 静默模式:不回应答(供"ctx 到期必须报错"类测试用;父进程会杀掉我们)
 		time.Sleep(10 * time.Minute)
@@ -164,6 +168,8 @@ func TestFakePiProcess(t *testing.T) {
 			ID          string `json:"id"`
 			Since       string `json:"since"`
 			SessionPath string `json:"sessionPath"`
+			Provider    string `json:"provider"`
+			ModelID     string `json:"modelId"`
 		}
 		if json.Unmarshal(in.Bytes(), &req) != nil {
 			continue
@@ -180,6 +186,16 @@ func TestFakePiProcess(t *testing.T) {
 		case "switch_session":
 			resp["success"] = true
 			resp["data"] = map[string]any{"cancelled": false}
+		case "set_model":
+			// 1.0.2 语义:provider/modelId 任一缺省即拒(真机回退根因的镜像断言)
+			if req.Provider == "" || req.ModelID == "" ||
+				(expectModel != "" && req.Provider+"/"+req.ModelID != expectModel) {
+				resp["success"] = false
+				resp["error"] = fmt.Sprintf("Model not found: %s/%s", req.Provider, req.ModelID)
+			} else {
+				resp["success"] = true
+				resp["data"] = map[string]any{"provider": req.Provider, "modelId": req.ModelID}
+			}
 		case "get_entries":
 			switch req.Since {
 			case "":
