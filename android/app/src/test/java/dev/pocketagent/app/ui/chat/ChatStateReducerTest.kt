@@ -6,11 +6,16 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import dev.pocketagent.app.ui.ChatItem
+import dev.pocketagent.app.ui.DELIVERY_QUEUED
 import dev.pocketagent.app.ui.HistoryRoundsLogic
 import dev.pocketagent.app.ui.SlashCommandInfo
+import dev.pocketagent.app.ui.TurnSession
 import dev.pocketagent.app.ui.history.HistoryIdentityIndex
 import dev.pocketagent.app.ui.history.MessageSpan
+import pocketagent.v1.ApprovalRequest
 import pocketagent.v1.ThreadStatus
+import pocketagent.v1.Usage
 
 /**
  * ChatScreen 页面级状态 reducer 纯函数钉子(2026-10-04 计划 Task 8,第一层分层;
@@ -34,6 +39,9 @@ import pocketagent.v1.ThreadStatus
  * 11. 加载错误四通道:Reported 无条件、SetIfAbsent 现值为空才写(并行加载
  *     不互相顶掉)、Cleared 清空、ClearedIfOffline 只清「离线」前缀残留;
  * 12. 斜杠命令镜像 SlashCommandsSettled:无条件替换(空表照写=非面板会话清空语义)。
+ * 13. TurnSessionUiState 只读投影(第三层):turnSessionUiStateOf 的透传字段
+ *     与派生标量(itemsEmpty/itemCount/lastQueuedIndex/userTurnCount/latestPlan)
+ *     与迁出前 ChatScreen 原地派生表达式一一对应;投影默认态=TurnSession 空会话。
  */
 class ChatStateReducerTest {
 
@@ -444,5 +452,153 @@ class ChatStateReducerTest {
         // 非面板会话清空(即使缓存里有别的会话残留也不漏)
         val cleared = ChatStateReducer.reduce(loaded, ChatIntent.SlashCommandsSettled(emptyList()))
         assertTrue(cleared.slashCommands.isEmpty())
+    }
+
+    // ---- 13. TurnSessionUiState 只读投影(第三层) ----
+    //
+    // turnSessionUiStateOf(TurnSession.State) 是纯映射;TurnSession.State 可在 JVM
+    // 直接构造(嵌套类,不触碰 TurnSession 单例的任何方法/作用域),快照状态在
+    // 无观察者时读写即为当前值 —— 用例只钉"映射的形状",不钉 TurnSession 行为。
+
+    private fun project(vararg items: ChatItem): TurnSessionUiState {
+        val st = TurnSession.State()
+        st.items.addAll(items.toList())
+        return turnSessionUiStateOf(st)
+    }
+
+    @Test
+    fun `投影默认态等于空会话 生命周期与审批错误全缺省`() {
+        val p = project()
+        assertFalse(p.running)
+        assertFalse(p.streaming)
+        assertFalse(p.recovering)
+        assertFalse(p.turnTerminal)
+        assertNull(p.pendingApproval)
+        assertNull(p.approvalError)
+        assertNull(p.errorMessage)
+        assertNull(p.recoveryError)
+        assertEquals("", p.runningModel)
+        assertNull(p.runningEffort)
+        assertEquals(0, p.queuedCount)
+        assertFalse(p.historyLoaded)
+        assertNull(p.turnUsage)
+        assertNull(p.totalUsage)
+        assertEquals(0L, p.liveContextWindow)
+        assertFalse(p.compactionInProgress)
+        assertEquals(0L, p.lastCompactedAt)
+        assertTrue(p.guardianOverridden.isEmpty())
+        // 派生标量:空时间线
+        assertTrue(p.itemsEmpty)
+        assertEquals(0, p.itemCount)
+        assertEquals(-1, p.lastQueuedIndex)
+        assertEquals(0, p.userTurnCount)
+        assertTrue(p.latestPlan.isEmpty())
+    }
+
+    @Test
+    fun `投影透传生命周期 审批与错误字段`() {
+        val st = TurnSession.State()
+        st.running = true
+        st.streaming = true
+        st.recovering = false
+        st.turnTerminal = false
+        st.errorMessage = "任务失败"
+        st.recoveryError = "自动恢复超时，请手动刷新会话历史"
+        st.approvalError = "审批请求已更新，请重新确认"
+        st.pendingApproval = ApprovalRequest.newBuilder().setRequestId("r1").build()
+        val p = turnSessionUiStateOf(st)
+        assertTrue(p.running)
+        assertTrue(p.streaming)
+        assertFalse(p.recovering)
+        assertFalse(p.turnTerminal)
+        assertEquals("任务失败", p.errorMessage)
+        assertEquals("自动恢复超时，请手动刷新会话历史", p.recoveryError)
+        assertEquals("审批请求已更新，请重新确认", p.approvalError)
+        // 审批请求按内容透传(弹窗状态机读 requestId/action/options 都靠它)
+        assertEquals("r1", p.pendingApproval?.requestId)
+    }
+
+    @Test
+    fun `投影透传恢复中 用量与模型字段`() {
+        val st = TurnSession.State()
+        st.recovering = true
+        st.turnTerminal = true
+        st.historyLoaded = true
+        st.queuedCount = 2
+        st.runningModel = "pi/zai-coding-cn/glm-5.3"
+        st.runningEffort = "max"
+        st.turnUsage = Usage.newBuilder().setInputTokens(11).setOutputTokens(7).build()
+        st.totalUsage = Usage.newBuilder().setInputTokens(110).setOutputTokens(70).build()
+        st.liveContextWindow = 128_000L
+        st.compactionInProgress = true
+        st.lastCompactedAt = 1_728_000_000_000L
+        st.guardianOverridden = setOf("review-1", "review-2")
+        val p = turnSessionUiStateOf(st)
+        assertTrue(p.recovering)
+        assertTrue(p.turnTerminal)
+        assertTrue(p.historyLoaded)
+        assertEquals(2, p.queuedCount)
+        assertEquals("pi/zai-coding-cn/glm-5.3", p.runningModel)
+        assertEquals("max", p.runningEffort)
+        assertEquals(11L, p.turnUsage?.inputTokens)
+        assertEquals(7L, p.turnUsage?.outputTokens)
+        assertEquals(110L, p.totalUsage?.inputTokens)
+        assertEquals(128_000L, p.liveContextWindow)
+        assertTrue(p.compactionInProgress)
+        assertEquals(1_728_000_000_000L, p.lastCompactedAt)
+        assertEquals(setOf("review-1", "review-2"), p.guardianOverridden)
+    }
+
+    @Test
+    fun `派生标量 计数与排队下标与原表达式同式`() {
+        // 原式:lastQueuedIndex = items.indexOfLast { it.deliverState == DELIVERY_QUEUED }
+        //       userTurnCount = items.count { it.role == "user" }
+        val p = project(
+            ChatItem(role = "user", text = "a"),
+            ChatItem(role = "assistant", text = "b"),
+            ChatItem(role = "user", text = "c", deliverState = DELIVERY_QUEUED, queuePos = 1),
+            ChatItem(role = "tool", text = "d"),
+            ChatItem(role = "user", text = "e", deliverState = DELIVERY_QUEUED, queuePos = 2),
+        )
+        assertFalse(p.itemsEmpty)
+        assertEquals(5, p.itemCount)
+        assertEquals(3, p.userTurnCount)
+        // 同一队列一张入口:取**最后**一条排队消息(indexOfLast 语义,不是 indexOf)
+        assertEquals(4, p.lastQueuedIndex)
+    }
+
+    @Test
+    fun `latestPlan 时间线 plan 卡取最新 流式草稿兜底`() {
+        // 原式:items.lastOrNull { it.role == "plan" && it.planSteps.isNotEmpty() }?.planSteps ?: planSteps
+        val st = TurnSession.State()
+        st.items.addAll(
+            listOf(
+                ChatItem(role = "plan", planSteps = listOf("done|旧步骤")),
+                ChatItem(role = "user", text = "继续"),
+                ChatItem(role = "plan", planSteps = listOf("doing|新步骤")),
+            ),
+        )
+        assertEquals(listOf("doing|新步骤"), turnSessionUiStateOf(st).latestPlan)
+        // 没有落定卡(或卡片空步骤)时退流式草稿
+        val streaming = TurnSession.State()
+        streaming.planSteps = listOf("doing|草稿")
+        assertEquals(listOf("doing|草稿"), turnSessionUiStateOf(streaming).latestPlan)
+        // 全空:latestPlan 为空(计划面板不出现)
+        assertTrue(project().latestPlan.isEmpty())
+    }
+
+    @Test
+    fun `latestPlan 非 plan 角色与非空卡过滤 不认空步骤卡`() {
+        val st = TurnSession.State()
+        st.items.addAll(
+            listOf(
+                ChatItem(role = "plan", planSteps = emptyList()), // 空步骤卡:过滤
+                ChatItem(role = "assistant", text = "长得像但不是 plan"),
+                ChatItem(role = "plan", planSteps = listOf("done|有效卡")),
+            ),
+        )
+        st.planSteps = listOf("doing|草稿")
+        // 有效卡存在:草稿不兜底
+        assertEquals(listOf("done|有效卡"), turnSessionUiStateOf(st).latestPlan)
     }
 }

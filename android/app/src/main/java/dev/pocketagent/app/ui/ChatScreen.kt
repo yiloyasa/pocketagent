@@ -152,6 +152,8 @@ import dev.pocketagent.app.ui.model.ModelEffortCard
 import dev.pocketagent.app.ui.model.ModelSelectionIntent
 import dev.pocketagent.app.ui.model.ModelSelectionReducer
 import dev.pocketagent.app.ui.model.ModelSelectionRepository
+import dev.pocketagent.app.ui.model.cardEffortLevels
+import dev.pocketagent.app.ui.model.modelDisplayLabel
 import androidx.core.content.ContextCompat
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
@@ -1950,6 +1952,18 @@ fun ChatScreen(
     // 轮次状态在 TurnSession 单例:离开页面流不中断,回来接着看
     val st = remember(threadId) { TurnSession.state(threadId) }
     var input by st::draft
+    // ---- 【P3 Task 8 第三层】TurnSession 交互协议面:只读投影单点 collect ----
+    // 「只读展示 + 条件判断」的状态读取收进 ChatViewModel.session(TurnSessionUiState,
+    // snapshotFlow 桥),下方读点改读投影;写入通道(st.items/pendingApproval/
+    // errorMessage/approvalError/queuedCount/historyLoaded/草稿)与 TurnSession 命令
+    // 通道(send/cancelTurn/retryRecovery/answerApproval/...)仍由本页直接持有。
+    // bindSession 在 remember(threadId) 内同步播种(首帧即真实值,不留默认态闪帧),
+    // 随会话换绑;DisposableEffect 负责离开页面解绑。
+    val session by remember(threadId) { chatVm.bindSession(threadId); chatVm.session }
+        .collectAsState()
+    DisposableEffect(chatVm, threadId) {
+        onDispose { chatVm.unbindSession() }
+    }
     // ---- 输入框修订号(P4 Task 2 前置小改)----
     // 内容每变一次 +1:优化预览的防覆盖闸拿它对比"请求发起时刻的修订号"
     // (PromptOptimizePreviewState.inputModifiedSince),等待期间改过输入就不许
@@ -1972,19 +1986,19 @@ fun ChatScreen(
     // 用户可感的终态,一处监听覆盖全部收尾路径,不碰状态机(禁改纪律)。
     // errorMessage==null = COMPLETED 帧(ok=true);FAILED 帧不响"完成"触觉。
     var wasTurnRunning by remember(threadId) { mutableStateOf(false) }
-    LaunchedEffect(st.running, st.turnTerminal, st.errorMessage) {
-        if (wasTurnRunning && !st.running && st.turnTerminal && st.errorMessage == null) {
+    LaunchedEffect(session.running, session.turnTerminal, session.errorMessage) {
+        if (wasTurnRunning && !session.running && session.turnTerminal && session.errorMessage == null) {
             PaHaptics.success(hapticView)
         }
-        wasTurnRunning = st.running
+        wasTurnRunning = session.running
     }
 
     // ---- 语义触觉:审批到达(P1-5)----
     // pendingApproval 从无到有的瞬间是"任务停下来了,等你"—— warning 一下;
     // 从一张卡换到另一张(同卡更新)不重复响,只在"没有→有"边界触发。
     var hadPendingApproval by remember(threadId) { mutableStateOf(false) }
-    LaunchedEffect(st.pendingApproval) {
-        val now = st.pendingApproval != null
+    LaunchedEffect(session.pendingApproval) {
+        val now = session.pendingApproval != null
         if (now && !hadPendingApproval) PaHaptics.warning(hapticView)
         hadPendingApproval = now
     }
@@ -2237,10 +2251,9 @@ fun ChatScreen(
     // 一个可展开/收起的面板:默认收起(顶部只留一行进度摘要),点开看完整步骤。
     var planPanelOpen by remember { mutableStateOf(false) }
     // 最近一次计划的步骤(时间线里落定的 + 正在流式的,取最新的一份)
-    val latestPlan = remember(st.items, st.planSteps) {
-        st.items.lastOrNull { it.role == "plan" && it.planSteps.isNotEmpty() }?.planSteps
-            ?: st.planSteps
-    }
+    // 【P3 Task 8 第三层】派生已上收 TurnSessionUiState.latestPlan(投影内同式:
+    // 时间线 plan 卡取最新,流式草稿兜底),此处只投影。
+    val latestPlan = session.latestPlan
     // 【默认展开】计划一出现就展开 —— 对应"未完成时要保持在会话中显示"。
     // 键用 Boolean 而不是步骤列表:只在"从无到有"时触发一次,
     // 之后用户手动收起不会被反复弹开。
@@ -2373,7 +2386,7 @@ fun ChatScreen(
     // —— 只读投影;写点三处都在下方效果内(SlashCommandsSettled)。进程级
     // SlashCommandCache 与拉取 RPC 原样留在这里(缓存去重通道零改动)。
     val slashCommands = chatState.slashCommands
-    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, st.running) {
+    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, session.running) {
         if (!isSlashPanelAgent(threadAgentId)) {
             // 非面板会话(zcode/codex/pi 之外)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
             chatVm.send(ChatIntent.SlashCommandsSettled(emptyList()))
@@ -2563,8 +2576,8 @@ fun ChatScreen(
     }
     // 轮次结束沿(false 沿)刷新:初始组合不再多发一次请求
     val subPrevRunning = remember(threadId) { AtomicBoolean(false) }
-    LaunchedEffect(st.running) {
-        if (subPrevRunning.getAndSet(st.running) && !st.running) SubAgentsState.refresh()
+    LaunchedEffect(session.running) {
+        if (subPrevRunning.getAndSet(session.running) && !session.running) SubAgentsState.refresh()
     }
 
     // 【P3-T4 接线①】进入会话:ModelSelectionRepository.open(threadId, agentId)
@@ -2648,7 +2661,7 @@ fun ChatScreen(
         it.isEmpty() || it.startsWith("$sessionAgent/")
     }.orEmpty()
     val followsNative=requestedModel.isBlank() || requestedModel==agentDefaultModelId(sessionAgent)
-    val effectiveModelId=if(followsNative) st.runningModel.ifBlank { requestedModel } else requestedModel
+    val effectiveModelId=if(followsNative) session.runningModel.ifBlank { requestedModel } else requestedModel
     val effectiveModel=sessionModels.find { it.id==effectiveModelId }
         ?: if (effectiveModelId.isBlank() || effectiveModelId==agentDefaultModelId(sessionAgent))
             sessionModels.find { it.id==agentDefaultModelId(sessionAgent) } else null
@@ -2656,7 +2669,7 @@ fun ChatScreen(
     val agentDefaultWindow = sessionModels.find { it.id == agentDefaultModelId(sessionAgent) }?.contextWindow ?: 0
     // 窗口解析优先级链:daemon 上报真实窗口 > 当前模型声明窗口 > agent 默认模型声明窗口。
     val reportedWindow = pickContextWindow(
-        live = st.liveContextWindow,
+        live = session.liveContextWindow,
         modelDeclared = effectiveModel?.contextWindow ?: 0,
         agentDefaultDeclared = agentDefaultWindow,
     )
@@ -2678,7 +2691,7 @@ fun ChatScreen(
         else modelBareName(effectiveModelId)
     // 内置档没有的取值(pi 动态档位 off/minimal/max 及未来新增)回
     // effortLabelOf 的中文标签,模型 chip 上不至于露出英文原 id。
-    val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: st.runningEffort.orEmpty())
+    val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: session.runningEffort.orEmpty())
 
     // ---- 上下文窗口卡:断网缓存 + 自动刷新 ----
     // ① 每次收到用量更新(含从缓存回填的首帧)都写一份"最后一次已知用量"到本地:
@@ -2688,19 +2701,19 @@ fun ChatScreen(
     //    纯函数 UsagePersistThrottleTest 钉死)—— 输入栏实时环与卡面实时值不受
     //    节流影响,st.turnUsage 本身仍是逐帧真实值,这里只管磁盘写频率。
     var usagePersistCursor by remember(threadId) { mutableStateOf<UsagePersistCursor?>(null) }
-    LaunchedEffect(threadId, st.turnUsage, st.totalUsage, st.liveContextWindow) {
+    LaunchedEffect(threadId, session.turnUsage, session.totalUsage, session.liveContextWindow) {
         UsageCache.init(ctx)
-        if (st.turnUsage != null || st.totalUsage != null) {
+        if (session.turnUsage != null || session.totalUsage != null) {
             val nowMs = System.currentTimeMillis()
-            val nextTokens = usageTotalTokens(st.turnUsage)
+            val nextTokens = usageTotalTokens(session.turnUsage)
             if (usagePersistCursorAccepts(usagePersistCursor, nowMs, nextTokens, contextWindow)) {
                 UsageCache.save(
                     threadId,
                     UsageSnapshot(
                         contextWindow = contextWindow,
                         windowIsFallback = windowIsFallback,
-                        turnUsage = st.turnUsage,
-                        totalUsage = st.totalUsage,
+                        turnUsage = session.turnUsage,
+                        totalUsage = session.totalUsage,
                         updatedAt = nowMs,
                     ),
                 )
@@ -3496,9 +3509,9 @@ fun ChatScreen(
 
     val connSt = AgentConnection.connState.collectAsState().value
     val hasFailure = loadError != null ||
-        st.recovering ||
-        st.recoveryError != null ||
-        st.errorMessage != null ||
+        session.recovering ||
+        session.recoveryError != null ||
+        session.errorMessage != null ||
         connSt == "down"
     // 呈现层断连横幅状态:推进逻辑全在 component/nextConnectionBannerState(纯函数,
     // ConnectionBannerStateTest 钉死),本屏编辑式横幅(ChatOfflineBanner)只读结果 ——
@@ -3524,14 +3537,14 @@ fun ChatScreen(
     // 待审批优先于一切(同一事实在首页/任务中心/会话长出同一种状态);本轮已收尾且
     // 无错误按 IDLE 归「已完成」;其余落到 getThread 回填的 daemon 状态。
     val identityStatus = run {
-        val pending = if (st.pendingApproval != null) 1 else 0
+        val pending = if (session.pendingApproval != null) 1 else 0
         val status = when {
-            st.running || st.recovering -> ThreadStatus.THREAD_STATUS_RUNNING
-            st.turnTerminal && st.errorMessage == null -> ThreadStatus.THREAD_STATUS_IDLE
+            session.running || session.recovering -> ThreadStatus.THREAD_STATUS_RUNNING
+            session.turnTerminal && session.errorMessage == null -> ThreadStatus.THREAD_STATUS_IDLE
             pending > 0 -> ThreadStatus.THREAD_STATUS_WAITING_APPROVAL
             else -> threadStatus
         }
-        editorialThreadStatusView(status, pending, st.errorMessage ?: "")
+        editorialThreadStatusView(status, pending, session.errorMessage ?: "")
     }
 
     // =====================================================================
@@ -3550,8 +3563,8 @@ fun ChatScreen(
     // =====================================================================
     var approvalUi by remember(threadId) { mutableStateOf<ApprovalRequestUi?>(null) }
     var approvalDialogOpen by remember(threadId) { mutableStateOf(false) }
-    LaunchedEffect(st.pendingApproval?.requestId) {
-        val ap = st.pendingApproval
+    LaunchedEffect(session.pendingApproval?.requestId) {
+        val ap = session.pendingApproval
         if (ap == null) {
             val ui = approvalUi ?: return@LaunchedEffect
             approvalUi = when (ui.phase) {
@@ -3586,10 +3599,10 @@ fun ChatScreen(
         }
     }
     // 提交失败:TurnSession 置 approvalError 且请求仍在 → 暂无法处理(人话原因+重试)
-    LaunchedEffect(st.approvalError) {
-        val err = st.approvalError ?: return@LaunchedEffect
+    LaunchedEffect(session.approvalError) {
+        val err = session.approvalError ?: return@LaunchedEffect
         val ui = approvalUi ?: return@LaunchedEffect
-        if (st.pendingApproval?.requestId == ui.requestId) {
+        if (session.pendingApproval?.requestId == ui.requestId) {
             approvalUi = ui.markUnavailable(err)
         }
     }
@@ -3607,7 +3620,7 @@ fun ChatScreen(
                 approvalDialogOpen = false
                 approvalUi = null
             }
-            ApprovalPhase.UNAVAILABLE -> if (st.pendingApproval == null) {
+            ApprovalPhase.UNAVAILABLE -> if (session.pendingApproval == null) {
                 delay(1400)
                 approvalDialogOpen = false
                 approvalUi = null
@@ -3620,11 +3633,11 @@ fun ChatScreen(
     // 的白名单没有"问题/选项/自由输入"的槽位(基座组件禁改),而反问必须把答案经
     // note 通道回给 daemon —— 两类语义在数据层同链,在界面层分容器。红线语义
     // (不可下滑关闭/拦截返回/不替用户做决定)由 PaSheetConvergenceTest 钉住不动。
-    st.pendingApproval?.let { ap ->
+    session.pendingApproval?.let { ap ->
         if (askIsAskAction(ap.action.name)) {
             ApprovalSheet(
                 action = ap,
-                error = st.approvalError,
+                error = session.approvalError,
                 onDecision = { approved, note ->
                     // 语义触觉(P1-5):审批提交 = 轻击确认 —— 手指离开屏幕的瞬间就有
                     // "已交出去了"的物理回执,不等网络往返。
@@ -3733,7 +3746,7 @@ fun ChatScreen(
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
             // 终止正在跑的轮次(用户反馈:任务跑飞了没法自己停)
-            if (st.running) {
+            if (session.running) {
                 IconActionButton(
                     AppR.drawable.ic_lucide_square, "终止任务",
                     {
@@ -3818,7 +3831,7 @@ fun ChatScreen(
         val subChildren = remember(SubAgentsState.threads, threadId) {
             SubAgentsLogic.childrenOf(SubAgentsState.threads, threadId)
         }
-        val subRunIds = remember(st.running, SubAgentsState.lastRefreshedAt) {
+        val subRunIds = remember(session.running, SubAgentsState.lastRefreshedAt) {
             TurnSession.runningThreadIds() // TurnSession 无锁快照,不进 Compose 状态
         }
         // 【出入场】子代理卡区块出现/消失走 AnimatedContent(淡入+轻微上移 / 淡出,
@@ -3894,11 +3907,11 @@ fun ChatScreen(
         // 现在按优先级合并成一条提示,并且等待态带进度指示:
         //   恢复失败 > 恢复中(等待) > 轮次错误 > 页面加载错误
         run {
-            val waiting = st.recovering
+            val waiting = session.recovering
             val noticeMsg = when {
-                st.recoveryError != null -> st.recoveryError
-                waiting -> st.errorMessage ?: "连接已断开，正在恢复电脑端任务结果"
-                st.errorMessage != null -> st.errorMessage
+                session.recoveryError != null -> session.recoveryError
+                waiting -> session.errorMessage ?: "连接已断开，正在恢复电脑端任务结果"
+                session.errorMessage != null -> session.errorMessage
                 loadError != null -> loadError
                 else -> null
             }
@@ -4016,7 +4029,7 @@ fun ChatScreen(
         // 这张卡只是**入口**(点开 PaApprovalDialog),卡上不放任何批准/拒绝按钮;
         // 弹窗关闭(暂不处理)后从这里或顶部身份行再次进入。请求与弹窗相位的状态机
         // 见上方"审批弹窗状态机"块。反问类请求有自己的常驻问题卡,不进这张入口。
-        val pendingApprovalEntry = st.pendingApproval
+        val pendingApprovalEntry = session.pendingApproval
         if (pendingApprovalEntry != null && !askIsAskAction(pendingApprovalEntry.action.name)) {
             ApprovalEntryCard(onOpen = { approvalDialogOpen = true })
         }
@@ -4033,8 +4046,8 @@ fun ChatScreen(
         if (latestPlan.isNotEmpty()) {
             PlanPanel(
                 steps = latestPlan,
-                draft = if (st.running) st.planStream else "",
-                running = st.running,
+                draft = if (session.running) st.planStream else "",
+                running = session.running,
                 expanded = planPanelOpen,
                 onToggle = { planPanelOpen = !planPanelOpen },
                 outerGutter = midGutter,
@@ -4076,9 +4089,9 @@ fun ChatScreen(
         // 真源),门控纯函数 queueClearVisible 锁三重条件(agent==pi + 确有排队 +
         // daemon 宣告 queue_clear:pi)—— 旧 daemon / 非 pi 会话 / 没有排队都不出
         // 按钮,不显示点了必败的假入口。
-        val queueClearOn = queueClearVisible(threadAgentId, st.queuedCount, hostCaps)
+        val queueClearOn = queueClearVisible(threadAgentId, session.queuedCount, hostCaps)
         // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
-        val lastQueuedIndex = st.items.indexOfLast { it.deliverState == DELIVERY_QUEUED }
+        val lastQueuedIndex = session.lastQueuedIndex
         // 消息列表容器(Box):列表本体 + P0-1 的「↓ N 条新内容」悬浮胶囊同层,
         // 常规气泡与 hacker 终端块共用(锚定状态与胶囊都只此一份)。
         Box(Modifier.weight(1f)) {
@@ -4193,7 +4206,7 @@ fun ChatScreen(
                                 CodexEventCard(
                                     event = ev,
                                     uiScale = uiScale,
-                                    guardianOverridden = st.guardianOverridden.contains(ev.reviewId),
+                                    guardianOverridden = session.guardianOverridden.contains(ev.reviewId),
                                     onApproveGuardian = { approveGuardian(it) },
                                     onOpenSettings = onOpenSettings,
                                 )
@@ -4351,7 +4364,7 @@ fun ChatScreen(
                         CodexEventCard(
                             event = ev,
                             uiScale = uiScale,
-                            guardianOverridden = st.guardianOverridden.contains(ev.reviewId),
+                            guardianOverridden = session.guardianOverridden.contains(ev.reviewId),
                             onApproveGuardian = { approveGuardian(it) },
                             onOpenSettings = onOpenSettings,
                         )
@@ -4436,7 +4449,7 @@ fun ChatScreen(
             }
             // 流式执行计划:已由上方 PlanPanel 承担(它同时兼做收起的进度条),
             // 这里不再重复渲染,否则同一步骤会出现两份。
-            if (st.streaming) {
+            if (session.streaming) {
                 item(key = "streaming-bubble") {
                     if (PaHacker.isHacker) {
                     // 黑客终端模式:流式输出块(块尾 braille 转轮,80ms/帧);
@@ -4510,15 +4523,15 @@ fun ChatScreen(
             // 黑客终端模式:回合脚注(④)—— 轮次终局后挂在列表末尾右对齐。
             // 【不造数据】只在"有真实终局知识"时出现:运行中/恢复中绝不显示;
             // 有失败信息给 ✗,有真实 token 用量给 ✓ N tok,什么都没有只给 ✓。
-            if (PaHacker.isHacker && !st.running && !st.recovering && st.recoveryError == null &&
-                (st.turnUsage != null || st.errorMessage != null)
+            if (PaHacker.isHacker && !session.running && !session.recovering && session.recoveryError == null &&
+                (session.turnUsage != null || session.errorMessage != null)
             ) {
                 item(key = "turn-footnote") {
                     TerminalFootnote(
                         formatTurnFootnote(
-                            success = st.errorMessage == null,
+                            success = session.errorMessage == null,
                             elapsedMs = 0.0, // 回合时长无现成数据,不编造
-                            outputTokens = st.turnUsage?.outputTokens ?: 0,
+                            outputTokens = session.turnUsage?.outputTokens ?: 0,
                         ),
                     )
                 }
@@ -4534,8 +4547,8 @@ fun ChatScreen(
         // 判定走纯函数(shouldShowTimelineSkeleton / shouldShowTimelineEmptyState,
         // TimelineSkeletonEmptyTest 钉死):报错横幅、离线副本、运行/恢复中都不摆。
         if (shouldShowTimelineSkeleton(
-                itemsEmpty = st.items.isEmpty(),
-                historyLoaded = st.historyLoaded,
+                itemsEmpty = session.itemsEmpty,
+                historyLoaded = session.historyLoaded,
                 hasLoadError = loadError != null,
                 offlineSnapshot = offlineSnapshot,
             )
@@ -4544,12 +4557,12 @@ fun ChatScreen(
             PaSkeletonList(SkeletonKind.MESSAGE_BUBBLE, perRowHeight = 82.dp)
         }
         if (shouldShowTimelineEmptyState(
-                itemsEmpty = st.items.isEmpty(),
-                historyLoaded = st.historyLoaded,
+                itemsEmpty = session.itemsEmpty,
+                historyLoaded = session.historyLoaded,
                 hasLoadError = loadError != null,
                 offlineSnapshot = offlineSnapshot,
-                running = st.running,
-                recovering = st.recovering,
+                running = session.running,
+                recovering = session.recovering,
             )
         ) {
             val (emptyHead, emptySub) = timelineEmptyStateCopy(selectedAgentLabel(threadAgentId))
@@ -4628,7 +4641,7 @@ fun ChatScreen(
                             scope.launch {
                                 followBottom = true
                                 unreadBlocks = 0
-                                val total = st.items.size + if (st.streaming) 1 else 0
+                                val total = session.itemCount + if (session.streaming) 1 else 0
                                 if (total > 0) listState.animateScrollToItem(total - 1)
                             }
                         }
@@ -5207,10 +5220,10 @@ fun ChatScreen(
                     // 看不出窗口被占了多少。现在环内给占比(≥80% 黄、≥95% 红),窗口总量与
                     // 用量明细点开卡面看;窗口未知或还没上报用量时环内是"—",绝不假装 0%。
                     val ctxWindowKnown = !windowIsFallback && contextWindow > 0
-                    val ctxUsage = st.turnUsage
+                    val ctxUsage = session.turnUsage
                     val ctxRingKnown = ctxWindowKnown && ctxUsage != null
                     // 压缩同步:压缩后旧占用已失真,小环进入"已压"态而非继续显示旧占比。
-                    val ctxCompacted = compactionPending(st.turnUsage, st.lastCompactedAt)
+                    val ctxCompacted = compactionPending(session.turnUsage, session.lastCompactedAt)
                     val ctxRatio =
                         if (ctxRingKnown) usageTotalTokens(ctxUsage).toFloat() / contextWindow.toFloat() else 0f
                     // 【空值不渲染】窗口未知或还没有用量时报"—"的空环,悬在工具行中间
@@ -5386,13 +5399,13 @@ fun ChatScreen(
                     // 【P1-4】running 时输入可用,发送键变为「插入运行中任务」:
                     // 图标(列表+勾)与箭头区分,内容描述同步,让读屏与视觉都能分清
                     // "开新任务"与"插进正在跑的任务(或排队)"。离线快照态一律禁用。
-                    val sendEnabled = !offlineSnapshot && input.isNotBlank() && !st.recovering
-                    val inserting = st.running
+                    val sendEnabled = !offlineSnapshot && input.isNotBlank() && !session.recovering
+                    val inserting = session.running
                     // R2 停止可达性:运行中且输入为空 → 发送键原位变「终止」键(与
                     // ChatGPT/Codex 移动端同位语义:拇指不动就能停),不再是灰死的箭头。
                     // 运行中且输入非空 = P1-4 的「插入」,语义让位给输入;顶栏(黑客终端)
                     // 与「更多」(编辑式)的终止入口原样保留作兜底。
-                    val canStopTurn = st.running && input.isBlank() && !offlineSnapshot
+                    val canStopTurn = session.running && input.isBlank() && !offlineSnapshot
                     Box(
                         Modifier
                             // PA-REAL-0004:触控箱 ≥48dp(原 40dp)。Accent 圆底下沉一层保持
@@ -5507,8 +5520,8 @@ fun ChatScreen(
                             ?.let { it.substringAfterLast('/').substringAfterLast('\\') }
                             ?.takeIf { it.isNotBlank() },
                         statusView = identityStatus,
-                        approvalWaiting = st.pendingApproval != null &&
-                            !askIsAskAction(st.pendingApproval!!.action.name),
+                        approvalWaiting = session.pendingApproval != null &&
+                            !askIsAskAction(session.pendingApproval!!.action.name),
                         onOpenApproval = { approvalDialogOpen = true },
                         agentIconRes = agentBrandIcon(threadAgentId),
                     )
@@ -5735,7 +5748,7 @@ fun ChatScreen(
                 // 编辑式骨架(05):顶栏只留一个次操作(「更多」),低频动作收进本面板;
                 // 黑客终端顶栏按钮原样保留,不重复给入口。
                 if (!PaHacker.isHacker) {
-                    if (st.running) {
+                    if (session.running) {
                         SheetAction(AppR.drawable.ic_lucide_square, "终止当前任务", ChatDeniedColor) {
                             showMore = false
                             // 终止 = warning 档(与顶栏终止键、发送键原位终止同档)
@@ -5903,7 +5916,7 @@ fun ChatScreen(
     // 回合数从时间线里现数(每条用户消息 = 一个回合)。数不出回合(历史还没加载出来)
     // 就不给选项 —— 免得用户选完必然失败。
     if (rollbackOpen) {
-        val turnTotal = st.items.count { it.role == "user" }
+        val turnTotal = session.userTurnCount
         val options = rollbackOptions(turnTotal)
         var picked by remember(turnTotal) { mutableStateOf(1) }
         // 【本轮换 PaSheet】统一玻璃浮层;滚动由封装内建(选项随回合数增长时
@@ -6036,7 +6049,7 @@ fun ChatScreen(
                 expandedInputOpen = false
                 if (send(text)) setInput("")
             },
-            canSend = !offlineSnapshot && input.isNotBlank() && !st.recovering,
+            canSend = !offlineSnapshot && input.isNotBlank() && !session.recovering,
         )
     }
 
@@ -6137,8 +6150,24 @@ fun ChatScreen(
     // 被反复打断(真机:轮次运行中点模型行,面板闪没/开不出,用户裁决"切换不
     // 流畅"的主因)。稳定层挂载后不受逐帧重组影响。
     if (showQuickModels) {
-        val quickModels = remember(sessionModels, sessionAgent) {
-            ModelQuickSwitchLogic.quickModels(sessionAgent, sessionModels)
+        // 【L2 真机发现 5 · 两卡同源】模型清单改用与完整卡(ui/model.ModelEffortCard)
+        // 完全同一份数据:ModelSelectionRepository.state.models(daemon 会话级申报,
+        // listModelsWithSelection 按 agent/thread 收窄)经同一条 modelsForAgent 过滤
+        // —— 与卡面第 203 行逐字同式。
+        // 【根因】旧实现读本页全局大表 models(不带 agent 过滤的全 agent ListModels
+        // + 10s 巡检合并),而巡检合并的过滤键是 provider 字段:大表里 pi 系模型的
+        // provider 是上游供应商(如 zai-coding-cn)而非 "pi",永远滤不掉,于是 pi
+        // 会话的快速面板摆出 6 个模型、完整卡按申报只有 2 个 —— 同一入口两级清单。
+        // 【以申报为准】申报表就是 daemon 会为该会话接受的 set_model 全集:表外模型
+        // 选了也会被真值回填校正(L2 发现 1 的静默回退正是表外选择),且 reducer 的
+        // 失效 effort 清理(cleanEffortFor)只认申报表。清单统一后,选中态
+        // (qm.id == effectiveModelId)、MRU 失效淘汰、提交流(applyModelPick →
+        // 仓库 SelectModel)全部原样不动。
+        val cardModels = remember(modelSelectionState.models, sessionAgent) {
+            modelsForAgent(modelSelectionState.models, sessionAgent)
+        }
+        val quickModels = remember(cardModels, sessionAgent) {
+            ModelQuickSwitchLogic.quickModels(sessionAgent, cardModels)
         }
         Popup(
             alignment = Alignment.BottomStart,
@@ -6161,8 +6190,10 @@ fun ChatScreen(
                 // 【面板头部:当前 vs 正在跑】模型行精简后,"正在运行的模型"信息
                 // 收进这里 —— 对比语境(当前选择 vs 实际在跑)在面板里才读得通。
                 if (st.runningEffort != null && st.runningModel.isNotBlank()) {
-                    val actualName = sessionModels.find { it.id == st.runningModel }?.displayName
-                        ?: modelBareName(st.runningModel)
+                    // 【统一翻译层】申报表优先、全 agent 大表补位、裸名/原 id 兜底
+                    // (modelDisplayLabel,L2 发现 5:正在跑的模型不在申报表里时
+                    // 不再把 "hermes/deepseek-flash" 这类裸 id 直接亮出来)
+                    val actualName = modelDisplayLabel(st.runningModel, cardModels, sessionModels)
                     Text(
                         "正在运行：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}",
                         Modifier
@@ -6173,7 +6204,9 @@ fun ChatScreen(
                 }
                 if (quickModels.isEmpty()) {
                     Text(
-                        if (sessionModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
+                        // 【两卡同源】空态判定跟着申报表走:申报表空 = 完整卡此刻
+                        // 也只显示"Agent 暂未报告模型,请刷新",两级入口说同一句话
+                        if (cardModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
                         else "暂无可快速切换的模型",
                         Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                         fontSize = 12.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
@@ -6195,7 +6228,10 @@ fun ChatScreen(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                qm.label,
+                                // 【统一翻译层】与面板头部同一条解析链:申报表 displayName
+                                // → 大表 displayName → 裸名/原 id(行数据自带的 qm.label
+                                // 只查申报表,这里补上大表补位,避免申报表缺展示名时露裸 id)
+                                modelDisplayLabel(qm.id, cardModels, sessionModels),
                                 fontSize = 13.5.sp,
                                 color = if (current) PaEditorial.Primary else PaEditorial.Ink,
                                 fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
@@ -6220,12 +6256,24 @@ fun ChatScreen(
                 }
                 // 【思考强度行(2026-10-02 流畅度补全)】强度切换此前藏在"更多…"二级
                 // 完整卡里,一级面板只有模型 —— 用户裁决"切换不流畅"的第二主因。
-                // 这里按会话 agent 的档位集(effortsFor 同源)渲染强度胶囊,单点即切
+                // 这里按会话 agent 的档位集渲染强度胶囊,单点即切
                 // (下一轮生效语义与完整卡一致);【P3-T4 接线④】选中态来自仓库
                 // display(ModelSelectionReducer.display),点击改发 SelectEffort 意图
                 // —— 不再直读/直写 AgentConnection.selectedEffort 与 setThreadEffort。
-                val quickEfforts = remember(sessionAgent, sessionModels) {
-                    effortsFor(sessionModels, effectiveModelId, sessionAgent)
+                // 【两卡同源(L2 发现 5)】强度档位改走完整卡同一条 cardEffortLevels:
+                // daemon 真值 available_efforts(仓库 display 回传)优先,退申报表
+                // effortsFor。旧实现读全局大表,其 provider 字段是上游供应商而非
+                // agent id,effortsFor 的 agent 匹配永远落空 —— pi 会话在快速面板
+                // 只看得到内置五档(默认/低/中/高/极高),完整卡却是 pi 动态全集
+                // (默认/关/低/高/最大),同一发现的两半。选中态
+                // (modelSelection?.effort)与单点即切的下发链原样不动。
+                val quickEfforts = remember(cardModels, effectiveModelId, sessionAgent, modelSelection?.availableEfforts) {
+                    cardEffortLevels(
+                        models = cardModels,
+                        agentId = sessionAgent,
+                        modelId = effectiveModelId,
+                        daemonEfforts = modelSelection?.availableEfforts.orEmpty(),
+                    )
                 }
                 Row(
                     Modifier
@@ -6314,12 +6362,12 @@ fun ChatScreen(
         ContextUsageCard(
             contextWindow = cw,
             windowIsFallback = fb,
-            turnUsage = st.turnUsage ?: cached?.turnUsage,
-            totalUsage = st.totalUsage ?: cached?.totalUsage,
+            turnUsage = session.turnUsage ?: cached?.turnUsage,
+            totalUsage = session.totalUsage ?: cached?.totalUsage,
             // 压缩同步:daemon 转发的"上下文已压缩"事件到达后,这里给出明确的压缩状态,
             // 而不是继续显示压缩前的旧占用(可能超出实际窗口)。
-            compactionInProgress = st.compactionInProgress,
-            lastCompactedAt = st.lastCompactedAt,
+            compactionInProgress = session.compactionInProgress,
+            lastCompactedAt = session.lastCompactedAt,
             // 压缩等待文案按会话归属 agent("等待 Pi/Codex 完成压缩"),不硬编码 codex。
             agentLabel = selectedAgentLabel(sessionAgent),
             // 只有"已知断网"(down)才显示离线提示条;checking 不显示(见上方 ③ 的注释)。

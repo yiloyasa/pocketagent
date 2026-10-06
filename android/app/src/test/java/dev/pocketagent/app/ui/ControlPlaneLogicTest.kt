@@ -644,9 +644,10 @@ class ControlPlaneLogicTest {
             "协同已开启 · 委派与扇出可用",
             collabSummaryOverride(collabRow(delegate = "开", fanout = "开", members = null)),
         )
-        // 现值读不出("不限"非纯数值):同样整段不摆。
+        // 现值读不出("不限"非纯数值):同样整段不摆,双开紧凑口径不变
+        // (与上一条缺席态同款;逐项口径只属于"有子项关着/认不出"的形态)。
         assertEquals(
-            "协同已开启 · 委派开 · 扇出开",
+            "协同已开启 · 委派与扇出可用",
             collabSummaryOverride(collabRow(delegate = "开", fanout = "开", members = "不限")),
         )
     }

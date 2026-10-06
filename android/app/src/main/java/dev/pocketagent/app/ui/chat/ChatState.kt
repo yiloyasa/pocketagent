@@ -4,7 +4,9 @@ import dev.pocketagent.app.ui.HistoryRoundsLogic
 import dev.pocketagent.app.ui.SlashCommandInfo
 import dev.pocketagent.app.ui.history.HistoryIdentityIndex
 import dev.pocketagent.app.ui.history.MessageSpan
+import pocketagent.v1.ApprovalRequest
 import pocketagent.v1.ThreadStatus
+import pocketagent.v1.Usage
 
 /**
  * ChatScreen 页面级长期状态(2026-10-04 会话选择与历史体验计划 Task 8,第一层分层)。
@@ -417,3 +419,94 @@ object ChatStateReducer {
         is ChatIntent.SlashCommandsSettled -> state.copy(slashCommands = intent.commands)
     }
 }
+
+/**
+ * TurnSession 轮次状态的**只读投影**(2026-10-04 计划 Task 8,第三层:
+ * TurnSession 交互协议面收进 ViewModel)。
+ *
+ * 【它是什么】TurnSession.State 是对话流核心资产(generation+seq 断点+增量→全量
+ * 降级,禁改),它不是 StateFlow,而是 Compose 快照状态(mutableStateOf /
+ * mutableStateList)的 remember 单例。过去 ChatScreen 的子组件各自直读 `st.xxx`,
+ * 状态读取管道散在组合各处;本类把「只读展示 + 条件判断」的状态收敛成一棵纯数据树,
+ * 由 ChatViewModel 经 snapshotFlow 桥映射成 `session: StateFlow<TurnSessionUiState>`
+ * 单点分发 —— 子组件只接收 state/intent,不再直读 TurnSession 单例。
+ *
+ * 【迁了什么】低频标量与派生标量:轮次生命周期(running/streaming/recovering/
+ * turnTerminal)、审批两态(pendingApproval/approvalError)、错误两态(errorMessage/
+ * recoveryError)、运行时模型(runningModel/runningEffort)、用量四项(turnUsage/
+ * totalUsage/liveContextWindow/compactionInProgress/lastCompactedAt)、排队镜像
+ * (queuedCount)、历史加载位(historyLoaded)、已推翻审查集合(guardianOverridden),
+ * 以及原 ChatScreen 原地派生的标量(itemsEmpty/itemCount/lastQueuedIndex/
+ * userTurnCount/latestPlan)。
+ *
+ * 【留了什么(有意不进投影,等价于精确订阅)】
+ *  - `items` 时间线本体:LazyColumn 逐 item 精确订阅是刻意的;整表复制进投影会
+ *    违背计划 Task 8「流式内容更新不复制整条时间线」——只取派生标量。
+ *  - `streamText`/`thinkingText`/`planStream`:逐 token 高频流,进粗粒度投影等于
+ *    每个 delta 全页重组(消费点各自已有精确/节流通道:displayedStream 快照、
+ *    流式思考卡)。
+ *  - `draft`(输入草稿)与全部写入面:读写同一引用,归 ChatScreen 直持(写入
+ *    通道非状态通道);TurnSession 方法调用(发送/终止/恢复/审批应答)同理留命令面。
+ *  - `selectionPending`/`replyCh`/`generation`/`lastSequence`:协议内部锚点,
+ *    UI 不读。
+ *
+ * 【反应性】投影经 snapshotFlow 对快照状态做等值去重:任一被读字段变化且映射结果
+ * (data class equals)有变才发射一次 —— proto 消息(Usage/ApprovalRequest)按
+ * 内容 equals,不会因同值新实例造成空转重组。投影是**只读**的:本类不提供任何
+ * 写通道,TurnSession 状态的合法写者仍只有 TurnSession 自身与 ChatScreen 的
+ * 既有写点。
+ */
+data class TurnSessionUiState(
+    /** 轮次运行中(StartTurn 流在途;发送键「插入」态/终止入口/各命令闸的实时位)。 */
+    val running: Boolean = false,
+    /** 正文流式输出中(时间线尾部的流式气泡挂载位)。 */
+    val streaming: Boolean = false,
+    /** 断流恢复中(琥珀提示条/输入停用/脚注抑制)。 */
+    val recovering: Boolean = false,
+    /** 本轮已到终局帧(COMPLETED/FAILED;状态徽章「已完成」的实时位)。 */
+    val turnTerminal: Boolean = false,
+    /** 待审批请求(daemon 下发;审批弹窗状态机/入口卡/身份徽章的数据源)。 */
+    val pendingApproval: ApprovalRequest? = null,
+    /** 审批提交失败原因(人话;问题卡/弹窗 UNAVAILABLE 相位展示)。 */
+    val approvalError: String? = null,
+    /** 轮次错误(终局 FAILED/非重试 ERROR;提示条与脚注共用)。 */
+    val errorMessage: String? = null,
+    /** 恢复链终态失败(超时/同步失败;提示条重试按钮的数据源)。 */
+    val recoveryError: String? = null,
+    /** 本轮实际生效的模型(daemon Started/巡检回填;生效模型链的实时真值)。 */
+    val runningModel: String = "",
+    /** 本轮实际生效的思考强度(null = 未上报)。 */
+    val runningEffort: String? = null,
+    /** 已排队等待执行的输入条数(「撤回排队」入口门控;写点仍归 ChatScreen)。 */
+    val queuedCount: Int = 0,
+    /** 会话历史已加载过至少一次(时间线骨架/空态的裁定输入)。 */
+    val historyLoaded: Boolean = false,
+    /** 本轮 token 用量(null = 未知;上下文环/脚注/明细卡共用)。 */
+    val turnUsage: Usage? = null,
+    /** 本会话累计用量(null = daemon 未报,如实显示未知)。 */
+    val totalUsage: Usage? = null,
+    /** daemon 上报的真实上下文窗口大小(0 = 未知)。 */
+    val liveContextWindow: Long = 0L,
+    /** Codex 正在执行 contextCompaction item(小环「已压」态的进行位)。 */
+    val compactionInProgress: Boolean = false,
+    /** 最近一次「上下文已压缩」的时间(0 = 本进程内未发生过)。 */
+    val lastCompactedAt: Long = 0L,
+    /** 已被用户推翻过的审查 id(审查卡「仍然执行」按钮的收起依据)。 */
+    val guardianOverridden: Set<String> = emptySet(),
+
+    // ---- 派生标量(items 不进投影,这里只收原 ChatScreen 原地派生的读数) ----
+
+    /** 时间线是否为空(骨架/空态裁定;与 st.items.isEmpty() 同值)。 */
+    val itemsEmpty: Boolean = true,
+    /** 时间线条目数(「↓ N 条新内容」胶囊的总数锚点;与 st.items.size 同值)。 */
+    val itemCount: Int = 0,
+    /** 最后一条「排队中」消息的下标(-1 = 无;「撤回排队」只挂它上面)。 */
+    val lastQueuedIndex: Int = -1,
+    /** 时间线里的用户消息数(每条 = 一个可回滚回合;回滚面板的选项数来源)。 */
+    val userTurnCount: Int = 0,
+    /**
+     * 最近一次执行计划的步骤(时间线已落定的 plan 卡取最新,流式草稿兜底;
+     * 与迁出前 `remember(st.items, st.planSteps)` 的原地派生同式)。
+     */
+    val latestPlan: List<String> = emptyList(),
+)

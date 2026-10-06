@@ -20,7 +20,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.modelBareName
 import dev.pocketagent.app.ui.theme.PaEditorial
+import pocketagent.v1.ModelInfo
 
 /**
  * 模型选择卡的单行选项(2026-10-04 会话选择与历史体验计划 Task 4 拆分件)。
@@ -55,6 +57,32 @@ internal fun modelRowDetail(
     if (supportsImages) parts += "支持图片"
     return parts.joinToString(" · ")
 }
+
+/**
+ * 模型 id → 人话显示名的**统一翻译层**(L2 真机发现 5 后半:Hermes/Pi 会话把
+ * daemon 未带展示名的模型以裸 id 直接上屏,如 "hermes/deepseek-flash")。
+ *
+ * 解析顺序(照 ModelEffortCard「Agent 当前」行的既有风格:displayName 优先,
+ * 空串 displayName 不算数、继续往下兜底):
+ *  ① [preferred] —— 会话级申报表(与完整卡同源的仓库模型表按 agent 过滤);
+ *  ② [secondary] —— 全 agent 大表:申报表按 daemon 会话级口径收窄后,正在运行
+ *     但不在申报表里的模型(如被真值校正回退的旧模型)仍能从大表翻出人话名;
+ *  ③ modelBareName —— 去 agent 前缀的裸名;无前缀 id 原样返回(兜底即原 id),
+ *     绝不空白、不造假名。
+ *
+ * 纯函数,JVM 单测钉死 —— 见 ModelDisplayLabelTest。
+ */
+internal fun modelDisplayLabel(
+    modelId: String,
+    preferred: List<ModelInfo>,
+    secondary: List<ModelInfo> = emptyList(),
+): String =
+    // 空串 displayName 不算翻译成功:跳过该条继续往下一张表找,而不是
+    // 停在首个 id 命中上 —— 两表都没给有效名字才落裸名。
+    (preferred.firstOrNull { it.id == modelId && it.displayName.isNotBlank() }
+        ?: secondary.firstOrNull { it.id == modelId && it.displayName.isNotBlank() })
+        ?.displayName
+        ?: modelBareName(modelId)
 
 /**
  * 一行模型选项。
