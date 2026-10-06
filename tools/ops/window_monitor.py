@@ -57,7 +57,9 @@ user32 = ctypes.windll.user32
 def raw_window_entries():
     """EnumWindows 枚举可见顶层窗口 → [{"pid","title","class_name"}]（未过滤、未排序）。"""
     entries = []
-    proto = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+    # 回调契约是 Win32 BOOL(4 字节整型):c_bool 只有 1 字节,返回值能否
+    # 零扩展满寄存器取决于 libffi 实现 —— 红线取证工具不赌这个。
+    proto = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
     def _class_name(hwnd):
         buf = ctypes.create_unicode_buffer(256)

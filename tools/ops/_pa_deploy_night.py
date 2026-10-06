@@ -233,6 +233,7 @@ def cmd_build(args):
         print(f"  ==> 构建 {label} ...")
         r = subprocess.run(argv, cwd=DAEMON_DIR,
                            capture_output=True, text=True,
+                           creationflags=CREATE_NO_WINDOW,
                            encoding="utf-8", errors="replace", timeout=600)
         if r.returncode != 0:
             print(f"  [X] {label} 构建失败 exit={r.returncode}\n{r.stderr[-2000:]}")
@@ -568,6 +569,7 @@ def cmd_verify(args):
             try:
                 r = subprocess.run([go, "run", "./cmd/bridgehealth", "-addr", PROBE_ADDR],
                                    cwd=DAEMON_DIR, capture_output=True, text=True,
+                                   creationflags=CREATE_NO_WINDOW,
                                    encoding="utf-8", errors="replace", timeout=120)
                 out = (r.stdout + r.stderr).strip()
                 print("     " + "\n     ".join(out.splitlines()[:12]) if out else f"     (无输出 exit={r.returncode})")
