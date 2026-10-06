@@ -22,15 +22,23 @@ import (
 // 与 zcode/dsh 同构:懒启动共享适配器进程;会话跨轮续接(同进程内缓存 →
 // ExternalSession 重挂载(session/load,历史回放)→ 新建),不再"一轮一会话"。
 //
-// 【投影映射(ACP session/update → TurnServerMessage)】
+// 【投影映射(ACP session/update → TurnServerMessage;2026-10-07 覆盖矩阵收口)】
 //
 //	agent_message_chunk → TextDelta(流式正文)
 //	agent_thought_chunk → ThinkingDelta(HideReasoning 时丢弃)
 //	tool_call / tool_call_update → ToolCallUpdate(STARTED / UPDATE / FINISHED;
-//	  diff 内容块并入 JsonArgs,write_file/patch 的编辑提案实证形状)
+//	  diff 内容块与 locations 文件位置并入 JsonArgs,write_file/patch 实测形状)
 //	plan → 计划步骤("status|text",status 用四词口径)
 //	usage_update(size,used) → TurnServerMessage_Usage(ModelContextWindow=size,
 //	  Usage.InputTokens=used —— 手机 ContextUsageCard 的数据源,zcode/dsh 同通道)
+//	prompt 应答 usage → Run 返回的 *pb.Usage(轮次 token 用量,server 落账通道)
+//	session_info_update(带标题) → STATUS 卡「hermes · 会话命名」+ 台账留痕
+//	user_message_chunk / 无标题 session_info / current_mode_update /
+//	available_commands_update → 台账 KNOWN_PASSTHROUGH 留痕(不重投影:手机已
+//	展示用户输入/暂无消费方,dsh 同口径)
+//	其他非 session/update 通知(传输层 default)→ hermesapp 未知通知钩子 →
+//	未知事件台账 UNKNOWN_NOTIFICATION
+//	认不出的 session/update 变体 → 台账 UNKNOWN_NOTIFICATION + 限频上屏
 //
 // 【轮次取消(2026-09-30 接通)】prompt 阻塞到轮次终局,Run 用看门狗三闸收场:
 // ctx 取消(手机停止帧/CancelTurn/重入打断)、150s 无任何事件(审批等待豁免)、
@@ -79,7 +87,7 @@ type hermesClient interface {
 	LoadSession(ctx context.Context, cwd, sessionID string) (*hermesapp.SessionLoadResult, error)
 	ListSessions(ctx context.Context, cursor string) (*hermesapp.SessionListResult, error)
 	SetSessionModel(ctx context.Context, sessionID, modelID string) error
-	Prompt(ctx context.Context, sessionID, text string) (string, error)
+	Prompt(ctx context.Context, sessionID, text string) (*hermesapp.PromptOutcome, error)
 	CancelSession(ctx context.Context, sessionID string) error
 	SetTurnHandlers(notif func(json.RawMessage), req func(id int64, method string, params json.RawMessage))
 	Respond(id int64, result any) error
@@ -90,7 +98,20 @@ type hermesClient interface {
 // 编译期钉死:真实客户端满足依赖面(接口漂移在编译期暴露)。
 var _ hermesClient = (*hermesapp.Client)(nil)
 
+// hermesUnknownHookOnce 钉住"未知通知上抛钩子只注入一次"(readLoop 的 default
+// 分支 → 未知事件台账;hermesapp 在分层上位于 agent 之下,经包级钩子注入)。
+var hermesUnknownHookOnce sync.Once
+
 func NewHermesProvider() *HermesProvider {
+	// 未知通知接线(2026-10-07 旁路审计收口):传输层收到非 session/update 的
+	// 通知不再静默,重定向进未知事件台账(UNKNOWN_NOTIFICATION 档),与四家的
+	// 全局钩子同一条诊断链(recordProviderEvent → UnknownEventLog → server
+	// 摘要 → App 处理中心)。
+	hermesUnknownHookOnce.Do(func() {
+		hermesapp.SetUnknownNotificationHook(func(method string, params json.RawMessage) {
+			recordProviderEvent("hermes", method, "", runtime.KindUnknownNotification, params)
+		})
+	})
 	return &HermesProvider{newClient: defaultNewHermesClient, threadMap: map[string]hermesThreadRef{}}
 }
 
@@ -352,7 +373,8 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	var final strings.Builder   // 仅消费者 goroutine 写;收尸(stopPump)后 Run 才读
 	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对;仅消费者访问)
 	var toolMu sync.Mutex
-	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:readLoop 收到任何一帧 = 适配器还活着
+	var notices nativeNoticeRecorder // 已知无投影变体的台账留痕口(KNOWN_PASSTHROUGH);未知变体走它的限频上屏
+	lastNotif := &atomic.Int64{}     // 看门狗活跃刻度:readLoop 收到任何一帧 = 适配器还活着
 	approvalWaiting := &atomic.Bool{}
 	type hermesNotifMsg struct {
 		ev  hermesapp.StreamEvent // 已解析的 session/update(生产者侧解析)
@@ -382,7 +404,7 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		for {
 			select {
 			case nm := <-notifCh:
-				p.projectSessionUpdate(nm.ev, sink, &final, toolIDs, &toolMu)
+				p.projectSessionUpdate(nm.ev, sink, &final, toolIDs, &toolMu, &notices)
 				processed.Add(1)
 			case <-notifStop:
 				return
@@ -429,8 +451,8 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	lastNotif.Store(time.Since(turnStart).Milliseconds()) // 初喂:单调毫秒,免疫墙钟跳变
 	log.Printf("[hermes] session/prompt session=%s 输入=%d字", sid, len([]rune(text)))
 	go func() {
-		stop, err := c.Prompt(ctx, sid, text)
-		outCh <- hermesPromptOutcome{stop: stop, err: err}
+		out, err := c.Prompt(ctx, sid, text)
+		outCh <- hermesPromptOutcome{out: out, err: err}
 	}()
 
 	tick := time.NewTicker(hermesWatchdogTick)
@@ -475,9 +497,19 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		}
 		return nil, nil, fmt.Errorf("hermes prompt: %w", res.err)
 	}
-	if hermesapp.StopReasonIsError(res.stop) {
-		return nil, nil, fmt.Errorf("hermes 轮次被拒/被取消(stopReason=%s)", res.stop)
+	// 【轮次用量(2026-10-07 补收)】prompt 应答自带 usage(输入/输出/思考/缓存读),
+	// 此前整块静默丢。经 Run 返回值交 server 层落轮次记录与线程累计(thread.go
+	// 的 usagePtr 通道);不另发 TurnServerMessage_Usage 流帧 —— 流帧那条通道在
+	// hermes 承载的是 usage_update 的"窗口占用"语义(InputTokens=used),两种口径
+	// 混用会污染手机 ContextUsageCard。
+	stop := ""
+	if res.out != nil {
+		stop = res.out.StopReason
 	}
+	if hermesapp.StopReasonIsError(stop) {
+		return nil, nil, fmt.Errorf("hermes 轮次被拒/被取消(stopReason=%s)", stop)
+	}
+	turnUsage := hermesUsageFromOutcome(res.out)
 
 	// 排空栅栏(dsh drainEvents 同款):先把已入队帧消费完(尾部正文不丢),
 	// 再收尸 —— 消费者退出后 final 归 Run 独占,以下读点无竞争。
@@ -485,18 +517,36 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	stopPump()
 	out := strings.TrimSpace(final.String())
 	if out == "" {
-		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:hermes 安装目录的 config.yaml 未配置 model.default,或凭据无效", res.stop)
+		return nil, nil, fmt.Errorf("hermes 轮次没有产出正文(stopReason=%s);常见原因:hermes 安装目录的 config.yaml 未配置 model.default,或凭据无效", stop)
 	}
 	log.Printf("[hermes] 一轮完成 session=%s 用时 %v 回复 %d 字", sid,
 		time.Since(turnStart).Round(time.Millisecond), len([]rune(out)))
 	return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: out}}}},
-		nil, nil
+		turnUsage, nil
 }
 
 // hermesPromptOutcome 是 prompt goroutine 的收场(形状同构 dsh 的 promptOutcome)。
 type hermesPromptOutcome struct {
-	stop string
-	err  error
+	out *hermesapp.PromptOutcome
+	err error
+}
+
+// hermesUsageFromOutcome 把 prompt 应答的 usage 翻成协议内用量(缺席不伪造:
+// outcome 为 nil / usage 为 nil / 全零一律 nil,server 层按无用量落账)。
+func hermesUsageFromOutcome(out *hermesapp.PromptOutcome) *pb.Usage {
+	if out == nil || out.Usage == nil {
+		return nil
+	}
+	u := out.Usage
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.TotalTokens == 0 {
+		return nil
+	}
+	return &pb.Usage{
+		InputTokens:     u.InputTokens,
+		OutputTokens:    u.OutputTokens,
+		CacheReadTokens: u.CachedReadTokens,
+		ReasoningTokens: u.ThoughtTokens,
+	}
 }
 
 // ---- 时长预算(与 dsh/codex 对表;包级变量仅为测试注入短值)----
@@ -549,8 +599,10 @@ func (p *HermesProvider) Steer(context.Context, string, []pb.ContentBlock) (bool
 
 // projectSessionUpdate 把一条已解析的 session/update 投影到 sink(只从 Run 的
 // 事件泵单消费者 goroutine 里调;只处理本轮会话的帧。final/toolIDs/sink 仅被
-// 这个 goroutine 读写,是消灭 P0 数据竞争的所有权边界)。
-func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sink, final *strings.Builder, toolIDs map[string]int, toolMu *sync.Mutex) {
+// 这个 goroutine 读写,是消灭 P0 数据竞争的所有权边界)。notices 是已知无投影
+// 变体的台账留痕口与未知变体的限频上屏口(2026-10-07 旁路审计收口:此前四类
+// 具名变体与未知变体在本函数里双双静默)。
+func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sink, final *strings.Builder, toolIDs map[string]int, toolMu *sync.Mutex, notices *nativeNoticeRecorder) {
 	switch {
 	case ev.MessageChunk != "":
 		final.WriteString(ev.MessageChunk)
@@ -581,6 +633,17 @@ func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sin
 		if tc.Diff != nil {
 			args["diff"] = map[string]string{"path": tc.Diff.Path, "oldText": tc.Diff.OldText, "newText": tc.Diff.NewText}
 		}
+		if len(tc.Locations) > 0 {
+			locs := make([]map[string]any, 0, len(tc.Locations))
+			for _, loc := range tc.Locations {
+				entry := map[string]any{"path": loc.Path}
+				if loc.Line > 0 {
+					entry["line"] = loc.Line
+				}
+				locs = append(locs, entry)
+			}
+			args["locations"] = locs
+		}
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 			Phase: phase,
 			Call: &pb.ToolCallBlock{
@@ -609,10 +672,78 @@ func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sin
 			Usage:              &pb.Usage{InputTokens: ev.Usage.Used},
 			ModelContextWindow: ev.Usage.Size,
 		}}})
+	case ev.SessionInfo != nil && ev.SessionInfo.Title != "":
+		// 【session_info_update(2026-10-07 补投影)】适配器自动起名(_on_session_title)
+		// 与压缩头轮转(provenance)各发一条,此前静默。标题用户可见:发 STATUS 卡
+		// (与"思考强度"同通道);台账留痕走 KNOWN_PASSTHROUGH。标题到 thread 落库的
+		// 全量同步(codex/zcode/pi 的 TitleHandler→server)需要 server 层接线,另案。
+		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+			Kind:    pb.CodexEvent_STATUS,
+			Code:    "session_title",
+			Title:   "hermes · 会话命名",
+			Message: ev.SessionInfo.Title,
+		}}})
+	case ev.SessionInfo != nil:
+		// 无标题的 session_info(压缩头轮转的出处帧):已知协议成员,台账留痕。
+		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
+	case ev.UserChunk != "":
+		// 排队 prompt 回显 / 历史回放:手机端已展示用户自己的输入(dsh 同口径),
+		// 不重投影;台账 KNOWN_PASSTHROUGH 留痕,不再静默。
+		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
+	case ev.CurrentMode != "":
+		// 会话模式变化通知(ACP 变体;现装 hermes 适配器静读未发现发送点):已知
+		// 协议成员,台账留痕。
+		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
+	case ev.CommandsSeen > 0:
+		// 斜杠命令面广告(commands.py _send_available_commands_update):daemon 暂无
+		// 消费方,已知协议成员 → 台账留痕(dsh available_commands_update 同档)。
+		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
+	default:
+		// 【default 兜底(2026-10-07 收口)】两种情形,分档不混:
+		//   - 变体名认识但本轮无内容可投影(空文本 chunk、零值 usage 等):已知
+		//     路径上的空转,KNOWN_* 台账留痕(dshNoticeKind 同口径),不推屏;
+		//   - 变体名认不出:真未知 → UNKNOWN_NOTIFICATION 台账 + recordAs 限频
+		//     上屏(每方法至多 2 张卡),与四家的 default 兜底同一条管道。
+		if len(ev.Raw) == 0 {
+			return
+		}
+		kind := hermesNoticeKind(ev.Variant)
+		if kind == runtime.KindUnknownNotification {
+			notices.recordAs(kind, "hermes", hermesLedgerMethod(ev), ev.Raw, sink)
+		} else {
+			notices.recordLedgerOnly(kind, "hermes", hermesLedgerMethod(ev), ev.Raw)
+		}
 	}
-	// user_message_chunk(排队回显/历史回放)/ current_mode_update /
-	// available_commands_update / session_info_update:解析层已具名(daemon
-	// 暂无 sink 消费方),不透传、不误当未知。
+}
+
+// hermesNoticeKind 给 session/update 变体分档(规格 §4.6 normalized_kind;判定
+// 依据是"daemon 对这个变体做了什么",与 dshNoticeKind 同一口径):
+//   - 五件套在投影面有专属 case(agent_message_chunk / agent_thought_chunk /
+//     tool_call / tool_call_update / plan / usage_update)→ KNOWN_PROJECTED,
+//     走到兜底 = 已知路径上的空转或意外形状;
+//   - 四类具名无投影变体 → KNOWN_PASSTHROUGH(台账留痕,不冒充未知);
+//   - 其余(含空变体名)→ UNKNOWN_NOTIFICATION,如实记真没见过。
+func hermesNoticeKind(variant string) string {
+	switch variant {
+	case "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
+		"plan", "usage_update":
+		return runtime.KindKnownProjected
+	case "user_message_chunk", "current_mode_update", "available_commands_update",
+		"session_info_update":
+		return runtime.KindKnownPassthrough
+	}
+	return runtime.KindUnknownNotification
+}
+
+// hermesLedgerMethod 台账登记名:hermes 已知/未知变体统一挂 session/update 方法
+// 名下,带变体后缀(dsh "session/update:<kind>" / zcode "session/event:<type>"
+// 同款后缀先例),词表翻译与诊断页过滤天然命中。坏帧(Raw 为空)不该走到这里。
+func hermesLedgerMethod(ev hermesapp.StreamEvent) string {
+	if ev.Variant != "" {
+		return "session/update:" + ev.Variant
+	}
+	return "session/update"
 }
 
 // ---- 会话就绪(重挂载握手纪律:校验不能省,dsh 同款)----

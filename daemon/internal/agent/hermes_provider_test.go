@@ -43,6 +43,10 @@ type fakeHermesClient struct {
 
 	responds   []fakeRespond
 	respondErr []fakeRespondErr
+
+	// promptUsage 是 Prompt 注入的轮次用量(默认 nil;用量映射钉子用,见
+	// hermes_field_coverage_20261007_test.go)。
+	promptUsage *hermesapp.TurnUsage
 }
 
 type fakeRespond struct {
@@ -123,12 +127,14 @@ func (f *fakeHermesClient) SetSessionModel(_ context.Context, sessionID, modelID
 }
 
 // Prompt 脚本:回放工具帧;文本带 need-approval 时同步发审批反向请求。
-func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (string, error) {
+// 终局应答形状对 server.py _finish_turn(可经 promptUsage 注入 usage)。
+func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (*hermesapp.PromptOutcome, error) {
 	f.mu.Lock()
 	f.promptCalls++
 	f.promptSids = append(f.promptSids, sessionID)
 	f.promptTexts = append(f.promptTexts, text)
 	notif, req := f.notifFn, f.reqFn
+	usage := f.promptUsage
 	f.mu.Unlock()
 	if notif != nil {
 		notif(json.RawMessage(`{"sessionId":"` + sessionID + `","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"正文片段"}}}`))
@@ -142,7 +148,7 @@ func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (st
 	if req != nil && strings.Contains(text, "need-approval") {
 		req(9001, "session/request_permission", json.RawMessage(fakePermParams))
 	}
-	return "end_turn", nil
+	return &hermesapp.PromptOutcome{StopReason: "end_turn", Usage: usage}, nil
 }
 
 const fakePermParams = `{"sessionId":"cur","toolCall":{"toolCallId":"perm-check-1","title":"运行命令: mkdir x","kind":"execute","status":"pending","rawInput":{"command":"mkdir x"}},"options":[{"optionId":"allow_once","kind":"allow_once","name":"Allow once"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}`

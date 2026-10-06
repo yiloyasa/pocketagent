@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pocketagent/daemon/internal/hermesapp"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
@@ -55,7 +56,7 @@ func (c *pumpWiringProbe) SetTurnHandlers(notif func(json.RawMessage), req func(
 
 // Prompt 在委托给假客户端之前抓拍当前钩子:hermes.go 的【泵安装】行在启动
 // prompt goroutine 之前同步执行,故抓拍值非 nil ⟺ 泵先于 Prompt 装好。
-func (c *pumpWiringProbe) Prompt(ctx context.Context, sessionID, text string) (string, error) {
+func (c *pumpWiringProbe) Prompt(ctx context.Context, sessionID, text string) (*hermesapp.PromptOutcome, error) {
 	c.mu.Lock()
 	if !c.promptSeen {
 		c.promptSeen = true

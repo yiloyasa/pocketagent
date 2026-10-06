@@ -111,10 +111,14 @@ func main() {
 	defer c.SetTurnHandlers(nil, nil)
 
 	task := fmt.Sprintf("请在工作区创建文件 %s,内容恰好一行:hermes approval probe ok。只允许写到工作区内。完成后只回复两个字母:OK。", target)
-	stop, err := c.Prompt(ctx, st.SessionID, task)
+	out, err := c.Prompt(ctx, st.SessionID, task)
 	if err != nil {
 		fmt.Printf("[4] prompt 失败: %v\n", err)
 	} else {
+		stop := ""
+		if out != nil {
+			stop = out.StopReason
+		}
 		fmt.Printf("[4] prompt stop=%s\n", stop)
 	}
 

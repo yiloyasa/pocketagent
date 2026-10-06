@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -264,17 +265,22 @@ func isNullJSON(raw json.RawMessage) bool {
 }
 
 // StreamEvent 一条 session/update 投影(已解析的最小面,供 Provider 映射)。
-// 【变体对表(2026-10-02 server.py/events.py 静读 + 真机探针实测)】
+// 【变体对表(2026-10-02 server.py/events.py 静读 + 真机探针实测;2026-10-07
+// 复核 acp_adapter 全量静读,证据 docs/reviews/2026-10-07/field-coverage-hermes.md)】
 //
 //	agent_message_chunk / agent_thought_chunk / tool_call / tool_call_update /
 //	plan —— 主投影五件套(Provider 消费);
 //	user_message_chunk(排队 prompt 回显 + load 历史回放)/ current_mode_update /
 //	available_commands_update / usage_update(上下文占用→ provider 投影为
 //	TurnServerMessage_Usage 发手机)/ session_info_update(标题/压缩轮转)
-//	—— 已知协议成员,逐变体具名解析(不再笼统静默),暂无消费方的留字段待接;
-//	未知变体如实带 Raw 上抛(未知事件同一纪律)。
+//	—— 已知协议成员,逐变体具名解析(不再笼统静默),无投影消费方的由 provider
+//	落未知事件台账留痕(KNOWN_PASSTHROUGH 档,不再静默);
+//	未知变体如实带 Raw 上抛(未知事件同一纪律)。Variant 记变体原名,供台账
+//	登记名对表(dsh "session/update:<kind>" 同款后缀惯例)。
 type StreamEvent struct {
 	SessionID string
+	// Variant 是 update.sessionUpdate 原文(未知变体也有;坏帧为空)。
+	Variant string
 	// 以下按 Update 分类:
 	MessageChunk string // agent_message_chunk 正文增量
 	ThoughtChunk string // agent_thought_chunk 思考增量
@@ -310,7 +316,17 @@ type ToolCallEvent struct {
 	// Diff 是 content 里 type=diff 的编辑提案(write_file/patch 实测:
 	// FileEditToolCallContent{path, oldText, newText}),nil = 无。
 	Diff     *ToolDiff
-	RawInput json.RawMessage // rawInput 原样透传
+	// Locations 是工具涉及的文件位置(ACP ToolCallLocation{path,line}:read_file/
+	// write_file/patch 的 args.path 实测经 tools.py extract_locations 上报;line
+	// 缺席为 0)。此前解析层不收、工具卡上无文件位置 —— 2026-10-07 补收。
+	Locations []ToolLocation
+	RawInput  json.RawMessage // rawInput 原样透传
+}
+
+// ToolLocation 是 ACP ToolCallLocation(path 必有;line 可缺席,0 = 未上报)。
+type ToolLocation struct {
+	Path string
+	Line int64
 }
 
 // ToolDiff 是编辑类工具调用的 diff 内容块。
@@ -341,7 +357,11 @@ type updateBody struct {
 	ToolKind    string          `json:"kind"`
 	ToolCallID  string          `json:"toolCallId"`
 	RawInput    json.RawMessage `json:"rawInput"`
-	Entries     []struct {
+	Locations   []struct {
+		Path string `json:"path"`
+		Line int64  `json:"line"`
+	} `json:"locations"`
+	Entries []struct {
 		Content string `json:"content"`
 		Status  string `json:"status"`
 	} `json:"entries"`
@@ -382,6 +402,7 @@ func ParseSessionUpdate(params json.RawMessage) StreamEvent {
 	}
 	ev.SessionID = p.SessionID
 	u := p.Update
+	ev.Variant = u.SessionUpdate
 	// content 二解:文本类变体按单对象,工具类变体按数组(解析失败 = 空处理)。
 	var textBlk textContentBlock
 	var toolBlks []toolContentBlock
@@ -420,6 +441,11 @@ func ParseSessionUpdate(params json.RawMessage) StreamEvent {
 				}
 			}
 		}
+		for _, loc := range u.Locations {
+			if loc.Path != "" {
+				tc.Locations = append(tc.Locations, ToolLocation{Path: loc.Path, Line: loc.Line})
+			}
+		}
 		// rawInput 字面 null 归一为空(缺席语义,不应答与真实输入区分开)。
 		if string(tc.RawInput) == "null" {
 			tc.RawInput = nil
@@ -445,26 +471,48 @@ func ParseSessionUpdate(params json.RawMessage) StreamEvent {
 	return ev
 }
 
+// PromptOutcome 是 session/prompt 的终局应答(stopReason + 轮次用量)。
+// 【usage 形状实证 server.py _finish_turn】Usage(input_tokens, output_tokens,
+// total_tokens, thought_tokens=result.get("reasoning_tokens"),
+// cached_read_tokens=…),且仅当三者任一非 None 时在场 —— 缺席 = 适配器没拿到
+// 用量,不伪造。此前 Prompt 只回 stopReason,轮次用量整块静默丢(手机端轮次
+// 用量/线程累计两处都吃不到),2026-10-07 补收。
+type PromptOutcome struct {
+	StopReason string     `json:"stopReason"`
+	Usage      *TurnUsage `json:"usage,omitempty"`
+}
+
+// TurnUsage 是 prompt 应答的 usage 对象(server.py 实测形状;0 = 字段缺席)。
+type TurnUsage struct {
+	InputTokens      int64 `json:"input_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+	ThoughtTokens    int64 `json:"thought_tokens"`
+	CachedReadTokens int64 `json:"cached_read_tokens"`
+}
+
 // Prompt 发一轮输入并阻塞到轮次终局。流式增量经 OnSessionUpdate 钩子实时回调
-// (挂钩要在调用本方法前完成);返回值 = stopReason(end_turn / refusal / cancelled…)。
+// (挂钩要在调用本方法前完成);返回值 = 终局应答(stopReason 取 end_turn /
+// refusal / cancelled…,Usage 为轮次 token 用量,缺席为 nil)。
 // 【长调用,无 120s 兜底】本方法阻塞到整轮结束(长流式轮次轻松超 2 分钟),走
 // CallTurnCtx(两路 select,无 callTimeout)—— 兜底会把长轮次误杀成假死超时;
 // 存活由 hermes 看门狗三闸(150s 静默 + 60min 上限 + 审批豁免)与 ctx 取消治理。
-func (c *Client) Prompt(ctx context.Context, sessionID, text string) (string, error) {
+func (c *Client) Prompt(ctx context.Context, sessionID, text string) (*PromptOutcome, error) {
 	raw, err := c.CallTurnCtx(ctx, "session/prompt", map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": text}},
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var out struct {
-		StopReason string `json:"stopReason"`
+	out := &PromptOutcome{}
+	if json.Unmarshal(raw, out) != nil {
+		// 应答体解析失败:不伪造 stopReason,给空终局留痕(prompt 侧按空串走
+		// "正文判据",与旧口径一致,只是多一条日志可查)。
+		log.Printf("[hermes-acp] session/prompt 应答体无法解析(原样留日志): %s", truncateForLog(string(raw), 300))
+		return out, nil
 	}
-	if json.Unmarshal(raw, &out) != nil {
-		return "", nil
-	}
-	return out.StopReason, nil
+	return out, nil
 }
 
 // ---- 轮次取消(session/cancel,ACP 通知)----

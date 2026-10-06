@@ -361,6 +361,11 @@ func (r *nativeNoticeRecorder) recordAs(kind, agentID, method string, raw json.R
 	}
 	r.count[method]++
 	r.mu.Unlock()
+	// sink 为 nil = 只留痕不出卡(调用方已有自己的用户可见承载,如 dsh 工具
+	// 卡已发、隐藏 content 只需诊断台账)。
+	if sink == nil {
+		return
+	}
 	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
 		Kind: pb.CodexEvent_STATUS, Code: "native_notification", Title: agentID + " · " + method,
 		Message: "原生状态通知", RawJson: redactNativePayload(raw),

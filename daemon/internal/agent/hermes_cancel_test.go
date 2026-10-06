@@ -54,7 +54,7 @@ func newSlowHermesFake(base *fakeHermesClient) *hermesSlowFake {
 	}
 }
 
-func (f *hermesSlowFake) Prompt(ctx context.Context, sessionID, text string) (string, error) {
+func (f *hermesSlowFake) Prompt(ctx context.Context, sessionID, text string) (*hermesapp.PromptOutcome, error) {
 	f.promptBegin <- sessionID
 	if f.firePerm {
 		f.mu.Lock()
@@ -66,10 +66,10 @@ func (f *hermesSlowFake) Prompt(ctx context.Context, sessionID, text string) (st
 	}
 	select {
 	case <-f.release:
-		return "end_turn", nil
+		return &hermesapp.PromptOutcome{StopReason: "end_turn"}, nil
 	case <-ctx.Done():
 		close(f.stopped)
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
@@ -289,7 +289,7 @@ func TestHermesUsageUpdateProjection(t *testing.T) {
 	var events []*pb.TurnServerMessage
 	sink := func(ev *pb.TurnServerMessage) { events = append(events, ev) }
 	raw := json.RawMessage(`{"sessionId":"s1","update":{"sessionUpdate":"usage_update","size":128000,"used":4200}}`)
-	p.projectSessionUpdate(hermesapp.ParseSessionUpdate(raw), sink, &strings.Builder{}, map[string]int{}, &sync.Mutex{})
+	p.projectSessionUpdate(hermesapp.ParseSessionUpdate(raw), sink, &strings.Builder{}, map[string]int{}, &sync.Mutex{}, &nativeNoticeRecorder{})
 
 	if len(events) != 1 {
 		t.Fatalf("usage_update 应投影为一帧, got %d", len(events))

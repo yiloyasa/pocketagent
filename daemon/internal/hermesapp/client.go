@@ -62,6 +62,32 @@ func (c *Client) SetTurnHandlers(notif func(json.RawMessage), req func(id int64,
 	c.hs.Store(&hermesHandlers{Notif: notif, Req: req})
 }
 
+// unknownNotificationHook 是"非 session/update 通知"的上抛钩子(readLoop 的
+// default 分支消费)。注入式而非 import:hermesapp 在 daemon 分层里位于 agent
+// 之下,未知事件台账(agent 包的 sharedRuntimeBackend)由上层接线 —— 与
+// SessionMCPServersSource 同款包级注入先例;atomic.Pointer 装载,多 provider
+// 实例(生产单例 + 测试多实例)并发安全。
+var unknownNotificationHook atomic.Pointer[func(method string, params json.RawMessage)]
+
+// SetUnknownNotificationHook 注册未知通知上抛钩子(生产路径由 agent/hermes.go
+// 注入台账;nil = 卸下,readLoop 回落到日志留痕)。
+func SetUnknownNotificationHook(fn func(method string, params json.RawMessage)) {
+	if fn == nil {
+		unknownNotificationHook.Store(nil)
+		return
+	}
+	unknownNotificationHook.Store(&fn)
+}
+
+// UnknownNotificationHook 返回当前钩子(nil = 未注入)。供上层(agent 测试)
+// 断言"NewHermesProvider 已完成台账接线",不为此再开第二份真值。
+func UnknownNotificationHook() func(method string, params json.RawMessage) {
+	if fn := unknownNotificationHook.Load(); fn != nil {
+		return *fn
+	}
+	return nil
+}
+
 // loadHandlers 取当前钩子快照(无钩子返回 nil)。
 func (c *Client) loadHandlers() *hermesHandlers { return c.hs.Load() }
 
@@ -247,6 +273,10 @@ func (c *Client) readLoop() {
 			// 应答帧
 			var id int64
 			if jsonErr := json.Unmarshal(w.ID, &id); jsonErr != nil {
+				// id 解析不了的应答帧(字符串 id 等)无法关联任何在途调用:不静默,
+				// 留一条日志可查(应答帧无法回错误帧,这是它唯一能去的地方)。
+				log.Printf("[hermes-acp] 收到 id 无法解析的应答帧(id=%s),丢弃留痕",
+					truncateForLog(string(w.ID), 64))
 				continue
 			}
 			c.mu.Lock()
@@ -273,7 +303,17 @@ func (c *Client) readLoop() {
 				h.Notif(w.Params)
 			}
 		default:
-			// 其他通知(非 session/update):daemon 侧无消费方,静默丢。
+			// 其他通知(非 session/update):ACP 客户端方法面(venv acp/meta.py
+			// CLIENT_METHODS)里除 session/update 外全是带 id 的反向请求(走上面
+			// 分支),这里只可能是上游新版发来的未识别通知 —— 经 UnknownNotification
+			// 钩子上抛进 daemon 未知事件台账(agent 包注入,未知事件同一纪律),
+			// 不再静默丢;未装钩子(纯传输层测试)至少留一条日志。
+			if fn := unknownNotificationHook.Load(); fn != nil {
+				(*fn)(w.Method, w.Params)
+			} else {
+				log.Printf("[hermes-acp] 未识别的通知 %s(未装上抛钩子,留痕于此)",
+					truncateForLog(w.Method, 120))
+			}
 		}
 	}
 }

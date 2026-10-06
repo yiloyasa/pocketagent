@@ -340,12 +340,12 @@ func TestFakeProcessApprovalRound(t *testing.T) {
 			})
 			defer c.SetTurnHandlers(nil, nil)
 
-			stop, err := c.Prompt(nil, st.SessionID, "need-approval 创建文件")
+			out, err := c.Prompt(nil, st.SessionID, "need-approval 创建文件")
 			if err != nil {
 				t.Fatalf("prompt 应成功: %v", err)
 			}
-			if stop != "end_turn" {
-				t.Fatalf("stopReason = %q", stop)
+			if out == nil || out.StopReason != "end_turn" {
+				t.Fatalf("stopReason = %+v", out)
 			}
 			// 对账:适配器把收到的 outcome 回显进正文;diff 工具帧与 usage 帧照常到。
 			var sawOutcome, sawTool, sawUsage bool

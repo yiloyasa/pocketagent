@@ -81,10 +81,14 @@ func main() {
 			reply.WriteString(ev.MessageChunk)
 		}
 	}, nil)
-	stop, err := c.Prompt(ctx, st.SessionID, "只回复两个字符:pong")
+	out, err := c.Prompt(ctx, st.SessionID, "只回复两个字符:pong")
 	if err != nil {
 		fmt.Printf("[4] prompt 失败(常见:模型/凭据未配,差距见报告): %v\n", err)
 	} else {
+		stop := ""
+		if out != nil {
+			stop = out.StopReason
+		}
 		fmt.Printf("[4] prompt stop=%s reply=%q\n", stop, strings.TrimSpace(reply.String()))
 	}
 	c.SetTurnHandlers(nil, nil)
@@ -182,13 +186,13 @@ func runCancelScenario(c *hermesapp.Client, ctx context.Context, sid string) {
 	defer c.SetTurnHandlers(nil, nil)
 
 	type promptOutcome struct {
-		stop string
-		err  error
+		out *hermesapp.PromptOutcome
+		err error
 	}
 	out := make(chan promptOutcome, 1)
 	go func() {
-		stop, err := c.Prompt(ctx, sid, "写一篇两千字的散文,主题是秋夜的萤火,从头写到尾不要停,不要提前收束。")
-		out <- promptOutcome{stop, err}
+		res, err := c.Prompt(ctx, sid, "写一篇两千字的散文,主题是秋夜的萤火,从头写到尾不要停,不要提前收束。")
+		out <- promptOutcome{res, err}
 	}()
 
 	select {
@@ -216,9 +220,13 @@ func runCancelScenario(c *hermesapp.Client, ctx context.Context, sid string) {
 			fmt.Printf("!! prompt 未按终局应答返回(err=%v)—— cancel_event 未生效或通道已坏\n", res.err)
 			return
 		}
-		fmt.Printf("[C3] prompt 终局 stop=%s\n", res.stop)
-		if res.stop != "cancelled" {
-			fmt.Printf("!! stopReason=%s ≠ cancelled —— 取消未传导到轮次终局(差距)\n", res.stop)
+		stop := ""
+		if res.out != nil {
+			stop = res.out.StopReason
+		}
+		fmt.Printf("[C3] prompt 终局 stop=%s\n", stop)
+		if stop != "cancelled" {
+			fmt.Printf("!! stopReason=%s ≠ cancelled —— 取消未传导到轮次终局(差距)\n", stop)
 		}
 	case <-time.After(30 * time.Second):
 		fmt.Println("!! 发取消后 30s prompt 仍未返回 —— session/cancel 没叫停轮次(差距)")
