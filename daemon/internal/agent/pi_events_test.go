@@ -205,7 +205,7 @@ func TestPiUIBudgetIs120s(t *testing.T) {
 
 func TestApprovalCallFromUI(t *testing.T) {
 	// confirm 保持专用确认卡(手机按"允许/拒绝"渲染)
-	call := ApprovalCallFromUI("uuid-1", "confirm", "Dangerous!", "Allow rm -rf?", nil)
+	call := ApprovalCallFromUI("uuid-1", "confirm", "Dangerous!", "Allow rm -rf?", nil, "", "")
 	if call.Id != "uuid-1" || call.Name != "pi_ui_confirm" {
 		t.Fatalf("审批卡动作字段错误: id=%q name=%q", call.Id, call.Name)
 	}
@@ -218,7 +218,7 @@ func TestApprovalCallFromUI(t *testing.T) {
 // select 选项必须完整透传进 request_user_input 反问卡(不再"自动取第一项"
 // 的前提是用户看得见全部选项)。
 func TestApprovalCallFromUISelectPassesOptions(t *testing.T) {
-	call := ApprovalCallFromUI("uuid-2", "select", "选个方案", "要哪种部署方式?", []string{"方案A", "方案B"})
+	call := ApprovalCallFromUI("uuid-2", "select", "选个方案", "要哪种部署方式?", []string{"方案A", "方案B"}, "", "")
 	if call.Id != "uuid-2" || call.Name != toolNameAskUser {
 		t.Fatalf("select 应回反问卡(%s): id=%q name=%q", toolNameAskUser, call.Id, call.Name)
 	}
@@ -250,7 +250,7 @@ func TestApprovalCallFromUISelectPassesOptions(t *testing.T) {
 // input/editor:不给选项(手机渲染为纯输入框),题干照常透传。
 func TestApprovalCallFromUIInputNoOptions(t *testing.T) {
 	for _, m := range []string{"input", "editor"} {
-		call := ApprovalCallFromUI("uuid-3", m, "补充说明", "", nil)
+		call := ApprovalCallFromUI("uuid-3", m, "补充说明", "", nil, "", "")
 		if call.Name != toolNameAskUser {
 			t.Fatalf("%s 应回反问卡,得到 %q", m, call.Name)
 		}

@@ -148,7 +148,11 @@ type UIRequest struct {
 	Message   string   // confirm 的正文
 	Options   []string // select 的选项
 	TimeoutMs int64    // 扩展自带的超时;0 = 无(daemon 必须自己兜底,见 §4.6)
-	Raw       json.RawMessage
+	// Placeholder/Prefill 是 input/editor 的提示与预填(rpc-types.d.ts:425/432,
+	// pi 1.0.2 字段级全适配审计补收)——手机反问卡据此渲染输入提示,不丢语境。
+	Placeholder string // input 的占位提示(可空)
+	Prefill     string // editor 的预填文本(可空)
+	Raw         json.RawMessage
 }
 
 // Dialog 报告这是不是需要应答的 dialog 类请求。
@@ -694,17 +698,21 @@ func (c *Client) emit(ev Event) {
 // parseUIRequest 解析 extension_ui_request(只取用得到的字段)。
 func parseUIRequest(line []byte) *UIRequest {
 	var raw struct {
-		ID      string `json:"id"`
-		Method  string `json:"method"`
-		Title   string `json:"title"`
-		Message string `json:"message"`
-		Options []any  `json:"options"`
-		Timeout any    `json:"timeout"`
+		ID          string `json:"id"`
+		Method      string `json:"method"`
+		Title       string `json:"title"`
+		Message     string `json:"message"`
+		Options     []any  `json:"options"`
+		Timeout     any    `json:"timeout"`
+		Placeholder string `json:"placeholder"`
+		Prefill     string `json:"prefill"`
 	}
 	if json.Unmarshal(line, &raw) != nil || raw.ID == "" {
 		return nil
 	}
-	req := &UIRequest{ID: raw.ID, Method: raw.Method, Title: raw.Title, Message: raw.Message, Raw: append([]byte(nil), line...)}
+	req := &UIRequest{ID: raw.ID, Method: raw.Method, Title: raw.Title, Message: raw.Message,
+		Placeholder: raw.Placeholder, Prefill: raw.Prefill,
+		Raw: append([]byte(nil), line...)}
 	for _, o := range raw.Options {
 		if s, ok := o.(string); ok {
 			req.Options = append(req.Options, s)

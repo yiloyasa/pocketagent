@@ -724,6 +724,13 @@ func piEventNoticeKind(eventType string) string {
 		"summarization_retry_attempt_start", "summarization_retry_finished",
 		"extension_error", "bash_execution_update", "thinking_level_changed":
 		return runtime.KindKnownPassthrough
+	case "model_changed", "model_select", "state_changed":
+		// 【1.0.2 审计 G6】三类不在 pi 1.0.2 事件全集里(AgentSessionEvent 并集
+		// 无此三类,0.85.1 时代防御残留),Run 的 consume 却有真实投影分支
+		// (InvalidateModels + emitRuntimeSelection → Started 帧)—— 旧分档漏收,
+		// 一旦旧版 pi 回连,已投影的事件会被灌成 UNKNOWN 淹诊断页。分类依据是
+		// "daemon 做了什么":有投影 → PROJECTED。
+		return runtime.KindKnownProjected
 	}
 	return piNoticeKind(eventType)
 }
@@ -866,7 +873,7 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		// 【看门狗豁免】等手机的这段时间 pi 合法地不出事件,登记在飞数让
 		// 静默闸绕行(与 codex/dsh/zcode/hermes 的审批豁免同口径)。
 		p.uiInFlight.Add(1)
-		approved, note, aerr := approve(actx, ApprovalCallFromUI(uireq.ID, uireq.Method, uireq.Title, uireq.Message, uireq.Options))
+		approved, note, aerr := approve(actx, ApprovalCallFromUI(uireq.ID, uireq.Method, uireq.Title, uireq.Message, uireq.Options, uireq.Placeholder, uireq.Prefill))
 		p.uiInFlight.Add(-1)
 		if aerr != nil {
 			log.Printf("[pi] 审批 %s(%s)未取得手机决定,回 cancelled: %v", uireq.ID, uireq.Method, aerr)
@@ -1043,6 +1050,15 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 				// UIRequestHandler 专线处理、已知 fire-and-forget 无应答通道,两者
 				// 在 consumePiUnknownUIRequest 里原样放行,维持静默忽略
 				// (实测 26 次 setStatus 噪声)。
+				// 【notify 例外(1.0.2 审计 G3)】notify 是扩展发给用户的即时通知
+				// (info/warning/error),不属于"机器交互",静默会吞掉用户可见内容
+				// —— 先映射成状态/警告卡上屏(不回写,fire-and-forget 无应答通道),
+				// 其余 fire-and-forget(setStatus/setWidget/setTitle/set_editor_text
+				// 是桌面 TUI 专属面)与未知 method 照旧走下方管道。
+				if cev, ok := MapUINotify(ev.Raw); ok {
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
+					return
+				}
 				frame := append(json.RawMessage(nil), ev.Raw...)
 				// 【看门狗豁免】等手机确认的这段时间同样登记在飞数(与 dialog
 				// 审批同口径,预算同为 piUIBudget)。

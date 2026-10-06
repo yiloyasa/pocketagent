@@ -294,6 +294,36 @@ func MapToolExecStart(raw json.RawMessage) (pb.ToolCallUpdate, bool) {
 
 // ---- get_session_stats ----
 
+// piStatsCost get_session_stats.data.cost 的双形状兼容载体。
+//
+// 【为什么必须兼容两种形状(pi 1.0.2 字段级审计 G1,P0)】
+//   - pi 1.0.2(本机实装)是**纯数字**:docs/rpc-commands.md:555 实样
+//     `"cost": 0.45`;实现 dist/core/usage-totals.js 的 createUsageTotals
+//     `cost: 0` + addUsageToTotals `totals.cost += usage.cost.total`,
+//     agent-session.js getSessionStats `cost: usageTotals.cost`。
+//   - pi ≤0.99.x 是对象 {"total":…}(0.99.1 探针实帧,pi_events_test.go 夹具)。
+//
+// 此前按对象硬解:1.0.2 的每帧 stats 都 json.Unmarshal 失败 → parseSessionStats
+// 返回 nil → 用量基线/轮询兜底/收尾定稿/contextUsage 窗口**全部静默哑火**
+// (statsQuiet 失败即沉默,不推任何帧)。双形状兼容后新旧两代协议同一段代码。
+type piStatsCost struct{ Total float64 }
+
+func (c *piStatsCost) UnmarshalJSON(b []byte) error {
+	var num float64
+	if json.Unmarshal(b, &num) == nil {
+		c.Total = num
+		return nil
+	}
+	var obj struct {
+		Total float64 `json:"total"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	c.Total = obj.Total
+	return nil
+}
+
 // piSessionStats get_session_stats.data(只取用得到的字段)。
 type piSessionStats struct {
 	Tokens struct {
@@ -303,9 +333,7 @@ type piSessionStats struct {
 		CacheWrite int64 `json:"cacheWrite"`
 		Total      int64 `json:"total"`
 	} `json:"tokens"`
-	Cost struct {
-		Total float64 `json:"total"`
-	} `json:"cost"`
+	Cost piStatsCost `json:"cost"`
 	ContextUsage *struct {
 		Tokens        *int64 `json:"tokens"`
 		ContextWindow int64  `json:"contextWindow"`
@@ -383,10 +411,17 @@ func MapStatusEvent(evType string, raw json.RawMessage) (*pb.CodexEvent, bool) {
 		// errorMessage 非空 = 压缩失败;willRetry=true = 溢出恢复成功、即将重试
 		// 当前任务(压缩本身已成功)。旧实现一律报"已压缩",0.99.1 语义下会把
 		// 中止/失败冒充成功 —— 按四态如实呈现。
+		// 【1.0.2 审计 G5】completed 态补读 result.{tokensBefore,
+		// estimatedTokensAfter}(docs/json.md:144-148 实样),压缩前后体量上卡
+		// —— pi TUI /session 同款信息,手机端不再只看到"完成了"而不知道压了多少。
 		var e struct {
 			Aborted      bool   `json:"aborted"`
 			WillRetry    bool   `json:"willRetry"`
 			ErrorMessage string `json:"errorMessage"`
+			Result       *struct {
+				TokensBefore         int64 `json:"tokensBefore"`
+				EstimatedTokensAfter int64 `json:"estimatedTokensAfter"`
+			} `json:"result"`
 		}
 		_ = json.Unmarshal(raw, &e)
 		ev.Kind = pb.CodexEvent_CONTEXT_COMPACTED
@@ -402,10 +437,15 @@ func MapStatusEvent(evType string, raw json.RawMessage) (*pb.CodexEvent, bool) {
 		default:
 			ev.Code = "completed"
 			ev.Title = "上下文已压缩"
+			msg := ""
+			if e.Result != nil && e.Result.TokensBefore > 0 {
+				msg = fmt.Sprintf("上下文 %d → 约 %d tokens。",
+					e.Result.TokensBefore, e.Result.EstimatedTokensAfter)
+			}
 			if e.WillRetry {
-				ev.Message = "上下文压缩完成(溢出恢复),即将重试刚才的任务。"
+				ev.Message = "上下文压缩完成(溢出恢复),即将重试刚才的任务。" + msg
 			} else {
-				ev.Message = "上下文压缩完成,继续执行。"
+				ev.Message = "上下文压缩完成,继续执行。" + msg
 			}
 		}
 		return ev, true
@@ -450,6 +490,55 @@ func MapStatusEvent(evType string, raw json.RawMessage) (*pb.CodexEvent, bool) {
 			ev.Message = "重试失败:" + e.FinalError
 		}
 		return ev, true
+	case "summarization_retry_scheduled":
+		// 【1.0.2 审计 G2】压缩/分支摘要的 LLM 调用失败后的自动重试排程,与
+		// auto_retry_* 同族(auto_retry 有专属卡,本族此前只经 recordAs 限 2 卡、
+		// 之后静默 —— 重试等待期的停顿会被误读成卡死)。字段与 auto_retry_start
+		// 同形:attempt/maxAttempts/delayMs/errorMessage(bundle:
+		// _summarizationRetryCallbacks → onRetryScheduled;docs/json.md:175 实样)。
+		var e struct {
+			Attempt      int    `json:"attempt"`
+			MaxAttempts  int    `json:"maxAttempts"`
+			DelayMs      int    `json:"delayMs"`
+			ErrorMessage string `json:"errorMessage"`
+		}
+		_ = json.Unmarshal(raw, &e)
+		ev.Kind = pb.CodexEvent_RETRY_STARTED
+		ev.Code = "summarization_retry"
+		ev.Title = fmt.Sprintf("上下文摘要重试中(第 %d/%d 次)", e.Attempt, e.MaxAttempts)
+		if e.DelayMs > 0 {
+			ev.Title += fmt.Sprintf(" 约 %d 秒后", (e.DelayMs+999)/1000)
+		}
+		ev.Message = firstNonEmpty(e.ErrorMessage, "上一次摘要生成失败,已安排自动重试。")
+		ev.WillRetry = true
+		ev.Attempt = int32(e.Attempt)
+		return ev, true
+	case "summarization_retry_attempt_start":
+		// source 区分两类摘要:compaction(带 reason:manual/threshold/overflow)
+		// 与 branchSummary(reason 缺席,docs/json.md:180)。
+		var e struct {
+			Source string `json:"source"`
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(raw, &e)
+		ev.Kind = pb.CodexEvent_RETRY_STARTED
+		ev.Code = "summarization_retry"
+		if e.Source == "branchSummary" {
+			ev.Title = "正在重试分支摘要"
+			ev.Message = "分支摘要生成中,期间输出可能停顿,不是卡死。"
+		} else {
+			ev.Title = "正在重试上下文摘要"
+			ev.Message = "正在重新生成压缩摘要(" + firstNonEmpty(e.Reason, "compaction") + "),期间输出可能停顿,不是卡死。"
+		}
+		return ev, true
+	case "summarization_retry_finished":
+		// 无字段帧(bundle:onRetryFinished → {type} 一发):重试循环收尾。
+		// 最终失败不走这里 —— 会以 compaction_end(errorMessage)或整轮失败呈现。
+		ev.Kind = pb.CodexEvent_RETRY_STOPPED
+		ev.Code = "summarization_retry"
+		ev.Title = "上下文摘要重试结束"
+		ev.Message = "摘要已生成,继续执行。"
+		return ev, true
 	case "queue_update":
 		var e struct {
 			Steering []string `json:"steering"`
@@ -479,6 +568,36 @@ func MapStatusEvent(evType string, raw json.RawMessage) (*pb.CodexEvent, bool) {
 
 // ---- extension_ui_request → 审批卡 ----
 
+// MapUINotify 把 fire-and-forget 的 notify 请求映射成状态/警告卡(1.0.2 审计 G3)。
+//
+// 【为什么不再静默】notify 是扩展发给用户的即时通知(rpc-types.d.ts:436-439:
+// {message, notifyType?: "info"|"warning"|"error"}),pi TUI 会按类型弹 toast;
+// 此前 Run 路径对已知 fire-and-forget 一律静默(UNKNOWN 确认管道对已知 method
+// 原样放行),通知内容整类不可见。info→STATUS、warning→WARNING、error→ERROR,
+// 严重度由 kind 承载,手机端按既有 CodexEvent 卡渲染。仍不回写应答
+// (fire-and-forget 无应答通道,回写污染协议流 —— piapp/client.go 纪律不变)。
+func MapUINotify(raw json.RawMessage) (*pb.CodexEvent, bool) {
+	var e struct {
+		Method     string `json:"method"`
+		Message    string `json:"message"`
+		NotifyType string `json:"notifyType"`
+	}
+	if json.Unmarshal(raw, &e) != nil || e.Method != "notify" {
+		return nil, false
+	}
+	ev := &pb.CodexEvent{Code: "extension_notify", Title: "扩展通知"}
+	switch e.NotifyType {
+	case "warning":
+		ev.Kind = pb.CodexEvent_WARNING
+	case "error":
+		ev.Kind = pb.CodexEvent_ERROR
+	default:
+		ev.Kind = pb.CodexEvent_STATUS
+	}
+	ev.Message = firstNonEmpty(e.Message, "扩展发来一条通知。")
+	return ev, true
+}
+
 // uiAskOption 反问卡上的一个选项。label 既是按钮文案也是答案回传值
 // (各 agent 侧都按 label=value 收集);description/preview 是 zcode
 // requestUserInput 的原生扩展信息,pi/codex 场景留空(omitempty,不改变
@@ -493,11 +612,15 @@ type uiAskOption struct {
 // Options 存选项原文:label 即值,用户点了哪项就把哪项回给扩展。
 // MultiSelect 仅 zcode requestUserInput 会置真(zod schema 的 multiSelect?),
 // 置真时卡 JSON 里标注 "multiSelect": true,供手机渲染多选态。
+// Placeholder/Prefill 仅 pi 的 input/editor dialog 会带(1.0.2 审计 G4):
+// 非空时随卡 JSON 透出,供手机端渲染输入提示/预填;旧 App 忽略未知键。
 type uiAskQuestion struct {
 	ID          string
 	Question    string
 	Options     []uiAskOption
 	MultiSelect bool
+	Placeholder string
+	Prefill     string
 }
 
 // plainOptions 把裸 label 列表包成选项(pi select / zcode elicitation enum:
@@ -530,6 +653,13 @@ func buildAskUserCall(reqID, message string, questions []uiAskQuestion) pb.ToolC
 		qm := map[string]any{"id": q.ID, "question": q.Question, "options": opts}
 		if q.MultiSelect {
 			qm["multiSelect"] = true // 只在真值时标注,老卡形状零变化
+		}
+		// pi input/editor 的输入提示与预填(G4):非空才进卡,老卡形状零变化。
+		if q.Placeholder != "" {
+			qm["placeholder"] = q.Placeholder
+		}
+		if q.Prefill != "" {
+			qm["prefill"] = q.Prefill
 		}
 		qs = append(qs, qm)
 	}
@@ -625,12 +755,17 @@ func firstAnswerFromNote(note string) string {
 // 点选按钮,input/editor 给自由输入框 —— 取代旧行为"select 自动取第一项 /
 // input 空值放行"。
 //
+// 【placeholder/prefill(1.0.2 审计 G4)】input 的占位提示与 editor 的预填文本
+// (rpc-types.d.ts:425/432)随反问卡 JSON 透出:进 question 的同名可选键,手机
+// 端新 App 可渲染输入提示/预填,旧 App 忽略未知键不受影响(先例:options 里的
+// description/preview 与 question 的 multiSelect)。
+//
 // 【为什么走 approve hook 而不是另开通道】server 的 approve 中继已经把
 // ApprovalRequest→手机→decision 的整条链路(含断线 readerDone 语义)做完了,
 // 复用它 = 审批卡/超时/断线回 cancelled 全部继承(调研 §4.6 的要求)。
-// 【vet】返回指针:pb 消息含锁,调用方(pi.go:430)按调用结果直传 approve,
+// 【vet】返回指针:pb 消息含互斥量,调用方(pi.go:430)按调用结果直传 approve,
 // ApprovalHook 已改指针参数,这里必须回传指针(内容不变)。
-func ApprovalCallFromUI(reqID string, method, title, message string, options []string) *pb.ToolCallBlock {
+func ApprovalCallFromUI(reqID string, method, title, message string, options []string, placeholder, prefill string) *pb.ToolCallBlock {
 	if method == "confirm" {
 		args := map[string]any{"method": method}
 		if title != "" {
@@ -648,7 +783,9 @@ func ApprovalCallFromUI(reqID string, method, title, message string, options []s
 	if method == "select" {
 		q.Options = plainOptions(options)
 	}
-	// input/editor:不给选项,手机端渲染为纯输入框。
+	// input/editor:不给选项,手机端渲染为纯输入框;提示/预填随卡透出(见上)。
+	q.Placeholder = placeholder
+	q.Prefill = prefill
 	// buildAskUserCall 保持值返回(它的结果还会进别的元组),这里取址适配指针签名。
 	call := buildAskUserCall(reqID, subtitle, []uiAskQuestion{q})
 	return &call
