@@ -63,6 +63,11 @@ import pocketagent.v1.ModelInfo
  * 【未知 effort】daemon 未来新增取值:档位行不伪造,但把原 id 如实亮出
  * (effortLabelOf else -> id),并给「技术详情」入口(原文/来源/解释),
  * 不显示空白(计划验收项,与协同页未知状态同纪律)。
+ *
+ * 【提交中态(L2 真机发现 4)】点选到 daemon 写回之间乐观投影已上屏,但没有任何
+ * 进行中指示,慢写回观感如回退 —— pending 在飞时([cardSubmission] 纯函数映射)
+ * 卡面状态槽与被改的那一行亮「提交中…」;写回成功(pending 清)指示消失,
+ * 失败回滚走既有错误链路(error 位)。
  */
 
 // ---- 纯函数(JVM 单测钉死:ModelEffortOptionsTest / ChatModelRoutingTest)----
@@ -127,6 +132,44 @@ internal fun cardSelectedEffort(
     return ModelSelectionReducer.cleanEffortFor(models, agentId, effort, modelId)
 }
 
+// ---- 提交中态(L2 真机发现 4:点选到 daemon 写回之间无进行中指示,慢写回观感如回退)----
+
+/** 「提交中」状态词(四词状态风格,与协同直控开关的「提交中」同款)。 */
+private const val SUBMITTING_LABEL = "提交中…"
+
+/**
+ * 卡面「提交中」的展示映射(pending → 展示态;纯函数,JVM 单测钉死 —— 见
+ * ModelEffortOptionsTest)。
+ *
+ * 【pending 是什么】ModelSelectionReducer 的在飞锚点:用户刚点选、乐观投影已上屏、
+ * daemon 真值未回填(pending != null 即在飞;下发成功 confirmSent 清、真值到达
+ * applyDaemon 清、失败 rollback 退回上一份并走既有错误链路)。
+ *
+ * 【指示钉在被改的行】与下发前的上一份选择([PendingSelection.previous])逐维
+ * 比较,差在哪个维度哪一行亮「提交中…」;previous 缺席(此前从无任何已知选择)
+ * 无法逐维归因 → 模型/强度两行都亮(保守多提示,不漏钉)。
+ */
+internal data class CardSubmissionUi(
+    val inFlight: Boolean,
+    val modelPending: Boolean,
+    val effortPending: Boolean,
+    /** 状态词;不在飞为空串。 */
+    val label: String,
+)
+
+internal fun cardSubmission(state: ModelSelectionState): CardSubmissionUi {
+    val pending = state.pending ?: return CardSubmissionUi(false, false, false, "")
+    val prev = pending.previous
+        ?: return CardSubmissionUi(true, modelPending = true, effortPending = true, label = SUBMITTING_LABEL)
+    val display = ModelSelectionReducer.display(state)
+    return CardSubmissionUi(
+        inFlight = true,
+        modelPending = display?.modelId.orEmpty() != prev.modelId,
+        effortPending = display?.effort.orEmpty() != prev.effort,
+        label = SUBMITTING_LABEL,
+    )
+}
+
 /**
  * 模型与思考强度卡(弹窗卡面)。
  *
@@ -176,6 +219,11 @@ internal fun ModelEffortCard(
         selectedEffortShown.isNotBlank() && effortLabelOf(selectedEffortShown) == selectedEffortShown
     val unknownSource = display != null && display.source == SelectionSource.UNKNOWN
     var showTechDetails by remember { mutableStateOf(false) }
+    // 【提交中态(L2 发现 4)】pending != null = 有一笔选择在飞:状态词占住卡面状态槽,
+    // 被改的那一行亮「提交中…」;写回成功(pending 清)即消失,失败走既有错误链路。
+    val submission = cardSubmission(state)
+    // 模型维度在飞且目标是"跟随默认"(空 id,零值合法):指示亮在跟随默认行上。
+    val modelPendingOnFollow = submission.modelPending && selectedModelId.isBlank()
 
     // 强度胶囊的触感落点(独立卡面,自取 LocalView;light 档见下方 onClick)
     val effortHapticView = LocalView.current
@@ -234,6 +282,8 @@ internal fun ModelEffortCard(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 val syncLine = when {
+                    // 提交中优先:这是用户刚点下的那笔选择的"进行中"真相(四词状态风格)
+                    submission.inFlight -> submission.label
                     state.loading -> "正在同步电脑端真值…"
                     state.error != null -> state.error
                     display?.fromCache == true -> "显示上次记录;电脑端真值未达,可点刷新"
@@ -257,8 +307,10 @@ internal fun ModelEffortCard(
                 // 唯一能回到跟随默认的路(ResetToDefault,计划接线⑥)。
                 ModelOptionRow(
                     title = "跟随默认",
-                    subtitle = if (agent == "codex") "使用电脑上 codex 当前的默认模型"
-                    else "使用默认解析(桌面下发/Agent 原生当前值)",
+                    // 【提交中钉行】清覆盖在飞:目标行就是这里(空 id = 跟随默认,零值合法)
+                    subtitle = (if (agent == "codex") "使用电脑上 codex 当前的默认模型"
+                        else "使用默认解析(桌面下发/Agent 原生当前值)") +
+                        if (modelPendingOnFollow) " · ${submission.label}" else "",
                     selected = followDefault,
                     brandIconRes = agentBrandIcon(agent),
                     onClick = {
@@ -283,6 +335,11 @@ internal fun ModelEffortCard(
                             available = m.available,
                         ),
                         selected = m.id == selectedModelId,
+                        // 【提交中钉行】模型切换在飞:指示亮在显示中的乐观目标行上
+                        // (行组件无状态,文案由卡面算好传入,不新增行参数)
+                        subtitle = if (submission.modelPending && m.id == selectedModelId) {
+                            submission.label
+                        } else "",
                         brandIconRes = agentBrandIcon(agent),
                         onClick = {
                             onPicked()
@@ -327,6 +384,16 @@ internal fun ModelEffortCard(
                         )
                     }
                 }
+            }
+            // 【提交中钉行】强度切换在飞:胶囊行下补一行状态小字(四词状态风格,不靠色);
+            // 写回成功(pending 清)整行消失,失败回滚走既有错误链路(error 位)。
+            if (submission.effortPending) {
+                Text(
+                    "思考强度${submission.label}",
+                    fontSize = 11.sp,
+                    color = PaEditorial.Muted,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
             // 【未知 effort 不空白】档位行没有当前强度(不伪造)时,把原 id 如实亮出
             if (selectedEffortShown.isNotBlank() && efforts.none { it.id == selectedEffortShown }) {

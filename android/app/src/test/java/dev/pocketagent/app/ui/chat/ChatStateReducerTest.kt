@@ -2,15 +2,19 @@ package dev.pocketagent.app.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.pocketagent.app.ui.HistoryRoundsLogic
+import dev.pocketagent.app.ui.SlashCommandInfo
 import dev.pocketagent.app.ui.history.HistoryIdentityIndex
 import dev.pocketagent.app.ui.history.MessageSpan
+import pocketagent.v1.ThreadStatus
 
 /**
- * ChatScreen 页面级状态 reducer 纯函数钉子(2026-10-04 计划 Task 8,第一层分层)。
+ * ChatScreen 页面级状态 reducer 纯函数钉子(2026-10-04 计划 Task 8,第一层分层;
+ * 第二层增量:会话元数据四项/加载错误/斜杠命令镜像,用例见 10-12 节)。
  *
  * 覆盖面(每条与迁出前 ChatScreen 的原地赋值语义一一对应):
  *  1. initial:设置档位经 clamp 收敛(脏值→默认档);
@@ -25,6 +29,11 @@ import dev.pocketagent.app.ui.history.MessageSpan
  *  7. 加载更早在飞闸 Started/Finished;
  *  8. KnownTotalObserved:0 不覆盖(旧 daemon 未报);
  *  9. listOffset 派生:与迁出前 `if (historyTruncated && !offlineSnapshot) 1 else 0` 同式。
+ * 10. 会话元数据 ThreadHeaderLoaded/WorkspaceResolved:getThread 三原式
+ *     (空标题不覆盖/空工作区→null/空 agentId→"codex")+ 上传回填直写;
+ * 11. 加载错误四通道:Reported 无条件、SetIfAbsent 现值为空才写(并行加载
+ *     不互相顶掉)、Cleared 清空、ClearedIfOffline 只清「离线」前缀残留;
+ * 12. 斜杠命令镜像 SlashCommandsSettled:无条件替换(空表照写=非面板会话清空语义)。
  */
 class ChatStateReducerTest {
 
@@ -303,5 +312,137 @@ class ChatStateReducerTest {
         assertEquals(0, state(truncated = true, offlineSnapshot = true).listOffset)
         assertEquals(0, state(truncated = false, offlineSnapshot = false).listOffset)
         assertEquals(0, state(truncated = false, offlineSnapshot = true).listOffset)
+    }
+
+    // ---- 10. 会话元数据(第二层) ----
+
+    @Test
+    fun `initial 第二层缺省与迁出前各 remember 初值逐字对应`() {
+        val s = ChatStateReducer.initial(20)
+        assertEquals("任务", s.threadTitle)
+        assertEquals(ThreadStatus.THREAD_STATUS_UNSPECIFIED, s.threadStatus)
+        assertNull(s.threadWorkspace)
+        assertEquals("", s.threadAgentId)
+        assertNull(s.loadError)
+        assertTrue(s.slashCommands.isEmpty())
+    }
+
+    @Test
+    fun `ThreadHeaderLoaded 有值全量覆盖 四项一次落位`() {
+        val base = state().copy(
+            threadTitle = "旧标题",
+            threadStatus = ThreadStatus.THREAD_STATUS_UNSPECIFIED,
+            threadWorkspace = null,
+            threadAgentId = "",
+        )
+        val s = ChatStateReducer.reduce(
+            base,
+            ChatIntent.ThreadHeaderLoaded(
+                title = "新标题",
+                status = ThreadStatus.THREAD_STATUS_IDLE,
+                workspace = "/home/user/proj",
+                agentId = "pi",
+            ),
+        )
+        assertEquals("新标题", s.threadTitle)
+        assertEquals(ThreadStatus.THREAD_STATUS_IDLE, s.threadStatus)
+        assertEquals("/home/user/proj", s.threadWorkspace)
+        assertEquals("pi", s.threadAgentId)
+    }
+
+    @Test
+    fun `ThreadHeaderLoaded 空标题不覆盖 空工作区归 null 空 agentId 兜 codex`() {
+        val base = state().copy(
+            threadTitle = "上一会话的标题",
+            threadWorkspace = "/old/ws",
+            threadAgentId = "pi",
+        )
+        val s = ChatStateReducer.reduce(
+            base,
+            ChatIntent.ThreadHeaderLoaded(
+                title = "",
+                status = ThreadStatus.THREAD_STATUS_UNSPECIFIED,
+                workspace = "  ",
+                agentId = "",
+            ),
+        )
+        // 空标题不覆盖(原式 if (t.title.isNotEmpty()):换到无标题会话不顶掉旧标题
+        // —— 兜底靠换会话时 ViewModel 整体重建回落「任务」,与原 remember(threadId) 同语义)
+        assertEquals("上一会话的标题", s.threadTitle)
+        // 空白工作区归 null(原式 t.workspace.ifBlank { null })
+        assertNull(s.threadWorkspace)
+        // 空 agentId 兜 "codex"(原式 t.agentId.ifBlank { "codex" })
+        assertEquals("codex", s.threadAgentId)
+    }
+
+    @Test
+    fun `WorkspaceResolved 上传回填直写覆盖旧值`() {
+        val base = state().copy(threadWorkspace = "/old/ws")
+        val s = ChatStateReducer.reduce(base, ChatIntent.WorkspaceResolved("/home/user/proj"))
+        assertEquals("/home/user/proj", s.threadWorkspace)
+    }
+
+    // ---- 11. 加载错误(第二层) ----
+
+    @Test
+    fun `LoadErrorReported 无条件覆盖 本会话最新失败就是当前事实`() {
+        val base = state().copy(loadError = "无法加载模型设置：x")
+        val s = ChatStateReducer.reduce(base, ChatIntent.LoadErrorReported("无法加载会话：y"))
+        assertEquals("无法加载会话：y", s.loadError)
+    }
+
+    @Test
+    fun `LoadErrorSetIfAbsent 现值为空才写 已有错误不顶掉 并行加载互不打架`() {
+        val empty = state()
+        assertEquals(
+            "无法加载模型设置：x",
+            ChatStateReducer.reduce(empty, ChatIntent.LoadErrorSetIfAbsent("无法加载模型设置：x")).loadError,
+        )
+        val occupied = state().copy(loadError = "无法加载会话：y")
+        // 后完成者不顶掉先到的提示(真机教训;未变化时原样返回,不触发无谓发射)
+        val untouched = ChatStateReducer.reduce(
+            occupied,
+            ChatIntent.LoadErrorSetIfAbsent("无法加载模型列表：z"),
+        )
+        assertEquals("无法加载会话：y", untouched.loadError)
+        assertSame(occupied, untouched)
+    }
+
+    @Test
+    fun `LoadErrorCleared 清空 其余字段不动`() {
+        val base = state().copy(loadError = "无法加载会话：x", offlineSnapshot = true)
+        val s = ChatStateReducer.reduce(base, ChatIntent.LoadErrorCleared)
+        assertNull(s.loadError)
+        assertTrue(s.offlineSnapshot)
+    }
+
+    @Test
+    fun `LoadErrorClearedIfOffline 只清离线前缀残留 真失败不动`() {
+        val stale = state().copy(loadError = "离线：显示的是本地记录")
+        val cleared = ChatStateReducer.reduce(stale, ChatIntent.LoadErrorClearedIfOffline)
+        assertNull(cleared.loadError)
+
+        val realFailure = state().copy(loadError = "无法加载会话历史：连接失败")
+        val kept = ChatStateReducer.reduce(realFailure, ChatIntent.LoadErrorClearedIfOffline)
+        assertEquals("无法加载会话历史：连接失败", kept.loadError)
+        assertSame(realFailure, kept)
+    }
+
+    // ---- 12. 斜杠命令镜像(第二层) ----
+
+    @Test
+    fun `SlashCommandsSettled 无条件替换 空表照写 非面板会话清空语义`() {
+        val base = state().copy(
+            slashCommands = listOf(SlashCommandInfo("goal", "设置会话目标", "/goal [text]")),
+        )
+        // RPC 回包/缓存命中落位
+        val loaded = ChatStateReducer.reduce(
+            base,
+            ChatIntent.SlashCommandsSettled(listOf(SlashCommandInfo("compact", "压缩会话历史", ""))),
+        )
+        assertEquals(listOf("compact"), loaded.slashCommands.map { it.name })
+        // 非面板会话清空(即使缓存里有别的会话残留也不漏)
+        val cleared = ChatStateReducer.reduce(loaded, ChatIntent.SlashCommandsSettled(emptyList()))
+        assertTrue(cleared.slashCommands.isEmpty())
     }
 }

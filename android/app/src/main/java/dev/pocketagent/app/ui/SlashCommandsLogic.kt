@@ -20,7 +20,7 @@ internal const val SLASH_COMMANDS_DEADLINE_S = 30L
 internal const val SLASH_PANEL_MAX_HEIGHT_DP = 320
 
 /** 命令点选后的动作分流:普通命令回填输入框,内置伪命令执行对应动作。 */
-internal enum class SlashAction {
+enum class SlashAction {
     /** 普通命令:回填 "/命令 "(codex 技能填自然语言),发送后由 agent 触发。 */
     FILL,
     /** 内置伪命令"/目标":打开设置会话目标(SetThreadGoal)弹窗。 */
@@ -42,7 +42,7 @@ internal enum class SlashAction {
 }
 
 /** daemon ListSlashCommands 里一条命令的手机端展平视图(摆脱 proto 类型,纯逻辑可用)。 */
-internal data class SlashCommandInfo(
+data class SlashCommandInfo(
     val name: String,               // 命令名(不带斜杠,如 "goal";pi 技能形如 "skill:mmx-cli")
     val description: String,        // 一句话说明(可空)
     val inputHint: String,          // 参数提示(如 "/goal [pause|resume|…]",可空)

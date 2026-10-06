@@ -2272,10 +2272,15 @@ fun ChatScreen(
     var selectedAttachment by remember { mutableStateOf<Attachment?>(null) }
     // 【PF4】按 threadId 记忆:导航 launchSingleTop 复用同一 ChatScreen 实例,
     // 会话切换必须重置本会话的 daemon 回填值,不能闪现上一会话的残值。
-    var threadWorkspace by remember(threadId) { mutableStateOf<String?>(null) }
+    // 【P3 Task 8 第二层】threadWorkspace/loadError 已收进 ChatViewModel(ChatState)
+    // —— 此处为只读投影;写入走 chatVm.send(ThreadHeaderLoaded/WorkspaceResolved/
+    // LoadError* 意图,见 getThread 效果/文件上传/模型设置预取/各重试点)。
+    // loadError 原为无键 remember(跨会话沿用,靠后续加载覆盖);随 ViewModel 换
+    // 会话重建归 null —— 上一会话的失败不再带进新会话,方向与第一层同款更干净。
+    val threadWorkspace = chatState.threadWorkspace
     var codexSettings by remember { mutableStateOf<CodexSettings?>(null) }
     var models by remember { mutableStateOf(listOf<ModelInfo>()) }
-    var loadError by remember { mutableStateOf<String?>(null) }
+    val loadError = chatState.loadError
     // 【P3 Task 8】离线快照标志已收进 ChatViewModel(ChatState)—— 此处为只读投影,
     // 写入走 chatVm.send(见离线横幅/错误条重试/getThread 效果各写点)。
     val offlineSnapshot = chatState.offlineSnapshot
@@ -2350,7 +2355,10 @@ fun ChatScreen(
     // daemon 回空列表 / RPC 失败都安静降级,绝不 Toast 报错打断输入;在线时
     // hostCapabilities 已就位,内置伪命令(随 compact/review 位点亮,见
     // slashCandidatesFor)仍给三源会话兜出可用卡面。
-    var threadAgentId by remember(threadId) { mutableStateOf("") } // 【PF4】换会话重置,理由同 threadWorkspace
+    // 【P3 Task 8 第二层】会话归属 agent 已收进 ChatViewModel(ChatState)—— 只读
+    // 投影;写点唯一(getThread 回填,ThreadHeaderLoaded),读点零改动。
+    // 【PF4】换会话重置随 ViewModel 键控,理由同 threadWorkspace。
+    val threadAgentId = chatState.threadAgentId
     // 【能力位数据源】hostCapabilities 共享快照(与主页网格/设置页同一真源):
     // 会话级动作(压缩/分叉/回滚/计划审查/HTML 导出)与运行中发送回执(steer)
     // 的唯一门控数据源 —— 位在才亮入口,缺位不显示假入口(硬红线)。
@@ -2361,15 +2369,18 @@ fun ChatScreen(
     // 为准(图3 实锤:过去 pi 会话没取到它,链路落到 codex 桌面默认
     // GLM-5.3-Flash 上,芯片显示成了 codex 的模型)。
     var threadModelId by remember(threadId) { mutableStateOf("") } // 【PF4】换会话重置,理由同 threadWorkspace
-    var slashCommands by remember(threadId) { mutableStateOf<List<SlashCommandInfo>>(emptyList()) }
+    // 【P3 Task 8 第二层】斜杠命令的 Compose 侧镜像已收进 ChatViewModel(ChatState)
+    // —— 只读投影;写点三处都在下方效果内(SlashCommandsSettled)。进程级
+    // SlashCommandCache 与拉取 RPC 原样留在这里(缓存去重通道零改动)。
+    val slashCommands = chatState.slashCommands
     LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, st.running) {
         if (!isSlashPanelAgent(threadAgentId)) {
             // 非面板会话(zcode/codex/pi 之外)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
-            slashCommands = emptyList()
+            chatVm.send(ChatIntent.SlashCommandsSettled(emptyList()))
             return@LaunchedEffect
         }
         val cached = SlashCommandCache.get(threadId)
-        if (cached != null) slashCommands = cached
+        if (cached != null) chatVm.send(ChatIntent.SlashCommandsSettled(cached))
         val loaded = try {
             withContext(Dispatchers.IO) {
                 AgentConnection.threadService()
@@ -2384,7 +2395,7 @@ fun ChatScreen(
             emptyList() // 拉不到就没有面板,不是错误
         }
         SlashCommandCache.put(threadId, loaded)
-        slashCommands = loaded
+        chatVm.send(ChatIntent.SlashCommandsSettled(loaded))
     }
     // 「优化」点击(P4 Task 2):走仓库发 RPC,结果进预览弹层等用户确认,不再
     // 直接替换输入框。daemon 侧整段预算 150s,手机端 deadline 再兜余量(仓库的
@@ -2509,7 +2520,9 @@ fun ChatScreen(
         } catch (e: Exception) {
             // 不覆盖已有提示:离线快照的黄条比这里的红条更有信息量(真机验证发现
             // 两个并行加载共用 loadError,后完成者会把"离线:显示的是本地记录"顶掉)
-            if (loadError == null) loadError = "无法加载模型设置：${e.message ?: "连接失败"}"
+            // 【P3 Task 8 第二层】"现值为空才写"的条件收进 reducer(LoadErrorSetIfAbsent
+            // 对权威现值判定;原地读投影有一帧滞后,会把先到的错误顶掉)。
+            chatVm.send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型设置：${e.message ?: "连接失败"}"))
         }
         try {
             withContext(Dispatchers.IO) {
@@ -2517,7 +2530,7 @@ fun ChatScreen(
                     .listModels(ListModelsRequest.newBuilder().build()).modelsList
             }
         } catch (e: Exception) {
-            if (loadError == null) loadError = "无法加载模型列表：${e.message ?: "连接失败"}"
+            chatVm.send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型列表：${e.message ?: "连接失败"}"))
         }
         try {
             withContext(Dispatchers.IO) {
@@ -2802,7 +2815,8 @@ fun ChatScreen(
                             .ifBlank { null }
                         ?: error("当前会话没有工作区，请先为会话选择工作区")
                 }
-                threadWorkspace = ws
+                // 【P3 Task 8 第二层】工作区回填经 ViewModel(WorkspaceResolved)
+                chatVm.send(ChatIntent.WorkspaceResolved(ws))
                 val uploaded = withContext(Dispatchers.IO) {
                     uris.mapIndexed { index, uri ->
                         val (name, bytes) = ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
@@ -3080,11 +3094,13 @@ fun ChatScreen(
 
     // 【PF4】按 threadId 记忆(getThread 用 t.title 回填且空标题不覆盖 —— 不带键时
     // 换到无标题会话会永远顶着上一会话的标题;带键换会话即回落「任务」)。
-    var threadTitle by remember(threadId) { mutableStateOf("任务") }
+    // 【P3 Task 8 第二层】threadTitle/threadStatus 已收进 ChatViewModel(ChatState)
+    // —— 只读投影;写点唯一(getThread 回填,ThreadHeaderLoaded),读点零改动。
+    val threadTitle = chatState.threadTitle
     // daemon 上报的会话状态(getThread 回填;四词状态徽章的兜底数据源。
     // 运行中/恢复中由 st.running 实时覆盖,待审批由 st.pendingApproval 实时覆盖 ——
     // 徽章口径见下方 identityStatus 的装配注释)
-    var threadStatus by remember(threadId) { mutableStateOf(ThreadStatus.THREAD_STATUS_UNSPECIFIED) }
+    val threadStatus = chatState.threadStatus
     // 【桌面只读回显】会话目标顶栏文案(GoalDisplayLogic:goal_detail 电脑端现读优先,
     // goal 本地库兜底):有则显示一行,无则不占位。
     var threadGoalLine by remember(threadId) { mutableStateOf<String?>(null) } // 【PF4】换会话重置,理由同 threadWorkspace
@@ -3105,7 +3121,8 @@ fun ChatScreen(
                 if (st.items.isNotEmpty()) listState.scrollToItem(st.items.size - 1)
                 // 【P3 Task 8】离线快照标志经 ViewModel 意图落位(在线路径不动身份索引)
                 chatVm.send(ChatIntent.ShowOfflineSnapshot(dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)))
-                loadError = null
+                // 【P3 Task 8 第二层】快照黄条比红条有信息量:清掉加载错误(原 loadError = null)
+                chatVm.send(ChatIntent.LoadErrorCleared)
             }
             // 无快照(null):不伪造内容,继续走在线加载(失败时按原有报错分支提示)
         }
@@ -3113,13 +3130,19 @@ fun ChatScreen(
             val t = withContext(Dispatchers.IO) {
                 AgentConnection.threadService().getThread(GetThreadRequest.newBuilder().setThreadId(threadId).build())
             }
-            if (t.title.isNotEmpty()) threadTitle = t.title
-            threadStatus = t.status
+            // 【P3 Task 8 第二层】会话元数据四项(title/status/workspace/agentId)
+            // 一次落位经 ViewModel;三条原式(空标题不覆盖/空工作区→null/空
+            // agentId→"codex")收进 reducer(ThreadHeaderLoaded)。
+            chatVm.send(
+                ChatIntent.ThreadHeaderLoaded(
+                    title = t.title,
+                    status = t.status,
+                    workspace = t.workspace,
+                    agentId = t.agentId,
+                ),
+            )
             // 【P1-6】顺手把会话名交给通知模块:后台轮次完成时,通知标题用真实会话名
             PaNotifications.rememberTitle(threadId, t.title)
-            threadWorkspace = t.workspace.ifBlank { null }
-            // 斜杠命令面板按会话归属 agent 开关(只认 zcode;空/未知不显示)
-            threadAgentId = t.agentId.ifBlank { "codex" }
             if (AgentConnection.threadModel(threadId) == null) AgentConnection.setThreadModel(threadId, t.modelId)
             if (AgentConnection.threadEffort(threadId) == null) AgentConnection.setThreadEffort(threadId, t.effort)
             // 会话真实生效模型(daemon 落库):模型芯片/弹窗选中态的数据源
@@ -3133,7 +3156,8 @@ fun ChatScreen(
             // 这里只管把"目标:xxx"文案算出来;读不到/没设目标时为 null,不占位。
             threadGoalLine = GoalDisplayLogic.goalLine(t)
         } catch (e: Exception) {
-            loadError = "无法加载会话：${e.message ?: "连接失败"}"
+            // 【P3 Task 8 第二层】getThread 失败经 ViewModel(LoadErrorReported)
+            chatVm.send(ChatIntent.LoadErrorReported("无法加载会话：${e.message ?: "连接失败"}"))
         }
         try {
             // 后台轮次进行中(或已有实时列表)时不覆盖
@@ -3190,7 +3214,9 @@ fun ChatScreen(
             st.historyLoaded = true
             // 【P3 Task 8】恢复在线撤掉残留的离线提示(flag + 落盘时间成对清)
             chatVm.send(ChatIntent.BackOnline)
-            if (loadError?.startsWith("离线") == true) loadError = null
+            // 【P3 Task 8 第二层】只清「离线」前缀残留的条件收进 reducer(原式
+            // `if (loadError?.startsWith("离线") == true) loadError = null`)
+            chatVm.send(ChatIntent.LoadErrorClearedIfOffline)
         } catch (e: Exception) {
             // 连不上:有快照就渲染快照 + 顶部横幅(输入同时停用),没有才报错(保持原行为)。
             val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
@@ -3207,9 +3233,10 @@ fun ChatScreen(
                         resetIdentity = true,
                     ),
                 )
-                loadError = null
+                // 【P3 Task 8 第二层】快照兜底不报错:清掉加载错误(原 loadError = null)
+                chatVm.send(ChatIntent.LoadErrorCleared)
             } else {
-                loadError = "无法加载会话历史：${e.message ?: "连接失败"}"
+                chatVm.send(ChatIntent.LoadErrorReported("无法加载会话历史：${e.message ?: "连接失败"}"))
                 chatVm.send(ChatIntent.BackOnline)
             }
         }
@@ -3742,7 +3769,8 @@ fun ChatScreen(
                         if (st.recoveryError != null || st.recovering) {
                             TurnSession.retryRecovery(threadId)
                         } else {
-                            loadError = null
+                            // 【P3 Task 8 第二层】重试清错误经 ViewModel(原 loadError = null)
+                            chatVm.send(ChatIntent.LoadErrorCleared)
                             codexSettings = null
                             models = emptyList()
                             reloadToken++
@@ -3928,7 +3956,8 @@ fun ChatScreen(
                             if (st.recoveryError != null) {
                                 TurnSession.retryRecovery(threadId)
                             } else {
-                                loadError = null
+                                // 【P3 Task 8 第二层】重试清错误经 ViewModel(原 loadError = null)
+                                chatVm.send(ChatIntent.LoadErrorCleared)
                                 chatVm.send(ChatIntent.ClearSnapshotFlag)
                                 reloadToken++
                             }

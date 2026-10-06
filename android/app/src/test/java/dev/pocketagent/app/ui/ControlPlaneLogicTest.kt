@@ -554,4 +554,149 @@ class ControlPlaneLogicTest {
         // panic 降级域连 items 都没有:不可展开。
         assertFalse(controlDomainExpandable(emptyList()))
     }
+
+    // ---- collab 域摘要:展示位组合(L2 真机发现 3:摘要如实反映子项实况)----------
+
+    /** 拼一份 collab 域行:三开关 + 成员上限,现值按参给;null = 该项缺席。 */
+    private fun collabRow(
+        master: String = "开",
+        delegate: String? = "关",
+        fanout: String? = "关",
+        members: String? = "2",
+    ): ControlDomainRow = ControlDomainRow(
+        id = "collab",
+        title = "多 Agent 协同",
+        summary = "daemon 原文摘要",
+        writable = true,
+        statusCode = 0,
+        dotKind = ControlDotKind.NORMAL,
+        items = buildList {
+            add(
+                ControlItemRow(
+                    id = COLLAB_MASTER_SWITCH_ID, label = "协同总开关", current = master,
+                    kind = "toggle", hint = "", action = ControlItemAction.COLLAB_TOGGLE,
+                )
+            )
+            if (delegate != null) add(
+                ControlItemRow(
+                    id = "collab.native_delegate_enabled", label = "委派子任务", current = delegate,
+                    kind = "toggle", hint = "", action = ControlItemAction.COLLAB_TOGGLE,
+                )
+            )
+            if (fanout != null) add(
+                ControlItemRow(
+                    id = "collab.fanout_enabled", label = "并行扇出", current = fanout,
+                    kind = "toggle", hint = "", action = ControlItemAction.COLLAB_TOGGLE,
+                )
+            )
+            if (members != null) add(
+                ControlItemRow(
+                    id = COLLAB_MEMBERS_ID, label = "扇出成员上限", current = members,
+                    kind = "number", hint = "", action = ControlItemAction.COLLAB_NUMBER,
+                )
+            )
+        },
+    )
+
+    @Test
+    fun `协同摘要_总开关关_只说已关闭_子开关不改变结论`() {
+        // 子开关再开也没用(daemon 同一实话):总闸关 = 协同已关闭。
+        assertEquals(
+            "协同已关闭",
+            collabSummaryOverride(collabRow(master = "关", delegate = "开", fanout = "开", members = "3")),
+        )
+    }
+
+    @Test
+    fun `协同摘要_总开四态组合_全开才说委派与扇出可用_否则逐项报实况`() {
+        // (委派开, 扇出开):两路全开才允许「委派与扇出可用」。
+        assertEquals(
+            "协同已开启 · 委派与扇出可用(上限 2)",
+            collabSummaryOverride(collabRow(delegate = "开", fanout = "开")),
+        )
+        // (委派关, 扇出开):L2 真机撞见的那组 —— daemon 原文宣称"可用"而委派关着,
+        // 组合后逐项报实况,横幅与摘要不再互相矛盾。
+        assertEquals(
+            "协同已开启 · 委派关 · 扇出开(上限 2)",
+            collabSummaryOverride(collabRow(delegate = "关", fanout = "开")),
+        )
+        // (委派开, 扇出关)
+        assertEquals(
+            "协同已开启 · 委派开 · 扇出关",
+            collabSummaryOverride(collabRow(delegate = "开", fanout = "关")),
+        )
+        // (委派关, 扇出关):上限段只跟「扇出开」走。
+        assertEquals(
+            "协同已开启 · 委派关 · 扇出关",
+            collabSummaryOverride(collabRow()),
+        )
+    }
+
+    @Test
+    fun `协同摘要_上限段_0是不限_读不出不摆段_不编数字`() {
+        // 0 = 不限(daemon membersText 同一语义),不是"上限 0"。
+        assertEquals(
+            "协同已开启 · 委派与扇出可用(上限不限)",
+            collabSummaryOverride(collabRow(delegate = "开", fanout = "开", members = "0")),
+        )
+        // 成员上限项缺席:只少上限段,不编数字。
+        assertEquals(
+            "协同已开启 · 委派与扇出可用",
+            collabSummaryOverride(collabRow(delegate = "开", fanout = "开", members = null)),
+        )
+        // 现值读不出("不限"非纯数值):同样整段不摆。
+        assertEquals(
+            "协同已开启 · 委派开 · 扇出开",
+            collabSummaryOverride(collabRow(delegate = "开", fanout = "开", members = "不限")),
+        )
+    }
+
+    @Test
+    fun `协同摘要_子项认不出报未识别_项缺席或非collab域退_null_照_daemon_原文`() {
+        // 现值在词表外:报「未识别」,不猜布尔(与直控开关状态词同款)。
+        assertEquals(
+            "协同已开启 · 委派未识别 · 扇出开(上限 2)",
+            collabSummaryOverride(collabRow(delegate = "on", fanout = "开")),
+        )
+        assertEquals(
+            "协同已开启 · 委派关 · 扇出未识别",
+            collabSummaryOverride(collabRow(delegate = "关", fanout = "")),
+        )
+        // 总开关现值认不出:拼不出实况,退 daemon 原文。
+        assertNull(collabSummaryOverride(collabRow(master = "true")))
+        // 子项缺席(快照形态不在预期):不拼接半份事实。
+        assertNull(collabSummaryOverride(collabRow(delegate = null)))
+        assertNull(collabSummaryOverride(collabRow(fanout = null)))
+        // 非 collab 域不参与组合。
+        assertNull(collabSummaryOverride(collabRow().copy(id = "budget")))
+    }
+
+    @Test
+    fun `协同摘要_数据层不预写_组合只发生在展示位`() {
+        // daemon 原文宣称「委派与扇出可用」而委派其实关着(L2 发现 3 的原始矛盾):
+        // controlDomainRows 照原文带出(同源纪律),RuntimeSection 展示位才换成组合实况。
+        val domain = ControlDomain.newBuilder()
+            .setId("collab").setTitle("多 Agent 协同").setWritable(true).setStatusCode(0)
+            .setSummary("协同已开启:委派与扇出可用,单次扇出上限 2 家")
+            .addItems(
+                ControlItem.newBuilder().setId(COLLAB_MASTER_SWITCH_ID).setLabel("协同总开关")
+                    .setCurrent("开").setKind("toggle")
+            )
+            .addItems(
+                ControlItem.newBuilder().setId("collab.native_delegate_enabled").setLabel("委派子任务")
+                    .setCurrent("关").setKind("toggle")
+            )
+            .addItems(
+                ControlItem.newBuilder().setId("collab.fanout_enabled").setLabel("并行扇出")
+                    .setCurrent("开").setKind("toggle")
+            )
+            .addItems(
+                ControlItem.newBuilder().setId(COLLAB_MEMBERS_ID).setLabel("扇出成员上限")
+                    .setCurrent("2").setKind("number")
+            )
+            .build()
+        val row = controlDomainRows(ControlPlane.newBuilder().addDomains(domain).build()).single()
+        assertEquals("协同已开启:委派与扇出可用,单次扇出上限 2 家", row.summary)
+        assertEquals("协同已开启 · 委派关 · 扇出开(上限 2)", collabSummaryOverride(row))
+    }
 }

@@ -43,6 +43,13 @@ const val CONTROL_DOMAIN_DIALYSIS = "dialysis"
 /** collab 域的扇出成员上限项(daemon 钉死的稳定 id;数值写通道走既有 SetCollabPolicy)。 */
 const val COLLAB_MEMBERS_ID = "collab.max_parallel_members"
 
+/**
+ * collab 域的委派/扇出子开关项 id(daemon 契约钉死的稳定键,摘要组合 [collabSummaryOverride]
+ * 按 id 取项、不按 label;与 [COLLAB_TOGGLE_IDS] 词表同源)。
+ */
+internal const val COLLAB_DELEGATE_ID = "collab.native_delegate_enabled"
+internal const val COLLAB_FANOUT_ID = "collab.fanout_enabled"
+
 // ---- 展示模型 ------------------------------------------------------------------
 
 /** 状态圆点三档(0 灰 / 1 黄 / 2 红;语义色只用在 8dp 小圆点上)。 */
@@ -274,6 +281,59 @@ fun controlToggleOn(current: String): Boolean? = when (current) {
     "开" -> true
     "关" -> false
     else -> null
+}
+
+/**
+ * 扇出成员上限现值("2")→ 人话段("上限 2";0 → "上限不限",daemon membersText 同一
+ * 语义:0 是不限不是零家);读不出(缺席/非纯数值)→ 空串,调用方整段不摆 —— 不编数字。
+ */
+internal fun collabMembersCapPhrase(current: String): String {
+    val s = current.trim()
+    if (s.isEmpty() || !s.all { it.isDigit() }) return ""
+    val n = s.toLongOrNull() ?: return ""
+    return if (n <= 0) "上限不限" else "上限 $n"
+}
+
+/**
+ * 协同域摘要的展示位组合(L2 真机发现 3:daemon 摘要只看总闸 —— 总开即宣称
+ * 「委派与扇出可用」,而委派/扇出子开关各有「关」;子项关着时派发被 daemon 拒,
+ * 横幅如实、摘要却说"可用",两者互相矛盾)。
+ *
+ * 组合口径(照 daemon 词表「开/关」,不猜;对应 daemon/internal/server/control_plane.go
+ * controlDomainCollab 的三态):
+ *  - 总开关关 → 「协同已关闭」(子开关再开也没用,与 daemon 侧同一句实话);
+ *  - 总开关开 → 按子项实况拼:**两路全开才说「委派与扇出可用」**,否则逐项报实况
+ *    (「委派关 · 扇出开(上限 2)」);上限段只跟「扇出开」走(扇出关时上限没有意义);
+ *  - 子项在而现值认不出(词表外)→ 该项报「未识别」,不猜布尔;
+ *  - 总开关/子项缺席(快照形态不在预期)→ 返回 null,**照 daemon 原文呈现** ——
+ *    拼不出完整实况就退回 daemon 的话,不拼接半份事实。
+ *
+ * 【为什么是展示位组合而不是改 daemon】同一快照两个读法才有"App 与 daemon 说的
+ * 不一样"的新矛盾;组合用的现值就是本域 items 的 daemon 原文,数据层
+ * ([controlDomainRows])照旧原文不改写,单测钉住两层分工。
+ */
+internal fun collabSummaryOverride(domain: ControlDomainRow): String? {
+    if (domain.id != CONTROL_DOMAIN_COLLAB) return null
+    val byId = domain.items.associateBy { it.id }
+    // 总开关:项缺席 / 现值认不出 → 拼不出实况,退 daemon 原文。
+    val masterOn = byId[COLLAB_MASTER_SWITCH_ID]?.let { controlToggleOn(it.current) } ?: return null
+    if (!masterOn) return "协同已关闭"
+    // 子开关:项缺席 → 退 daemon 原文;项在而现值认不出 → 保留 null,该项报
+    // 「未识别」(与直控开关状态词同款),不猜布尔 —— 两种缺席不许混为一谈。
+    val delegateItem = byId[COLLAB_DELEGATE_ID] ?: return null
+    val fanoutItem = byId[COLLAB_FANOUT_ID] ?: return null
+    val delegateOn = controlToggleOn(delegateItem.current)
+    val fanoutOn = controlToggleOn(fanoutItem.current)
+    val capSuffix = collabMembersCapPhrase(byId[COLLAB_MEMBERS_ID]?.current.orEmpty())
+        .takeIf { it.isNotEmpty() }?.let { "($it)" } ?: ""
+    return if (delegateOn == true && fanoutOn == true) {
+        "协同已开启 · 委派与扇出可用$capSuffix"
+    } else {
+        "协同已开启 · " + listOf(
+            when (delegateOn) { true -> "委派开"; false -> "委派关"; null -> "委派未识别" },
+            when (fanoutOn) { true -> "扇出开$capSuffix"; false -> "扇出关"; null -> "扇出未识别" },
+        ).joinToString(" · ")
+    }
 }
 
 /**

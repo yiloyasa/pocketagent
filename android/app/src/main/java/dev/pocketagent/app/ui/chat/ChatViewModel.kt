@@ -7,12 +7,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * ChatScreen 页面级长期状态的持有者(2026-10-04 计划 Task 8,第一层分层)。
+ * ChatScreen 页面级长期状态的持有者(2026-10-04 计划 Task 8,第一层分层;
+ * 第二层增量:会话元数据四项/加载错误/斜杠命令镜像照同一形态收拢)。
  *
  * 【形态】项目没有 viewModel 依赖(禁加),按计划口径用普通 class:构造即持有
  * 一棵 [ChatState] 的 StateFlow;ChatScreen 只 collect([ChatRoute] 构造并传入,
  * 直连入口在 ChatScreen 内兜底自建)。照 ModelSelectionRepository 的
- * "单一投影点 + 意图入口"先例,但更薄 —— 本轮迁出的全是**同步状态推进**
+ * "单一投影点 + 意图入口"先例,但更薄 —— 两层迁出的全是**同步状态推进**
  * (RPC 仍留在 ChatScreen 的既有接线段里,零搬动),所以**不需要 CoroutineScope**:
  * 每条意图都是一次 [ChatStateReducer.reduce] 纯函数调用,经 StateFlow.update
  * 原子落位(全部调用点在主线程:组合回调/LaunchedEffect)。后续轮次接管
@@ -26,7 +27,7 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
 
     private val _state = MutableStateFlow(ChatStateReducer.initial(stepRounds))
 
-    /** 页面级长期状态(离线快照/历史加载/身份索引/搜索定位底座)。 */
+    /** 页面级长期状态(离线快照/历史加载/身份索引/会话元数据/加载错误/斜杠命令镜像)。 */
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     /** 处理一条页面级意图(UI 只发意图;纯 reducer 落位,无副作用)。 */

@@ -196,6 +196,25 @@ func TestFakePiProcess(t *testing.T) {
 				resp["success"] = true
 				resp["data"] = map[string]any{"provider": req.Provider, "modelId": req.ModelID}
 			}
+		case "get_available_models":
+			// 1.0.2 应答形状(bundle 实证:getAvailableSnapshot() → {models}):
+			// 两模型固定表,供 client_test 的就绪重试+真表命中用例使用;字段名
+			// (id/name/provider/reasoning/input/contextWindow/thinkingLevelMap)
+			// 与 agent 层 probePiModels 的解析结构逐一对齐。
+			resp["success"] = true
+			resp["data"] = map[string]any{
+				"models": []map[string]any{
+					{
+						"id": "glm-5.3", "name": "GLM-5.3", "provider": "zai-coding-cn",
+						"reasoning": true, "input": []string{"text"}, "contextWindow": 1000000,
+						"thinkingLevelMap": map[string]any{"off": nil, "low": "low", "high": "high", "max": "max"},
+					},
+					{
+						"id": "deepseek-flash", "name": "DeepSeek V4.1 Flash", "provider": "deepseek",
+						"reasoning": false, "input": []string{"text", "image"}, "contextWindow": 128000,
+					},
+				},
+			}
 		case "get_entries":
 			switch req.Since {
 			case "":

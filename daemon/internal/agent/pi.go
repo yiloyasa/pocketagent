@@ -268,22 +268,61 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 		return nil
 	}
 	defer c.Close()
-	// 【8s 快速失败(2026-10-01 实测)】0.99.1 的 --no-session rpc 下
-	// get_available_models 永不应答(0.87.1 可用,上游变了)—— 30s 预算会把
-	// 手机端模型选择器挂死;快速失败后走下方实证候选回退,用户立刻有得选。
-	raw, err := c.Call("get_available_models", nil, 8*time.Second)
+	out := probePiModels(c, PiModelsStoreFallbackModels)
+	// 【死因日志去冤案(2026-09-25 弹窗治理专项)】探测结束后 defer Close 会 Kill
+	// 子进程,daemon.log 随之出现"退出(Close 主动关闭) 退出码=1"—— 曾被误读成
+	// "0.87.1 rpc 拉起即退"挂进 AUDIT 适配债。这里留一行人话收尾,与退出行相邻,
+	// 后人不再重复排查(退出码 1 = TerminateProcess 的固定码,与崩溃无关)。
+	// 真表与 models-store 回退两种来源都走这一行收尾,措辞用"候选"兼容二者。
+	if len(out) > 0 {
+		log.Printf("[pi] 模型列表探测收尾(%d 个候选):一次性子进程 %d 即将按设计关闭,其后的退出码=1 是 Kill 收尸码非崩溃", len(out), c.PID())
+	}
+	return out
+}
+
+// 模型探测的传输预算(分相):单次尝试上界 + 总上界交给就绪重试。
+const (
+	// piModelsProbeAttempt 单次尝试的等待上界,与 piapp 的 piReadyAttempt 同值
+	// 同义(未应答换 id 重试,直到总预算耗尽/拿到定局;两处本地声明,注释互指
+	// —— 不为读一个常量把 piapp 的内部预算升成公共面)。
+	piModelsProbeAttempt = 12 * time.Second
+	// piModelsProbeBudget 探测总上界(ctx deadline)。【8s→30s(2026-10-07,pi
+	// 1.0.2 对齐)】1.0.2 的 runRpcMode 在扩展加载完成后才开始读 stdin(启动
+	// 门控,见 piapp.callWithReadyRetry):spawn 后首条命令可能躺在管道里数十秒
+	// (本机重扩展实测 >15s),旧 8s 单次预算大概率空超时、白白落 models-store
+	// 回退 —— 而 1.0.2 的 get_available_models handler 实际存在(bundle 实证),
+	// 拿不到真表纯属传输时机。30s 给"重扩展绑定完成后拿到真表"留足机会;
+	// 拿不到时回退链照旧,不劣化。
+	piModelsProbeBudget = 30 * time.Second
+)
+
+// piModelsProbeCaller 模型探测对 piapp.Client 的窄接口(单测打桩,不拉真子进程;
+// piapp.Client 的 CallWithReadyRetry 天然满足,生产零适配 —— 与 piMountClient
+// 的抽接口同模式)。
+type piModelsProbeCaller interface {
+	CallWithReadyRetry(ctx context.Context, typ string, params map[string]any, attemptBudget time.Duration) (json.RawMessage, error)
+}
+
+// 生产零适配的编译期保证:真客户端的方法集必须天然满足窄接口。
+var _ piModelsProbeCaller = (*piapp.Client)(nil)
+
+// probePiModels 就绪重试发 get_available_models 并按既有语义折叠成最终候选:
+//   - 拿到真表 → 解析返回;
+//   - RPC 失败(1.0.2 门控下总预算耗尽仍未就绪 / success:false / 子进程死亡)
+//     → fallback()(models-store 只读回退,不劣化 —— 0.99.1 的 --no-session 下
+//     这条命令永不应答(cmd/pimodelsprobe 探针溯源),回退链正是为它而生);
+//   - 应答不可解析 → 返回 nil 且**不**回退(原生形状漂移,宁缺毋假,与
+//     2026-10-01 以来"解析失败不走回退"的既有分支一致)。
+//
+// fallback 抽成参数是注入缝:单测用临时 models-store 文件钉"超时必回退"
+// (生产传 PiModelsStoreFallbackModels,与探针 cmd/pimodelsprobe 同源)。
+func probePiModels(c piModelsProbeCaller, fallback func() []pb.ModelInfo) []pb.ModelInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), piModelsProbeBudget)
+	defer cancel()
+	raw, err := c.CallWithReadyRetry(ctx, "get_available_models", nil, piModelsProbeAttempt)
 	if err != nil {
-		log.Printf("[pi] get_available_models 不可用(0.99.1 实测超时),回退实证候选: %v", err)
-		// 回退到 pi 自维护的模型目录文件(~/.pi/agent/models-store.json,只读):
-		// 通用用户的 pi 都有它。经 agency 自适应编译管道提取 —— 不依赖固定
-		// schema,上游改字段/嵌套仍能出全量候选(架构适应力,非硬编码解析)。
-		// 【0.99.1 真实形状】models 是数组(非旧形态的键即 id dict),provider
-		// 继承与提取在 pi_models_store.go 的桶感知源里完成(piModelsStoreSource);
-		// 本机实跑见 cmd/pimodelsprobe —— 探针与生产走同一个 PiModelsStoreFallbackModels。
-		if out := PiModelsStoreFallbackModels(); len(out) > 0 {
-			return out
-		}
-		return nil
+		log.Printf("[pi] get_available_models 未取得真表(未就绪/超时),回退实证候选: %v", err)
+		return fallback()
 	}
 	var res struct {
 		Models []struct {
@@ -322,13 +361,6 @@ func (p *PiProvider) fetchModelsUncached() []pb.ModelInfo {
 		if m.Name == "" {
 			out[len(out)-1].DisplayName = m.ID
 		}
-	}
-	// 【死因日志去冤案(2026-09-25 弹窗治理专项)】探测成功后 defer Close 会 Kill
-	// 子进程,daemon.log 随之出现"退出(Close 主动关闭) 退出码=1"—— 曾被误读成
-	// "0.87.1 rpc 拉起即退"挂进 AUDIT 适配债。这里留一行人话收尾,与退出行相邻,
-	// 后人不再重复排查(退出码 1 = TerminateProcess 的固定码,与崩溃无关)。
-	if len(out) > 0 {
-		log.Printf("[pi] 模型列表探测完成(%d 个模型):一次性子进程 %d 即将按设计关闭,其后的退出码=1 是 Kill 收尸码非崩溃", len(out), c.PID())
 	}
 	return out
 }

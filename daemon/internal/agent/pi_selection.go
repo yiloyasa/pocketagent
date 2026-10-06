@@ -36,16 +36,17 @@ func configurePiSelection(ctx context.Context, c piSelectionCaller, model, effor
 			// 整轮任务。回退 Pi 默认模型、回读**实际生效模型**并经 warn 上抛,
 			// 由调用方发警告卡+Started 帧携带真实模型(手机模型行随之显示真值)。
 			if strings.Contains(err.Error(), "Model not found") {
-				log.Printf("[pi] 模型 %s 已不在 Pi 目录,回退默认模型继续本轮", model)
+				log.Printf("[pi] 模型 %s 已不在 Pi 目录,沿用 Pi 当前默认模型继续本轮", model)
 				warn = "会话原模型 " + model + " 已从 Pi 目录移除,已回退 Pi 默认模型;请在模型行重新选择。"
-				for _, fb := range []map[string]any{
-					{"modelId": "default"},
-					{"provider": "", "modelId": ""},
-				} {
-					if _, e2 := c.CallCtx(ctx, "set_model", fb, piCallBudget); e2 == nil {
-						break
-					}
-				}
+				// 【1.0.2 对齐(2026-10-07)】「回退默认」= 不动 pi 侧,跳过 set_model,
+				// 直接 get_state 回读真值。bundle 实证 1.0.2 的 handler 只按
+				// find(m => m.provider === command.provider && m.id === command.modelId)
+				// 精确匹配,没有「跟随默认」分支 —— 旧候选 {"modelId":"default"} 与
+				// {"provider":"","modelId":""} 双双必败(目录里没有 id 为 "default"
+				// 或 provider/modelId 为空串的条目),每次降级都白打两轮必败 RPC。
+				// 沿用当前模型即默认语义,跨版本一致:0.99.1 时代 daemon 生产路径
+				// 本就只发 provider+id 二元组、default/无斜杠规格一律本地拒绝
+				// (pi_selection 首版先例),不发这两种形状对它零差异。
 				if raw, e3 := c.CallCtx(ctx, "get_state", nil, piCallBudget); e3 == nil {
 					var st struct {
 						Model struct {

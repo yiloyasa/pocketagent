@@ -1,8 +1,10 @@
 package dev.pocketagent.app.ui.chat
 
 import dev.pocketagent.app.ui.HistoryRoundsLogic
+import dev.pocketagent.app.ui.SlashCommandInfo
 import dev.pocketagent.app.ui.history.HistoryIdentityIndex
 import dev.pocketagent.app.ui.history.MessageSpan
+import pocketagent.v1.ThreadStatus
 
 /**
  * ChatScreen 页面级长期状态(2026-10-04 会话选择与历史体验计划 Task 8,第一层分层)。
@@ -22,6 +24,12 @@ import dev.pocketagent.app.ui.history.MessageSpan
  *
  * 【字段语义与原 ChatScreen 局部变量一一对应】迁出前写在 ChatScreen 函数体内
  * (2266-2293 行一带),注释原样搬移;写入通道全部走 [ChatIntent](见 reducer)。
+ *
+ * 【第二层增量】会话元数据四项([threadTitle]/[threadStatus]/[threadWorkspace]/
+ * [threadAgentId],getThread 回填)、历史加载错误([loadError])与斜杠命令的
+ * Compose 侧镜像([slashCommands],进程级 SlashCommandCache 仍留在 ChatScreen,
+ * 这里只收面板渲染用的列表)照同一手法迁入:纯数据 + 纯 reducer 落位,
+ * 四接线段(优化/搜索/语音/模型卡)引用符号零触碰。
  */
 data class ChatState(
     /**
@@ -62,6 +70,54 @@ data class ChatState(
      * 空 = 旧 daemon 未带 id,退「回包条数 - 已加载条数」兜底。
      */
     val oldestMessageId: String = "",
+
+    /**
+     * 会话标题(getThread 回填;顶栏/侧边栏/搜索命中卡/导出文件名共用)。
+     * 【PF4 原注释】按 threadId 记忆 —— getThread 用 t.title 回填且空标题不覆盖,
+     * 不带键时换到无标题会话会永远顶着上一会话的标题;本层随 ChatViewModel 换
+     * 会话整体重建回落「任务」,与原 remember(threadId) 键控同语义。
+     * 初始值「任务」= 迁出前 mutableStateOf 的初值。
+     */
+    val threadTitle: String = "任务",
+
+    /**
+     * daemon 上报的会话状态(getThread 回填;四词状态徽章的兜底数据源。
+     * 运行中/恢复中由 st.running 实时覆盖,待审批由 st.pendingApproval 实时
+     * 覆盖 —— 徽章口径仍在 ChatScreen 的 identityStatus 装配处)。
+     */
+    val threadStatus: ThreadStatus = ThreadStatus.THREAD_STATUS_UNSPECIFIED,
+
+    /**
+     * 会话工作区(getThread 回填;文件上传回填 PC 路径、抽屉/导出/Git 面板共用)。
+     * null = 尚未回填或 daemon 报空([ChatIntent.ThreadHeaderLoaded] 内
+     * `ifBlank { null }` 原式);【PF4】换会话随 ViewModel 重建归 null。
+     */
+    val threadWorkspace: String? = null,
+
+    /**
+     * 会话归属 agent(getThread 回填;斜杠面板开关/品牌图标/能力位文案共用)。
+     * 空 = getThread 未回填(投影后由读点的 ifBlank 兜底,如 sessionAgent);
+     * daemon 报空时 reducer 兜 "codex"(原式);【PF4】换会话随 ViewModel 重建归 ""。
+     */
+    val threadAgentId: String = "",
+
+    /**
+     * 页面级加载错误(统一提示条的「页面加载错误」档;模型设置/模型列表/会话/
+     * 会话历史四路加载共用 —— 真机教训:两个并行加载共用一格,后完成者不得把
+     * 先到的提示顶掉,见 [ChatIntent.LoadErrorSetIfAbsent])。
+     * 【语义保真注】原实现是无键 remember(跨会话沿用,靠后续加载覆盖);本层随
+     * ChatViewModel 换会话整体重建归 null —— 上一会话的失败横幅不再带进新会话
+     * (getThread 效果重跑本就会重裁定),方向与第一层 offlineSnapshot 同款。
+     */
+    val loadError: String? = null,
+
+    /**
+     * 斜杠命令面板的候选列表(zcode/codex/pi 三源 daemon 回包的 Compose 侧镜像;
+     * 面板显隐/候选合并仍在 ChatScreen 走 SlashCommandsLogic 纯逻辑)。
+     * 进程级去重缓存 SlashCommandCache 原样留在 ChatScreen 的拉取效果内 ——
+     * 本字段只是渲染镜像,与缓存对象无双向耦合(拉取 RPC 通道零改动)。
+     */
+    val slashCommands: List<SlashCommandInfo> = emptyList(),
 ) {
     /**
      * 时间线列表的头部偏移:时间线顶部挂「加载更早」入口时 itemsIndexed 的下标
@@ -164,6 +220,70 @@ sealed interface ChatIntent {
      * daemon 未报)**不覆盖**已有值。对应迁出前 onSearchSearched 的条件赋值。
      */
     data class KnownTotalObserved(val total: Int) : ChatIntent
+
+    // ---- 第二层:会话元数据 / 加载错误 / 斜杠命令镜像 ----
+
+    /**
+     * getThread 回包的会话元数据四项一次落位。对应迁出前 getThread 成功分支的
+     * 三条原式(reducer 内逐字保留,调用方传 daemon 原值):
+     *  - `if (t.title.isNotEmpty()) threadTitle = t.title`(空标题不覆盖,否则
+     *    换到无标题会话会顶着上一会话的标题);
+     *  - `threadWorkspace = t.workspace.ifBlank { null }`;
+     *  - `threadAgentId = t.agentId.ifBlank { "codex"}`。
+     * status 无条件覆盖(`threadStatus = t.status` 原式)。
+     */
+    data class ThreadHeaderLoaded(
+        val title: String,
+        val status: ThreadStatus,
+        val workspace: String,
+        val agentId: String,
+    ) : ChatIntent
+
+    /**
+     * 会话工作区直接落位。对应迁出前文件上传(pickFiles)回填的
+     * `threadWorkspace = ws` 原式 —— ws 是本地已解析的非空路径
+     * (投影值兜底 → RPC getThread → 双 elvis),无条件覆盖。
+     */
+    data class WorkspaceResolved(val workspace: String) : ChatIntent
+
+    /**
+     * 页面加载错误无条件落位。对应迁出前 getThread 失败与会话历史加载失败两处
+     * `loadError = "无法加载会话[历史]：…"`(本会话的最新失败就是当前事实)。
+     */
+    data class LoadErrorReported(val message: String) : ChatIntent
+
+    /**
+     * 页面加载错误只在现值为空时落位。对应迁出前模型设置/模型列表两个并行加载
+     * 的 `if (loadError == null) loadError = "…"` 原式 —— 后完成者不顶掉先到的
+     * 提示(真机教训)。条件收在 reducer 内对权威现值判定,不读投影(投影存在
+     * 一帧滞后,原地判会把先到的错误顶掉 —— 与 RoundsAdvancedIfBeyond 同理)。
+     */
+    data class LoadErrorSetIfAbsent(val message: String) : ChatIntent
+
+    /**
+     * 页面加载错误清空。对应迁出前四处 `loadError = null`:离线快照分支两处
+     * (getThread 快照命中/断线快照兜底,快照黄条比红条有信息量)与两处用户
+     * 重试(顶栏状态点/统一提示条「重试」按钮)。
+     */
+    data object LoadErrorCleared : ChatIntent
+
+    /**
+     * 只清「离线」前缀的残留错误。对应迁出前历史加载成功分支的
+     * `if (loadError?.startsWith("离线") == true) loadError = null` 原式 ——
+     * 前缀字面量是错误文案的约定(离线提示统一以「离线」开头),收在 reducer
+     * 纯函数内可被 JVM 单测钉死;其它错误(真失败)不在此处清。
+     */
+    data object LoadErrorClearedIfOffline : ChatIntent
+
+    /**
+     * 斜杠命令镜像无条件替换。对应迁出前拉取效果内三处同款赋值:
+     *  - 非面板会话清空(`slashCommands = emptyList()`,即使缓存里有别的会话
+     *    残留也不漏);
+     *  - 缓存命中先渲染(`if (cached != null) slashCommands = cached`,调用点
+     *    保留 null 闸 —— 那是对本地变量的新鲜判定,无投影滞后问题);
+     *  - RPC 回包落位(`slashCommands = loaded`,失败安静降级为空表照写)。
+     */
+    data class SlashCommandsSettled(val commands: List<SlashCommandInfo>) : ChatIntent
 }
 
 /**
@@ -185,6 +305,13 @@ object ChatStateReducer {
         loadingEarlier = false,
         identity = HistoryIdentityIndex(),
         oldestMessageId = "",
+        // 第二层缺省与迁出前各 remember 初值逐字对应(换会话随 ViewModel 重建回落)
+        threadTitle = "任务",
+        threadStatus = ThreadStatus.THREAD_STATUS_UNSPECIFIED,
+        threadWorkspace = null,
+        threadAgentId = "",
+        loadError = null,
+        slashCommands = emptyList(),
     )
 
     /** 头部拼接前的增量裁定(纯查询,不改状态):本次回包实际新增多少条。 */
@@ -265,5 +392,28 @@ object ChatStateReducer {
             } else {
                 state
             }
+
+        // ---- 第二层:会话元数据 / 加载错误 / 斜杠命令镜像 ----
+
+        is ChatIntent.ThreadHeaderLoaded -> state.copy(
+            threadTitle = if (intent.title.isNotEmpty()) intent.title else state.threadTitle,
+            threadStatus = intent.status,
+            threadWorkspace = intent.workspace.ifBlank { null },
+            threadAgentId = intent.agentId.ifBlank { "codex" },
+        )
+
+        is ChatIntent.WorkspaceResolved -> state.copy(threadWorkspace = intent.workspace)
+
+        is ChatIntent.LoadErrorReported -> state.copy(loadError = intent.message)
+
+        is ChatIntent.LoadErrorSetIfAbsent ->
+            if (state.loadError == null) state.copy(loadError = intent.message) else state
+
+        ChatIntent.LoadErrorCleared -> state.copy(loadError = null)
+
+        ChatIntent.LoadErrorClearedIfOffline ->
+            if (state.loadError?.startsWith("离线") == true) state.copy(loadError = null) else state
+
+        is ChatIntent.SlashCommandsSettled -> state.copy(slashCommands = intent.commands)
     }
 }

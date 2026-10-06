@@ -414,6 +414,32 @@ func TestCallReadyRetryStopsOnDeadProcess(t *testing.T) {
 	}
 }
 
+// 1.0.2 启动门控下的一次性探测子进程(agent 层 fetchModels 的传输形状):
+// 延迟就绪的假 pi 上,导出面 CallWithReadyRetry(get_available_models) 必须在
+// 就绪后拿到真表 —— 与 GetState/SwitchSession 共用同一套就绪重试,不另写第二
+// 实现;应答字段(id/provider/contextWindow)与 agent 层 probePiModels 的解析
+// 结构逐一对齐。
+func TestCallWithReadyRetryFetchesModelsAfterReady(t *testing.T) {
+	c := newDelayedFakePi(t, 2)
+	raw, err := c.CallWithReadyRetry(context.Background(), "get_available_models", nil, 1*time.Second)
+	if err != nil {
+		t.Fatalf("就绪后应拿到真表: %v", err)
+	}
+	var data struct {
+		Models []struct {
+			ID            string `json:"id"`
+			Provider      string `json:"provider"`
+			ContextWindow int64  `json:"contextWindow"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(raw, &data) != nil || len(data.Models) != 2 {
+		t.Fatalf("get_available_models 应答形状不符: %s", raw)
+	}
+	if data.Models[0].Provider != "zai-coding-cn" || data.Models[0].ID != "glm-5.3" || data.Models[0].ContextWindow != 1000000 {
+		t.Fatalf("首条模型字段不符: %+v", data.Models[0])
+	}
+}
+
 // GetState 全链路(真实 readLoop/dispatch/解析管线)在"延迟就绪"的假 pi 上成功
 // 且会话缓存回填 —— 探针第 2 项(get_state 握手)的验收形状。
 func TestGetStateAgainstDelayedFakePi(t *testing.T) {

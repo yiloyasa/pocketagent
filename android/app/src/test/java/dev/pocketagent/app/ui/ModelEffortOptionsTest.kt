@@ -1,11 +1,16 @@
 package dev.pocketagent.app.ui
 
+import dev.pocketagent.app.ui.model.EffectiveSelectionUi
+import dev.pocketagent.app.ui.model.ModelSelectionState
+import dev.pocketagent.app.ui.model.PendingSelection
 import dev.pocketagent.app.ui.model.SelectionSource
 import dev.pocketagent.app.ui.model.cardEffortLevels
 import dev.pocketagent.app.ui.model.cardSelectedEffort
+import dev.pocketagent.app.ui.model.cardSubmission
 import dev.pocketagent.app.ui.model.modelRowDetail
 import dev.pocketagent.app.ui.model.selectionSourceLabel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pocketagent.v1.ModelInfo
@@ -189,5 +194,81 @@ class ModelEffortOptionsTest {
         // 词表外新增来源:不报错,如实展示 daemon 原文;连原文都没有才落"未知来源"
         assertEquals("future_source", selectionSourceLabel(SelectionSource.UNKNOWN, "future_source"))
         assertEquals("未登记来源", selectionSourceLabel(SelectionSource.UNKNOWN, ""))
+    }
+
+    // ---- L2 发现 4:提交中态(cardSubmission:pending → 展示映射)--------------------
+
+    /** 拼一份选择投影(agent 固定 pi;零值 = 跟随默认,合法取值)。 */
+    private fun sel(modelId: String = "", effort: String = "", optimistic: Boolean = false) =
+        EffectiveSelectionUi(
+            agentId = "pi",
+            modelId = modelId,
+            effort = effort,
+            source = SelectionSource.THREAD_OVERRIDE,
+            sourceRaw = SelectionSource.THREAD_OVERRIDE.raw,
+            appliesToNextTurn = true,
+            explanation = "",
+            availableEfforts = emptyList(),
+            optimistic = optimistic,
+        )
+
+    @Test
+    fun submission_idle_when_no_pending_no_label() {
+        // pending = null:不在飞,不摆任何指示、状态词为空串。
+        val got = cardSubmission(ModelSelectionState(selection = sel(modelId = "pi/glm-5.3", effort = "high")))
+        assertFalse(got.inFlight)
+        assertEquals("", got.label)
+        assertFalse(got.modelPending)
+        assertFalse(got.effortPending)
+    }
+
+    @Test
+    fun submission_marks_only_the_changed_dimension() {
+        val prev = sel(modelId = "pi/glm-5.3", effort = "high")
+        // 切模型:模型行亮「提交中…」,强度行不亮。
+        val modelSwitch = ModelSelectionState(
+            selection = sel(modelId = "pi/other", effort = "high", optimistic = true),
+            pending = PendingSelection(previous = prev),
+        )
+        with(cardSubmission(modelSwitch)) {
+            assertTrue(inFlight)
+            assertTrue(modelPending)
+            assertFalse(effortPending)
+            assertEquals("提交中…", label)
+        }
+        // 切强度:强度亮,模型行不亮。
+        val effortSwitch = ModelSelectionState(
+            selection = sel(modelId = "pi/glm-5.3", effort = "max", optimistic = true),
+            pending = PendingSelection(previous = prev),
+        )
+        with(cardSubmission(effortSwitch)) {
+            assertTrue(inFlight)
+            assertFalse(modelPending)
+            assertTrue(effortPending)
+        }
+    }
+
+    @Test
+    fun submission_reset_to_default_marks_both_dimensions() {
+        // 清覆盖(双空 = 跟随默认):模型与强度两维都变了 → 两行都亮。
+        val got = cardSubmission(
+            ModelSelectionState(
+                selection = sel(optimistic = true),
+                pending = PendingSelection(previous = sel(modelId = "pi/glm-5.3", effort = "high")),
+            ),
+        )
+        assertTrue(got.inFlight && got.modelPending && got.effortPending)
+    }
+
+    @Test
+    fun submission_without_previous_marks_both_conservatively() {
+        // previous 缺席(此前从无任何已知选择):无法逐维归因 → 两行都亮,不漏钉。
+        val got = cardSubmission(
+            ModelSelectionState(
+                selection = sel(modelId = "pi/glm-5.3", effort = "high", optimistic = true),
+                pending = PendingSelection(previous = null),
+            ),
+        )
+        assertTrue(got.inFlight && got.modelPending && got.effortPending)
     }
 }

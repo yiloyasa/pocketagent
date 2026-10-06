@@ -488,7 +488,11 @@ private fun ControlDomainBlock(
     // 与设置页通用行(16sp/13sp)拉开一档,控制中心内部层级更清楚。
     ControlDomainHeaderRow(
         title = domain.title,
-        summary = domain.summary,
+        // 【协同摘要如实反映子项(L2 真机发现 3)】daemon 摘要只看总闸:总开即宣称
+        // 「委派与扇出可用」,子开关各有「关」时派发被 daemon 拒,横幅与摘要互相矛盾。
+        // 展示位按同快照的子项现值组合出实况(collabSummaryOverride 纯函数,四态
+        // 组合已钉单测);非 collab 域 / 快照缺项 → null,照 daemon 原文不改写。
+        summary = collabSummaryOverride(domain) ?: domain.summary,
         dotKind = domain.dotKind,
         divider = divider,
         chevron = onClick != null,

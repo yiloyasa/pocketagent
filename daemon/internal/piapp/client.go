@@ -850,6 +850,14 @@ func (c *Client) callWithReadyRetry(ctx context.Context, typ string, params map[
 	}
 }
 
+// CallWithReadyRetry 是 callWithReadyRetry 的导出面:agent 层模型探测的一次性
+// 子进程(fetchModelsUncached → probePiModels)与常驻会话路径(GetState/
+// SwitchSession)共用同一套「1.0.2 启动门控」就绪重试语义,不另写第二实现
+// (注释互指:agent/pi.go 的 piModelsProbeAttempt 与本文件 piReadyAttempt 同值同义)。
+func (c *Client) CallWithReadyRetry(ctx context.Context, typ string, params map[string]any, attemptBudget time.Duration) (json.RawMessage, error) {
+	return c.callWithReadyRetry(ctx, typ, params, attemptBudget)
+}
+
 // GetState 拉当前会话状态并刷新 SessionFile/SessionID 缓存。
 // 走就绪重试:它常是 spawn 后的第一条命令(新会话挂载路径),在 pi 1.0.2 的
 // 启动门控下要等到扩展绑定完成才有应答。
