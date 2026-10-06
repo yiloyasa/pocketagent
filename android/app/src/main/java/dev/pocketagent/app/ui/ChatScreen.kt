@@ -2636,7 +2636,11 @@ fun ChatScreen(
                     if(native.modelsCount>0) {
                         // 【P1-20 · 先比对再赋值】List equals 按内容逐元素比(proto ModelInfo
                         // 实现 equals):内容没变就不换实例,消除每 10s 一次的空转重组。
-                        val merged=models.filter { it.provider!=sessionAgent }+native.modelsList
+                        // 【L2 发现⑤根因收尾】大表行的 provider 字段存的是上游供应商名
+                        // (pi 系 = zai-coding-cn/deepseek),按 provider 过滤等于没滤,
+                        // 本 agent 旧行永存、大表持续膨胀;改与 modelsForAgent 同口径
+                        // 按 id 首段过滤,旧行剔除、native 申报行唯一入库。
+                        val merged=models.filter { it.id.substringBefore('/')!=sessionAgent }+native.modelsList
                         if(merged!=models) models=merged
                     }
                     TurnSession.acceptRuntimeSelection(threadId,native.currentModelId,
@@ -2678,17 +2682,16 @@ fun ChatScreen(
 
     // 【生效模型名】在输入栏前统一计算,供"输入框上方全宽行"、tmux 状态条与
     // "工具行模型 chip"复用。
-    // 修复 2b:displayName 可能为空串(daemon 返回的模型未带展示名),空串不能触发
-    // `?:` 兜底,必须用 takeIf { isNotBlank() } 先判空,再回退到生效模型 id 去掉
-    // agent 前缀的裸名(modelBareName:"pi/glm-5.3" → "glm-5.3")或"跟随桌面"。
-    // 这样无论模型列表是否加载完,当前模型名都非空、完整可读。
+    // 【统一翻译层】与快速面板/完整卡同一份 modelDisplayLabel:申报视图
+    // (sessionModels)displayName → 大表(models)displayName → 裸名。
+    // L2 真机发现⑤后半:daemon 未带展示名时旧链直接裸 id 上屏(如
+    // "zai-coding-cn/glm-5.3-flash"),现在大表补位翻出人话名;
+    // 生效模型名非空不变量由翻译层兜底保证(绝不空白、不造假名)。
     // 一律用 model/list 返回的 displayName,不硬编码任何模型名。
     // 【兜底键用 effectiveModelId 而非 selectedModel】生效链会落到 daemon
     // 落库的 Thread.ModelID(pi 会话真实模型),芯片显示跟真实跑的一致。
-    val modelDisplayName = effectiveModel?.displayName?.takeIf { it.isNotBlank() }
-    val modelName = modelDisplayName
-        ?: if (effectiveModelId.isEmpty()) "跟随桌面"
-        else modelBareName(effectiveModelId)
+    val modelName = if (effectiveModelId.isEmpty()) "跟随桌面"
+        else modelDisplayLabel(effectiveModelId, sessionModels, models)
     // 内置档没有的取值(pi 动态档位 off/minimal/max 及未来新增)回
     // effortLabelOf 的中文标签,模型 chip 上不至于露出英文原 id。
     val effortLabel = effortLabelOf(AgentConnection.threadEffort(threadId) ?: session.runningEffort.orEmpty())
