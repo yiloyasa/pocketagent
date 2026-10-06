@@ -855,14 +855,24 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 	switch stop {
 	case "", "end_turn":
 		text := st.snapshotText()
-		log.Printf("[dsh] 一轮完成 session=%s 用时 %v 回复 %d 字", sid, time.Since(turnStart).Round(time.Millisecond), len([]rune(text)))
+		imgs := st.snapshotImages()
+		log.Printf("[dsh] 一轮完成 session=%s 用时 %v 回复 %d 字 图片 %d 张", sid, time.Since(turnStart).Round(time.Millisecond), len([]rune(text)), len(imgs))
 		// 【空就是空】见 codex.go 同处注释:占位文本会把"真的没话说""只有产物"
 		// "适配器丢正文"压成同一条普通 assistant 文本,用户无从判断该不该重试。
 		// 如实返回空块,OutputState 由 server 层按 blocks 判定。
-		if text == "" {
+		// 助手图片(0.2.0 bundle agent_message_chunk image 块)随终局 blocks 返回
+		// —— 只有产物没正文时,用户拿到的是图片而非空轮。
+		blocks := make([]pb.ContentBlock, 0, 1+len(imgs))
+		if text != "" {
+			blocks = append(blocks, pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}})
+		}
+		for _, img := range imgs {
+			blocks = append(blocks, pb.ContentBlock{Block: &pb.ContentBlock_Image{Image: &pb.ImageBlock{Data: img.data, MediaType: img.mediaType}}})
+		}
+		if len(blocks) == 0 {
 			return nil, &pb.Usage{}, nil
 		}
-		return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}}, &pb.Usage{}, nil
+		return blocks, &pb.Usage{}, nil
 	case "cancelled":
 		partial := st.snapshotText()
 		return nil, nil, &dshRunError{info: &pb.Error{
@@ -880,6 +890,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 type dshTurnState struct {
 	mu              sync.Mutex
 	streamText      strings.Builder
+	images          []turnImage // 助手输出的图片块(0.2.0 bundle:agent_message_chunk 可携 {type:"image"})
 	lastNotif       atomic.Int64
 	approvalWaiting atomic.Bool
 }
@@ -894,6 +905,25 @@ func (s *dshTurnState) snapshotText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.streamText.String()
+}
+
+// appendImage 暂存一张助手输出图片(等 Run 终局随最终 blocks 返回 —— 流式
+// 帧型没有图片增量位,终局 blocks 是既有 pb 里唯一能承载它的通道)。
+func (s *dshTurnState) appendImage(data, mediaType string) {
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil || len(raw) == 0 {
+		return // 解不开的图块不伪造,不静默当文本
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.images = append(s.images, turnImage{data: raw, mediaType: mediaType})
+}
+
+// snapshotImages 取本轮已收助手图片(快照后追加不进本结果)。
+func (s *dshTurnState) snapshotImages() []turnImage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]turnImage(nil), s.images...)
 }
 
 // drainEvents 等"已入队的事件全部被消费"(上限 5s):update 流与 prompt 应答
@@ -1209,10 +1239,24 @@ func (p *DshProvider) handleSessionUpdate(raw json.RawMessage, sink Sink, st *ds
 	kind := dshUpdateKind(raw)
 	switch kind {
 	case "agent_message_chunk":
-		// 块级文本(上游 #594 落地前不是逐字 delta,见包注释)
-		if text := dshUpdateText(raw); text != "" {
-			st.appendText(text)
-			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: text}}})
+		// 块级文本(上游 #594 落地前不是逐字 delta,见包注释)。
+		// 【2026-10-07 字段级审计补齐】content 不止文本:bundle assistantBlockToAcp
+		// 对助手图片块发 {type:"image",data:base64,mimeType} —— 旧实现只解 text,
+		// 图片块被静默丢弃。现在图片暂存进轮次状态、随 Run 终局 blocks 返回
+		// (流式帧型无图片增量位,终局 blocks 是既有 pb 唯一承载位),并即时发
+		// 一条状态帧让用户在流里看见"有一张图在路上";其余形状(防御面,bundle
+		// 不产)走诊断透传,不再无声消失。
+		switch c := dshUpdateContent(raw); {
+		case c.Type == "text":
+			if c.Text != "" {
+				st.appendText(c.Text)
+				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_TextDelta{TextDelta: &pb.TextDelta{Delta: c.Text}}})
+			}
+		case c.Type == "image":
+			st.appendImage(c.Data, c.MimeType)
+			notices.recordAs(runtime.KindKnownProjected, "dsh", "session/update:agent_message_chunk:image", raw, sink)
+		default:
+			notices.recordAs(dshNoticeKind("session/update:agent_message_chunk"), "dsh", "session/update:agent_message_chunk:"+c.Type, raw, sink)
 		}
 	case "agent_thought_chunk":
 		// HideReasoning 过滤(daemon 侧行为改变,不依赖 dsh 原生开关)
@@ -1289,6 +1333,7 @@ func dshUpdateKind(raw json.RawMessage) string {
 }
 
 // dshUpdateText 提取文本块的 text(ACP ContentBlock:{type:"text",text:...})。
+// 仅用于 thought 路径:agent_message_chunk 已改走 dshUpdateContent(可携图片)。
 func dshUpdateText(raw json.RawMessage) string {
 	var u struct {
 		Content struct {
@@ -1305,6 +1350,37 @@ func dshUpdateText(raw json.RawMessage) string {
 	return u.Content.Text
 }
 
+// dshContentPayload 是 ACP ContentBlock 里 daemon 消费的字段(bundle 实测形状:
+// 文本 {type:"text",text};图片 {type:"image",data:base64,mimeType})。
+type dshContentPayload struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Data     string `json:"data"`
+	MimeType string `json:"mimeType"`
+}
+
+// dshUpdateContent 解 agent_message_chunk 的 content 块,返回归类结果:
+//   - kind="text":文本增量(bundle 主路径);
+//   - kind="image":助手图片(bundle assistantBlockToAcp,base64+媒体类型);
+//   - kind=<其它/空>:识别不了的形状,调用方走诊断透传 —— 不猜、不静默丢。
+func dshUpdateContent(raw json.RawMessage) dshContentPayload {
+	var u struct {
+		Content dshContentPayload `json:"content"`
+	}
+	if json.Unmarshal(raw, &u) != nil {
+		return dshContentPayload{Type: "unparseable"}
+	}
+	switch u.Content.Type {
+	case "", "text":
+		u.Content.Type = "text"
+		return u.Content
+	case "image":
+		return u.Content
+	default:
+		return dshContentPayload{Type: u.Content.Type}
+	}
+}
+
 // dshToolCallUpdate 是 tool_call/tool_call_update 体(只声明用得到的字段;
 // 状态枚举按蓝本 pending/running/in_progress/finished 与 ACP
 // pending/in_progress/completed/failed 的并集做归一,未知状态进诊断不猜)。
@@ -1317,7 +1393,11 @@ type dshToolCallUpdate struct {
 	Title      string            `json:"title"`
 	Kind       string            `json:"kind"`
 	Status     string            `json:"status"`
+	// Name 是 ACP 侧 UNSTABLE 的程序化工具名(schema 在案;0.2.0-rc.2 bundle
+	// 的 toolCallUpdate 不发,title 即工具名)。防御面:在场时参与取名链。
+	Name       string            `json:"name"`
 	RawInput   json.RawMessage   `json:"rawInput"`
+	RawOutput  json.RawMessage   `json:"rawOutput"`
 	Content    []json.RawMessage `json:"content"`
 }
 
@@ -1386,14 +1466,8 @@ func (p *DshProvider) handleDshToolUpdate(kind string, raw json.RawMessage, sink
 	}
 	tu := &pb.ToolCallUpdate{Phase: phase}
 	// 【0.2.0-rc.2】title 即工具名(bundle:title=event.data.name),kind 恒 "other"
-	// —— 名称优先取 title;title 缺失回落 kind,再缺失用通用名。
-	name := u.Title
-	if name == "" {
-		name = u.Kind
-	}
-	if name == "" {
-		name = "tool"
-	}
+	// —— 名称优先取 title;缺失回落 UNSTABLE 的程序化 name,再缺失用 kind、通用名。
+	name := firstNonEmpty(u.Title, u.Name, u.Kind, "tool")
 	args := map[string]interface{}{"title": u.Title, "kind": u.Kind, "status": u.Status}
 	if len(u.RawInput) > 0 {
 		var input interface{}
@@ -1403,15 +1477,47 @@ func (p *DshProvider) handleDshToolUpdate(kind string, raw json.RawMessage, sink
 	tu.Call = &pb.ToolCallBlock{Id: u.ToolCallID, Name: name, JsonArgs: mustJSON(args)}
 	if phase == pb.ToolCallUpdate_FINISHED {
 		var sb strings.Builder
+		unshown := 0
+		var firstHiddenType string
 		for _, c := range u.Content {
 			if text, ok := dshContentText(c); ok {
 				sb.WriteString(text)
+				continue
+			}
+			// 非文本承载位(diff/terminal/图片条目):bundle toolResultUpdate 只发
+			// {type:"content"} 文本包裹,这些是 union 防御面 —— 不进卡片输出,
+			// 但必须留痕进诊断视图,不允许静默消失(2026-10-07 审计)。
+			unshown++
+			if firstHiddenType == "" {
+				firstHiddenType = dshContentHeadType(c)
 			}
 		}
+		output := sb.String()
+		if output == "" && len(u.RawOutput) > 0 && string(u.RawOutput) != "null" {
+			// content 全空但 rawOutput 在场(union 允许):原文透出,不再给空卡。
+			output = string(u.RawOutput)
+		}
 		ok := strings.EqualFold(u.Status, "completed") || strings.EqualFold(u.Status, "finished")
-		tu.Result = &pb.ToolResultBlock{CallId: u.ToolCallID, Ok: ok, Output: clip(sb.String(), 4000)}
+		tu.Result = &pb.ToolResultBlock{CallId: u.ToolCallID, Ok: ok, Output: clip(output, 4000)}
+		if unshown > 0 {
+			// 隐藏条目只留痕(计数+台账)不出卡:工具卡本身就是用户可见承载,
+			// 再补 STATUS 卡会重复打扰 —— sink 传 nil 即"诊断-only"。
+			notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh",
+				"session/update:"+kind+":content:"+firstHiddenType, raw, nil)
+		}
 	}
 	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: tu}})
+}
+
+// dshContentHeadType 取一条 ToolCallContent 条目的判别类型(读不出给 "opaque")。
+func dshContentHeadType(item json.RawMessage) string {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(item, &head) != nil || head.Type == "" {
+		return "opaque"
+	}
+	return head.Type
 }
 
 // dshUsageUpdate 防御性解析用量帧:识别常见 token 字段(实测形状待配 key 真机
@@ -1446,6 +1552,10 @@ func dshUsageUpdate(raw json.RawMessage) *pb.UsageUpdate {
 // dshUsageUpdateFromUsedSize 解 0.1.5-rc.3 实测的 usage_update 形状
 // {"used":N,"size":M}:上下文窗口占用,InputTokens=used(≈codex last 口径:
 // InputTokens 承载"当前窗口占用",ContextUsageCard 按此渲染)。
+// 【2026-10-07 字段级审计补齐】size 是 dsh-acp 自报的窗口总量
+// (bundle usageUpdate:size=session.requestContext().contextWindow),是
+// UsageUpdate.model_context_window 的地面真值 —— 此前被静默丢弃,手机端
+// 占用环永远拿不到窗口分母。0.2.0-rc.2 bundle 实证 used/size 同帧在发。
 // used/size 任一缺失返回 nil —— 字段不全不猜。
 func dshUsageUpdateFromUsedSize(raw json.RawMessage) *pb.UsageUpdate {
 	var u struct {
@@ -1455,7 +1565,7 @@ func dshUsageUpdateFromUsedSize(raw json.RawMessage) *pb.UsageUpdate {
 	if json.Unmarshal(raw, &u) != nil || u.Used == nil || u.Size == nil {
 		return nil
 	}
-	return &pb.UsageUpdate{Usage: &pb.Usage{InputTokens: *u.Used}}
+	return &pb.UsageUpdate{Usage: &pb.Usage{InputTokens: *u.Used}, ModelContextWindow: *u.Size}
 }
 
 // ---- 审批桥(反向请求 → 手机 → outcome;对标 codex_requests.go 纪律)----

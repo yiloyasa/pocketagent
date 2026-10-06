@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -188,19 +189,48 @@ func (c *Client) SessionNew(ctx context.Context, cwd string) (*SessionState, err
 }
 
 // SessionList 列出可恢复的持久会话(最新在前)。条目无 title(探针修正④)。
+//
+// 【翻页(2026-10-07 字段级审计补齐,bundle listSessions 静态)】dsh-acp 的
+// session/list 是分页的:应答为 {sessions:[…], nextCursor?}(默认页大小 100,
+// sessionListPageSize 配置;nextCursor 是不透明短横线字母串,服务端
+// decodeSessionListCursor 校验 ^[A-Za-z0-9_-]+$)。旧实现只读第一页,
+// nextCursor 被静默丢弃 —— 会话数超过一页后,重挂载校验(remountSession 按
+// list 在列与否裁决)会把实际存在的会话误判成"不在可恢复列表",用户再也
+// 挂不回自己的历史会话。这里跟随 nextCursor 翻页取全;上限 dshSessionListMaxPages
+// 页(防御性:正常部署远达不到),触顶返回已取得的页并落日志,不以错误打断
+// 调用方(校验语义是"在列→可恢复",少页只影响完整性判断,不该炸掉重挂载)。
 func (c *Client) SessionList(ctx context.Context) ([]SessionListEntry, error) {
-	raw, err := c.CallCtx(ctx, "session/list", map[string]interface{}{})
-	if err != nil {
-		return nil, fmt.Errorf("session/list: %w", err)
+	var out []SessionListEntry
+	cursor := ""
+	for page := 0; page < dshSessionListMaxPages; page++ {
+		params := map[string]interface{}{}
+		if cursor != "" {
+			params["cursor"] = cursor // 服务端产出的不透明游标,原样回传
+		}
+		raw, err := c.CallCtx(ctx, "session/list", params)
+		if err != nil {
+			return nil, fmt.Errorf("session/list: %w", err)
+		}
+		var res struct {
+			Sessions   []SessionListEntry `json:"sessions"`
+			NextCursor string             `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			return nil, fmt.Errorf("session/list 应答无法解析: %w", err)
+		}
+		out = append(out, res.Sessions...)
+		if res.NextCursor == "" {
+			return out, nil
+		}
+		cursor = res.NextCursor
 	}
-	var res struct {
-		Sessions []SessionListEntry `json:"sessions"`
-	}
-	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, fmt.Errorf("session/list 应答无法解析: %w", err)
-	}
-	return res.Sessions, nil
+	log.Printf("[dsh] session/list 达到翻页上限(%d 页),返回已取得的 %d 条", dshSessionListMaxPages, len(out))
+	return out, nil
 }
+
+// dshSessionListMaxPages 是 SessionList 跟随 nextCursor 的页数上限(防御性:
+// 默认页大小 100,50 页 = 5 万条,远超真实部署规模;防游标异常导致死循环)。
+const dshSessionListMaxPages = 50
 
 // SessionListEntry 是 session/list 的一条(实测只有 sessionId + cwd)。
 type SessionListEntry struct {

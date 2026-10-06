@@ -8,9 +8,12 @@ package agent
 //
 //	文字逐字蹦出      model.streaming + payload.kind="text_delta"
 //	思考过程          model.streaming + payload.kind="reasoning_delta"
-//	"⚙ Write"卡片    tool.updated + payload.kind="tool_call"(含完整 input)
+//	"⚙ Write"卡片    tool.updated + payload.kind="tool_call"(0.16.5)/
+//	                  "scheduled"|"started"(本机 fork union,2026-10-07 审计)
+//	卡片进度          tool.updated + payload.kind="progress"(预览/尾随输出)
 //	卡片出结果        tool.updated + payload.kind="result"(result.success/content)
-//	工具出错          tool.updated + payload.kind="tool_error" → FINISHED(ok=false)
+//	工具出错          tool.updated + payload.kind="tool_error"(0.16.5)/
+//	                  "error"(fork) → FINISHED(ok=false)
 //	审批弹卡          interaction/requestPermission(服务器反向请求)→ approve hook
 //	用量              turn.completed payload.usage(input/output/cache/reasoning tokens)
 //	一轮真正结束      turn.completed / turn.failed
@@ -1043,7 +1046,16 @@ func subagentResultClip(ids map[string]bool, toolCallID string) int {
 	return zcodeToolClip
 }
 
-// mapZcodeToolCall 从 tool.updated(payload.kind="tool_call")提取工具调用开始。
+// mapZcodeToolCall 从 tool.updated 提取工具调用开始帧(STARTED)。
+//
+// 【kind 双代兼容(2026-10-07 字段级审计,证据=bundle 静态 zod union)】
+//   - 0.16.5 探针实测(cmd/zcprobe):kind="tool_call"(含完整 input);
+//   - 本机 fork(bundle eGt discriminatedUnion,2026-09-29 构建)已无 "tool_call":
+//     工具开始拆成 kind="scheduled"(带 input/inputByteLength/inputOmitted 等)
+//     与 kind="started"(仅 startedAt)。旧映射只认 "tool_call",fork 上工具
+//     起始卡整帧静默丢失(用户只看到结果、看不到"正在跑什么")。
+// 三种 kind 都映射 STARTED:同 id 的重复卡由手机端按 callId 原地替换,
+// scheduled→started 连发等价于一次刷新。
 func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 	var pl struct {
 		Kind       string          `json:"kind"`
@@ -1051,8 +1063,18 @@ func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 		ToolName   string          `json:"toolName"`
 		Input      json.RawMessage `json:"input"`
 	}
-	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "tool_call" || pl.ToolCallID == "" {
+	if json.Unmarshal(payload, &pl) != nil || pl.ToolCallID == "" {
 		return pb.ToolCallUpdate{}, false
+	}
+	switch pl.Kind {
+	case "tool_call", "started", "scheduled":
+	default:
+		return pb.ToolCallUpdate{}, false
+	}
+	// fork 的 kind="started" 变体 toolName 是可选(base Zpe.optional)——空名卡
+	// 没有可读标识,兜底通用名(与 buildZcodeApprovalCall 同口径)。
+	if pl.ToolName == "" {
+		pl.ToolName = "tool"
 	}
 	return pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_STARTED,
@@ -1067,26 +1089,34 @@ func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 // mapZcodeToolResult 从 tool.updated(payload.kind="result")提取工具结果。
 // 默认限长 zcodeToolClip;子代理委派结果要完整透出"产出",用
 // mapZcodeToolResultClipped 传 zcodeSubagentToolClip。
-func mapZcodeToolResult(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
+func mapZcodeToolResult(payload json.RawMessage) (*pb.ToolCallUpdate, bool) {
 	return mapZcodeToolResultClipped(payload, zcodeToolClip)
 }
 
 // mapZcodeToolResultClipped 同 mapZcodeToolResult,限长可由调用方指定
 // (子代理委派放宽到 zcodeSubagentToolClip,普通工具沿用 zcodeToolClip)。
-func mapZcodeToolResultClipped(payload json.RawMessage, clipN int) (pb.ToolCallUpdate, bool) {
+//
+// 【2026-10-07 字段级审计补齐】
+//   - content 改按 RawMessage 接:bundle 里 result 段是 m.unknown()(k5i),
+//     content 不保证是字符串;非字符串时按原 JSON 文本透出,不再因反序列化
+//     失败把整个结果帧静默丢掉;
+//   - duration(毫秒,fork union 实测字段)透到 ToolResultBlock.ElapsedMs,
+//     此前静默丢弃。
+func mapZcodeToolResultClipped(payload json.RawMessage, clipN int) (*pb.ToolCallUpdate, bool) {
 	var pl struct {
 		Kind       string `json:"kind"`
 		ToolCallID string `json:"toolCallId"`
 		ToolName   string `json:"toolName"`
 		Result     struct {
-			Success bool   `json:"success"`
-			Content string `json:"content"`
+			Success bool            `json:"success"`
+			Content json.RawMessage `json:"content"`
 		} `json:"result"`
+		Duration float64 `json:"duration"`
 	}
 	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "result" || pl.ToolCallID == "" {
-		return pb.ToolCallUpdate{}, false
+		return nil, false
 	}
-	return pb.ToolCallUpdate{
+	upd := pb.ToolCallUpdate{
 		Phase: pb.ToolCallUpdate_FINISHED,
 		Call: &pb.ToolCallBlock{
 			Id:       pl.ToolCallID,
@@ -1094,16 +1124,112 @@ func mapZcodeToolResultClipped(payload json.RawMessage, clipN int) (pb.ToolCallU
 			JsonArgs: "{}",
 		},
 		Result: &pb.ToolResultBlock{
-			CallId: pl.ToolCallID,
-			Ok:     pl.Result.Success,
-			Output: clip(pl.Result.Content, clipN),
+			CallId:    pl.ToolCallID,
+			Ok:        pl.Result.Success,
+			Output:    clip(zcodeResultContentText(pl.Result.Content), clipN),
+			ElapsedMs: pl.Duration,
+		},
+	}
+	return &upd, true
+}
+
+// zcodeResultContentText 把 tool.updated(kind="result")的 result.content 归一成
+// 展示文本:字符串原样;其它 JSON 形状(数组/对象/数字)按原文透出 —— 结果内容
+// 不允许因为"形状不是字符串"就被静默丢掉;空值给空串。
+func zcodeResultContentText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
+}
+
+// mapZcodeToolProgress 从 tool.updated(payload.kind="progress")提取工具执行
+// 进度帧(UPDATE)。fork union 实测字段(bundle):elapsedMs/pid/stdoutBytes/
+// stderrBytes/outputBytes/outputPreview{text,fullText?,totalLines,totalBytes,
+// linesEstimated}/stdoutTail/stderrTail —— 此前整个 kind 落在三个旧映射之外,
+// Run 链连诊断留痕都没有,是纯静默丢弃。映射与 pi 的 tool_execution_update
+// 同款:UPDATE 帧 + Result.Ok=true(进行中没有失败语义),输出取可读预览。
+func mapZcodeToolProgress(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
+	var pl struct {
+		Kind          string  `json:"kind"`
+		ToolCallID    string  `json:"toolCallId"`
+		ToolName      string  `json:"toolName"`
+		ElapsedMs     float64 `json:"elapsedMs"`
+		Pid           int     `json:"pid"`
+		OutputPreview *struct {
+			Text     string `json:"text"`
+			FullText string `json:"fullText"`
+		} `json:"outputPreview"`
+		StdoutTail string `json:"stdoutTail"`
+		StderrTail string `json:"stderrTail"`
+	}
+	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "progress" || pl.ToolCallID == "" {
+		return pb.ToolCallUpdate{}, false
+	}
+	var parts []string
+	if pl.OutputPreview != nil {
+		if t := firstNonEmpty(pl.OutputPreview.Text, pl.OutputPreview.FullText); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	if pl.StdoutTail != "" {
+		parts = append(parts, "stdout: "+pl.StdoutTail)
+	}
+	if pl.StderrTail != "" {
+		parts = append(parts, "stderr: "+pl.StderrTail)
+	}
+	output := strings.Join(parts, "\n")
+	if output == "" {
+		output = "工具执行中…"
+	}
+	return pb.ToolCallUpdate{
+		Phase: pb.ToolCallUpdate_UPDATE,
+		Call: &pb.ToolCallBlock{
+			Id:       pl.ToolCallID,
+			Name:     pl.ToolName,
+			JsonArgs: "{}",
+		},
+		Result: &pb.ToolResultBlock{
+			CallId:    pl.ToolCallID,
+			Ok:        true, // 进行中:没有失败语义(pi 同款)
+			Output:    clip(output, zcodeToolClip),
+			ElapsedMs: pl.ElapsedMs,
 		},
 	}, true
 }
 
-// mapZcodeToolError 从 tool.updated(payload.kind="tool_error")提取工具失败帧。
-// 该 kind 在 P0 探针里只出现过一次且样本被截断,字段按 best-effort 解析:
-// 有 error.message/message 就带上,其余兜底固定文案。
+// zcodeToolPayloadKind 取 tool.updated 载荷的 kind 判别字段(纯读,不猜内容)。
+func zcodeToolPayloadKind(payload json.RawMessage) string {
+	var pl struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(payload, &pl) != nil {
+		return ""
+	}
+	return pl.Kind
+}
+
+// zcodeToolRestNoticeKind 给"映射不了的 tool.updated kind"分档:batch(并行组
+// 完成汇总,单卡无 toolCallId)/ raw(桌面桥原始透传)是 fork union 的已知成员
+// —— 刻意不投影但必须留痕,标 PASSTHROUGH 与"只透传"口径一致;其余(含空)
+// 如实 UNKNOWN,不替没见过的 kind 编身份。
+func zcodeToolRestNoticeKind(kind string) string {
+	switch kind {
+	case "batch", "raw":
+		return runtime.KindKnownPassthrough
+	}
+	return runtime.KindUnknownNotification
+}
+
+// mapZcodeToolError 从 tool.updated 提取工具失败帧(FINISHED,Ok=false)。
+// 【kind 双代兼容】0.16.5 探针实测 kind="tool_error"(样本曾被截断,按
+// best-effort 解析);本机 fork union 已改名 kind="error",负载同为
+// {toolCallId, error:{message,type}, …}(bundle 静态)。两者都认,失败卡
+// 不再因改名整帧静默丢失。
 func mapZcodeToolError(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 	var pl struct {
 		Kind       string `json:"kind"`
@@ -1115,7 +1241,12 @@ func mapZcodeToolError(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
 		} `json:"error"`
 		Message string `json:"message"`
 	}
-	if json.Unmarshal(payload, &pl) != nil || pl.Kind != "tool_error" || pl.ToolCallID == "" {
+	if json.Unmarshal(payload, &pl) != nil || pl.ToolCallID == "" {
+		return pb.ToolCallUpdate{}, false
+	}
+	switch pl.Kind {
+	case "tool_error", "error":
+	default:
 		return pb.ToolCallUpdate{}, false
 	}
 	msg := "工具执行出错"
@@ -1882,17 +2013,22 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					}
 				case "tool.updated":
 					// 子代理委派识别(情况 B):ZCode 不暴露子代理内部对话,只透出
-					// tool.updated 的入参/结果。tool_call 阶段先记下 id,result 阶段
-					// 据此放宽限长,让手机端能看到子代理"承担了什么/产出了什么"
-					// (详见 zcodeapp.ToolInputIsSubagent 的识别依据,纯结构不写死名)。
+					// tool.updated 的入参/结果。tool_call/scheduled 阶段先记下 id,
+					// result 阶段据此放宽限长,让手机端能看到子代理"承担了什么/产出了
+					// 什么"(详见 zcodeapp.ToolInputIsSubagent 的识别依据,纯结构不写死名)。
+					// 【2026-10-07】fork 把带 input 的起始帧改名 kind="scheduled",
+					// 与旧 bundle 的 "tool_call" 并列识别。
 					var toolProbe struct {
 						Kind       string          `json:"kind"`
 						ToolCallID string          `json:"toolCallId"`
 						Input      json.RawMessage `json:"input"`
 					}
 					if json.Unmarshal(ev.Payload, &toolProbe) == nil {
-						if toolProbe.Kind == "tool_call" && zcodeapp.ToolInputIsSubagent(toolProbe.Input) {
-							subagentCalls[toolProbe.ToolCallID] = true
+						switch toolProbe.Kind {
+						case "tool_call", "scheduled":
+							if zcodeapp.ToolInputIsSubagent(toolProbe.Input) {
+								subagentCalls[toolProbe.ToolCallID] = true
+							}
 						}
 					}
 					if upd, ok := mapZcodeToolCall(ev.Payload); ok {
@@ -1900,14 +2036,22 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 						continue
 					}
 					if upd, ok := mapZcodeToolResultClipped(ev.Payload, subagentResultClip(subagentCalls, toolProbe.ToolCallID)); ok {
-						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: upd}})
 						continue
 					}
 					if upd, ok := mapZcodeToolError(ev.Payload); ok {
 						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
 						continue
 					}
-					// scheduled / tool_input_* / batch:P0 不映射(见事件对照表)
+					if upd, ok := mapZcodeToolProgress(ev.Payload); ok {
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &upd}})
+						continue
+					}
+					// fork union 的其余成员(batch=并行组完成汇总、raw=桌面桥原始透传,
+					// bundle 静态在案)刻意不投影,但必须走诊断留痕 —— 此前这条路径
+					// 连留痕都没有,是真正的静默丢弃;从未见过的 kind 如实 UNKNOWN。
+					notices.recordAs(zcodeToolRestNoticeKind(zcodeToolPayloadKind(ev.Payload)),
+						"zcode", "session/event:tool.updated:"+zcodeToolPayloadKind(ev.Payload), ev.Payload, sink)
 				case "session.titleUpdated":
 					var pl struct {
 						Title string `json:"title"`

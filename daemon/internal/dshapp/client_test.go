@@ -122,6 +122,32 @@ func TestFakeDshHelperProcess(t *testing.T) {
 			respond(*m.ID, map[string]interface{}{})
 		case "boom":
 			respondErr(*m.ID, -32603, "no API key for provider route")
+		case "session/list":
+			// 分页契约(2026-10-07 字段级审计,bundle listSessions 静态):应答为
+			// {sessions,nextCursor?};cursor 由客户端原样回传。三种页型:
+			//   无 cursor → 第一页 + nextCursor("page2");
+			//   cursor=page2 → 第二页,无 nextCursor(终止);
+			//   cursor=loop → 恒带 nextCursor("loop"),钉翻页上限兜底。
+			var p struct {
+				Cursor string `json:"cursor"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			switch p.Cursor {
+			case "page2":
+				respond(*m.ID, map[string]interface{}{"sessions": []map[string]string{{"sessionId": "s-2", "cwd": "C:\\w"}}})
+			case "loop":
+				respond(*m.ID, map[string]interface{}{"sessions": []map[string]string{{"sessionId": "s-loop", "cwd": "C:\\w"}}, "nextCursor": "loop"})
+			default:
+				// 首页即 loop(游标异常防御面钉子):环境旗标切入,否则走 page2 常规流。
+				if os.Getenv("DSHAPP_FAKE_DSH_SESSION_LOOP") == "1" {
+					respond(*m.ID, map[string]interface{}{"sessions": []map[string]string{{"sessionId": "s-loop", "cwd": "C:\\w"}}, "nextCursor": "loop"})
+					break
+				}
+				respond(*m.ID, map[string]interface{}{
+					"sessions":   []map[string]string{{"sessionId": "s-1", "cwd": "C:\\w"}},
+					"nextCursor": "page2",
+				})
+			}
 		default:
 			respond(*m.ID, map[string]interface{}{})
 		}
