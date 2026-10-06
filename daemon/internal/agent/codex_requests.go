@@ -36,6 +36,7 @@ const (
 	reqApprovalPermissions                         // 权限提升审批
 	reqAskUser                                     // agent 反问(item/tool/requestUserInput)
 	reqAskMcp                                      // MCP 侧询问(elicitation)
+	reqCurrentTime                                 // 外部时钟源问时(currentTime/read,0.160.0 起)
 	reqUnsupported                                 // 我们不做:回 error
 )
 
@@ -72,6 +73,13 @@ func classifyCodexRequest(method string) codexRequestKind {
 		return reqAskUser
 	case "mcpServer/elicitation/request":
 		return reqAskMcp
+	case "currentTime/read":
+		// 0.160.0 新增(本机二进制请求面 "…attestation/generate currentTime/read
+		// applyPatchApproval…" 实证;0.159.2 vendored ServerRequest.json 里还没有)。
+		// 桌面 clock_source=external 时 app-server 把客户端当外部时钟源,注入
+		// "时间提醒"前问当前时间;fail-closed —— 不应答本轮直接停。daemon 有真实
+		// 墙钟,如实回 currentTimeAt(见 codex.go 的 reqHandler)。
+		return reqCurrentTime
 	case "item/tool/call", "account/chatgptAuthTokens/refresh", "attestation/generate":
 		// 动态工具执行 / ChatGPT 凭证刷新 / attestation 生成:
 		// 这三件事要么属于桌面端职责(凭证),要么我们没有对外注册过任何动态工具,

@@ -563,6 +563,21 @@ func (p *CodexProvider) attachGlobalHandler(c *codexapp.Client) {
 			if h := p.ThreadEventHandler; h != nil {
 				p.ThreadEventHandlerAsync(h, method, params)
 			}
+		case method == "thread/goal/updated", method == "thread/goal/cleared":
+			// 目标状态机的轮外变化(桌面端设/清目标、codex 自己推进状态):与 Run 的
+			// 轮内分支走同一条 GoalHandler 通路。以前全局路径不认这两条 —— 任务之外
+			// 到达时只进台账(PROJECTED),本地库永远停在设下去那一刻的旧状态。
+			// 异步同上:GoalHandler 会落库,绝不拖住 readLoop。
+			if p.GoalHandler != nil {
+				tid := codexThreadIDOf(params)
+				if tid != "" {
+					goalText, status, tokensUsed, timeUsed := goalStatusFromNotification(params)
+					if method == "thread/goal/cleared" {
+						goalText = ""
+					}
+					go p.GoalHandler(tid, goalText, status, tokensUsed, timeUsed)
+				}
+			}
 		}
 	})
 }
@@ -701,8 +716,11 @@ var codexGlobalNoticeKinds = map[string]string{
 	"hook/completed":                  runtime.KindKnownPassthrough,
 	// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
 	// 模型服务登录态自动恢复两连 —— 它解释"轮次莫名失败",属关键通知。
-	"modelProvider/authRecoveryStarted":   runtime.KindKnownPassthrough,
-	"modelProvider/authRecoveryCompleted": runtime.KindKnownPassthrough,
+	// 【2026-10-07 字段级覆盖审计升级】从 PASSTHROUGH 升为 PROJECTED:载荷
+	// {message, provider, threadId, turnId} 正是"错误"维度的人话载体,
+	// codex_events_ext.go 自本批起投影成 WARNING 卡,不再只留痕。
+	"modelProvider/authRecoveryStarted":   runtime.KindKnownProjected,
+	"modelProvider/authRecoveryCompleted": runtime.KindKnownProjected,
 	// 2026-10-01 通宵采样批(同上活体单轮):已知但无投影,只留痕 ——
 	//   - turn/started → Run 路径只做日志 + steer 目标登记,不发协议帧;
 	//   - serverRequest/resolved → 桌面端处理完反向请求的回执,手机端无消费方。
@@ -844,6 +862,9 @@ type itemNotif struct {
 		} `json:"content"`
 		AggregatedOutput string `json:"aggregatedOutput"`
 		Status           string `json:"status"`
+		// ExitCode 是 CommandExecutionThreadItem 的退出码(可缺失);非零时补进
+		// 工具卡结果,用户不用点开原始输出也能看出命令没跑成。
+		ExitCode *int64 `json:"exitCode"`
 	} `json:"item"`
 }
 
@@ -1213,7 +1234,13 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 							Text string `json:"text"`
 						} `json:"content"` // 旧版兼容
 					} `json:"items"`
-					Error *struct {
+					// Status 是轮次结束原因(completed/interrupted/failed/inProgress,
+					// schema TurnStatus,活体轮实证 docs/verify/evidence/
+					// codex-01592-liveturn-20261002.log 的收口帧带 "status":"completed")。
+					// 旧实现只看 error 对象:failed 而没附 error、或 interrupted 的轮次
+					// 都被当成"正常完成",用户看到的终局与实际不符。
+					Status string `json:"status"`
+					Error  *struct {
 						Message        string          `json:"message"`
 						Additional     string          `json:"additionalDetails"`
 						CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
@@ -1232,11 +1259,34 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					lastErr.HttpStatus = int32(statusFromMessage(n.Turn.Error.Message))
 					lastErr.Retryable = false
 					mu.Unlock()
+				} else if n.Turn.Status == "failed" {
+					// failed 却没附 error 对象:如实按失败收口,不冒充成功。
+					mu.Lock()
+					lastErr = &pb.Error{
+						Code:      "turnFailed",
+						Message:   "Codex 报告本轮未能正常完成,且没有附上具体原因",
+						Details:   "turn.status=failed",
+						Retryable: false,
+					}
+					mu.Unlock()
 				} else {
 					// 正常终局:清掉此前瞬时 error 通知留下的痕迹
 					mu.Lock()
 					lastErr = nil
 					mu.Unlock()
+					if n.Turn.Status == "interrupted" {
+						// 被打断的轮次(电脑端停止/另一端 interrupt):已流出的部分正文
+						// 照常交回,但必须告诉用户"为什么话说到一半停了",否则看起来
+						// 就是"答完了"。不打成 lastErr:中断不是失败,部分输出仍有效。
+						sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+							Kind:     pb.CodexEvent_WARNING,
+							Code:     "turnInterrupted",
+							Title:    "本轮已中断",
+							Message:  "任务在完成前被中断(可能是在电脑端停止了执行)。以上是中断前已输出的内容,可继续追问让它接着做。",
+							ThreadId: codexTID,
+							RawJson:  clip(string(params), 8000),
+						}}})
+					}
 				}
 				// turn.completed 自带最终 items,兜底提取(防 item/completed 竞态漏掉)。
 				var sb strings.Builder
@@ -1297,6 +1347,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				if subagentSeen.allow(key) {
 					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: ev}})
 				}
+			} else if msg := codexItemToolCard(method, params, codexTID); msg != nil {
+				// 工具类 item(fileChange/mcpToolCall/webSearch)的开始卡:
+				// 独立工具卡投影(见 codex_items.go),不再降级成不透明透传。
+				sink(msg)
 			} else {
 				// 其余 item 类型(userMessage/reasoning 等):此前是静默丢弃,现接进
 				// 主线 A notices.record 原样包装透传(限频+脱敏自动生效)。仅透传,
@@ -1324,6 +1378,12 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					RawJson:  clip(string(params), 8000),
 				}}})
 			case "commandExecution":
+				output := clip(n.Item.AggregatedOutput, 4000)
+				if n.Item.ExitCode != nil && *n.Item.ExitCode != 0 {
+					// 非零退出码是"命令其实没跑成"的第一信号:拼在结果末尾,
+					// 输出为空时它就是唯一线索(此前该字段被静默丢弃)。
+					output = strings.TrimSpace(output + "\n(退出码 " + strconv.FormatInt(*n.Item.ExitCode, 10) + ")")
+				}
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 					Phase: pb.ToolCallUpdate_FINISHED,
 					Call: &pb.ToolCallBlock{
@@ -1333,7 +1393,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					Result: &pb.ToolResultBlock{
 						CallId: n.Item.Id,
 						Ok:     n.Item.Status == "completed" || n.Item.Status == "",
-						Output: clip(n.Item.AggregatedOutput, 4000),
+						Output: output,
 					},
 				}}})
 			case "subAgentActivity", "collabAgentToolCall":
@@ -1341,6 +1401,15 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				// 同一套翻译与限频 —— item 自身的 kind/status 已区分阶段。
 				if ev, key := subagentEvent(params, codexTID); ev != nil && subagentSeen.allow(key) {
 					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: ev}})
+				}
+			case "fileChange", "mcpToolCall", "webSearch":
+				// 工具类 item 的收尾卡(codex_items.go):与开始卡同一条 ToolCall
+				// 通路,阶段/结果随 item 自身的 status 走;解析不出形状时落回
+				// 下面的不透明透传,不伪造成功。
+				if msg := codexItemToolCard(method, params, codexTID); msg != nil {
+					sink(msg)
+				} else {
+					maybeRecordOpaqueItem(method, params, codexTID, &notices, sink)
 				}
 			default:
 				// 其余 item 类型(userMessage/reasoning 等):此前静默丢弃,接主线 A
@@ -1443,6 +1512,17 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		// 以前这里统一回 {"decision":"decline"} —— 那不是"拒绝执行",而是拿一种请求的
 		// 报文形状去回答另一种请求,对方只能按协议错误处理(token 刷新就是这么被打死的)。
 		switch kind {
+		case reqCurrentTime:
+			// 0.160.0 新增反向请求 currentTime/read:桌面把 clock_source 配成 external 时,
+			// app-server 把连接着的客户端(我们)当外部时钟源,在注入"时间提醒"前问当前
+			// 时间。协议是 fail-closed:不回、回错形状或超时,本轮在模型请求前直接停 ——
+			// 所以这里必须如实应答,不能落进 reqUnknown 的 -32601 兜底。
+			// 应答形状 {"currentTimeAt": <unix 秒>}(字段名在 0.160.0 二进制请求面
+			// "currentTimeAt" 与公开协议文档双侧实证;params 只带 threadId,无需回读)。
+			now := time.Now().Unix()
+			log.Printf("[codex] currentTime/read → 应答 currentTimeAt=%d", now)
+			_ = c.Respond(id, map[string]int64{"currentTimeAt": now})
+			return
 		case reqUnsupported, reqUnknown:
 			// 【辅线 B】开关 ON 时,未知反向请求先弹手机通用确认卡(复用 requestApproval
 			// 的 approve/deny 回路,确认卡经既有审批卡通道渲染):允许 → 已回空对象 {}

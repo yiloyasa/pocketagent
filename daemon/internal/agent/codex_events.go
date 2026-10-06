@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
@@ -220,10 +221,13 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 			} `json:"status"`
 		}
 		_ = json.Unmarshal(raw, &n)
-		event.Title = "线程状态更新"
-		event.Message = "状态：" + n.Status.Type
+		event.Title = "会话状态更新"
+		// 状态与旗标翻人话(notLoaded/idle/systemError/active 与
+		// waitingOnApproval/waitingOnUserInput 都是 schema 枚举原词);
+		// 枚举之外的值原样透出,不猜。
+		event.Message = "状态：" + codexThreadStatusLabel(n.Status.Type)
 		if len(n.Status.ActiveFlags) > 0 {
-			event.Message += " · " + strings.Join(n.Status.ActiveFlags, "、")
+			event.Message += " · " + codexThreadFlagsLabel(n.Status.ActiveFlags)
 		}
 	case "thread/tokenUsage/updated":
 		var n struct {
@@ -365,28 +369,50 @@ func codexNotificationEvent(method string, raw json.RawMessage, threadID, turnID
 			event.Code = *n.FailureReason
 		}
 	case "account/rateLimits/updated":
+		// schema RateLimitSnapshot:primary/secondary 均可空,各带 usedPercent/
+		// resetsAt(unix 秒)/windowDurationMins;rateLimitReachedType 说明这次
+		// 是哪一类限流到顶。旧实现只读两个 usedPercent:重置时间与限流原因
+		// 被丢,用户看到"用了 100%"却不知道几点恢复、为什么发不出消息。
 		var n struct {
 			RateLimits struct {
 				PlanType string `json:"planType"`
-				Primary  struct {
-					UsedPercent int `json:"usedPercent"`
+				Primary  *struct {
+					UsedPercent        int   `json:"usedPercent"`
+					ResetsAt           int64 `json:"resetsAt"`
+					WindowDurationMins int   `json:"windowDurationMins"`
 				} `json:"primary"`
-				Secondary struct {
-					UsedPercent int `json:"usedPercent"`
+				Secondary *struct {
+					UsedPercent        int   `json:"usedPercent"`
+					ResetsAt           int64 `json:"resetsAt"`
+					WindowDurationMins int   `json:"windowDurationMins"`
 				} `json:"secondary"`
+				RateLimitReachedType *string `json:"rateLimitReachedType"`
 			} `json:"rateLimits"`
 		}
 		_ = json.Unmarshal(raw, &n)
 		event.Kind = pb.CodexEvent_RATE_LIMIT
 		event.Title = "用量限制更新"
-		event.Message = fmt.Sprintf(
-			"主要窗口已使用 %d%% · 次要窗口已使用 %d%%",
-			n.RateLimits.Primary.UsedPercent,
-			n.RateLimits.Secondary.UsedPercent,
-		)
-		if n.RateLimits.PlanType != "" {
-			event.Message += " · 方案 " + n.RateLimits.PlanType
+		primaryUsed, secondaryUsed := 0, 0
+		if n.RateLimits.Primary != nil {
+			primaryUsed = n.RateLimits.Primary.UsedPercent
 		}
+		if n.RateLimits.Secondary != nil {
+			secondaryUsed = n.RateLimits.Secondary.UsedPercent
+		}
+		msg := fmt.Sprintf("主要窗口已使用 %d%% · 次要窗口已使用 %d%%", primaryUsed, secondaryUsed)
+		if w := n.RateLimits.Primary; w != nil && w.WindowDurationMins > 0 {
+			msg += fmt.Sprintf(" · 主窗口 %d 分钟", w.WindowDurationMins)
+		}
+		if w := n.RateLimits.Primary; w != nil && w.ResetsAt > 0 {
+			msg += " · 主窗口 " + time.Unix(w.ResetsAt, 0).Format("01-02 15:04") + " 重置"
+		}
+		if n.RateLimits.PlanType != "" {
+			msg += " · 方案 " + n.RateLimits.PlanType
+		}
+		if t := codexRateLimitReachedLabel(derefTrim(n.RateLimits.RateLimitReachedType)); t != "" {
+			msg += " · " + t
+		}
+		event.Message = msg
 	case "item/commandExecution/terminalInteraction":
 		// 命令运行中输出了交互提示(sudo 密码、y/n 确认等)。
 		// 【诚实边界 · 0.159.2 更新】此前核对 v2 schema 的结论是"只有这条通知、

@@ -115,6 +115,18 @@ func runFakeCodexAppServer() int {
 		defer mu.Unlock()
 		_, _ = os.Stdout.Write(append(raw, '\n'))
 	}
+	// respondAny 把任意 JSON-RPC 帧写到 stdout(2026-10-07 字段覆盖批):供 fake
+	// 模拟 app-server 的**反向请求**(currentTime/read 等 —— 带 method 与 id,
+	// 等 daemon 应答;应答帧由循环顶部的 "<client-response>" 分支记录)。
+	respondAny := func(frame map[string]interface{}) {
+		raw, err := json.Marshal(frame)
+		if err != nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = os.Stdout.Write(append(raw, '\n'))
+	}
 	// respondErr 应答 JSON-RPC error 帧(只进 stdout,不进请求日志 —— 日志只记
 	// 请求与通知)。供 thread/revert 失败路径的注入(PA_FAKE_CODEX_REVERT_ERROR)。
 	respondErr := func(id int64, code int, msg string) {
@@ -140,7 +152,16 @@ func runFakeCodexAppServer() int {
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
 		}
-		if json.Unmarshal(in.Bytes(), &m) != nil || m.Method == "" {
+		if json.Unmarshal(in.Bytes(), &m) != nil {
+			continue
+		}
+		if m.Method == "" {
+			if m.ID != nil {
+				// 【2026-10-07 字段覆盖批】客户端的应答帧(无 method、带 id):
+				// 原样记进日志(method 用哨兵 "<client-response>",params 放整行
+				// 原文),供父进程断言 currentTime/read 等反向请求的应答形状。
+				logOnly("<client-response>", json.RawMessage(in.Bytes()))
+			}
 			continue
 		}
 		if m.ID == nil {
@@ -198,6 +219,80 @@ func runFakeCodexAppServer() int {
 				ThreadID string `json:"threadId"`
 			}
 			_ = json.Unmarshal(m.Params, &p)
+			// ---- 2026-10-07 字段覆盖批:env 注入的协议帧(缺省零行为)----
+			// PA_FAKE_CODEX_CURRENT_TIME=1:app-server 以反向请求问时
+			// (0.160.0 currentTime/read,应答形状见 codex.go reqHandler)。
+			if os.Getenv("PA_FAKE_CODEX_CURRENT_TIME") == "1" {
+				params, _ := json.Marshal(map[string]string{"threadId": p.ThreadID})
+				reqID := int64(777001)
+				respondAny(map[string]interface{}{
+					"jsonrpc": "2.0", "id": reqID,
+					"method": "currentTime/read", "params": json.RawMessage(params),
+				})
+				logOnly("currentTime/read", params)
+			}
+			// PA_FAKE_CODEX_ITEMS_NOTIFY=1:工具类 item 的开始/收尾帧
+			// (fileChange/mcpToolCall/webSearch,形状按 vendored schema)。
+			if os.Getenv("PA_FAKE_CODEX_ITEMS_NOTIFY") == "1" {
+				notify("item/started", map[string]interface{}{
+					"threadId": p.ThreadID, "turnId": "turn-items", "startedAtMs": 1,
+					"item": map[string]interface{}{
+						"type": "fileChange", "id": "fc-1", "status": "inProgress",
+						"changes": []map[string]interface{}{
+							{"path": "a.txt", "diff": "--- a\n+++ b", "kind": map[string]string{"type": "update"}},
+						},
+					},
+				})
+				notify("item/completed", map[string]interface{}{
+					"threadId": p.ThreadID, "turnId": "turn-items", "completedAtMs": 2,
+					"item": map[string]interface{}{
+						"type": "fileChange", "id": "fc-1", "status": "completed",
+						"changes": []map[string]interface{}{
+							{"path": "a.txt", "diff": "--- a\n+++ b", "kind": map[string]string{"type": "update"}},
+						},
+					},
+				})
+				notify("item/started", map[string]interface{}{
+					"threadId": p.ThreadID, "turnId": "turn-items", "startedAtMs": 3,
+					"item": map[string]interface{}{
+						"type": "mcpToolCall", "id": "mc-1", "status": "inProgress",
+						"server": "fs", "tool": "read_file",
+					},
+				})
+				notify("item/completed", map[string]interface{}{
+					"threadId": p.ThreadID, "turnId": "turn-items", "completedAtMs": 4,
+					"item": map[string]interface{}{
+						"type": "mcpToolCall", "id": "mc-1", "status": "failed",
+						"server": "fs", "tool": "read_file",
+						"error": map[string]string{"message": "file not found"},
+					},
+				})
+				notify("item/started", map[string]interface{}{
+					"threadId": p.ThreadID, "turnId": "turn-items", "startedAtMs": 5,
+					"item": map[string]interface{}{
+						"type": "webSearch", "id": "ws-1", "query": "pocketagent",
+					},
+				})
+				notify("item/completed", map[string]interface{}{
+					"threadId": p.ThreadID, "turnId": "turn-items", "completedAtMs": 6,
+					"item": map[string]interface{}{
+						"type": "webSearch", "id": "ws-1", "query": "pocketagent",
+						"action": map[string]interface{}{"type": "search", "query": "pocketagent"},
+					},
+				})
+			}
+			// PA_FAKE_CODEX_AUTH_RECOVERY_NOTIFY=1:登录态自动恢复两连
+			// (0.159.2 起,载荷 {message, provider, threadId, turnId})。
+			if os.Getenv("PA_FAKE_CODEX_AUTH_RECOVERY_NOTIFY") == "1" {
+				notify("modelProvider/authRecoveryStarted", map[string]string{
+					"threadId": p.ThreadID, "turnId": "turn-auth",
+					"provider": "openai", "message": "refresh token expired",
+				})
+				notify("modelProvider/authRecoveryCompleted", map[string]string{
+					"threadId": p.ThreadID, "turnId": "turn-auth",
+					"provider": "openai", "message": "session restored",
+				})
+			}
 			if os.Getenv("PA_FAKE_CODEX_REASONING") == "1" {
 				notify("item/reasoning/textDelta", map[string]string{
 					"threadId": p.ThreadID, "delta": "思考片段一",
@@ -206,13 +301,19 @@ func runFakeCodexAppServer() int {
 					"threadId": p.ThreadID, "delta": "思考片段二",
 				})
 			}
+			// PA_FAKE_CODEX_TURN_STATUS:注入轮次结束原因(schema TurnStatus)。
+			// failed = 失败收口且不带 error 对象;interrupted = 中途被打断。
+			turn := map[string]interface{}{
+				"items": []map[string]interface{}{
+					{"type": "agentMessage", "text": "fake-ok"},
+				},
+			}
+			if st := os.Getenv("PA_FAKE_CODEX_TURN_STATUS"); st != "" {
+				turn["status"] = st
+			}
 			notify("turn/completed", map[string]interface{}{
 				"threadId": p.ThreadID,
-				"turn": map[string]interface{}{
-					"items": []map[string]interface{}{
-						{"type": "agentMessage", "text": "fake-ok"},
-					},
-				},
+				"turn":     turn,
 			})
 		case "account/rateLimits/read", "account/usage/read":
 			// 用量探测的迟到应答注入(2026-10-01,fetchUsageUncached 治理回归):

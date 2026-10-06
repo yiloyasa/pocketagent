@@ -57,14 +57,15 @@ func TestCodexGlobalNoticeKindClassification(t *testing.T) {
 		}
 	}
 	// 0.159.2 收编批(generate-json-schema diff + 活体探针,2026-09-30):
-	// 通知面 75 → 85;authRecovery 两连是关键通知(解释轮次失败),留痕不投影;
-	// terminalInteraction 有事件流投影(0.159.2 起配套 writeStdin 审批卡),
-	// 从漏登的 UNKNOWN 补为 PROJECTED。
+	// authRecovery 两连是关键通知(解释轮次失败)。【2026-10-07 字段级覆盖审计升级】
+	// 载荷 {message, provider} 正是"错误"维度的人话载体,从"留痕不投影"升为
+	// PROJECTED(codex_events_ext.go 投影成 WARNING 卡);terminalInteraction 同批
+	// 从漏登的 UNKNOWN 补为 PROJECTED(0.159.2 起配套 writeStdin 审批卡)。
 	for _, m := range []string{
 		"modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
 	} {
-		if got := codexGlobalNoticeKind(m); got != runtime.KindKnownPassthrough {
-			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PASSTHROUGH(0.159.2 收编批,只留痕不投影)", m, got)
+		if got := codexGlobalNoticeKind(m); got != runtime.KindKnownProjected {
+			t.Errorf("codexGlobalNoticeKind(%q) = %q, want PROJECTED(2026-10-07 审计升为 WARNING 投影)", m, got)
 		}
 	}
 	if got := codexGlobalNoticeKind("item/commandExecution/terminalInteraction"); got != runtime.KindKnownProjected {

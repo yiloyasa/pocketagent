@@ -21,7 +21,9 @@
 // 而**通知侧**给的是 camelCase:
 //
 //	status:  inProgress / approved / denied / timedOut / aborted
-//	action.type: command / execve / applyPatch / networkAccess / mcpToolCall / requestPermissions
+//	action.type: command / execve / writeStdin / applyPatch / networkAccess / mcpToolCall / requestPermissions
+//	             (writeStdin 为 0.160.0 新增的第七种:向运行中的终端写入输入;
+//	             见 vendored schema GuardianApprovalReviewAction oneOf[2])
 //	action.source: shell / unifiedExec
 //	action.protocol: http / https / socks5Tcp / socks5Udp
 //	action.toolName
@@ -336,6 +338,7 @@ func guardianActionLabel(raw json.RawMessage) string {
 		Server    string   `json:"server"`
 		ToolName  string   `json:"toolName"`
 		ToolTitle string   `json:"toolTitle"`
+		Stdin     string   `json:"stdin"`
 	}
 	if json.Unmarshal(raw, &a) != nil {
 		return ""
@@ -345,6 +348,12 @@ func guardianActionLabel(raw json.RawMessage) string {
 		return "命令 " + clip(a.Command, 160)
 	case "execve":
 		return "程序 " + clip(firstNonEmpty(a.Program, strings.Join(a.Argv, " ")), 160)
+	case "writeStdin":
+		// 0.160.0 新增动作变体(schema GuardianApprovalReviewAction oneOf[2],
+		// 字段 approvalId/processId/stdin):审查者评估"要不要往运行中的终端
+		// 写这行输入"。此前没有这个 case,该类审查卡上"动作"一句是空的 ——
+		// 用户只看到结论,不知道被审的是什么。
+		return "写入输入 " + clip(a.Stdin, 120)
 	case "applyPatch":
 		if len(a.Files) == 0 {
 			return "文件改动"

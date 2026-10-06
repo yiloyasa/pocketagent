@@ -259,8 +259,89 @@ func codexExtendedNotificationEvent(method string, raw json.RawMessage, event *p
 		event.Title = "模型输出校验"
 		event.Message = fmt.Sprintf("本轮有 %d 项校验记录。", len(n.Verifications))
 		return true
+
+	// ---- 模型服务登录态自动恢复(0.159.2 起,2026-10-07 审计升为投影)----
+	// 载荷 {message, provider, threadId, turnId}。它解释"轮次莫名失败":
+	// 上游登录态掉了 codex 在自动恢复,恢复不成随后必有 error 通知。此前只
+	// 留痕不投影,用户看不到这层原因 —— 错误维度不许静默,投影成 WARNING 卡。
+	case "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted":
+		var n struct {
+			Message  string `json:"message"`
+			Provider string `json:"provider"`
+		}
+		_ = json.Unmarshal(raw, &n)
+		event.Kind = pb.CodexEvent_WARNING
+		if strings.HasSuffix(method, "Completed") {
+			event.Title = "模型服务登录状态已恢复"
+			event.Code = "authRecoveryCompleted"
+		} else {
+			event.Title = "模型服务登录状态恢复中"
+			event.Code = "authRecoveryStarted"
+		}
+		parts := make([]string, 0, 2)
+		if n.Provider != "" {
+			parts = append(parts, "服务:"+n.Provider)
+		}
+		if m := strings.TrimSpace(n.Message); m != "" {
+			parts = append(parts, m)
+		}
+		event.Message = strings.Join(parts, " · ")
+		return true
 	}
 	return false
+}
+
+// codexThreadStatusLabel 把 thread/status/changed 的状态枚举(ThreadStatus
+// oneOf:notLoaded/idle/systemError/active)翻成人话;枚举外原样返回,不猜。
+func codexThreadStatusLabel(t string) string {
+	switch t {
+	case "notLoaded":
+		return "未加载"
+	case "idle":
+		return "空闲"
+	case "active":
+		return "执行中"
+	case "systemError":
+		return "系统异常"
+	}
+	return t
+}
+
+// codexThreadFlagsLabel 把 active 态的 activeFlags(waitingOnApproval/
+// waitingOnUserInput)翻成人话;未知值原样保留 —— 它们是数据,不是噪音。
+func codexThreadFlagsLabel(flags []string) string {
+	labels := make([]string, 0, len(flags))
+	for _, f := range flags {
+		switch f {
+		case "waitingOnApproval":
+			labels = append(labels, "等待审批")
+		case "waitingOnUserInput":
+			labels = append(labels, "等待输入")
+		default:
+			labels = append(labels, f)
+		}
+	}
+	return strings.Join(labels, "、")
+}
+
+// codexRateLimitReachedLabel 把 RateLimitSnapshot.rateLimitReachedType 翻成人话;
+// 空值返回空串(卡片不追加该段)。
+func codexRateLimitReachedLabel(t string) string {
+	switch t {
+	case "":
+		return ""
+	case "rate_limit_reached":
+		return "已触发限流,请等窗口重置"
+	case "workspace_owner_credits_depleted":
+		return "工作区额度已用尽"
+	case "workspace_member_credits_depleted":
+		return "工作区成员额度已用尽"
+	case "workspace_owner_usage_limit_reached":
+		return "工作区所有者的用量上限已到"
+	case "workspace_member_usage_limit_reached":
+		return "工作区成员的用量上限已到"
+	}
+	return "限流原因:" + t
 }
 
 func firstNonEmpty(values ...string) string {
