@@ -63,7 +63,9 @@ func main() {
 		log.Fatalf("定位原生 codex.exe: %v", err)
 	}
 	version := "未知"
-	if v, err := exec.Command(bin, "--version").CombinedOutput(); err == nil {
+	cmd := exec.Command(bin, "--version")
+	hidewin.Apply(cmd)
+	if v, err := cmd.CombinedOutput(); err == nil {
 		version = strings.TrimSpace(string(v))
 	}
 	rep.sec("# codex-plan-probe —— thread/plan/updated vs turn/plan/updated 幻影方法定案")

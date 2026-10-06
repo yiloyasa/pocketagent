@@ -309,7 +309,21 @@ func main() {
 	log.Printf("[collab] 生效策略: collaboration=%v delegate=%v fanout=%v max_parallel_members=%d（配置 %s）",
 		collabPolicy.CollabEnabled(), collabPolicy.DelegateEnabled(), collabPolicy.Fanout(),
 		collabPolicy.MaxMembers(), runtime.CollabPolicyPath(*dataDir))
+	// Job Object 兜底(用户红线「结束时不应残留任务和后台进程」):把自己与
+	// 之后拉起的全部子进程绑进 Kill-on-Close Job —— daemon 无论怎么死
+	// (优雅退出/taskkill /F/崩溃),内核保证 codex/dsh/pi 子进程一起带走,
+	// 热部署不再残留孤儿。必须绑在任何 agent 子进程拉起之前(见包注释):
+	// 下面 DetectProviders 里的 pi --version 探测就是本进程第一批子进程,
+	// 顺序不能反。绑定失败只记日志不阻塞启动 —— 兜底层缺席时退回优雅退出+手动收尸。
+	if _, err := jobobject.Assign(); err != nil {
+		log.Printf("WARNING: Job Object 绑定失败(退出时可能残留 agent 子进程,不影响其他功能): %v", err)
+	} else {
+		log.Printf("Job Object 已绑定:本进程退出时全部 agent 子进程随之终止")
+	}
 	providers := agent.DetectProviders()
+	// 历史崩溃/taskkill 残留在 %TEMP% 的 codex 图片临时文件,启动对账清扫一次
+	// (只清早于本次启动的;在役文件不会被误删)。
+	agent.SweepStaleImageTemps()
 	tm := term.NewManager()
 	// 空闲回收器:随进程存活,daemon 退出时随进程消亡,无需单独停
 	tm.SetIdleTimeout(*termIdle)
@@ -411,17 +425,6 @@ func main() {
 			mdnsReg = reg
 			log.Printf("mDNS 自动发现已启用: _pocketagent._tcp 端口 %d 主机 %s", port, srv.DisplayName())
 		}
-	}
-
-	// Job Object 兜底(用户红线「结束时不应残留任务和后台进程」):把自己与
-	// 之后拉起的全部子进程绑进 Kill-on-Close Job —— daemon 无论怎么死
-	// (优雅退出/taskkill /F/崩溃),内核保证 codex/dsh/pi 子进程一起带走,
-	// 热部署不再残留孤儿。必须在任何 agent 子进程拉起之前绑定(见包注释);
-	// 绑定失败只记日志不阻塞启动 —— 兜底层缺席时退回优雅退出+手动收尸。
-	if _, err := jobobject.Assign(); err != nil {
-		log.Printf("WARNING: Job Object 绑定失败(退出时可能残留 agent 子进程,不影响其他功能): %v", err)
-	} else {
-		log.Printf("Job Object 已绑定:本进程退出时全部 agent 子进程随之终止")
 	}
 
 	// 本地 Web 管理面板(默认关):进程内直调自己的 server 方法(与手机同一批

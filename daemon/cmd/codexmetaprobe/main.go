@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/codexapp"
+	"github.com/pocketagent/daemon/internal/hidewin"
 )
 
 // methodShape 是一条候选方法名:全小写段 + camelCase 段,`/` 分隔。
@@ -103,7 +104,9 @@ func run(schemaPath, binFlag string, rep *report) {
 		log.Fatalf("定位原生 codex.exe: %v", err)
 	}
 	version := "未知"
-	if out, err := exec.Command(bin, "--version").CombinedOutput(); err == nil {
+	cmd := exec.Command(bin, "--version")
+	hidewin.Apply(cmd)
+	if out, err := cmd.CombinedOutput(); err == nil {
 		version = strings.TrimSpace(string(out))
 	} else {
 		version = fmt.Sprintf("未知(--version 失败: %v)", err)

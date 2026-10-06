@@ -412,3 +412,85 @@ func TestPageContainsNoSecrets(t *testing.T) {
 		}
 	}
 }
+
+// ---- CSRF 守卫(写方法验来源;Host 守卫拦不住跨站表单/fetch POST)------------
+
+// csrfPost 在 postForm 基础上可注入 Origin / Sec-Fetch-Site 头,验证守卫放行面。
+func csrfPost(t *testing.T, h http.Handler, origin, fetchSite string) *http.Response {
+	t.Helper()
+	form := url.Values{"key": {"fanout"}, "value": {"off"}}
+	req := httptest.NewRequest(http.MethodPost, "/api/collab", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = "127.0.0.1:7455"
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	if fetchSite != "" {
+		req.Header.Set("Sec-Fetch-Site", fetchSite)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w.Result()
+}
+
+func TestCSRFGuardRejectsCrossSiteWrite(t *testing.T) {
+	h := Handler(newFake())
+	// 恶意网页跨站表单/fetch:Origin 是外部站点 → 一律 403,写调用不得发生。
+	for _, org := range []string{
+		"http://evil.example",
+		"https://attacker.com:443",
+		"http://localhost.evil.example:8080", // 相似域名不是回环
+		"null",                               // 沙箱 iframe 的 origin
+	} {
+		resp := csrfPost(t, h, org, "")
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("Origin=%q 的跨站写应 403,得到 %d(%s)", org, resp.StatusCode, body)
+		}
+	}
+	// 现代浏览器跨站标记(Sec-Fetch-Site=cross-site)即便 Origin 缺失也拒。
+	resp := csrfPost(t, h, "", "cross-site")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("Sec-Fetch-Site=cross-site 应 403,得到 %d", resp.StatusCode)
+	}
+}
+
+func TestCSRFGuardAllowsLocalAndScriptWrites(t *testing.T) {
+	h := Handler(newFake())
+	// 同源浏览器页面:Origin 恰为本机回环(带 scheme 形态)→ 放行。
+	resp := csrfPost(t, h, "http://127.0.0.1:7455", "same-origin")
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("同源回环 Origin 的写不应被 CSRF 守卫拒绝")
+	}
+	// 非浏览器客户端(curl/运维脚本):两个头都不带 → 放行(既有 postForm 用例
+	// 即此形态,这里显式钉一遍防"将来把缺头当跨站"的回归)。
+	resp = csrfPost(t, h, "", "")
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("无 Origin/Sec-Fetch-Site 的脚本写不应被 CSRF 守卫拒绝")
+	}
+	// 只带 Sec-Fetch-Site=same-site(本机另一端口的页面)也放行。
+	resp = csrfPost(t, h, "", "same-site")
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("Sec-Fetch-Site=same-site 不应被拒(同机站点)")
+	}
+}
+
+func TestOriginHostStripsScheme(t *testing.T) {
+	cases := map[string]string{
+		"http://127.0.0.1:7455":    "127.0.0.1:7455",
+		"https://localhost":        "localhost",
+		"http://[::1]:7455":        "[::1]:7455",
+		"http://evil.example/path": "evil.example",
+		"null":                     "null",
+	}
+	for in, want := range cases {
+		if got := originHost(in); got != want {
+			t.Fatalf("originHost(%q)=%q, want %q", in, got, want)
+		}
+	}
+}

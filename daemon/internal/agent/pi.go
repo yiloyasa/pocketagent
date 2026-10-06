@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
@@ -64,6 +65,22 @@ const (
 	// 旧版 pi(流式恒 0,observed 恒假),保留为旧版兜底。
 	piUsagePushInterval = 5 * time.Second
 )
+
+// Pi 轮次看门狗阈值(P1-7 补齐四家同口径三闸:codex/zcode/dsh/hermes 均为
+// 150s 静默 + 60min 单轮上限 + 审批豁免,pi 此前是唯一缺失的一家 —— 子进程
+// 活着但 LLM/事件流停摆时 Run 永久挂起且占住 running[t.ID],该会话后续轮次全被
+// PI_BUSY 拒,只能重启 daemon)。var(非 const)仅为让测试可收紧阈值,生产勿改。
+var (
+	// piSilenceWatchdog 无任何 pi 事件的静默上界。审批等待豁免:手机 dialog
+	// (piUIBudget=120s)与未知请求确认在飞时不计静默 —— 120s < 150s,豁免位
+	// 是双保险,口径与 codex/dsh/zcode/hermes 一致。
+	piSilenceWatchdog = 150 * time.Second
+	// piTurnCap 单轮总时长上限(静默豁免救不了"慢而不断"的轮)。
+	piTurnCap = 60 * time.Minute
+)
+
+// piWatchdogTick 看门狗巡检周期(检查只是取时差,便宜;5s 足够)。
+const piWatchdogTick = 5 * time.Second
 
 // PiProvider 桥接 pi --mode rpc。
 type PiProvider struct {
@@ -119,6 +136,12 @@ type PiProvider struct {
 	// TitleHandler 标题同步钩子:Pi 会话名变化时回调(server 落库,双端一致)。
 	// P1 只在挂载时把 thread.Title 写给 Pi(set_session_name),回调预留。
 	TitleHandler func(threadID, title string)
+
+	// uiInFlight 在飞的"等手机应答"计数(dialog 审批 + 未知请求确认,两处都在
+	// Run 生命周期内)。看门狗的静默闸据此豁免:审批等待期间 pi 合法地不出事件,
+	// 不能当停摆杀掉(与 codex/dsh/zcode/hermes 的审批豁免同口径)。原子量:
+	// 生产侧(事件泵)与看门狗 tick 跨 goroutine 读写。
+	uiInFlight atomic.Int64
 }
 
 // NewPiProvider 构造;守护扩展写到临时目录(固定名,覆盖写,daemon 启动即生效)。
@@ -840,7 +863,11 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		actx, acancel := context.WithTimeout(runCtx, piUIBudget)
 		defer acancel()
 		// 内联构造传参:pb 消息按值传给接口会被 vet 拒绝,复合调用结果可以
+		// 【看门狗豁免】等手机的这段时间 pi 合法地不出事件,登记在飞数让
+		// 静默闸绕行(与 codex/dsh/zcode/hermes 的审批豁免同口径)。
+		p.uiInFlight.Add(1)
 		approved, note, aerr := approve(actx, ApprovalCallFromUI(uireq.ID, uireq.Method, uireq.Title, uireq.Message, uireq.Options))
+		p.uiInFlight.Add(-1)
 		if aerr != nil {
 			log.Printf("[pi] 审批 %s(%s)未取得手机决定,回 cancelled: %v", uireq.ID, uireq.Method, aerr)
 			return map[string]any{"cancelled": true}, true
@@ -858,7 +885,17 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	notifCh := make(chan piapp.Event, 4096)
 	notifStop := make(chan struct{})
 	notifDone := make(chan struct{})
+	// 看门狗时钟:turnStartRef 单调起点,lastEvent 最近一次 pi 事件到达时刻。
+	// 打点在生产侧(readLoop 回调)—— 事件一到就算"活着",与 codex lastNotif
+	// 同语义;wdMu 只护一个时间值的读写,纳秒级临界区(与消费侧 mu 分开,避免
+	// 在 readLoop 热路径上碰文本缓冲的锁)。
+	turnStartRef := time.Now()
+	var wdMu sync.Mutex
+	lastEvent := turnStartRef
 	c.SetEventHandler(func(ev piapp.Event) {
+		wdMu.Lock()
+		lastEvent = time.Now()
+		wdMu.Unlock()
 		select {
 		case notifCh <- ev:
 		case <-notifStop:
@@ -1007,7 +1044,13 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 				// 在 consumePiUnknownUIRequest 里原样放行,维持静默忽略
 				// (实测 26 次 setStatus 噪声)。
 				frame := append(json.RawMessage(nil), ev.Raw...)
-				go p.consumePiUnknownUIRequest(c, frame, t.ID, runCtx, approve)
+				// 【看门狗豁免】等手机确认的这段时间同样登记在飞数(与 dialog
+				// 审批同口径,预算同为 piUIBudget)。
+				go func() {
+					p.uiInFlight.Add(1)
+					defer p.uiInFlight.Add(-1)
+					p.consumePiUnknownUIRequest(c, frame, t.ID, runCtx, approve)
+				}()
 				return
 			}
 			if piLedgerOnlyEvent(ev.Type) {
@@ -1107,15 +1150,54 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 		<-usageDone
 	}()
 
-	// ---- 等 settled / 取消 / 子进程死亡 ----
-	select {
-	case <-runCtx.Done():
-	case <-c.DeathCh():
+	// ---- 等 settled / 取消 / 子进程死亡(带看门狗,P1-7 补齐四家同口径)----
+	// 旧实现裸 select:pi 子进程活着但 LLM/事件流停摆时永久挂起并占住
+	// running[t.ID],该会话后续轮次全被 PI_BUSY 拒。现在 150s 无事件(审批豁免)
+	// 或单轮超 60min 即判失败退出,与 codex/zcode/dsh/hermes 同口径。
+	wdTick := time.NewTicker(piWatchdogTick)
+	defer wdTick.Stop()
+wdLoop:
+	for {
+		select {
+		case <-runCtx.Done():
+			break wdLoop
+		case <-c.DeathCh():
+			break wdLoop
+		case <-wdTick.C:
+			wdMu.Lock()
+			sinceEvent := time.Since(lastEvent)
+			wdMu.Unlock()
+			switch piWatchdogVerdict(sinceEvent, time.Since(turnStartRef), p.uiInFlight.Load()) {
+			case 1:
+				runCancel(errPiSilence)
+				break wdLoop
+			case 2:
+				runCancel(errPiTurnCap)
+				break wdLoop
+			}
+		}
 	}
 	cause := context.Cause(runCtx)
 	userStop := ctx.Err() != nil && cause != errSettled // 上层取消(手机取消帧 / CancelTurn / 重入打断)
 	if cause == errSettled {
 		// 正常终局
+	} else if cause == errPiSilence || cause == errPiTurnCap {
+		// 看门狗触发:如实终止本轮。先尽力走与用户中止同款的清理序列
+		// (clear_queue+abort)—— 静默≠进程死,子进程多半还活着,不清理会话级
+		// 运行态会残留;清理失败不阻塞返回,下轮 clientFor 对异常子进程重挂载兜底。
+		actx, acancel := context.WithTimeout(context.Background(), piSettleWait)
+		if _, _, cerr := stopTurnOn(actx, c); cerr != nil {
+			log.Printf("[pi] 看门狗终止序列失败(下轮重挂载兜底) thread=%s: %v", t.ID, cerr)
+		}
+		acancel()
+		if cause == errPiSilence {
+			log.Printf("[pi] 看门狗: %s 内无任何事件且不在等审批 thread=%s", piSilenceWatchdog, t.ID)
+			return partialText(&mu, &textBuf), nil, &piError{code: "PI_STALLED",
+				msg: fmt.Sprintf("Pi %s 内无任何事件且不在等审批(子进程可能僵死),本轮终止;重发消息会自动重挂载会话", piSilenceWatchdog)}
+		}
+		log.Printf("[pi] 看门狗: 单轮超过 %s 仍未终局 thread=%s", piTurnCap, t.ID)
+		return partialText(&mu, &textBuf), nil, &piError{code: "PI_TURN_TIMEOUT",
+			msg: fmt.Sprintf("Pi 单轮超过 %s 仍未终局,本轮终止;重发消息会自动重挂载会话", piTurnCap)}
 	} else if userStop {
 		// 发终止序列并等它干净收尾。【顺序是 0.99.1 文档配方(rpc-commands.md
 		// clear_queue/abort 两节)】"abort continues queued messages when they
@@ -1197,6 +1279,25 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 
 // errSettled 用 context.Cause 传递"正常终局"信号(agent_settled → runCancel)。
 var errSettled = errors.New("agent_settled")
+
+// 看门狗两闸的 cause 信号(与 errSettled 同机制:runCancel(err) → context.Cause)。
+var (
+	errPiSilence = errors.New("pi silence watchdog")
+	errPiTurnCap = errors.New("pi turn cap")
+)
+
+// piWatchdogVerdict 看门狗判定(纯函数,回归钉用):0=继续等,1=静默超限,2=单轮超限。
+// uiInFlight>0(手机 dialog 审批/未知请求确认在飞)豁免静默闸 —— 审批等待期间
+// pi 合法地不出事件;单轮上限不豁免(预算远超单次审批 120s,60min 仍超即真异常)。
+func piWatchdogVerdict(sinceEvent, sinceStart time.Duration, uiInFlight int64) int {
+	if sinceStart >= piTurnCap {
+		return 2
+	}
+	if uiInFlight == 0 && sinceEvent >= piSilenceWatchdog {
+		return 1
+	}
+	return 0
+}
 
 // statsQuiet 静默取 get_session_stats(失败返回 nil,不阻塞轮次)。
 func (p *PiProvider) statsQuiet(c *piapp.Client) *piSessionStats {

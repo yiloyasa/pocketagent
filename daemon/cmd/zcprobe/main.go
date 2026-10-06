@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pocketagent/daemon/internal/hidewin"
 	"github.com/pocketagent/daemon/internal/hostenv"
 )
 
@@ -362,6 +363,7 @@ func (r *results) print() {
 // startProc 拉起 app-server 并装好读循环。
 func startProc(p *probe, cwd string) (*exec.Cmd, ioWriter) {
 	cmd := exec.Command(nodeExe, zcodeJs, "app-server", "--stdio")
+	hidewin.Apply(cmd)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
 	stdin, _ := cmd.StdinPipe()

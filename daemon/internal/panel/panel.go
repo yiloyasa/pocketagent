@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
@@ -68,7 +69,9 @@ func Start(addr string, ctrl Controller) (url string, stop func(), err error) {
 		lis.Close()
 		return "", nil, fmt.Errorf("管理面板实际绑定地址非回环(%s),拒绝启动", lis.Addr())
 	}
-	srv := &http.Server{Handler: Handler(ctrl)}
+	// ReadHeaderTimeout:慢速请求头洪泛(slowloris)的兜底。仅回环监听风险本就
+	// 低,但零成本补上 —— 没有它时恶意/卡死的本机进程可长期占住连接。
+	srv := &http.Server{Handler: Handler(ctrl), ReadHeaderTimeout: 10 * time.Second}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -97,6 +100,14 @@ func Handler(ctrl Controller) http.Handler {
 // 攻击流量同样来自 127.0.0.1(受害者的浏览器替远端网页发请求)。浏览器发出的
 // Host 头携带页面域名,rebinding 域名的 Host 不是回环形态 —— 一行校验就能拦下,
 // 而本机用户直连 127.0.0.1:7455 时 Host 恰是回环,正常使用零感知。
+//
+// 【为什么写方法还要查 Origin/Sec-Fetch-Site(CSRF 守卫)】Host 守卫拦得住
+// rebinding,拦不住经典 CSRF:恶意网页直接向 http://127.0.0.1:7455 发跨站
+// 表单/no-cors fetch POST,此时 Host 恰是回环形态、守卫全绿 —— 而 POST 的
+// 响应虽不可读,开关的**副作用**已经落地(协同/委派/扇出、B 开关被陌生网页
+// 静默翻转)。浏览器对跨站 POST 必带 Origin 头(非回环来源即拒);现代浏览器
+// 另带 Sec-Fetch-Site(cross-site 即拒)。两道都缺 = 非浏览器客户端(curl、
+// 运维脚本),放行 —— 面板的合法写方只有本机页面与脚本。
 type loopbackGuard struct{ next http.Handler }
 
 func (g loopbackGuard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +115,32 @@ func (g loopbackGuard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "管理面板仅限本机回环访问(Host 头非回环已拒绝)", http.StatusForbidden)
 		return
 	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if org := strings.TrimSpace(r.Header.Get("Origin")); org != "" && !isLoopbackHost(originHost(org)) {
+			http.Error(w, "管理面板写操作拒绝跨站来源(Origin 非本机回环)", http.StatusForbidden)
+			return
+		}
+		switch strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")) {
+		case "", "same-origin", "same-site", "none":
+			// 缺头(非浏览器)或同源/同站/用户直开:放行。
+		default:
+			http.Error(w, "管理面板写操作拒绝跨站请求(Sec-Fetch-Site)", http.StatusForbidden)
+			return
+		}
+	}
 	g.next.ServeHTTP(w, r)
+}
+
+// originHost 从 Origin 头(形如 "http://127.0.0.1:7455")里剥出 host[:port],
+// 交给 isLoopbackHost 判定。无 scheme(如 "null")时原样返回 —— 判否,安全方向。
+func originHost(origin string) string {
+	if i := strings.Index(origin, "://"); i >= 0 {
+		origin = origin[i+3:]
+	}
+	if i := strings.IndexAny(origin, "/?"); i >= 0 {
+		origin = origin[:i]
+	}
+	return origin
 }
 
 // isLoopbackHost 判断 host(可带端口,可 IPv6 括号)是否回环形态。

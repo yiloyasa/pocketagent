@@ -1130,7 +1130,9 @@ func locateBin() string {
 }
 
 func dshVersion(node, bin string) string {
-	out, err := exec.Command(node, bin, "--version").Output()
+	cmd := exec.Command(node, bin, "--version")
+	hideWindow(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return "(--version 失败: " + err.Error() + ")"
 	}

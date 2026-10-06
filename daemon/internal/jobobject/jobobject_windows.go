@@ -3,7 +3,7 @@
 // Package jobobject 把 daemon 及其全部子进程绑进一个 Job Object,设
 // KILL_ON_JOB_CLOSE + UI 限制 —— daemon 无论怎么死(优雅退出/taskkill /F/
 // 崩溃/断电),内核保证把 codex/dsh/pi 子进程一起带走,后台不再残留孤儿;
-// 且 Job 内进程弹 UI 被内核直接拒绝。
+// 且 Job 内进程的剪贴板/显示设置/关机类 UI 操作被内核直接拒绝。
 //
 // 【为什么必须做这一层】优雅退出只覆盖"收到信号"一条路:部署脚本 taskkill /F、
 // 崩溃、断电都绕过它,而 Windows 进程父子关系不传递死亡——父死后 agent 子进程
@@ -46,8 +46,8 @@ func Assign() (windows.Handle, error) {
 		return 0, fmt.Errorf("SetInformationJobObject(kill-on-close): %w", err)
 	}
 	// UI 限制:禁止 Job 内进程读剪贴板/全局原子/改显示设置/关机 —— agent 内核
-	// 是后台服务,弹 UI 在内核层被拒。这是 hidewin(进程级)之上的最后一道闸:
-	// hidewin 管"不闪黑窗",UI 限制管"想弹也弹不出"。
+	// 是后台服务,这类系统交互在内核层被拒。注意它不阻止窗口创建本身:不闪窗
+	// 的主力是 hidewin 的 CREATE_NO_WINDOW,这层是 hidewin 之上的第二道闸。
 	uil := windows.JOBOBJECT_BASIC_UI_RESTRICTIONS{
 		UIRestrictionsClass: windows.JOB_OBJECT_UILIMIT_READCLIPBOARD |
 			windows.JOB_OBJECT_UILIMIT_WRITECLIPBOARD |

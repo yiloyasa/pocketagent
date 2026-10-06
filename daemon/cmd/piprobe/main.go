@@ -574,7 +574,9 @@ func (r *runner) runAll() {
 			note: fmt.Sprintf("未找到 node/cli(node=%q cli=%q)。请设 PI_NODE / PI_BIN / PI_CLI 后重试。", node, cli)})
 		return
 	}
-	if out, err := exec.Command(node, cli, "--version").Output(); err == nil {
+	cmd := exec.Command(node, cli, "--version")
+	hidewin.Apply(cmd)
+	if out, err := cmd.Output(); err == nil {
 		ver = strings.TrimSpace(string(out))
 	}
 	fmt.Printf("node=%s\ncli=%s\npi version=%s\n", node, cli, ver)

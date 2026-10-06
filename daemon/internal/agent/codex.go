@@ -2123,6 +2123,36 @@ func materializeImage(img *turnImage, idx int) (string, string, error) {
 	return f.Name(), name, nil
 }
 
+// SweepStaleImageTemps 启动清扫:materializeImage 的临时文件正常由 Run 结束时
+// 的 imgCleanup 收尾,但 daemon 被 taskkill /F 或崩溃时收不到 defer,残片会在
+// %TEMP% 无限积累(Windows 不自动清)。daemon 启动时对"早于本次启动"的残留
+// 做一次幂等清扫 —— 在役文件必然创建于本次进程启动之后,不会误删。
+func SweepStaleImageTemps() {
+	if n := sweepImageTemps(os.TempDir(), time.Now()); n > 0 {
+		log.Printf("[codex] 启动清扫:移除历史残留图片临时文件 %d 个", n)
+	}
+}
+
+func sweepImageTemps(dir string, started time.Time) int {
+	paths, err := filepath.Glob(filepath.Join(dir, "pocketagent-img-*"))
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil || !fi.ModTime().Before(started) {
+			continue
+		}
+		if rmErr := os.Remove(p); rmErr == nil {
+			removed++
+		} else if !os.IsNotExist(rmErr) {
+			log.Printf("[codex] 清理历史图片临时文件失败 %s: %v", p, rmErr)
+		}
+	}
+	return removed
+}
+
 // imageMediaType 兜底补全 MIME:协议层没带时按内容嗅探(前 512 字节,png/jpeg/
 // gif/webp 都认得);实在认不出按 image/png 处理,成败交由 codex 侧读字节决定。
 func imageMediaType(img *turnImage) string {

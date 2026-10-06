@@ -336,7 +336,9 @@ func setupAgentDir(dir, home string) error {
 	link := filepath.Join(dir, "npm")
 	target := filepath.Join(home, ".pi", "agent", "npm")
 	if _, err := os.Stat(link); err != nil {
-		out, jerr := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+		cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
+		hidewin.Apply(cmd)
+		out, jerr := cmd.CombinedOutput()
 		if jerr != nil {
 			addf("[%s] junction 失败(%s),退回整目录拷贝(可能耗时)", ts(), clipStr(string(out), 200))
 			if cerr := copyDir(target, link); cerr != nil {

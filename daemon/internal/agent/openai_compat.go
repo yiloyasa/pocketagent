@@ -9,15 +9,31 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 )
 
-// oaHTTP 带超时的共享 HTTP 客户端:http.DefaultClient 没有超时,
-// 网络一抖整轮任务就永久挂起(实测教训)。
-var oaHTTP = &http.Client{Timeout: 180 * time.Second}
+// oaHTTP 共享 HTTP 客户端:不设 Client.Timeout —— 它罩整个请求含流式 body
+// 读取,会把 GLM/DeepSeek 的长轮硬压在 3 分钟墙钟上(五家 CLI 家单轮上限是
+// 60min)。停摆防护改由两层承担:传输层 ResponseHeaderTimeout 管"连不上/
+// 首字节不来";streamOnce 的空闲看门狗管"流到一半没进展"—— 只惩罚无进展,
+// 不惩罚长任务。
+var oaHTTP = &http.Client{Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	TLSHandshakeTimeout:   15 * time.Second,
+	ResponseHeaderTimeout: 150 * time.Second,
+	IdleConnTimeout:       90 * time.Second,
+}}
+
+// oaIdleTimeout 流式空闲阈值:连续这么久一个 SSE 字节都没来即视为停摆,
+// 对齐 codex/zcode/dsh/hermes/pi 的 150s 静默看门狗口径。var 供测试收紧。
+var oaIdleTimeout = 150 * time.Second
+
+// oaWatchdogTick 空闲看门狗的巡检间隔(生产 5s 同 pi;var 供测试收紧)。
+var oaWatchdogTick = 5 * time.Second
 
 // OpenAICompatible 覆盖所有"说 OpenAI 方言"的服务:智谱 GLM、DeepSeek、
 // Kimi、Qwen、Ollama(/v1)、以及 OpenAI 本尊。
@@ -198,7 +214,10 @@ func (p *OpenAICompatible) Run(ctx context.Context, req TurnRequest, sink Sink, 
 // usage 改为指针返回:protobuf 消息内嵌 MessageState 含锁,按值 return 会拷贝锁。
 func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []oaMessage, tools []oaTool, sink Sink) (blocks []pb.ContentBlock, calls []oaToolCall, finish string, usage *pb.Usage, err error) {
 	body, _ := json.Marshal(oaRequest{Model: model, Messages: msgs, Tools: tools, Stream: true})
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
+	// 空闲看门狗用独立 ctx 罩本次请求;用户取消(ctx)照常直通。
+	watchCtx, watchCancel := context.WithCancel(ctx)
+	defer watchCancel()
+	httpReq, err := http.NewRequestWithContext(watchCtx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, "", usage, err
 	}
@@ -207,6 +226,9 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 
 	resp, err := oaHTTP.Do(httpReq)
 	if err != nil {
+		if ctx.Err() == nil && watchCtx.Err() != nil {
+			return nil, nil, "", usage, fmt.Errorf("请求 %s 停摆:%s 内无任何进展,已放弃", p.baseURL, oaIdleTimeout)
+		}
 		return nil, nil, "", usage, fmt.Errorf("请求 %s 失败: %w", p.baseURL, err)
 	}
 	defer resp.Body.Close()
@@ -216,6 +238,28 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 		return nil, nil, "", usage, fmt.Errorf("API 返回 %d: %s", resp.StatusCode, clip(buf.String(), 500))
 	}
 
+	// 空闲看门狗:任何字节到达即续命;连续 oaIdleTimeout 无字节 → 取消请求,
+	// 读循环拿到取消错误后在 sc.Err() 处翻译成"停摆"。
+	var lastByte atomic.Int64 // 最近一次收到 SSE 字节的 UnixNano
+	lastByte.Store(time.Now().UnixNano())
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		tick := time.NewTicker(oaWatchdogTick)
+		defer tick.Stop()
+		for {
+			select {
+			case <-tick.C:
+				if time.Since(time.Unix(0, lastByte.Load())) > oaIdleTimeout {
+					watchCancel()
+					return
+				}
+			case <-watchDone:
+				return
+			}
+		}
+	}()
+
 	var text strings.Builder
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -223,6 +267,7 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 
 	for sc.Scan() {
 		line := sc.Text()
+		lastByte.Store(time.Now().UnixNano()) // 有字节到达=还活着
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -273,6 +318,9 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 		}
 	}
 	if err := sc.Err(); err != nil {
+		if ctx.Err() == nil && watchCtx.Err() != nil {
+			return nil, nil, finish, usage, fmt.Errorf("模型流式响应超过 %s 无任何字节,已按停摆放弃", oaIdleTimeout)
+		}
 		return nil, nil, finish, usage, err
 	}
 
