@@ -303,6 +303,73 @@ class AskQuestionCardFidelityTest {
         assertEquals("", qs[0].header)
     }
 
+    // ---- pi 反问表单的 placeholder / prefill(daemon G4,非空才进卡) ----
+
+    @Test
+    fun parse_keeps_placeholder_and_prefill_when_present() {
+        // pi input 卡:placeholder=输入提示;pi editor 卡:prefill=预填文本
+        val qs = parseAskQuestions(
+            ask(
+                JSONObject()
+                    .put("id", "inp")
+                    .put("question", "分支名?")
+                    .put("placeholder", "如 feature/login"),
+                JSONObject()
+                    .put("id", "ed")
+                    .put("question", "描述?")
+                    .put("prefill", "沿用上一轮的描述草稿"),
+            ),
+        )
+        assertEquals(2, qs.size)
+        assertEquals("如 feature/login", qs[0].placeholder)
+        assertEquals("", qs[0].prefill) // 只带 placeholder 的卡不得编出 prefill
+        assertEquals("沿用上一轮的描述草稿", qs[1].prefill)
+        assertEquals("", qs[1].placeholder) // 只带 prefill 的卡不得编出 placeholder
+    }
+
+    @Test
+    fun parse_placeholder_prefill_absent_falls_back_empty_legacy_compatible() {
+        // 老 daemon 形状(两键全缺):空串=渲染层回落旧提示文案/空初始输入,行为不变
+        val qs = parseAskQuestions(
+            ask(JSONObject().put("id", "old").put("question", "?").put("options", JSONArray().put(JSONObject().put("label", "a")))),
+        )
+        assertEquals("", qs[0].placeholder)
+        assertEquals("", qs[0].prefill)
+    }
+
+    @Test
+    fun initialTexts_seeds_prefill_only_when_non_blank() {
+        // prefill 非空 → 初始文本挂 askQid key;空白/缺省 → 不伪造初始输入(空 map=旧初始态)
+        val qs = listOf(
+            AskQuestion(id = "ed", text = "?", options = emptyList(), prefill = "预填草稿"),
+            AskQuestion(id = "blank", text = "?", options = emptyList(), prefill = "   "),
+            AskQuestion(id = "old", text = "?", options = emptyList()),
+        )
+        assertEquals(mapOf("ed" to "预填草稿"), askInitialTexts(qs))
+        // 空白 prefill 与缺省 prefill 都不进初始输入 → 空 map=旧初始态
+        assertEquals(emptyMap<String, String>(), askInitialTexts(qs.drop(1)))
+        // id 缺失的题:prefill 挂稳定的 q0 兜底 key,与 packAskAnswers 同源
+        val noId = listOf(AskQuestion(id = "", text = "?", options = emptyList(), prefill = "草稿"))
+        assertEquals(mapOf("q0" to "草稿"), askInitialTexts(noId))
+    }
+
+    @Test
+    fun inputHint_placeholder_overrides_when_present() {
+        val q = AskQuestion(id = "i", text = "?", options = emptyList(), placeholder = "如 feature/login")
+        assertEquals("如 feature/login", askInputHint(q))
+        // 有选项的题也一样:placeholder 优先于「或直接输入你的回答」
+        val withOpts = AskQuestion(id = "o", text = "?", options = listOf(AskOption("a")), placeholder = "自定义提示")
+        assertEquals("自定义提示", askInputHint(withOpts))
+    }
+
+    @Test
+    fun inputHint_missing_placeholder_falls_back_to_legacy_copy() {
+        // 键缺失(空串)回落旧文案,三条分支逐字节一致(老卡不回归)
+        assertEquals("输入你的回答…", askInputHint(AskQuestion(id = "a", text = "?", options = emptyList())))
+        assertEquals("或填写其他…", askInputHint(AskQuestion(id = "b", text = "?", options = listOf(AskOption("x")), isOther = true)))
+        assertEquals("或直接输入你的回答…", askInputHint(AskQuestion(id = "c", text = "?", options = listOf(AskOption("x")))))
+    }
+
     // ---- 反问卡与 agent 无关(任务一 · 通用性契约) ----
     // 反问卡只认 action.name,不看 agent 身份。本测试把它锁死:这两类动作名恒走
     // "取消/提交"反问卡;其余(批准/权限类)一律不走反问卡。能力由 daemon 运行时上报

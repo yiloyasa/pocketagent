@@ -830,12 +830,23 @@ func (p *HermesProvider) agentVersionLabel() string {
 var hermesApprovalTimeout = 2 * time.Minute
 
 // handleRequestPermission 反向请求分派,三条规则与 dsh/codex 同款:
-//  1. 不认识的方法回 JSON-RPC error,绝不伪造 decision;
+//  1. 不认识的方法回 JSON-RPC error + 台账 UNKNOWN_REQUEST 留痕,绝不伪造 decision;
 //  2. 审批卡按请求真实内容构造,不猜不编造;
 //  3. 超时/断线/通道故障 → 拒绝侧,绝不伪造"同意"。
 func (p *HermesProvider) handleRequestPermission(c hermesClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook) {
 	if method != "session/request_permission" {
 		log.Printf("[hermes] %s → 回 error(未实现,不伪造 decision)", method)
+		// 台账登记(2026-10-07 审计移交收口):回 error 只让对端知道"这次没做成",
+		// "收到过一个不认识的请求"要能事后查 —— 与 codex/zcode/dsh 同位路径同款
+		// UNKNOWN_REQUEST 登记。thread_id 留空:本函数签名里没有会话上下文(dsh
+		// 同口径,拿别的 id 冒充更糟)。载荷脱敏,注记安全拒绝语义。
+		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+			SourceAgent:    "hermes",
+			SourceMethod:   method,
+			NormalizedKind: runtime.KindUnknownRequest,
+			RawPayload:     redactNativePayload(params),
+			Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
+		})
 		_ = c.RespondError(id, -32601, "PocketAgent 未实现该反向请求: "+method)
 		return
 	}

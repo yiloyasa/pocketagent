@@ -6407,6 +6407,9 @@ internal data class AskOption(
  * 契约(F-A 终版):zcode/pi 卡 description/preview 空时键省略(omitempty)、multiSelect
  * 仅 true 时出现(缺省=单选);codex 卡 header/isSecret/isOther 恒出现(false 也透出)。
  * 这些都是 daemon 透传的问题级字段,存在才生效(旧形状全缺省,行为不变)。
+ * 【G4 接线】placeholder=输入框提示文案、prefill=初始文本(pi 的 input/editor 反问表单,
+ * daemon 非空才进卡,piapp/client.go / pi_events.go buildAskUserCall);键缺失=空串=
+ * 与老卡行为逐字节一致。
  */
 internal data class AskQuestion(
     val id: String,
@@ -6416,6 +6419,8 @@ internal data class AskQuestion(
     val isSecret: Boolean = false,
     val isOther: Boolean = false,
     val header: String = "", // codex 卡的问题分组小标题,存在才渲染
+    val placeholder: String = "", // pi input 卡的输入提示,存在才替换默认提示文案
+    val prefill: String = "", // pi editor 卡的预填文本,非空才进初始输入
 )
 
 /** 问题 id 缺失时给个稳定的兜底 key,否则答案会挂不上(与旧行为一致)。 */
@@ -6424,7 +6429,8 @@ internal fun askQid(q: AskQuestion, idx: Int): String = q.id.ifBlank { "q$idx" }
 /**
  * 解析审批卡 json_args 里的 questions(纯函数,JVM 可测)。
  * 【能透传就透传】选项取 label 主文案,description/preview 原样保留(渲染时如实展示、不改写);
- * 问题级 multiSelect/isSecret/isOther 存在才生效。不认识的字段/选项形状一律忽略不炸——
+ * 问题级 multiSelect/isSecret/isOther 存在才生效;placeholder/prefill(pi input/editor 的
+ * 输入提示/预填)非空才携带。不认识的字段/选项形状一律忽略不炸——
  * 旧 daemon(选项只有 label 的旧形状)解析结果与旧版逐字段等价,不回归。
  */
 internal fun parseAskQuestions(args: JSONObject?): List<AskQuestion> {
@@ -6454,6 +6460,8 @@ internal fun parseAskQuestions(args: JSONObject?): List<AskQuestion> {
                     isSecret = q.optBoolean("isSecret", false),
                     isOther = q.optBoolean("isOther", false),
                     header = q.optString("header"),
+                    placeholder = q.optString("placeholder"),
+                    prefill = q.optString("prefill"),
                 ),
             )
         }
@@ -6469,6 +6477,30 @@ internal fun askHasAnswers(
     questions.isEmpty() ||
         picks.values.any { it.isNotEmpty() } ||
         texts.values.any { it.isNotBlank() }
+
+/**
+ * 每题自由输入的初始 map(纯函数,JVM 可测):pi editor 的 prefill(G4)非空才作
+ * 初始文本(key 走 askQid 兜底,与提交打包同源);无 prefill 的老卡返回空 map,
+ * 与旧版 `emptyMap()` 初始态逐字段一致。
+ */
+internal fun askInitialTexts(questions: List<AskQuestion>): Map<String, String> =
+    questions.mapIndexedNotNull { idx, q ->
+        q.prefill.takeIf { it.isNotBlank() }?.let { askQid(q, idx) to it }
+    }.toMap()
+
+/**
+ * 自由输入框的提示文案(纯函数,JVM 可测):pi input 的 placeholder(G4)非空优先;
+ * 键缺失(空串)回落旧文案 —— 无选项=自由输入兜底、isOther=「或填写其他」、
+ * 其余=「或直接输入你的回答」,与老卡逐字节一致。
+ */
+internal fun askInputHint(q: AskQuestion): String =
+    q.placeholder.ifBlank {
+        when {
+            q.options.isEmpty() -> "输入你的回答…" // 无选项=自由输入兜底(含未知形状降级)
+            q.isOther -> "或填写其他…"
+            else -> "或直接输入你的回答…"
+        }
+    }
 
 /**
  * 打包答案成 daemon/codex 期望的 {"<问题id>":{"answers":[...]}} 形状(纯函数,JVM 可测)。
@@ -6614,7 +6646,9 @@ private fun ApprovalSheet(
     val questions = remember(action.action.jsonArgs) { parseAskQuestions(args) }
     // 问题 id 缺失时给个稳定的兜底 key,否则答案会挂不上。
     var picks by remember(action.requestId) { mutableStateOf(emptyMap<String, Set<String>>()) } // 每题勾中的选项 label
-    var texts by remember(action.requestId) { mutableStateOf(emptyMap<String, String>()) } // 每题自由输入
+    // 每题自由输入;pi editor 的 prefill(G4)经 askInitialTexts 非空才作初始文本,
+    // 键缺失=空 map=老卡初始态。
+    var texts by remember(action.requestId) { mutableStateOf(askInitialTexts(questions)) }
     val canSubmit = isAsk && askHasAnswers(questions, picks, texts)
 
     fun submit() {
@@ -6847,12 +6881,9 @@ private fun ApprovalSheet(
                             decorationBox = { inner ->
                                 Box {
                                     if (cur.isEmpty()) {
+                                        // pi input 的 placeholder(G4)经 askInputHint 非空才替换,键缺失回落旧文案
                                         Text(
-                                            when {
-                                                q.options.isEmpty() -> "输入你的回答…" // 无选项=自由输入兜底(含未知形状降级)
-                                                q.isOther -> "或填写其他…"
-                                                else -> "或直接输入你的回答…"
-                                            },
+                                            askInputHint(q),
                                             fontSize = 13.sp, color = PaEditorial.Subtle,
                                         )
                                     }
