@@ -293,6 +293,34 @@ func runFakeCodexAppServer() int {
 					"provider": "openai", "message": "session restored",
 				})
 			}
+			// PA_FAKE_CODEX_BADFRAME_NOTIFY=C-1 坏帧注入(unknown-bypass-audit §二 C-1,
+			// 2026-10-07 收口):=1 发四条 params 为 JSON 字符串的坏帧(item/started、
+			// item/completed、turn/started、item/agentMessage/delta —— 各 case 的结构体
+			// 解包必失败;turn/completed 的坏帧单列 ="terminal" 档,避免与好终局帧混淆
+			// 断言);="foreign" 发异线程的好帧(threadId 指向别的会话,作"异线程过滤
+			// 维持静默"的活体对照)。
+			if bf := os.Getenv("PA_FAKE_CODEX_BADFRAME_NOTIFY"); bf != "" {
+				switch bf {
+				case "1":
+					notify("item/started", "not-an-item-frame")
+					notify("item/completed", "not-an-item-frame")
+					notify("turn/started", "not-a-turn-frame")
+					notify("item/agentMessage/delta", "not-a-delta-frame")
+				case "terminal":
+					// 终局帧坏形状:解包失败必须留痕,且不得打断轮次(fake 随后照常
+					// 发好 turn/completed,Run 正常收口 —— 钉"留痕不改收口语义")。
+					notify("turn/completed", "not-a-turn-frame")
+				default:
+					notify("item/completed", map[string]interface{}{
+						"threadId": "someone-else-thread",
+						"item":     map[string]interface{}{"type": "agentMessage", "id": "am-x", "text": "别的会话的帧"},
+					})
+					notify("turn/started", map[string]interface{}{
+						"threadId": "someone-else-thread",
+						"turn":     map[string]interface{}{"id": "turn-other"},
+					})
+				}
+			}
 			if os.Getenv("PA_FAKE_CODEX_REASONING") == "1" {
 				notify("item/reasoning/textDelta", map[string]string{
 					"threadId": p.ThreadID, "delta": "思考片段一",

@@ -58,11 +58,6 @@ type collabAgentToolCallItem struct {
 	ReasoningEffort   string                          `json:"reasoningEffort"`
 }
 
-// isSubagentItemType 判断 item 类型是否属于本文件管的两类子代理 item。
-func isSubagentItemType(t string) bool {
-	return t == "subAgentActivity" || t == "collabAgentToolCall"
-}
-
 // subagentEvent 把一条 item/started|item/completed 通知翻成子代理 CodexEvent。
 //
 // 返回 (事件, 限频键)。不是这两类 item、或 threadId 不属于当前线程时返回

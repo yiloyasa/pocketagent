@@ -619,5 +619,3 @@ func searchTermMatches(t *store.Thread, term string) bool {
 	}
 	return false
 }
-
-var _ = agent.RiskLevelLabel

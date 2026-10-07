@@ -134,11 +134,9 @@ func approvalDecision(method string, allow bool) string {
 // acceptForSession = 允许且本会话内同类请求不再询问;cancel / abort =
 // 拒绝且立即中止当前轮次(codex 侧收到后自己打断,daemon 不再另发停止指令)。
 const (
-	optAccept          = "accept"
 	optAcceptSession   = "acceptForSession"
 	optDecline         = "decline"
 	optCancel          = "cancel"
-	optApproved        = "approved"
 	optApprovedSession = "approved_for_session"
 	optDenied          = "denied"
 	optAbort           = "abort"

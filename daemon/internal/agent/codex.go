@@ -842,9 +842,6 @@ var ErrBusy = fmt.Errorf("codex 正忙(另一个操作正在初始化/探测),�
 
 // ---- 通知/请求的 JSON 形状(只解析用得到的字段)----
 
-type notifCommon struct {
-	ThreadId string `json:"threadId"`
-}
 type deltaNotif struct {
 	ThreadId string `json:"threadId"`
 	Delta    string `json:"delta"`
@@ -1179,6 +1176,21 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	// 的 clearSteerTarget(req.Thread.ID),同一个 req 就在本作用域内)。
 	notices := nativeNoticeRecorder{threadID: req.Thread.ID}
 	var subagentSeen subagentNoticeGate // 子代理 item 事件限频(语义同 nativeNoticeRecorder)
+	// 【C-1 坏帧留痕(unknown-bypass-audit.md §二 C-1,2026-10-07 收口)】
+	// 事件泵 item/turn 各 case 的参数解包失败,此前与"异线程过滤"共用同一条静默
+	// 分支 —— 坏形状与"别的会话的帧"不可区分。现在解包失败单独走 recordBadFrame:
+	// 台账 UNKNOWN(method 带 <unparseable> 标记,与 zcode/dsh 泵侧同款命名)+
+	// 限频 STATUS 卡。
+	// 【裁量:与 zcode/dsh 的"只台账"不同,这里出卡】zcode/dsh 的常驻全局钩子对
+	// 同一帧已先落 UNKNOWN 台账,泵侧不是唯一留痕;codex 的全局钩子
+	// (attachGlobalHandler)对这几个方法按 codexGlobalNoticeKinds 记的是
+	// KNOWN_PROJECTED/PASSTHROUGH —— "这一帧坏了"在台账里只存在于泵侧,属
+	// "坏帧是唯一留痕"的情形,按 recordAs 的 nil-sink 语义传真 sink 出限频卡
+	// (每键 2 条、64 键封顶,不会刷屏)。异线程过滤维持静默(全家同款刻意取舍,
+	// 见审计 §二"全家":写台账会被并发会话流量刷爆 200 条滚动窗)。
+	recordBadFrame := func(method string, params json.RawMessage) {
+		notices.recordAs(runtime.KindUnknownNotification, "codex", method+":<unparseable>", params, sink)
+	}
 	handleNotif := func(method string, params json.RawMessage) {
 		switch {
 		case method == "turn/started":
@@ -1186,8 +1198,14 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			log.Printf("[codex] codex 已接收任务 thread=%s %.140s", codexTID, string(params))
 			// P1-4:登记「当前运行中轮次」的 codex id,供 turn/steer 校验
 			// expectedTurnId(见 codex_steer.go)。turnActive 守卫过滤迟到的旧通知。
-			if n := parseTurnStarted(params); n != nil && n.ThreadId == codexTID {
-				p.setSteerTarget(req.Thread.ID, codexTID, n.Turn.Id)
+			// 【C-1】解包失败(parseTurnStarted nil:解不开或缺 turn.id,都是
+			// "没解出可用的轮次标识")单独留痕;异线程静默维持(同款过滤)。
+			if n := parseTurnStarted(params); n != nil {
+				if n.ThreadId == codexTID {
+					p.setSteerTarget(req.Thread.ID, codexTID, n.Turn.Id)
+				}
+			} else {
+				recordBadFrame(method, params)
 			}
 		case method == "item/fileChange/patchUpdated":
 			// 累积"本回合被改动的文件",供文件变更审批卡展示(见 changeFiles 注释)。
@@ -1197,7 +1215,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					Path string `json:"path"`
 				} `json:"changes"`
 			}
-			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID {
+			// 【C-1】解包失败此前整帧静默(审批卡将拿不到文件列表且无任何痕迹)。
+			if err := json.Unmarshal(params, &n); err != nil {
+				recordBadFrame(method, params)
+			} else if n.ThreadId == codexTID {
 				paths := make([]string, 0, len(n.Changes))
 				for _, ch := range n.Changes {
 					if ch.Path != "" {
@@ -1247,7 +1268,12 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					} `json:"error"` // turn 级终局错误
 				} `json:"turn"`
 			}
-			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID {
+			// 【C-1】终局帧解包失败此前整段静默(连 finish() 都不触发,轮次只能
+			// 等看门狗收口且无任何痕迹)。留痕不改变收口语义:finish 仍只在
+			// "解包成功且同线程"时调用,坏帧的处置路径维持原样,只是现在查得到。
+			if err := json.Unmarshal(params, &n); err != nil {
+				recordBadFrame(method, params)
+			} else if n.ThreadId == codexTID {
 				if n.Turn.Error != nil && n.Turn.Error.Message != "" {
 					mu.Lock()
 					lastErr = &pb.Error{
@@ -1301,7 +1327,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 		case strings.Contains(method, "agentMessage") && strings.Contains(method, "delta"):
 			var n deltaNotif
-			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Delta != "" {
+			// 【C-1】解包失败单独留痕;空 delta 是合法空转,维持静默。
+			if err := json.Unmarshal(params, &n); err != nil {
+				recordBadFrame(method, params)
+			} else if n.ThreadId == codexTID && n.Delta != "" {
 				mu.Lock()
 				streamText.WriteString(n.Delta)
 				mu.Unlock()
@@ -1309,7 +1338,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 		case isReasoningDeltaMethod(method):
 			var n deltaNotif
-			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Delta != "" {
+			// 【C-1】解包失败单独留痕;空 delta 是合法空转,维持静默。
+			if err := json.Unmarshal(params, &n); err != nil {
+				recordBadFrame(method, params)
+			} else if n.ThreadId == codexTID && n.Delta != "" {
 				// 隐藏推理过程(daemon 侧强制过滤):不把思考事件推给手机。
 				// 这是真实的行为改变,不依赖 codex 是否有原生开关 —— 本版本 codex
 				// 的 schema 里根本没有 hide_agent_reasoning 这个配置键。
@@ -1322,7 +1354,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 		case method == "item/started":
 			var n itemNotif
-			if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Item.Type == "contextCompaction" {
+			// 【C-1】解包一次,失败态与异线程分开判定(此前两者都静默落进末尾
+			// 兜底,坏形状与"别的会话的帧"不可区分)。
+			unpacked := json.Unmarshal(params, &n) == nil
+			if unpacked && n.ThreadId == codexTID && n.Item.Type == "contextCompaction" {
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
 					Kind:     pb.CodexEvent_CONTEXT_COMPACTED,
 					Code:     "started",
@@ -1331,7 +1366,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					ThreadId: codexTID,
 					RawJson:  clip(string(params), 8000),
 				}}})
-			} else if json.Unmarshal(params, &n) == nil && n.ThreadId == codexTID && n.Item.Type == "commandExecution" {
+			} else if unpacked && n.ThreadId == codexTID && n.Item.Type == "commandExecution" {
 				sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ToolCall{ToolCall: &pb.ToolCallUpdate{
 					Phase: pb.ToolCallUpdate_STARTED,
 					Call: &pb.ToolCallBlock{
@@ -1351,6 +1386,10 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				// 工具类 item(fileChange/mcpToolCall/webSearch)的开始卡:
 				// 独立工具卡投影(见 codex_items.go),不再降级成不透明透传。
 				sink(msg)
+			} else if !unpacked {
+				// 【C-1】坏帧:解不开的 params 在这里单独留痕(走到这说明前面
+				// 各专案分支都不可能命中 —— 它们各自的解析同样解不开)。
+				recordBadFrame(method, params)
 			} else {
 				// 其余 item 类型(userMessage/reasoning 等):此前是静默丢弃,现接进
 				// 主线 A notices.record 原样包装透传(限频+脱敏自动生效)。仅透传,
@@ -1359,7 +1398,13 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 		case method == "item/completed":
 			var n itemNotif
-			if json.Unmarshal(params, &n) != nil || n.ThreadId != codexTID {
+			// 【C-1】解包失败与异线程此前共用一条 return,坏形状与"别的会话的帧"
+			// 不可区分;现在坏帧单独留痕,异线程过滤维持静默(同款口径)。
+			if err := json.Unmarshal(params, &n); err != nil {
+				recordBadFrame(method, params)
+				return
+			}
+			if n.ThreadId != codexTID {
 				return
 			}
 			switch n.Item.Type {
