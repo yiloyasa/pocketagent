@@ -1559,6 +1559,22 @@ func applyZcodeTitle(st *store.FileStore, threadID, title string) {
 	}
 }
 
+// applyDshTitle 把 dsh 的标题回调落库(session_info_update.title,与
+// applyZcodeTitle 同语义同守卫:dsh 与 zcode 一样没有"把手机上的新名字回写
+// 给 agent"的通道,被用户手动改名钉住(TitlePinned)的线程不得被自动命名
+// 顶掉)。独立成函数而非复用 applyZcodeTitle:日志前缀必须如实指明来源
+// provider(PA-REAL-0003:错误文案不得误导排障)。
+func applyDshTitle(st *store.FileStore, threadID, title string) {
+	for _, t := range st.List(true) {
+		if t.ID != threadID || t.Title == title || t.TitlePinned {
+			continue
+		}
+		t.Title = title
+		logStoreUpdateErr("dsh-title-sync", threadID, st.Update(t))
+		log.Printf("[dsh] 标题同步落库 thread=%s title=%.60q", threadID, title)
+	}
+}
+
 // threadAgentID 线程归属 agent:AgentID 缺省(旧库记录)= "codex",
 // 与"老记录全是 codex 会话"的事实一致(store 兼容规则)。
 func threadAgentID(t *store.Thread) string {
@@ -1666,14 +1682,6 @@ func (s *Server) defaultProvider() agent.Provider {
 		return s.cfg.Providers[ids[0]]
 	}
 	return s.cfg.Providers["echo"]
-}
-
-func (s *Server) defaultModelID() string {
-	p := s.defaultProvider()
-	if ms := p.Models(); len(ms) > 0 {
-		return p.ID() + "/" + ms[0].Id
-	}
-	return "echo/echo-1"
 }
 
 func indexByte(s string, b byte) int {

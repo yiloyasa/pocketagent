@@ -142,8 +142,13 @@ process.stdin.on('data', (chunk) => {
       }
       if (process.env.PA_FAKE_ZCODE_EVENTS) {
         // 注入任意 session/event 序列(标题同步等事件形状的接线测试用);
-        // 元素形状 {type, payload},payload 缺省给 {}。
+        // 元素形状 {type, payload},payload 缺省给 {};{rawParams} 直接把
+        // params 写成 JSON 字符串(信封解不开的坏帧,Z-3 泵入口测试用)。
         for (const e of JSON.parse(process.env.PA_FAKE_ZCODE_EVENTS)) {
+          if (e.rawParams !== undefined) {
+            write({method: 'session/event', params: e.rawParams});
+            continue;
+          }
           env(e.type, e.payload || {});
         }
       }

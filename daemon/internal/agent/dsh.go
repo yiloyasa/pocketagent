@@ -115,6 +115,8 @@ var (
 //	思考过程         agent_thought_chunk → ThinkingDelta(HideReasoning 时过滤)
 //	工具卡片状态机   tool_call / tool_call_update → ToolCallUpdate
 //	上下文用量       context_usage → UsageUpdate
+//	会话命名         session_info_update → TitleHandler(server 落库双端同步;
+//	                   桥 0.2.0-rc.2 暂不实发该变体,接线为防御面)
 //	审批弹卡         session/request_permission(反向请求)→ ApprovalHook
 //	一轮终局         session/prompt 应答 stopReason end_turn/cancelled
 type DshProvider struct {
@@ -163,6 +165,13 @@ type DshProvider struct {
 	// 桌面偏好快照(PrefsAware 子集:Model/Effort/HideReasoning)
 	prefsMu sync.Mutex
 	prefs   DesktopPrefs
+
+	// TitleHandler 标题同步钩子:session_info_update 带 title 时回调(zcode
+	// session.titleUpdated 同语义;server 层 New 里接线 applyDshTitle 落库后
+	// 手机/桌面双端可见,回调带的是我们自己的线程 ID)。0.2.0-rc.2 桥不实发
+	// 该变体(字段覆盖审计 A 节),接线为防御面:上游启用即自动点亮。
+	// nil = 未接线(探针/测试路径),事件照常消费,只是不落库。
+	TitleHandler func(threadID, title string)
 
 	// newClient 是测试注入点:非空时 withClientCtx 用它造 fake(生产恒 nil)。
 	newClient func() (dshClient, error)
@@ -729,7 +738,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 	// 4) 事件路由:readLoop 里同步调 notif 钩子,慢 sink 会堵整条管道 —— 只入队,
 	// 单消费者 goroutine 保序分发(codex 同款)。enqueued/processed 组成排空栅栏:
 	// prompt 应答(update 与应答分路竞速)到达后,先把已入队帧消费完再读终局。
-	st := &dshTurnState{}
+	st := &dshTurnState{threadID: req.Thread.ID} // threadID 供 session_info_update 的标题投影定位线程
 	var notices nativeNoticeRecorder
 	var enqueued, processed atomic.Int64
 	type notifMsg struct {
@@ -760,9 +769,22 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 			case nm := <-notifCh:
 				if nm.method == "session/update" {
 					var env dshUpdateEnvelope
-					if json.Unmarshal(nm.params, &env) != nil || env.SessionID != sid {
+					if json.Unmarshal(nm.params, &env) != nil {
+						// 【D-1(=Z-3 dsh 侧)坏帧留痕(2026-10-07 旁路审计)】解包失败
+						// 与异会话过滤此前共用一条 continue。拆开后坏帧补一条泵侧台账,
+						// 方法名带 <unparseable> 标记,与全局钩子(dshGlobalNoticeKind
+						// 对拆不开的信封记的裸 "session/update")可区分、可检索。
+						// 【裁量:只台账,不出限频 STATUS 卡】全局钩子对同一帧已先落
+						// UNKNOWN 台账,泵侧不是唯一留痕;传输级异常帧无用户处置路径,
+						// 诊断卡只会添噪。异会话过滤维持下方静默(全家同款刻意取舍)。
+						notices.recordLedgerOnly(runtime.KindUnknownNotification,
+							"dsh", "session/update:<unparseable>", nm.params)
 						processed.Add(1)
-						continue // 坏帧/别的会话的帧不进本轮(诊断可开 PA_DSH_DEBUG)
+						continue
+					}
+					if env.SessionID != sid {
+						processed.Add(1)
+						continue // 别的会话的帧不进本轮(刻意过滤,与四家同款)
 					}
 					p.handleSessionUpdate(env.Update, sink, st, &notices)
 					processed.Add(1)
@@ -893,6 +915,10 @@ type dshTurnState struct {
 	images          []turnImage // 助手输出的图片块(0.2.0 bundle:agent_message_chunk 可携 {type:"image"})
 	lastNotif       atomic.Int64
 	approvalWaiting atomic.Bool
+	// threadID 是本轮所属的我们自己的会话 id(Run 装配时带入):session_info_update
+	// 的标题投影经 TitleHandler 落库时要按它定位线程。零值(单测直调
+	// handleSessionUpdate)= 无归属,标题投影跳过,不拿空 id 调钩子。
+	threadID string
 }
 
 func (s *dshTurnState) appendText(text string) {
@@ -1308,6 +1334,29 @@ func (p *DshProvider) handleSessionUpdate(raw json.RawMessage, sink Sink, st *ds
 	case "available_commands_update":
 		// 透传进诊断视图(蓝本 §4.3:available_commands 忽略分支)
 		notices.recordAs(dshNoticeKind("session/update:"+kind), "dsh", "session/update:"+kind, raw, sink)
+	case "session_info_update":
+		// 会话标识事实(ACP union:{title?, updatedAt?};桥 0.2.0-rc.2 不实发,
+		// 字段覆盖审计 A 节/G6:此前落 default 变 UNKNOWN)。带 title 时照 zcode
+		// session.titleUpdated 同款语义接标题链:TitleHandler → server 落库,
+		// 手机/桌面双端同步(接线见 server.go New → applyDshTitle)。异步不堵
+		// 事件泵;zcode 同款不因该事件断流。updatedAt 无用户可见承载位(落库
+		// 时间由 server 自己记),不解释。
+		var info struct {
+			Title string `json:"title"`
+		}
+		hasTitle := json.Unmarshal(raw, &info) == nil && info.Title != ""
+		if hasTitle && st.threadID != "" && p.TitleHandler != nil {
+			go p.TitleHandler(st.threadID, info.Title)
+		}
+		// 分类在调用点显式给(dshNoticeKind 在 native_notifications.go,本轮
+		// 不改共享分类器):带 title = 走标题投影路径 → PROJECTED(zcode
+		// session.titleUpdated 同口径);仅 updatedAt/空 title = 已知变体无投影
+		// → PASSTHROUGH。该变体既有的限频诊断帧保持不变,不因接线而消音。
+		infoKind := runtime.KindKnownPassthrough
+		if hasTitle {
+			infoKind = runtime.KindKnownProjected
+		}
+		notices.recordAs(infoKind, "dsh", "session/update:"+kind, raw, sink)
 	default:
 		// 探针修正⑤:未知变体原样透传进诊断视图,不猜(README §7 主线 A:
 		// 识别不了≠出错;原文+变体名进诊断视图,App 显示"原生发来了一个新事件")

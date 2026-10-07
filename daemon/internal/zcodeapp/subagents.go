@@ -23,9 +23,14 @@ package zcodeapp
 //     found" —— 本 RPC 只认 sessionStore 里已持久化的会话。调用纪律:只在
 //     轮次(或其他确认落库的动作)之后查,不要在 create 后立刻查。
 //
-// 【分页边界】ended 用 (endedAt, childSessionId) 游标分页。本封装只取一页
-// (调用方给 endedLimit,≤100);列表尾页判定交给调用方看 Total 与已取条数,
-// 不在这里自动翻页 —— 子代理清单是低频展示数据,自动翻页只会放大故障面。
+// 【分页边界(2026-10-07 收口,比照 dshapp SessionList 同款先例)】ended 用
+// (endedAt, childSessionId) 游标分页:调用方给的 endedCursor 是首页起点;
+// 应答 ended.nextCursor 非空 = 还有下一页,本封装自动跟随翻页取全,上限
+// zcodeSubagentsMaxPages 页(防御性:防游标异常死循环),触顶返回已取得的页
+// 并落日志,不以错误打断调用方 —— 清单是"有则更好"的增强数据,少页只影响
+// 完整性判断。旧实现只取一页、nextCursor 被静默丢弃,单页(50)装不下的
+// ended 子代理对用户不可见。快照级字段(revision/childSessionIds/running)
+// 描述同一父会话的当前事实,只取首页,不跨页累计。
 //
 // 【透传原则】未知状态值原样保留在 Status 里,不映射不猜测(server 层落库时
 // 只对认识的状态表态,见 zcode_subagent_sync.go)。
@@ -34,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 // SubagentEntry session/subagents 里一条子代理条目(running/ended 通用:ended
@@ -70,30 +76,54 @@ type SubagentsResult struct {
 	Ended           SubagentsEndedPage `json:"ended"`
 }
 
-// Subagents 调 session/subagents 取某会话的原生子代理清单。
+// Subagents 调 session/subagents 取某会话的原生子代理清单(自动跟随 ended
+// 分页游标取全,见文件头【分页边界】)。
 //
 // sessionID 必须是已持久化的 zcode 会话 id(见文件头时序纪律);endedLimit
 // <= 0 时省略(服务器默认 20),> 100 会被 strict schema 拒绝,这里不再重复
-// 校验 —— 参数错误让它以 -32602 原样暴露,不静默钳制。endedCursor 非空时
-// 原样回传(b64url 游标,构造与解析都是服务器的事)。
+// 校验 —— 参数错误让它以 -32602 原样暴露,不静默钳制。endedCursor 非空时作为
+// 首页起点原样回传(b64url 游标,构造与解析都是服务器的事);后续页的游标取自
+// 各页应答的 ended.nextCursor,原样回传。
 func (c *Client) Subagents(ctx context.Context, sessionID string, endedLimit int, endedCursor string) (SubagentsResult, error) {
 	var out SubagentsResult
 	if sessionID == "" {
 		return out, fmt.Errorf("session/subagents: sessionId 必填")
 	}
-	params := map[string]interface{}{"sessionId": sessionID}
-	if endedLimit > 0 {
-		params["endedLimit"] = endedLimit
+	cursor := endedCursor
+	for page := 0; page < zcodeSubagentsMaxPages; page++ {
+		params := map[string]interface{}{"sessionId": sessionID}
+		if endedLimit > 0 {
+			params["endedLimit"] = endedLimit
+		}
+		if cursor != "" {
+			params["endedCursor"] = cursor // 服务器产出的不透明游标,原样回传
+		}
+		raw, err := c.CallCtx(ctx, "session/subagents", params)
+		if err != nil {
+			return out, err
+		}
+		var pg SubagentsResult
+		if err := json.Unmarshal(raw, &pg); err != nil {
+			return out, fmt.Errorf("session/subagents 应答解析失败: %w", err)
+		}
+		if page == 0 {
+			out = pg // 快照级字段(revision/childSessionIds/running)与首页 ended
+		} else {
+			out.Ended.Items = append(out.Ended.Items, pg.Ended.Items...)
+		}
+		// NextCursor 保留末页原值:游标耗尽时为空串(取全);触顶时非空,
+		// 调用方据此知道"还有更多没取"。
+		out.Ended.NextCursor = pg.Ended.NextCursor
+		if pg.Ended.NextCursor == "" {
+			return out, nil
+		}
+		cursor = pg.Ended.NextCursor
 	}
-	if endedCursor != "" {
-		params["endedCursor"] = endedCursor
-	}
-	raw, err := c.CallCtx(ctx, "session/subagents", params)
-	if err != nil {
-		return out, err
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return out, fmt.Errorf("session/subagents 应答解析失败: %w", err)
-	}
+	log.Printf("[zcode] session/subagents 达到翻页上限(%d 页),返回已取得的 %d 条", zcodeSubagentsMaxPages, len(out.Ended.Items))
 	return out, nil
 }
+
+// zcodeSubagentsMaxPages 是 Subagents 跟随 ended.nextCursor 的页数上限
+// (防御性:页大小至多 100、常用 50,50 页 = 数千条,远超真实子代理规模;
+// 防游标异常导致死循环,与 dshapp 的 dshSessionListMaxPages 同口径)。
+const zcodeSubagentsMaxPages = 50

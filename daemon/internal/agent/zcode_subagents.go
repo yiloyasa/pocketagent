@@ -24,8 +24,9 @@ import (
 const (
 	// zcodeSubagentsBudget 单次清单拉取的上界:一次 RPC,不需要会话级宽时限。
 	zcodeSubagentsBudget = 20 * time.Second
-	// zcodeSubagentsEndedLimit ended 分页取数上限(schema 上限 100;单页 50,
-	// 超过的子代理如实少登记 —— 见 fetchSubagentsForTurn 的日志)。
+	// zcodeSubagentsEndedLimit ended 每页取数条数(schema 上限 100)。翻页由
+	// zcodeapp.Subagents 自动跟随 nextCursor 进行(上限 zcodeSubagentsMaxPages
+	// 页),本值只是页大小,不再是"只登记一页"的截断线。
 	zcodeSubagentsEndedLimit = 50
 )
 
@@ -46,9 +47,10 @@ func (p *ZcodeProvider) SubagentsForSession(sessionID string) (zcodeapp.Subagent
 	return out, err
 }
 
-// fetchSubagentsForTurn 轮次终局后的清单拉取(异步入口):取一页并交给
-// SubagentsHandler(由 server 层在装配时接线)。任何失败只留痕 —— 存根登记
-// 是"有则更好"的增强,绝不影响轮次本身的结果与返回。
+// fetchSubagentsForTurn 轮次终局后的清单拉取(异步入口):跟随 ended 分页取全
+// (上限 zcodeSubagentsMaxPages 页)并交给 SubagentsHandler(由 server 层在装配
+// 时接线)。任何失败只留痕 —— 存根登记是"有则更好"的增强,绝不影响轮次本身的
+// 结果与返回。
 func (p *ZcodeProvider) fetchSubagentsForTurn(threadID, sessionID string) {
 	if p.SubagentsHandler == nil || sessionID == "" {
 		return
@@ -59,9 +61,10 @@ func (p *ZcodeProvider) fetchSubagentsForTurn(threadID, sessionID string) {
 		return
 	}
 	if total := res.Ended.Total; total > len(res.Ended.Items) {
-		// 只取了一页:如实说明少了多少,不静默截断成"全部"。
-		log.Printf("[zcode] 子代理清单超过单页(%d > %d),本轮只登记最近 %d 条 thread=%s",
-			total, len(res.Ended.Items), len(res.Ended.Items), threadID)
+		// 翻页后仍取不全只剩一种可能:触到 zcodeSubagentsMaxPages 页上限
+		// (res.Ended.NextCursor 非空)。如实说明少了多少,不静默截断成"全部"。
+		log.Printf("[zcode] 子代理清单超过翻页上限(%d > %d,还有更多未取) thread=%s,本轮只登记最近 %d 条",
+			total, len(res.Ended.Items), threadID, len(res.Ended.Items))
 	}
 	p.SubagentsHandler(threadID, res)
 }

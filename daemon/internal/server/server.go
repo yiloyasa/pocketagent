@@ -286,6 +286,14 @@ func New(cfg Config) *Server {
 	}
 	// Pi 标题同步:session_info_changed → 落库(与 zcode 同语义;实现见 thread.go)。
 	srv.wirePiTitleHandler()
+	// dsh 标题同步:session_info_update.title → 落库(zcode session.titleUpdated
+	// 同款语义,实现见 thread.go applyDshTitle)。0.2.0-rc.2 桥不实发该变体,
+	// 接线为防御面:上游启用即自动点亮,provider 侧无需再动。
+	if dp, ok := cfg.Providers["dsh"].(*agent.DshProvider); ok {
+		dp.TitleHandler = func(threadID, title string) {
+			applyDshTitle(cfg.Store, threadID, title)
+		}
+	}
 	// Resolve legacy RUNNING records before list synchronization can hide their
 	// terminal error. This consults native journals only, never launches a turn.
 	// 【轮次起点】仍处于 RUNNING 的会话由 backfillRestartedRunningStamp 回填

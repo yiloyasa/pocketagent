@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // dshInitBudget 是 initialize 握手的默认上界。探针实测冷启动(含首次 profile
@@ -350,11 +351,18 @@ func parseSessionState(raw json.RawMessage, method string) (*SessionState, error
 	return st, nil
 }
 
+// clipStr 错误文案/日志里的原文限长。按字节预算 n 截断,但回退到最后一个完整
+// rune 的边界再截(与 openai_compat.go 的 clip 同款修法):此前 s[:n] 可能把一个
+// 多字节汉字劈成非法 UTF-8,应答缺 sessionId 的报错里带 CJK 原文时会成乱码。
 func clipStr(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "...[截断]"
+	limit := n
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
+	}
+	return s[:limit] + "...[截断]"
 }
 
 // ---- 双层 JSON 编码(探针修正①,纯函数 + 单测钉死)----

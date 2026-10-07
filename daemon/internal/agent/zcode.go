@@ -1979,8 +1979,24 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					continue
 				}
 				var ev zcodeEventEnvelope
-				if json.Unmarshal(nm.params, &ev) != nil || ev.SessionID != sid {
+				if json.Unmarshal(nm.params, &ev) != nil {
+					// 【Z-3 坏帧留痕(2026-10-07 旁路审计)】解包失败与异会话过滤
+					// 此前共用一条 continue,坏帧在轮内与"别的会话"不可区分。拆开后
+					// 给坏帧补一条泵侧台账:方法名带 <unparseable> 标记,与全局钩子
+					// (zcodeLedgerMethod 对拆不开的壳记的裸 "session/event")可区分、
+					// 可检索 —— 同一帧两条台账各说各的事实(全局=壳,泵=消费失败),
+					// 台账是索引,记全真实路径。
+					// 【裁量:只台账,不出限频 STATUS 卡】这不是坏帧的唯一留痕:
+					// 常驻全局钩子对每条通知(含本帧)已先落 UNKNOWN 台账;传输级
+					// 异常帧也没有用户可动手脚的处置路径,诊断卡只会添噪。异会话
+					// 过滤维持下方静默 —— 全家同款刻意取舍,不写台账(会被并发
+					// 会话流量刷爆 200 条滚动窗,见 unknown-bypass-audit §二"全家")。
+					notices.recordLedgerOnly(runtime.KindUnknownNotification,
+						"zcode", "session/event:<unparseable>", nm.params)
 					continue
+				}
+				if ev.SessionID != sid {
+					continue // 别的会话的帧不进本轮(刻意过滤,与四家同款)
 				}
 				switch ev.Type {
 				case "session.updated", "settings.updated", "session.modelUpdated":

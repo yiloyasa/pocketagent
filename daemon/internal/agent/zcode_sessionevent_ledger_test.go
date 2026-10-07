@@ -57,6 +57,15 @@ func TestZcodeLedgerMethodUnwrapsSessionEvent(t *testing.T) {
 // turn.completed),断言全局路径记的台账按拆壳名分类,不再有裸 session/event 的
 // UNKNOWN。fake 脚本由 zcode_image_input_test.go 提供(同包复用)。
 func TestZcodeSessionEventLedgerUnwrappedEndToEnd(t *testing.T) {
+	// 台账是进程级共享单例:同包其它测试(如 2026-10-07 坏帧钉子)可能已写入
+	// 裸 session/event 的历史条目。红线只对"本轮 fake 一轮"新产生的条目生效
+	// —— 先记水位,再只扫增量,历史条目不背锅。
+	watermark := int64(0)
+	for _, e := range sharedRuntimeBackend().UnknownEvents().List(runtime.ListFilter{AgentID: "zcode"}, 0) {
+		if e.Sequence > watermark {
+			watermark = e.Sequence
+		}
+	}
 	p, _ := newFakeZcodeProvider(t, "")
 	ws := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -75,8 +84,8 @@ func TestZcodeSessionEventLedgerUnwrappedEndToEnd(t *testing.T) {
 	for _, e := range entries {
 		byMethod[e.SourceMethod] = e.NormalizedKind
 		// 红线:全局路径不再产生裸 "session/event" 的 UNKNOWN(那正是本轮治理的病)。
-		if e.SourceMethod == "session/event" && e.NormalizedKind == runtime.KindUnknownNotification {
-			t.Fatalf("台账仍有裸 session/event 的 UNKNOWN: %+v", e)
+		if e.Sequence > watermark && e.SourceMethod == "session/event" && e.NormalizedKind == runtime.KindUnknownNotification {
+			t.Fatalf("本轮新增裸 session/event 的 UNKNOWN: %+v", e)
 		}
 	}
 	for m, want := range map[string]string{

@@ -89,7 +89,9 @@ func TestSubagentsOmitsLimitAndKeepsCursor(t *testing.T) {
 	callAndRespond(t, c, buf, func() error {
 		_, err = c.Subagents(nil, "sess_abc", 0, "eyJjaGlsZFNlc3Npb25JZCI6InMxIn0")
 		return nil
-	}, `{"revision":1,"childSessionIds":[],"running":[],"ended":{"total":0,"items":[],"nextCursor":"next-1"}}`)
+		// 应答不带 nextCursor:单请求契约(首页游标即终点)。翻页行为
+		// (含"次页请求回传首页游标")由 subagents_pagination_test.go 钉。
+	}, `{"revision":1,"childSessionIds":[],"running":[],"ended":{"total":0,"items":[]}}`)
 
 	if err != nil {
 		t.Fatalf("Subagents 返回错误: %v", err)
