@@ -10,13 +10,17 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
+	"github.com/pocketagent/daemon/internal/server"
 )
 
 func main() {
@@ -27,6 +31,10 @@ func main() {
 	agent := flag.String("agent", "", "会话 agent(zcode/pi/codex);空 = codex(老客户端语义)")
 	mode := flag.String("mode", "turn", "turn=建线+发轮次(默认);optimize=只打 OptimizePrompt RPC")
 	style := flag.String("style", "", "optimize 模式的改写风格(concise/detailed/空=默认)")
+	// -data 配对码目录(2026-10-07):daemon 默认开鉴权,无 token 探针会被
+	// Unauthenticated 拒。读 pair-code.txt 派生 legacy token,与 listthreadscheck
+	// 同源;不打印 token 本身。
+	dataDir := flag.String("data", "", "daemon 数据目录(默认 ~/.pocketagentd,读 pair-code.txt)")
 	flag.Parse()
 	// 提示词:第一个非 flag 位置参数(【注意】必须放在 flag.Parse() 之后用
 	// flag.Arg(0),不能沿用旧的 os.Args[1] —— 引入 flag 包后 os.Args 里仍带着
@@ -51,8 +59,24 @@ func main() {
 	}
 	defer conn.Close()
 
-	tc := pb.NewThreadServiceClient(conn)
 	ctx := context.Background()
+	// 鉴权(2026-10-07):配对码 → legacy token,塞进后续所有 RPC 的 metadata。
+	{
+		dir := *dataDir
+		if dir == "" {
+			home, _ := os.UserHomeDir()
+			dir = filepath.Join(home, ".pocketagentd")
+		}
+		if raw, rerr := os.ReadFile(filepath.Join(dir, "pair-code.txt")); rerr == nil {
+			if tok := server.LegacyTokenFor(strings.TrimSpace(string(raw))); tok != "" {
+				ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+			}
+		} else {
+			fmt.Println("(未读到 pair-code.txt,按无鉴权尝试)")
+		}
+	}
+
+	tc := pb.NewThreadServiceClient(conn)
 	start := time.Now()
 
 	// -mode optimize:只打一次 OptimizePrompt RPC(2026-09-19 优化按钮真机验收
@@ -124,6 +148,12 @@ func main() {
 				}
 			case *pb.TurnServerMessage_Completed:
 				fmt.Printf("[%6s] COMPLETED\n", elapsed)
+			case *pb.TurnServerMessage_Usage:
+				u := m.Usage.GetUsage()
+				tu := m.Usage.GetTotalUsage()
+				fmt.Printf("[%6s] USAGE in=%d out=%d ctx_window=%d total_in=%d\n",
+					elapsed, u.GetInputTokens(), u.GetOutputTokens(),
+					m.Usage.GetModelContextWindow(), tu.GetInputTokens())
 			case *pb.TurnServerMessage_Failed:
 				fmt.Printf("[%6s] FAILED: %s\n", elapsed, m.Failed.Error.Message)
 			default:
