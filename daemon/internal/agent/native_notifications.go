@@ -108,6 +108,16 @@ func recordProviderEvent(agentID, method, threadID, kind string, raw json.RawMes
 	if kind == "" {
 		kind = runtime.KindUnknownNotification
 	}
+	// 【2026-10-07 汇点复核(codex 专属)】codex 全局钩子(codex.go)用
+	// codexGlobalNoticeKind 定性,而分类中枢的 codexMethodNoticeKind 自 rawResponse
+	// 预收编批起是全局表的**超集**(登记表收不了 0.160.0 快照外的新名,归另一轮)。
+	// 为守住"同一方法两路定性一致"的 2026-10-02 单表原则,汇点在 codex 且初判为
+	// UNKNOWN 时按中枢分类器复核一次:非前缀方法复核结果不变(两函数对表外名字
+	// 同样落 UNKNOWN),只有预收编族在这里从 UNKNOWN 翻成 PASSTHROUGH。登记表
+	// 收编后本复核成为恒等映射,可与前缀规则一并退役。
+	if agentID == "codex" && kind == runtime.KindUnknownNotification {
+		kind = codexMethodNoticeKind(method)
+	}
 	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
 		ThreadID:       threadID,
 		SourceAgent:    agentID,
@@ -165,7 +175,27 @@ func codexItemNoticeKind(itemType string) string {
 // 轮内兜底只收"没有专属分支"的方法,对它们全局表就是唯一权威定性;真正未知的方法
 // 两表同样落 UNKNOWN,口径不变。表本体与登记证据见 codex.go 的
 // codexGlobalNoticeKinds。
+//
+// 【2026-10-07 预收编批(rawResponse 内部通知族,全局表的受控超集)】0.160.0
+// 新增两条内部通知 rawResponseItem/completed 与 rawResponse/completed
+// (vendored 0.159.2 快照里没有,登记表及其 schema 对表测试因此收不了它们 ——
+// 登记表归另一轮)。双证见 docs/reviews/2026-10-07/field-coverage-codex.md
+// §2/§3:0.160.0 二进制通知枚举表序(…item/completed→rawResponseItem/completed
+// →rawResponse/completed→…) + codex-schema/v2/RawResponse*.json 的
+// "Internal-only" 描述。在登记表之外按方法名前缀预收编:rawResponse* 一族 =
+// 上游 Responses API 完成的内部回执/原始用量镜像,用户可见面已有正式载体
+// (用量走 thread/tokenUsage/updated 的用量卡,条目内容随对应 item 卡),逐上游
+// 调用一条若投影会刷屏 → 只留痕,PASSTHROUGH。取舍:
+//   - 用前缀不用精确名:0.160.x 再添同族变体时自动同口径,不再灌 UNKNOWN;
+//     代价是未来若出现 unrelated 的 rawResponse* 新面会被提前算作已知 —— 该族
+//     是内部通知,载荷照落台账可查(词表缺词条时翻译层仍如实拆解原文),风险
+//     可接受;前缀是大小写敏感的精确串匹配,前缀外的名字不放宽。
+//   - 登记表收编路径(快照重导 + codexGlobalNoticeKinds 增名)归另一轮;届时
+//     本前缀规则与 recordProviderEvent 的汇点复核一并退役。
 func codexMethodNoticeKind(method string) string {
+	if strings.HasPrefix(method, "rawResponse") {
+		return runtime.KindKnownPassthrough
+	}
 	return codexGlobalNoticeKind(method)
 }
 
@@ -290,9 +320,8 @@ func piNoticeKind(eventType string) string {
 //     process/resourceSample 与 process/mcpResourceSamples 是 0.16.9 实测
 //     每分钟灌台账的遥测(0.16.9 上线两天记了 193 条 UNKNOWN,把真未知挤出
 //     200 条滚动窗),收编为已知是本轮分档的直接动机。
-//   - permission.requested / userInput.requested:与反向请求
-//     interaction/requestPermission 的关系探针证不出(审批流需要真实轮次,
-//     本轮红线禁跑),按"证不出就留 UNKNOWN(不猜)"处理。
+//   - permission.requested / userInput.requested:2026-09-30 时点按"证不出就留
+//     UNKNOWN(不猜)"处理;【2026-10-07 翻案】见下方预收编批(二)。
 //
 // 【2026-09-30 复验收编批(证据:zcprobe 全子模式重跑 + bundle 静态 zod 枚举,
 // 见 knowledge_zcode.go 同日注释)】message.*/part.*/streamRecovery.updated 是
@@ -303,6 +332,22 @@ func piNoticeKind(eventType string) string {
 // interaction/requestOfficialMcpAuthHeaders **不进本表**:它是反向请求,走
 // zcode.go reqHandler 兜底硬编码 UNKNOWN_REQUEST 登记(zcode 侧尚无 request
 // 分类器,已知拒答也如实入账),人话由词表读时翻译 —— 本表只管通知。
+//
+// 【2026-10-07 预收编批(证据:docs/reviews/2026-10-07/field-coverage-zcode.md
+// §A/§B 的 bundle 静态 payload 形状;未运行任何程序,证据分级:静态)】
+// (一)v4/conversation/frame、v4/telemetry/local-ttft、v4/cua/permission-observation:
+// 顶层通知注册表 jV={conversationFrame, conversationTelemetryFact, localTtftFacts,
+// cuaPermissionObservation} 的同族成员,与已收编的 v4/telemetry/event 同口径
+// (内核遥测/镜像帧,只留痕不投影)。此前落 UNKNOWN 属"分类批漏掉同族",与
+// process/* 遥测家族同病,按同款口径预收编。
+// (二)permission.requested/resolved、userInput.requested/resolved 四件套:
+// session/event union 在案,上轮已取得完整 bundle 静态 payload 形状
+// (§B:Psr/Rsr/Dsr/Osr)。此前维持 UNKNOWN 的理由是"投影形状需带审批的真实
+// 轮次实证"—— 那是对**投影**说的;收编为 PASSTHROUGH 不做任何投影(审批/
+// 反问的用户可见面仍走反向请求通道 interaction/requestPermission、
+// interaction/requestUserInput 的审批卡/反问卡),事件流里这四条只是同一事实
+// 的留痕镜像,透传卡如实上屏即可,主模型裁决据此推翻遗留⑤。精确名收编:
+// union 外的近似名(permission.brandNew 之类)仍如实 UNKNOWN,不放宽。
 //
 // 【2026-09-30 预收编批(证据:bundle 顶层通知注册表静态在案;无实测帧,证据
 // 分级:静态,与 session.titleUpdated 首次收编同款口径)】process/toolExecResource、
@@ -332,7 +377,10 @@ func zcodeNoticeKind(method string) string {
 		"message.upserted", "message.removed",
 		"part.started", "part.delta", "part.upserted", "part.removed",
 		"streamRecovery.updated",
-		"v4/telemetry/event", "computer-use/operation-event":
+		"v4/telemetry/event", "computer-use/operation-event",
+		"v4/conversation/frame", "v4/telemetry/local-ttft", "v4/cua/permission-observation",
+		"permission.requested", "permission.resolved",
+		"userInput.requested", "userInput.resolved":
 		return runtime.KindKnownPassthrough
 	}
 	return runtime.KindUnknownNotification

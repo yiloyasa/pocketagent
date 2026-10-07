@@ -5,8 +5,9 @@
 // interaction/providerRuntimeHeadersCancelled 三名(bundle 顶层通知注册表静态
 // 在案、无实测帧)已按 process/* 遥测家族口径预收编:①平键词表必须出人话,
 // 不得再译成"未知事件";②红线反向钉:未收编的同族新名(process/brandNewSample)
-// 与刻意不收的 permission 四件套必须仍是"未知事件"口径 —— 预收编只限注册表
-// 在案的三名,不许顺手把兜底放宽。
+// 必须仍是"未知事件"口径 —— 预收编只限注册表在案的三名,不许顺手把兜底放宽
+// (permission 四件套 2026-10-07 已按新证据另行预收编为 PASSTHROUGH,移出本
+// 钉,见 knowledge_preadopt_20261007_test.go 与 knowledge_zcode.go 同日批)。
 package runtime
 
 import (
@@ -42,14 +43,13 @@ func TestZcodeKnowledgePreAdopt20260930Entries(t *testing.T) {
 	}
 }
 
-// 红线反向钉:预收编只限注册表在案的三名 —— 同族未在案新名与 permission
-// 四件套(证不出就留 UNKNOWN,不猜)必须仍走"未知事件"兜底。
+// 红线反向钉:预收编只限注册表在案的三名 —— 同族未在案新名必须仍走"未知
+// 事件"兜底(permission 四件套 2026-10-07 已另行预收编为 PASSTHROUGH,移出
+// 本清单;近似名不因收编而放宽的红线由 knowledge_preadopt_20261007_test 续钉)。
 func TestZcodeKnowledgePreAdoptDoesNotWidenFallback(t *testing.T) {
 	for _, m := range []string{
 		"process/brandNewSample", "plugins/brandNewProgress",
 		"interaction/brandNewCancelled",
-		"permission.requested", "permission.resolved",
-		"userInput.requested", "userInput.resolved",
 	} {
 		tr := TranslateEvent("zcode", m, KindUnknownNotification, `{"sample":1}`)
 		if !strings.Contains(tr.Summary, "未知") {

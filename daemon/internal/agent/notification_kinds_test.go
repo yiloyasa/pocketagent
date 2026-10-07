@@ -89,11 +89,17 @@ func TestZcodeNoticeKindClassification(t *testing.T) {
 	if got := zcodeNoticeKind("turn.started"); got != runtime.KindKnownPassthrough {
 		t.Errorf("zcodeNoticeKind(\"turn.started\") = %q, want PASSTHROUGH(只落日志,无正式投影)", got)
 	}
-	// 刻意留 UNKNOWN(不猜):permission.requested / userInput.requested 与反向
-	// 请求 interaction/requestPermission 的关系,探针证不出(审批流需真实轮次,
-	// 本轮红线禁跑)。等有实证再定档,不许按名字眼熟洗成已知。
-	for _, m := range []string{"permission.requested", "userInput.requested", "permission.resolved", "userInput.resolved",
-		"brand.new.event", ""} {
+	// 【2026-10-07 预收编批】permission/userInput 四件套已按 bundle 静态 payload
+	// 形状(docs/reviews/2026-10-07/field-coverage-zcode.md §B)收编 PASSTHROUGH:
+	// 审批/反问的用户可见面仍走反向请求通道的审批卡/反问卡,事件流镜像只留痕
+	// 不投影(2026-09-30 时点的"证不出就留 UNKNOWN"是对投影说的,不拦透传)。
+	for _, m := range []string{"permission.requested", "userInput.requested", "permission.resolved", "userInput.resolved"} {
+		if got := zcodeNoticeKind(m); got != runtime.KindKnownPassthrough {
+			t.Errorf("zcodeNoticeKind(%q) = %q, want PASSTHROUGH(2026-10-07 预收编,只留痕不投影)", m, got)
+		}
+	}
+	// 仍然刻意留 UNKNOWN(不猜):union 外的近似名不因四件套收编而放宽,空名同前。
+	for _, m := range []string{"permission.brandNew", "userInput.brandNew", "brand.new.event", ""} {
 		if got := zcodeNoticeKind(m); got != runtime.KindUnknownNotification {
 			t.Errorf("zcodeNoticeKind(%q) = %q, want UNKNOWN(未实证,兜底不冒充已知)", m, got)
 		}

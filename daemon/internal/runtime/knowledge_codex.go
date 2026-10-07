@@ -150,4 +150,16 @@ var codexEventSummaries = map[string]string{
 	"codex\x1fmodel/safetyBuffering/updated":           "模型正在安全缓冲,回复可能稍慢",
 	"codex\x1fthread/compacted":                        "会话上下文已压缩,后续对话使用更紧凑的上下文",
 	"codex\x1fwindows/worldWritableWarning":            "电脑上有目录对所有用户可写,沙箱保护会打折扣",
+
+	// ---- 2026-10-07 预收编批(0.160.0 内部通知族;证据:
+	// docs/reviews/2026-10-07/field-coverage-codex.md §2/§3 —— 0.160.0 二进制
+	// 通知枚举表序 + codex-schema/v2/RawResponse*.json "Internal-only" 双证;
+	// 未运行任何程序)----
+	// rawResponse* 是上游 Responses API 完成的内部回执:用户可见的用量已由
+	// thread/tokenUsage/updated 投影成用量卡,条目内容随对应 item 卡展示,逐上游
+	// 调用一条的原始镜像若投影会刷屏 → 只留痕。分类按方法名前缀在
+	// agent/native_notifications.go 收编 PASSTHROUGH(登记表与 schema 对表测试
+	// 归另一轮);载荷仅 responseId/threadId/turnId(+item/usage),原文在台账可查。
+	"codex\x1frawResponse/completed":     "Codex 记录了一次上游模型应答的原始用量回执(内部通知,用量已在用量卡展示,此处仅留痕)",
+	"codex\x1frawResponseItem/completed": "Codex 记录了一个上游应答条目的内部回执(内部通知,内容已随对应条目卡片展示,此处仅留痕)",
 }

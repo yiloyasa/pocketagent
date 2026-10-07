@@ -115,19 +115,27 @@ func TestZcode20260930BatchLandsInLedger(t *testing.T) {
 }
 
 // 红线反向钉(不猜):
-//   - permission.requested/resolved、userInput.requested/resolved:union 在,但
-//     投影形状需带审批的真实轮次实证 —— 维持 UNKNOWN,不许按名字眼熟洗成已知;
+//   - permission.requested/resolved、userInput.requested/resolved 已于
+//     2026-10-07 预收编批翻案为 PASSTHROUGH(bundle 静态形状到手,见
+//     notification_kinds_test.go 与 knowledge_zcode.go 新批),移出本清单;
 //   - interaction/requestOfficialMcpAuthHeaders 是**反向请求**,生产路径走
 //     reqHandler 兜底硬编码 UNKNOWN_REQUEST 登记(zcode.go,zcode 侧尚无 request
 //     分类器),本分类器只管通知 —— 它出现在通知分类表里才是错的。
 func TestZcodeNoticeKindUntouchedUnknowns(t *testing.T) {
 	for _, m := range []string{
-		"permission.requested", "permission.resolved",
-		"userInput.requested", "userInput.resolved",
 		"interaction/requestOfficialMcpAuthHeaders",
 	} {
 		if got := zcodeNoticeKind(m); got != runtime.KindUnknownNotification {
 			t.Errorf("zcodeNoticeKind(%q) = %q, want UNKNOWN(证不出就留 UNKNOWN,不猜)", m, got)
+		}
+	}
+	// 2026-10-07 收编对照:四件套如今必须 PASSTHROUGH(防回潮)。
+	for _, m := range []string{
+		"permission.requested", "permission.resolved",
+		"userInput.requested", "userInput.resolved",
+	} {
+		if got := zcodeNoticeKind(m); got != runtime.KindKnownPassthrough {
+			t.Errorf("zcodeNoticeKind(%q) = %q, want PASSTHROUGH(2026-10-07 预收编批)", m, got)
 		}
 	}
 }

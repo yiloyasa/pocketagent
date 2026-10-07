@@ -4,9 +4,11 @@
 // 【钉什么】①台账复合键(session/event 拆壳后的登记名,SourceMethod 原样查表)
 // 必须出人话 —— 此前只有平键,轮次事件在诊断页全部掉进"未知事件";
 // ②顶层遥测(v4/telemetry/event、computer-use/operation-event)与已知拒绝
-// (interaction/requestOfficialMcpAuthHeaders)的人话;③红线反向钉:
-// permission 四件套刻意不收词表(证不出就留 UNKNOWN,不猜),翻译必须仍是
-// "未知事件"口径 —— 谁哪天给它们编了人话,这里就会红。
+// (interaction/requestOfficialMcpAuthHeaders)的人话;③permission 四件套:
+// 2026-09-30 时点刻意不收词表(证不出就留 UNKNOWN),2026-10-07 已按 bundle
+// 静态 payload 形状翻案预收编 PASSTHROUGH(docs/reviews/2026-10-07/
+// field-coverage-zcode.md §B)—— 本文件把旧断言同步翻转为"必须出人话",
+// 谁把词条删了,这里就会红。
 package runtime
 
 import (
@@ -66,13 +68,23 @@ func TestZcodeKnowledge20260930Entries(t *testing.T) {
 	}
 }
 
-// 红线反向钉:permission 四件套刻意不收词表(union 在,投影形状需带审批的
-// 真实轮次实证)—— 翻译必须仍走"未知事件"兜底,Detail 不冒充已知处置。
-func TestZcodePermissionQuadStaysUnknown(t *testing.T) {
-	for _, m := range []string{"permission.requested", "permission.resolved", "userInput.requested", "userInput.resolved"} {
-		tr := TranslateEvent("zcode", m, KindUnknownNotification, `{"sample":1}`)
-		if !strings.Contains(tr.Summary, "未知") {
-			t.Errorf("%s: 未实证四件套必须仍译为未知事件,得到: %s", m, tr.Summary)
+// 【2026-10-07 预收编批翻案】permission 四件套此前刻意不收词表(证不出就留
+// UNKNOWN);上轮已取得完整 bundle 静态 payload 形状(field-coverage-zcode.md
+// §B),主模型裁决收编 PASSTHROUGH —— 翻译必须出人话且带 PASSTHROUGH 处置句,
+// 不得再走"未知事件"兜底。
+func TestZcodePermissionQuadPassthrough20261007(t *testing.T) {
+	for _, tc := range []struct{ m, keyword string }{
+		{"permission.requested", "权限请求"},
+		{"permission.resolved", "权限请求"},
+		{"userInput.requested", "输入请求"},
+		{"userInput.resolved", "输入请求"},
+	} {
+		tr := TranslateEvent("zcode", tc.m, KindKnownPassthrough, `{"sample":1}`)
+		if strings.Contains(tr.Summary, "未知") || !strings.Contains(tr.Summary, tc.keyword) {
+			t.Errorf("%s: 预收编后必须译出人话(含 %q),得到: %s", tc.m, tc.keyword, tr.Summary)
+		}
+		if !strings.Contains(tr.Detail, "只原样透传留痕") {
+			t.Errorf("%s: PASSTHROUGH 处置句缺失: %s", tc.m, tr.Detail)
 		}
 	}
 }

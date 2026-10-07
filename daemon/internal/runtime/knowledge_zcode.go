@@ -29,6 +29,9 @@
 //  5. 刻意不收:permission.requested/permission.resolved/userInput.requested/
 //     userInput.resolved 四件套(union 在,但投影形状需带审批的真实轮次实证,
 //     维持遗留⑤"证不出就留 UNKNOWN(不猜)")。
+//     【2026-10-07 翻案】上轮已取得完整 bundle 静态 payload 形状
+//     (docs/reviews/2026-10-07/field-coverage-zcode.md §B),主模型裁决收编
+//     PASSTHROUGH(只留痕不投影,审批可见面仍走反向请求通道),见文末同日批。
 //  6. 2026-09-30 预收编批:process/toolExecResource、plugins/operationProgress、
 //     interaction/providerRuntimeHeadersCancelled 三名在 bundle 顶层通知注册表
 //     静态在案、探针无实测帧 —— 按 process/* 遥测家族口径预收编 PASSTHROUGH,
@@ -105,4 +108,27 @@ var zcodeEventSummaries = map[string]string{
 	"zcode\x1fprocess/toolExecResource":                    "ZCode 上报了工具执行资源采样(诊断数据,daemon 只留痕)",
 	"zcode\x1fplugins/operationProgress":                   "ZCode 上报了插件操作进度(诊断数据,daemon 只留痕)",
 	"zcode\x1finteraction/providerRuntimeHeadersCancelled": "ZCode 通知提供方运行时鉴权头流程已取消(桌面端职责域,daemon 只留痕)",
+
+	// ---- 2026-10-07 预收编批(证据:docs/reviews/2026-10-07/field-coverage-zcode.md
+	// §A/§B bundle 静态 payload 形状;未运行任何程序,证据分级:静态)----
+	// v4 三连是顶层通知注册表 jV 的同族成员(与已收的 v4/telemetry/event 同口径,
+	// 内核遥测/镜像帧,只留痕);permission/userInput 四件套是 session/event union
+	// 里审批与反问事实的留痕镜像 —— 用户可见的审批卡/反问卡仍走反向请求通道
+	// (interaction/requestPermission、interaction/requestUserInput,各有投影),
+	// 这里只如实留痕,不重复投影。措辞按通知名直译+家族同款,实测帧到手后再校准。
+	"zcode\x1fv4/conversation/frame":         "ZCode 上报了会话对话帧镜像(内核遥测数据,daemon 只留痕)",
+	"zcode\x1fv4/telemetry/local-ttft":       "ZCode 上报了本地首字延迟统计(内核遥测数据,daemon 只留痕)",
+	"zcode\x1fv4/cua/permission-observation": "ZCode 上报了桌面操作权限的观察记录(内核遥测数据,daemon 只留痕)",
+	"zcode\x1fpermission.requested":          "ZCode 记录了一项操作权限请求(审批走反向请求通道的审批卡,此处为事件流留痕)",
+	"zcode\x1fpermission.resolved":           "ZCode 记录了一项权限请求的处理结果(批准/拒绝以审批卡为准,此处为事件流留痕)",
+	"zcode\x1fuserInput.requested":           "ZCode 记录了一次用户输入请求(反问走反向请求通道的反问卡,此处为事件流留痕)",
+	"zcode\x1fuserInput.resolved":            "ZCode 记录了一次用户输入请求的处理结果(此处为事件流留痕)",
+
+	// 复合键:全局钩子把 session/event 拆壳登记成 "session/event:<type>"
+	// (agent.zcodeLedgerMethod),翻译层按 SourceMethod 原样查表 —— 四件套经
+	// 全局钩子路径到达时走这些键。
+	"zcode\x1fsession/event:permission.requested": "ZCode 记录了一项操作权限请求(审批走反向请求通道的审批卡,此处为事件流留痕)",
+	"zcode\x1fsession/event:permission.resolved":  "ZCode 记录了一项权限请求的处理结果(批准/拒绝以审批卡为准,此处为事件流留痕)",
+	"zcode\x1fsession/event:userInput.requested":  "ZCode 记录了一次用户输入请求(反问走反向请求通道的反问卡,此处为事件流留痕)",
+	"zcode\x1fsession/event:userInput.resolved":   "ZCode 记录了一次用户输入请求的处理结果(此处为事件流留痕)",
 }
