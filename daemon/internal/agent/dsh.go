@@ -74,9 +74,18 @@ var (
 	dshBusyHandshakeWait = 45 * time.Second
 )
 
-// dshApprovalTimeout 审批等待上限:超时走拒绝路径,绝不伪造"同意"(红线 1)。
-// 包级变量仅为测试注入短值;生产语义 = 2 分钟,请勿改动。
-var dshApprovalTimeout = 2 * time.Minute
+// dshApprovalTimeout 审批等待预算:用户可能久不点(去开会、过夜再看),等待本身
+// 是合法静默;但"手机在线、就是不点"没有天然上界,预算必须给足又不许无限挂。
+// 【统一 15min(2026-10-09)】server 层兜底 = provider 预算:此前本值 2 分钟,而
+// server 的 approvalWaitBudget(thread.go)与 codex 的 codexApprovalWaitBudget 已
+// 统一 15 分钟 —— server 允 15 分钟、provider 自己 2 分钟就掐,预算被整体架空,
+// 跨 agent 口径不一致(用户在 codex 面前能等到第 3 分钟,在 dsh 面前却被提前判死)。
+// 超预算语义与 codex 同源:"未取得用户决定"的失败安全处置,不是用户点了拒绝 ——
+// dsh 审批应答没有 -32000 通道可走,按既有口径回 reject-once(拒绝是失败安全方向:
+// 最坏损失是"用户本想允许但没来得及点",绝不是"没答应却被当成答应了";红线 1)。
+// var 仅为缩时单测留缝(照 codex 先例),生产不要改它。改预算三处一起动:本变量、
+// server approvalWaitBudget、codexApprovalWaitBudget;server 层永远 ≥ 本预算才不失义。
+var dshApprovalTimeout = 15 * time.Minute
 
 // dshClient 是 DshProvider 对 dshapp.Client 的依赖面(最小接口,单测注 fake,
 // 不依赖真子进程;codexApprovalResponder/zcodeResponder 同款模式)。
@@ -1646,7 +1655,7 @@ func dshUsageUpdateFromUsedSize(raw json.RawMessage) *pb.UsageUpdate {
 // handleDshRequest 反向请求分派,三条规则与 codex_requests.go 同款:
 //  1. 不认识的方法回 JSON-RPC error,绝不伪造 decision(红线 2);
 //  2. 审批卡按请求真实内容构造,不猜不编造;
-//  3. 超时(2min)/断线/通道故障 → 拒绝路径,绝不伪造"同意"(红线 1)。
+//  3. 超预算(dshApprovalTimeout)/断线/通道故障 → 拒绝路径,绝不伪造"同意"(红线 1)。
 //
 // threadID 是我们自己的会话 id,供应答写回失败的日志定位到具体会话(与 codex
 // 的 B4 留痕同口径)。
@@ -1722,7 +1731,8 @@ func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, p
 	allow, _, askErr := approve(askCtx, call)
 	switch {
 	case askErr != nil:
-		// 超时(2min)/断线/通道故障 → 拒绝路径(蓝本 §4.3:绝不伪造"同意")。
+		// 超预算(dshApprovalTimeout)/断线/通道故障 → 拒绝路径(蓝本 §4.3:绝不
+		// 伪造"同意";预算值统一 15min 的口径见变量注释,超时语义不变)。
 		// 拒绝是失败安全方向:最坏损失是"用户本想允许但没来得及点",而不是
 		// "用户没答应却被当成答应了"。
 		if errors.Is(askErr, context.DeadlineExceeded) {

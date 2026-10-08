@@ -200,6 +200,9 @@ fun SubAgentCard(
                             SubAgentsLogic.previewOf(currentPreview),
                             Modifier.fillMaxWidth(),
                             fontSize = PaEditorial.Type.Caption.fontSize,
+                            // 【行高豁免】15.sp 非 Type 令牌:两行预览的行高与底部
+                            // 12dp 渐隐遮罩联动(遮罩恰好压住第二行下缘),溢出判定
+                            // (hasVisualOverflow)也按此行高计算,不可单独换令牌。
                             lineHeight = 15.sp,
                             color = PaEditorial.Muted,
                             maxLines = 2,

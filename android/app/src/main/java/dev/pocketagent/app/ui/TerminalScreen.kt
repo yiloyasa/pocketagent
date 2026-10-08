@@ -223,6 +223,8 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                 )
                 Text(
                     cwd.ifBlank { "默认目录(点右侧文件夹切换)" },
+                    // 【行高豁免】15.sp 非 Type 令牌:头部三行堆叠(22sp 标题 + 两行
+                    // 15sp 副行)的固定节奏,均为单行(maxLines=1)紧凑行高。
                     fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 15.sp, color = PaEditorial.Muted, maxLines = 1,
                 )
                 Text(
@@ -234,6 +236,7 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                         else -> "正在连接终端…"
                     },
                     fontSize = PaEditorial.Type.Micro.fontSize,
+                    // 【行高豁免】同上:单行状态副行与 cwd 副行共用 15sp 紧凑节奏。
                     lineHeight = 15.sp,
                     // 语义双通道:状态词 + 同色状态点;连接失败走加深珊瑚(小字对比纪律)
                     color = when {

@@ -840,7 +840,17 @@ func (p *HermesProvider) agentVersionLabel() string {
 // hermesApprovalTimeout 审批卡等待手机裁决的窗口(与 dshApprovalTimeout 同款:
 // 超时按拒绝处理 —— 失败安全方向;适配器侧自己的 approvals.timeout 默认 300s,
 // daemon 先答"拒绝"也不会悬挂)。
-var hermesApprovalTimeout = 2 * time.Minute
+// 【统一 15min(2026-10-09)】server 层兜底 = provider 预算:此前本值 2 分钟,而
+// server 的 approvalWaitBudget(thread.go)与 codex 的 codexApprovalWaitBudget 已
+// 统一 15 分钟 —— server 允 15 分钟、provider 自己 2 分钟就掐,预算被整体架空,
+// 跨 agent 口径不一致。超预算语义与 codex 同源:"未取得用户决定"的失败安全处置,
+// 不是用户点了拒绝 —— hermes 审批应答没有"回 error 让上游自行恢复"的通道,按既有
+// 口径回 deny 侧(绝不伪造"同意";红线 1)。var 仅为缩时单测留缝(照 codex 先例),
+// 生产不要改它。改预算三处一起动:本变量、server approvalWaitBudget、
+// codexApprovalWaitBudget;server 层永远 ≥ 本预算才不失义。注意:适配器侧
+// approvals.timeout(默认 300s)早于本预算到期时请求由适配器自行收尾,本预算
+// 是 daemon 侧的二级兜底 —— 只保证 daemon 不无限挂、不因手机慢点而提前判死。
+var hermesApprovalTimeout = 15 * time.Minute
 
 // handleRequestPermission 反向请求分派,三条规则与 dsh/codex 同款:
 //  1. 不认识的方法回 JSON-RPC error + 台账 UNKNOWN_REQUEST 留痕,绝不伪造 decision;

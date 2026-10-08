@@ -45,6 +45,15 @@ import dev.pocketagent.app.ui.theme.PaEditorial
  * 【排版值】导航高 68dp、水平 22dp、标题 25/32 w720(premium.css .nav);内容区
  * 水平 23dp(README 外边距);画布按当前色盘 [PaEditorial.Canvas]。
  *
+ * 【插槽稳定性契约(性能侦察 2026-10-09 的裁决落点)】各插槽参数在类型上都是
+ * 稳定的(Compose 编译器对函数类型一律按 stable 推断),骨架本身可 skip;但
+ * **实例**不稳定时(调用方每帧新建 lambda,引用不等),骨架的入参每次都被判
+ * "已变化",整块跟着调用方逐帧重组。框架层无法在骨架内部独立收敛 ——
+ * `remember(slot) { slot }` 对逐帧新引用是恒等空转(每帧 memo 必失效),
+ * `@Stable` 也不能标在函数参数上。收敛点在调用方:热路径(如 ChatScreen)
+ * 迁移时应把插槽 lambda `remember` 化或上提状态,把捕获收敛到稳定引用;骨架
+ * 侧唯一能做的是把该契约写明,供迁移波次照做。
+ *
  * 【插槽纪律】[leading] 只放一个主导航钮(菜单或返回),[trailing] 只放**一个**
  * 次操作(README:一个次操作);主机状态槽 [hostStatus] 统一吃 [PaHostChip]。
  * [titleContent] 用于标题需要携带富信息时的替换(如会话页的"标题+Agent·工作区+

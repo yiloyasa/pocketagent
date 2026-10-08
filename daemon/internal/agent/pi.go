@@ -820,6 +820,53 @@ func (p *PiProvider) acquireRunning(threadID string, runCtx context.Context) err
 	}
 }
 
+// piUnknownUIInFlightLimit 未知 extension_ui_request 透传确认的在飞上限:每条在飞
+// 确认占一条 goroutine、各自以 piUIBudget(120s)为界,上游扩展异常刷屏时若无上界,
+// goroutine 与手机端确认卡会在窗口内同步堆积。占坑失败(超限)的请求不排队,直接
+// 回 pi 协议原生兜底拒绝(piRejectUnknownUIBusy)。上限盖过任何真实场景的并发未知
+// 请求(正常交互是"一次一张卡"),只拦异常洪水。var 仅为缩时单测留缝,生产勿改。
+var piUnknownUIInFlightLimit = int64(16)
+
+// acquireUnknownUIInFlight 未知请求确认的在飞占坑:占坑成功(未超限)返回 true,
+// 调用方负责在结束时 uiInFlight.Add(-1) 释放;超限返回 false 且**不占坑** ——
+// Add 探到超限立即退坑,窗口内不留残坑(否则洪水过后上限永久缩水一个)。判定与
+// 占坑是同一次 Add,无 check-then-act 竞态,第 limit+1 个必被拒。计数器 uiInFlight
+// 本就存在(dialog 审批 + 未知请求确认共用,看门狗静默豁免位),这里只补上此前
+// 缺失的上限判定。
+func (p *PiProvider) acquireUnknownUIInFlight() bool {
+	if p.uiInFlight.Add(1) > int64(piUnknownUIInFlightLimit) {
+		p.uiInFlight.Add(-1) // 超限:立刻退坑,不占窗口
+		return false
+	}
+	return true
+}
+
+// piRejectUnknownUIBusy 未知请求确认在飞超限的"忙"拒绝:回 pi 协议原生兜底拒绝
+// {"cancelled":true}(pi 的 extension_ui_response 没有 -32601 错误码通道,cancelled
+// 是协议内唯一的安全拒绝形状,与 consumePiUnknownUIRequest 拒绝路同款)+ 台账
+// UNKNOWN_REQUEST 留痕 —— 备注写明是 daemon 侧容量拒绝(忙),不是用户决定,事后
+// 排查不误判。id 缺失无法回写,只落台账(与 consumePiUnknownUIRequest 的 id 缺失
+// 静默同口径,但"收到过洪水"要能事后查)。同步执行、不起 goroutine:调用点在
+// 事件泵上,RespondUI 与其他协议写回一样是便宜的管道写。
+func piRejectUnknownUIBusy(c piUIClient, raw json.RawMessage, threadID string) {
+	var busy struct {
+		ID     string `json:"id"`
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(raw, &busy)
+	if busy.ID != "" {
+		_ = c.RespondUI(busy.ID, map[string]any{"cancelled": true})
+	}
+	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+		ThreadID:       threadID,
+		SourceAgent:    "pi",
+		SourceMethod:   busy.Method,
+		NormalizedKind: runtime.KindUnknownRequest,
+		RawPayload:     redactNativePayload(raw),
+		Note:           "未知请求确认在飞超限,已回协议原生兜底拒绝 cancelled:true(daemon 容量拒绝,非用户决定;未替用户做任何审批决定)",
+	})
+}
+
 // Run 执行完整一轮:发 prompt → 消费事件流 → agent_settled 收尾。
 func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	t := req.Thread
@@ -1110,8 +1157,17 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 				frame := append(json.RawMessage(nil), ev.Raw...)
 				// 【看门狗豁免】等手机确认的这段时间同样登记在飞数(与 dialog
 				// 审批同口径,预算同为 piUIBudget)。
+				// 【in-flight 闸(2026-10-09)】此前这里无条件 go,上游扩展异常刷屏时
+				// 确认 goroutine 无上界(每条各自 piUIBudget=120s 为界,窗口内照样
+				// 堆积)。复用 uiInFlight 计数器补一道上限:同步先占坑(判定与占坑
+				// 是同一次 Add,无 check-then-act 竞态),超限直接回"忙"拒绝 ——
+				// pi 协议原生兜底 {cancelled:true}(失败安全形状,非用户决定)+ 台账
+				// 留痕,不起 goroutine、不问手机,见 piRejectUnknownUIBusy。
+				if !p.acquireUnknownUIInFlight() {
+					piRejectUnknownUIBusy(c, frame, t.ID)
+					return
+				}
 				go func() {
-					p.uiInFlight.Add(1)
 					defer p.uiInFlight.Add(-1)
 					p.consumePiUnknownUIRequest(c, frame, t.ID, runCtx, approve)
 				}()

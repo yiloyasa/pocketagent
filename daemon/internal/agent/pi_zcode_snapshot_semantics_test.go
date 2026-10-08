@@ -1,12 +1,16 @@
-// pi_zcode_snapshot_semantics_test.go —— P2-8 回归钉子:pi/zcode 的 Run 消费
-// effort/hideReasoning 时按 Thread.SettingsSnapshot 快照语义(与 codex 三级
-// 优先级对齐):
+// pi_zcode_snapshot_semantics_test.go —— S3 正名(2026-10-09):GlobalOverride
+// Semantics 口径。原文件头/用例名 "SnapshotSemantics" 名不副实 —— pi/zcode 的
+// 实际口径是**全局优先(覆盖快照)**:
 //
-//	线程显式 Effort(Thread.Effort)> 线程设置快照(SettingsSnapshot)> 全局偏好。
+//	hideReasoning:全局开关一律生效,快照字段不参与判定(有无快照都一样,
+//	  见 pi.go hideReasoningFor 注释"当前口径:全局优先";codex/pi/zcode 三家同款);
+//	effort:快照非 nil 按快照(空串 = "当时未设置",保持原值、不回抓全局),
+//	  快照 nil 才回退全局。
 //
-// 【背景】设置页"仅新建生效"的快照语义上线后,codex 每轮按快照装配,而
-// pi/zcode 的 Run 仍读全局 —— 老会话的思考强度/隐藏推理随设置页漂移。
-// 不依赖子进程,纯内存态断言。
+// 【背景】codex 那种"有快照就冻结、不随全局漂移"的快照语义在 pi/zcode 只有
+// effort 一半成立;hideReasoning 的断言钉的是全局覆盖 —— 原名把全局覆盖语义钉在
+// "快照语义"名下,会误导后来人照名改语义。名字照实改,断言体一字不动(语义是
+// 有测试钉住的既定行为,此处只正名、不单边改道)。不依赖子进程,纯内存态断言。
 package agent
 
 import (
@@ -22,7 +26,7 @@ func snapOf(effort string, hide bool) *store.Thread {
 	}
 }
 
-func TestPiHideReasoningForSnapshotSemantics(t *testing.T) {
+func TestPiHideReasoningForGlobalOverrideSemantics(t *testing.T) {
 	p := NewPiProvider()
 	p.ApplyPrefs(DesktopPrefs{HideReasoning: true}) // 全局:隐藏
 
@@ -41,7 +45,7 @@ func TestPiHideReasoningForSnapshotSemantics(t *testing.T) {
 	}
 }
 
-func TestPiDesktopEffortForSnapshotSemantics(t *testing.T) {
+func TestPiDesktopEffortForGlobalOverrideSemantics(t *testing.T) {
 	p := NewPiProvider()
 	p.ApplyPrefs(DesktopPrefs{Effort: "high"}) // 全局:high
 
@@ -61,7 +65,7 @@ func TestPiDesktopEffortForSnapshotSemantics(t *testing.T) {
 	}
 }
 
-func TestZcodeHideReasoningForSnapshotSemantics(t *testing.T) {
+func TestZcodeHideReasoningForGlobalOverrideSemantics(t *testing.T) {
 	p := NewZcodeProvider()
 	p.ApplyPrefs(DesktopPrefs{HideReasoning: true})
 
@@ -73,7 +77,7 @@ func TestZcodeHideReasoningForSnapshotSemantics(t *testing.T) {
 	}
 }
 
-func TestZcodeDesktopEffortForSnapshotSemantics(t *testing.T) {
+func TestZcodeDesktopEffortForGlobalOverrideSemantics(t *testing.T) {
 	p := NewZcodeProvider()
 	p.ApplyPrefs(DesktopPrefs{Effort: "high"})
 

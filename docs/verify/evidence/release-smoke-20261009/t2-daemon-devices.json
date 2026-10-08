@@ -1,0 +1,13 @@
+[
+  {
+    "device_id": "d553b807-8fbe-4032-92be-3e5a2e754f37",
+    "name": "sdk_gphone64_x86_64",
+    "pub_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEITtXDOdo/svPPPuy6CPg+hn8Oo3hPOEZ5/aINLh61EZlNz9Kp+1kj/6M3Zics7uhFViYnvW98pWQvBYN04AgBw==",
+    "token_hash": "381ed7be8e926a4c00f2f6feb5684965b1b915be466b7e1bd304f5d86dfa0eeb",
+    "scopes": [
+      "all"
+    ],
+    "created_unix": 1791500790,
+    "last_seen_unix": 1791500790
+  }
+]

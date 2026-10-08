@@ -423,7 +423,7 @@ internal fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("版本", "版本号 · 电脑系统信息", "关于"),
     SettingsSearchEntry("显示模式", "跟随系统 · 浅色 · 深色 · 黑客终端", "外观与阅读", "appearance"),
     SettingsSearchEntry("字号", "界面文字缩放 · 思考文字缩放", "外观与阅读", "appearance"),
-    SettingsSearchEntry("语音识别", "SenseVoice · App 内置模型", "Daemon 桥接与输入", "daemon"),
+    SettingsSearchEntry("语音识别", "SenseVoice · 按需下载模型", "Daemon 桥接与输入", "daemon"),
     SettingsSearchEntry("切换 Agent", "Codex · Pi · ZCode", "Agent 与模型", "agent"),
     SettingsSearchEntry("审批策略", "仅信任 · 按需询问 · 完全访问", "Agent 与模型", "agent"),
     SettingsSearchEntry("沙箱模式", "读写权限 · 网络访问", "Agent 与模型", "agent"),
@@ -1014,6 +1014,11 @@ private fun SettingsScreenBody(
 
     val connStateTop = AgentConnection.connState.collectAsState().value
     val connTransportTop = AgentConnection.connTransport.collectAsState().value
+    // 【版本协商闸 A5】daemon 随探活报告 min_app_version,与本机版本分量比较后点亮
+    // (AgentConnection 上轮已就位的 StateFlow,语义化比较在 ConnectionDiagnostics,
+    // 7 例单测钉死)。只提示不阻断:这里只订阅出值,探活/连接流程零感知。
+    val appVersionOutdatedTop = AgentConnection.appVersionOutdated.collectAsState().value
+    val minAppVersionTop = AgentConnection.minAppVersionRequired.collectAsState().value
     // 各导航行的"当前值摘要"(R1-C:不用点进去就知道现状)——取值映射全部在
     // SettingsOverviewLogic 的纯函数里(单测钉死),这里只喂状态。
     val connSummary = connectionSummary(connStateTop, connTransportTop)
@@ -1080,6 +1085,31 @@ private fun SettingsScreenBody(
                     ).joinToString(" · "),
                     onClick = { subPage = "userdata" },
                 )
+                // 版本闸提示行(纯提示位,不做弹窗/不阻断):daemon 报告的最低版本
+                // 高于本机 App 时,在连接信息卡内联一条警示,风格随设置页既有警示行
+                // (settingsError 同款:DeniedContainer 底 + DENIED 文字,全取
+                // PaEditorial 槽位,禁新色)。
+                if (appVersionOutdatedTop) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_lucide_triangle_alert), null,
+                            tint = EditorialTone.DENIED.text, modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            appVersionOutdatedHint(minAppVersionTop),
+                            fontSize = PaEditorial.Type.Caption.fontSize,
+                            color = EditorialTone.DENIED.text,
+                        )
+                    }
+                }
             }
         },
     ) {
@@ -4269,6 +4299,43 @@ private fun selectNativeOption(
     }
 }
 
+// =====================================================================================
+// 设置页接线纯函数(版本闸提示文案 / 语音模型下载按钮判定;JVM 单测钉死,
+// 同 SettingsOverviewLogic 纪律:取值与文案收在可测纯函数里,Composable 只喂状态)
+// =====================================================================================
+
+/**
+ * 版本闸提示行文案(纯函数):App 版本低于 daemon 要求的最低版本时,设置页
+ * 连接信息卡的内联警示就这么说。minAppVersion 空白(对端未报告,理论上到不了
+ * 这里 —— outdated 为 true 蕴含 min 非空)回落成不带版本号的说法,不摆空 ≥。
+ */
+internal fun appVersionOutdatedHint(minAppVersion: String): String =
+    if (minAppVersion.isBlank()) "App 版本过旧，请更新手机 App"
+    else "App 版本过旧，电脑端要求 ≥$minAppVersion，请更新手机 App"
+
+/**
+ * 语音卡"下载语音模型"按钮的可见性与文案(纯函数,返回 null = 不显示按钮)。
+ *
+ * 三态口径(与 SenseVoiceModelManager 的状态流一一对齐,UI 不自持状态):
+ *  · ready(就绪)或 preparing(下载中,进度走既有"初始化 X%"通道)→ null,
+ *    按钮消失/不出现;
+ *  · 其余(!ready && !preparing)必摆按钮 —— needsDownload 态摆"下载";
+ *    下载失败态(Manager 失败路径会回到 needsDownload=true + error,此时 error
+ *    是真实失败原因而非"未下载"占位文案)摆"重试"。两者只有按钮文案之差,
+ *    失败原因本身经既有 desc 通道(speech.error)透出,这里不重复拼错误串。
+ *
+ * 【为什么按文案识别占位】Manager 侧 needsDownload=true 同时覆盖"从没下载过"
+ * (error = NEEDS_DOWNLOAD_MESSAGE 占位)与"下载失败回退"(error = 真实原因)
+ * 两种落点,除 error 文案外无第二判别通道;Manager 是禁碰文件,故在此钉文案
+ * 比对 —— Manager 若改占位文案,这里会静默把失败态判成"下载",该风险由单测
+ * 与 Manager 侧 const 同源引用兜住(两处引用同一常量,改一处即编译可见)。
+ */
+internal fun senseVoiceDownloadAction(ready: Boolean, preparing: Boolean, error: String?): String? = when {
+    ready || preparing -> null
+    error != null && error != SenseVoiceModelManager.NEEDS_DOWNLOAD_MESSAGE -> "重试下载语音模型"
+    else -> "下载语音模型（约 228MB，建议 Wi-Fi）"
+}
+
 /** writer 形参已随 S2 聚拢移除(F3 终验):对话显示三项只留在一级页「会话与对话」。 */
 @Composable
 private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models: List<ModelInfo>, capabilities: List<String>) {
@@ -4366,19 +4433,47 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models:
             val context = LocalContext.current
             LaunchedEffect(Unit) { SenseVoiceModelManager.init(context) }
             val speech by SenseVoiceModelManager.state.collectAsState()
+            // 【按需下载正路入口】模型不再随 APK 打包(SenseVoiceModelManager 三态,
+            // 上轮已就位):needsDownload → 摆下载按钮(此前只有"点麦克风才触发"
+            // 一条暗路);下载中沿用下方既有"初始化 X%"进度通道;就绪后按钮消失;
+            // 下载失败(error 非空且非"未下载"占位文案)→ desc 走既有错误通道 +
+            // 重试按钮。可见性/文案判定收在纯函数 senseVoiceDownloadAction(单测钉死)。
+            val downloadAction = senseVoiceDownloadAction(speech.ready, speech.preparing, speech.error)
             SettingRow(
-                title = "SenseVoice Small INT8（App 内置）",
+                title = "SenseVoice Small INT8（按需下载）",
                 desc = speech.error
                     ?: "符合中文输入习惯 · 自动标点与数字规范化 · 音频不离开设备",
                 value = when {
                     speech.ready -> "已就绪"
                     speech.preparing -> "初始化 ${speech.preparedBytes * 100 / SenseVoiceModelManager.TOTAL_BYTES}%"
+                    speech.needsDownload -> "未下载"
                     else -> "内置"
                 },
                 divider = false,
             )
+            if (downloadAction != null) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = PaEditorial.Space.TouchMin)
+                        .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .pressable(haptic = true) { SenseVoiceModelManager.prepareBundledModel() }
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        downloadAction,
+                        fontSize = PaEditorial.Type.Body.fontSize,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PaEditorial.Primary,
+                    )
+                }
+            }
             Text(
-                "有系统识别服务时可直接使用；否则使用 App 内置 SenseVoice。录音权限被拒绝时只请求权限，不提供外部模型下载入口。",
+                "有系统识别服务时可直接使用；否则使用 SenseVoice 离线识别(模型首次启用时联网下载一次,音频不离开设备)。录音权限被拒绝时只请求权限。",
                 fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
             )

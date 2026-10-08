@@ -1,0 +1,124 @@
+--------- beginning of main
+10-08 23:05:35.795 24902 24902 I pocketagent.app: Late-enabling -Xcheck:jni
+10-08 23:05:35.809 24902 24902 I pocketagent.app: Using CollectorTypeCC GC.
+10-08 23:05:35.809 24902 24902 W pocketagent.app: Unexpected CPU variant for x86: x86_64.
+10-08 23:05:35.809 24902 24902 W pocketagent.app: Known variants: atom, sandybridge, silvermont, goldmont, goldmont-plus, tremont, kabylake, default
+10-08 23:05:35.884 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 171979766; UID 10195; state: ENABLED
+10-08 23:05:35.885 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 242716250; UID 10195; state: ENABLED
+10-08 23:05:35.898 24902 24902 W ziparchive: Unable to open '/data/app/~~xcu5RPNX9zYRwriK71IxDg==/dev.pocketagent.app-PIIl7U2Pa4yeS3PDqdVLzw==/base.dm': No such file or directory
+10-08 23:05:35.898 24902 24902 W ziparchive: Unable to open '/data/app/~~xcu5RPNX9zYRwriK71IxDg==/dev.pocketagent.app-PIIl7U2Pa4yeS3PDqdVLzw==/base.dm': No such file or directory
+10-08 23:05:36.245 24902 24902 D nativeloader: Configuring clns-6 for other apk /data/app/~~xcu5RPNX9zYRwriK71IxDg==/dev.pocketagent.app-PIIl7U2Pa4yeS3PDqdVLzw==/base.apk. target_sdk_version=35, uses_libraries=, library_path=/data/app/~~xcu5RPNX9zYRwriK71IxDg==/dev.pocketagent.app-PIIl7U2Pa4yeS3PDqdVLzw==/lib/x86_64:/data/app/~~xcu5RPNX9zYRwriK71IxDg==/dev.pocketagent.app-PIIl7U2Pa4yeS3PDqdVLzw==/base.apk!/lib/x86_64, permitted_path=/data:/mnt/expand:/data/user/0/dev.pocketagent.app
+10-08 23:05:36.252 24902 24902 V GraphicsEnvironment: Currently set values for:
+10-08 23:05:36.252 24902 24902 V GraphicsEnvironment:   angle_gl_driver_selection_pkgs=[]
+10-08 23:05:36.252 24902 24902 V GraphicsEnvironment:   angle_gl_driver_selection_values=[]
+10-08 23:05:36.252 24902 24902 V GraphicsEnvironment: ANGLE GameManagerService for dev.pocketagent.app: false
+10-08 23:05:36.252 24902 24902 V GraphicsEnvironment: dev.pocketagent.app is not listed in per-application setting
+10-08 23:05:36.252 24902 24902 V GraphicsEnvironment: Neither updatable production driver nor prerelease driver is supported.
+10-08 23:05:36.276 24902 24928 D libEGL  : loaded /vendor/lib64/egl/libEGL_emulation.so
+10-08 23:05:36.279 24902 24928 D libEGL  : loaded /vendor/lib64/egl/libGLESv1_CM_emulation.so
+10-08 23:05:36.281 24902 24928 D libEGL  : loaded /vendor/lib64/egl/libGLESv2_emulation.so
+10-08 23:05:36.349 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 270306772; UID 10195; state: ENABLED
+10-08 23:05:36.350 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 235355681; UID 10195; state: ENABLED
+10-08 23:05:36.385 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 237531167; UID 10195; state: DISABLED
+10-08 23:05:36.386 24902 24902 W OpenGLRenderer: Unknown dataspace 0
+10-08 23:05:36.436 24902 24930 I AgentConnection: 连接 daemon: 10.0.2.2:7246 token=无
+10-08 23:05:36.480 24902 24944 D TrafficStats: tagSocket(89) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:36.520 24902 24902 W pocketagent.app: Method boolean androidx.compose.runtime.snapshots.SnapshotStateList.conditionalUpdate(boolean, kotlin.jvm.functions.Function1) failed lock verification and will run slower.
+10-08 23:05:36.520 24902 24902 W pocketagent.app: Common causes for lock verification issues are non-optimized dex code
+10-08 23:05:36.520 24902 24902 W pocketagent.app: and incorrect proguard optimizations.
+10-08 23:05:36.520 24902 24902 W pocketagent.app: Method boolean androidx.compose.runtime.snapshots.SnapshotStateList.conditionalUpdate$default(androidx.compose.runtime.snapshots.SnapshotStateList, boolean, kotlin.jvm.functions.Function1, int, java.lang.Object) failed lock verification and will run slower.
+10-08 23:05:36.520 24902 24902 W pocketagent.app: Method java.lang.Object androidx.compose.runtime.snapshots.SnapshotStateList.mutate(kotlin.jvm.functions.Function1) failed lock verification and will run slower.
+10-08 23:05:36.521 24902 24902 W pocketagent.app: Method void androidx.compose.runtime.snapshots.SnapshotStateList.update(boolean, kotlin.jvm.functions.Function1) failed lock verification and will run slower.
+10-08 23:05:36.521 24902 24902 W pocketagent.app: Method void androidx.compose.runtime.snapshots.SnapshotStateList.update$default(androidx.compose.runtime.snapshots.SnapshotStateList, boolean, kotlin.jvm.functions.Function1, int, java.lang.Object) failed lock verification and will run slower.
+10-08 23:05:36.582 24902 24926 W OpenGLRenderer: Failed to choose config with EGL_SWAP_BEHAVIOR_PRESERVED, retrying without...
+10-08 23:05:36.582 24902 24926 W OpenGLRenderer: Failed to initialize 101010-2 format, error = EGL_SUCCESS
+10-08 23:05:36.659 24902 24926 I Gralloc4: mapper 4.x is not supported
+10-08 23:05:36.689 24902 24926 E OpenGLRenderer: Unable to match the desired swap behavior.
+10-08 23:05:37.472 24902 24945 D TrafficStats: tagSocket(108) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:37.802 24902 24926 D EGL_emulation: app_time_stats: avg=14.66ms min=0.57ms max=103.98ms count=48
+10-08 23:05:38.815 24902 24926 D EGL_emulation: app_time_stats: avg=16.57ms min=9.02ms max=24.07ms count=61
+10-08 23:05:39.099 24902 24938 D TrafficStats: tagSocket(107) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:39.108 24902 24944 D TrafficStats: tagSocket(107) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:39.112 24902 24945 D TrafficStats: tagSocket(129) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:39.121 24902 24972 D TrafficStats: tagSocket(133) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:39.123 24902 24973 D TrafficStats: tagSocket(134) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:39.208 24902 24930 W AgentConnection: 探活失败: StatusRuntimeException: UNAVAILABLE: Channel shutdownNow invoked
+10-08 23:05:39.210 24902 24938 I AgentConnection: 连接 daemon: 10.0.2.2:17262 token=无
+10-08 23:05:39.214 24902 24974 D TrafficStats: tagSocket(102) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:40.182 24902 24974 D TrafficStats: tagSocket(107) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:40.298 24902 24944 D TrafficStats: tagSocket(107) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:40.567 24902 24926 D EGL_emulation: app_time_stats: avg=126.56ms min=1.18ms max=1281.64ms count=13
+10-08 23:05:40.707 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 171228096; UID 10195; state: ENABLED
+10-08 23:05:41.584 24902 24926 D EGL_emulation: app_time_stats: avg=11.85ms min=1.33ms max=69.83ms count=49
+10-08 23:05:41.913 24902 24974 D TrafficStats: tagSocket(108) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:42.156 24902 24976 D ProfileInstaller: Installing profile for dev.pocketagent.app
+10-08 23:05:42.680 24902 24926 D EGL_emulation: app_time_stats: avg=64.41ms min=13.11ms max=830.42ms count=17
+10-08 23:05:43.692 24902 24926 D EGL_emulation: app_time_stats: avg=10.78ms min=1.23ms max=327.03ms count=41
+10-08 23:05:44.839 24902 24944 D TrafficStats: tagSocket(108) with statsTag=0xffffffff, statsUid=-1
+10-08 23:05:45.066 24902 24926 D EGL_emulation: app_time_stats: avg=31.02ms min=1.36ms max=866.55ms count=31
+10-08 23:05:45.127 24902 24902 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 23:05:45.127 24902 24902 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 23:05:45.332 24902 24910 I pocketagent.app: Compiler allocated 5653KB to compile void dev.pocketagent.app.ui.HomeScreenKt.HomeScreen(int, int, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function1, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function0, kotlin.jvm.functions.Function1, androidx.compose.ui.Modifier, androidx.compose.runtime.Composer, int, int, int)
+10-08 23:05:46.489 24902 24926 D EGL_emulation: app_time_stats: avg=36.02ms min=1.19ms max=839.32ms count=31
+10-08 23:05:47.185 24902 24902 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 23:05:47.185 24902 24902 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 23:05:47.503 24902 24926 D EGL_emulation: app_time_stats: avg=19.90ms min=1.65ms max=80.20ms count=50
+10-08 23:05:48.528 24902 24926 D EGL_emulation: app_time_stats: avg=48.74ms min=12.57ms max=464.09ms count=21
+10-08 23:05:48.636 24902 24910 I pocketagent.app: Compiler allocated 5412KB to compile void dev.pocketagent.app.ui.AppDrawerKt$DrawerPanel$1$1.invoke(boolean, androidx.compose.runtime.Composer, int)
+10-08 23:06:00.319 24902 24926 D EGL_emulation: app_time_stats: avg=611.60ms min=1.15ms max=11400.88ms count=19
+10-08 23:06:14.550 24902 24902 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 23:06:14.550 24902 24902 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 23:06:14.626 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 289878283; UID 10195; state: ENABLED
+10-08 23:06:14.761 24902 24926 D EGL_emulation: app_time_stats: avg=367.39ms min=0.83ms max=13759.72ms count=39
+10-08 23:06:16.830 24902 24926 D EGL_emulation: app_time_stats: avg=150.00ms min=0.72ms max=1614.61ms count=13
+10-08 23:06:26.821 24902 24902 I ImeTracker: dev.pocketagent.app:c6ede41f: onRequestShow at ORIGIN_CLIENT_SHOW_SOFT_INPUT reason SHOW_SOFT_INPUT_BY_INSETS_API
+10-08 23:06:26.822 24902 24902 D InsetsController: show(ime(), fromIme=false)
+10-08 23:06:26.823 24902 24902 D InputMethodManager: showSoftInput() view=androidx.compose.ui.platform.AndroidComposeView{102cc6c VFED..... .F....ID 0,0-1080,2400 aid=1073741824} flags=0 reason=SHOW_SOFT_INPUT_BY_INSETS_API
+10-08 23:06:26.830 24902 24926 D EGL_emulation: app_time_stats: avg=2489.48ms min=0.91ms max=9945.05ms count=4
+10-08 23:06:26.837 24902 24902 I ImeTracker: dev.pocketagent.app:645aa1c: onRequestShow at ORIGIN_CLIENT_SHOW_SOFT_INPUT reason SHOW_SOFT_INPUT
+10-08 23:06:26.838 24902 24902 D InputMethodManager: showSoftInput() view=androidx.compose.ui.platform.AndroidComposeView{102cc6c VFED..... .F...... 0,0-1080,2400 aid=1073741824} flags=0 reason=SHOW_SOFT_INPUT
+10-08 23:06:26.923 24902 24902 D InsetsController: show(ime(), fromIme=true)
+10-08 23:06:26.925 24902 24902 D InsetsController: show(ime(), fromIme=true)
+10-08 23:06:26.925 24902 24902 I ImeTracker: dev.pocketagent.app:645aa1c: onCancelled at PHASE_CLIENT_APPLY_ANIMATION
+10-08 23:06:27.247 24902 24902 I ImeTracker: dev.pocketagent.app:c6ede41f: onShown
+10-08 23:06:27.848 24902 24926 D EGL_emulation: app_time_stats: avg=22.40ms min=0.99ms max=500.44ms count=28
+10-08 23:06:28.198 24902 24910 I pocketagent.app: Compiler allocated 5699KB to compile void dev.pocketagent.app.ui.SettingsScreenKt$UserDataPage$2$1.invoke(androidx.compose.foundation.layout.ColumnScope, androidx.compose.runtime.Composer, int)
+10-08 23:06:29.135 24902 24926 D EGL_emulation: app_time_stats: avg=135.31ms min=1.03ms max=479.32ms count=9
+10-08 23:06:29.135 24902 24902 W WindowOnBackDispatcher: sendCancelIfRunning: isInProgress=falsecallback=ImeCallback=ImeOnBackInvokedCallback@177716997 Callback=android.window.IOnBackInvokedCallback$Stub$Proxy@b4428c1
+10-08 23:06:29.448 24902 24902 I ImeTracker: dev.pocketagent.app:6eb6f665: onRequestHide at ORIGIN_CLIENT_HIDE_SOFT_INPUT reason HIDE_SOFT_INPUT_BY_INSETS_API
+10-08 23:06:29.449 24902 24902 I ImeTracker: dev.pocketagent.app:30b84949: onHidden
+10-08 23:06:30.249 24902 24926 D EGL_emulation: app_time_stats: avg=51.49ms min=11.42ms max=501.66ms count=21
+10-08 23:06:30.262 24902 24931 I AgentConnection: 设备配对成功(每设备独立 token)
+10-08 23:06:30.268 24902 24931 D TrafficStats: tagSocket(111) with statsTag=0xffffffff, statsUid=-1
+10-08 23:06:30.276 24902 24974 D TrafficStats: tagSocket(102) with statsTag=0xffffffff, statsUid=-1
+10-08 23:06:30.276 24902 24972 D TrafficStats: tagSocket(111) with statsTag=0xffffffff, statsUid=-1
+10-08 23:06:30.277 24902 24944 D TrafficStats: tagSocket(118) with statsTag=0xffffffff, statsUid=-1
+10-08 23:06:30.363 24902 24931 I AgentConnection: 连接 daemon: 10.15.25.5:17262 token=有
+10-08 23:06:30.366 24902 24974 D TrafficStats: tagSocket(102) with statsTag=0xffffffff, statsUid=-1
+10-08 23:06:30.367 24902 24902 D CompatibilityChangeReporter: Compat change id reported: 147798919; UID 10195; state: ENABLED
+10-08 23:06:31.190 24902 24974 D TrafficStats: tagSocket(105) with statsTag=0xffffffff, statsUid=-1
+10-08 23:06:31.317 24902 24926 D EGL_emulation: app_time_stats: avg=147.11ms min=1.15ms max=501.77ms count=7
+10-08 23:06:32.317 24902 24926 D EGL_emulation: app_time_stats: avg=500.06ms min=498.07ms max=502.04ms count=2
+10-08 23:06:33.332 24902 24926 D EGL_emulation: app_time_stats: avg=507.37ms min=497.91ms max=516.83ms count=2
+10-08 23:06:34.333 24902 24926 D EGL_emulation: app_time_stats: avg=500.80ms min=500.30ms max=501.30ms count=2
+10-08 23:06:35.831 24902 24926 D EGL_emulation: app_time_stats: avg=499.20ms min=498.35ms max=500.22ms count=3
+10-08 23:06:36.831 24902 24926 D EGL_emulation: app_time_stats: avg=500.04ms min=497.46ms max=502.62ms count=2
+10-08 23:06:37.832 24902 24926 D EGL_emulation: app_time_stats: avg=500.05ms min=498.45ms max=501.65ms count=2
+10-08 23:06:38.848 24902 24926 D EGL_emulation: app_time_stats: avg=508.23ms min=501.00ms max=515.46ms count=2
+10-08 23:06:40.349 24902 24926 D EGL_emulation: app_time_stats: avg=500.17ms min=499.42ms max=500.71ms count=3
+10-08 23:06:41.848 24902 24926 D EGL_emulation: app_time_stats: avg=499.77ms min=499.42ms max=499.96ms count=3
+10-08 23:06:42.849 24902 24926 D EGL_emulation: app_time_stats: avg=500.12ms min=499.48ms max=500.76ms count=2
+10-08 23:06:43.865 24902 24926 D EGL_emulation: app_time_stats: avg=508.28ms min=498.82ms max=517.74ms count=2
+10-08 23:06:45.206 24902 24926 D EGL_emulation: app_time_stats: avg=446.80ms min=341.01ms max=501.47ms count=3
+10-08 23:06:45.220 24902 24902 I ImeTracker: dev.pocketagent.app:3ef1fee0: onRequestHide at ORIGIN_CLIENT_HIDE_SOFT_INPUT reason HIDE_SOFT_INPUT_BY_INSETS_API
+10-08 23:06:45.221 24902 24902 I ImeTracker: dev.pocketagent.app:3ef1fee0: onCancelled at PHASE_CLIENT_APPLY_ANIMATION
+10-08 23:06:46.820 24902 24926 D EGL_emulation: app_time_stats: avg=807.10ms min=17.76ms max=1596.43ms count=2
+10-08 23:06:46.887 24902 24913 W System  : A resource failed to call release. 
+10-08 23:07:11.717 24902 24902 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 23:07:11.717 24902 24902 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 23:07:11.873 24902 24926 D EGL_emulation: app_time_stats: avg=1660.34ms min=0.78ms max=24756.23ms count=15
+10-08 23:07:12.008 24902 24910 I pocketagent.app: JIT allocated 61KB for compiled code of void dev.pocketagent.app.ui.SettingsScreenKt.SettingsScreenBody(kotlin.jvm.functions.Function0, boolean, kotlin.jvm.functions.Function1, androidx.compose.ui.Modifier, androidx.compose.runtime.Composer, int, int)
+10-08 23:07:12.008 24902 24910 I pocketagent.app: Compiler allocated 7532KB to compile void dev.pocketagent.app.ui.SettingsScreenKt.SettingsScreenBody(kotlin.jvm.functions.Function0, boolean, kotlin.jvm.functions.Function1, androidx.compose.ui.Modifier, androidx.compose.runtime.Composer, int, int)
+10-08 23:07:16.019 24902 24926 D EGL_emulation: app_time_stats: avg=258.67ms min=11.04ms max=3649.20ms count=16
+10-08 23:07:29.845 24902 24902 W Choreographer: Frame time is 0.14809 ms in the future!  Check that graphics HAL is generating vsync timestamps using the correct timebase.
+10-08 23:07:29.884 24902 24926 D EGL_emulation: app_time_stats: avg=235.74ms min=1.40ms max=12863.28ms count=58

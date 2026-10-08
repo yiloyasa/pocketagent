@@ -111,6 +111,10 @@ fun SplitButton(
                 Column(if (compact) Modifier else Modifier.weight(1f)) {
                     Text(
                         label,
+                        // 【尺寸豁免】非 Type 令牌:标签字号与按钮几何联动(compact
+                        // 34dp 高→12.5sp;常规 48dp 高→15sp),取值介于 Body(14)与
+                        // Heading(16)之间;Type 档日后增设按钮标签档时可收编,
+                        // 当前按组件尺寸语义豁免。
                         fontSize = if (compact) 12.5.sp else 15.sp,
                         color = PaEditorial.Ink,
                         maxLines = 1,

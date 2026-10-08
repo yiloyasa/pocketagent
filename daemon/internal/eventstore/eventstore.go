@@ -21,7 +21,9 @@
 // 是"每个文本增量一行",fsync 会把延迟抬上去。(2026-10-09 起追加走 32KB 行
 // 缓冲,见 Append:进程崩溃时用户态缓冲里的尾部至多 32KB 也可能丢,权衡记录
 // 在彼处;回放路径会先冲缓冲,续传语义不受影响。)任何写失败都只降级成
-// "内存计数、不再落盘"(记日志),绝不 panic 拖垮 daemon。
+// "内存计数、不再落盘"(记日志),绝不 panic 拖垮 daemon。降级不是终身刑:
+// 落盘暂停期间按 30s 节拍尝试重开事件文件自愈(见 tryRecoverLocked),重开
+// 成功即恢复落盘;降级窗口内缺失的 seq 由续传断点语义兜底(缺失即跳过)。
 package eventstore
 
 import (
@@ -77,6 +79,8 @@ type Store struct {
 	// maxBytes 轮转阈值(测试可调小);<=0 用 DefaultMaxBytes。
 	maxBytes int64
 	// memOnly 文件不可用(打开失败/历史写错误)后的降级标志:继续分配 seq,不再落盘。
+	// 【降级可自愈】置位后按 recoverInterval 节拍尝试重开事件文件(见
+	// tryRecoverLocked),成功即清位恢复落盘 —— 不再像旧版那样降级到重启。
 	memOnly bool
 	// scanMu 回放与轮转的互斥锁(不含 Append 热路径)。锁序恒为 mu → scanMu。
 	// 【为什么需要它】Windows 上"打开中的文件"改名会失败:回放移出 s.mu 后,
@@ -87,16 +91,27 @@ type Store struct {
 	scanMu sync.Mutex
 	// bw Append 的行缓冲写(见 Append 注释的崩溃语义权衡)。nil = 尚未创建。
 	bw *bufio.Writer
+	// recoverInterval 降级后的自愈节拍:距上次重开尝试超过该间隔才再试。
+	// <=0 用 defaultRecoverInterval;测试注入缩时用。
+	recoverInterval time.Duration
+	// lastRecoverAt 上次自愈重开尝试的时刻(时间门控:Append 是每帧热路径,
+	// 不能每次都打一发 OpenFile,更不能在磁盘真坏时把它打成新热点)。
+	lastRecoverAt time.Time
 }
 
 // appendBufSize Append 行缓冲大小。崩溃/断电时未 Flush 的尾部(至多这个字节数)
 // 可能丢失,见 Append 的取舍注释。
 const appendBufSize = 32 << 10
 
+// defaultRecoverInterval 降级后的自愈节拍:每 30s 尝试一次重开事件文件。
+// 选 30s:太短会在磁盘真坏时把热路径变成周期性重试热点,太长则落盘空白窗口
+// 拉大;30s 与"手机断连数分钟仍可续传"的产品语义相比是可接受的暂停粒度。
+const defaultRecoverInterval = 30 * time.Second
+
 // Open 打开(或创建)数据目录下的事件存储并恢复 seq 计数器。
 // dir 为空 = 纯内存模式(计数器照常单调,不碰磁盘)。
 func Open(dir string) (*Store, error) {
-	s := &Store{dir: dir, maxBytes: DefaultMaxBytes}
+	s := &Store{dir: dir, maxBytes: DefaultMaxBytes, recoverInterval: defaultRecoverInterval}
 	if dir == "" {
 		return s, nil
 	}
@@ -183,8 +198,13 @@ func (s *Store) Append(threadID, turnID, eventType string, payloadJSON []byte) i
 	defer s.mu.Unlock()
 	s.maxSeq++
 	seq := s.maxSeq
-	if s.f == nil || s.memOnly {
-		return seq // 内存模式:不落盘
+	if s.memOnly {
+		// 【自愈】降级不终身:到了节拍就尝试重开事件文件,成功则本次
+		// Append 直接恢复落盘(含 INFO 日志,见 tryRecoverLocked)。
+		s.tryRecoverLocked()
+	}
+	if s.f == nil {
+		return seq // 内存模式(未配置目录 / 自愈未成功):不落盘
 	}
 	ev := Event{
 		Seq: seq, ThreadID: threadID, TurnID: turnID, EventType: eventType,
@@ -203,7 +223,13 @@ func (s *Store) Append(threadID, turnID, eventType string, payloadJSON []byte) i
 	}
 	if s.size > 0 && s.size+int64(len(line)) > limit {
 		if err := s.rotateLocked(); err != nil {
-			log.Printf("[eventstore] 轮转失败,降级为内存模式: %v", err)
+			// 【WARNING】轮转失败不是普通抖动:此时 events.jsonl 句柄已被
+			// rotateLocked 关闭,后续帧无处可写 —— 旧版此处只留一行普通日志
+			// 就静默不落盘到重启(Windows 上共享冲突即可触发 Remove/Rename
+			// 失败,且恰好总在手机重连回放时发生)。现在:醒目标记落盘暂停 +
+			// 实际降级,由自愈节拍周期重试重开(rotateLocked 的 Remove/Rename
+			// 失败分支也已改为真正降级,与这条日志的说法一致)。
+			log.Printf("[eventstore][WARNING] 事件落盘已暂停:轮转失败,降级内存模式并周期自愈重试(当前降级窗口内的帧不会写盘): %v", err)
 		}
 	}
 	if s.f != nil {
@@ -221,13 +247,13 @@ func (s *Store) Append(threadID, turnID, eventType string, payloadJSON []byte) i
 		}
 		if s.bw.Buffered() > 0 && s.bw.Available() < len(line) {
 			if ferr := s.bw.Flush(); ferr != nil {
-				log.Printf("[eventstore] 冲刷事件缓冲失败(seq=%d),后续降级为内存模式: %v", seq, ferr)
+				log.Printf("[eventstore][WARNING] 事件落盘已暂停:冲刷事件缓冲失败(seq=%d),降级内存模式并周期自愈重试: %v", seq, ferr)
 				s.degradeLocked()
 				return seq
 			}
 		}
 		if _, werr := s.bw.Write(line); werr != nil {
-			log.Printf("[eventstore] 追加事件失败(seq=%d),后续降级为内存模式: %v", seq, werr)
+			log.Printf("[eventstore][WARNING] 事件落盘已暂停:追加事件失败(seq=%d),降级内存模式并周期自愈重试: %v", seq, werr)
 			s.degradeLocked()
 		} else {
 			s.size += int64(len(line))
@@ -260,15 +286,21 @@ func (s *Store) rotateLocked() error {
 	rotated := filepath.Join(s.dir, RotatedName)
 	// 只保留一代:更老的 events-1.jsonl 直接删(它的区间记入"已丢",由
 	// minSeq 起始位置体现 → 恢复请求会收到 ResyncRequired 而不是拼出错帧)。
+	// 【失败必须降级】走到这里句柄已关(s.f=nil),若不置 memOnly,后续 Append
+	// 会因 f==nil 静默跳过落盘且自愈永不触发 —— 旧版正是漏在这两处(Windows
+	// 共享冲突即可触发)。降级后由 tryRecoverLocked 按节拍重开,下一次 Append
+	// 会再次触发轮转判断,等效于对轮转本身的重试。
 	if err := os.Remove(rotated); err != nil && !os.IsNotExist(err) {
+		s.degradeLocked()
 		return err
 	}
 	if err := os.Rename(s.path, rotated); err != nil {
+		s.degradeLocked()
 		return err
 	}
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		s.memOnly = true
+		s.degradeLocked()
 		return err
 	}
 	s.f = f
@@ -281,6 +313,8 @@ func (s *Store) rotateLocked() error {
 }
 
 // degradeLocked 写失败后的降级:关句柄、置内存模式。seq 计数不受影响。
+// 降级时刻记入 lastRecoverAt,首个自愈重试安排在 recoverInterval 之后
+// (刚写失败的句柄立刻重开大概率还是失败,不值得白打一发 OpenFile)。
 func (s *Store) degradeLocked() {
 	if s.bw != nil {
 		s.bw = nil // 缓冲已不可靠,丢弃(丢的是降级前最后一批未刷行,与降级同义)
@@ -290,6 +324,45 @@ func (s *Store) degradeLocked() {
 		s.f = nil
 	}
 	s.memOnly = true
+	s.lastRecoverAt = time.Now()
+}
+
+// tryRecoverLocked 降级自愈:mem-only 后按 recoverInterval 节拍尝试重开事件
+// 文件,成功即退出降级、恢复落盘并打 INFO;失败则留在降级态,下个节拍再试。
+//
+// 【节拍由 Append 流量驱动,不用后台 goroutine】没有新事件时本就无帧可落,
+// 重开没有意义;Append 是每帧热路径,故用时间门控(距上次尝试超过节拍才
+// 真正重开一次),不引入 goroutine 生命周期与 Close 的额外耦合。恢复语义:
+// 重开用 O_APPEND,降级窗口内缺失的 seq 由续传断点语义兜底(缺失即跳过),
+// 不会拼出错帧;size 从磁盘实际状态恢复,下一帧的轮转判断照常生效(等效于
+// 对失败过的轮转自动补试)。调用方已持 s.mu。
+func (s *Store) tryRecoverLocked() {
+	if !s.memOnly || s.path == "" {
+		return
+	}
+	interval := s.recoverInterval
+	if interval <= 0 {
+		interval = defaultRecoverInterval
+	}
+	now := time.Now()
+	if !s.lastRecoverAt.IsZero() && now.Sub(s.lastRecoverAt) < interval {
+		return // 还没到下个自愈节拍
+	}
+	s.lastRecoverAt = now
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("[eventstore] 自愈重开事件文件失败,继续内存模式(下个节拍再试): %v", err)
+		return
+	}
+	size := int64(0)
+	if st, err := f.Stat(); err == nil {
+		size = st.Size() // 降级窗口内磁盘可能被动过,轮转判断以真实大小为准
+	}
+	s.f = f
+	s.size = size
+	s.bw = nil
+	s.memOnly = false
+	log.Printf("[eventstore] 事件文件重开成功,退出降级恢复落盘(降级窗口内缺失的帧由续传断点语义兜底)")
 }
 
 // ReplayTurnFrames 回放某线程的 TurnServerMessage 帧(seq > afterSeq,升序)。

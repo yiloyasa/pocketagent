@@ -1461,6 +1461,9 @@ private fun RecentSessionRow(thread: PThread, onClick: () -> Unit) {
             statusView.detail?.let { summary ->
                 Text(
                     summary,
+                    // 【行高豁免】15.sp 非 Type 令牌:单行摘要(maxLines=1)的紧凑
+                    // 行高,比 Micro 档默认 17.sp 收一档,与同列标题行(21)·元信息
+                    // 行(16)在 56dp 会话行内的三行堆叠节奏配套。
                     fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 15.sp,
                     color = EditorialDeniedText, maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

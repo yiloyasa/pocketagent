@@ -1,0 +1,77 @@
+--------- beginning of main
+10-08 22:16:38.106 17039 17039 I pocketagent.app: Using CollectorTypeCC GC.
+10-08 22:16:38.107 17039 17039 W pocketagent.app: Unexpected CPU variant for x86: x86_64.
+10-08 22:16:38.107 17039 17039 W pocketagent.app: Known variants: atom, sandybridge, silvermont, goldmont, goldmont-plus, tremont, kabylake, default
+10-08 22:16:38.279 17039 17039 I ndk_translation: Initialized NDK translation (aarch64), version 0.2.3
+10-08 22:16:38.380 17039 17039 E pocketagent.app: Not starting debugger since process cannot load the jdwp agent.
+10-08 22:16:38.420 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 171979766; UID 10192; state: ENABLED
+10-08 22:16:38.420 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 242716250; UID 10192; state: ENABLED
+10-08 22:16:38.425 17039 17039 D nativeloader: Configuring clns-6 for other apk /data/app/~~EOv2kBT3jGcBl0kOAI5K6g==/dev.pocketagent.app-6kG98jUcPxdJDdFawY9bdw==/base.apk. target_sdk_version=35, uses_libraries=, library_path=/data/app/~~EOv2kBT3jGcBl0kOAI5K6g==/dev.pocketagent.app-6kG98jUcPxdJDdFawY9bdw==/lib/arm64:/data/app/~~EOv2kBT3jGcBl0kOAI5K6g==/dev.pocketagent.app-6kG98jUcPxdJDdFawY9bdw==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/dev.pocketagent.app
+10-08 22:16:38.432 17039 17039 V GraphicsEnvironment: Currently set values for:
+10-08 22:16:38.432 17039 17039 V GraphicsEnvironment:   angle_gl_driver_selection_pkgs=[]
+10-08 22:16:38.432 17039 17039 V GraphicsEnvironment:   angle_gl_driver_selection_values=[]
+10-08 22:16:38.433 17039 17039 V GraphicsEnvironment: ANGLE GameManagerService for dev.pocketagent.app: false
+10-08 22:16:38.433 17039 17039 V GraphicsEnvironment: dev.pocketagent.app is not listed in per-application setting
+10-08 22:16:38.433 17039 17039 V GraphicsEnvironment: Neither updatable production driver nor prerelease driver is supported.
+10-08 22:16:38.478 17039 17060 D libEGL  : loaded /vendor/lib64/egl/libEGL_emulation.so
+10-08 22:16:38.493 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 270306772; UID 10192; state: ENABLED
+10-08 22:16:38.496 17039 17060 D libEGL  : loaded /vendor/lib64/egl/libGLESv1_CM_emulation.so
+10-08 22:16:38.504 17039 17060 D libEGL  : loaded /vendor/lib64/egl/libGLESv2_emulation.so
+10-08 22:16:38.513 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 235355681; UID 10192; state: ENABLED
+10-08 22:16:38.578 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 237531167; UID 10192; state: DISABLED
+10-08 22:16:38.583 17039 17039 W OpenGLRenderer: Unknown dataspace 0
+10-08 22:16:38.598 17039 17062 I AgentConnection: 连接 daemon: 10.0.2.2:7246 token=无
+10-08 22:16:38.619 17039 17080 D TrafficStats: tagSocket(84) with statsTag=0xffffffff, statsUid=-1
+10-08 22:16:38.818 17039 17058 W OpenGLRenderer: Failed to choose config with EGL_SWAP_BEHAVIOR_PRESERVED, retrying without...
+10-08 22:16:38.818 17039 17058 W OpenGLRenderer: Failed to initialize 101010-2 format, error = EGL_SUCCESS
+10-08 22:16:39.010 17039 17058 I Gralloc4: mapper 4.x is not supported
+10-08 22:16:39.042 17039 17058 E OpenGLRenderer: Unable to match the desired swap behavior.
+10-08 22:16:40.118 17039 17058 D EGL_emulation: app_time_stats: avg=17.68ms min=0.52ms max=117.80ms count=42
+10-08 22:16:41.136 17039 17058 D EGL_emulation: app_time_stats: avg=3.38ms min=0.64ms max=46.31ms count=61
+10-08 22:16:43.757 17039 17092 D ProfileInstaller: Installing profile for dev.pocketagent.app
+10-08 22:16:54.182 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 78294732; UID 10192; state: ENABLED
+10-08 22:16:59.549 17039 17058 D EGL_emulation: app_time_stats: avg=2029.95ms min=0.85ms max=18261.26ms count=9
+10-08 22:17:55.514 17039 17058 D EGL_emulation: app_time_stats: avg=55965.49ms min=55965.49ms max=55965.49ms count=1
+10-08 22:18:05.919 17039 17058 D EGL_emulation: app_time_stats: avg=386.75ms min=0.74ms max=9804.31ms count=26
+10-08 22:18:07.519 17039 17058 D EGL_emulation: app_time_stats: avg=61.20ms min=8.09ms max=1201.41ms count=25
+10-08 22:18:09.120 17039 17058 D EGL_emulation: app_time_stats: avg=50.89ms min=0.88ms max=1184.75ms count=25
+10-08 22:18:10.718 17039 17058 D EGL_emulation: app_time_stats: avg=63.12ms min=13.53ms max=1199.61ms count=25
+10-08 22:18:12.381 17039 17058 D EGL_emulation: app_time_stats: avg=54.17ms min=0.77ms max=1246.63ms count=25
+10-08 22:18:52.248 17039 17039 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 22:18:52.248 17039 17039 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 22:18:52.280 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 289878283; UID 10192; state: ENABLED
+10-08 22:18:52.347 17039 17058 D EGL_emulation: app_time_stats: avg=1804.62ms min=0.72ms max=39412.84ms count=22
+10-08 22:19:18.682 17039 17058 D EGL_emulation: app_time_stats: avg=1304.48ms min=0.76ms max=25795.68ms count=20
+10-08 22:19:42.563 17039 17058 D EGL_emulation: app_time_stats: avg=5960.14ms min=1.79ms max=23830.33ms count=4
+10-08 22:19:51.260 17039 17058 D EGL_emulation: app_time_stats: avg=4345.36ms min=13.20ms max=8677.52ms count=2
+10-08 22:19:52.814 17039 17039 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 22:19:52.814 17039 17039 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 22:19:52.860 17039 17039 I WebViewFactory: Loading com.google.android.webview version 113.0.5672.136 (code 567263637)
+10-08 22:19:52.862 17039 17039 W ziparchive: Unable to open '/data/app/~~KM6OBbrd07G0K6_IyStuSg==/com.google.android.trichromelibrary_567263637-xUccMmUJh3H1Fkzw0n0ZOw==/TrichromeLibrary.dm': No such file or directory
+10-08 22:19:52.862 17039 17039 W ziparchive: Unable to open '/data/app/~~KM6OBbrd07G0K6_IyStuSg==/com.google.android.trichromelibrary_567263637-xUccMmUJh3H1Fkzw0n0ZOw==/TrichromeLibrary.dm': No such file or directory
+10-08 22:19:52.863 17039 17039 W pocketagent.app: Entry not found
+10-08 22:19:52.864 17039 17039 D nativeloader: Configuring clns-7 for other apk /data/app/~~KM6OBbrd07G0K6_IyStuSg==/com.google.android.trichromelibrary_567263637-xUccMmUJh3H1Fkzw0n0ZOw==/TrichromeLibrary.apk. target_sdk_version=34, uses_libraries=ALL, library_path=/data/app/~~2q8CxVFviCrOCfJF8edUiQ==/com.google.android.webview-A3dX_dt5vlzC_icpXRdPVA==/lib/x86_64:/data/app/~~2q8CxVFviCrOCfJF8edUiQ==/com.google.android.webview-A3dX_dt5vlzC_icpXRdPVA==/WebViewGoogle.apk!/lib/x86_64:/data/app/~~KM6OBbrd07G0K6_IyStuSg==/com.google.android.trichromelibrary_567263637-xUccMmUJh3H1Fkzw0n0ZOw==/TrichromeLibrary.apk!/lib/x86_64, permitted_path=/data:/mnt/expand
+10-08 22:19:52.871 17039 17039 D nativeloader: Configuring clns-8 for other apk /data/app/~~2q8CxVFviCrOCfJF8edUiQ==/com.google.android.webview-A3dX_dt5vlzC_icpXRdPVA==/WebViewGoogle.apk. target_sdk_version=34, uses_libraries=, library_path=/data/app/~~2q8CxVFviCrOCfJF8edUiQ==/com.google.android.webview-A3dX_dt5vlzC_icpXRdPVA==/lib/x86_64:/data/app/~~2q8CxVFviCrOCfJF8edUiQ==/com.google.android.webview-A3dX_dt5vlzC_icpXRdPVA==/WebViewGoogle.apk!/lib/x86_64:/data/app/~~KM6OBbrd07G0K6_IyStuSg==/com.google.android.trichromelibrary_567263637-xUccMmUJh3H1Fkzw0n0ZOw==/TrichromeLibrary.apk!/lib/x86_64, permitted_path=/data:/mnt/expand
+10-08 22:19:52.921 17039 17039 I cr_WVCFactoryProvider: Loaded version=113.0.5672.136 minSdkVersion=29 isBundle=false multiprocess=true packageId=2
+10-08 22:19:52.938 17039 17039 I cr_LibraryLoader: Successfully loaded native library
+10-08 22:19:52.938 17039 17039 I cr_CachingUmaRecorder: Flushed 8 samples from 8 histograms.
+10-08 22:19:53.035 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 183155436; UID 10192; state: ENABLED
+10-08 22:19:53.176 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 214741472; UID 10192; state: ENABLED
+10-08 22:19:53.180 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 171228096; UID 10192; state: ENABLED
+10-08 22:19:53.283 17039 17477 W cr_media: BLUETOOTH_CONNECT permission is missing.
+10-08 22:19:53.287 17039 17477 W cr_media: registerBluetoothIntentsIfNeeded: Requires BLUETOOTH permission
+10-08 22:19:53.362 17039 17039 D CompatibilityChangeReporter: Compat change id reported: 193247900; UID 10192; state: ENABLED
+10-08 22:19:53.396 17039 17058 D EGL_emulation: app_time_stats: avg=84.21ms min=0.68ms max=1778.19ms count=22
+10-08 22:19:53.429 17039 17039 I Choreographer: Skipped 35 frames!  The application may be doing too much work on its main thread.
+10-08 22:19:54.450 17039 17058 D EGL_emulation: app_time_stats: avg=127.70ms min=1.44ms max=590.52ms count=8
+10-08 22:20:07.287 17039 17058 D EGL_emulation: app_time_stats: avg=752.80ms min=8.74ms max=12568.49ms count=17
+10-08 22:20:20.994 17039 17058 D EGL_emulation: app_time_stats: avg=842.70ms min=0.80ms max=13343.81ms count=16
+10-08 22:20:34.453 17039 17039 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 22:20:34.453 17039 17039 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 22:20:34.458 17039 17039 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+10-08 22:20:34.458 17039 17039 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+10-08 22:20:34.459 17039 17058 D EGL_emulation: app_time_stats: avg=331.31ms min=1.05ms max=12791.89ms count=39
+10-08 22:20:34.514 17039 17058 E OpenGLRenderer: Unable to match the desired swap behavior.
+10-08 22:20:41.214 17039 17058 D EGL_emulation: app_time_stats: avg=437.26ms min=1.70ms max=6244.92ms count=15
+10-08 22:20:57.547 17039 17039 W WindowOnBackDispatcher: sendCancelIfRunning: isInProgress=falsecallback=android.view.ViewRootImpl$$ExternalSyntheticLambda17@eb9603
+10-08 22:20:57.580 17039 17058 D EGL_emulation: app_time_stats: avg=952.83ms min=0.83ms max=22429.36ms count=24

@@ -36,12 +36,31 @@ type Session struct {
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
+	// creating Open 的 per-session 占位表:spawn(pty.New+cmd.Start)慢且必须
+	// 在 m.mu 外做,占位防并发同 id 重入 —— 恰一 goroutine 真正 spawn,其余
+	// 在占位票上等它收尾(见 Open / spawnTicket)。
+	creating map[string]*spawnTicket
 	// idleTimeout 为"无 reader 空闲回收"时长;0 表示禁用(默认)。
 	idleTimeout time.Duration
+	// spawnHook 测试钩子:非 nil 时在 pty 创建前调用(仅并发 Open 单测注入,
+	// 用于钉死"恰一 spawn";生产恒为 nil)。
+	spawnHook func()
+}
+
+// spawnTicket 占位票:并发同 id 的 Open 在 done 上等待唯一那次 spawn 收尾;
+// closeRequested 记录 spawn 窗口内到达的 Close(spawn 期间会话尚未落表,
+// Close 拿不到它 —— 由 Open 收尾时按此标记补杀,保持旧版"Close 等 Open
+// 出锁后必关掉"的语义,见 Close)。
+type spawnTicket struct {
+	done           chan struct{}
+	closeRequested bool
 }
 
 func NewManager() *Manager {
-	return &Manager{sessions: map[string]*Session{}}
+	return &Manager{
+		sessions: map[string]*Session{},
+		creating: map[string]*spawnTicket{},
+	}
 }
 
 // SetIdleTimeout 配置空闲回收时长:d<=0 禁用。应在 StartReaper 之前调用。
@@ -156,12 +175,63 @@ func DefaultShell() string {
 }
 
 // Open 启动一个 PTY 会话。sessionID 由客户端生成,重复 Attach 复用同一会话。
+//
+// 【锁纪律(2026-10-09 重排)】此前整段持 m.mu,pty.New()+cmd.Start() 的
+// 毫秒到秒级慢 spawn 会卡住所有终端 RPC(Get/List/Close/Reap 全在等锁)。
+// 现在锁内只做查表与 per-session 占位(creating),慢 spawn 全程锁外:
+//   - 活会话已在表:直接复用(快速路径,与旧版一致);
+//   - 占位已存在(他者正在 spawn):在票上等它收尾,随后复用其成果;占位者
+//     失败则本调用者升格为 spawn 者自行重试(错误归自己,不传播他人错误);
+//   - 抢到占位:锁外 spawn,失败回滚占位;成功落表。spawn 窗口内到达的
+//     Close 由票上的 closeRequested 标记在收尾时补杀(见 Close),保持旧版
+//     "Close 不会漏掉正在 Open 的会话"的语义。
 func (m *Manager) Open(sessionID, cwd, shell string, cols, rows int, env map[string]string) (*Session, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if s, ok := m.sessions[sessionID]; ok && s.alive() {
+		m.mu.Unlock()
 		return s, nil
 	}
+	if t, pending := m.creating[sessionID]; pending {
+		m.mu.Unlock()
+		<-t.done // 等 spawn 完成者收尾(落表或回滚);不持锁、不空转
+		m.mu.Lock()
+		s, ok := m.sessions[sessionID]
+		m.mu.Unlock()
+		if ok && s.alive() {
+			return s, nil
+		}
+		// 占位者失败了:表里没有活会话,占位也已回滚 —— 升格为 spawn 者重试。
+		// 每轮重试都完整走一遍 spawn 周期,不会无限递归(失败即返回自身错误)。
+		return m.Open(sessionID, cwd, shell, cols, rows, env)
+	}
+	t := &spawnTicket{done: make(chan struct{})}
+	m.creating[sessionID] = t
+	m.mu.Unlock()
+
+	s, err := m.spawnSession(sessionID, cwd, shell, cols, rows, env)
+
+	m.mu.Lock()
+	delete(m.creating, sessionID) // 回滚占位(无论成败,先解除重入闸门)
+	closeRequested := t.closeRequested
+	if err == nil {
+		if closeRequested {
+			delete(m.sessions, sessionID) // spawn 窗口内收到过 Close:即刻出表
+		} else {
+			m.sessions[sessionID] = s
+		}
+	}
+	close(t.done) // 唤醒等票者;他们拿锁时会短暂排在本次 Unlock 之后,无死锁
+	m.mu.Unlock()
+	if err == nil && closeRequested {
+		s.close(-1) // 补杀,对齐旧版 Close-after-Open 的效果
+	}
+	return s, err
+}
+
+// spawnSession 慢路径:默认值补齐、cwd 校验、pty 创建、shell 启动、读泵与
+// Wait 泵挂载。全程不持 m.mu(这是 Open 锁重排的全部意义);表登记由 Open
+// 收尾统一完成。除"会话落表"外行为与旧版 Open 逐行一致。
+func (m *Manager) spawnSession(sessionID, cwd, shell string, cols, rows int, env map[string]string) (*Session, error) {
 	if shell == "" {
 		shell = DefaultShell()
 	}
@@ -184,6 +254,10 @@ func (m *Manager) Open(sessionID, cwd, shell string, cols, rows int, env map[str
 	}
 	if rows <= 0 {
 		rows = 24
+	}
+
+	if m.spawnHook != nil {
+		m.spawnHook()
 	}
 
 	p, err := pty.New()
@@ -236,7 +310,6 @@ func (m *Manager) Open(sessionID, cwd, shell string, cols, rows int, env map[str
 		exitCh:    make(chan struct{}),
 		idleSince: time.Now(), // 尚无 reader;首个订阅(Read)会清零
 	}
-	m.sessions[sessionID] = s
 
 	if err := p.Resize(cols, rows); err != nil {
 		// 某些平台首次 resize 可能失败,不影响会话
@@ -419,6 +492,10 @@ func (m *Manager) Close(id string) {
 	s, ok := m.sessions[id]
 	if ok {
 		delete(m.sessions, id)
+	} else if t, pending := m.creating[id]; pending {
+		// spawn 进行中(会话尚未落表):登记关闭意图,由 Open 收尾统一补杀,
+		// 对齐旧版"Close 在 m.mu 上排队、Open 完成后必关掉"的效果。
+		t.closeRequested = true
 	}
 	m.mu.Unlock()
 	if ok {
