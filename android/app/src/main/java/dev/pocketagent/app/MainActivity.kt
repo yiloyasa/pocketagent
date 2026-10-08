@@ -10,6 +10,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -97,11 +99,31 @@ class MainActivity : ComponentActivity() {
                 // 一律吃编辑式槽位;旧 Pa scheme(PaTheme)降为最外层兼容基底。
                 androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
                     Surface(modifier = Modifier.fillMaxSize(), color = PaEditorial.Canvas) {
-                        var showSplash by remember { mutableStateOf(true) }
-                        if (showSplash) {
-                            Splash(onDone = { showSplash = false })
-                        } else {
+                        // 【2026-10-09 分发资格批】Splash 从"串行闸"改"覆盖层":
+                        // 旧形态 if(showSplash) Splash() else RootNav() 让 RootNav(含首帧
+                        // RPC 预取/引擎装配)整整等 Splash ~1.5s 播完才开始组合,冷启动
+                        // 白等;现在 RootNav 在 Splash 之下**并行组合**,RPC 预取与启动
+                        // 动画同跑,Splash 播完淡出时主页早已就绪,淡出即见真内容。
+                        // 时机语义保持:Splash 内部动画/淡出/onDone 链路一字未动,
+                        // onDone 仍是"动画播完+淡出结束"的同一个时点,只是消费它的
+                        // 动作从"开始组合 RootNav"变为"摘掉覆盖层"。
+                        // 覆盖层吃掉点击:动画期间用户点不到尚未可见的主页,与旧
+                        // 串行形态"看不见也点不着"一致,避免淡出中误触穿屏。
+                        Box(modifier = Modifier.fillMaxSize()) {
                             RootNav()
+                            var showSplash by remember { mutableStateOf(true) }
+                            if (showSplash) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null,
+                                        ) {},
+                                ) {
+                                    Splash(onDone = { showSplash = false })
+                                }
+                            }
                         }
                     }
                 }

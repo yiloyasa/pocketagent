@@ -17,6 +17,8 @@ import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.history.MessageSpan
 import dev.pocketagent.app.ui.model.ModelSelectionRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -315,49 +317,60 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
         val recentThreads: List<PThread>? = null,
     )
 
-    suspend fun prefetchStatic(): StaticPrefetch {
-        val settings = try {
-            withContext(Dispatchers.IO) {
-                AgentConnection.modelService()
-                    .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
+    suspend fun prefetchStatic(): StaticPrefetch = coroutineScope {
+        // 【P2-11】四路互相独立,旧实现顺序 await(串行 RPC):总时延 = 四段之和。
+        // 改四路 async 并行,总时延 = 最慢一段。每路各自的 try/catch 原样保留
+        // (失败项回 null + LoadErrorSetIfAbsent 意图),异常不会逃出 async。
+        val settings = async {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.modelService()
+                        .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
+                }
+            } catch (e: Exception) {
+                // 不覆盖已有提示:离线快照的黄条比这里的红条更有信息量(真机验证发现
+                // 两个并行加载共用 loadError,后完成者会把"离线:显示的是本地记录"顶掉)
+                send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型设置：${e.message ?: "连接失败"}"))
+                null
             }
-        } catch (e: Exception) {
-            // 不覆盖已有提示:离线快照的黄条比这里的红条更有信息量(真机验证发现
-            // 两个并行加载共用 loadError,后完成者会把"离线:显示的是本地记录"顶掉)
-            send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型设置：${e.message ?: "连接失败"}"))
-            null
         }
-        val models = try {
-            withContext(Dispatchers.IO) {
-                AgentConnection.modelServiceSlow()
-                    .listModels(ListModelsRequest.newBuilder().build()).modelsList
+        val models = async {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.modelServiceSlow()
+                        .listModels(ListModelsRequest.newBuilder().build()).modelsList
+                }
+            } catch (e: Exception) {
+                send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型列表：${e.message ?: "连接失败"}"))
+                null
             }
-        } catch (e: Exception) {
-            send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型列表：${e.message ?: "连接失败"}"))
-            null
         }
-        val hostName = try {
-            withContext(Dispatchers.IO) {
-                AgentConnection.hostService()
-                    .getHostInfo(GetHostInfoRequest.getDefaultInstance()).displayName
+        val hostName = async {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.hostService()
+                        .getHostInfo(GetHostInfoRequest.getDefaultInstance()).displayName
+                }
+            } catch (_: Exception) {
+                null // 电脑名取不到不影响聊天,侧边栏回退到通用文案
             }
-        } catch (_: Exception) {
-            null // 电脑名取不到不影响聊天,侧边栏回退到通用文案
         }
-        val recent = try {
-            withContext(Dispatchers.IO) {
-                AgentConnection.threadService()
-                    .listThreads(
-                        ListThreadsRequest.newBuilder()
-                            .setIncludeArchived(false)
-                            .build(),
-                    )
-                    .threadsList
+        val recent = async {
+            try {
+                withContext(Dispatchers.IO) {
+                    AgentConnection.threadService()
+                        .listThreads(
+                            ListThreadsRequest.newBuilder()
+                                .setIncludeArchived(false)
+                                .build(),
+                        )
+                        .threadsList
+                }
+            } catch (_: Exception) {
+                null // 拉不到就显示空态,不影响当前会话
             }
-        } catch (_: Exception) {
-            null // 拉不到就显示空态,不影响当前会话
         }
-        return StaticPrefetch(settings, models, hostName, recent)
+        StaticPrefetch(settings.await(), models.await(), hostName.await(), recent.await())
     }
 
     // ---- 【2026-10-09 效果层外移 · 任务1】打开会话加载:getThread + 历史回填 ----
@@ -521,8 +534,11 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
             if (!snap.isNullOrEmpty() && st.items.isEmpty()) {
                 st.items.clear()
                 st.items.addAll(
+                    // 【N1】时间戳随行:与主路径(prefillOfflineSnapshot 同一批快照的
+                    // ChatItem 构造)同一语义 —— 兜底路径漏带 savedAtMs 会让历史导航的
+                    // 日期分组退化为「早前」。
                     snap.map {
-                        ChatItem(role = it.role, text = it.text, id = nextChatItemId(it.role))
+                        ChatItem(role = it.role, text = it.text, sentAtMs = it.savedAtMs, id = nextChatItemId(it.role))
                     },
                 )
                 TurnSession.enforceTimelineCap(st)
@@ -717,6 +733,12 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
     ) {
         stopModelInspection()
         inspectionJob = sessionScope.launch {
+            // 【P2-12】巡检退避:表稳定(reducer 合并未产生新实例)后逐拍翻倍间隔,
+            // 封顶 [MODEL_INSPECTION_MAX_INTERVAL_MS];表有变化立即回落基础节奏。
+            // daemon 变更推送不做 —— 变更靠巡检自愈,回落节奏保证变化后 10s 内可见。
+            // 用量核对/选择回填等轻量动作随间隔一并放缓(同一巡检拍,本来就是
+            // 幂等回显);连接失败/空表不退避,保持基础节奏以便快速恢复。
+            var intervalMs = MODEL_INSPECTION_INTERVAL_MS
             while (true) {
                 // 前台门控:STOP 状态不跑 RPC;挂起等 ON_START
                 foregroundGate()
@@ -726,7 +748,13 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
                         if (native.modelsCount > 0) {
                             // 先比对再赋值在 reducer(内容没变不换实例,消除每 10s
                             // 一次的空转重组);按 id 首段过滤(与 modelsForAgent 同口径)
+                            val modelsBefore = _state.value.models
                             send(ChatIntent.ModelListMerged(agentId, native.modelsList))
+                            intervalMs = if (_state.value.models !== modelsBefore) {
+                                MODEL_INSPECTION_INTERVAL_MS
+                            } else {
+                                (intervalMs * 2).coerceAtMost(MODEL_INSPECTION_MAX_INTERVAL_MS)
+                            }
                         }
                         TurnSession.acceptRuntimeSelection(
                             threadId,
@@ -744,7 +772,7 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
                         // Keep last verified runtime state during network recovery.
                     }
                 }
-                delay(10_000)
+                delay(intervalMs)
             }
         }
     }
@@ -758,6 +786,12 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
     private companion object {
         /** 页面保活心跳节奏(远小于 TurnSession 的 30 分钟空闲阈值)。 */
         const val SESSION_KEEPALIVE_MS = 60_000L
+
+        /** 模型巡检基础节奏(P2-12 退避的起点,原 10s 固定值)。 */
+        const val MODEL_INSPECTION_INTERVAL_MS = 10_000L
+
+        /** 模型巡检退避封顶:表稳定后 10s→20s→40s→60s 封住,不再往上翻。 */
+        const val MODEL_INSPECTION_MAX_INTERVAL_MS = 60_000L
     }
 }
 

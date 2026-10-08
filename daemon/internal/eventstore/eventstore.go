@@ -17,9 +17,11 @@
 // (覆盖上一代),只保留一代 —— 旋转丢弃的区间用 minSeq 记账,恢复请求落到
 // 丢失区间时服务端回 ResyncRequired,手机端降级全量回填,绝不静默拼错。
 //
-// 【可靠性取舍】追加写不走 fsync:进程崩溃不丢(OS 页缓存仍在),断电最多丢
-// 尾部几帧 —— 而事件流的写入频率是"每个文本增量一行",fsync 会把延迟抬上去。
-// 任何写失败都只降级成"内存计数、不再落盘"(记日志),绝不 panic 拖垮 daemon。
+// 【可靠性取舍】追加写不走 fsync:断电最多丢尾部几帧 —— 而事件流的写入频率
+// 是"每个文本增量一行",fsync 会把延迟抬上去。(2026-10-09 起追加走 32KB 行
+// 缓冲,见 Append:进程崩溃时用户态缓冲里的尾部至多 32KB 也可能丢,权衡记录
+// 在彼处;回放路径会先冲缓冲,续传语义不受影响。)任何写失败都只降级成
+// "内存计数、不再落盘"(记日志),绝不 panic 拖垮 daemon。
 package eventstore
 
 import (
@@ -76,7 +78,20 @@ type Store struct {
 	maxBytes int64
 	// memOnly 文件不可用(打开失败/历史写错误)后的降级标志:继续分配 seq,不再落盘。
 	memOnly bool
+	// scanMu 回放与轮转的互斥锁(不含 Append 热路径)。锁序恒为 mu → scanMu。
+	// 【为什么需要它】Windows 上"打开中的文件"改名会失败:回放移出 s.mu 后,
+	// 若 rotateLocked 的 rename 撞上一个正被回放读取的 events-1.jsonl
+	// (DeleteFile 只是 delete-pending,名字仍在,REPLACE 语义直接 ACCESS_DENIED),
+	// 轮转失败会把 store 降级成 mem-only —— 恰好总在手机重连时发生。让轮转与
+	// 回放互斥(轮转本身极低频),Append 永不取 scanMu,热路径不受回放拖累。
+	scanMu sync.Mutex
+	// bw Append 的行缓冲写(见 Append 注释的崩溃语义权衡)。nil = 尚未创建。
+	bw *bufio.Writer
 }
+
+// appendBufSize Append 行缓冲大小。崩溃/断电时未 Flush 的尾部(至多这个字节数)
+// 可能丢失,见 Append 的取舍注释。
+const appendBufSize = 32 << 10
 
 // Open 打开(或创建)数据目录下的事件存储并恢复 seq 计数器。
 // dir 为空 = 纯内存模式(计数器照常单调,不碰磁盘)。
@@ -127,7 +142,8 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
-// Close 关闭底层文件(进程退出/测试收尾用;nil 安全)。
+// Close 关闭底层文件(进程退出/测试收尾用;nil 安全)。关闭前先把行缓冲冲干净,
+// 已分配 seq 的事件不留在用户态缓冲里。
 func (s *Store) Close() error {
 	if s == nil {
 		return nil
@@ -136,6 +152,10 @@ func (s *Store) Close() error {
 	defer s.mu.Unlock()
 	if s.f == nil {
 		return nil
+	}
+	if s.bw != nil {
+		_ = s.bw.Flush() // 尽力而为:关闭路径上写失败只降级,不阻塞退出
+		s.bw = nil
 	}
 	err := s.f.Close()
 	s.f = nil
@@ -187,20 +207,52 @@ func (s *Store) Append(threadID, turnID, eventType string, payloadJSON []byte) i
 		}
 	}
 	if s.f != nil {
-		n, werr := s.f.Write(line)
-		if werr != nil {
+		// 【行缓冲】事件流写入频率是"每个文本增量一行",此前每行一次 syscall;
+		// 收成 32KB 行缓冲(appendBufSize)。缓冲装不下整行时先 Flush(行边界
+		// 落盘,已缓冲内容不与当前行混在半行里),再写整行。
+		// 【崩溃语义权衡(刻意接受)】进程崩溃时 bufio 用户态缓冲里未 Flush 的
+		// 尾部(至多 32KB)会丢 —— 直写 os.File 的数据在进程崩溃后仍在 OS 页缓存,
+		// 缓冲后则不然;断电语义不变(Flush 过的同样可能丢尾部)。丢的帧由重连
+		// 回放的 afterSeq 断点语义兜底(缺失即续传跳过;若 crash 后重启 maxSeq
+		// 回退导致重复 seq,客户端按 idempotent 重放处理,方向安全)。事件帧是
+		// 可再生的过程数据,换回 append 热路径数量级的 syscall 削减,值得。
+		if s.bw == nil {
+			s.bw = bufio.NewWriterSize(s.f, appendBufSize)
+		}
+		if s.bw.Buffered() > 0 && s.bw.Available() < len(line) {
+			if ferr := s.bw.Flush(); ferr != nil {
+				log.Printf("[eventstore] 冲刷事件缓冲失败(seq=%d),后续降级为内存模式: %v", seq, ferr)
+				s.degradeLocked()
+				return seq
+			}
+		}
+		if _, werr := s.bw.Write(line); werr != nil {
 			log.Printf("[eventstore] 追加事件失败(seq=%d),后续降级为内存模式: %v", seq, werr)
 			s.degradeLocked()
 		} else {
-			s.size += int64(n)
+			s.size += int64(len(line))
 		}
 	}
 	return seq
 }
 
 // rotateLocked 轮转:events.jsonl → events-1.jsonl(覆盖上一代),开新文件。
-// 调用方已持锁。轮转后 minSeq = 上一代首行的 seq(它现在是最老的有效事件)。
+// 调用方已持 s.mu;改名/删除段与回放互斥(scanMu,锁序 mu → scanMu —— Windows
+// 上 rename 撞上"打开中的文件"会失败,见 scanMu 字段注释)。轮转后
+// minSeq = 上一代首行的 seq(它现在是最老的有效事件)。
 func (s *Store) rotateLocked() error {
+	// 缓冲里的尾行必须先落盘:它们已计入 s.size,且 seq 顺序在前,轮出去的
+	// 代次里不能缺它们。
+	if s.bw != nil {
+		if err := s.bw.Flush(); err != nil {
+			s.bw = nil
+			s.degradeLocked()
+			return err
+		}
+		s.bw = nil
+	}
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
 	if s.f != nil {
 		_ = s.f.Close()
 		s.f = nil
@@ -230,6 +282,9 @@ func (s *Store) rotateLocked() error {
 
 // degradeLocked 写失败后的降级:关句柄、置内存模式。seq 计数不受影响。
 func (s *Store) degradeLocked() {
+	if s.bw != nil {
+		s.bw = nil // 缓冲已不可靠,丢弃(丢的是降级前最后一批未刷行,与降级同义)
+	}
 	if s.f != nil {
 		_ = s.f.Close()
 		s.f = nil
@@ -256,14 +311,34 @@ func (s *Store) ReplayHostEvents(afterSeq int64) []Event {
 }
 
 // replay 读盘过滤的公共实现。nil 安全(返回 nil);文件缺失按空处理。
+//
+// 【锁纪律(2026-10-09 重排)】此前整段持 s.mu 扫两代文件逐行解析,而 Append
+// 同锁 —— 手机重连回放期间(要扫至多 2×10MB)所有流式帧落盘全部停摆。现在:
+// 锁内只快照文件路径(微秒级),扫盘解析移到锁外;回放与轮转用 scanMu 互斥
+// (Windows 上 rename 撞打开中文件会失败,见 scanMu 注释)。回放语义不变:
+// 过滤谓词、afterSeq 边界、BeyondRetention → ResyncRequired 判定均照旧
+// (BeyondRetention 的 minSeq 读取仍是 O(1) 的锁内操作,不受本重排影响)。
+// 【与轮转的竞态】快照路径后、扫描前若恰逢轮转:events.jsonl → events-1.jsonl
+// 的改名让"按名扫两代"要么读到新内容要么读到旧代,最坏是少量新帧不在本次
+// 回放结果里 —— 客户端下一轮 afterSeq 续传自然补上,方向安全不重不乱。
 func (s *Store) replay(keep func(Event) bool, afterSeq int64) []Event {
 	if s == nil || s.dir == "" {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	// 回放前先冲行缓冲:回放语义是"看到全部已 Append 的帧",缓冲里的尾行
+	// (至多 32KB)若不落盘,重连续传会漏掉最近一段。Flush 失败不阻塞回放
+	// (磁盘上有什么就回放什么;写路径会在下一次 Append 自行降级)。
+	if s.bw != nil {
+		_ = s.bw.Flush()
+	}
+	paths := []string{filepath.Join(s.dir, RotatedName), s.path}
+	s.mu.Unlock()
+
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
 	var out []Event
-	for _, p := range []string{filepath.Join(s.dir, RotatedName), s.path} {
+	for _, p := range paths {
 		f, err := os.Open(p)
 		if err != nil {
 			continue // 上一代不存在 = 没轮转过,正常

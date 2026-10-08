@@ -962,6 +962,11 @@ func approvalCommand(raw json.RawMessage) string {
 // 不在的 ctx 超时兜底,这里防的是"流还在、人不点")。超预算按"通道失败"处置
 // (照下方 askErr 分支口径:回 -32000 让 codex 按基础设施故障自行恢复,绝不
 // 伪装用户拒绝)。var 仅为缩时单测留缝,生产不要改它。
+// 【与 server 层互指(2026-10-09)】server 侧两条审批中继路径(StartTurn 主路径 +
+// collab 成员)共用的等待上界是 thread.go 的 approvalWaitBudget(同为 15 分钟,
+// 注释见彼处):此前它在 server 层硬编码 2 分钟,把本预算整体架空(超预算分支
+// 在主路径永不触发)。改预算三处一起动:本变量、server approvalWaitBudget、
+// collab 侧引用;server 层永远 ≥ 本预算才不失义。
 var codexApprovalWaitBudget = 15 * time.Minute
 
 // codexApprovalResponder codexapp.Client 的应答面(最小接口,单测可注 fake,

@@ -927,9 +927,14 @@ func (p *ZcodeProvider) hideReasoning() bool {
 }
 
 // hideReasoningFor 是 hideReasoning 的线程感知版(P2-8,与 codex 的
-// HideReasoningFor 同语义):有设置快照的线程("设置页更改只对新建对话生效"
-// 上线后新建的会话)一律按快照值判定,与当前全局开关无关 —— 老会话的隐藏
-// 推理不随设置页漂移;旧线程(快照 nil)回退全局,保持升级前行为。
+// HideReasoningFor 同语义)。
+//
+// 【当前口径:全局优先(2026-10-09 注释与实现对齐)】快照字段
+// TurnSettings.HideReasoning 虽然随快照落库,但**不参与判定** —— 无论有无
+// 快照,一律以当前全局开关为准。这是有测试钉住的既定行为
+// (TestHideReasoningIsGlobalAcrossSnapshots,本文件族 codex_snapshot_test.go;
+// codex/pi/zcode 三家同款实现、同款全局优先 —— "切换快照语义"必须三家一起动,
+// 此处不单边改道)。
 func (p *ZcodeProvider) hideReasoningFor(t *store.Thread) bool {
 	return p.hideReasoning()
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/pocketagent/daemon/internal/mdns"
 	"github.com/pocketagent/daemon/internal/panel"
 	"github.com/pocketagent/daemon/internal/piapp"
+	"github.com/pocketagent/daemon/internal/rotatelog"
 	"github.com/pocketagent/daemon/internal/runtime"
 	"github.com/pocketagent/daemon/internal/server"
 	"github.com/pocketagent/daemon/internal/store"
@@ -141,6 +142,26 @@ func main() {
 	if *collabMCP {
 		runCollabMCP(*dataDir, *workspace)
 		return
+	}
+
+	// 【daemon.log 进程内尺寸轮转】日志经 rotatelog.Writer 落 <cwd>/daemon.log,
+	// 超 20MB 改名留一代(daemon.log.1)再续写。为什么做在进程内:daemon 长驻,
+	// paguard 只在崩溃/开机时拉起,"拉起前轮转"管不住单次运行内的增长;而
+	// paguard 既往只轮转自己的 watchdog.log,分发机器上 daemon.log 无限增长,
+	// 磁盘写满会连带打断 store 落库。路径取 cwd:paguard 拉起时 cmd.Dir=exe 目录,
+	// 与其 stderr 重定向目标(<exeDir>/daemon.log)是同一个文件 —— 由本 Writer
+	// 单点写入,inherited stderr 句柄退役,轮转后不存在"旧句柄写向已改名文件"
+	// 的增量(Windows 句柄语义的核实与取舍见 rotatelog 包注释)。
+	// 【为什么不做 stderr 镜像】生产 stderr 已被 paguard 重定向到同一文件,镜像
+	// 会双写;开发运行看文件即可(与生产同一查看路径)。子模式(-collab-mcp)
+	// 走 stdio 协议且 cwd 不可控,明确不装本 Writer(已在上方 return)。
+	if lw, lerr := rotatelog.New(filepath.Join(cwd(), "daemon.log"), rotatelog.DefaultMaxBytes); lerr != nil {
+		// 打不开文件(只读目录等):退回 stderr,daemon 照常起 —— 日志缺位
+		// 不能成为拒绝服务的理由。
+		log.Printf("WARNING: daemon.log 打开失败,日志退回 stderr: %v", lerr)
+	} else {
+		log.SetOutput(lw)
+		defer lw.Close()
 	}
 
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
@@ -299,6 +320,14 @@ func main() {
 			origins["RAMWorkingBytes"], origins["MaxParallelTurns"],
 			runtime.BudgetPolicyPath(*dataDir))
 	}
+	// 【DiskConversationBytes 接通】threads.archive 旁车归档目录的总字节上限取
+	// 预算策略全局级的 disk_conversation 值(未设置 → 维持 store 内置默认 32MB)。
+	// 此前该字段只是配置口径,全仓无执行点(假预算);这里把它接到唯一真实的
+	// 执行体 —— store 的归档总量守护(见 store_archive.go evictArchiveLocked)。
+	if lim := budgetPolicy.Effective("", "", "", ""); lim.DiskConversationBytes != nil {
+		st.SetArchiveMaxBytes(*lim.DiskConversationBytes)
+		log.Printf("[budget] disk_conversation 已执行: threads.archive 总量上限 = %dMB", *lim.DiskConversationBytes>>20)
+	}
 
 	// W10：装载协同策略（规格 §11）。与预算同款取舍：配置坏掉不让 daemon 起不来
 	// （它不是安全边界），但必须出声 —— 静默回退会让"我明明关过协同"变成灵异事件。
@@ -441,11 +470,15 @@ func main() {
 
 	// 优雅退出:Ctrl+C / kill 时先注销 mDNS(发 GOODBYE,局域网内缓存立刻过期),
 	// 再停 gRPC。进程被强杀时注销包发不出去,靠 TTL 自然过期(行为兜底,无需处理)。
+	// 【二次信号放行】首个信号后 signal.Stop 交还默认处置:gs.Stop 若因某个
+	// 连接/收尾卡住,再次 Ctrl+C 直接按默认方式终止进程,不再被同一个 goroutine
+	// 吞掉 —— 优雅退出是礼遇,不是人质。
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Printf("收到退出信号,注销 mDNS 并停止 gRPC ...")
+		log.Printf("收到退出信号,注销 mDNS 并停止 gRPC ...(再次 Ctrl+C 立即强杀)")
+		signal.Stop(sigCh)
 		mdnsReg.Shutdown()
 		gs.Stop()
 	}()

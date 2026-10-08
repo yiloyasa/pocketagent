@@ -78,7 +78,13 @@ type HostInfo struct {
 	// 损失"经 RPC 送到手机 —— 此前它只落在 daemon 日志里,用户在手机端无从知道
 	// 「上次退出时还有几条排队输入没轮到执行」。旧 daemon 不带该字段 = 未报告,
 	// 手机端据此隐藏该区块(禁用"未知/错误"措辞,AUDIT §3.3)。
-	Recovery      *HostRecoveryReport `protobuf:"bytes,12,opt,name=recovery,proto3" json:"recovery,omitempty"`
+	Recovery *HostRecoveryReport `protobuf:"bytes,12,opt,name=recovery,proto3" json:"recovery,omitempty"`
+	// 版本协商闸(A5 最小实现,2026-10-09):本 daemon 要求的最低 App 版本,
+	// 语义化版本("0.3.0")。空 = 不设限(旧 daemon 恒空,手机端照常工作)。
+	// 手机端与本机 versionName 做分量数值比较,过低时在连接诊断置"App 版本过旧"
+	// 提示位(仅提示,不阻断 —— 旧 daemon 不带该字段,不能拿它当硬闸)。
+	// 常量真源:daemon/internal/version.MinAppVersion(升级 daemon 时同步抬)。
+	MinAppVersion string `protobuf:"bytes,13,opt,name=min_app_version,json=minAppVersion,proto3" json:"min_app_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -195,6 +201,13 @@ func (x *HostInfo) GetRecovery() *HostRecoveryReport {
 		return x.Recovery
 	}
 	return nil
+}
+
+func (x *HostInfo) GetMinAppVersion() string {
+	if x != nil {
+		return x.MinAppVersion
+	}
+	return ""
 }
 
 type AuthorizeRequest struct {
@@ -1464,7 +1477,7 @@ var File_v1_host_proto protoreflect.FileDescriptor
 const file_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"\rv1/host.proto\x12\x0epocketagent.v1\x1a\x0ev1/model.proto\"\x14\n" +
-	"\x12GetHostInfoRequest\"\xa1\x03\n" +
+	"\x12GetHostInfoRequest\"\xc9\x03\n" +
 	"\bHostInfo\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x0e\n" +
@@ -1480,7 +1493,8 @@ const file_v1_host_proto_rawDesc = "" +
 	"\x0etailscale_ipv4\x18\n" +
 	" \x01(\tR\rtailscaleIpv4\x12\x19\n" +
 	"\blan_ipv4\x18\v \x01(\tR\alanIpv4\x12>\n" +
-	"\brecovery\x18\f \x01(\v2\".pocketagent.v1.HostRecoveryReportR\brecovery\"\xb4\x02\n" +
+	"\brecovery\x18\f \x01(\v2\".pocketagent.v1.HostRecoveryReportR\brecovery\x12&\n" +
+	"\x0fmin_app_version\x18\r \x01(\tR\rminAppVersion\"\xb4\x02\n" +
 	"\x10AuthorizeRequest\x12\x1d\n" +
 	"\tpair_code\x18\x01 \x01(\tH\x00R\bpairCode\x12\x16\n" +
 	"\x05token\x18\x02 \x01(\tH\x00R\x05token\x12-\n" +

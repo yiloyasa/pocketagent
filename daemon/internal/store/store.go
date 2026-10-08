@@ -307,10 +307,29 @@ type FileStore struct {
 	// quarantinePath 解析失败时的留档文件绝对路径(仅 quarantined 时非空),
 	// 供启动报告把"抢救证据在哪"一并给出。
 	quarantinePath string
+	// archiveMaxBytes threads.archive 旁车归档目录的总字节上限(见 store_archive.go
+	// evictArchiveLocked)。NewFileStore 置默认值;生产由 main 用预算策略的
+	// DiskConversationBytes 覆盖(SetArchiveMaxBytes),读路径均在 s.mu 持锁下。
+	archiveMaxBytes int64
+}
+
+// SetArchiveMaxBytes 调整归档目录总量上限。生产在启动装配期调用一次(把
+// runtime 预算策略的 DiskConversationBytes 接到唯一执行体);测试用它收紧阈值。
+// <=0 视为恢复默认。与 archiveMaxBytes 的读取方(evictArchiveLocked)同锁序。
+func (s *FileStore) SetArchiveMaxBytes(n int64) {
+	if s == nil {
+		return
+	}
+	if n <= 0 {
+		n = DefaultArchiveMaxBytes
+	}
+	s.mu.Lock()
+	s.archiveMaxBytes = n
+	s.mu.Unlock()
 }
 
 func NewFileStore(dataDir string) (*FileStore, error) {
-	s := &FileStore{path: filepath.Join(dataDir, "threads.json")}
+	s := &FileStore{path: filepath.Join(dataDir, "threads.json"), archiveMaxBytes: DefaultArchiveMaxBytes}
 	s.data.Threads = map[string]*Thread{}
 	raw, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {

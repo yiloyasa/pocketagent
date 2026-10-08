@@ -33,29 +33,6 @@ val verifySenseVoiceDependency by tasks.registering {
     }
 }
 tasks.named("preBuild").configure { dependsOn(verifySenseVoiceDependency) }
-val verifyBundledSpeechModel by tasks.registering {
-    val bundled = listOf(
-        Triple("model.int8.onnx", 239_233_841L, "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"),
-        Triple("tokens.txt", 315_894L, "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"),
-    )
-    doLast {
-        for ((name, size, sha) in bundled) {
-            val file = layout.projectDirectory.file("src/main/assets/sensevoice/$name").asFile
-            check(file.isFile && file.length() == size) { "Missing bundled $name; run build-ascii.ps1" }
-            val digest = MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input ->
-                val bytes = ByteArray(128 * 1024)
-                while (true) {
-                    val n = input.read(bytes)
-                    if (n < 0) break
-                    digest.update(bytes, 0, n)
-                }
-            }
-            check(digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) } == sha) { "Bundled $name checksum mismatch" }
-        }
-    }
-}
-tasks.named("preBuild").configure { dependsOn(verifyBundledSpeechModel) }
 
 android {
     namespace = "dev.pocketagent.app"
@@ -71,18 +48,61 @@ android {
         versionName = "0.3.0"
         // OBS-03 体检:sherpa-onnx AAR 自带 4 套 ABI(arm64-v8a/armeabi-v7a/x86/x86_64,
         // 无 mips/mips64),全量打进 universal APK 白耗体积。收窄为
-        // arm64-v8a(主力/小米13)+ armeabi-v7a(32 位老机)+ x86_64(模拟器),
-        // 剔除 x86(32 位,无真机)。原生库按 useLegacyPackaging 不压缩存储,
-        // APK 预计减少 ≈36 MB(x86: sherpa 35.6MB,见 AAR 清单)。
+        // arm64-v8a(主力/小米13)+ armeabi-v7a(32 位老机),剔掉 x86 与 x86_64。
+        // 【2026-10-09 分发资格批】release 只发这 2 套真机 ABI:x86_64(模拟器)是
+        // 交集外的纯开发 ABI,挪进 debug 的 ndk 块按需并入(abiFilters 跨维度取并集,
+        // 故 defaultConfig 里不能留它,否则 release 会跟着带上)。x86(32 位)无真机,
+        // 两边都不要。原生库按 useLegacyPackaging 不压缩存储。
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // ---- release 签名(2026-10-09 分发资格批)----
+    // 密钥库:android/keystore/release.jks(别名 pocketagent,见同目录 README.md,
+    // 含口令与"丢失后无法再分发升级"的备份警告——该文件不入 git,务必仓库外备份)。
+    // 口令注入优先级:gradle.properties(PA_RELEASE_STORE_PASSWORD /
+    // PA_RELEASE_KEY_PASSWORD)→ 同名环境变量 → 回退 README 记录的默认值。
+    // 【单机开发链路优先可用性】回退默认值让 assembleRelease 开箱即跑;
+    // 但默认值已随仓库 README 落盘,**正式对外分发前应改密**(keytool -storepasswd /
+    // -keypasswd 换口令后经 gradle.properties 或环境变量注入,并更新本地备份)。
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("keystore/release.jks")
+            storePassword = (project.findProperty("PA_RELEASE_STORE_PASSWORD") as String?)
+                ?: System.getenv("PA_RELEASE_STORE_PASSWORD")
+                ?: "***REDACTED-STORE-PASSWORD***"
+            keyAlias = "pocketagent"
+            // PKCS12 实测:keytool 忽略独立 keypass,库/钥匙口令合一(首跑 packageRelease
+            // 以"bad key"实锤)。keyPassword 缺省跟 store 口令;真需要分开时才注入
+            // PA_RELEASE_KEY_PASSWORD。
+            keyPassword = (project.findProperty("PA_RELEASE_KEY_PASSWORD") as String?)
+                ?: System.getenv("PA_RELEASE_KEY_PASSWORD")
+                ?: (project.findProperty("PA_RELEASE_STORE_PASSWORD") as String?)
+                    ?: System.getenv("PA_RELEASE_STORE_PASSWORD")
+                    ?: "***REDACTED-STORE-PASSWORD***"
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+            // 【minify 定夺】开启 R8 混淆/去糖:classes.dex 全家 ≈40MB,预期压掉一半。
+            // 依赖面已核对:无反射(getIdentifier/Class.forName 全仓 0 命中)、grpc/
+            // protobuf/pocketagent.v1 有 keep 规则(下方 proguard-rules.pro)、sherpa-onnx
+            // AAR 的 consumer proguard.txt 为空 → 已补 com.k2fsa.sherpa.onnx.** keep
+            // (libsherpa-onnx-jni.so 按名字查 Java 类,混淆即断)。release 构建的
+            // 首次验证在统一构建轮做:若 R8 报 missing-class/依赖告警,先回退
+            // isMinifyEnabled=false 只做签名(一行开关),再按告警补 -dontwarn。
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            // 模拟器开发链路保 x86_64(与 release 的真机 2 ABI 互补,见 defaultConfig 注释)。
+            ndk {
+                abiFilters += listOf("x86_64")
+            }
         }
     }
     compileOptions {
@@ -136,9 +156,11 @@ dependencies {
     implementation("javax.annotation:javax.annotation-api:1.3.2")
 
     // ---- 端侧离线语音识别(SenseVoice)----
-    // 内置 INT8 模型进 assets(构建时下载校验,见上方 verifyBundledSpeechModel),
-    // 引擎走 libs/ 下的 sherpa-onnx AAR(构建时下载+哈希校验,见上方 verifySenseVoiceDependency)。
-    // 旧遗留引擎依赖已于 2026-09-20 整体摘除(git 历史可查),端侧兜底仅剩 SenseVoice。
+    // 【2026-10-09 分发资格批】模型不再打进 APK(原 239MB ONNX 是 APK 220MB 的绝对
+    // 大头):改为首用触发按需下载/断点续传(SenseVoiceModelFiles,下载源与 SHA-256
+    // 常量见 ui/component/SenseVoiceModelManager.kt)。引擎走 libs/ 下的 sherpa-onnx
+    // AAR(构建时下载+哈希校验,见上方 verifySenseVoiceDependency)。旧遗留引擎依赖
+    // 已于 2026-09-20 整体摘除(git 历史可查),端侧兜底仅剩 SenseVoice。
     implementation(files(sherpaAar))
     testImplementation("junit:junit:4.13.2")
     // android.jar 里的 org.json 是 stub(JVM 单测调用会抛 "not mocked"),

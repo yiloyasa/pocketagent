@@ -226,7 +226,7 @@ func (s *Server) runCollabMember(sessionID, threadID, task string, gen int) {
 				ApprovalResolved: &pb.ApprovalResolved{RequestId: reqID, Note: "审批已结束"},
 			}})
 		}()
-		waitCtx, waitCancel := context.WithTimeout(actx, collabApprovalWaitTimeout)
+		waitCtx, waitCancel := context.WithTimeout(actx, approvalWaitBudget)
 		defer waitCancel()
 		var decision *pb.ApprovalDecision
 		select {
@@ -234,8 +234,9 @@ func (s *Server) runCollabMember(sessionID, threadID, task string, gen int) {
 		case <-waitCtx.Done():
 			// 无人应答 ≠ 同意:按拒绝继续(绝不代拟"同意"),成员卡同步摘下
 			// 挂起审批 —— 协同成员无人值守,不能为一笔回不了的审批把整轮吊死。
+			// 预算口径与 StartTurn 主路径同一(approvalWaitBudget,注释互指)。
 			coord.memberApprovalWaiting(sessionID, threadID, gen, request, false)
-			return false, "协同审批等待超时(2 分钟),已按拒绝继续", nil
+			return false, fmt.Sprintf("协同审批等待超时(%s),已按拒绝继续", approvalWaitBudget), nil
 		case <-runCtx.Done():
 			return false, "", runCtx.Err()
 		}

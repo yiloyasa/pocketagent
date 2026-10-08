@@ -137,6 +137,9 @@ import pocketagent.v1.CodexSettings
  * 全部随迁;共享状态(附件列表、各浮层开合、语音模式)以 [MutableState] 直传。
  * ColumnScope 接收者:模型行 `Modifier.weight(1f)` 依赖列作用域;两条骨架
  * (黑客终端 / 编辑式)共用同一份内容。
+ *
+ * 【P2-10】草稿以 provider(`() -> String`)传入:所有 `input` 读取都发生在本
+ * 子树的组合/回调时机 —— 击键只重组本子树,页面级作用域不再订阅 st.draft。
  */
 @Composable
 internal fun ColumnScope.ChatComposerArea(
@@ -144,7 +147,7 @@ internal fun ColumnScope.ChatComposerArea(
     session: TurnSessionUiState,
     ctx: Context,
     hapticView: android.view.View,
-    input: String,
+    input: () -> String,
     setInput: (String) -> Unit,
     attachments: MutableState<List<Attachment>>,
     threadAgentId: String,
@@ -304,8 +307,8 @@ internal fun ColumnScope.ChatComposerArea(
             // 视觉:纵向可滑卡面(最大 320dp,每行名称+说明完整不截断)—— 取代旧
             // "横滚 8 条"候选条,解决 codex/pi 长列表"看不全"的问题;
             // 可见性/过滤/合并/回填纯逻辑在 SlashCommandsLogic.kt。
-            val slashCandidates = if (slashPanelVisible(threadAgentId, input, slashCommands, offlineSnapshot, hostCaps)) {
-                filterSlashCandidates(slashCandidatesFor(threadAgentId, slashCommands, hostCaps), input)
+            val slashCandidates = if (slashPanelVisible(threadAgentId, input(), slashCommands, offlineSnapshot, hostCaps)) {
+                filterSlashCandidates(slashCandidatesFor(threadAgentId, slashCommands, hostCaps), input())
             } else {
                 emptyList()
             }
@@ -332,21 +335,21 @@ internal fun ColumnScope.ChatComposerArea(
                                 .pressable {
                                     when (c.action) {
                                         SlashAction.GOAL -> {
-                                            setInput(stripSlashToken(input))
+                                            setInput(stripSlashToken(input()))
                                             slashGoalSheet.value = true
                                         }
                                         SlashAction.COMPACT -> {
-                                            setInput(stripSlashToken(input))
+                                            setInput(stripSlashToken(input()))
                                             onCompact()
                                         }
                                         SlashAction.REVIEW -> {
                                             // "/计划":词元后已敲的文字作为审查重点
                                             // (通常为空,daemon 有默认口径),清空输入框后发起。
-                                            val reviewFocus = stripSlashToken(input)
+                                            val reviewFocus = stripSlashToken(input())
                                             setInput("")
                                             onStartReview(reviewFocus)
                                         }
-                                        SlashAction.FILL -> setInput(applySlashPick(input, c, threadAgentId))
+                                        SlashAction.FILL -> setInput(applySlashPick(input(), c, threadAgentId))
                                     }
                                 }
                                 .background(
@@ -378,7 +381,7 @@ internal fun ColumnScope.ChatComposerArea(
             // (AUDIT §3.3:遇未知值给人话,禁止"未知/错误"字样)。agentId 还没拉到
             // (加载中)与离线态都不提示,避免闪错/与离线横幅重复;纯逻辑见
             // slashUnknownAgentHintVisible(SlashCommandsLogic.kt)。
-            if (slashUnknownAgentHintVisible(threadAgentId, input, offlineSnapshot)) {
+            if (slashUnknownAgentHintVisible(threadAgentId, input(), offlineSnapshot)) {
                 Text(
                     SLASH_UNKNOWN_AGENT_HINT,
                     fontSize = PaEditorial.Type.Caption.fontSize,
@@ -408,7 +411,7 @@ internal fun ColumnScope.ChatComposerArea(
                 // (TextLayoutResult.lineCount,含自动换行),不按字符数猜。
                 var inputWrapLines by remember { mutableStateOf(1) }
                 BasicTextField(
-                    value = input,
+                    value = input(),
                     onValueChange = { setInput(it) },
                     onTextLayout = { inputWrapLines = it.lineCount },
                     modifier = Modifier
@@ -436,7 +439,7 @@ internal fun ColumnScope.ChatComposerArea(
                         // 黑客终端模式:输入非空时行首渲染 `❯ ` 提示符装饰(PaEditorial.Primary);
                         // 空输入显示 hint,不显示 ❯(见 composerShowsPrompt 纯函数)。
                         Row(verticalAlignment = Alignment.Top) {
-                            if (PaHacker.isHacker && composerShowsPrompt(input)) {
+                            if (PaHacker.isHacker && composerShowsPrompt(input())) {
                                 Text(
                                     "❯ ",
                                     color = ChatAccentColor,
@@ -446,7 +449,7 @@ internal fun ColumnScope.ChatComposerArea(
                                 )
                             }
                             Box {
-                                if (input.isEmpty()) {
+                                if (input().isEmpty()) {
                                     Text(
                                         when {
                                             offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
@@ -497,7 +500,7 @@ internal fun ColumnScope.ChatComposerArea(
                 ) {
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
-                        tint = if (input.length > EXPAND_HINT_THRESHOLD) ChatAccentColor else ChatSubtleColor,
+                        tint = if (input().length > EXPAND_HINT_THRESHOLD) ChatAccentColor else ChatSubtleColor,
                         modifier = Modifier
                             .padding(end = 3.5.dp, top = 3.5.dp)
                             .size(15.dp),
@@ -882,13 +885,13 @@ internal fun ColumnScope.ChatComposerArea(
                 // 【P1-4】running 时输入可用,发送键变为「插入运行中任务」:
                 // 图标(列表+勾)与箭头区分,内容描述同步,让读屏与视觉都能分清
                 // "开新任务"与"插进正在跑的任务(或排队)"。离线快照态一律禁用。
-                val sendEnabled = !offlineSnapshot && input.isNotBlank() && !session.recovering
+                val sendEnabled = !offlineSnapshot && input().isNotBlank() && !session.recovering
                 val inserting = session.running
                 // R2 停止可达性:运行中且输入为空 → 发送键原位变「终止」键(与
                 // ChatGPT/Codex 移动端同位语义:拇指不动就能停),不再是灰死的箭头。
                 // 运行中且输入非空 = P1-4 的「插入」,语义让位给输入;顶栏(黑客终端)
                 // 与「更多」(编辑式)的终止入口原样保留作兜底。
-                val canStopTurn = session.running && input.isBlank() && !offlineSnapshot
+                val canStopTurn = session.running && input().isBlank() && !offlineSnapshot
                 Box(
                     Modifier
                         // PA-REAL-0004:触控箱 ≥48dp(原 40dp)。Accent 圆底下沉一层保持
@@ -904,7 +907,7 @@ internal fun ColumnScope.ChatComposerArea(
                                 Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
                             } else {
                                 PaHaptics.confirm(hapticView)
-                                if (onSend(input)) setInput("")
+                                if (onSend(input())) setInput("")
                             }
                         },
                     contentAlignment = Alignment.Center,

@@ -193,6 +193,9 @@ class TurnEventResumeTest {
         )
         assertEquals(TurnSession.ReplayOutcome.CAUGHT_UP, outcome)
         assertTrue(st.streaming) // 电脑端还在跑,流式状态保持
+        // 【P1-5 锚点更新】delta 改走 StringBuilder 缓冲 + 120ms 巡检发布;断言前
+        // flush 追平(回放累积语义不变,"帧后立即可读"属实现细节)
+        TurnSession.flushStreamBuffers(st)
         assertEquals("正在", st.streamText)
         assertEquals(6L, st.lastSequence)
     }

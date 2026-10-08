@@ -56,6 +56,12 @@ message HostInfo {
   // 「上次退出时还有几条排队输入没轮到执行」。旧 daemon 不带该字段 = 未报告,
   // 手机端据此隐藏该区块(禁用"未知/错误"措辞,AUDIT §3.3)。
   HostRecoveryReport recovery = 12;
+  // 版本协商闸(A5 最小实现,2026-10-09):本 daemon 要求的最低 App 版本,
+  // 语义化版本("0.3.0")。空 = 不设限(旧 daemon 恒空,手机端照常工作)。
+  // 手机端与本机 versionName 做分量数值比较,过低时在连接诊断置"App 版本过旧"
+  // 提示位(仅提示,不阻断 —— 旧 daemon 不带该字段,不能拿它当硬闸)。
+  // 常量真源:daemon/internal/version.MinAppVersion(升级 daemon 时同步抬)。
+  string min_app_version = 13;
 }
 
 message AuthorizeRequest {

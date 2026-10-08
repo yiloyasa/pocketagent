@@ -16,6 +16,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -40,10 +41,28 @@ func Paths(dataDir string) (certPath, keyPath string) {
 // Ensure 保证 dataDir/certs 下有一对可用的自签证书:
 // 已存在则直接加载复用;缺失则生成 ECDSA P-256 自签证书并落盘(私钥 0600)。
 // 返回可直接交给 gRPC 的 tls.Certificate。
+//
+// 【损坏路径(2026-10-09 重排)】加载失败 ≠ 文件缺失:磁盘坏块/误编辑会让
+// "文件在但解析不了"。此前实现把两种情况混为一谈,无条件静默换新证书 ——
+// 指纹一换,所有已配对手机的 TOFU 校验全部失败,全员掉线且日志里无一字线索。
+// 现在:重签前把旧证书/私钥改名留档(.corrupt-<unix 秒>,照 store 的
+// quarantineCorruptFile 先例,原始字节保留供比对/抢救),并打醒目 WARNING
+// (写明"所有设备需重新配对")。留档本身失败不阻塞重签(证书体系必须能自愈,
+// 否则 daemon 起不来;证据丢失只降低可追查性)。
 func Ensure(dataDir string) (tls.Certificate, error) {
 	certPath, keyPath := Paths(dataDir)
 	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
 		return cert, nil
+	} else if loadErr := err; anyFileExists(certPath, keyPath) {
+		stamp := time.Now().Unix()
+		quarantined := []string{}
+		for _, p := range []string{certPath, keyPath} {
+			qPath := fmt.Sprintf("%s.corrupt-%d", p, stamp)
+			if qerr := os.Rename(p, qPath); qerr == nil {
+				quarantined = append(quarantined, qPath)
+			}
+		}
+		log.Printf("WARNING: TLS 证书/私钥加载失败,已换发新证书 —— 所有已配对设备(手机)的指纹校验将失败,需要全部重新配对!| 原错误: %v | 旧文件已留档: %v", loadErr, quarantined)
 	}
 	certPEM, keyPEM, err := generate()
 	if err != nil {
@@ -64,6 +83,17 @@ func Ensure(dataDir string) (tls.Certificate, error) {
 		return tls.Certificate{}, fmt.Errorf("解析刚生成的证书失败: %w", err)
 	}
 	return cert, nil
+}
+
+// anyFileExists 报告任一路径所指文件确实存在(区分"损坏重签"与"首次生成":
+// 首次生成两个文件都不在,无需留档也无需告警)。
+func anyFileExists(paths ...string) bool {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // generate 生成一张 ECDSA P-256 自签服务器证书:

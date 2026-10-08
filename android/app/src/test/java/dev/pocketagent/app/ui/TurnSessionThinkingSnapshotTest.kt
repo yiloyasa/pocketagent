@@ -16,6 +16,13 @@ import pocketagent.v1.TurnServerMessage
  * 实时流与回放(GetThreadEventsSince)共用 applyServerFrame 同一分支,这里
  * 两条路径都钉:snapshot 非空 → 替换;snapshot 空(旧 daemon/普通 delta 帧)
  * → 追加,与旧版行为一字不差。
+ *
+ * 【P1-5 锚点更新说明】性能批把 thinkingText/streamText 的"逐帧字符串拼接"改成
+ * StringBuilder 缓冲 + 120ms 巡检发布(snapshot 权威帧仍即时发布)。测试里断言前
+ * 统一先调 [TurnSession.flushStreamBuffers] 追平发布节奏 —— 累积语义与消费点
+ * (落卡/终局/checkpoint)行为不变,"delta 帧后 mutableStateOf 立即可读"属实现
+ * 细节,锚点随结构更新;发布节奏本身由 UI 侧的 displayedStream 节流快照兜底,
+ * 不在本纯 JVM 用例的证明范围。
  */
 class TurnSessionThinkingSnapshotTest {
 
@@ -27,6 +34,9 @@ class TurnSessionThinkingSnapshotTest {
             )
             .build()
 
+    /** 断言前追平 P1-5 的缓冲发布(见类注释的锚点更新说明)。 */
+    private fun flush(st: TurnSession.State) = TurnSession.flushStreamBuffers(st)
+
     // ------------------------------------------------------ snapshot 替换 / delta 追加
 
     @Test
@@ -37,6 +47,7 @@ class TurnSessionThinkingSnapshotTest {
             "t-snap", st, thinkingFrame(snapshot = "权威全文(丢帧兜底)"), replay = false,
         )
         // snapshot 是权威真相:整体替换,不与此前累积拼接
+        flush(st)
         assertEquals("权威全文(丢帧兜底)", st.thinkingText)
     }
 
@@ -46,6 +57,7 @@ class TurnSessionThinkingSnapshotTest {
         TurnSession.applyServerFrame("t-delta", st, thinkingFrame(delta = "思考"), replay = false)
         TurnSession.applyServerFrame("t-delta", st, thinkingFrame(delta = "进行"), replay = false)
         TurnSession.applyServerFrame("t-delta", st, thinkingFrame(delta = "中"), replay = false)
+        flush(st)
         assertEquals("思考进行中", st.thinkingText)
     }
 
@@ -55,6 +67,7 @@ class TurnSessionThinkingSnapshotTest {
         TurnSession.applyServerFrame("t-fallback", st, thinkingFrame(delta = "增量"), replay = false)
         // 显式空 snapshot(daemon 只想补一帧 delta)→ 追加,不得把已有累积清掉
         TurnSession.applyServerFrame("t-fallback", st, thinkingFrame(delta = "+续", snapshot = ""), replay = false)
+        flush(st)
         assertEquals("增量+续", st.thinkingText)
     }
 
@@ -67,6 +80,7 @@ class TurnSessionThinkingSnapshotTest {
             .setThinkingDelta(ThinkingDelta.newBuilder().setDelta("b"))
             .build()
         TurnSession.applyServerFrame("t-legacy", st, legacy, replay = false)
+        flush(st)
         assertEquals("ab", st.thinkingText)
     }
 
@@ -81,6 +95,7 @@ class TurnSessionThinkingSnapshotTest {
         TurnSession.applyServerFrame("t-mix", st, thinkingFrame(snapshot = "AB+修正"), replay = false)
         // 3) 新一轮思考继续在权威全文之后追加
         TurnSession.applyServerFrame("t-mix", st, thinkingFrame(delta = "C"), replay = false)
+        flush(st)
         assertEquals("AB+修正C", st.thinkingText)
     }
 
@@ -89,6 +104,7 @@ class TurnSessionThinkingSnapshotTest {
         val st = TurnSession.State()
         TurnSession.applyServerFrame("t-snap2", st, thinkingFrame(snapshot = "第一版全文"), replay = false)
         TurnSession.applyServerFrame("t-snap2", st, thinkingFrame(snapshot = "第二版全文"), replay = false)
+        flush(st)
         assertEquals("第二版全文", st.thinkingText)
     }
 
@@ -103,6 +119,7 @@ class TurnSessionThinkingSnapshotTest {
             "t-replay", st,
             listOf(thinkingFrame(snapshot = "回放权威全文")),
         )
+        flush(st)
         assertEquals("回放权威全文", st.thinkingText)
         // 无终局帧 → 只是追平,不算恢复完成
         assertEquals(TurnSession.ReplayOutcome.CAUGHT_UP, outcome)
@@ -115,6 +132,7 @@ class TurnSessionThinkingSnapshotTest {
             "t-replay2", st,
             listOf(thinkingFrame(delta = "x"), thinkingFrame(delta = "y")),
         )
+        flush(st)
         assertEquals("xy", st.thinkingText)
         assertEquals(TurnSession.ReplayOutcome.CAUGHT_UP, outcome)
     }

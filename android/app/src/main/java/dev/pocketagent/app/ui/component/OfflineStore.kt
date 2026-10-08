@@ -312,9 +312,27 @@ object OfflineStore {
         runCatching {
             val key = cacheKey(url)
             val capHex = if (capturedAtMs > 0) capturedAtMs.toString(16) else "0"
-            File(d, "$key.$capHex.${hex(mime)}.${hex(name)}").writeBytes(bytes)
+            val fresh = File(d, "$key.$capHex.${hex(mime)}.${hex(name)}")
+            fresh.writeBytes(bytes)
+            // 【N2】同 URL 只留最新一份:写入成功后清掉同 key 的旧快照文件(含旧格式
+            // 无时间戳段的文件)。否则二次存档会让目录里同 URL 堆多份,读取侧还要
+            // 挑版本,LRU 容量也被旧版本白占。
+            d.listFiles { f -> f.isFile && f.name.startsWith("$key.") }?.forEach { f ->
+                if (f.name != fresh.name) runCatching { f.delete() }
+            }
             evictIfNeeded("url")
         }
+    }
+
+    /**
+     * 候选文件名里的 capturedAt 段(N2):新格式(≥3 段)取首段十六进制时间戳;
+     * 旧格式(两段,无时间戳段)或段缺失/非法返回 0 —— 语义与 [getUrl] 的解析
+     * 完全一致。0 不参与"新档优先"比较,只落 mtime 回退。
+     */
+    private fun fileNameCapturedAt(file: File, key: String): Long {
+        val segs = file.name.substringAfter("$key.").split('.')
+        if (segs.size < 3) return 0L
+        return segs[0].toLongOrNull(16) ?: 0L
     }
 
     /** 取一份网页快照;命中即 touch(参与 LRU),未命中返回 null。 */
@@ -323,8 +341,19 @@ object OfflineStore {
         if (url.isBlank()) return null
         return runCatching {
             val key = cacheKey(url)
-            val hit = d.listFiles { f -> f.isFile && f.name.startsWith("$key.") }
-                ?.maxByOrNull { it.lastModified() } ?: return@runCatching null
+            val candidates = d.listFiles { f -> f.isFile && f.name.startsWith("$key.") }
+            if (candidates.isNullOrEmpty()) return@runCatching null
+            // 【N2】候选挑选按文件名 capturedAt 段最大(新档权威):mtime 是"最后一次
+            // 查看"不是"内容新旧",旧档被 touch 过就会压过新档 —— 按内容自带的时间戳
+            // 选才对。旧格式(无时间戳段)capturedAt=0,彼此之间按 mtime 回退;一旦
+            // 目录里出现任何带有效时间戳的新档,旧档必输(putUrl 已同时清旧档,
+            // 这里是存量混合目录的兜底口径)。
+            val hit = candidates.maxWithOrNull(
+                compareBy(
+                    { f -> fileNameCapturedAt(f, key) },
+                    { f -> f.lastModified() },
+                ),
+            ) ?: return@runCatching null
             val rest = hit.name.substringAfter("$key.")
             // 段语义:hex 段内不含点,段数即格式判据 ——
             //   新格式 "<capturedAtHex>.<hexMime>.<hexName>"(三段);

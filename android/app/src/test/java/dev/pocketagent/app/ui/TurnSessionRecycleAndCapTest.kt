@@ -133,6 +133,50 @@ class TurnSessionRecycleAndCapTest {
         assertEquals(newlyFolded + carried, markers.single().trimmedCount)
     }
 
+    // ------------------------------------------------------------ 封顶入口(P1-3)
+
+    @Test
+    fun `未超上限 enforceTimelineCap 零变化_不触发整表替换`() {
+        // P1-3:封顶入口在未超限时应 O(1) 早退(旧实现每帧 toList() 整表复制后
+        // 又原样换回)。行为级钉法:上限内条目逐条原样保留(同引用、同序)。
+        val st = TurnSession.State()
+        val items = bulk(10)
+        st.items.addAll(items)
+        TurnSession.enforceTimelineCap(st)
+        assertEquals(10, st.items.size)
+        assertEquals(items, st.items.toList())
+    }
+
+    @Test
+    fun `超上限 enforceTimelineCap 中间截断`() {
+        val st = TurnSession.State()
+        st.items.addAll(bulk(TurnSession.TIMELINE_MAX_ITEMS + 100))
+        TurnSession.enforceTimelineCap(st)
+        // 头 50 + 折叠标记 1 + 尾 300 = 351
+        assertEquals(351, st.items.size)
+        assertEquals("items_trimmed", st.items[TurnSession.TIMELINE_KEEP_HEAD].role)
+    }
+
+    // ------------------------------------------------------------ 只读访问器(P1-4)
+
+    @Test
+    fun `peek 不存在的会话返回 null 且不创建 State`() {
+        // P1-4:通知轮询改走 peek —— 不存在的 threadId 不许经 getOrPut 凭空拉起
+        // State(旧实现走 state(),轮询把"登记过"的 id 全部实体化,states 无界增长)。
+        val tid = "peek-never-exists-${System.nanoTime()}"
+        assertNull(TurnSession.peek(tid))
+    }
+
+    @Test
+    fun `peek 返回既有 State 且不刷新访问时刻`() {
+        val tid = "peek-existing-${System.nanoTime()}"
+        val st = TurnSession.state(tid) // state():创建并刷 lastAccessAt(既有语义)
+        val accessBefore = st.lastAccessAt
+        Thread.sleep(2) // 墙钟推进一点点,证明 peek 不写访问时刻
+        assertSame(st, TurnSession.peek(tid))
+        assertEquals("peek 不得刷新 lastAccessAt(通知轮询不算访问)", accessBefore, st.lastAccessAt)
+    }
+
     // ------------------------------------------------------------ 稳定 id(C2)
 
     @Test

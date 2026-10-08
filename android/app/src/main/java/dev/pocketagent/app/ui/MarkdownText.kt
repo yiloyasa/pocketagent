@@ -473,8 +473,14 @@ private fun RenderMdBlock(block: MdBlock, fontSize: Float) {
 
 @Composable
 private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float, color: Color = PaEditorial.Ink) {
+    // 【P1-6】AnnotatedString 按 line 缓存:旧实现在每次重组都 line.annotated() 逐行
+    // 重建(spans→AnnotatedString 的 buildAnnotatedString 全量重跑)。MarkdownLine 是
+    // data class,equals 为结构比较(spans 列表逐元素比较),内容不变即命中缓存。
+    // 颜色等盘面状态参与 key:三盘换肤(IsDark/黑客盘切换)时强制重建,
+    // 与 MarkdownCodeBlock「remember 键含 colors」的换肤即时重映色纪律一致。
+    val annotated = remember(line, PaEditorial.IsDark, PaHacker.isHacker) { line.annotated() }
     Text(
-        text = line.annotated(),
+        text = annotated,
         // 黑客终端模式:正文行整体等宽(代码块本来就是等宽,普通行随之统一)。
         // 字体走 theme 层令牌 PaEditorial.MonoFont(JetBrains Mono,下载落库 res/font;
         // 等宽统一 2026-10-09)。

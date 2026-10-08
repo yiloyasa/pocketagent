@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -156,5 +157,64 @@ func TestEnsureGeneratesAndReloads(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("证书文件应存在: %s: %v", p, err)
 		}
+	}
+}
+
+// TestEnsureQuarantinesCorruptPairBeforeReissue 损坏路径:文件在但解析不了 →
+// 旧对改名留档(.corrupt-<ts>,照 store quarantineCorruptFile 先例)→ 重签新对。
+// 钉的是"静默换证不留档不留痕"回归:指纹一换所有已配对手机掉线,现场必须有
+// 留档与日志可追查。
+func TestEnsureQuarantinesCorruptPairBeforeReissue(t *testing.T) {
+	dir := t.TempDir()
+	cert1, err := Ensure(dir)
+	if err != nil {
+		t.Fatalf("首次生成: %v", err)
+	}
+	oldPin := fingerprintOf(cert1.Certificate[0])
+	certPath, keyPath := Paths(dir)
+
+	// 私钥被写坏(磁盘坏块/误编辑的等效注入):证书还认得,私钥解析不了。
+	if err := os.WriteFile(keyPath, []byte("corrupted key bytes, not a pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cert2, err := Ensure(dir)
+	if err != nil {
+		t.Fatalf("损坏后 Ensure 必须自愈重签: %v", err)
+	}
+	newPin := fingerprintOf(cert2.Certificate[0])
+	if newPin == oldPin {
+		t.Fatal("损坏后应换发新证书(指纹必须变化)")
+	}
+
+	// 旧对已留档:恰好两个 .corrupt-* 文件,原始字节原样保留。
+	quarantineDir := filepath.Dir(certPath)
+	matches, err := filepath.Glob(filepath.Join(quarantineDir, "*.corrupt-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("应恰好留档 2 个文件(证书+私钥),得到 %v", matches)
+	}
+	for _, q := range matches {
+		raw, rerr := os.ReadFile(q)
+		if rerr != nil {
+			t.Fatalf("留档不可读: %v", rerr)
+		}
+		if len(raw) == 0 {
+			t.Fatalf("留档为空: %s", q)
+		}
+	}
+
+	// 常规路径上是全新可用的一对(再次 Ensure 复用,不再触发重签)。
+	cert3, err := Ensure(dir)
+	if err != nil {
+		t.Fatalf("重签后的证书必须可用: %v", err)
+	}
+	if fingerprintOf(cert3.Certificate[0]) != newPin {
+		t.Fatal("重签后的证书应被正常复用")
+	}
+	if _, err := os.Stat(certPath); err != nil {
+		t.Fatalf("新证书应落回常规路径: %v", err)
 	}
 }

@@ -85,7 +85,7 @@ import dev.pocketagent.app.ui.chatItemContentType
 import dev.pocketagent.app.ui.editorialDeliveryCopy
 import dev.pocketagent.app.ui.extractPcPaths
 import dev.pocketagent.app.ui.humanizeMethodError
-import dev.pocketagent.app.ui.loadAttachmentPreview
+import dev.pocketagent.app.ui.rememberAttachmentThumbnail
 import dev.pocketagent.app.ui.offlineSnapshotBanner
 import dev.pocketagent.app.ui.queueClearVisible
 import dev.pocketagent.app.ui.selectedAgentLabel
@@ -511,7 +511,9 @@ internal fun ColumnScope.ChatTimelineArea(
     if (latestPlan.isNotEmpty()) {
         PlanPanel(
             steps = latestPlan,
-            draft = if (session.running) st.planStream else "",
+            // 【P2-13】planStream 以 provider 下沉:草稿只在 PlanPanel 内部(展开区)
+            // 订阅,不再让整个时间线区随每个计划 delta 全区重组。
+            draft = { if (session.running) st.planStream else "" },
             running = session.running,
             expanded = planPanelOpen.value,
             onToggle = { planPanelOpen.value = !planPanelOpen.value },
@@ -543,6 +545,26 @@ internal fun ColumnScope.ChatTimelineArea(
             }
     }
 
+    // ---- 流式思考节流快照(P1-7,与上方 displayedStream 同款口径)----
+    // 旧实现 item 内容直读 st.thinkingText:每个思考 delta 全文重排版一次。这里
+    // 复制 120ms 合并快照:中间帧只写 displayedThinking;「文本清空(思考已落卡)
+    // 立即追平」的终局一致性语义与 displayedStream 相同 —— 落卡的瞬间快照同步清空,
+    // 卡片不会在时间线上残留或延迟出现超过一帧。可见性条件读快照(delta 只触发
+    // 本快照写入,不再逐帧重组整个时间线区)。
+    var displayedThinking by remember(st) { mutableStateOf("") }
+    LaunchedEffect(st) {
+        snapshotFlow { st.thinkingText }
+            .collect { text ->
+                when {
+                    text.isEmpty() -> displayedThinking = text
+                    text != displayedThinking -> {
+                        delay(STREAM_RENDER_THROTTLE_MS)
+                        displayedThinking = st.thinkingText
+                    }
+                }
+            }
+    }
+
     // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----
     // 【进入动画的武装记录】记住"上一帧组合时的条目数":仅在"末尾追加了新消息"
     // 的那一帧允许进入动画(见 MessageEnterAnimation)。null = 本页首帧,绝不播
@@ -555,6 +577,17 @@ internal fun ColumnScope.ChatTimelineArea(
     // (ChatScreen 侧同式求值),这里不再重复。
     // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
     val lastQueuedIndex = session.lastQueuedIndex
+    // 【P1-6】item 内容 lambda 的直读上提:st.items.lastIndex/size/[index±1] 与
+    // prevItemCount.value 原先在**每个 item 的内容 lambda 里**读 —— 每个可见 item
+    // 的重组作用域都被订阅到整表/这些状态,任何一条消息变化都会让全可见区逐条重算。
+    // 现在在列表作用域一次读出(快照进普通局部值),item lambda 只按 index 取用,
+    // 不再订阅快照状态。
+    val itemCountNow = st.items.size
+    val lastItemIndexNow = itemCountNow - 1
+    val prevItemCountNow = prevItemCount.value
+    val itemRolesNow = ArrayList<String>(itemCountNow).also { roles ->
+        for (i in 0 until itemCountNow) roles += st.items[i].role
+    }
     // 消息列表容器(Box):列表本体 + P0-1 的「↓ N 条新内容」悬浮胶囊同层,
     // 常规气泡与 hacker 终端块共用(锚定状态与胶囊都只此一份)。
     Box(Modifier.weight(1f)) {
@@ -604,10 +637,10 @@ internal fun ColumnScope.ChatTimelineArea(
             contentType = { _, item -> chatItemContentType(PaHacker.isHacker, item) },
         ) { index, item ->
             // 进入动画只武装"新消息追加"的那一帧(见上方 prevItemCount 注释)
-            val prevCount = prevItemCount.value
-            val enterArm = prevCount != null &&
-                index == st.items.lastIndex &&
-                st.items.size > prevCount
+            // 【P1-6】三个直读全部换用列表作用域快照(见 itemCountNow 注释)
+            val enterArm = prevItemCountNow != null &&
+                index == lastItemIndexNow &&
+                itemCountNow > prevItemCountNow
             // R2-A:本条消息的「选择文本」模式。长按默认开菜单(见用户/回复气泡的
             // longPressMenu),选一段文字改为从菜单进入 —— 手柄拖选能力不丢,但不再
             // 与菜单抢同一个长按手势。滑出屏幕即复位(remember 跟随 item 生命周期)。
@@ -655,12 +688,11 @@ internal fun ColumnScope.ChatTimelineArea(
                                     rowAttachments.forEach { attachment ->
                                         AttachmentCard(
                                             attachment = attachment,
-                                            preview = remember(
-                                                attachment.name,
-                                                attachment.previewData?.contentHashCode(),
-                                            ) {
-                                                loadAttachmentPreview(ctx, attachment)
-                                            },
+                                            // 【P0-2/P1-8】key 直接用 previewData 引用(equals=引用
+                                            // 比较)—— 旧 key `previewData?.contentHashCode()` 在
+                                            // 每次重组的键求值里对整图(1-5MB)做哈希;两段式
+                                            // ~128px 解码挪进 produceState/IO(见 rememberAttachmentThumbnail)。
+                                            preview = rememberAttachmentThumbnail(ctx, attachment),
                                             modifier = Modifier.weight(1f),
                                             onClick = { onOpenAttachment(attachment) },
                                         )
@@ -701,8 +733,9 @@ internal fun ColumnScope.ChatTimelineArea(
                     // 相接两侧的圆角收小(7dp)读作"同一段话的延续"。纯视觉:offset
                     // 只动摆放位置,LazyColumn 的排列/锚定/回收行为零变化,黑客终端
                     // 块(22dp 大留白的终端语言)不参与分组。
-                    val prevIsUser = index > 0 && st.items[index - 1].role == "user"
-                    val nextIsUser = index < st.items.lastIndex && st.items[index + 1].role == "user"
+                    // 【P1-6】邻居角色改读列表作用域快照(itemRolesNow),不再订阅整表
+                    val prevIsUser = index > 0 && itemRolesNow[index - 1] == "user"
+                    val nextIsUser = index < lastItemIndexNow && itemRolesNow[index + 1] == "user"
                     val bubbleShape = if (PaHacker.isHacker) {
                         RoundedCornerShape(PaEditorial.Radius.Terminal)
                     } else {
@@ -761,12 +794,9 @@ internal fun ColumnScope.ChatTimelineArea(
                                     rowAttachments.forEach { attachment ->
                                         AttachmentCard(
                                             attachment = attachment,
-                                            preview = remember(
-                                                attachment.name,
-                                                attachment.previewData?.contentHashCode(),
-                                            ) {
-                                                loadAttachmentPreview(ctx, attachment)
-                                            },
+                                            // 【P0-2/P1-8】同上:key 用 previewData 引用,解码走
+                                            // produceState/IO 的两段式缩略图
+                                            preview = rememberAttachmentThumbnail(ctx, attachment),
                                             modifier = Modifier.weight(1f),
                                             onClick = { onOpenAttachment(attachment) },
                                         )
@@ -951,9 +981,12 @@ internal fun ColumnScope.ChatTimelineArea(
             }
         }
         // 流式思考:边想边展示,和落定的思考卡同款样式
-        if (st.running && AgentConnection.showThinking && st.thinkingText.isNotEmpty()) {
+        // 【P1-7】直读 st.thinkingText 换成 120ms 节流快照 displayedThinking:
+        // 逐 delta 全文重排版收敛为每 120ms 一次;落卡清空的瞬间快照立即追平,
+        // 卡片消失时机与旧实现同帧。
+        if (st.running && AgentConnection.showThinking && displayedThinking.isNotEmpty()) {
             item(key = "streaming-thinking") {
-                ThinkingCard(st.thinkingText, thinkScale, streaming = true)
+                ThinkingCard(displayedThinking, thinkScale, streaming = true)
             }
         }
         // 流式执行计划:已由上方 PlanPanel 承担(它同时兼做收起的进度条),

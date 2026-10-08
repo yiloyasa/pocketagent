@@ -235,9 +235,11 @@ private fun PaSheetCentered(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            // 满幅档:无卡可装——去宽度/高度帽与玻璃/海拔,内容自己铺(fillMaxSize);
+            // 满幅档:无卡可装——去宽度/高度帽与玻璃/海拔,内容自己铺;【N4】内容根
+            // 在封装内强制 fillMaxSize(),不靠调用方自觉(旧实现给裸 Modifier,漏挂
+            // fillMaxSize 的内容会塌成包裹尺寸,满幅档名不副实)。
             // 弹簧出场与关闭语义保持同族。
-            val cardMods = if (fullBleed) Modifier else Modifier
+            val cardMods = if (fullBleed) Modifier.fillMaxSize() else Modifier
                 .padding(horizontal = 23.dp)
                 .widthIn(max = 400.dp)
                 .heightIn(max = maxH)

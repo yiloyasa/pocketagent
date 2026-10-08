@@ -169,6 +169,8 @@ type CollabSessionStore interface {
 	GetSession(ctx context.Context, id string) (CollabSession, bool)
 	ListSessions(ctx context.Context, includeFinished bool) []CollabSession
 	UpdateSession(ctx context.Context, s CollabSession) error
+	// DeleteSession 删除会话及其事件文件(thread 删除级联用;见实现注释)。
+	DeleteSession(ctx context.Context, id string) error
 	AppendEvent(ctx context.Context, e CollabEvent) (int64, error)
 	ReplayEvents(ctx context.Context, id string, after int64) ([]CollabEvent, error)
 }
@@ -443,6 +445,38 @@ func (s *FileCollabSessionStore) UpdateSession(ctx context.Context, sess CollabS
 	stored.UpdatedAt = time.Now().UnixMilli()
 	s.sessions[sess.ID] = collabSessionRecord{Session: stored, BaseSequence: rec.BaseSequence}
 	return s.saveLocked()
+}
+
+// DeleteSession 删除会话及其事件文件。会话不存在报 ErrCollabSessionNotFound。
+//
+// 【为什么必须有它】此前只有 Create/Get/List/Update/Append/Replay,没有任何
+// 删除入口 —— 用户删掉一个作为协同成员的子线程后,sessions.json 里的会话与
+// events/<id>.jsonl 永久残留(元数据里还挂着指向已删线程的 thread_id),
+// 随 ListSessions 一路透出到手机端。现在由 server 的 DeleteThread 级联调用。
+//
+// 【失败边界】元数据删除为准(saveLocked 成功即删成);事件文件删除是尽力
+// 而为:删失败只告警 —— 会话已从元数据移除,孤儿事件文件不再被任何读路径
+// (loadEventFile 只按 sessions.json 里存在的会话加载)读到,仅占磁盘,不产生
+// 幽灵状态。内存侧事件与序号一并清空。
+func (s *FileCollabSessionStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return fmt.Errorf("collab session %q: %w", id, ErrCollabSessionNotFound)
+	}
+	delete(s.sessions, id)
+	delete(s.events, id)
+	delete(s.lastSeq, id)
+	if err := s.saveLocked(); err != nil {
+		return err
+	}
+	if err := os.Remove(s.eventFilePath(id)); err != nil && !os.IsNotExist(err) {
+		log.Printf("[store:collab] WARNING: 会话 %q 事件文件删除失败(会话元数据已删,文件成孤儿留档): %v", id, err)
+	}
+	return nil
 }
 
 // AppendEvent 向会话事件流追加一条事件,返回新派发的序号。序号每会话单调递增

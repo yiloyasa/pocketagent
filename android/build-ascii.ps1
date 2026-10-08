@@ -63,33 +63,40 @@ if (!(Test-Path -LiteralPath $aar) -or (Get-FileHash -LiteralPath $aar -Algorith
     Move-Item -LiteralPath $download -Destination $aar -Force
 }
 
-# Models are BUILD inputs, not phone downloads. Both sources must produce the
-# exact pinned SHA-256; the mirror is only a transport alternative in China.
-$speechAssets = Join-Path $src 'app\src\main\assets\sensevoice'
+# [2026-10-09 release-readiness batch] The speech model is NO LONGER a build input:
+# the APK does not bundle the 239MB ONNX any more (assets/sensevoice is empty now;
+# APK shrinks from ~220MB to ~15MB). The phone downloads on demand via
+# SenseVoiceModelFiles, burning the same dual sources + SHA-256 as listed below.
+# This block now only maintains the archive copy under repo dist/models/ (not in
+# git; for sideload/manual distribution):
+#   - verified archive copy present -> skip, zero network;
+#   - missing/corrupt              -> re-download from the dual sources;
+#   - network unavailable          -> warn only, the build no longer depends on it.
 $speechFiles = @(
     @{ Name = 'model.int8.onnx'; Hash = 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' },
     @{ Name = 'tokens.txt'; Hash = 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' }
 )
 $speechRepo = 'csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07'
-New-Item -ItemType Directory -Force -Path $speechAssets | Out-Null
+$speechModels = Join-Path (Split-Path -Parent $src) 'dist\models'
+New-Item -ItemType Directory -Force -Path $speechModels | Out-Null
 foreach ($spec in $speechFiles) {
-    $target = Join-Path $speechAssets $spec.Name
+    $target = Join-Path $speechModels $spec.Name
     if ((Test-Path -LiteralPath $target) -and (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -eq $spec.Hash) { continue }
     $success = $false
     foreach ($origin in @('https://huggingface.co', 'https://hf-mirror.com')) {
         try {
             Invoke-WebRequest -Uri "$origin/$speechRepo/$($spec.Name)" -OutFile "$target.download" -TimeoutSec 900
             if ((Get-FileHash -LiteralPath "$target.download" -Algorithm SHA256).Hash -ne $spec.Hash) {
-                throw "Bundled speech checksum mismatch: $($spec.Name)"
+                throw "Archived speech model checksum mismatch: $($spec.Name)"
             }
             Move-Item -LiteralPath "$target.download" -Destination $target -Force
             $success = $true
             break
         } catch {
-            Write-Warning "Build input unavailable from $origin : $($_.Exception.Message)"
+            Write-Warning "Archived speech model unavailable from $origin : $($_.Exception.Message)"
         }
     }
-    if (!$success) { throw "Cannot build an offline-ready APK without verified $($spec.Name)" }
+    if (!$success) { Write-Warning "dist/models/$($spec.Name) archive missing (APK build unaffected; phone will download in-app)" }
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Stage) | Out-Null

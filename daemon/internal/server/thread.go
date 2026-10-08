@@ -419,7 +419,39 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 	if err := s.cfg.Store.Delete(t.ID); err != nil {
 		return nil, errInternal(err)
 	}
+	// 【级联清理协同会话】被删线程若是某协同会话的成员线程,会话元数据里还挂着
+	// 指向它的 member.ThreadID —— 此前无任何删除入口,会话连同 events/<id>.jsonl
+	// 永久残留,并经 ListSessions 一路透出到手机端(幽灵成员卡)。按"成员线程
+	// 指向本会话"的结构性事实匹配(与上方 deleteChildStubs 同纪律,不按 id 前缀
+	// 猜),DeleteSession 连事件文件一并清。失败不阻塞线程删除(与上面原生删除
+	// 同口径:残留可再处置),但必须出声。
+	s.deleteCollabSessionsForThread(t.ID)
 	return &pb.Empty{}, nil
+}
+
+// deleteCollabSessionsForThread 级联删除"成员线程含 threadID"的全部协同会话
+// (含已终局的:残留就是残留,与是否终局无关)。store 层 DeleteSession 的
+// 失败边界(事件文件孤儿留档)见 collab_store.go。
+func (s *Server) deleteCollabSessionsForThread(threadID string) {
+	coord := s.collabCoordinatorFor()
+	ctx := context.Background()
+	for _, sess := range coord.store.ListSessions(ctx, true) {
+		referenced := false
+		for _, m := range sess.Members {
+			if m.ThreadID == threadID {
+				referenced = true
+				break
+			}
+		}
+		if !referenced {
+			continue
+		}
+		if err := coord.store.DeleteSession(ctx, sess.ID); err != nil {
+			log.Printf("[thread] WARNING: 级联删除协同会话 %s 失败(成员线程 %s 已删,残留可在协同列表再处置): %v", sess.ID, threadID, err)
+		} else {
+			log.Printf("[thread] 已级联删除协同会话 %s(其成员线程 %s 被删除)", sess.ID, threadID)
+		}
+	}
 }
 
 // tombstoneThread 把"这个会话被用户删过"记入墓碑。键覆盖各同步链的登记键:
@@ -985,6 +1017,22 @@ func (s *Server) maybePullZcodeImportedHistory(ctx context.Context, t *store.Thr
 		len(history), t.ID, cur.ExternalSession.SessionID)
 }
 
+// approvalWaitBudget StartTurn 主路径与 collab 成员路径(collab_session.go 的
+// approve 中继)共用的审批等待上界。
+//
+// 【为什么必须是 15 分钟、且两处收口到这一个值】它是 provider 侧审批预算的
+// **外层**上界:agent/codex.go 的 codexApprovalWaitBudget(同为 15 分钟)兜
+// "手机在线、就是不点"的最后一道,但若本层的超时短于 provider 预算,provider
+// 的超预算分支就永远不会触发 —— 2026-10-09 实锤:此处曾硬编码 2 分钟,把 codex
+// 的 15 分钟预算整体架空(当天的回归测试在 provider 层注入挂起 approve、绕过
+// server 层,所以测试绿但防线无效)。hermes/dsh 各自有更短的 provider 级预算
+// (agent/hermes.go hermesApprovalTimeout、agent/dsh.go dshApprovalTimeout),
+// 对它们本层只是兜底,不再是有效截断点。
+// 【收口纪律】改预算三处一起动:本变量、agent/codex.go 的 codexApprovalWaitBudget、
+// 以及两端注释互指;server 层永远 ≥ provider 预算才不失义。
+// var 仅为缩时单测留缝(见 approval_wait_budget_test.go),生产不要改它。
+var approvalWaitBudget = 15 * time.Minute
+
 // ---------- StartTurn:整个产品的心脏 ----------
 
 // 【讲解】这是全项目最重要的一段。gRPC 双向流 = 两条同时流动的河:
@@ -1153,7 +1201,7 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		approvals.attach(request)
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalRequest{ApprovalRequest: request}})
 		defer sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{RequestId: reqID, Note: "审批已结束"}}})
-		waitCtx, waitCancel := context.WithTimeout(actx, 2*time.Minute)
+		waitCtx, waitCancel := context.WithTimeout(actx, approvalWaitBudget)
 		defer waitCancel()
 		select {
 		case d := <-approvalCh:

@@ -205,6 +205,11 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		// 能看到,无需额外的轮询通道;代价只是一次结构体拷贝。此前这条信息只落在
 		// daemon 日志里,用户端无从知道自己的排队消息没跑成 —— 判为"未达成"。
 		Recovery: s.recoveryReport.ToProto(),
+		// 版本协商闸(A5 最小实现,2026-10-09):随探活如实报告本 daemon 要求的
+		// 最低 App 版本(host.proto 字段 13)。手机端据此在连接诊断置"App 版本过旧"
+		// 提示位(仅提示不阻断);旧 daemon 不带该字段 = 空 = 手机端不设限。
+		// 常量真源 internal/version.MinAppVersion,升级 daemon 时同步评估抬升。
+		MinAppVersion: version.MinAppVersion,
 	}, nil
 }
 

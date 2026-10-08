@@ -191,3 +191,12 @@ model.proto；同 package 非限定名引用，与 thread.proto 同款形态）�
 | 消息 | 既有最大号 | 字段 | 号 | 类型 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | ThinkingDelta（thread.proto） | 1 | snapshot | 2 | string | 权威全文：pi thinking_end 终局事件/历史回放一次性携带；客户端收到即整体替换累积思考文本（丢帧/断连兜底）；旧客户端忽略未知字段，增量行为不变 |
+
+### host.proto —— 版本协商闸（2026-10-09，A5 最小实现）
+
+来源：分发资格批任务 3（proto/daemon 常量/App 比较函数三件套）。
+扩展既有消息 HostInfo，从现有最大号 12 续接。
+
+| 消息 | 既有最大号 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| HostInfo（host.proto） | 12 | min_app_version | 13 | string | 本 daemon 要求的最低 App 版本（语义化版本字符串）；空 = 不设限；常量真源 `daemon/internal/version.MinAppVersion`；手机端仅置连接诊断提示位，不做硬阻断 |

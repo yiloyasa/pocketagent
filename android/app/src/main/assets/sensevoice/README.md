@@ -1,11 +1,16 @@
-# 离线语音资产（SenseVoice 模型）
+# 离线语音资产（SenseVoice 模型）——【2026-10-09 起已移出 APK】
 
-本目录是 **APK 构建输入**：目录内的 `*.onnx` 与 `tokens.txt` 被 `.gitignore`
-排除（不入库），fresh clone 后这里只剩这份 README，此时**出不了完整 APK**。
+本目录**不再有任何构建输入**：239MB 的 `model.int8.onnx` 与 `tokens.txt` 已移至
+仓库 `dist/models/` 留档（`.gitignore` 双向排除，均不入 git），APK 体积因此从
+约 220MB 大幅下降。目录留作占位与说明，请勿把模型文件放回这里。
 
-正常构建**无需手工操作**：跑 `android/build-ascii.ps1` 会自动下载并按下表
-SHA-256 校验后把文件放进本目录。手工获取时把文件放进本目录即可，
-**文件名必须与下表一字不差**（Kotlin 侧按烧录常量逐字打开）。
+模型现在的获取方式（二选一，均不走 APK）：
+
+1. **应用内按需下载（正路）**：`SenseVoiceModelManager.prepareBundledModel()`
+   在语音被启用时触发 `SenseVoiceModelFiles` 下载/断点续传，下载源与 SHA-256
+   烧录常量同源（见 `ui/component/SenseVoiceModelManager.kt`）。
+2. **仓库留档**：`dist/models/` 下的副本由 `android/build-ascii.ps1` 保证
+   （缺失且网络可用时自动补下并校验），仅供留档/侧载，**不进 APK、不进 git**。
 
 | 文件 | 字节数 | SHA-256 |
 |---|---|---|
@@ -13,8 +18,5 @@ SHA-256 校验后把文件放进本目录。手工获取时把文件放进本目
 | `tokens.txt` | 315,894 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
 
 - 文件名/字节数/哈希的唯一真源：`ui/component/SenseVoiceModelManager.kt`
-  的烧录常量（`files` 列表 + `TOTAL_BYTES`，首启从 APK 资产解压时逐字节
-  复核）与 `android/build-ascii.ps1` 的下载校验配置，两处必须一致。
-- 下载源不在此罗列：以 `android/build-ascii.ps1` 内的现有双源配置为准
-  （固定上游仓库与 revision 的说明另见 `android/app/libs/README.md`）。
-- 手机端不做任何运行时模型下载：模型打进 APK，首启只做解压 + 校验。
+  的烧录常量（`files` 列表 + `TOTAL_BYTES`）与 `android/build-ascii.ps1` 的
+  下载校验配置，两处必须一致。

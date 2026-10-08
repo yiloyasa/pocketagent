@@ -16,6 +16,9 @@ class RuntimeStateRegressionTest {
             .setTextDelta(TextDelta.newBuilder().setDelta("原生结果")).build()
         TurnSession.applyServerFrame("test", state, delta, replay = true)
         TurnSession.applyServerFrame("test", state, delta, replay = true)
+        // 【P1-5 锚点更新】delta 改走 StringBuilder 缓冲 + 120ms 巡检发布;断言前
+        // flush 追平(重复帧去重的累积语义不变,"帧后立即可读"属实现细节)
+        TurnSession.flushStreamBuffers(state)
         assertEquals("原生结果", state.streamText)
     }
 

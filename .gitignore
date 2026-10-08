@@ -56,9 +56,14 @@ docs/_video_frames_ref/
 local.properties
 android/app/libs/*.aar
 android/app/libs/*.download
-android/app/src/main/assets/sensevoice/*.onnx
-android/app/src/main/assets/sensevoice/tokens.txt
-android/app/src/main/assets/sensevoice/*.download
+# 【2026-10-09 分发资格批】语音模型移出 APK:不再作为 assets 打包(239MB ONNX 曾是
+# APK 220MB 的绝对大头),运行时按需下载(SenseVoiceModelFiles)。文件本体移至
+# dist/models/ 留档(不入 git);整个 assets 子目录忽略,防止模型被重新放回误打包。
+android/app/src/main/assets/sensevoice/
+dist/models/
+# release 签名密钥库(机密不入库;口令与备份警告见 android/keystore/README.md)
+android/keystore/*.jks
+android/keystore/*.keystore
 captures/
 .externalNativeBuild/
 .cxx/

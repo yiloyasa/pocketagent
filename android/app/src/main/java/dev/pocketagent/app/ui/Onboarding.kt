@@ -122,8 +122,10 @@ fun onboardSteps(connected: Boolean): List<OnboardStep> = listOf(
     OnboardStep(
         id = "trouble",
         done = false,
-        sentence = "电脑没出现在手机上?按顺序看这三件小事。",
-        action = "①电脑开着桌面端;②手机和电脑连同一个 WiFi(或插数据线);③还不行,到「设置 → 连接」手动填地址。",
+        sentence = "电脑没出现在手机上?按顺序过这几件小事。",
+        action = "①电脑开着桌面端;②手机和电脑连同一个 WiFi(或插数据线);③还不行,到「设置 → 连接」手动填地址;" +
+            "④路由器开了 AP 隔离,或防火墙拦了自动发现,也会搜不到电脑,同样手填地址就能连;" +
+            "⑤地址没错却连不上,多半是电脑上 7246 端口被别的程序占了,换个端口重新装桌面端。",
     ),
 )
 

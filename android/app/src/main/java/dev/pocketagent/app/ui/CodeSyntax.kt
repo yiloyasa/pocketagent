@@ -174,6 +174,14 @@ fun tokenizeCode(code: String, lang: String): List<CodeToken> {
                 while (j < code.length) {
                     val ch = code[j]
                     if (ch == '\\') {
+                        // 【N3】行尾反斜杠:转义要越过的是换行符时不越过 —— 串在行边界
+                        // 收口(与未闭合串、行注释同一"换行留给 PLAIN,行边界不吞"纪律),
+                        // 不再把下一行代码染成串色。只消费反斜杠本身(j+1),换行留给
+                        // 外层循环按普通字符落 PLAIN;非换行的转义照旧跳过两字符。
+                        if (j + 1 < code.length && code[j + 1] == '\n') {
+                            j += 1
+                            break
+                        }
                         j += 2
                         continue
                     }

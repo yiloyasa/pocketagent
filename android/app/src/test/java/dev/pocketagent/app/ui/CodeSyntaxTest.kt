@@ -200,6 +200,34 @@ class CodeSyntaxTest {
     }
 
     @Test
+    fun `行尾反斜杠转义不吞换行_串色不污染下一行`() {
+        // 【N3】旧实现遇到行尾反斜杠时 j+=2 直接越过换行符,未闭合串把下一行整段
+        // 染成串色。修复后:转义要越过的是 \n 则止于换行(与未闭合串同一行边界纪律)。
+        val src = "call(\"arg\\\nstill_plain = 1"
+        val tokens = tokenizeCode(src, "kotlin")
+        // 第一行的串止于换行前(反斜杠留在串内,换行交给 PLAIN)
+        assertTokenKind(src, "kotlin", "\"arg\\", CodeTokenKind.STRING)
+        assertTrue(
+            "换行后的下一行不应被串色污染",
+            tokens.any { it.text == "\nstill_plain = " && it.kind == CodeTokenKind.PLAIN },
+        )
+        assertTrue("下一行的数字照常是 NUMBER", tokens.any { it.text == "1" && it.kind == CodeTokenKind.NUMBER })
+        assertTrue(
+            "任何 STRING token 不得跨行(单行串不吞换行)",
+            tokens.filter { it.kind == CodeTokenKind.STRING }.none { it.text.contains('\n') },
+        )
+        // 拼接守恒红线:修复不得丢/重字符
+        assertEquals(src, tokens.joinToString("") { it.text })
+    }
+
+    @Test
+    fun `串中非行尾转义照旧跳过_行为不回退`() {
+        // N3 修复不得误伤正常转义:"a\n"(字面反斜杠+n,非真换行)仍在同一行串内闭合
+        val src = "s = \"a\\\\nb\" + 1"
+        assertTokenKind(src, "kotlin", "\"a\\\\nb\"", CodeTokenKind.STRING)
+    }
+
+    @Test
     fun `C系块注释跨行承接_未闭合吞到末尾`() {
         val src = "/* a\nb */ x"
         val tokens = assertTokenKind(src, "java", "/* a\nb */", CodeTokenKind.COMMENT)

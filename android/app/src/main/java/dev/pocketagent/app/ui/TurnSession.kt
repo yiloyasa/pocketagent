@@ -52,8 +52,22 @@ import pocketagent.v1.ThreadMessage
 object TurnSession {
     class State {
         val items = mutableStateListOf<ChatItem>()
+        /**
+         * 流式正文快照(P1-5):delta **不直接写这里** —— 先进 [streamBuffer] 累积,
+         * 按 [STREAM_RENDER_THROTTLE_MS] 的 120ms 快照口径经 [TurnSession.flushStreamBuffers]
+         * 发布(与 ChatTimeline 的 displayedStream 节流快照同一节奏)。旧实现逐帧
+         * `streamText += delta` 是 O(n²) 的字符串拼接;缓冲后发布只剩每 120ms 一次
+         * O(n) 拷贝。终局帧/工具卡提交/checkpoint 等消费点都先 flush,语义不变。
+         */
         var streamText by mutableStateOf("")
         var thinkingText by mutableStateOf("")
+        /** 流式正文内部累积缓冲(非快照;全部访问都在 `synchronized(this@State)` 内)。 */
+        internal val streamBuffer = StringBuilder()
+        /** 思考文本内部累积缓冲(同上;THINKING_DELTA 的 snapshot 分支整体替换本缓冲)。 */
+        internal val thinkingBuffer = StringBuilder()
+        /** 缓冲里有未发布增量的脏位(@Volatile 仅供巡检快判,真正判定在锁内)。 */
+        @Volatile internal var streamDirty = false
+        @Volatile internal var thinkingDirty = false
         /** 本轮 token 用量(上下文窗口交互卡用)。 */
         var turnUsage by mutableStateOf<pocketagent.v1.Usage?>(null)
         /** 本会话累计用量。 */
@@ -167,6 +181,8 @@ object TurnSession {
     }
 
     private fun checkpoint(threadId: String, st: State, force: Boolean = false) {
+        // 【P1-5】落盘前先发布缓冲:磁盘上的流式尾巴不落后于 120ms 巡检节奏
+        flushStreamBuffers(st)
         val now=System.currentTimeMillis()
         if (!force && now-st.lastSnapshotAt<1500) return
         st.lastSnapshotAt=now
@@ -206,6 +222,110 @@ object TurnSession {
             }
         }
     }.also { it.lastAccessAt = System.currentTimeMillis() } // C3:任何 get/写都算访问
+
+    /**
+     * 只读访问器(C3/P1-4):存在才返回,**不创建、不刷新访问时刻**。
+     *
+     * 【为什么必须存在】通知轮询此前走 [state](getOrPut + 刷 lastAccessAt),后果:
+     *  1) 30 分钟空闲回收永不触发 —— 每次轮询都被记成"刚访问过";
+     *  2) 已回收的会话被轮询凭空复活(getOrPut 拉起全新 State),states 无界增长;
+     *  3) 设计注释里"通知轮询不算访问"的意图([ChatViewModel.bindSession] 心跳
+     *     只保活"正被看的那一个")从未真正兑现。轮询改走本访问器:无会话直接跳过。
+     */
+    fun peek(threadId: String): State? = states[threadId]
+
+    // ---- 【P1-5】流式文本缓冲与 120ms 快照发布 -------------------------------
+    //
+    // 【口径】发布节奏沿用 ChatTimeline.displayedStream 的 [STREAM_RENDER_THROTTLE_MS]
+    // (同包常量,120ms):delta 帧只进 StringBuilder 累积(append 均摊 O(1)),
+    // 巡检协程每 120ms 把脏缓冲一次性发布进 mutableStateOf —— UI 侧感知与旧
+    // "displayedStream 120ms 合并快照"完全一致,只是把合并动作从渲染层挪到了
+    // 状态源头,消除 O(n²) 拼接。终局帧/工具卡提交/checkpoint 等消费点同步
+    // flush(见各调用点),终局快照/替换语义逐点不变。
+
+    private fun flushStreamLocked(st: State): String? =
+        if (st.streamDirty) {
+            st.streamDirty = false
+            st.streamBuffer.toString()
+        } else {
+            null
+        }
+
+    private fun flushThinkingLocked(st: State): String? =
+        if (st.thinkingDirty) {
+            st.thinkingDirty = false
+            st.thinkingBuffer.toString()
+        } else {
+            null
+        }
+
+    /**
+     * 把累积缓冲中的未发布增量发布进 streamText/thinkingText(幂等,可任意线程调用)。
+     * internal 供 JVM 单测在断言前显式追平发布节奏(旧测试锚的是"帧后立即可读",
+     * 发布节奏属实现细节,测试锚点随之更新 —— 累积与消费语义不变)。
+     */
+    internal fun flushStreamBuffers(st: State) {
+        val stream = synchronized(st) { flushStreamLocked(st) }
+        if (stream != null) st.streamText = stream
+        val thinking = synchronized(st) { flushThinkingLocked(st) }
+        if (thinking != null) st.thinkingText = thinking
+    }
+
+    /** delta 追加(正文):只进缓冲,发布交给 120ms 巡检。 */
+    private fun appendStreamDelta(st: State, delta: String) {
+        synchronized(st) {
+            st.streamBuffer.append(delta)
+            st.streamDirty = true
+        }
+    }
+
+    /** delta 追加(思考):只进缓冲,发布交给 120ms 巡检。 */
+    private fun appendThinkingDelta(st: State, delta: String) {
+        synchronized(st) {
+            st.thinkingBuffer.append(delta)
+            st.thinkingDirty = true
+        }
+    }
+
+    /** 权威全文替换(思考 snapshot 帧):缓冲整体重置并**立即**发布(低频权威帧,不进节流)。 */
+    private fun replaceThinkingSnapshot(st: State, snapshot: String) {
+        synchronized(st) {
+            st.thinkingBuffer.setLength(0)
+            st.thinkingBuffer.append(snapshot)
+            st.thinkingDirty = false
+        }
+        st.thinkingText = snapshot
+    }
+
+    /** 清空流式正文(轮次开始/正文已转存进时间线):缓冲与快照同清,不留尾巴。 */
+    private fun clearStreamText(st: State) {
+        synchronized(st) {
+            st.streamBuffer.setLength(0)
+            st.streamDirty = false
+        }
+        st.streamText = ""
+    }
+
+    /** 清空思考文本(轮次开始/思考已落卡):缓冲与快照同清。 */
+    private fun clearThinkingText(st: State) {
+        synchronized(st) {
+            st.thinkingBuffer.setLength(0)
+            st.thinkingDirty = false
+        }
+        st.thinkingText = ""
+    }
+
+    /** 缓冲整体播种(checkpoint 恢复把已落盘的流式内容接回缓冲,后续 delta 续在其后)。 */
+    private fun seedStreamBuffers(st: State, stream: String, thinking: String) {
+        synchronized(st) {
+            st.streamBuffer.setLength(0)
+            st.streamBuffer.append(stream)
+            st.streamDirty = false
+            st.thinkingBuffer.setLength(0)
+            st.thinkingBuffer.append(thinking)
+            st.thinkingDirty = false
+        }
+    }
 
     /**
      * 只刷新访问时刻、**不创建** State(C3)。给页面正打开期间的 VM 心调用:
@@ -273,6 +393,20 @@ object TurnSession {
                 runCatching { sweepIdleStates() }
             }
         }
+        // 【P1-5】流式缓冲的 120ms 发布巡检:每拍把脏缓冲 flush 进快照状态。
+        // 挂 Default(回收巡检同款,JVM 单测无 Android Main 也可存活);快照状态
+        // 写入本身线程安全,缓冲访问在 synchronized(State) 内,与 Main 线程的
+        // 帧应用互斥。无脏位的会话是两次无锁读 + 两次锁内判空,开销可忽略。
+        recycleScope.launch {
+            while (true) {
+                delay(STREAM_RENDER_THROTTLE_MS)
+                for (st in states.values) {
+                    if (st.streamDirty || st.thinkingDirty) {
+                        runCatching { flushStreamBuffers(st) }
+                    }
+                }
+            }
+        }
     }
 
     private fun sweepIdleStates() {
@@ -327,6 +461,10 @@ object TurnSession {
 
     /** 把时间线压回上限内(超限时经 swapItems 整表替换,同引用零变化)。 */
     internal fun enforceTimelineCap(st: State) {
+        // 【P1-3】未超限早退:旧实现每帧都 st.items.toList() 整表复制再原样换回
+        // (trimmedTimelineItems 对上限内输入返回原引用,swapItems 判同引用跳过 ——
+        // 语义上是昂贵的空转)。流式期间每帧 O(n) 复制纯浪费,先 O(1) 判长。
+        if (st.items.size <= TIMELINE_MAX_ITEMS) return
         val trimmed = trimmedTimelineItems(st.items.toList())
         swapItems(st, trimmed)
     }
@@ -344,6 +482,8 @@ object TurnSession {
                 enforceTimelineCap(st)
                 st.streamText=saved.stream
                 st.thinkingText=saved.thinking
+                // 【P1-5】恢复出的流式内容接回缓冲:后续 delta 续在其后,flush 不会倒灌覆盖
+                seedStreamBuffers(st, saved.stream, saved.thinking)
                 st.lastSequence=saved.sequence
                 st.runningModel=saved.model
                 st.runningEffort=saved.effort
@@ -397,10 +537,12 @@ object TurnSession {
      * 重复调用自然变成空操作。这样退出页面再回来也能看到完整的思考过程。
      */
     private fun commitThinking(st: State) {
+        // 【P1-5】提交前先发布缓冲:落卡的思考文本不丢尾巴
+        flushStreamBuffers(st)
         val t = st.thinkingText
         if (t.isBlank()) return
         st.items.add(ChatItem("thinking", t.trim(), id = nextChatItemId("thinking")))
-        st.thinkingText = ""
+        clearThinkingText(st)
     }
 
     /**
@@ -622,8 +764,8 @@ object TurnSession {
         st.codexEvents = emptyList()
         st.approvalError = null
         st.pendingApproval = null
-        st.thinkingText = ""
-        st.streamText = ""
+        clearThinkingText(st)
+        clearStreamText(st)
         // 注意:这里**不重置** turnUsage —— 新一轮上报到达前,上下文窗口继续显示
         // 上一次的用量(否则发完消息面板立刻变成 0%,看起来像数据丢了)。
         st.planSteps = emptyList()
@@ -693,6 +835,8 @@ object TurnSession {
                     // 没有结束帧 = 电脑端结果未知,按断流处理并启动自动恢复
                     st.recovering = true
                     st.errorMessage = "结果流已结束，正在核对电脑端任务状态"
+                    // 【P1-5】断流判定读快照前先发布缓冲,streaming 相位不丢尾巴
+                    flushStreamBuffers(st)
                     st.streaming = st.streamText.isNotBlank()
                     checkpoint(threadId,st,force=true)
                     recoverOrphanTurn(threadId, st)
@@ -716,6 +860,8 @@ object TurnSession {
                 }
                 st.recovering = true
                 st.errorMessage = if (AgentConnection.connState.value == "down") "连接暂不可用，正在等待恢复结果" else "结果流中断，正在核对电脑端任务状态"
+                // 【P1-5】同上:异常兜底路径读快照前先发布缓冲
+                flushStreamBuffers(st)
                 st.streaming = st.streamText.isNotBlank()
                 checkpoint(threadId,st,force=true)
                 recoverOrphanTurn(threadId, st)
@@ -761,7 +907,8 @@ object TurnSession {
                 st.streaming = true
                 // 正文开始 = 思考阶段结束,先把思考落成一张卡片
                 commitThinking(st)
-                st.streamText += ev.textDelta.delta
+                // 【P1-5】delta 只进 StringBuilder(均摊 O(1)),发布走 120ms 巡检口径
+                appendStreamDelta(st, ev.textDelta.delta)
             }
             TurnServerMessage.MsgCase.THINKING_DELTA -> {
                 // 【P1-3·pi thinking】daemon 侧一帧只带其一:snapshot 非空 = 权威全文
@@ -769,8 +916,11 @@ object TurnSession {
                 // 丢帧/断连后的兜底真相,不依赖逐帧拼接的完整性;否则追加增量
                 // (旧 daemon / 普通流式 delta 帧,行为与旧版完全一致)。
                 // 实时流与回放(GetThreadEventsSince)共用本分支,历史路径无需另行处理。
+                // 【P1-5】两分支都对齐缓冲结构:snapshot 权威帧整体重置缓冲并**立即**
+                // 发布(低频终局真相,不进 120ms 节流);delta 追加只进缓冲,发布走巡检。
                 val td = ev.thinkingDelta
-                st.thinkingText = if (td.snapshot.isNotEmpty()) td.snapshot else st.thinkingText + td.delta
+                if (td.snapshot.isNotEmpty()) replaceThinkingSnapshot(st, td.snapshot)
+                else appendThinkingDelta(st, td.delta)
             }
             TurnServerMessage.MsgCase.USAGE -> {
                 // 用量进上下文窗口交互卡，不再挤占聊天时间线。
@@ -836,9 +986,11 @@ object TurnSession {
             TurnServerMessage.MsgCase.TOOL_CALL -> {
                 val tc = ev.toolCall
                 if (tc.phase == ToolCallUpdate.Phase.STARTED) {
+                    // 【P1-5】正文转存进时间线前先发布缓冲,判断/落卡都看全量
+                    flushStreamBuffers(st)
                     if (st.streamText.isNotEmpty()) {
                         st.items.add(ChatItem("assistant", st.streamText, id = nextChatItemId("assistant")))
-                        st.streamText = ""
+                        clearStreamText(st)
                     }
                     commitThinking(st)
                     st.items.add(
@@ -928,6 +1080,8 @@ object TurnSession {
                 st.turnTerminal = true
                 commitThinking(st)
                 commitPlan(st)
+                // 【P1-5】终局帧同步 flush:终局快照/替换语义照旧(不留 120ms 延迟尾巴)
+                flushStreamBuffers(st)
                 if (st.streamText.isNotEmpty()) {
                     st.items.add(ChatItem("assistant", st.streamText, id = nextChatItemId("assistant")))
                 } else {
@@ -939,7 +1093,7 @@ object TurnSession {
                 // 地方。旧实现在这里塞一句 "(完成,无文本输出)" 假占位,是把歧义藏起来,
                 // 而且那条文本会落库、被离线快照读到,变成一个"真的存在的助手回复"。
                 noticeEmptyOutput(st, ev.completed.outputState, ev.completed.outputSource)
-                st.streamText = ""
+                clearStreamText(st)
                 st.streaming = false
                 // 「已插入/发送中」的输入属于刚结束的这一轮:撤标签变回普通消息;
                 // 「排队中/未送达」保留 —— 排队的还没轮到,未送达必须继续可见。
@@ -970,13 +1124,15 @@ object TurnSession {
                 st.errorMessage = ev.failed.error.message.ifBlank { "任务失败" }
                 commitThinking(st)
                 commitPlan(st)
+                // 【P1-5】终局帧同步 flush:失败帧的 partial 正文同样不留节流尾巴
+                flushStreamBuffers(st)
                 if (st.streamText.isNotEmpty()) {
                     st.items.add(ChatItem("assistant", st.streamText, id = nextChatItemId("assistant")))
                 } else {
                     // 失败帧同样可能只带 partial_text,不能让已产出的正文消失。
                     commitFinalText(st, ev.failed.partialText)
                 }
-                st.streamText = ""
+                clearStreamText(st)
                 st.streaming = false
                 clearDeliveryTags(st.items, queuedOnly = false)?.let { swapItems(st, it) }
                 if (st.queuedCount > 0) {

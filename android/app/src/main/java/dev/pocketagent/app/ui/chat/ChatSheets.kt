@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
@@ -103,10 +104,13 @@ internal fun ChatAttachmentViewer(
             ) {
                 // 标题行:预览态显示**完整文件名**(不省略、可换行),长按复制完整名。
                 // 这样"名字被裁"的老问题在点开预览后彻底消失(需求:预览标题行要完整可见)。
+                // 【N4】statusBars padding:fullBleed 满幅档铺到 Dialog 窗口顶,标题行
+                // 不让开状态栏会被刘海/挖孔裁切(真机实锤)。
                 Text(
                     attachment.name,
                     Modifier
                         .fillMaxWidth()
+                        .statusBarsPadding()
                         .pressableLong(
                             onClick = {},
                             onLongPress = { copyMessage(ctx, attachment.name) },

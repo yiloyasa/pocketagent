@@ -41,7 +41,7 @@
 ### L1 自动化回归（每次代码变更必跑）
 
 - JVM 448 用例：`python tools/device/_pa_gradle.py test`，**必须 `--rerun`**，并解析 `app/build/test-results/**/*.xml` 的 tests/failures + 时间戳是否本次（防 Gradle UP-TO-DATE 假绿）。
-- daemon：`go test ./...`；`CGO_ENABLED=1 go test -race`（server/agent/store/codexapp/piapp/zcodeapp）。
+- daemon：`go test ./...`；`CGO_ENABLED=1 go test -race`（server/agent/store/codexapp/piapp/zcodeapp/rpcwire/dshapp/hermesapp/eventstore/runtime/collabmcp）。2026-10-09 扩包：rpcwire/dshapp/hermesapp/eventstore/runtime/collabmcp 首次纳入（当轮实跑全绿），eventstore 与 rotatelog 含并发回归用例（Append×回放赛跑）。
 - 体积结论必须走 `cleanapk`（AGP 增量会在 APK 留孤儿 dex，增量包结论不可信）。
 
 ### L2 真机验收

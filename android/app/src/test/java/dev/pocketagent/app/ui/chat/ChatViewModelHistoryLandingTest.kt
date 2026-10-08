@@ -136,6 +136,38 @@ class ChatViewModelHistoryLandingTest {
         assertEquals(60, vm2.state.value.roundsLoaded)
         assertEquals(3, TurnSession.state("t-fetch-earlier-2").items.size)
     }
+
+    // ---------------------------------------------------------- 【N1】离线兜底路径
+
+    @Test
+    fun `离线快照兜底路径时间戳不丢`() = kotlinx.coroutines.runBlocking {
+        // 【N1】loadHistoryTail 失败分支的 ChatItem 构造此前漏带 sentAtMs —— 快照里
+        // 的真实时间戳整列剥掉,恢复后历史导航的日期分组退化「早前」。主路径
+        // (prefillOfflineSnapshot)带时间戳,兜底路径必须同语义。
+        val snapDir = org.junit.rules.TemporaryFolder().apply { create() }.newFolder("pa_snap")
+        dev.pocketagent.app.ui.component.ThreadSnapshot.initForTest(snapDir)
+        val tid = "t-offline-sentat"
+        dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(
+            tid,
+            listOf(
+                dev.pocketagent.app.ui.component.ThreadSnapshot.Msg("user", "早的用户消息", 1_700_000_000_000L),
+                dev.pocketagent.app.ui.component.ThreadSnapshot.Msg("assistant", "早的助手消息", 1_700_000_060_000L),
+            ),
+        )
+        val vm = ChatViewModel(stepRounds = 20).also { it.gateway = ThrowingGateway() }
+        val r = vm.loadHistoryTail(tid, rounds = 20, connectionEpoch = 0, reloadToken = 0)
+        assertTrue("应走快照兜底路径", r.snapshotFallback)
+        val st = TurnSession.state(tid)
+        assertEquals(2, st.items.size)
+        assertEquals("兜底路径的时间戳必须随行", 1_700_000_000_000L, st.items[0].sentAtMs)
+        assertEquals(1_700_000_060_000L, st.items[1].sentAtMs)
+    }
+
+    /** threadHistory 必抛:制造"连不上"以触发离线快照兜底分支。 */
+    private class ThrowingGateway : ChatViewModelActionsTestGateway() {
+        override suspend fun threadHistory(threadId: String, rounds: Int): GetThreadHistoryResponse =
+            throw java.io.IOException("连接失败(测试注入)")
+    }
 }
 
 /** 只为复用 FakeGateway 的骨架:除被覆写方法外其余调用即失败(测试不应触达)。 */

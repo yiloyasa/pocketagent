@@ -177,9 +177,10 @@ object PaNotificationPolicy {
  * 【权限】Android13+ 的 POST_NOTIFICATIONS 运行时权限由 MainActivity 首次恢复时申请;
  * 未授权时发通知静默跳过(不崩、不重试轰炸)。
  *
- * 【只读 TurnSession】本对象对 TurnSession 只调公开 API(state/answerApproval),
- * 不写它的任何字段 —— TurnSession 由并行执行体独占。
- */
+     * 【只读 TurnSession】本对象对 TurnSession 只调公开 API(peek/answerApproval),
+     * 不写它的任何字段 —— TurnSession 由并行执行体独占。轮询用 peek 不用 state:
+     * 不创建、不刷访问时刻,"通知轮询不算访问"(C3)由此兑现。
+     */
 object PaNotifications {
 
     // ---- 渠道与常量 ----
@@ -313,7 +314,16 @@ object PaNotifications {
         scopeIds.addAll(TurnSession.runningThreadIds())
         scopeIds.addAll(watches.keys)
         for (tid in scopeIds) {
-            val st = TurnSession.state(tid)
+            // 【C3/P1-4】只读访问:peek 不创建、不刷新访问时刻。旧实现走 TurnSession.state()
+            // (getOrPut + 刷 lastAccessAt),把"通知轮询"变成了无限保活 —— 空闲回收
+            // 永不触发、已回收的会话被凭空复活、states 无界增长。无会话 = 该线程当前
+            // 没有可监控的状态,跳过本拍,并把上一拍快照撤掉(重见时按"首见"基线处理,
+            // 不让陈旧的 prev 快照在会话重建后误判出下降沿)。
+            val st = TurnSession.peek(tid)
+            if (st == null) {
+                watches.remove(tid)
+                continue
+            }
             val now = PaNotificationPolicy.ThreadWatch(
                 running = st.running,
                 approvalPresent = st.pendingApproval != null,

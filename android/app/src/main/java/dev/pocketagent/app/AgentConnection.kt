@@ -117,6 +117,38 @@ object AgentConnection {
         hostCapabilities.value = caps
     }
 
+    // ---- 版本协商闸(A5 最小实现,2026-10-09 分发资格批)----
+    // daemon 在 HostInfo.min_app_version 随探活报告它要求的最低 App 版本;这里
+    // 与本机 versionName 分量比较后点亮提示位。**只提示不阻断**:探活/连接流程
+    // 完全不受它影响,消费方(设置页连接信息卡,daemon_version 展示同区)订阅
+    // 本 StateFlow 加一行提示即可。旧 daemon 不带该字段(空)→ 恒 false。
+    val appVersionOutdated = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** daemon 报告的最低版本原文(空 = 对端未报告/旧 daemon),供提示位展开细节。 */
+    val minAppVersionRequired = kotlinx.coroutines.flow.MutableStateFlow("")
+
+    /** daemon 报告 min_app_version 时的提示文案(纯函数在 ConnectionDiagnostics)。 */
+    fun appVersionOutdatedMessage(): String = buildString {
+        append(appVersionOutdatedLabel())
+        minAppVersionRequired.value.takeIf { it.isNotBlank() }?.let { append("(要求 ≥ $it)") }
+    }
+
+    /**
+     * GetHostInfo 成功后的统一入口:caps 快照 + 版本闸一起刷新。
+     * AgentConnection 内部的两条成功链(回退连接 / 8s 探活)走这里;
+     * 各屏自己的独立 GetHostInfo(HomeScreen/RuntimeStateLogic/SettingsScreen)
+     * 仍走 [updateHostCapabilities] 单写 caps —— 版本闸由探活链兜底刷新,
+     * 最多滞后一个探活周期,不要求逐屏改造。
+     */
+    fun updateHostInfo(info: pocketagent.v1.HostInfo) {
+        updateHostCapabilities(info.capabilitiesList)
+        minAppVersionRequired.value = info.minAppVersion
+        appVersionOutdated.value = isAppVersionTooOld(
+            appVersion = dev.pocketagent.app.BuildConfig.VERSION_NAME,
+            minAppVersion = info.minAppVersion,
+        )
+    }
+
     /**
      * 连接方式注册表 —— **唯一扩展点**。新增一种连接方式只需在这里加一条:
      * 候选生成器(addrProvider)+ 可执行说明(hintText)+ 展示标签(label/transport)+ 匹配规则(matcher)。
@@ -825,7 +857,7 @@ object AgentConnection {
                 }
                 rememberTailscaleIp(info.tailscaleIpv4)
                 rememberLanIp(info.lanIpv4)
-                updateHostCapabilities(info.capabilitiesList)
+                updateHostInfo(info)
                 markConnected(cand)
                 info
             } else {
@@ -1614,7 +1646,8 @@ object AgentConnection {
                 rememberLanIp(info.lanIpv4)
                 // capabilities 共享快照随探活持续刷新:任何渲染链的独立请求失败后,
                 // 最多一个探活周期(~8s)自动回到 daemon 真值(T-DSH 问题 A 自愈兜底)。
-                updateHostCapabilities(info.capabilitiesList)
+                // 版本协商闸(min_app_version → appVersionOutdated)同链路刷新。
+                updateHostInfo(info)
                 true
                 } catch (e: Exception) {
                     // 【可诊断性】探活失败此前只进 connError 诊断卡、不打日志,

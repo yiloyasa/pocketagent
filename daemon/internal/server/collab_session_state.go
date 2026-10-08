@@ -98,10 +98,10 @@ const (
 	collabCancelPollInterval = 50 * time.Millisecond
 	// collabUpdateRetries 撞上 ErrCollabStaleUpdate 时的重读重试上界。
 	collabUpdateRetries = 4
-	// collabApprovalWaitTimeout 成员审批等待上界(与 StartTurn 的审批应答
-	// 上界同口径)。超时按拒绝继续 —— 协同成员无人值守,不能为一笔回不了
-	// 的审批把整轮吊死。
-	collabApprovalWaitTimeout = 2 * time.Minute
+	// 成员审批等待上界已收口到 thread.go 的 approvalWaitBudget(15 分钟,与
+	// agent 侧 provider 预算一致;2026-10-09 前此处独立维护 2 分钟,曾把 provider
+	// 预算架空)。超时按拒绝继续 —— 协同成员无人值守,不能为一笔回不了的
+	// 审批把整轮吊死。
 )
 
 // collabCoordinators 引擎单例登记表:键 *Server → *collabCoordinator。
@@ -1283,6 +1283,23 @@ func (m *memoryCollabSessionStore) ReplayEvents(ctx context.Context, id string, 
 		}
 	}
 	return out, nil
+}
+
+// DeleteSession 内存版删除(与 FileCollabSessionStore 同语义:不存在报
+// ErrCollabSessionNotFound;内存无文件,只清三张 map)。thread 删除级联用。
+func (m *memoryCollabSessionStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[id]; !ok {
+		return fmt.Errorf("collab session %q: %w", id, store.ErrCollabSessionNotFound)
+	}
+	delete(m.sessions, id)
+	delete(m.events, id)
+	delete(m.lastSeq, id)
+	return nil
 }
 
 func collabCopyEvent(in store.CollabEvent) store.CollabEvent {

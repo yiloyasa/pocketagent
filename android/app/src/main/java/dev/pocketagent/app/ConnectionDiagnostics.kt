@@ -63,3 +63,48 @@ fun connectionFailureLabel(kind: ConnectionFailureKind): String = when (kind) {
     ConnectionFailureKind.UNAVAILABLE -> "daemon 不可达，请确认电脑端已启动"
     ConnectionFailureKind.UNKNOWN -> "连接失败"
 }
+
+// =====================================================================================
+// 版本协商闸(A5 最小实现,2026-10-09 分发资格批)
+//
+// daemon 在 HostInfo.min_app_version(host.proto 字段 13)随探活报告它要求的最低
+// App 版本;App 侧用下面两个纯函数与自身 versionName 分量比较,过低时点亮
+// AgentConnection.appVersionOutdated 提示位。设计口径:
+//  · **只提示不阻断**:旧 daemon 恒不带该字段(空 = 不设限),协议自身就是软闸;
+//  · **宁可漏报不误报**:任一侧解析失败(空/非数字段/带后缀)一律视为"不设限",
+//    绝不因脏数据把能用的连接标成过旧;
+//  · 比较是语义化的分量数值比较(0.3.10 > 0.3.9),不是字典序/不是 versionCode。
+// =====================================================================================
+
+/**
+ * 解析语义化版本字符串 → 分量列表(每个分量一个非负整数)。
+ * 宽容口径:允许前缀 "v"/"V"("v0.3.0");分量按 '.' 切分后必须全为数字。
+ * 解析不了(空/空白/含非数字分量)→ null,调用方按"不设限"处理。
+ */
+fun parseSemver(version: String): List<Int>? {
+    val trimmed = version.trim().removePrefix("v").removePrefix("V").trim()
+    if (trimmed.isEmpty()) return null
+    val parts = trimmed.split('.')
+    if (parts.any { it.isEmpty() || it.any { ch -> !ch.isDigit() } }) return null
+    return parts.map { it.toInt() }
+}
+
+/**
+ * App 版本是否低于 daemon 要求的最低版本(纯函数,JVM 单测锁定语义化版本与
+ * 位数边界)。任一侧解析失败、或 min 为空(旧 daemon/未设限)→ false。
+ * 缺省分量按 0 补齐("0.3" == "0.3.0");分量逐位数值比较,首位定胜负。
+ */
+fun isAppVersionTooOld(appVersion: String, minAppVersion: String): Boolean {
+    val app = parseSemver(appVersion) ?: return false
+    val min = parseSemver(minAppVersion) ?: return false
+    val width = maxOf(app.size, min.size)
+    for (i in 0 until width) {
+        val a = app.getOrElse(i) { 0 }
+        val m = min.getOrElse(i) { 0 }
+        if (a != m) return a < m
+    }
+    return false
+}
+
+/** 连接诊断里"App 版本过旧"提示位的人话文案(与 connectionFailureLabel 同族)。 */
+fun appVersionOutdatedLabel(): String = "App 版本过旧，请更新手机端 App（电脑端要求更高版本）"

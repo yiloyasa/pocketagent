@@ -92,6 +92,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -383,6 +384,82 @@ internal fun loadAttachmentPreview(context: Context, attachment: Attachment): Im
     }.getOrNull()
 }
 
+/**
+ * 附件缩略图解码目标(px):时间线附件卡按 64dp 展示(AttachmentPreview.Image),
+ * 按 2x 密度取 ~128px 解析度 —— 全尺寸原图(1-5MB)按 64dp 显示是纯浪费的解码与内存。
+ */
+internal const val ATTACHMENT_THUMBNAIL_TARGET_PX = 128
+
+/**
+ * 两段解码的抽样档(纯函数,可 JVM 单测):返回把宽高都压到 [targetPx] 附近的
+ * 最小 2^n inSampleSize;原尺寸已不超过目标(或尺寸未知)按 1(原样解码)。
+ */
+internal fun attachmentThumbnailSampleSize(
+    width: Int,
+    height: Int,
+    targetPx: Int = ATTACHMENT_THUMBNAIL_TARGET_PX,
+): Int {
+    if (width <= 0 || height <= 0) return 1
+    var sample = 1
+    var w = width
+    var h = height
+    while (w / 2 >= targetPx && h / 2 >= targetPx) {
+        w /= 2
+        h /= 2
+        sample *= 2
+    }
+    return sample
+}
+
+/**
+ * 附件缩略图加载(P1-8):两段解码(inJustDecodeBounds 量尺寸 → inSampleSize 抽样),
+ * 只解出 ~128px 的小图。旧路径 [loadAttachmentPreview] 直接 decodeByteArray 全图,
+ * 卡片列表滚动时每张附件都按原尺寸(可达数 MB 像素)解码,解码结果还只显示 64dp。
+ * 全尺寸解码保留给附件大图预览(ChatAttachmentViewer 的满幅检视),互不影响。
+ */
+internal fun loadAttachmentThumbnail(context: Context, attachment: Attachment): ImageBitmap? {
+    return runCatching {
+        val data = attachment.previewData
+        if (data != null) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = attachmentThumbnailSampleSize(bounds.outWidth, bounds.outHeight)
+            }
+            return@runCatching BitmapFactory.decodeByteArray(data, 0, data.size, opts)?.asImageBitmap()
+        }
+        val uri = attachment.localUri?.let(Uri::parse) ?: return@runCatching null
+        // 流不可重读:量尺寸与抽样解码各开一次流
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = attachmentThumbnailSampleSize(bounds.outWidth, bounds.outHeight)
+        }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)?.asImageBitmap()
+        }
+    }.getOrNull()
+}
+
+/**
+ * 缩略图的组合期加载(P1-8):produceState 桥,解码在 Dispatchers.IO 上跑,
+ * 不再阻塞合成帧;key 用 previewData 引用(与 P0-2 的 remember key 同一口径,
+ * ByteArray equals = 引用比较,不再对整图做 contentHashCode)。解码完成前返回
+ * null(卡片渲染既有兜底图标)。
+ */
+@Composable
+internal fun rememberAttachmentThumbnail(context: Context, attachment: Attachment): ImageBitmap? =
+    produceState<ImageBitmap?>(
+        initialValue = null,
+        attachment.previewData,
+        attachment.localUri,
+    ) {
+        if (attachment.previewData == null && attachment.localUri == null) return@produceState
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            loadAttachmentThumbnail(context, attachment)
+        }
+    }.value
+
 @Composable
 internal fun CodexEventCard(
     event: CodexEvent,
@@ -657,7 +734,12 @@ internal fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
 @Composable
 internal fun PlanPanel(
     steps: List<String>,
-    draft: String,
+    /**
+     * 流式草稿的 provider(P2-13):在面板内部读取 —— 只有展开区真正消费草稿,
+     * planStream 的 delta 订阅就收在 PlanPanel(展开时)里,不再让调用方
+     * (整个时间线区)随每个 delta 重组。
+     */
+    draft: () -> String,
     running: Boolean,
     expanded: Boolean,
     onToggle: () -> Unit,
@@ -755,11 +837,13 @@ internal fun PlanPanel(
             }
 
             // ---- 展开区:完整步骤 + 生成中的草稿 ----
+            // 【P2-13】draft() 的读取(即 planStream 订阅)只发生在展开分支内:
+            // 面板收起时不读草稿,流式 delta 零重组;展开时也只有 PlanPanel 子树重组。
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
                 if (parsed.isEmpty()) {
                     // 还没有结构化步骤:把草稿按可读段落排版
-                    PlanDraftText(draft)
+                    PlanDraftText(draft())
                 } else {
                     parsed.forEach { (status, text) ->
                         Row(
@@ -787,9 +871,10 @@ internal fun PlanPanel(
                         }
                     }
                     // 步骤已出但仍在跑:把最新草稿附在下面(可能是下一步的说明)
-                    if (running && draft.isNotBlank()) {
+                    val draftNow = draft()
+                    if (running && draftNow.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
-                        PlanDraftText(draft)
+                        PlanDraftText(draftNow)
                     }
                 }
             }
@@ -2457,8 +2542,11 @@ fun ChatScreen(
 
     // 提示词优化:输入/开关/离线态任一变化都重算按钮可见性(单一事实来源是输入,
     // 状态机只记"请求在飞";纯逻辑见 PromptOptimizeLogic.kt,JVM 单测钉行为)。
-    LaunchedEffect(input, offlineSnapshot, AgentConnection.optimizePromptEnabled) {
-        syncPromptOptState(input, offlineSnapshot)
+    // 【P2-10】input 从 effect key 挪进 snapshotFlow:key 在组合期求值会让整页
+    // 订阅每次击键;snapshotFlow 块内读取不进组合作用域。发射语义与旧"按键重启
+    // effect"一致:初始值 + 每个 distinct 变化各跑一次 sync(同步语义逐字保留)。
+    LaunchedEffect(offlineSnapshot, AgentConnection.optimizePromptEnabled) {
+        snapshotFlow { input }.collect { syncPromptOptState(it, offlineSnapshot) }
     }
 
     // ---- 斜杠命令面板(zcode/codex/pi 三源)----
@@ -2485,10 +2573,16 @@ fun ChatScreen(
     // —— 只读投影;写点三处都在下方效果内(SlashCommandsSettled)。进程级
     // SlashCommandCache 与拉取 RPC 原样留在这里(缓存去重通道零改动)。
     val slashCommands = chatState.slashCommands
-    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, session.running) {
-        // 【C1 RPC 入 VM】拉取/缓存/镜像落位三段整体收进 ChatViewModel.refreshSlashCommands
-        // (语义逐字保留:非面板清空 → 缓存先渲染 → RPC 回包/失败降级空表)。
-        chatVm.refreshSlashCommands(threadId, threadAgentId)
+    // 【P2-10】旧 key `slashTokenOf(input) != null` 是组合期直读:每次击键都让整页
+    // 重组合只为了重算这一个布尔。改 snapshotFlow 订阅(不进组合作用域):面板
+    // 出现时机(布尔翻转沿 + 初值)与刷新语义逐字保留 —— collect 每个发射(初值/
+    // 翻转)各调一次 refreshSlashCommands,与旧"键变化重启 effect"同拍。
+    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, session.running) {
+        snapshotFlow { slashTokenOf(input) != null }.collect {
+            // 【C1 RPC 入 VM】拉取/缓存/镜像落位三段整体收进 ChatViewModel.refreshSlashCommands
+            // (语义逐字保留:非面板清空 → 缓存先渲染 → RPC 回包/失败降级空表)。
+            chatVm.refreshSlashCommands(threadId, threadAgentId)
+        }
     }
     // 「优化」点击(P4 Task 2):走仓库发 RPC,结果进预览弹层等用户确认,不再
     // 直接替换输入框。daemon 侧整段预算 150s,手机端 deadline 再兜余量(仓库的
@@ -3102,28 +3196,38 @@ fun ChatScreen(
 
     // 新内容到达:仅当"本来在跟随"(或用户其实仍在距底 100px 内)才自动回底;
     // 真离底(上滑阅读)绝不拽动,只累加未读块数交给「↓ N 条新内容」胶囊。
-    LaunchedEffect(st.items.size, st.streamText.length / STREAM_BLOCK_CHARS, st.streaming) {
-        val wasFollowing = followBottom.value
-        val itemBlocks = (st.items.size - arriveItemCount).coerceAtLeast(0)
-        val streamBlocks = (streamBlockIndex(st.streamText.length) - arriveStreamBlocks).coerceAtLeast(0)
-        arriveItemCount = st.items.size
-        arriveStreamBlocks = streamBlockIndex(st.streamText.length)
-        unreadBlocks.value = accumulateUnreadBlocks(wasFollowing, unreadBlocks.value, itemBlocks, streamBlocks)
-        val total = st.items.size + if (st.streaming) 1 else 0
-        // 用户手势进行中(drag/fling,且非我们的程序滚动)绝不抢滚动:同一帧里
-        // "上滑"与"新内容到达"撞车时,以用户为准 —— 下一帧距底观测会解除跟随,
-        // 之后的新块进未读计数,交给胶囊。
-        val userScrolling = listState.isScrollInProgress && !programmaticScroll.get()
-        if (total > 0 && !userScrolling &&
-            shouldAutoScroll(distanceFromBottomOfList(listState), wasFollowing)
-        ) {
-            programmaticScroll.set(true)
-            try {
-                listState.scrollToItem(total - 1)
-                // 重申跟随:程序回底不是"用户离底",距底观测被标记挡住看不到这帧
-                followBottom.value = true
-            } finally {
-                programmaticScroll.set(false)
+    // 【P0-1】旧形态把 (items.size, streamText.length/24, streaming) 写进
+    // LaunchedEffect 的 key:键在**组合期**求值,等于让整页组合作用域订阅
+    // streamText —— 流式期间每个 delta 触发一次全页重组,只为决定"要不要回底"。
+    // 改 LaunchedEffect(Unit) + snapshotFlow:snapshotFlow 块内的读取只订阅该
+    // 流(不进组合作用域),收敛出同样的重启语义(键值三元组 distinct 变化才跑),
+    // 未读块数的计算口径逐字不变。
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            Triple(st.items.size, streamBlockIndex(st.streamText.length), st.streaming)
+        }.collect { (itemCount, streamBlocksNow, streamingNow) ->
+            val wasFollowing = followBottom.value
+            val itemBlocks = (itemCount - arriveItemCount).coerceAtLeast(0)
+            val streamBlocks = (streamBlocksNow - arriveStreamBlocks).coerceAtLeast(0)
+            arriveItemCount = itemCount
+            arriveStreamBlocks = streamBlocksNow
+            unreadBlocks.value = accumulateUnreadBlocks(wasFollowing, unreadBlocks.value, itemBlocks, streamBlocks)
+            val total = itemCount + if (streamingNow) 1 else 0
+            // 用户手势进行中(drag/fling,且非我们的程序滚动)绝不抢滚动:同一帧里
+            // "上滑"与"新内容到达"撞车时,以用户为准 —— 下一帧距底观测会解除跟随,
+            // 之后的新块进未读计数,交给胶囊。
+            val userScrolling = listState.isScrollInProgress && !programmaticScroll.get()
+            if (total > 0 && !userScrolling &&
+                shouldAutoScroll(distanceFromBottomOfList(listState), wasFollowing)
+            ) {
+                programmaticScroll.set(true)
+                try {
+                    listState.scrollToItem(total - 1)
+                    // 重申跟随:程序回底不是"用户离底",距底观测被标记挡住看不到这帧
+                    followBottom.value = true
+                } finally {
+                    programmaticScroll.set(false)
+                }
             }
         }
     }
@@ -3457,7 +3561,24 @@ fun ChatScreen(
         // 【C1 拆分】中段子树(时间线区)整体迁至 ui/chat/ChatTimeline.kt 的
         // ChatTimelineArea;此处只保留薄委托,两条骨架(黑客 Column / PaScreenScaffold)
         // 共用段与迁移前一字不差。重试链等闭包捕获以回调下放,语义原样。
-        val chatMiddle: @Composable ColumnScope.() -> Unit = {
+        // 【P2-9】lambda remember 化:实例身份稳定,不再每次重组新分配一个捕获 30+
+        // 变量的闭包,也让骨架侧拿到可比较的内容 lambda。key = lambda 与其捕获链
+        // (loadEarlier/send/retryDelivery 等本页局部函数)触及的**全部裸值**;
+        // session/threadGoalLine/codexSettings/reloadToken 等是状态委托,读取发生在
+        // lambda 执行时(归执行作用域订阅),不进 key。捕获的局部函数只触键控值与
+        // 状态委托,不依赖键外易变态。
+        val chatMiddle: @Composable ColumnScope.() -> Unit = remember(
+            threadId, threadTitle, threadAgentId, st, ctx, hapticView, drawerCtrl,
+            hasFailure, threadGoalLine, loadError, offlineSnapshot, offlineSnapshotAt,
+            historyTruncated, loadingEarlier, historyRoundsLoaded, hostCaps,
+            uiScale, thinkScale, listState, messageMenu, messageSelectArmed, peekSub,
+            approvalDialogOpen, planPanelOpen, showExport, showMore, showHistoryPanel,
+            unreadBlocks, followBottom, historyEntries, historyCurrentIndex, historyDrag,
+            historyDayStarts, scope,
+        ) {
+            // remember 计算体不可调用 composable(DisallowComposableCalls):
+            // 这里只**构造**并返回 composable lambda,执行仍发生在骨架内容位。
+            val content: @Composable ColumnScope.() -> Unit = {
             ChatTimelineArea(
                 threadId = threadId,
                 threadTitle = threadTitle,
@@ -3531,8 +3652,9 @@ fun ChatScreen(
                 onMenuTarget = { messageMenuTarget = it },
                 scope = scope,
             )
+            }
+            content
         } // chatMiddle 薄委托到此结束
-
         // ---- 编辑式主机状态槽(05/12):只承载离线件(主机胶囊+断线横幅) ----
         // 会话身份已上移到标题行右侧(ChatIdentityBadge,2026-09-30 布局修复:
         // "Agent·工作区+状态点"跟在标题旁,不再单独占一张大卡);本槽仅在断线时
@@ -3549,13 +3671,15 @@ fun ChatScreen(
         }
         // 【C1 拆分】底部输入区整体迁至 ui/chat/ChatComposer.kt(ChatComposerArea);
         // 此处只保留薄委托,两条骨架的输入区外壳(黑客终端/编辑式)不变。
+        // 【P2-10】草稿以 provider 形态传入:参数在 ChatComposerArea 内部读取,
+        // 击键只重组输入区子树,不再把整页订阅到 st.draft。
         val chatComposerBody: @Composable ColumnScope.() -> Unit = {
             ChatComposerArea(
                 threadId = threadId,
                 session = session,
                 ctx = ctx,
                 hapticView = hapticView,
-                input = input,
+                input = { input },
                 setInput = ::setInput,
                 attachments = attachments,
                 threadAgentId = threadAgentId,
@@ -3893,9 +4017,10 @@ fun ChatScreen(
     }
 
     // 长文本大窗编辑(需求:输入过长时可增大输入框窗口)
+    // 【P2-10】value/canSend 以 provider 形态传入:大窗里的击键只重组大窗子树。
     if (expandedInputOpen.value) {
         ExpandedInputSheet(
-            value = input,
+            value = { input },
             onValueChange = { setInput(it) },
             onDismiss = { expandedInputOpen.value = false },
             onSend = {
@@ -3903,7 +4028,7 @@ fun ChatScreen(
                 expandedInputOpen.value = false
                 if (send(text)) setInput("")
             },
-            canSend = !offlineSnapshot && input.isNotBlank() && !session.recovering,
+            canSend = { !offlineSnapshot && input.isNotBlank() && !session.recovering },
         )
     }
 
@@ -4992,17 +5117,18 @@ internal fun InAppMarkdown(
  * 改中间一句得来回滚。这里给一个占大半个屏幕的编辑区。
  *
  * 【为什么不会有内容不同步的问题】它和主输入框共用**同一份 state**
- * (`value` / `onValueChange` 直连 `input`),不存在两份副本需要回写,
+ * (`value` / `onValueChange` 直连 `input`;P2-10 起 value/canSend 以 provider
+ * 形态传入,击键只重组本面板子树),不存在两份副本需要回写,
  * 点"完成"只是收起面板,文字本来就已经在输入框里了。
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ExpandedInputSheet(
-    value: String,
+    value: () -> String,
     onValueChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onSend: () -> Unit,
-    canSend: Boolean,
+    canSend: () -> Boolean,
 ) {
     PaSheet(
         onDismissRequest = onDismiss,
@@ -5022,7 +5148,7 @@ private fun ExpandedInputSheet(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("编辑消息", Modifier.weight(1f), fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
-                Text("${value.length} 字", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
+                Text("${value().length} 字", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
                 Spacer(Modifier.width(10.dp))
                 // 完成 = 收起面板,内容原样留在底部输入框
                 Box(
@@ -5037,19 +5163,20 @@ private fun ExpandedInputSheet(
                 Spacer(Modifier.width(8.dp))
                 // 发送键触感分级:大窗里发送与底栏同档(confirm 级,见输入区发送键注释)
                 val sendHapticView = LocalView.current
+                val sendable = canSend()
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
-                        .pressable(scaleDown = 0.92f, enabled = canSend) {
+                        .pressable(scaleDown = 0.92f, enabled = sendable) {
                             PaHaptics.confirm(sendHapticView)
                             onSend()
                         }
-                        .background(if (canSend) PaEditorial.Primary else PaEditorial.Hover)
+                        .background(if (sendable) PaEditorial.Primary else PaEditorial.Hover)
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 ) {
                     Text(
                         "发送", fontSize = PaEditorial.Type.BodySmall.fontSize,
-                        color = if (canSend) PaEditorial.OnPrimary else PaEditorial.Subtle,
+                        color = if (sendable) PaEditorial.OnPrimary else PaEditorial.Subtle,
                     )
                 }
             }
@@ -5064,14 +5191,14 @@ private fun ExpandedInputSheet(
                     .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card)),
             ) {
                 BasicTextField(
-                    value = value,
+                    value = value(),
                     onValueChange = onValueChange,
                     modifier = Modifier.fillMaxSize().verticalScroll(scroll).padding(14.dp),
                     textStyle = TextStyle(fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, lineHeight = 22.sp),
                     cursorBrush = SolidColor(PaEditorial.Primary),
                     decorationBox = { inner ->
                         Box {
-                            if (value.isEmpty()) {
+                            if (value().isEmpty()) {
                                 Text(
                                     "随心输入,发给电脑上的 agent…",
                                     fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Subtle,
