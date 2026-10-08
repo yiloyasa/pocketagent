@@ -124,14 +124,14 @@ internal fun ModelOptionRow(
             // 用户反馈"模型名称仍未完整显示");displayName 为空时调用方退回 id。
             Text(
                 title,
-                fontSize = 15.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize,
                 color = if (selected) PaEditorial.Primary else PaEditorial.Ink,
             )
             if (subtitle.isNotBlank()) {
-                Text(subtitle, fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                Text(subtitle, fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
             }
             if (detail.isNotBlank()) {
-                Text(detail, fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                Text(detail, fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
             }
         }
         if (selected) {

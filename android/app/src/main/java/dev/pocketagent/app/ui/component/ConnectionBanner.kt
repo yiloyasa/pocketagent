@@ -135,7 +135,7 @@ fun ConnectionBanner(
             // 语义状态条(不算卡):警示色 8% 透明底 + 16dp 圆角,
             // 与 Home/Threads 既有错误横幅同一套语言(黄=等待,红=失败)
             .pressable { beginRetry() }
-            .background(PaEditorial.Attention.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+            .background(PaEditorial.Attention.copy(alpha = 0.08f), RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -147,12 +147,12 @@ fun ConnectionBanner(
         Text(
             connectionBannerCopy(banner.attempts, TurnSession.totalQueuedInputs()),
             Modifier.weight(1f),
-            fontSize = 12.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Attention,
             maxLines = 2,
         )
         TextButton(onClick = { beginRetry() }, enabled = !retrying) {
-            Text(if (retrying) "重试中…" else "重试", fontSize = 12.sp, color = PaEditorial.Primary)
+            Text(if (retrying) "重试中…" else "重试", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary)
         }
     }
 }

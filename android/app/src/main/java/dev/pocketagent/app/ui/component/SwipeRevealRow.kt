@@ -111,7 +111,7 @@ fun SwipeRevealRow(
     onAction: (SwipeAction) -> Unit,
     modifier: Modifier = Modifier,
     rowBackground: Color = PaEditorial.Surface,
-    shape: Shape = RoundedCornerShape(18.dp),
+    shape: Shape = RoundedCornerShape(PaEditorial.Radius.Card),
     onClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     content: @Composable () -> Unit,
@@ -200,7 +200,7 @@ fun SwipeRevealRow(
                             )
                             Text(
                                 action.label,
-                                fontSize = 10.sp,
+                                fontSize = PaEditorial.Type.Micro.fontSize,
                                 color = action.tint,
                                 modifier = Modifier.padding(top = 4.dp),
                             )

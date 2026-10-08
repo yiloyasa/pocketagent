@@ -95,7 +95,7 @@ internal fun DeliveryStatusBadge(
         state == DELIVERY_STEERED -> PaEditorial.RunningText
         else -> PaEditorial.AccentText
     }
-    val font = if (mono) TerminalFont.chatFont else null
+    val font = if (mono) PaEditorial.MonoFont else null
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Icon(
             painterResource(visual.icon.drawableRes()),
@@ -106,9 +106,9 @@ internal fun DeliveryStatusBadge(
         Spacer(Modifier.width(4.dp))
         Text(
             visual.label,
-            fontSize = 10.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             lineHeight = 14.sp,
-            fontWeight = FontWeight(650),
+            fontWeight = FontWeight.SemiBold,
             color = tint,
             fontFamily = font,
         )
@@ -116,7 +116,7 @@ internal fun DeliveryStatusBadge(
             Spacer(Modifier.width(6.dp))
             Text(
                 "点按重发",
-                fontSize = 10.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 lineHeight = 14.sp,
                 color = PaEditorial.DeniedText,
                 fontWeight = FontWeight.Medium,

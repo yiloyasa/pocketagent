@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * 磨砂玻璃材质系统（UI 改版 ·「高级感」的地基）。
@@ -100,7 +101,7 @@ fun rememberGlassBlurAvailable(): Boolean = remember {
  * @param shadowElevation 悬浮玻璃（浮层卡）给一点投影；贴边的导航栏/编辑条给 0。
  */
 fun Modifier.paGlass(
-    shape: Shape = RoundedCornerShape(0.dp),
+    shape: Shape = RoundedCornerShape(PaEditorial.Radius.Terminal),
     tint: Color? = null,
     hairline: Boolean = true,
     shadowElevation: Dp = 0.dp,

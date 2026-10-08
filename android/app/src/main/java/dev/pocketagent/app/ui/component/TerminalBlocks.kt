@@ -31,7 +31,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -164,17 +163,10 @@ internal fun tmuxClockLabel(epochMs: Long): String =
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 字体:JetBrains Mono(Regular+Bold,OFL,已随 res/font 落库;许可见
-// res/raw/jetbrains_mono_ofl.txt)。回退方案:若字体资源不可用,消费方
-// 在 hacker 分支里退回 PaHacker.mono(系统等宽)—— 本对象不做运行时探测。
+// res/raw/jetbrains_mono_ofl.txt)。【字体身份轮 2026-10-09】等宽统一走 theme 层
+// 令牌 PaEditorial.MonoFont(单一事实来源),原 TerminalFont 对象并入其中后删除;
+// PaHacker.mono 契约对象保持冻结(消费点已改读令牌)。
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** hacker 模式对话字体。theme/PaHacker.kt 被并行线冻结,故 chatFont 落在新文件。 */
-object TerminalFont {
-    val chatFont: FontFamily = FontFamily(
-        Font(AppR.font.jetbrains_mono_regular, FontWeight.Normal),
-        Font(AppR.font.jetbrains_mono_bold, FontWeight.Bold),
-    )
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Block 组件
@@ -225,7 +217,7 @@ internal fun TerminalUserBlock(
                     },
                     fontSize = terminalBodyFontSize(uiScale).sp,
                     lineHeight = terminalBodyLineHeight(uiScale).sp,
-                    fontFamily = TerminalFont.chatFont,
+                    fontFamily = PaEditorial.MonoFont,
                 )
             }
         }
@@ -244,9 +236,9 @@ internal fun TerminalUserBlock(
                             Modifier
                                 .pressable(haptic = true) { onClearQueued() }
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
-                            fontSize = 10.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             color = PaEditorial.Denied,
-                            fontFamily = TerminalFont.chatFont,
+                            fontFamily = PaEditorial.MonoFont,
                         )
                     }
                 }
@@ -311,8 +303,8 @@ internal fun BrailleSpinner(color: Color = PaEditorial.Primary) {
     Text(
         brailleFrameAt(tick).toString(),
         color = color,
-        fontSize = 13.sp,
-        fontFamily = TerminalFont.chatFont,
+        fontSize = PaEditorial.Type.BodySmall.fontSize,
+        fontFamily = PaEditorial.MonoFont,
     )
 }
 
@@ -364,14 +356,14 @@ internal fun TerminalToolBlock(
                 "▸ ",
                 color = PaEditorial.Subtle,
                 fontSize = (13 * uiScale).sp,
-                fontFamily = TerminalFont.chatFont,
+                fontFamily = PaEditorial.MonoFont,
             )
             Text(
                 item.toolName.ifBlank { "工具" },
                 Modifier.weight(1f, fill = false),
                 color = PaEditorial.Ink,
                 fontSize = (13 * uiScale).sp,
-                fontFamily = TerminalFont.chatFont,
+                fontFamily = PaEditorial.MonoFont,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -385,7 +377,7 @@ internal fun TerminalToolBlock(
                     // Subtle 档只有 ~3:1,小字不可读(对比度核查结论)
                     color = PaEditorial.Muted,
                     fontSize = (11.5f * uiScale).sp,
-                    fontFamily = TerminalFont.chatFont,
+                    fontFamily = PaEditorial.MonoFont,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -399,7 +391,7 @@ internal fun TerminalToolBlock(
                 statusMark,
                 color = statusColor,
                 fontSize = (11 * uiScale).sp,
-                fontFamily = TerminalFont.chatFont,
+                fontFamily = PaEditorial.MonoFont,
             )
         }
     }
@@ -415,7 +407,7 @@ internal fun TerminalToolBlock(
                     color = PaEditorial.Muted,
                     fontSize = (10.5f * uiScale).sp,
                     lineHeight = (10.5f * uiScale * 1.4f).sp,
-                    fontFamily = TerminalFont.chatFont,
+                    fontFamily = PaEditorial.MonoFont,
                 )
             }
             if (item.text.isNotBlank()) {
@@ -425,7 +417,7 @@ internal fun TerminalToolBlock(
                     color = if (item.toolStatus == "failure") PaEditorial.Denied else PaEditorial.Muted,
                     fontSize = (10.5f * uiScale).sp,
                     lineHeight = (10.5f * uiScale * 1.4f).sp,
-                    fontFamily = TerminalFont.chatFont,
+                    fontFamily = PaEditorial.MonoFont,
                 )
             }
             if (item.toolArgs.isBlank() && item.text.isBlank()) {
@@ -434,7 +426,7 @@ internal fun TerminalToolBlock(
                     // 11sp 小字:Muted 档保证对黑底 ≥4.5:1(对比度核查结论)
                     color = PaEditorial.Muted,
                     fontSize = (11 * uiScale).sp,
-                    fontFamily = TerminalFont.chatFont,
+                    fontFamily = PaEditorial.MonoFont,
                 )
             }
         }
@@ -456,8 +448,8 @@ internal fun TerminalFootnote(
         textAlign = TextAlign.End,
         // 11sp 脚注:Muted 档(≥6:1),Subtle 档对黑底不足 4.5:1
         color = PaEditorial.Muted,
-        fontSize = 11.sp,
-        fontFamily = TerminalFont.chatFont,
+        fontSize = PaEditorial.Type.Caption.fontSize,
+        fontFamily = PaEditorial.MonoFont,
     )
 }
 
@@ -500,15 +492,15 @@ internal fun TmuxStatusLine(
     ) {
         Box(
             Modifier
-                .background(PaEditorial.Primary, RoundedCornerShape(3.dp))
+                .background(PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.Terminal))
                 .padding(horizontal = 6.dp, vertical = 1.dp),
         ) {
             Text(
                 "[0:pa]",
                 color = PaEditorial.Canvas,
-                fontSize = 10.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 fontWeight = FontWeight.SemiBold,
-                fontFamily = TerminalFont.chatFont,
+                fontFamily = PaEditorial.MonoFont,
             )
         }
         Spacer(Modifier.width(8.dp))
@@ -517,24 +509,24 @@ internal fun TmuxStatusLine(
             Modifier.weight(1f),
             // 10.5sp 状态条小字:Muted 档保证黑底可读(对比度核查结论)
             color = PaEditorial.Muted,
-            fontSize = 10.5.sp,
-            fontFamily = TerminalFont.chatFont,
+            fontSize = PaEditorial.Type.Micro.fontSize,
+            fontFamily = PaEditorial.MonoFont,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
             "● ${tmuxConnLabel(connState)}",
             color = if (connState == "ok") PaEditorial.Running else PaEditorial.Attention,
-            fontSize = 10.5.sp,
-            fontFamily = TerminalFont.chatFont,
+            fontSize = PaEditorial.Type.Micro.fontSize,
+            fontFamily = PaEditorial.MonoFont,
         )
         if (modelName.isNotBlank()) {
             TmuxSegmentDivider()
             Text(
                 modelName,
                 color = PaEditorial.Muted,
-                fontSize = 10.5.sp,
-                fontFamily = TerminalFont.chatFont,
+                fontSize = PaEditorial.Type.Micro.fontSize,
+                fontFamily = PaEditorial.MonoFont,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -544,8 +536,8 @@ internal fun TmuxStatusLine(
             tmuxClockLabel(clockMs),
             // 10.5sp 时钟:Muted 档,与标题同档可读(对比度核查结论)
             color = PaEditorial.Muted,
-            fontSize = 10.5.sp,
-            fontFamily = TerminalFont.chatFont,
+            fontSize = PaEditorial.Type.Micro.fontSize,
+            fontFamily = PaEditorial.MonoFont,
         )
     }
 }
@@ -557,8 +549,8 @@ private fun TmuxSegmentDivider() {
         "│",
         Modifier.padding(horizontal = 6.dp),
         color = PaEditorial.Hairline,
-        fontSize = 10.5.sp,
-        fontFamily = TerminalFont.chatFont,
+        fontSize = PaEditorial.Type.Micro.fontSize,
+        fontFamily = PaEditorial.MonoFont,
     )
 }
 

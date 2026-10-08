@@ -41,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -200,12 +199,12 @@ fun UnknownEventDetailSheet(onDismiss: () -> Unit) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
             Text(
                 UnknownEventCopy.SHEET_TITLE,
-                fontSize = 19.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize,
                 color = PaEditorial.Ink,
                 fontWeight = FontWeight.SemiBold,
             )
             ledger?.let {
-                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
+                Text(it, Modifier.padding(top = 3.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
             }
             val isEmpty = groups.needsUser.isEmpty() && groups.handled.isEmpty() && groups.reference.isEmpty()
             if (isEmpty) {
@@ -221,7 +220,7 @@ fun UnknownEventDetailSheet(onDismiss: () -> Unit) {
                         Text(
                             "$label · ${items.size}",
                             Modifier.padding(top = 10.dp, bottom = 2.dp),
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.Muted,
                             fontWeight = FontWeight.Medium,
                         )
@@ -279,11 +278,11 @@ fun UnknownEventDetailSheet(onDismiss: () -> Unit) {
         AlertDialog(
             onDismissRequest = { pendingConfirm = null },
             containerColor = PaEditorial.Surface,
-            title = { Text("确认执行「${action.label}」?", fontSize = 16.sp, color = PaEditorial.Ink) },
+            title = { Text("确认执行「${action.label}」?", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink) },
             text = {
                 Text(
                     action.description.ifBlank { UnknownEventCopy.ACTION_DONE },
-                    fontSize = 13.sp,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                 )
             },
@@ -348,10 +347,10 @@ private fun UnknownEventCardRow(
                 Column(Modifier.weight(1f)) {
                     Text(
                         card.title,
-                        fontSize = 14.sp,
+                        fontSize = PaEditorial.Type.Body.fontSize,
                         lineHeight = 19.sp,
                         color = PaEditorial.Ink,
-                        fontWeight = FontWeight(600),
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -359,7 +358,7 @@ private fun UnknownEventCardRow(
                         Text(
                             card.impact,
                             Modifier.padding(top = 2.dp),
-                            fontSize = 11.5.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             lineHeight = 16.sp,
                             color = PaEditorial.Muted,
                             maxLines = 2,
@@ -373,7 +372,7 @@ private fun UnknownEventCardRow(
                         Text(
                             meta,
                             Modifier.padding(top = 2.dp),
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.Subtle,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -383,10 +382,10 @@ private fun UnknownEventCardRow(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     unknownStatusLabel(card.status),
-                    fontSize = 10.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     lineHeight = 14.sp,
                     color = statusTone(card),
-                    fontWeight = FontWeight(650),
+                    fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.width(6.dp))
                 Icon(
@@ -402,7 +401,7 @@ private fun UnknownEventCardRow(
                 Text(
                     UnknownEventCopy.DEGRADED_NOTE,
                     Modifier.padding(top = 3.dp),
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Muted,
                 )
             }
@@ -423,7 +422,7 @@ private fun UnknownEventCardRow(
                     Text(
                         card.explanation,
                         Modifier.padding(top = 4.dp),
-                        fontSize = 12.5.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
                         lineHeight = 18.sp,
                         color = PaEditorial.Muted,
                     )
@@ -433,7 +432,7 @@ private fun UnknownEventCardRow(
                     Text(
                         it,
                         Modifier.padding(top = 6.dp),
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         lineHeight = 17.sp,
                         color = PaEditorial.Ink,
                     )
@@ -449,8 +448,8 @@ private fun UnknownEventCardRow(
                             .fillMaxWidth()
                             .padding(top = 6.dp),
                         singleLine = true,
-                        label = { Text(UnknownEventCopy.NOTE_LABEL, fontSize = 12.sp) },
-                        placeholder = { Text(UnknownEventCopy.NOTE_PLACEHOLDER, fontSize = 12.sp) },
+                        label = { Text(UnknownEventCopy.NOTE_LABEL, fontSize = PaEditorial.Type.Caption.fontSize) },
+                        placeholder = { Text(UnknownEventCopy.NOTE_PLACEHOLDER, fontSize = PaEditorial.Type.Caption.fontSize) },
                     )
                     // 一行塞不下全部按钮(窄屏会挤到换行截断),三个一排。
                     usable.chunked(3).forEach { rowActions ->
@@ -463,7 +462,7 @@ private fun UnknownEventCardRow(
                     Text(
                         it.text,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         lineHeight = 17.sp,
                         color = if (it.attention) EditorialTone.ATTENTION.accent else PaEditorial.RunningText,
                     )
@@ -479,7 +478,7 @@ private fun UnknownEventCardRow(
                 ) {
                     Text(
                         if (technicalOpen) UnknownEventCopy.TECHNICAL_HIDE else UnknownEventCopy.TECHNICAL_SHOW,
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Primary,
                     )
                     Icon(
@@ -500,7 +499,7 @@ private fun UnknownEventCardRow(
                     Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
                         Text(
                             UnknownEventCopy.TECHNICAL_SECTION_TITLE,
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.Muted,
                             fontWeight = FontWeight.Medium,
                         )
@@ -508,13 +507,13 @@ private fun UnknownEventCardRow(
                             detail == null || (!detail.loadFailed && detail.detail == null) -> Text(
                                 UnknownEventCopy.DETAIL_LOADING,
                                 Modifier.padding(top = 4.dp),
-                                fontSize = 12.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Muted,
                             )
                             detail.loadFailed -> Text(
                                 UnknownEventCopy.DETAIL_LOAD_FAILED,
                                 Modifier.padding(top = 4.dp),
-                                fontSize = 12.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 lineHeight = 17.sp,
                                 color = EditorialTone.ATTENTION.accent,
                             )
@@ -534,7 +533,7 @@ private fun TechnicalDetailBody(d: UnknownEventResponseOf) {
         Text(
             it,
             Modifier.padding(top = 6.dp),
-            fontSize = 12.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             lineHeight = 17.sp,
             color = PaEditorial.Muted,
         )
@@ -543,7 +542,7 @@ private fun TechnicalDetailBody(d: UnknownEventResponseOf) {
         Text(
             UnknownEventCopy.FIELD_DIGEST_TITLE,
             Modifier.padding(top = 10.dp, bottom = 2.dp),
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Muted,
             fontWeight = FontWeight.Medium,
         )
@@ -556,17 +555,17 @@ private fun TechnicalDetailBody(d: UnknownEventResponseOf) {
             .padding(top = 8.dp)
             .heightIn(max = 220.dp)
             .verticalScroll(rememberScrollState())
-            .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
+            .background(PaEditorial.GraphiteCode, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .padding(10.dp),
-        fontSize = 11.sp,
-        fontFamily = FontFamily.Monospace,
+        fontSize = PaEditorial.Type.Caption.fontSize,
+        fontFamily = PaEditorial.MonoFont,
         color = PaEditorial.CodeText,
     )
     d.supportBundleHint?.let {
         Text(
             it,
             Modifier.padding(top = 4.dp),
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             lineHeight = 16.sp,
             color = PaEditorial.Subtle,
         )
@@ -580,8 +579,8 @@ private fun DigestRow(row: UnknownEventDigestRow) {
         Text(
             row.key,
             Modifier.weight(0.9f),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
+            fontSize = PaEditorial.Type.Caption.fontSize,
+            fontFamily = PaEditorial.MonoFont,
             color = PaEditorial.Ink,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -590,14 +589,14 @@ private fun DigestRow(row: UnknownEventDigestRow) {
             Text(
                 row.meaning!!,
                 Modifier.weight(1f).padding(horizontal = 6.dp),
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
             )
         }
         Text(
             row.preview,
             Modifier.weight(1.1f),
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -622,7 +621,7 @@ private fun ActionButton(
     TextButton(onClick = { onAction(action) }, enabled = !busy) {
         Text(
             action.label,
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             color = if (action.destructive) EditorialTone.DENIED.text else PaEditorial.Primary,
         )
     }

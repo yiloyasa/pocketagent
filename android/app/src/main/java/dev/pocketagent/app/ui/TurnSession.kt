@@ -763,7 +763,15 @@ object TurnSession {
                 commitThinking(st)
                 st.streamText += ev.textDelta.delta
             }
-            TurnServerMessage.MsgCase.THINKING_DELTA -> st.thinkingText += ev.thinkingDelta.delta
+            TurnServerMessage.MsgCase.THINKING_DELTA -> {
+                // 【P1-3·pi thinking】daemon 侧一帧只带其一:snapshot 非空 = 权威全文
+                // (thinking_end 终局事件/历史回放一次性携带),整体替换累积思考文本 ——
+                // 丢帧/断连后的兜底真相,不依赖逐帧拼接的完整性;否则追加增量
+                // (旧 daemon / 普通流式 delta 帧,行为与旧版完全一致)。
+                // 实时流与回放(GetThreadEventsSince)共用本分支,历史路径无需另行处理。
+                val td = ev.thinkingDelta
+                st.thinkingText = if (td.snapshot.isNotEmpty()) td.snapshot else st.thinkingText + td.delta
+            }
             TurnServerMessage.MsgCase.USAGE -> {
                 // 用量进上下文窗口交互卡，不再挤占聊天时间线。
                 st.compactionInProgress = false

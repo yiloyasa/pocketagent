@@ -132,7 +132,7 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text(
                 "选择文件夹", Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                fontSize = 17.sp, lineHeight = 24.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 24.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = PaEditorial.Ink,
             )
@@ -152,7 +152,7 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                 Text(
                     if (showRoots) "此电脑" else path,
                     Modifier.weight(1f),
-                    fontSize = 12.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 if (loading) {
@@ -167,9 +167,9 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .background(EditorialTone.GREY.container, RoundedCornerShape(13.dp))
+                        .background(EditorialTone.GREY.container, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    fontSize = 12.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = EditorialTone.GREY.text,
                 )
             }
@@ -193,8 +193,8 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                                 Modifier
                                     .fillMaxWidth()
                                     .pressable { if (e.isDir) loadDir(e.path.ifEmpty { joinPath(path, e.name) }) }
-                                    .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                     .padding(horizontal = 12.dp, vertical = 11.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -206,7 +206,7 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                                 // 长目录名中间省略(保尾部),整行不至于只看到开头
                                 Text(
                                     middleEllipsize(e.name, 32),
-                                    fontSize = 14.sp, color = PaEditorial.Ink, maxLines = 1,
+                                    fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink, maxLines = 1,
                                 )
                             }
                             Spacer(Modifier.height(6.dp))
@@ -226,13 +226,13 @@ fun FolderPickerSheet(onDismiss: () -> Unit, onPick: (String) -> Unit) {
                             onPick(path)
                         }
                     }
-                    .background(if (showRoots) PaEditorial.Raised else PaEditorial.Graphite, RoundedCornerShape(14.dp))
+                    .background(if (showRoots) PaEditorial.Raised else PaEditorial.Graphite, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(vertical = 15.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (showRoots) "先进入一个文件夹" else "选择此文件夹",
-                    fontSize = 15.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize,
                     color = if (showRoots) PaEditorial.Muted else Color.White,
                     fontWeight = FontWeight.SemiBold,
                 )

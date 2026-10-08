@@ -37,14 +37,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
-import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.theme.PaEditorial
@@ -61,7 +58,9 @@ import kotlinx.coroutines.launch
  *      品牌时刻,不铺满画面);
  *   4) 收尾整屏淡出交接主页,全程无跳变。
  */
-private val PaFont = FontFamily(Font(R.font.poppins_bold))
+// 字体身份统一走令牌(2026-10-09):本地 PaFont 降为 PaEditorial.DisplayFont 别名,
+// Poppins Bold 单一事实来源在 theme 层。
+private val PaFont = PaEditorial.DisplayFont
 private const val FULL = "Pocket agent"
 
 @Composable
@@ -184,7 +183,7 @@ fun Splash(onDone: () -> Unit) {
                     },
                     fontFamily = PaFont,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 34.sp,
+                    fontSize = PaEditorial.Type.Display.fontSize,
                 )
                 Spacer(Modifier.height(16.dp))
                 // 进度线:随打字节奏展开,停留时收满(底槽 = 细线令牌)

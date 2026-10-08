@@ -69,7 +69,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -113,7 +112,6 @@ import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaHostChip
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.connectionBannerCopy
-import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.composerShowsPrompt
 import dev.pocketagent.app.ui.compactionPending
@@ -209,7 +207,7 @@ internal fun ColumnScope.ChatComposerArea(
                                 onClick = { onOpenAttachment(at) },
                                 onLongPress = { copyMessage(ctx, at.name) },
                             )
-                            .background(PaEditorial.Raised, RoundedCornerShape(10.dp))
+                            .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.Chip))
                             // PA-REAL-0004 收尾:chip 命中高度抬到 ≥48dp(原 ≈29dp)。
                             // 垂直 padding 7→0,由"移除叉"的 48dp 触控箱顶起;胶囊圆角/
                             // 配色/内容排布不变,仅整体增高到最小触控标准。
@@ -234,7 +232,7 @@ internal fun ColumnScope.ChatComposerArea(
                         Text(
                             middleEllipsize(at.name, ATTACH_CHIP_NAME_MAX),
                             Modifier.widthIn(max = 220.dp),
-                            fontSize = 11.sp, color = PaEditorial.Ink,
+                            fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Ink,
                             maxLines = 3, softWrap = true, overflow = TextOverflow.Ellipsis,
                         )
                         Spacer(Modifier.width(6.dp))
@@ -275,12 +273,12 @@ internal fun ColumnScope.ChatComposerArea(
             label = "inputFocusGlow",
         )
         // 编辑式:瓷白输入卡 + 细线(18dp 圆角);黑客终端保持玻璃材质(26dp)。
-        val composerShape = if (PaHacker.isHacker) RoundedCornerShape(26.dp) else RoundedCornerShape(18.dp)
+        val composerShape = if (PaHacker.isHacker) RoundedCornerShape(PaEditorial.Radius.Sheet) else RoundedCornerShape(PaEditorial.Radius.Card)
         Column(
             Modifier
                 .fillMaxWidth()
                 .then(
-                    if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(26.dp), hairline = true)
+                    if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(PaEditorial.Radius.Sheet), hairline = true)
                     else Modifier
                         .background(PaEditorial.Surface, composerShape)
                         .border(1.dp, PaEditorial.Hairline, composerShape),
@@ -314,7 +312,7 @@ internal fun ColumnScope.ChatComposerArea(
             if (slashCandidates.isNotEmpty()) {
                 Text(
                     "${slashCandidates.size} 个命令 · 上下滑动查看",
-                    fontSize = 10.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = ChatSubtleColor,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp),
                 )
@@ -353,13 +351,13 @@ internal fun ColumnScope.ChatComposerArea(
                                 }
                                 .background(
                                     PaEditorial.Raised,
-                                    RoundedCornerShape(12.dp),
+                                    RoundedCornerShape(PaEditorial.Radius.IconButton),
                                 )
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                         ) {
                             Text(
                                 "/" + c.name,
-                                fontSize = 12.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 fontWeight = FontWeight.SemiBold,
                                 color = ChatAccentColor,
                             )
@@ -367,7 +365,7 @@ internal fun ColumnScope.ChatComposerArea(
                                 Spacer(Modifier.height(4.dp))
                                 Text(
                                     c.description,
-                                    fontSize = 11.sp,
+                                    fontSize = PaEditorial.Type.Caption.fontSize,
                                     color = ChatMutedColor,
                                 )
                             }
@@ -383,7 +381,7 @@ internal fun ColumnScope.ChatComposerArea(
             if (slashUnknownAgentHintVisible(threadAgentId, input, offlineSnapshot)) {
                 Text(
                     SLASH_UNKNOWN_AGENT_HINT,
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = ChatSubtleColor,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
                 )
@@ -421,11 +419,11 @@ internal fun ColumnScope.ChatComposerArea(
                         // 右侧预留 30dp:保证右上角图标不会压住光标 / 末尾文字
                         .padding(start = 18.dp, end = 30.dp, top = 12.dp, bottom = 12.dp)
                         .heightIn(min = 24.dp),
-                    // 黑客终端模式:输入框字体等宽(JetBrains Mono,见 TerminalFont)
+                    // 黑客终端模式:输入框字体等宽(JetBrains Mono,令牌 PaEditorial.MonoFont)
                     textStyle = TextStyle(
-                        fontSize = 15.sp,
+                        fontSize = PaEditorial.Type.Heading.fontSize,
                         color = ChatInkColor,
-                        fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
+                        fontFamily = if (PaHacker.isHacker) PaEditorial.MonoFont else null,
                     ),
                     // 聚焦态喂给外层胶囊的辉光描边(见上方 inputFocused)
                     interactionSource = inputInteraction,
@@ -442,9 +440,9 @@ internal fun ColumnScope.ChatComposerArea(
                                 Text(
                                     "❯ ",
                                     color = ChatAccentColor,
-                                    fontSize = 15.sp,
+                                    fontSize = PaEditorial.Type.Heading.fontSize,
                                     fontWeight = FontWeight.Bold,
-                                    fontFamily = TerminalFont.chatFont,
+                                    fontFamily = PaEditorial.MonoFont,
                                 )
                             }
                             Box {
@@ -472,9 +470,9 @@ internal fun ColumnScope.ChatComposerArea(
                                             PaHacker.isHacker -> "输入指令…"
                                             else -> "继续输入,或询问当前进度…"
                                         },
-                                        fontSize = 15.sp,
+                                        fontSize = PaEditorial.Type.Heading.fontSize,
                                         color = ChatSubtleColor,
-                                        fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
+                                        fontFamily = if (PaHacker.isHacker) PaEditorial.MonoFont else null,
                                     )
                                 }
                                 inner()
@@ -546,11 +544,11 @@ internal fun ColumnScope.ChatComposerArea(
                 val nameColor = lerp(ChatInkColor, ChatAccentColor, nameFlash.value)
                 Text(
                     buildAnnotatedString {
-                        withStyle(SpanStyle(fontSize = 13.sp, color = nameColor, fontWeight = FontWeight.Medium)) {
+                        withStyle(SpanStyle(fontSize = PaEditorial.Type.BodySmall.fontSize, color = nameColor, fontWeight = FontWeight.Medium)) {
                             append(base)
                         }
                         if (runningHint.isNotEmpty()) {
-                            withStyle(SpanStyle(fontSize = 12.sp, color = ChatMutedColor)) {
+                            withStyle(SpanStyle(fontSize = PaEditorial.Type.Caption.fontSize, color = ChatMutedColor)) {
                                 append(runningHint)
                             }
                         }
@@ -655,7 +653,7 @@ internal fun ColumnScope.ChatComposerArea(
                         Spacer(Modifier.width(5.dp))
                         Text(
                             APPROVALS.find { it.first == cur }?.second ?: "按需询问",
-                            fontSize = 11.5.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             maxLines=1, overflow=TextOverflow.Ellipsis, modifier=Modifier.widthIn(max=72.dp),
                             color = if (danger) ChatDeniedColor else ChatInkColor,
                         )
@@ -669,7 +667,7 @@ internal fun ColumnScope.ChatComposerArea(
                         expanded = approvalMenu,
                         onDismissRequest = { approvalMenu = false },
                         containerColor = if (PaHacker.isHacker) PaEditorial.Raised else PaEditorial.Surface,
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(PaEditorial.Radius.Card),
                     ) {
                         APPROVALS.forEach { (id, label, desc) ->
                             val active = (codexSettings?.approvalPolicy ?: "on-request") == id
@@ -678,10 +676,10 @@ internal fun ColumnScope.ChatComposerArea(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Column(Modifier.weight(1f)) {
                                             Text(
-                                                label, fontSize = 14.sp,
+                                                label, fontSize = PaEditorial.Type.Body.fontSize,
                                                 color = if (active) ChatAccentColor else ChatInkColor,
                                             )
-                                            Text(desc, fontSize = 10.5.sp, color = ChatSubtleColor)
+                                            Text(desc, fontSize = PaEditorial.Type.Micro.fontSize, color = ChatSubtleColor)
                                         }
                                         if (active) {
                                             Icon(
@@ -865,7 +863,7 @@ internal fun ColumnScope.ChatComposerArea(
                                         .width(2.5.dp)
                                         .height(16.dp)
                                         .graphicsLayer { scaleY = v }
-                                        .background(ChatAccentColor, RoundedCornerShape(2.dp)),
+                                        .background(ChatAccentColor, RoundedCornerShape(PaEditorial.Radius.Terminal)),
                                 )
                             }
                         }

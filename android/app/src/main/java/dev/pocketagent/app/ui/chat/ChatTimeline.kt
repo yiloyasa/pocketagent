@@ -219,13 +219,13 @@ internal fun ColumnScope.ChatTimelineArea(
         }
         Text(
             selectedAgentLabel(threadAgentId),
-            fontSize = 11.5.sp, color = PaEditorial.Muted, maxLines = 1,
+            fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted, maxLines = 1,
         )
         Spacer(Modifier.width(8.dp))
         // 【必须显式 Ellipsis】Modifier.weight(1f) 已把宽度约束死,默认
     // TextOverflow.Clip 会"干净地"切掉尾巴且不画省略号,看起来像文字坏了。
     Text(
-        threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = PaEditorial.Ink,
+        threadTitle, Modifier.weight(1f), fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink,
         maxLines = 1, overflow = TextOverflow.Ellipsis,
     )
         // 终止正在跑的轮次(用户反馈:任务跑飞了没法自己停)
@@ -288,7 +288,7 @@ internal fun ColumnScope.ChatTimelineArea(
         ) {
             Text(
                 goal,
-                fontSize = 11.5.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -407,8 +407,8 @@ internal fun ColumnScope.ChatTimelineArea(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = midGutter, vertical = 2.dp)
-                    .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -424,7 +424,7 @@ internal fun ColumnScope.ChatTimelineArea(
                 Column(Modifier.weight(1f)) {
                     Text(
                         split?.first ?: noticeMsg,
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = if (!waiting && offlineSnapshot) tone.copy(alpha = 0.85f) else tone,
                         // 拆不出方法名时整条原文照抄,保留原 2 行;拆出后标题一行
                         maxLines = if (split == null) 2 else 1,
@@ -432,7 +432,7 @@ internal fun ColumnScope.ChatTimelineArea(
                     split?.second?.takeIf { it.isNotBlank() }?.let {
                         Text(
                             it,
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = if (!waiting && offlineSnapshot) tone.copy(alpha = 0.85f) else tone,
                             maxLines = 2,
                         )
@@ -445,7 +445,7 @@ internal fun ColumnScope.ChatTimelineArea(
                     TextButton(onClick = onRetryNotice) {
                         Text(
                             "重试",
-                            fontSize = 11.5.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.Primary,
                         )
                     }
@@ -464,8 +464,8 @@ internal fun ColumnScope.ChatTimelineArea(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = midGutter, vertical = 2.dp)
-                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
-                    .border(1.dp, OfflineBannerOutline, RoundedCornerShape(13.dp))
+                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                    .border(1.dp, OfflineBannerOutline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -477,12 +477,12 @@ internal fun ColumnScope.ChatTimelineArea(
                 Text(
                     "$banner · 显示的是电脑端会话的本地副本,输入已停用",
                     Modifier.weight(1f),
-                    fontSize = 11.5.sp, color = OfflineBannerText, maxLines = 2,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = OfflineBannerText, maxLines = 2,
                 )
                 TextButton(onClick = onReloadSnapshot) {
                 Text(
                     "重试",
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Primary,
                 )
                 }
@@ -585,7 +585,7 @@ internal fun ColumnScope.ChatTimelineArea(
                         TextButton(onClick = onLoadEarlier) {
                             Text(
                                 "加载更早",
-                                fontSize = 12.5.sp,
+                                fontSize = PaEditorial.Type.BodySmall.fontSize,
                                 color = PaEditorial.Primary,
                             )
                         }
@@ -629,7 +629,7 @@ internal fun ColumnScope.ChatTimelineArea(
                     ) {
                         Text(
                             "⋯ 已折叠 ${item.trimmedCount} 条早期消息",
-                            fontSize = 10.5.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             color = PaEditorial.Subtle,
                         )
                     }
@@ -704,7 +704,7 @@ internal fun ColumnScope.ChatTimelineArea(
                     val prevIsUser = index > 0 && st.items[index - 1].role == "user"
                     val nextIsUser = index < st.items.lastIndex && st.items[index + 1].role == "user"
                     val bubbleShape = if (PaHacker.isHacker) {
-                        RoundedCornerShape(6.dp)
+                        RoundedCornerShape(PaEditorial.Radius.Terminal)
                     } else {
                         RoundedCornerShape(
                             topStart = if (prevIsUser) 7.dp else 20.dp,
@@ -787,7 +787,7 @@ internal fun ColumnScope.ChatTimelineArea(
                                             fontSize = (14 * uiScale).sp,
                                             lineHeight = (21 * uiScale).sp,
                                             // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
-                                            fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
+                                            fontFamily = if (PaHacker.isHacker) PaEditorial.MonoFont else null,
                                         )
                                     }
                                 } else {
@@ -797,7 +797,7 @@ internal fun ColumnScope.ChatTimelineArea(
                                         fontSize = (14 * uiScale).sp,
                                         lineHeight = (21 * uiScale).sp,
                                         // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
-                                        fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
+                                        fontFamily = if (PaHacker.isHacker) PaEditorial.MonoFont else null,
                                     )
                                 }
                                 if (selectMode) {
@@ -806,7 +806,7 @@ internal fun ColumnScope.ChatTimelineArea(
                                         Modifier
                                             .pressable { selectMode = false }
                                             .padding(top = 4.dp),
-                                        fontSize = 10.5.sp,
+                                        fontSize = PaEditorial.Type.Micro.fontSize,
                                         fontWeight = FontWeight.SemiBold,
                                         color = ChatAccentColor,
                                     )
@@ -843,7 +843,7 @@ internal fun ColumnScope.ChatTimelineArea(
                                             Modifier
                                                 .pressable(haptic = true) { onClearQueued() }
                                                 .padding(horizontal = 8.dp, vertical = 2.dp),
-                                            fontSize = 10.sp,
+                                            fontSize = PaEditorial.Type.Micro.fontSize,
                                             color = ChatDeniedColor,
                                         )
                                     }
@@ -915,7 +915,7 @@ internal fun ColumnScope.ChatTimelineArea(
                             Modifier
                                 .pressable { selectMode = false }
                                 .padding(top = 4.dp),
-                            fontSize = 10.5.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             fontWeight = FontWeight.SemiBold,
                             color = ChatAccentColor,
                         )
@@ -941,7 +941,7 @@ internal fun ColumnScope.ChatTimelineArea(
                                         tint = ChatAccentColor, modifier = Modifier.size(13.dp),
                                     )
                                     Spacer(Modifier.width(5.dp))
-                                    Text("在浏览器打开 $fileName", fontSize = 10.5.sp, color = ChatAccentColor)
+                                    Text("在浏览器打开 $fileName", fontSize = PaEditorial.Type.Micro.fontSize, color = ChatAccentColor)
                                 }
                             }
                         }
@@ -999,10 +999,10 @@ internal fun ColumnScope.ChatTimelineArea(
                             Box(
                                 Modifier
                                     .then(
-                                        if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(18.dp))
+                                        if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(PaEditorial.Radius.Card))
                                         else Modifier
-                                            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-                                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp)),
+                                            .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+                                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card)),
                                     )
                                     .padding(horizontal = 16.dp, vertical = 14.dp),
                             ) {
@@ -1089,14 +1089,14 @@ internal fun ColumnScope.ChatTimelineArea(
             Spacer(Modifier.height(10.dp))
             Text(
                 emptyHead,
-                fontSize = 14.sp, lineHeight = 20.sp,
+                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = PaEditorial.Muted,
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 emptySub,
-                fontSize = 12.sp, lineHeight = 18.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 18.sp,
                 color = PaEditorial.Subtle,
                 textAlign = TextAlign.Center,
             )
@@ -1161,9 +1161,9 @@ internal fun ColumnScope.ChatTimelineArea(
                     // 深色盘(含黑客)保持既有平语言,不加班驳阴影
                     .then(
                         if (PaEditorial.IsDark) Modifier
-                        else Modifier.paEditorialShadow(PaEditorial.Shadow.Card, RoundedCornerShape(14.dp)),
+                        else Modifier.paEditorialShadow(PaEditorial.Shadow.Card, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                     )
-                    .background(ChatAccentColor, RoundedCornerShape(14.dp))
+                    .background(ChatAccentColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1175,7 +1175,7 @@ internal fun ColumnScope.ChatTimelineArea(
                 Text(
                     "${unreadBlocks.value.coerceAtLeast(1)} 条新内容",
                     color = PaEditorial.OnPrimary,
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     fontWeight = FontWeight.Medium,
                 )
             }

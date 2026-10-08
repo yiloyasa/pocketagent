@@ -210,7 +210,7 @@ internal fun PromptOptimizePreviewSheet(
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Text(
                 "优化预览",
-                fontSize = 18.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize,
                 fontWeight = FontWeight.Bold,
                 color = PaEditorial.Ink,
             )
@@ -233,14 +233,14 @@ internal fun PromptOptimizePreviewSheet(
             Spacer(Modifier.height(6.dp))
             Text(
                 promptOptimizeStyleHint(state.style),
-                fontSize = 12.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
             )
             Spacer(Modifier.height(4.dp))
             // 【常驻说明】Task 3:任何状态下都看得到这条边界
             Text(
                 "保留原意,不会自动执行;优化结果需你确认才会替换输入框",
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Subtle,
             )
             Spacer(Modifier.height(12.dp))
@@ -252,7 +252,7 @@ internal fun PromptOptimizePreviewSheet(
                         Spacer(Modifier.width(10.dp))
                         Text(
                             "正在按「${promptOptimizeStyleShortLabel(state.style)}」风格改写,电脑端生成中…",
-                            fontSize = 13.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                             color = PaEditorial.Muted,
                         )
                     }
@@ -265,7 +265,7 @@ internal fun PromptOptimizePreviewSheet(
                 state.error != null -> {
                     Text(
                         state.error,
-                        fontSize = 13.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
                         color = PaEditorial.DeniedText,
                     )
                     Spacer(Modifier.height(12.dp))
@@ -310,19 +310,19 @@ internal fun PromptOptimizePreviewSheet(
                         promptCandidateOverExpanded(state.original, candidate)
                     }
 
-                    Text("原文", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
+                    Text("原文", fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
                     Spacer(Modifier.height(4.dp))
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(max = 170.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                             .background(PaEditorial.Raised)
                             .verticalScroll(rememberScrollState())
                             .semantics { contentDescription = "优化前的原文,含改动高亮" }
                             .padding(12.dp),
                     ) {
-                        Text(originalAnnotation, fontSize = 13.sp, color = PaEditorial.Ink)
+                        Text(originalAnnotation, fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink)
                     }
 
                     Spacer(Modifier.height(10.dp))
@@ -330,19 +330,19 @@ internal fun PromptOptimizePreviewSheet(
                         // 【扩写提示】Task 3:候选比原文大幅变长 → 要求复核
                         Text(
                             "候选比原文明显变长,请检查是否加入了原文没有的内容",
-                            fontSize = 12.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             fontWeight = FontWeight.Medium,
                             color = PaEditorial.AttentionText,
                         )
                         Spacer(Modifier.height(6.dp))
                     }
 
-                    Text("候选(可编辑)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
+                    Text("候选(可编辑)", fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
                     Spacer(Modifier.height(4.dp))
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                             .background(PaEditorial.Surface)
                             .semantics { contentDescription = "优化候选文本,可编辑" },
                     ) {
@@ -353,7 +353,7 @@ internal fun PromptOptimizePreviewSheet(
                                 .fillMaxWidth()
                                 .heightIn(min = 96.dp, max = 220.dp)
                                 .padding(12.dp),
-                            textStyle = TextStyle(fontSize = 13.sp, color = PaEditorial.Ink),
+                            textStyle = TextStyle(fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink),
                         )
                     }
 
@@ -363,7 +363,7 @@ internal fun PromptOptimizePreviewSheet(
                         // 【防覆盖二选一】等待期间用户改过输入框:不静默覆盖
                         Text(
                             "等待期间你修改了输入框,请选择:",
-                            fontSize = 12.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.AttentionText,
                         )
                         Spacer(Modifier.height(6.dp))
@@ -403,7 +403,7 @@ private fun PromptStyleChip(
     Box(
         Modifier
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(100.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.Pill))
             .background(if (selected) PaEditorial.PrimaryContainer else PaEditorial.Raised)
             .pressable(enabled = enabled) { onClick() }
             .padding(horizontal = 14.dp),
@@ -411,7 +411,7 @@ private fun PromptStyleChip(
     ) {
         Text(
             promptOptimizeStyleShortLabel(style),
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) PaEditorial.AccentText else PaEditorial.Muted,
         )
@@ -429,7 +429,7 @@ private fun PreviewActionButton(
     Box(
         modifier
             .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
             .background(if (filled) PaEditorial.Primary else PaEditorial.Raised)
             .pressable { onClick() }
             .padding(horizontal = 16.dp),
@@ -437,7 +437,7 @@ private fun PreviewActionButton(
     ) {
         Text(
             text,
-            fontSize = 14.sp,
+            fontSize = PaEditorial.Type.Body.fontSize,
             fontWeight = FontWeight.Medium,
             color = if (filled) PaEditorial.OnPrimary else PaEditorial.Ink,
         )

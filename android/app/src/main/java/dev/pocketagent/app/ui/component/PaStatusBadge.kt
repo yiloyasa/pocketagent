@@ -28,6 +28,7 @@ import dev.pocketagent.app.ui.EditorialStatus
 import dev.pocketagent.app.ui.EditorialStatusView
 import dev.pocketagent.app.ui.PaStatusGlyph
 import dev.pocketagent.app.ui.statusGlyphOf
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * 形通道的统一渲染槽(徽章族共用:PaStatusBadge / PaHostChip 都从这里取形状)。
@@ -103,7 +104,7 @@ fun PaStatusBadge(
     Row(
         modifier
             .defaultMinSize(minHeight = 22.dp)
-            .background(tone.container, RoundedCornerShape(100.dp))
+            .background(tone.container, RoundedCornerShape(PaEditorial.Radius.Pill))
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .semantics { contentDescription = text },
         verticalAlignment = Alignment.CenterVertically,
@@ -112,8 +113,8 @@ fun PaStatusBadge(
         Spacer(Modifier.width(5.dp))
         Text(
             view.label,
-            fontSize = 10.sp, lineHeight = 14.sp,
-            fontWeight = FontWeight(650),
+            fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 14.sp,
+            fontWeight = FontWeight.SemiBold,
             color = tone.text,
             maxLines = 1,
         )
@@ -121,8 +122,8 @@ fun PaStatusBadge(
             Spacer(Modifier.width(4.dp))
             Text(
                 "· $suffix",
-                fontSize = 10.sp, lineHeight = 14.sp,
-                fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 14.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = tone.text.copy(alpha = 0.85f),
                 maxLines = 1,
             )

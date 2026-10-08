@@ -9,10 +9,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.R as AppR
 
 /**
  * 编辑式设计令牌层(PaEditorial)=「每个界面整体升级」工程的**唯一事实来源**。
@@ -221,12 +224,31 @@ object PaEditorial {
         }
     }
 
+    // ---- 字体身份(2026-10-09 轮;资源极简铁律:不新增字体文件) ----
+    /**
+     * 展示字体:Poppins Bold(仅此一档字重落库,斜体/Regular 不引新文件,缺字重用系统字补)。
+     * 只上"大字"层级([Type.Display]/[Type.Title]);正文保持系统字不加速。
+     */
+    val DisplayFont: FontFamily = FontFamily(Font(AppR.font.poppins_bold))
+
+    /**
+     * 等宽字体:JetBrains Mono(Regular+Bold,OFL,已随 res/font 落库)。
+     * 代码块/终端/数字场景统一走本令牌 —— 等宽即表格数字(tabular),数字列天然对齐,
+     * 无需另加 fontFeatureSettings "tnum"(实现代价最小的一档)。
+     * 黑客盘对话等宽消费原走 PaHacker.mono(系统等宽),2026-10-09 起统一到本令牌;
+     * PaHacker.mono 契约对象本身冻结不动(见 PaHackerTest)。
+     */
+    val MonoFont: FontFamily = FontFamily(
+        Font(AppR.font.jetbrains_mono_regular, FontWeight.Normal),
+        Font(AppR.font.jetbrains_mono_bold, FontWeight.Bold),
+    )
+
     // ---- 字阶(README 五档;值与行高取 premium.css 实测;模式无关) ----
     object Type {
-        /** 首页主标题 34/39(.hero-title 34px·1.16·w760)。 */
-        val Display = TextStyle(fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight(760), letterSpacing = (-1.8).sp)
-        /** 页面标题 25/32(.nav h1 25px·w720)。 */
-        val Title = TextStyle(fontSize = 25.sp, lineHeight = 32.sp, fontWeight = FontWeight(720), letterSpacing = (-0.9).sp)
+        /** 首页主标题 34/39(.hero-title 34px·1.16·w760);Poppins Bold 上展示层级。 */
+        val Display = TextStyle(fontFamily = DisplayFont, fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.8).sp)
+        /** 页面标题 25/32(.nav h1 25px·w720);Poppins Bold 上展示层级。 */
+        val Title = TextStyle(fontFamily = DisplayFont, fontSize = 25.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.9).sp)
         /** 模块标题 16/22(.section-title h2 16px·w700)。 */
         val Heading = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
         /** 正文 14/21。 */
@@ -238,7 +260,7 @@ object PaEditorial {
         /** 辅助微 11/17。 */
         val Micro = TextStyle(fontSize = 11.sp, lineHeight = 17.sp)
         /** 状态词专用 10/14(.state 10px·w650):状态徽章四词。 */
-        val State = TextStyle(fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight(650))
+        val State = TextStyle(fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 
     // ---- 间距(README:8px 网格,外边距 23px,点击区≥44px;模式无关) ----
@@ -261,8 +283,15 @@ object PaEditorial {
         val IconBox = 42.dp
     }
 
-    // ---- 圆角(premium.css 实测:18=大卡、13=图标钮/胶囊、23=弹窗、100=药丸;模式无关) ----
+    // ---- 圆角六档(premium.css 实测:18=大卡、13=图标钮/胶囊、23=弹窗、100=药丸;模式无关) ----
+    // 【机械收敛 2026-10-09】全 app 裸写 RoundedCornerShape(N.dp) 约 260 处、20 种值,
+    // 就近归档到六档:≤7→Terminal、8-11→Chip、12-14.5→IconButton、15-20→Card、
+    // 21-27→Sheet、≥28→Pill;黑客盘终端语言(PaHacker 契约的 6dp 终端块)落 Terminal 档。
     object Radius {
+        /** 终端块 6dp(黑客盘终端块语言,契约见 PaHacker.bubbleCorner;收敛档:原 0-7dp)。 */
+        val Terminal = 6.dp
+        /** 小元件 10dp(小角标/内嵌小件/迷你进度;收敛档:原 8-11dp)。 */
+        val Chip = 10.dp
         val IconButton = 13.dp
         val Card = 18.dp
         val Sheet = 23.dp
@@ -344,3 +373,45 @@ val LocalEditorial = staticCompositionLocalOf { PaEditorial }
 /** MaterialTheme 扩展:页内统一写作 `MaterialTheme.editorial.Canvas`。 */
 val MaterialTheme.editorial: PaEditorial
     @Composable get() = LocalEditorial.current
+
+/**
+ * 编辑式的 M3 色板:按当前色盘(浅/深/黑客)取编辑式令牌 → MaterialTheme
+ * colorScheme,供全 app 的 M3 原生组件(Switch / OutlinedTextField / RadioButton /
+ * AlertDialog / TextButton / CircularProgressIndicator / Button)跟随显示模式 ——
+ * 读的是 [PaEditorial] 可变槽位,组合期取值,换盘自动重组。
+ *
+ * 【色板并轨 2026-10-09】原仅包 5 屏(Browser/Files/Git/Settings/Terminal)子树,
+ * Chat/Threads/Home/Collab/TaskCenter 未包 —— 同屏两种黑漂移;现上提到
+ * MainActivity NavHost 外层一次包全 app,5 屏的重复包裹已删。与 PaTheme 的
+ * 旧 Pa 色板(兼容 shim)嵌套:本层在内层,M3 组件一律吃到编辑式盘。
+ */
+internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.material3.darkColorScheme(
+    primary = PaEditorial.Primary,
+    // onPrimary 同读 PaEditorial.OnPrimary(与 PaTheme 同槽位):黑客盘主色电光青
+    // #22D3EE 上白字 1.81:1,该盘内容色=暗青 #062B33(8.29:1);浅/深盘仍为白。
+    onPrimary = PaEditorial.OnPrimary,
+    background = PaEditorial.Canvas,
+    onBackground = PaEditorial.Ink,
+    surface = PaEditorial.Surface,
+    onSurface = PaEditorial.Ink,
+    surfaceVariant = PaEditorial.Raised,
+    onSurfaceVariant = PaEditorial.Muted,
+    outline = PaEditorial.Hairline,
+    error = PaEditorial.Denied,
+    // onError 同读 PaEditorial.OnDenied(与 PaTheme 同槽位):深/黑客盘 Denied
+    // 实底 #F08580/#F87171 上白字仅 2.51/2.77:1,内容色=暗红棕 #3A1514(6.45/5.85:1)。
+    onError = PaEditorial.OnDenied,
+) else androidx.compose.material3.lightColorScheme(
+    primary = PaEditorial.Primary,
+    onPrimary = PaEditorial.OnPrimary,
+    background = PaEditorial.Canvas,
+    onBackground = PaEditorial.Ink,
+    surface = PaEditorial.Surface,
+    onSurface = PaEditorial.Ink,
+    surfaceVariant = PaEditorial.Raised,
+    onSurfaceVariant = PaEditorial.Muted,
+    outline = PaEditorial.Hairline,
+    error = PaEditorial.Denied,
+    // 浅盘保持白字(对 #C94F4D 4.46:1,原型既有口径),同读 PaEditorial.OnDenied。
+    onError = PaEditorial.OnDenied,
+)

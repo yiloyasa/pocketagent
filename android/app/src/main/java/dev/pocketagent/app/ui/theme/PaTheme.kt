@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * PocketAgent 设计系统 —— 对标参考稿(深色:纯黑/深灰大圆角卡/蓝色点缀)。
@@ -16,6 +17,11 @@ import androidx.compose.ui.graphics.Color
  * 【讲解】颜色分层像"海拔":越浮在上面的东西越亮。
  * bg(底)→ card(一级卡)→ cardHigh(抽屉/二级)→ hover(按压)。
  * 所有字段都是 Compose 状态:设置里切换 显示模式 时整 app 一次性换肤。
+ *
+ * 【兼容 shim 2026-10-09】编辑式令牌层 [PaEditorial] 是唯一事实来源,M3 colorScheme
+ * 已由 editorialM3Scheme()(MainActivity NavHost 外层一次包全)接管。本对象**保留
+ * 构造但仅存量引用过渡用,新代码禁用** —— Pa.* 直取还有 700+ 处,逐个换是下一刀;
+ * 在那之前 Pa.* 与 PaEditorial.* 同槽位同盘灌入,不许新增消费点。
  */
 object Pa {
     var Bg by mutableStateOf(Color(0xFF000000)); private set
@@ -105,6 +111,9 @@ fun PaTheme(content: @Composable () -> Unit) {
     // 编辑式三色盘与 Pa 同步换肤:全部 editorial.* 消费点(700+ 处直取 + 44 处
     // 组合局部)随本调用零改动响应 显示模式(浅色/深色/黑客终端)。
     PaEditorial.apply(dark, hacker = AgentTheme.mode == "hacker")
+    // 【兼容 shim 2026-10-09】旧 Pa 色板灌的 M3 scheme:仅存量引用过渡用,新代码禁用。
+    // editorialM3Scheme()(编辑式盘)在 MainActivity NavHost 外层包在内层,全 app 的
+    // M3 组件实际吃到的是编辑式槽位;本 scheme 只作为最外层基底存在。
     // onPrimary 统一读 PaEditorial.OnPrimary:hacker 盘主色是电光青 #22D3EE,
     // 白字对比仅 1.81:1,该盘内容色=暗青 #062B33(8.29:1)——与 editorialM3Scheme
     // 同读同一槽位,两套 M3 色板内容色不漂移。

@@ -133,7 +133,7 @@ private fun CollabEmptyState(onNew: () -> Unit) {
         Spacer(Modifier.height(6.dp))
         Text(
             "配置后,委派子任务时直接引用角色 id 即可复用同一套岗位设定",
-            fontSize = 13.sp, lineHeight = 21.sp, color = ed.Muted,
+            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp, color = ed.Muted,
         )
         Spacer(Modifier.height(16.dp))
         Row(
@@ -147,7 +147,7 @@ private fun CollabEmptyState(onNew: () -> Unit) {
         ) {
             Icon(painterResource(R.drawable.ic_lucide_plus), null, tint = PaEditorial.Primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
-            Text("新建协同角色", fontSize = 15.sp, color = PaEditorial.Primary)
+            Text("新建协同角色", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Primary)
         }
     }
 }
@@ -168,7 +168,7 @@ private fun CollabErrorState(error: String, onRetry: () -> Unit) {
         Spacer(Modifier.height(6.dp))
         Text(
             error,
-            fontSize = 13.sp, lineHeight = 21.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp,
             color = EditorialTone.DENIED.text,
             maxLines = 3, overflow = TextOverflow.Ellipsis,
         )
@@ -185,7 +185,7 @@ private fun CollabErrorState(error: String, onRetry: () -> Unit) {
         ) {
             Icon(painterResource(R.drawable.ic_lucide_refresh_cw), null, tint = PaEditorial.Primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
-            Text("重试", fontSize = 15.sp, color = PaEditorial.Primary)
+            Text("重试", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Primary)
         }
     }
 }
@@ -211,22 +211,22 @@ private fun CollabRoleRow(role: CollabRole, onClick: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(
                     collabRoleDisplayName(role),
-                    fontSize = 15.sp, lineHeight = 21.sp,
-                    fontWeight = FontWeight(650), color = ed.Ink,
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold, color = ed.Ink,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 val summary = collabRoleSummaryLine(role)
                 if (summary.isNotEmpty()) {
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        summary, fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                        summary, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
                 if (role.description.isNotBlank()) {
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        role.description, fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                        role.description, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -291,20 +291,20 @@ private fun CollabDeleteConfirm(
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "确定删除「$roleName」($roleId)?\n\n删除后,引用它的委派会报「未定义的协同角色 $roleId」,正在进行的协作可能中断。此操作不可撤销。",
-                    fontSize = 13.sp, lineHeight = 21.sp, color = ed.Muted,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp, color = ed.Muted,
                 )
                 Spacer(Modifier.height(18.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Text(
-                        "取消", fontSize = 14.sp, color = ed.Muted,
+                        "取消", fontSize = PaEditorial.Type.Body.fontSize, color = ed.Muted,
                         modifier = Modifier
                             .pressable { onDismiss() }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "删除", fontSize = 14.sp,
-                        fontWeight = FontWeight(650),
+                        "删除", fontSize = PaEditorial.Type.Body.fontSize,
+                        fontWeight = FontWeight.SemiBold,
                         color = EditorialTone.DENIED.text,
                         modifier = Modifier
                             .pressable { onConfirm() }

@@ -140,7 +140,7 @@ fun PaHostChip(
         Box(
             Modifier
                 .size(42.dp)
-                .background(tone.container, RoundedCornerShape(13.dp)),
+                .background(tone.container, RoundedCornerShape(PaEditorial.Radius.IconButton)),
             contentAlignment = Alignment.Center,
         ) {
             if (icon != null) {
@@ -158,17 +158,17 @@ fun PaHostChip(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     hostName,
-                    fontSize = 14.sp, lineHeight = 20.sp,
+                    fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = PaEditorial.Ink,
                     maxLines = 1,
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("·", fontSize = 14.sp, color = PaEditorial.Subtle)
+                Text("·", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Subtle)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     hostStatusWord(link),
-                    fontSize = 14.sp, lineHeight = 20.sp,
+                    fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = PaEditorial.Ink,
                     maxLines = 1,
@@ -181,7 +181,7 @@ fun PaHostChip(
                 Spacer(Modifier.width(6.dp))
                 Text(
                     caption,
-                    fontSize = 11.sp, lineHeight = 16.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                     color = tone.text,
                     maxLines = 1,
                 )
@@ -197,4 +197,4 @@ fun PaHostChip(
     }
 }
 
-private val PaCardShape = RoundedCornerShape(18.dp)
+private val PaCardShape = RoundedCornerShape(PaEditorial.Radius.Card)

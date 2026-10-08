@@ -110,7 +110,7 @@ internal fun ChatAttachmentViewer(
                         )
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     color = Color.White,
-                    fontSize = 14.sp,
+                    fontSize = PaEditorial.Type.Body.fontSize,
                     maxLines = 3,
                     softWrap = true,
                     overflow = TextOverflow.Ellipsis,
@@ -165,7 +165,7 @@ internal fun ChatMoreSheet(
                 Text(
                     "会话操作",
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    fontSize = 17.sp, color = PaEditorial.Ink,
+                    fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink,
                 )
                 Spacer(Modifier.height(10.dp))
                 if (threadAgentId=="zcode") {
@@ -219,7 +219,7 @@ internal fun ChatMoreSheet(
                         // 真机实锤(图9):过去硬编码"让 Codex 压缩…",Pi 会话里张冠李戴。
                         compactionConsequenceCopy(threadAgentId),
                         Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
-                        fontSize = 11.5.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
                     )
                     if (forkOn || rollbackOn) {
                         HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = PaEditorial.Hairline)
@@ -230,7 +230,7 @@ internal fun ChatMoreSheet(
                     Text(
                         forkConsequence(),
                         Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
-                        fontSize = 11.5.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
                     )
                     if (rollbackOn) {
                         HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = PaEditorial.Hairline)
@@ -246,7 +246,7 @@ internal fun ChatMoreSheet(
                     Text(
                         rollbackSummary(),
                         Modifier.padding(start = 24.dp, end = 24.dp),
-                        fontSize = 11.5.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
                     )
                 }
             }
@@ -279,12 +279,12 @@ internal fun ChatGoalSheet(
                 Text(
                     "设置会话目标",
                     Modifier.fillMaxWidth(),
-                    fontSize = 17.sp, color = PaEditorial.Ink,
+                    fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink,
                 )
                 Text(
                     "目标会作为常驻上下文:agent 在这个会话里的每一轮都会看到它。",
                     Modifier.padding(top = 4.dp, bottom = 10.dp),
-                    fontSize = 11.5.sp, color = PaEditorial.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
                 )
                 BasicTextField(
                     value = goalDraft,
@@ -296,16 +296,16 @@ internal fun ChatGoalSheet(
                         // 同 SLA-21a / README §12 坑 6)。高度有界后 CoreTextField 内容
                         // 内部滚动并跟随光标,交互破坏最小(整列滚动会把按钮滚走)。
                         .heightIn(min = 72.dp, max = 200.dp)
-                        .background(PaEditorial.Surface, RoundedCornerShape(12.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(12.dp),
-                    textStyle = TextStyle(fontSize = 14.sp, color = PaEditorial.Ink),
+                    textStyle = TextStyle(fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink),
                     cursorBrush = SolidColor(PaEditorial.Primary),
                     decorationBox = { inner ->
                         Box {
                             if (goalDraft.isEmpty()) {
                                 Text(
                                     "例如:全程用 Kotlin,改动只落在 daemon 模块…",
-                                    fontSize = 14.sp, color = PaEditorial.Subtle,
+                                    fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Subtle,
                                 )
                             }
                             inner()
@@ -344,14 +344,14 @@ internal fun ChatGoalSheet(
                                 }
                             }
                         }
-                        .background(if (goalSaving) PaEditorial.Hover else PaEditorial.Primary, RoundedCornerShape(14.dp))
+                        .background(if (goalSaving) PaEditorial.Hover else PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(vertical = 13.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         if (goalSaving) "正在保存…" else "保存目标",
                         // saving 腿坐 Hover 底保持白字;就绪腿坐 Primary 实底读 OnPrimary
-                        fontSize = 14.5.sp,
+                        fontSize = PaEditorial.Type.Body.fontSize,
                         color = if (goalSaving) Color.White else PaEditorial.OnPrimary,
                         fontWeight = FontWeight.Medium,
                     )
@@ -392,19 +392,19 @@ internal fun ChatRollbackSheet(
                 Text(
                     "回滚会话",
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    fontSize = 17.sp, color = PaEditorial.Ink,
+                    fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink,
                 )
                 if (options.isEmpty()) {
                     Text(
                         "这个会话还没有可回滚的回合。",
                         Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
-                        fontSize = 13.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Subtle,
                     )
                 } else {
                     Text(
                         rollbackConsequence(picked),
                         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
-                        fontSize = 12.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     )
                     options.forEach { n ->
                         Row(
@@ -426,7 +426,7 @@ internal fun ChatRollbackSheet(
                             Spacer(Modifier.width(12.dp))
                             Text(
                                 rollbackOptionLabel(n, turnTotal),
-                                fontSize = 15.sp,
+                                fontSize = PaEditorial.Type.Heading.fontSize,
                                 color = if (picked == n) PaEditorial.Ink else PaEditorial.Muted,
                             )
                         }
@@ -445,7 +445,7 @@ internal fun ChatRollbackSheet(
                             colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                                 containerColor = PaEditorial.Denied,
                             ),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                         ) { Text("确认回滚", color = PaEditorial.OnDenied) }
                     }
                 }

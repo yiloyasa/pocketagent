@@ -261,7 +261,7 @@ fun Onboarding(onDone: () -> Unit) {
                     Modifier
                         .pressable { onDone() }
                         .padding(8.dp),
-                    fontSize = 14.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted,
                 )
             }
 
@@ -293,7 +293,7 @@ fun Onboarding(onDone: () -> Unit) {
                         Modifier
                             .pressable { scope.launch { pager.animateScrollToPage(pager.currentPage - 1) } }
                             .padding(8.dp),
-                        fontSize = 14.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted,
                     )
                 }
 
@@ -328,7 +328,7 @@ fun Onboarding(onDone: () -> Unit) {
                 // 主操作(下一步/开始使用)= 当前的操作,主色用在这里是纪律允许的一处
                 Box(
                     Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .pressable(haptic = true) {
                             if (isLast) onDone() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
                         }
@@ -343,7 +343,7 @@ fun Onboarding(onDone: () -> Unit) {
                     ) { lastPage ->
                         Text(
                             if (lastPage) "开始使用" else "下一步",
-                            fontSize = 14.sp, color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
+                            fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
                         )
                     }
                 }
@@ -380,7 +380,9 @@ private fun OnboardPageContent(page: OnboardPage) {
         Spacer(Modifier.height(22.dp))
         Text(
             page.title,
-            fontSize = 22.sp, lineHeight = 28.sp,
+            // 大字身份(2026-10-09):引导页标题 22sp→Title 档 + Poppins Bold(展示层级)
+            fontSize = PaEditorial.Type.Title.fontSize, lineHeight = 28.sp,
+            fontFamily = PaEditorial.DisplayFont,
             color = PaEditorial.Ink, fontWeight = FontWeight.Bold,
         )
         if (page.done) {
@@ -393,7 +395,7 @@ private fun OnboardPageContent(page: OnboardPage) {
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "已完成,不用再操作",
-                    fontSize = 12.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.RunningText,
                 )
             }
@@ -408,7 +410,7 @@ private fun OnboardPageContent(page: OnboardPage) {
                 when (block) {
                     is OnboardBlock.Lead -> Text(
                         block.text,
-                        fontSize = 15.sp, lineHeight = 22.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 22.sp, color = PaEditorial.Muted,
                     )
                     is OnboardBlock.Bullet -> OnboardBullet(block)
                     is OnboardBlock.Note -> OnboardNote(block.text)
@@ -427,8 +429,8 @@ private fun OnboardBullet(b: OnboardBlock.Bullet) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -437,10 +439,10 @@ private fun OnboardBullet(b: OnboardBlock.Bullet) {
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(b.title, fontSize = 15.sp, color = PaEditorial.Ink, fontWeight = FontWeight.Medium)
+            Text(b.title, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, fontWeight = FontWeight.Medium)
             if (b.desc != null) {
                 Spacer(Modifier.height(3.dp))
-                Text(b.desc, fontSize = 12.sp, lineHeight = 17.sp, color = PaEditorial.Muted)
+                Text(b.desc, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = PaEditorial.Muted)
             }
         }
     }
@@ -452,8 +454,8 @@ private fun OnboardNote(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -463,7 +465,7 @@ private fun OnboardNote(text: String) {
         )
         Spacer(Modifier.width(10.dp))
         Text(
-            text, fontSize = 12.5.sp, lineHeight = 18.sp, color = PaEditorial.Muted,
+            text, fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp, color = PaEditorial.Muted,
             modifier = Modifier.weight(1f),
         )
     }

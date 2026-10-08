@@ -507,7 +507,7 @@ fun TaskCenterScreen(
                     .padding(vertical = 13.dp),
                 horizontalArrangement = Arrangement.Center,
             ) {
-                Text("清理已完成的任务", fontSize = 14.sp, color = ed.Muted)
+                Text("清理已完成的任务", fontSize = PaEditorial.Type.Body.fontSize, color = ed.Muted)
             }
         }
 
@@ -555,8 +555,9 @@ private fun StatCard(
             .border(1.dp, ed.Hairline, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
-        Text(value, fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight(720), color = valueColor)
-        Text(label, fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted, modifier = Modifier.padding(top = 2.dp))
+        // 大字身份(2026-10-09):统计值 22sp→Title 档 + Poppins Bold(展示层级)
+        Text(value, fontSize = PaEditorial.Type.Title.fontSize, lineHeight = 26.sp, fontWeight = FontWeight.Bold, fontFamily = PaEditorial.DisplayFont, color = valueColor)
+        Text(label, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -580,8 +581,8 @@ private fun KindTab(label: String, selected: Boolean, modifier: Modifier = Modif
     ) {
         Text(
             label,
-            fontSize = 13.sp, lineHeight = 18.sp,
-            fontWeight = if (selected) FontWeight(650) else FontWeight.Normal,
+            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) PaEditorial.OnGraphite else ed.Ink,
             maxLines = 1,
         )
@@ -635,7 +636,7 @@ private fun TaskRow(
             Box(
                 Modifier
                     .size(PaEditorial.Space.IconBox)
-                    .background(iconBg, RoundedCornerShape(13.dp)),
+                    .background(iconBg, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(painterResource(icon), null, tint = iconTint, modifier = Modifier.size(20.dp))
@@ -646,8 +647,8 @@ private fun TaskRow(
                     Text(
                         task.title.ifEmpty { "(未命名任务)" },
                         Modifier.weight(1f, fill = false),
-                        fontSize = 14.sp, lineHeight = 20.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = ed.Ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -655,11 +656,11 @@ private fun TaskRow(
                     if (kind != null) {
                         Spacer(Modifier.width(6.dp))
                         // 类型标签:纯色文字(不摆底色 pill)
-                        Text(kind.label, fontSize = 10.sp, color = ed.Muted)
+                        Text(kind.label, fontSize = PaEditorial.Type.Micro.fontSize, color = ed.Muted)
                     }
                     if (task.rounds > 1) {
                         Spacer(Modifier.width(6.dp))
-                        Text("${task.rounds} 轮", fontSize = 10.sp, color = ed.Muted)
+                        Text("${task.rounds} 轮", fontSize = PaEditorial.Type.Micro.fontSize, color = ed.Muted)
                     }
                 }
                 Spacer(Modifier.height(2.dp))
@@ -667,7 +668,7 @@ private fun TaskRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         SimpleDateFormat("MM-dd HH:mm").format(Date(task.startedAt)),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                     )
                     statusView?.let {
@@ -679,7 +680,7 @@ private fun TaskRow(
                     Text(
                         hint,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = EditorialTone.GREY.text,
                     )
                 }
@@ -698,7 +699,7 @@ private fun TaskRow(
                             hasSourceThread = task.threadId.isNotEmpty(),
                         ),
                         Modifier.padding(top = 2.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = EditorialTone.GREY.text,
                     )
                 }
@@ -713,7 +714,7 @@ private fun TaskRow(
                             hostOffline,
                         ),
                         Modifier.padding(top = 2.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = EditorialTone.GREY.text,
                     )
                 }
@@ -721,7 +722,7 @@ private fun TaskRow(
                     Text(
                         "来自会话「" + task.sourceTitle + "」",
                         Modifier.padding(top = 2.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -731,7 +732,7 @@ private fun TaskRow(
                         // detail 形如「已保存到「下载/PocketAgent/xxx」」,比 content:// 友好
                         task.detail,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -741,7 +742,7 @@ private fun TaskRow(
                     Text(
                         task.sizeText,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -820,7 +821,7 @@ private fun RetryInFlightLabel() {
     ) {
         Text(
             "重试中",
-            fontSize = 10.sp, lineHeight = 14.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 14.sp,
             color = MaterialTheme.editorial.Muted,
         )
     }

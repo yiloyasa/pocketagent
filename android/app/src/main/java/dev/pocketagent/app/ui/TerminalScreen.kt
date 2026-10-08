@@ -75,11 +75,10 @@ import pocketagent.v1.ListDirectoryRequest
  */
 @Composable
 fun TerminalScreen(onBack: () -> Unit = {}) {
-    // 编辑式浅色 M3 色板只包本页子树(chrome 编辑式;xterm 内容区在 WebView 内保持石墨深色)
-    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
-        EditorialSystemBars()
-        TerminalScreenBody(onBack)
-    }
+    // 【色板并轨 2026-10-09】编辑式 M3 色板已上提 MainActivity NavHost 外层包全 app,
+    // 本页不再重复包裹(xterm 内容区在 WebView 内保持石墨深色)
+    EditorialSystemBars()
+    TerminalScreenBody(onBack)
 }
 
 @Composable
@@ -218,13 +217,13 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
             Column(Modifier.weight(1f)) {
                 Text(
                     "终端",
-                    fontSize = 16.sp, lineHeight = 22.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 22.sp,
                     fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp,
                     color = PaEditorial.Ink,
                 )
                 Text(
                     cwd.ifBlank { "默认目录(点右侧文件夹切换)" },
-                    fontSize = 10.5.sp, lineHeight = 15.sp, color = PaEditorial.Muted, maxLines = 1,
+                    fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 15.sp, color = PaEditorial.Muted, maxLines = 1,
                 )
                 Text(
                     when {
@@ -234,7 +233,7 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                         terminalState == "closed" -> "终端已关闭"
                         else -> "正在连接终端…"
                     },
-                    fontSize = 10.5.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     lineHeight = 15.sp,
                     // 语义双通道:状态词 + 同色状态点;连接失败走加深珊瑚(小字对比纪律)
                     color = when {
@@ -267,7 +266,7 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
         // JavaScript 回调，切换目录后按键和输出仍然会发给旧 PTY。
         if (!terminalReady) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Text("正在准备终端…", fontSize = 13.sp, color = PaEditorial.Muted)
+                Text("正在准备终端…", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
             }
         } else {
             DisposableEffect(bridge) {
@@ -326,27 +325,27 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
         ) {
             Text(
                 "切换工作目录", Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                fontSize = 17.sp, lineHeight = 24.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 24.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = PaEditorial.Ink,
             )
             Text(
                 "新终端将在所选目录启动(旧会话关闭)",
                 Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                fontSize = 12.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
             )
             if (switching) {
                 Text(
                     "正在切换目录…",
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                    fontSize = 12.sp, color = PaEditorial.Primary,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary,
                 )
             }
             switchError?.let {
                 Text(
                     it,
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                    fontSize = 12.sp, color = EditorialTone.DENIED.text,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text,
                 )
             }
             // 整列可滚:recents 无上限,多时"浏览电脑文件夹…"等操作行会被推出视口
@@ -363,8 +362,8 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                         Modifier
                             .fillMaxWidth()
                             .pressable(enabled = !switching) { switchDirectory(dir) }
-                            .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                            .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
@@ -375,7 +374,7 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                         Spacer(Modifier.width(10.dp))
                         Text(
                             dir.ifBlank { "默认目录" },
-                            fontSize = 13.sp, color = PaEditorial.Ink, maxLines = 1,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink, maxLines = 1,
                         )
                     }
                     Spacer(Modifier.height(6.dp))
@@ -385,8 +384,8 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                     Modifier
                         .fillMaxWidth()
                         .pressable(enabled = !switching) { showBrowser = true }
-                        .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 12.dp),
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
@@ -395,7 +394,7 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                         tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(10.dp))
-                    Text("浏览电脑文件夹…", fontSize = 13.sp, color = PaEditorial.Primary)
+                    Text("浏览电脑文件夹…", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Primary)
                 }
                 Spacer(Modifier.height(18.dp))
             }

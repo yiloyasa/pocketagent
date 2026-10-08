@@ -113,12 +113,12 @@ internal fun ChatQuickModelsPanel(
                     // 黑客模式 GraphiteDrawer 底 + 等宽字;常规 Surface 底(同浮层口径)
                     .background(
                         if (PaHacker.isHacker) PaEditorial.GraphiteDrawer else PaEditorial.Surface,
-                        RoundedCornerShape(14.dp),
+                        RoundedCornerShape(PaEditorial.Radius.IconButton),
                     )
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(vertical = 6.dp),
             ) {
-                val mono = if (PaHacker.isHacker) PaHacker.mono else null
+                val mono = if (PaHacker.isHacker) PaEditorial.MonoFont else null
                 val effortHapticView = LocalView.current
                 // 【面板头部:当前 vs 正在跑】模型行精简后,"正在运行的模型"信息
                 // 收进这里 —— 对比语境(当前选择 vs 实际在跑)在面板里才读得通。
@@ -132,7 +132,7 @@ internal fun ChatQuickModelsPanel(
                         Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 14.dp, vertical = 6.dp),
-                        fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle, fontFamily = mono,
                     )
                 }
                 if (quickModels.isEmpty()) {
@@ -142,7 +142,7 @@ internal fun ChatQuickModelsPanel(
                         if (cardModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
                         else "暂无可快速切换的模型",
                         Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        fontSize = 12.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Subtle, fontFamily = mono,
                     )
                 }
                 quickModels.forEach { qm ->
@@ -165,7 +165,7 @@ internal fun ChatQuickModelsPanel(
                                 // → 大表 displayName → 裸名/原 id(行数据自带的 qm.label
                                 // 只查申报表,这里补上大表补位,避免申报表缺展示名时露裸 id)
                                 modelDisplayLabel(qm.id, cardModels, sessionModels),
-                                fontSize = 13.5.sp,
+                                fontSize = PaEditorial.Type.Body.fontSize,
                                 color = if (current) PaEditorial.Primary else PaEditorial.Ink,
                                 fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -173,7 +173,7 @@ internal fun ChatQuickModelsPanel(
                             )
                             if (qm.detail.isNotEmpty()) {
                                 Text(
-                                    qm.detail, fontSize = 10.5.sp,
+                                    qm.detail, fontSize = PaEditorial.Type.Micro.fontSize,
                                     color = PaEditorial.Subtle, fontFamily = mono,
                                 )
                             }
@@ -219,7 +219,7 @@ internal fun ChatQuickModelsPanel(
                     Text(
                         "强度",
                         Modifier.padding(start = 6.dp),
-                        fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle, fontFamily = mono,
                     )
                     quickEfforts.forEach { e ->
                         val selected = modelSelection?.effort == e.id
@@ -232,7 +232,7 @@ internal fun ChatQuickModelsPanel(
                                     ModelSelectionRepository.send(ModelSelectionIntent.SelectEffort(e.id))
                                 }
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
-                            fontSize = 12.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = if (selected) PaEditorial.Primary else PaEditorial.Muted,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             fontFamily = mono,
@@ -261,7 +261,7 @@ internal fun ChatQuickModelsPanel(
                     Text(
                         "更多…",
                         Modifier.weight(1f),
-                        fontSize = 13.sp, color = PaEditorial.Muted, fontFamily = mono,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted, fontFamily = mono,
                     )
                     Icon(
                         painterResource(AppR.drawable.ic_lucide_chevron_right), "打开完整模型选择器",

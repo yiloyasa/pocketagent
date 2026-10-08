@@ -140,11 +140,11 @@ fun RecentThreadsDrawer(
                 // 【玻璃面板】与全局抽屉 AppDrawer 同一材质语言:半透明烟玻璃 + 右缘投影;
                 // 发丝线关(上下缘贴屏幕边),被覆盖内容的推背模糊由调用方(ChatScreen)负责
                 .paGlass(
-                    RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                    RoundedCornerShape(topEnd = PaEditorial.Radius.Sheet, bottomEnd = PaEditorial.Radius.Sheet),
                     hairline = false,
                     shadowElevation = 10.dp,
                 )
-                .clip(RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp))
+                .clip(RoundedCornerShape(topEnd = PaEditorial.Radius.Sheet, bottomEnd = PaEditorial.Radius.Sheet))
                 // 面板打开后在面板上向左拖也能跟手关闭(与边缘手势共用同一进度)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
@@ -163,13 +163,13 @@ fun RecentThreadsDrawer(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("最近会话", Modifier.weight(1f), fontSize = 17.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
+                Text("最近会话", Modifier.weight(1f), fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
                 Text(
                     "全部会话",
                     Modifier
                         .pressable(haptic = true) { onOpenAllThreads() }
                         .padding(horizontal = 8.dp, vertical = 6.dp),
-                    fontSize = 12.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.AccentText,
                 )
                 IconActionButton(
@@ -183,7 +183,7 @@ fun RecentThreadsDrawer(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .background(PaEditorial.Canvas, RoundedCornerShape(12.dp))
+                    .background(PaEditorial.Canvas, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -194,13 +194,13 @@ fun RecentThreadsDrawer(
                 Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f)) {
                     if (query.isEmpty()) {
-                        Text("搜索会话标题或工作区", fontSize = 12.5.sp, color = PaEditorial.Subtle)
+                        Text("搜索会话标题或工作区", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Subtle)
                     }
                     BasicTextField(
                         value = query,
                         onValueChange = { query = it },
                         singleLine = true,
-                        textStyle = TextStyle(color = PaEditorial.Ink, fontSize = 12.5.sp),
+                        textStyle = TextStyle(color = PaEditorial.Ink, fontSize = PaEditorial.Type.BodySmall.fontSize),
                         cursorBrush = SolidColor(PaEditorial.Primary),
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -236,14 +236,14 @@ fun RecentThreadsDrawer(
                     Column {
                         Text(
                             if (query.isEmpty()) "还没有会话" else "没有匹配的会话",
-                            fontSize = 13.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                             color = PaEditorial.Muted,
                         )
                         if (query.isEmpty()) {
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 "到「全部会话」新建一个,这里就会跟着更新",
-                                fontSize = 11.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Subtle,
                             )
                         }
@@ -265,7 +265,7 @@ fun RecentThreadsDrawer(
                                 .pressable(haptic = true) { onOpenThread(th.id) }
                                 .background(
                                     if (active) PaEditorial.PrimaryContainer else Color.Transparent,
-                                    RoundedCornerShape(12.dp),
+                                    RoundedCornerShape(PaEditorial.Radius.IconButton),
                                 )
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -277,15 +277,15 @@ fun RecentThreadsDrawer(
                                 contentDescription = null,
                                 modifier = Modifier
                                     .size(PaEditorial.Space.IconBox)
-                                    .clip(RoundedCornerShape(13.dp)),
+                                    .clip(RoundedCornerShape(PaEditorial.Radius.IconButton)),
                                 contentScale = ContentScale.Crop,
                             )
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     th.title.ifEmpty { "(未命名)" },
-                                    fontSize = 15.sp, lineHeight = 21.sp,
-                                    fontWeight = FontWeight(650),
+                                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
+                                    fontWeight = FontWeight.SemiBold,
                                     color = if (active) PaEditorial.AccentText else PaEditorial.Ink,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -299,7 +299,7 @@ fun RecentThreadsDrawer(
                                         if (th.workspace.isNotEmpty()) add(shortWorkspace(th.workspace))
                                         add(relativeTime(th.updatedAtUnixMs))
                                     }.filter { it.isNotEmpty() }.joinToString("  ·  "),
-                                    fontSize = 11.sp, lineHeight = 16.sp,
+                                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                                     color = PaEditorial.Subtle,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -348,19 +348,19 @@ private fun DrawerFooterAction(icon: Int, label: String, onClick: () -> Unit, ba
                 Box(
                     Modifier
                         .align(Alignment.TopEnd)
-                        .background(PaEditorial.Attention, RoundedCornerShape(7.dp))
+                        .background(PaEditorial.Attention, RoundedCornerShape(PaEditorial.Radius.Terminal))
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                 ) {
                     Text(
                         if (badge > 99) "99+" else badge.toString(),
-                        fontSize = 9.sp, lineHeight = 11.sp,
-                        color = PaEditorial.OnGraphite, fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.State.fontSize, lineHeight = 11.sp,
+                        color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
         }
         Spacer(Modifier.height(4.dp))
-        Text(label, fontSize = 10.sp, color = PaEditorial.Subtle)
+        Text(label, fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
     }
 }
 

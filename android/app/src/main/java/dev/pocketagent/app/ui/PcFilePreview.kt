@@ -6,6 +6,7 @@ import dev.pocketagent.app.ui.component.PaPaths
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
 import java.util.zip.ZipInputStream
+import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
  * 电脑 / 手机上的文件 → 内置浏览器可渲染的 HTML(纯本地解析,不引第三方库)。

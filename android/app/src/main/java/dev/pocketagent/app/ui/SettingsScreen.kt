@@ -59,7 +59,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -121,44 +120,9 @@ import pocketagent.v1.ModelInfo
 import pocketagent.v1.RateLimitWindow
 import pocketagent.v1.SetCodexSettingsRequest
 
-/**
- * 编辑式页面的 M3 色板:按当前色盘(浅/深/黑客)取编辑式令牌 → MaterialTheme
- * colorScheme,供页内的 M3 组件(Switch / OutlinedTextField / RadioButton /
- * AlertDialog / TextButton / EmptyState)跟随显示模式 —— 读的是 PaEditorial
- * 可变槽位,组合期取值,换盘自动重组。只包编辑式页面的子树,不动全局 PaTheme。
- */
-internal fun editorialM3Scheme() = if (PaEditorial.IsDark) androidx.compose.material3.darkColorScheme(
-
-    primary = PaEditorial.Primary,
-    // onPrimary 同读 PaEditorial.OnPrimary(与 PaTheme 同槽位):黑客盘主色电光青
-    // #22D3EE 上白字 1.81:1,该盘内容色=暗青 #062B33(8.29:1);浅/深盘仍为白。
-    onPrimary = PaEditorial.OnPrimary,
-    background = PaEditorial.Canvas,
-    onBackground = PaEditorial.Ink,
-    surface = PaEditorial.Surface,
-    onSurface = PaEditorial.Ink,
-    surfaceVariant = PaEditorial.Raised,
-    onSurfaceVariant = PaEditorial.Muted,
-    outline = PaEditorial.Hairline,
-    error = PaEditorial.Denied,
-    // onError 同读 PaEditorial.OnDenied(与 PaTheme 同槽位):深/黑客盘 Denied
-    // 实底 #F08580/#F87171 上白字仅 2.51/2.77:1,内容色=暗红棕 #3A1514(6.45/5.85:1)。
-    onError = PaEditorial.OnDenied,
-) else androidx.compose.material3.lightColorScheme(
-
-    primary = PaEditorial.Primary,
-    onPrimary = PaEditorial.OnPrimary,
-    background = PaEditorial.Canvas,
-    onBackground = PaEditorial.Ink,
-    surface = PaEditorial.Surface,
-    onSurface = PaEditorial.Ink,
-    surfaceVariant = PaEditorial.Raised,
-    onSurfaceVariant = PaEditorial.Muted,
-    outline = PaEditorial.Hairline,
-    error = PaEditorial.Denied,
-    // 浅盘保持白字(对 #C94F4D 4.46:1,原型既有口径),同读 PaEditorial.OnDenied。
-    onError = PaEditorial.OnDenied,
-)
+// 【色板并轨 2026-10-09】editorialM3Scheme() 原定义在本文件、只包 5 屏子树;
+// 现已上提 theme 层(ui/theme/PaEditorial.kt)并由 MainActivity NavHost 外层
+// 一次包全 app,本文件的同名定义删除。
 
 /**
  * 编辑式页面的系统栏图标适配:按当前盘 IsDark 决定图标深浅(浅盘→深色图标,
@@ -224,7 +188,7 @@ private fun StatusChip(text: String, color: Color) {
     Text(
         text,
         color = color,
-        fontSize = 10.5.sp,
+        fontSize = PaEditorial.Type.Micro.fontSize,
         fontWeight = FontWeight.Medium,
     )
 }
@@ -245,15 +209,15 @@ private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
     if (usage == null) {
         Text(
             if (loading) "正在读取…" else "未获取到用量信息",
-            fontSize = 12.sp, color = PaEditorial.Muted,
+            fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
             modifier = Modifier.padding(vertical = 12.dp),
         )
         return
     }
     if (usage.error.isNotBlank()) {
-        Text("暂时读不到额度", fontSize = 12.5.sp, color = PaEditorial.Ink)
+        Text("暂时读不到额度", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink)
         Spacer(Modifier.height(4.dp))
-        Text(usage.error, fontSize = 11.sp, color = PaEditorial.Muted)
+        Text(usage.error, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
         return
     }
 
@@ -261,7 +225,7 @@ private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
         Text(
             usage.planType.ifBlank { "未报告套餐" },
             Modifier.weight(1f),
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             color = PaEditorial.Ink,
             fontWeight = FontWeight.Medium,
         )
@@ -287,13 +251,13 @@ private fun CodexUsageBody(usage: CodexUsage?, loading: Boolean) {
     }
     if (extras.isNotEmpty()) {
         Spacer(Modifier.height(9.dp))
-        Text(extras.joinToString(" · "), fontSize = 11.sp, color = PaEditorial.Muted)
+        Text(extras.joinToString(" · "), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
     }
     if (usage.hasCredits || usage.creditBalance.isNotBlank()) {
         Spacer(Modifier.height(4.dp))
         Text(
             if (usage.unlimitedCredits) "额度不限量" else "剩余额度 ${usage.creditBalance}",
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Muted,
         )
     }
@@ -323,10 +287,10 @@ private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
             Text(
                 rateLimitWindowLabel(window.windowDurationMins, fallbackLabel),
                 Modifier.weight(1f),
-                fontSize = 12.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
             )
-            Text("$pct%", fontSize = 12.sp, color = barColor, fontWeight = FontWeight.Medium)
+            Text("$pct%", fontSize = PaEditorial.Type.Caption.fontSize, color = barColor, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.height(5.dp))
         Box(
@@ -344,7 +308,7 @@ private fun RateLimitRow(fallbackLabel: String, window: RateLimitWindow?) {
         }
         if (reset.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
-            Text(reset, fontSize = 10.5.sp, color = PaEditorial.Muted)
+            Text(reset, fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted)
         }
     }
 }
@@ -373,7 +337,7 @@ private fun ManagedPolicyNote(text: String) {
         Spacer(Modifier.width(7.dp))
         Text(
             text,
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Muted,
             modifier = Modifier.weight(1f),
         )
@@ -403,7 +367,7 @@ internal fun agentDisplay(id: String): String = AGENT_DISPLAY[id] ?: id.ifBlank 
  * 乱的不是卡片本身,是卡型不统一。现在设置页所有分区卡只此一种材质;
  * 行间分隔统一 1dp Hairline 细线。
  */
-private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(18.dp)): Modifier = composed {
+private fun Modifier.paSettingsCard(shape: Shape = RoundedCornerShape(PaEditorial.Radius.Card)): Modifier = composed {
     this
         .background(PaEditorial.Surface, shape)
         .border(1.dp, PaEditorial.Hairline, shape)
@@ -533,10 +497,9 @@ fun SettingsScreen(
     onOpenBrowser: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
-    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
-        SettingsScreenBody(onBack, openUserData, onOpenBrowser, modifier)
-    }
+    // 【色板并轨 2026-10-09】编辑式 M3 色板已上提 MainActivity NavHost 外层包全 app,
+    // 本页不再重复包裹
+    SettingsScreenBody(onBack, openUserData, onOpenBrowser, modifier)
 }
 
 @Composable
@@ -1100,8 +1063,8 @@ private fun SettingsScreenBody(
                 Text(
                     "当前连接",
                     Modifier.padding(start = 2.dp, bottom = 8.dp),
-                    fontSize = 11.sp, lineHeight = 16.sp,
-                    letterSpacing = 1.2.sp, fontWeight = FontWeight(650),
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
+                    letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold,
                     color = PaEditorial.Muted,
                 )
                 PaHostChip(
@@ -1134,7 +1097,7 @@ private fun SettingsScreenBody(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
+                                .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1143,7 +1106,7 @@ private fun SettingsScreenBody(
                                 tint = EditorialTone.DENIED.text, modifier = Modifier.size(15.dp),
                             )
                             Spacer(Modifier.width(9.dp))
-                            Text(message, Modifier.weight(1f), fontSize = 12.sp, color = EditorialTone.DENIED.text)
+                            Text(message, Modifier.weight(1f), fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
                             TextButton(onClick = {
                                 settingsError = null
                                 AgentConnection.connectionEpoch.value += 1
@@ -1156,7 +1119,7 @@ private fun SettingsScreenBody(
                         Text(
                             message,
                             Modifier.fillMaxWidth().padding(horizontal = 6.dp),
-                            fontSize = 12.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = when {
                                 message.contains("失败") -> EditorialTone.DENIED.text
                                 message.contains("保存中") || message.contains("未生效") -> PaEditorial.Primary
@@ -1188,14 +1151,14 @@ private fun SettingsScreenBody(
                         onValueChange = { settingsQuery = it },
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 14.sp, color = PaEditorial.Ink,
+                            fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink,
                         ),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(PaEditorial.Primary),
                         modifier = Modifier.weight(1f).padding(vertical = 10.dp),
                         decorationBox = { inner ->
                             Box {
                                 if (settingsQuery.isEmpty()) {
-                                    Text("搜索设置…", fontSize = 14.sp, color = PaEditorial.Muted)
+                                    Text("搜索设置…", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted)
                                 }
                                 inner()
                             }
@@ -1517,7 +1480,7 @@ private fun SettingsScreenBody(
                                     Modifier
                                         .fillMaxWidth()
                                         .padding(vertical = 14.dp),
-                                    fontSize = 13.sp,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                                     color = PaEditorial.Muted,
                                 )
                             } else {
@@ -1554,18 +1517,18 @@ private fun SettingsScreenBody(
                                                             )
                                                         }
                                                     },
-                                                    fontSize = 16.sp, color = PaEditorial.Ink, maxLines = 1,
+                                                    fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, maxLines = 1,
                                                 )
                                                 if (entry.desc.isNotEmpty()) {
                                                     Text(
                                                         entry.desc,
                                                         Modifier.padding(top = 2.dp),
-                                                        fontSize = 13.sp, color = PaEditorial.Muted, maxLines = 2,
+                                                        fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted, maxLines = 2,
                                                     )
                                                 }
                                             }
                                             Spacer(Modifier.width(8.dp))
-                                            Text(entry.group, fontSize = 14.5.sp, color = PaEditorial.Muted, maxLines = 1)
+                                            Text(entry.group, fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted, maxLines = 1)
                                             if (entry.target != null) {
                                                 Spacer(Modifier.width(6.dp))
                                                 Icon(
@@ -1626,17 +1589,17 @@ private fun GroupLabel(icon: Int, title: String, note: String = "") {
         Spacer(Modifier.width(7.dp))
         Text(
             title,
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             lineHeight = 16.sp,
             letterSpacing = 1.2.sp,
-            fontWeight = FontWeight(650),
+            fontWeight = FontWeight.SemiBold,
             color = PaEditorial.Muted,
         )
         if (note.isNotEmpty()) {
             Spacer(Modifier.width(8.dp))
             Text(
                 note,
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = PaEditorial.Subtle,
                 maxLines = 1,
             )
@@ -1834,7 +1797,7 @@ private fun CapabilityRowItem(c: CodexCapability, divider: Boolean) {
         divider = divider,
         control = {
             if (!c.enabled) {
-                Text("已停用", fontSize = 11.sp, color = PaEditorial.Muted)
+                Text("已停用", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
             }
         },
     )
@@ -1860,7 +1823,7 @@ private fun SettingStateLine(key: String, states: Map<String, String>) {
             Modifier.fillMaxWidth().padding(bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(info.text, fontSize = 12.sp, color = color)
+            Text(info.text, fontSize = PaEditorial.Type.Caption.fontSize, color = color)
         }
     }
 }
@@ -1877,7 +1840,7 @@ private fun SettingStateLine(key: String, states: Map<String, String>) {
 private fun DesktopEchoLine(settings: CodexSettings?, key: String) {
     val line = DesktopEchoLogic.desktopEchoLine(settings, key) ?: return
     Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-        Text(line, fontSize = 11.sp, color = PaEditorial.Muted)
+        Text(line, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
     }
 }
 
@@ -1908,19 +1871,19 @@ private fun CapabilitiesPage(
                 Box(
                     Modifier.fillMaxWidth().padding(vertical = 40.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("正在读取…", fontSize = 13.sp, color = PaEditorial.Muted) }
+                ) { Text("正在读取…", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted) }
             }
 
             error != null -> Column(Modifier.fillMaxWidth().padding(vertical = 24.dp)) {
-                Text("暂时读不到能力列表", fontSize = 14.sp, color = EditorialTone.DENIED.text)
+                Text("暂时读不到能力列表", fontSize = PaEditorial.Type.Body.fontSize, color = EditorialTone.DENIED.text)
                 Spacer(Modifier.height(6.dp))
-                Text(error, fontSize = 11.sp, color = PaEditorial.Muted)
+                Text(error, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
             }
 
             capabilities.isEmpty() -> Box(
                 Modifier.fillMaxWidth().padding(vertical = 40.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text("这台电脑上的 Codex 未报告任何技能、hooks 或插件", fontSize = 13.sp, color = PaEditorial.Muted) }
+            ) { Text("这台电脑上的 Codex 未报告任何技能、hooks 或插件", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted) }
 
             else -> {
                 val filtered = filterCapabilities(capabilities, query)
@@ -1936,7 +1899,7 @@ private fun CapabilitiesPage(
                     Box(
                         Modifier.fillMaxWidth().padding(vertical = 30.dp),
                         contentAlignment = Alignment.Center,
-                    ) { Text("没有匹配「$query」的技能、hooks 或插件", fontSize = 12.sp, color = PaEditorial.Muted) }
+                    ) { Text("没有匹配「$query」的技能、hooks 或插件", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted) }
                 } else {
                     LazyColumn(
                         Modifier.fillMaxWidth().weight(1f),
@@ -1946,7 +1909,7 @@ private fun CapabilitiesPage(
                             item(key = "header-$kind") {
                                 Text(
                                     capabilityKindLabel(kind) + " · " + list.size,
-                                    fontSize = 11.sp,
+                                    fontSize = PaEditorial.Type.Caption.fontSize,
                                     color = PaEditorial.Muted,
                                     modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                                 )
@@ -2064,7 +2027,7 @@ private fun AgentPage(
                 Text(
                     "尚未读到电脑端设置:切换 Agent 照常可用,审批 / 模型 / MCP 等桌面侧项需连接主机后读取与修改",
                     Modifier.weight(1f),
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Muted,
                 )
             }
@@ -2117,9 +2080,9 @@ private fun AgentPage(
                         tint = PaEditorial.Primary, modifier = Modifier.size(15.dp),
                     )
                     Spacer(Modifier.width(9.dp))
-                    Text(note, Modifier.weight(1f), fontSize = 11.5.sp, color = PaEditorial.Muted)
+                    Text(note, Modifier.weight(1f), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
                     TextButton(onClick = onRetrySettings) {
-                        Text("重试", color = PaEditorial.Primary, fontSize = 12.sp)
+                        Text("重试", color = PaEditorial.Primary, fontSize = PaEditorial.Type.Caption.fontSize)
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -2149,7 +2112,7 @@ private fun AgentPage(
                 // 反馈文案如实说"应用到 N 个"),默认保持"仅新建"不变。
                 Text(
                     "更改默认对新建对话生效,已有对话保持原设置",
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Muted,
                     modifier = Modifier.padding(bottom = 4.dp),
                 )
@@ -2164,7 +2127,7 @@ private fun AgentPage(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 if (applyToExistingThreads) "开" else "关",
-                                fontSize = 11.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Muted,
                             )
                             Switch(
@@ -2191,7 +2154,7 @@ private fun AgentPage(
                 DesktopEchoLogic.sandboxReadinessLine(settings)?.let { line ->
                     Text(
                         line,
-                        fontSize = 11.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Muted,
                         modifier = Modifier.padding(bottom = 6.dp),
                     )
@@ -2199,7 +2162,7 @@ private fun AgentPage(
                 if (settings?.desktopEchoError?.isNotBlank() == true) {
                     Text(
                         "电脑端当前值暂时读不到:${settings.desktopEchoError}",
-                        fontSize = 11.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Muted,
                         modifier = Modifier.padding(bottom = 6.dp),
                     )
@@ -2323,7 +2286,7 @@ private fun AgentPage(
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("预览审批弹窗", fontSize = 13.5.sp, color = PaEditorial.Primary)
+                    Text("预览审批弹窗", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Primary)
                 }
                 Spacer(Modifier.height(6.dp))
             }
@@ -2390,7 +2353,7 @@ private fun AgentPage(
                 if (capsBadges.isNotEmpty()) {
                     Text(
                         capsBadges.joinToString(" · "),
-                        fontSize = 10.5.sp,
+                        fontSize = PaEditorial.Type.Micro.fontSize,
                         color = PaEditorial.Muted,
                         modifier = Modifier.padding(bottom = 6.dp),
                     )
@@ -2444,7 +2407,7 @@ private fun AgentPage(
                 AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 6.dp))
                 Text(
                     "仅控制 Codex 的生成方式；全部 Agent 的思考与工具显示在「会话与对话」调整。",
-                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
 
@@ -2536,7 +2499,7 @@ private fun AgentPage(
                     desc = "已内置:粘贴的长文本原样完整送达电脑端,不做任何裁剪",
                     divider = false,
                     control = {
-                        Text("已内置", fontSize = 11.sp, color = EditorialTone.RUNNING.text)
+                        Text("已内置", fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.RUNNING.text)
                     },
                 )
                 Spacer(Modifier.height(6.dp))
@@ -2569,7 +2532,7 @@ private fun AgentPage(
                     }
                     Text(
                         emptyText,
-                        fontSize = 12.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
@@ -2597,7 +2560,7 @@ private fun AgentPage(
                             mcpError != null -> "暂时读不到 MCP 列表：$mcpError"
                             else -> "这台电脑未配置 MCP 服务器"
                         },
-                        fontSize = 12.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
@@ -2642,7 +2605,7 @@ private fun AgentPage(
                     Text(
                         "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
                             "可先在上方「切换 Agent」里回到 Codex。",
-                        fontSize = 12.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 }
@@ -2719,7 +2682,7 @@ private fun PiStatusSection(settings: CodexSettings?, modelChoices: List<ModelIn
         Spacer(Modifier.height(6.dp))
         Text(
             "会话内可单独覆盖模型与强度;以上默认值随设置页更新。",
-            fontSize = 11.sp, color = PaEditorial.Muted,
+            fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
             modifier = Modifier.padding(bottom = 6.dp),
         )
     }
@@ -2767,7 +2730,7 @@ private fun ZCodeStatusSection(
         Spacer(Modifier.height(6.dp))
         Text(
             "会话的模型与思考档位在会话内切换;额度展示下一批接入。",
-            fontSize = 11.sp, color = PaEditorial.Muted,
+            fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
             modifier = Modifier.padding(bottom = 6.dp),
         )
     }
@@ -2832,24 +2795,24 @@ private fun SettingsTextField(
         Text(
             label,
             Modifier.padding(start = 3.dp, bottom = 6.dp),
-            fontSize = 10.5.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             color = PaEditorial.Muted,
         )
         Box(
             Modifier
                 .fillMaxWidth()
-                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             if (value.isEmpty()) {
-                Text("—", fontSize = 13.5.sp, color = PaEditorial.Muted)
+                Text("—", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted)
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = TextStyle(color = PaEditorial.Ink, fontSize = 13.5.sp),
+                textStyle = TextStyle(color = PaEditorial.Ink, fontSize = PaEditorial.Type.Body.fontSize),
                 cursorBrush = SolidColor(PaEditorial.Primary),
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
@@ -2877,7 +2840,7 @@ private fun ModelPickerDialog(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(PaEditorial.Surface, RoundedCornerShape(23.dp))
+                .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Sheet))
                 .padding(20.dp),
         ) {
             Row(
@@ -2885,7 +2848,7 @@ private fun ModelPickerDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("选择默认模型", fontSize = 17.sp, color = PaEditorial.Ink)
+                Text("选择默认模型", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 IconActionButton(
                     R.drawable.ic_lucide_x, "关闭", onDismiss,
                     bg = Color.Transparent, size = 36.dp, iconSize = 18.dp,
@@ -2908,7 +2871,7 @@ private fun ModelPickerDialog(
                 if (models.isEmpty()) {
                     Text(
                         "未获取到模型列表(请检查连接后重试)",
-                        fontSize = 12.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                 }
@@ -2947,7 +2910,7 @@ private fun ModelChoiceRow(
             .pressable(haptic = true) { onClick() }
             .background(
                 if (selected) PaEditorial.Raised else Color.Transparent,
-                RoundedCornerShape(12.dp),
+                RoundedCornerShape(PaEditorial.Radius.IconButton),
             )
             .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -2968,11 +2931,11 @@ private fun ModelChoiceRow(
             // 这里去掉行数上限,让它按需换行完整显示。
             Text(
                 title,
-                fontSize = 15.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize,
                 color = if (selected) PaEditorial.Primary else PaEditorial.Ink,
             )
             if (subtitle.isNotEmpty()) {
-                Text(subtitle, fontSize = 10.5.sp, color = PaEditorial.Muted)
+                Text(subtitle, fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted)
             }
         }
         if (selected) {
@@ -3007,10 +2970,10 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("允许执行?", Modifier.weight(1f), fontSize = 19.sp, color = PaEditorial.Ink)
+                Text("允许执行?", Modifier.weight(1f), fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 Text(
                     if (expanded) "收起" else "展开",
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Primary,
                 )
                 IconActionButton(
@@ -3024,19 +2987,19 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
             }
             Text(
                 "agent 请求执行以下命令(这是示例,不会真的执行)",
-                fontSize = 13.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted,
                 modifier = Modifier.padding(top = 4.dp),
             )
             if (expanded) {
                 Text(
                     "{\"command\": \"Remove-Item C:\\\\project\\\\old-build -Recurse\", \"cwd\": \"C:\\\\project\"}",
-                    fontSize = 12.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.CodeText,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = PaEditorial.MonoFont,
                     modifier = Modifier
                         .fillMaxWidth()
                         // 命令原文:石墨代码箱(侧边栏/代码预览保留石墨深色的纪律)
-                        .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
+                        .background(PaEditorial.GraphiteCode, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(12.dp)
                         .padding(vertical = 4.dp),
                 )
@@ -3045,7 +3008,7 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                 "怎么用:点【允许】= 电脑上真实执行这条命令;点【拒绝】= 不执行," +
                     "agent 会继续对话并说明;放着不管 = 任务结束前自动拒绝。" +
                     "断网收不到弹窗时,daemon 会自动拒绝并让 agent 继续作答,不会卡死任务。",
-                fontSize = 12.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                 modifier = Modifier.padding(vertical = 10.dp),
             )
             Row(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
@@ -3054,23 +3017,23 @@ fun ApprovalPreviewSheet(onDismiss: () -> Unit) {
                     Modifier
                         .weight(1f)
                         .pressable { onDismiss() }
-                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(14.dp))
+                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         // 【三盘同构 2026-09-30】描边原硬编码浅盘值 #E9CFCA,深/黑客盘
                         // 的 DeniedContainer 已反相为暗底,浅粉描边刺眼 —— 对齐
                         // PaApprovalDialog 拒绝卡的既有口径:Denied 30% 淡染。
-                        .border(1.dp, PaEditorial.Denied.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
+                        .border(1.dp, PaEditorial.Denied.copy(alpha = 0.30f), RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("拒绝(示例)", fontSize = 15.sp, color = EditorialTone.DENIED.text) }
+                ) { Text("拒绝(示例)", fontSize = PaEditorial.Type.Heading.fontSize, color = EditorialTone.DENIED.text) }
                 Spacer(Modifier.width(12.dp))
                 Box(
                     Modifier
                         .weight(1f)
                         .pressable { onDismiss() }
-                        .background(PaEditorial.Graphite, RoundedCornerShape(14.dp))
+                        .background(PaEditorial.Graphite, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("允许(示例)", fontSize = 15.sp, color = Color.White, fontWeight = FontWeight.SemiBold) }
+                ) { Text("允许(示例)", fontSize = PaEditorial.Type.Heading.fontSize, color = Color.White, fontWeight = FontWeight.SemiBold) }
             }
         }
     }
@@ -3143,7 +3106,7 @@ fun SettingRow(
                     Box(
                         Modifier
                             .size(42.dp)
-                            .background(PaEditorial.Raised, RoundedCornerShape(13.dp)),
+                            .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -3164,7 +3127,7 @@ fun SettingRow(
             Column(Modifier.weight(1f)) {
                 Text(
                     title,
-                    fontSize = 15.sp, lineHeight = 21.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = PaEditorial.Ink,
                     maxLines = 1,
@@ -3173,7 +3136,7 @@ fun SettingRow(
                     Text(
                         desc,
                         Modifier.padding(top = 2.dp),
-                        fontSize = 12.5.sp, lineHeight = 17.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 17.sp,
                         color = PaEditorial.Muted,
                         maxLines = 2,
                     )
@@ -3183,7 +3146,7 @@ fun SettingRow(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     value,
-                    fontSize = 13.sp,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                     maxLines = 1,
                 )
@@ -3315,14 +3278,14 @@ private fun UserDataPage(
                             "down" -> "未连接 · 自动重连中"
                             else -> "检查中…"
                         },
-                        fontSize = 13.5.sp,
+                        fontSize = PaEditorial.Type.Body.fontSize,
                         color = PaEditorial.Ink,
                     )
                     Text(
                         // 【不截断】原先 maxLines=1 + Ellipsis 会把长地址再裁一次,
                         // 用户根本抄不全。地址是"可操作信息",必须完整可读。
                         if (connState == "ok") connAddr else "USB → 局域网 → Tailscale",
-                        fontSize = 10.5.sp,
+                        fontSize = PaEditorial.Type.Micro.fontSize,
                         color = PaEditorial.Muted,
                     )
                 }
@@ -3339,7 +3302,7 @@ private fun UserDataPage(
                     "尚未发现可用地址。插上 USB 后在电脑上执行 adb reverse tcp:7246 tcp:7246," +
                         "或让手机与电脑处于同一局域网 / Tailscale。",
                     Modifier.padding(top = 4.dp, bottom = 8.dp),
-                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                 )
             } else {
                 endpoints.forEach { ep ->
@@ -3366,7 +3329,7 @@ private fun UserDataPage(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     ep.label,
-                                    fontSize = 12.5.sp,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                                     color = PaEditorial.Ink,
                                     fontWeight = FontWeight.SemiBold,
                                 )
@@ -3375,7 +3338,7 @@ private fun UserDataPage(
                                     // 状态用纯色文字表达(统一卡语言:去底色 pill)
                                     Text(
                                         "使用中",
-                                        fontSize = 10.sp,
+                                        fontSize = PaEditorial.Type.Micro.fontSize,
                                         color = EditorialTone.RUNNING.text,
                                     )
                                 }
@@ -3384,20 +3347,20 @@ private fun UserDataPage(
                             Text(
                                 ep.addr,
                                 Modifier.padding(top = 2.dp),
-                                fontSize = 12.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Muted,
                             )
                             if (ep.detail.isNotBlank()) {
                                 Text(
                                     ep.detail,
                                     Modifier.padding(top = 1.dp),
-                                    fontSize = 10.sp,
+                                    fontSize = PaEditorial.Type.Micro.fontSize,
                                     color = PaEditorial.Muted,
                                 )
                             }
                         }
                         Spacer(Modifier.width(8.dp))
-                        Text("复制", fontSize = 11.5.sp, color = PaEditorial.Primary)
+                        Text("复制", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary)
                     }
                 }
                 Spacer(Modifier.height(4.dp))
@@ -3417,14 +3380,14 @@ private fun UserDataPage(
                     Column(Modifier.weight(1f)) {
                         Text(
                             "已锁定主机指纹",
-                            fontSize = 12.5.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                             color = PaEditorial.Ink,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             lockedPin.take(16) + "…(SHA-256,首次连接时锁定)",
                             Modifier.padding(top = 2.dp),
-                            fontSize = 10.5.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             color = PaEditorial.Muted,
                         )
                     }
@@ -3432,7 +3395,7 @@ private fun UserDataPage(
                         "清除",
                         // 危险色已区分(Denied);动作本体交给确认弹窗,不一击即清。
                         Modifier.pressable(haptic = true) { confirmClearPin = true },
-                        fontSize = 11.5.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Denied,
                     )
                 }
@@ -3447,7 +3410,7 @@ private fun UserDataPage(
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 6.dp),
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Denied,
                 )
                 Spacer(Modifier.height(6.dp))
@@ -3458,7 +3421,7 @@ private fun UserDataPage(
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 6.dp),
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     // 【不省略】失败地址同样必须完整可读,方便用户排查。
                     color = PaEditorial.Denied,
                 )
@@ -3508,7 +3471,7 @@ private fun UserDataPage(
                 Text(
                     "还没有下载内容。在会话右上角「导出对话」或左上角菜单的任务中心里下载后,会出现在这里。",
                     Modifier.padding(vertical = 14.dp),
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Muted,
                 )
             } else {
@@ -3531,7 +3494,7 @@ private fun UserDataPage(
                                         Text(
                                             d.title.ifEmpty { "(未命名文件)" },
                                             Modifier.weight(1f, fill = false),
-                                            fontSize = 13.sp,
+                                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                                             color = PaEditorial.Ink,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -3540,7 +3503,7 @@ private fun UserDataPage(
                                         // 类型标签:纯色文字(统一卡语言:去底色 pill)
                                         Text(
                                             kind.label,
-                                            fontSize = 9.5.sp,
+                                            fontSize = PaEditorial.Type.State.fontSize,
                                             color = kind.color,
                                         )
                                     }
@@ -3551,7 +3514,7 @@ private fun UserDataPage(
                                             statusLabel(d.status),
                                         ).filter { it.isNotEmpty() }.joinToString("  ·  "),
                                         Modifier.padding(top = 2.dp),
-                                        fontSize = 10.5.sp,
+                                        fontSize = PaEditorial.Type.Micro.fontSize,
                                         color = PaEditorial.Muted,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -3559,7 +3522,7 @@ private fun UserDataPage(
                                     if (d.detail.isNotEmpty()) {
                                         Text(
                                             d.detail,
-                                            fontSize = 9.5.sp,
+                                            fontSize = PaEditorial.Type.State.fontSize,
                                             color = PaEditorial.Muted,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -3594,7 +3557,7 @@ private fun UserDataPage(
                                     Text(
                                         if (d.localUri.isEmpty()) "文件位置无法获取" else "文件已被删除",
                                         Modifier.padding(end = 6.dp),
-                                        fontSize = 10.5.sp, color = EditorialTone.DENIED.text,
+                                        fontSize = PaEditorial.Type.Micro.fontSize, color = EditorialTone.DENIED.text,
                                     )
                                 }
                             }
@@ -3632,7 +3595,7 @@ private fun UserDataPage(
                     "手机会忘记这台电脑的指纹,下次连接时重新信任当前主机。" +
                         "在此之前若网络中被换成另一台机器,App 不会拦截。" +
                         "电脑上的数据与配对凭证不受影响。此操作立即生效。",
-                    color = PaEditorial.Muted, fontSize = 13.sp,
+                    color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
             },
             confirmButton = {
@@ -3661,7 +3624,7 @@ private fun UserDataPage(
                     "删除手机上已下载的这份文件本体" +
                         (if (target.sizeText.isNotBlank()) "(约 ${target.sizeText})" else "") +
                         ",电脑上的原件不受影响。此操作不可撤销。",
-                    color = PaEditorial.Muted, fontSize = 13.sp,
+                    color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
             },
             confirmButton = {
@@ -3800,14 +3763,14 @@ private fun CacheSection(
                     Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(row.key, fontSize = 13.sp, color = PaEditorial.Muted)
+                    Text(row.key, fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
                     if (CacheCleanupLogic.riskOf(row.kind) == CacheCleanupLogic.Risk.RISKY) {
-                        Text(" · 清理需确认", fontSize = 11.sp, color = EditorialTone.DENIED.text)
+                        Text(" · 清理需确认", fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
                     }
                     Spacer(Modifier.weight(1f))
                     // 占用 + 条目数(条目数未统计时只显示占用,不摆 0)
                     val entryNote = if (row.entries > 0) " / ${row.entries} 项" else ""
-                    Text(sizeText(row.bytes) + entryNote, fontSize = 13.sp, color = PaEditorial.Ink)
+                    Text(sizeText(row.bytes) + entryNote, fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink)
                 }
             }
             // 小计:只汇总本 App 管理的可清理项,不含下载文件本体(那属于用户内容)
@@ -3815,9 +3778,9 @@ private fun CacheSection(
                 Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("本机可清理缓存合计", fontSize = 13.sp, color = PaEditorial.Ink)
+                Text("本机可清理缓存合计", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink)
                 Spacer(Modifier.weight(1f))
-                Text(sizeText(managedTotal), fontSize = 13.5.sp, color = PaEditorial.Ink)
+                Text(sizeText(managedTotal), fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
             }
         }
 
@@ -3929,61 +3892,61 @@ private fun CacheSection(
                     " + 预览缓存 ${sizeText(previewBytes)} + 临时文件 ${sizeText(tempBytes)}" +
                     " + 其余 cacheDir 内容;与系统「存储占用 → 缓存」同口径,可对照。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "用户数据 ${sizeText(userBytes)} = 会话快照 ${sizeText(snapshotBytes)}" +
                     " + 轮次检查点 ${sizeText(checkpointBytes)} + 设置与登录凭证;" +
                     "清理项只动前两者,不碰登录凭证。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "下载 ${if (downloadUnknown) "占用无法获取" else sizeText(downloadBytes)} · $downloadCount 个文件" +
                     " · 任务条目 $taskCount 条;文件本体在系统下载目录,只能在上方列表逐条删除。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "网页快照 ${sizeText(urlSnapBytes)} = 断网时可回看的网页内容(pa_offline/pa_url 分区);" +
                     "与上面几项口径互不重叠,「清空网页快照缓存」只清它。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "轮次检查点 ${sizeText(checkpointBytes)} = 未完成轮次的断点续跑副本" +
                     "(filesDir/turn-checkpoints 分区,最多保留 ${dev.pocketagent.app.ui.component.TurnCheckpointStore.MAX_CHECKPOINTS} 个);" +
                     "「清空轮次检查点」只清它,已完成会话不受影响。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "清理临时与失效缓存:删崩溃残留的临时文件与「文件已被删除」的下载条目;" +
                     "不碰预览缓存、不碰登录状态,可随时清。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "清空预览缓存:释放 ${sizeText(previewBytes)};纯临时内容,清了随时可再生,不影响离线历史。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "清空会话快照(需二次确认):释放 ${sizeText(snapshotBytes)};" +
                     "后果:快照是「最近 N 轮」的本地副本,清掉后离线时看不到这段历史,需联网从电脑重拉;" +
                     "不影响登录与电脑端。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "清理浏览器数据:清掉内置浏览器的 HTTP 缓存 / Cookie / 网页存储;" +
                     "后果:浏览器里登录过的网站需重新登录;不影响电脑端与 App 设置。",
                 Modifier.padding(bottom = 4.dp),
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
             Text(
                 "清空已完成的任务条目:只清任务中心记录列表,不删已下载文件,也不减上方「下载」占用。",
-                fontSize = 10.5.sp, color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
             )
         }
     }
@@ -3995,7 +3958,7 @@ private fun CacheSection(
             text = {
                 Text(
                     "只移除任务中心的记录,已下载到手机的文件不受影响。此操作不可撤销。",
-                    color = PaEditorial.Muted, fontSize = 13.sp,
+                    color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
             },
             confirmButton = {
@@ -4024,7 +3987,7 @@ private fun CacheSection(
                 Text(
                     "会话快照是「最近 N 轮」的本地副本,断网时用来回看历史。清空后需要重新从电脑拉取," +
                         "离线时将看不到这段历史;联网后会自动重建,不影响电脑端记录与登录。此操作不可撤销。",
-                    color = PaEditorial.Muted, fontSize = 13.sp,
+                    color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
             },
             confirmButton = {
@@ -4053,8 +4016,8 @@ private fun CacheSection(
 @Composable
 private fun StatCell2(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-        Text(value, fontSize = 13.5.sp, color = PaEditorial.Ink)
-        Text(label, Modifier.padding(top = 2.dp), fontSize = 11.5.sp, color = PaEditorial.Muted)
+        Text(value, fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
+        Text(label, Modifier.padding(top = 2.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
     }
 }
 
@@ -4075,8 +4038,8 @@ private fun CacheActionRow(
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (danger) EditorialTone.DENIED.text else PaEditorial.Ink)
-            Text(desc, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = PaEditorial.Muted)
+            Text(title, fontSize = PaEditorial.Type.Body.fontSize, fontWeight = FontWeight.SemiBold, color = if (danger) EditorialTone.DENIED.text else PaEditorial.Ink)
+            Text(desc, Modifier.padding(top = 2.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
         }
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
@@ -4103,9 +4066,9 @@ private fun CollapsibleDetail(content: @Composable () -> Unit) {
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("详情", fontSize = 11.sp, color = PaEditorial.Muted)
+            Text("详情", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
             Spacer(Modifier.weight(1f))
-            Text(if (expanded) "▾" else "▸", fontSize = 12.sp, color = PaEditorial.Muted)
+            Text(if (expanded) "▾" else "▸", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
         }
         if (expanded) {
             content()
@@ -4207,7 +4170,7 @@ internal fun NativeConfigOptionsSection(agentId: String, onHasContent: (Boolean)
     SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "原生设置") {
         Spacer(Modifier.height(10.dp))
         if (error != null) {
-            Text("暂时读不到原生设置：$error", fontSize = 11.5.sp, color = PaEditorial.Muted,
+            Text("暂时读不到原生设置：$error", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                 modifier = Modifier.padding(vertical = 6.dp))
         }
         items.forEachIndexed { index, row ->
@@ -4241,7 +4204,7 @@ internal fun NativeConfigOptionsSection(agentId: String, onHasContent: (Boolean)
             }
         }
         if (sharedNote.isNotBlank()) {
-            Text(sharedNote, fontSize = 11.sp, color = PaEditorial.Muted,
+            Text(sharedNote, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                 modifier = Modifier.padding(vertical = 6.dp))
         }
     }
@@ -4278,7 +4241,7 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models:
     SubPageScaffold(title = "Daemon 桥接与输入", onBack = onBack) {
         SectionBlock(icon = R.drawable.ic_lucide_server, title = "连接策略") {
             Text("USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",
-                fontSize = 13.sp, color = PaEditorial.Muted, modifier = Modifier.padding(vertical=12.dp))
+                fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted, modifier = Modifier.padding(vertical=12.dp))
         }
         // 【S2 聚拢】原「全局对话显示」分区(显示思考 / 工具详情 / 历史轮数)已整体
         // 上收为一级页「会话与对话」组(高频观感开关不该藏在二级页);写入路径原样,
@@ -4319,7 +4282,7 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models:
             if (models.isEmpty()) {
                 Text(
                     "优化使用的 Agent 与模型列表需连接主机后读取",
-                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     modifier = Modifier.padding(vertical = 6.dp),
                 )
             }
@@ -4382,7 +4345,7 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models:
             )
             Text(
                 "有系统识别服务时可直接使用；否则使用 App 内置 SenseVoice。录音权限被拒绝时只请求权限，不提供外部模型下载入口。",
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
             )
             Spacer(Modifier.height(6.dp))

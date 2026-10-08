@@ -112,7 +112,7 @@ fun CollabRoleEditorScreen(
             },
         ) {
             Box(Modifier.fillMaxSize().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
-                Text("找不到该角色(可能已被删除)", fontSize = 14.sp, color = ed.Muted)
+                Text("找不到该角色(可能已被删除)", fontSize = PaEditorial.Type.Body.fontSize, color = ed.Muted)
             }
         }
         return
@@ -172,14 +172,14 @@ fun CollabRoleEditorScreen(
             // 后端原文如实透传:浅珊瑚底条,语义色 + 原文双通道
             Text(
                 errShown,
-                fontSize = 13.sp, lineHeight = 21.sp,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp,
                 color = EditorialTone.DENIED.text,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
-                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(12.dp),
             )
         }
@@ -199,26 +199,26 @@ fun CollabRoleEditorScreen(
                     placeholder = "如 reviewer,只能英文/数字/横线,不能含空格",
                 )
                 if (idError != null) {
-                    Text(idError!!, fontSize = 12.sp, color = EditorialTone.DENIED.text, modifier = Modifier.padding(start = 3.dp))
+                    Text(idError!!, fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text, modifier = Modifier.padding(start = 3.dp))
                 }
             } else {
                 // 只读 id:瓷白卡内的扁平行(它是引用键,不是可编辑字段)
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(ed.Surface, RoundedCornerShape(13.dp))
-                        .border(1.dp, ed.Hairline, RoundedCornerShape(13.dp))
+                        .background(ed.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, ed.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 13.dp, vertical = 12.dp),
                 ) {
-                    Text("角色 id(引用键)", fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle)
+                    Text("角色 id(引用键)", fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle)
                     Spacer(Modifier.height(4.dp))
                     Text(
                         existing?.id ?: "",
-                        fontSize = 13.sp, lineHeight = 21.sp,
-                        fontWeight = FontWeight(650), color = ed.Ink,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp,
+                        fontWeight = FontWeight.SemiBold, color = ed.Ink,
                     )
                     Spacer(Modifier.height(2.dp))
-                    Text("只读:它是委派里的引用键,改了会让已有引用失效", fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle)
+                    Text("只读:它是委派里的引用键,改了会让已有引用失效", fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle)
                 }
             }
 
@@ -272,21 +272,21 @@ fun CollabRoleEditorScreen(
                     .fillMaxWidth()
                     .heightIn(min = PaEditorial.Space.TouchMin)
                     .pressable(enabled = canSave) { doSave() }
-                    .background(saveBg, RoundedCornerShape(13.dp))
+                    .background(saveBg, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
                 Text(
                     if (saving) "保存中…" else "保存协同角色",
-                    fontSize = 14.sp, lineHeight = 20.sp,
-                    fontWeight = FontWeight(650),
+                    fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = if (canSave) PaEditorial.OnGraphite else ed.Subtle,
                 )
             }
             if (idError != null) {
                 // 保存按钮禁用时的原因说明(双保险:输入框下已提示,这里再强调一次)
-                Text(idError!!, fontSize = 12.sp, color = ed.Subtle, modifier = Modifier.padding(start = 3.dp))
+                Text(idError!!, fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Subtle, modifier = Modifier.padding(start = 3.dp))
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -317,22 +317,22 @@ private fun RoleTextField(
         label = "roleFieldBorder",
     )
     Column(Modifier.fillMaxWidth()) {
-        Text(label, Modifier.padding(start = 3.dp, bottom = 6.dp), fontSize = 11.sp, lineHeight = 16.sp, color = ed.Muted)
+        Text(label, Modifier.padding(start = 3.dp, bottom = 6.dp), fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Muted)
         Box(
             Modifier
                 .fillMaxWidth()
-                .background(ed.Surface, RoundedCornerShape(13.dp))
-                .border(1.dp, borderColor, RoundedCornerShape(13.dp))
+                .background(ed.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                .border(1.dp, borderColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .padding(horizontal = 13.dp, vertical = 12.dp),
         ) {
             if (value.isEmpty() && placeholder.isNotEmpty()) {
-                Text(placeholder, fontSize = 13.sp, lineHeight = 21.sp, color = ed.Subtle)
+                Text(placeholder, fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp, color = ed.Subtle)
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.fillMaxWidth(),
-                textStyle = TextStyle(fontSize = 13.sp, lineHeight = 21.sp, color = ed.Ink),
+                textStyle = TextStyle(fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp, color = ed.Ink),
                 cursorBrush = SolidColor(PaEditorial.Primary),
                 singleLine = !multiline,
                 minLines = if (multiline) 3 else 1,

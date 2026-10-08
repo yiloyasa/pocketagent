@@ -28,7 +28,7 @@
 - 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 93 RPC**，8 proto / 2588 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**，2026-10-08 校验 8 文件全一致）
 - 代码：android main **151** `.kt` / test **162** `.kt`；daemon Go **639** 文件（生成 pb.go **15**，手写 **624** 含测试）
-- 版本：**0.2.2 / versionCode 5**
+- 版本：**0.3.0 / versionCode 6**
 
 ### 0.3 当前状态（真值锚点 · 2026-10-08 收尾轮）
 
@@ -198,7 +198,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 | daemon 入口 | `daemon/cmd/pocketagentd/main.go` | 见 §3 flag 表；运行参数：`-addr 0.0.0.0:7246 -workspace G:\项目1\pocketagent`，env `CODEX_BIN=G:\Claude Code\codex.cmd`。⚠ **pi/dsh 的定位已改为按用户环境派生**（2026-09-23，`internal/hostenv`）：node 走 随包目录 → `%LOCALAPPDATA%`/`%ProgramFiles%` → PATH；pi/dsh 入口走 **npm 实际配置的全局根**（`.npmrc` 的 `prefix=` 或 `NPM_CONFIG_PREFIX`，其次才是 `%APPDATA%\npm` 等默认位置）→ PATH。本机 `.npmrc` 写着 `prefix=G:\Claude Code`，故 pi/dsh 均已实测命中、**无需重装**；仅在既无 env 覆盖、又装在别处时才须显式设 `PI_NODE`/`PI_CLI`（pi）或 `DSH_NODE`/`DSH_BIN`（dsh） |
 | daemon 数据目录 | `~/.pocketagentd/` | `threads.json`(会话真值)、`events.jsonl`(+轮转)、`devices.json`(配对设备)、`pair-code.txt`(配对码，0600，重启复用不换码)、`certs/`(自签证书)、`dsh-home/`(dsh 隔离 HOME) |
 | App 入口 | `MainActivity.kt` → NavHost | 冷启 Splash → onboarding(未配对)/home |
-| App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.2.2/5）；sherpa AAR 由构建脚本下载+哈希校验 |
+| App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.3.0/6）；sherpa AAR 由构建脚本下载+哈希校验 |
 | 构建脚本 | `tools/device/_pa_gradle.py`、`android/build-ascii.ps1` | 中文路径 Gradle 处理不了 → robocopy 镜像到 `G:\pa\android` 再 gradlew |
 | 看门狗 | `daemon/cmd/paguard` | 计划任务 PocketAgentDaemonGuard 每分钟**直跑 paguard.exe**（windowsgui 子系统物理无窗口）→ 探测 7246 死了才以同参数拉起 daemon（4s 内拉起）。旧链「计划任务 → wscript → watchdog_hidden.vbs → WMI → paguard」已于 2026-09-25 弃用（`6077295`：wscript 每分钟调度触发 VBScript 弃用弹窗，事件日志实锤），`watchdog.bat`/`watchdog_hidden.vbs` 两脚本已随之删除。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
 | 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+version.txt+install/uninstall/使用说明 → `PocketAgent桌面端.zip`。2026-09-23 修：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe/paguard.exe（提交 `42813da` 引入的回归）；现顺序为 清理 → 创建 → 构建 → 痕迹扫描 → 压缩，扫描命中开发机痕迹即中止不出包 |

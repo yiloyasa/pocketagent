@@ -227,7 +227,7 @@ internal fun ModelEffortCard(
 
     // 强度胶囊的触感落点(独立卡面,自取 LocalView;light 档见下方 onClick)
     val effortHapticView = LocalView.current
-    val mono = if (PaHacker.isHacker) PaHacker.mono else null
+    val mono = if (PaHacker.isHacker) PaEditorial.MonoFont else null
     // 【D2 模态家族统一】裸 Dialog → PaSheet centered 变体:同一块玻璃材质、同一档
     // spring 出场(PaMotion.sheet)、同一个 Radius.Sheet 圆角令牌(原硬编码 22dp)。
     // 行为语义零变化:点窗外/返回键仍走 onDismiss,内容与交互一字不动。
@@ -245,7 +245,7 @@ internal fun ModelEffortCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("模型与思考强度", fontSize = 17.sp, color = PaEditorial.Ink)
+                Text("模型与思考强度", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 IconActionButton(
                     AppR.drawable.ic_lucide_x, "关闭", onDismiss,
                     bg = androidx.compose.ui.graphics.Color.Transparent, size = 36.dp, iconSize = 18.dp,
@@ -264,12 +264,12 @@ internal fun ModelEffortCard(
                         // 「上次记录」:本地缓存尚未被 daemon 真值替换,必须标注
                         if (display.fromCache) append(" · 上次记录")
                     },
-                    fontSize = 11.sp, color = PaEditorial.Muted, fontFamily = mono,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted, fontFamily = mono,
                 )
                 if (display.explanation.isNotBlank()) {
                     Text(
                         display.explanation,
-                        fontSize = 11.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
@@ -281,7 +281,7 @@ internal fun ModelEffortCard(
                         models.find { it.id == runtimeModel }?.displayName?.takeIf { it.isNotBlank() }
                             ?: modelBareName(runtimeModel)
                     }" + (runtimeEffort?.let { " · ${effortLabelOf(it)}" } ?: ""),
-                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
@@ -296,7 +296,7 @@ internal fun ModelEffortCard(
                 }
                 Text(
                     syncLine,
-                    Modifier.weight(1f), fontSize = 11.sp, color = PaEditorial.Muted,
+                    Modifier.weight(1f), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                 )
                 TextButton(onClick = { onIntent(ModelSelectionIntent.Refresh) }) { Text("刷新") }
             }
@@ -326,7 +326,7 @@ internal fun ModelEffortCard(
                 if (models.isEmpty()) {
                     Text(
                         if (state.loading) "加载中…" else "Agent 暂未报告模型，请刷新",
-                        fontSize = 13.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Subtle,
                         modifier = Modifier.padding(8.dp),
                     )
                 }
@@ -357,7 +357,7 @@ internal fun ModelEffortCard(
             Spacer(Modifier.height(12.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(PaEditorial.Hairline))
             Spacer(Modifier.height(12.dp))
-            Text("思考强度", fontSize = 14.sp, color = PaEditorial.Ink)
+            Text("思考强度", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
             Spacer(Modifier.height(10.dp))
             // 【横向可滚】pi 动态全集 + "默认"最多 8 枚胶囊,窄屏一排放不下,
             // 溢出的档位以前会被直接裁掉(点不到也看不见)。选中态来自
@@ -384,7 +384,7 @@ internal fun ModelEffortCard(
                     ) {
                         Text(
                             e.label,
-                            fontSize = 13.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                             color = if (selected) PaEditorial.OnPrimary else PaEditorial.Muted,
                         )
                     }
@@ -395,7 +395,7 @@ internal fun ModelEffortCard(
             if (submission.effortPending) {
                 Text(
                     "思考强度${submission.label}",
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 6.dp),
                 )
@@ -404,14 +404,14 @@ internal fun ModelEffortCard(
             if (selectedEffortShown.isNotBlank() && efforts.none { it.id == selectedEffortShown }) {
                 Text(
                     "当前强度：${effortLabelOf(selectedEffortShown)}（非本模型常规档位）",
-                    fontSize = 11.sp, color = PaEditorial.Attention,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Attention,
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
             // 【技术详情入口】未知 effort / 未认知来源:给原文与解释,不给空白
             if (unknownEffort || unknownSource) {
                 TextButton(onClick = { showTechDetails = !showTechDetails }) {
-                    Text(if (showTechDetails) "收起技术详情" else "技术详情", fontSize = 11.sp)
+                    Text(if (showTechDetails) "收起技术详情" else "技术详情", fontSize = PaEditorial.Type.Caption.fontSize)
                 }
                 if (showTechDetails && display != null) {
                     Text(
@@ -427,7 +427,7 @@ internal fun ModelEffortCard(
                                 append(display.explanation)
                             }
                         },
-                        fontSize = 10.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
+                        fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle, fontFamily = mono,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
@@ -443,7 +443,7 @@ internal fun ModelEffortCard(
                     else ->
                         "修改将发送给电脑端确认，回填后显示为真值（含来源与生效时机）。"
                 },
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Subtle,
             )
         }

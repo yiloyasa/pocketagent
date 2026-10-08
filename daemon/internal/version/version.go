@@ -13,7 +13,7 @@ package version
 // Version is the daemon version. Default value stays in sync with the
 // repository; dist/windows/build.ps1 stamps the same value at build time
 // (and also drops it into version.txt inside the zip for reconciliation).
-var Version = "0.2.2"
+var Version = "0.3.0"
 
 // App is the historical name kept for existing callers (internal/server/host.go,
 // internal/agent/codex.go). It derives from Version, so a -ldflags stamp on

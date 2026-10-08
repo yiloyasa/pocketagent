@@ -52,9 +52,9 @@ import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.ThreadPins
 import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.component.ThreadUsageStore
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaTheme
+import dev.pocketagent.app.ui.theme.editorialM3Scheme
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -89,12 +89,20 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             PaTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = PaEditorial.Canvas) {
-                    var showSplash by remember { mutableStateOf(true) }
-                    if (showSplash) {
-                        Splash(onDone = { showSplash = false })
-                    } else {
-                        RootNav()
+                // 【色板并轨 2026-10-09】编辑式 M3 色板在 NavHost 外层一次包全 app:
+                // 原 editorialM3Scheme() 只包 5 屏(Browser/Files/Git/Settings/Terminal),
+                // Chat/Threads/Home/Collab/TaskCenter 未包 —— 同屏两种黑漂移;现在
+                // Splash + RootNav 全树都在编辑式盘内,全 app 的 M3 原生组件
+                // (OutlinedTextField/Button/CircularProgressIndicator/Switch/...)
+                // 一律吃编辑式槽位;旧 Pa scheme(PaTheme)降为最外层兼容基底。
+                androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
+                    Surface(modifier = Modifier.fillMaxSize(), color = PaEditorial.Canvas) {
+                        var showSplash by remember { mutableStateOf(true) }
+                        if (showSplash) {
+                            Splash(onDone = { showSplash = false })
+                        } else {
+                            RootNav()
+                        }
                     }
                 }
             }

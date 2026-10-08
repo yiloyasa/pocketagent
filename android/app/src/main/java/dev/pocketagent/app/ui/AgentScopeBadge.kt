@@ -62,7 +62,7 @@ fun AgentScopeBadge(
         if (prefix.isNotEmpty()) {
             Text(
                 prefix,
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = PaEditorial.Subtle,
             )
             Spacer(Modifier.width(6.dp))
@@ -79,7 +79,7 @@ fun AgentScopeBadge(
 private fun AgentScopeTag(agentId: String) {
     Row(
         Modifier
-            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(7.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Terminal))
             .padding(horizontal = 6.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -93,7 +93,7 @@ private fun AgentScopeTag(agentId: String) {
         }
         Text(
             agentDisplay(agentId),
-            fontSize = 10.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             fontWeight = FontWeight.Medium,
             color = PaEditorial.Muted,
             maxLines = 1,

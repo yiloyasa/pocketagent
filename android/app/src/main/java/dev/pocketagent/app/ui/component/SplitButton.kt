@@ -83,7 +83,7 @@ fun SplitButton(
     )
     val density = LocalDensity.current
     val buttonHeight = if (compact) 34.dp else 48.dp
-    val corner = if (compact) RoundedCornerShape(10.dp) else RoundedCornerShape(14.dp)
+    val corner = if (compact) RoundedCornerShape(PaEditorial.Radius.Chip) else RoundedCornerShape(PaEditorial.Radius.IconButton)
     val menuTopPx = with(density) { (buttonHeight + 6.dp).roundToPx() }
 
     Box(modifier) {
@@ -120,7 +120,7 @@ fun SplitButton(
                         // 当前生效值(如模型名)允许折到第二行,不做单行硬截断。
                         Text(
                             caption,
-                            fontSize = 13.5.sp,
+                            fontSize = PaEditorial.Type.Body.fontSize,
                             color = PaEditorial.Muted,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -175,8 +175,8 @@ fun SplitButton(
                         .widthIn(min = if (compact) 140.dp else 176.dp, max = 300.dp)
                         .heightIn(max = 288.dp)
                         .verticalScroll(rememberScrollState())
-                        .background(PaEditorial.Surface, RoundedCornerShape(14.dp))
-                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(vertical = 5.dp),
                 ) {
                     options.forEachIndexed { i, opt ->
@@ -203,7 +203,7 @@ fun SplitButton(
                                 // 选项标题(模型名/档位名)允许折到第二行,不单行硬截断。
                                 Text(
                                     opt.title,
-                                    fontSize = 14.5.sp,
+                                    fontSize = PaEditorial.Type.Body.fontSize,
                                     color = if (opt.selected) PaEditorial.Primary else PaEditorial.Ink,
                                     fontWeight = if (opt.selected) FontWeight.Medium else FontWeight.Normal,
                                     maxLines = 2,
@@ -213,7 +213,7 @@ fun SplitButton(
                                     Spacer(Modifier.height(1.dp))
                                     Text(
                                         opt.desc,
-                                        fontSize = 12.5.sp,
+                                        fontSize = PaEditorial.Type.BodySmall.fontSize,
                                         color = PaEditorial.Muted,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,

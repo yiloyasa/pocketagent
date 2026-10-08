@@ -169,14 +169,14 @@ private fun ApprovalBody(
                 .align(Alignment.CenterHorizontally)
                 .padding(bottom = 14.dp)
                 .size(width = 36.dp, height = 4.dp)
-                .background(PaEditorial.Subtle, RoundedCornerShape(100.dp)),
+                .background(PaEditorial.Subtle, RoundedCornerShape(PaEditorial.Radius.Pill)),
         )
         // 标题区:琥珀盾牌 + 「确认执行命令」+ 来自 Agent · 会话 + 排队数量(谁发起)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
                     .size(42.dp)
-                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp)),
+                    .background(PaEditorial.AttentionContainer, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -188,13 +188,13 @@ private fun ApprovalBody(
             Column(Modifier.weight(1f)) {
                 Text(
                     "确认执行命令",
-                    fontSize = 16.sp, lineHeight = 22.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 22.sp,
                     fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp,
                     color = PaEditorial.Ink,
                 )
                 Text(
                     "来自 ${request.agentName} · ${request.sessionTitle}",
-                    fontSize = 11.sp, lineHeight = 16.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                     color = PaEditorial.Muted,
                     maxLines = 1,
                 )
@@ -203,8 +203,8 @@ private fun ApprovalBody(
                     Spacer(Modifier.height(2.dp))
                     Text(
                         queue,
-                        fontSize = 11.sp, lineHeight = 16.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = PaEditorial.Attention,
                         maxLines = 1,
                     )
@@ -243,8 +243,8 @@ private fun ApprovalBody(
                     Spacer(Modifier.width(6.dp))
                     Text(
                         keyed.phaseWord,
-                        fontSize = 12.sp, lineHeight = 17.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = keyed.phaseTone.text,
                     )
                 }
@@ -254,7 +254,7 @@ private fun ApprovalBody(
         // 操作目的(README 白名单:操作目的;agent 给出的 reason 原文)
         Text(
             request.purpose,
-            fontSize = 13.sp, lineHeight = 21.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp,
             color = PaEditorial.Muted,
         )
         Spacer(Modifier.height(12.dp))
@@ -267,7 +267,7 @@ private fun ApprovalBody(
         if (request.command.isNotBlank()) {
             Text(
                 "命令原文",
-                fontSize = 11.sp, lineHeight = 16.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                 color = PaEditorial.Muted,
             )
             Spacer(Modifier.height(6.dp))
@@ -275,11 +275,11 @@ private fun ApprovalBody(
                 request.command,
                 Modifier
                     .fillMaxWidth()
-                    .background(PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
-                    .border(1.dp, PaEditorial.GraphiteCode, RoundedCornerShape(13.dp))
+                    .background(PaEditorial.GraphiteCode, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                    .border(1.dp, PaEditorial.GraphiteCode, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 14.dp, vertical = 14.dp),
-                fontSize = 12.sp, lineHeight = 18.sp,
-                fontFamily = TerminalFont.chatFont,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 18.sp,
+                fontFamily = PaEditorial.MonoFont,
                 color = PaEditorial.CodeText,
             )
             Spacer(Modifier.height(12.dp))
@@ -292,8 +292,8 @@ private fun ApprovalBody(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
-                    .border(1.dp, PaEditorial.Denied.copy(alpha = 0.30f), RoundedCornerShape(13.dp))
+                    .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                    .border(1.dp, PaEditorial.Denied.copy(alpha = 0.30f), RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.Top,
             ) {
@@ -305,7 +305,7 @@ private fun ApprovalBody(
                 Column {
                     Text(
                         risk.headline,
-                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = PaEditorial.DeniedText,
                     )
@@ -313,7 +313,7 @@ private fun ApprovalBody(
                         Spacer(Modifier.height(2.dp))
                         Text(
                             risk.reasonsLabel,
-                            fontSize = 12.sp, lineHeight = 17.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                             color = PaEditorial.DeniedText,
                         )
                     }
@@ -322,7 +322,7 @@ private fun ApprovalBody(
         } else {
             Text(
                 "${risk.headline} · 请核对命令原文",
-                fontSize = 11.sp, lineHeight = 16.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                 color = PaEditorial.Muted,
             )
         }
@@ -344,19 +344,19 @@ private fun ApprovalBody(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(PaEditorial.Raised, RoundedCornerShape(13.dp))
+                        .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                 ) {
                     Text(
                         "详情",
-                        fontSize = 11.sp, lineHeight = 16.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = PaEditorial.Muted,
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
                         request.details.orEmpty(),
-                        fontSize = 12.sp, lineHeight = 18.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 18.sp,
                         color = PaEditorial.Muted,
                     )
                 }
@@ -378,18 +378,18 @@ private fun ApprovalBody(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
-                        .border(1.dp, PaEditorial.Attention.copy(alpha = 0.30f), RoundedCornerShape(13.dp))
+                        .background(PaEditorial.AttentionContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, PaEditorial.Attention.copy(alpha = 0.30f), RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                 ) {
                     Text(
                         request.unavailableReason ?: "请求状态已变化，请刷新后重试",
-                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                         color = PaEditorial.AttentionText,
                     )
                     Text(
                         "决定按钮已停用，处理完成后可重试。",
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = PaEditorial.AttentionText,
                     )
                 }
@@ -409,7 +409,7 @@ private fun ApprovalBody(
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "重试",
-                        fontSize = 13.sp, lineHeight = 18.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
                         fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary,
                     )
                 }
@@ -482,7 +482,7 @@ private fun ApprovalBody(
         Text(
             "关闭弹窗只会暂不处理，不会自动允许或拒绝。",
             Modifier.fillMaxWidth(),
-            fontSize = 11.sp, lineHeight = 16.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
             textAlign = TextAlign.Center,
             color = PaEditorial.Subtle,
         )
@@ -502,10 +502,10 @@ private fun ScopeRow(label: String, value: String) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, fontSize = 12.sp, lineHeight = 17.sp, color = PaEditorial.Muted)
+            Text(label, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = PaEditorial.Muted)
             Text(
                 value,
-                fontSize = 13.sp, lineHeight = 18.sp,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
                 fontWeight = FontWeight.Bold, color = PaEditorial.Ink,
                 maxLines = 2,
             )
@@ -529,7 +529,7 @@ private fun ApprovalButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
     val container by animateColorAsState(
         targetValue = if (enabled) tones.container else tones.container.copy(alpha = 0.55f),
         animationSpec = PaMotion.standard(),
@@ -555,7 +555,7 @@ private fun ApprovalButton(
         }
         Text(
             text,
-            fontSize = 14.sp, lineHeight = 20.sp,
+            fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
             fontWeight = FontWeight.Bold,
             color = if (enabled) tones.content else tones.content.copy(alpha = 0.55f),
             maxLines = 1,

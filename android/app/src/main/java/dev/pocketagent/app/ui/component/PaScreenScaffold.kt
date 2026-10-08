@@ -140,7 +140,7 @@ fun PaNavIconButton(
     active: Boolean = false,
     plain: Boolean = false,
 ) {
-    val shape = RoundedCornerShape(13.dp)
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
     val container = when {
         active -> PaEditorial.PrimaryContainer
         plain -> Color.Transparent

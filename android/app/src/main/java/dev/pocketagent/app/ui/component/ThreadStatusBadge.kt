@@ -95,12 +95,12 @@ fun ThreadStatusBadge(badge: PaThreadBadge, modifier: Modifier = Modifier) {
         when (badge.kind) {
             PaThreadBadgeKind.FAILED -> Text(
                 "!",
-                fontSize = 11.sp, color = dotColor, fontWeight = FontWeight.Bold,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = dotColor, fontWeight = FontWeight.Bold,
             )
             else -> PulseDot8(dotColor, pulse = badge.kind == PaThreadBadgeKind.RUNNING)
         }
         Spacer(Modifier.width(4.dp))
-        Text(badge.label, fontSize = 10.5.sp, color = labelColor, maxLines = 1)
+        Text(badge.label, fontSize = PaEditorial.Type.Micro.fontSize, color = labelColor, maxLines = 1)
     }
 }
 

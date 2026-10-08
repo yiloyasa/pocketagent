@@ -115,7 +115,7 @@ fun IconActionButton(
     bg: Color = MaterialTheme.colorScheme.surfaceVariant,
     // 传 null 表示沿用主题默认图标色;需要"激活态反色"的按钮(如搜索开关)才显式传色。
     tint: Color? = null,
-    shape: Shape = RoundedCornerShape(14.dp),
+    shape: Shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
 ) {
     Box(
         modifier = modifier
@@ -146,9 +146,9 @@ fun SectionHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column {
-            Text(title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+            Text(title, fontSize = PaEditorial.Type.Heading.fontSize, color = MaterialTheme.colorScheme.onBackground)
             if (subtitle != null) {
-                Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                Text(subtitle, fontSize = PaEditorial.Type.Caption.fontSize, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
             }
         }
         trailing()
@@ -275,8 +275,8 @@ fun EmptyState(
         } else {
             Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(44.dp))
         }
-        Text(title, Modifier.padding(top = 14.dp), fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
-        Text(hint, Modifier.padding(top = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(title, Modifier.padding(top = 14.dp), fontSize = PaEditorial.Type.Body.fontSize, color = MaterialTheme.colorScheme.onBackground)
+        Text(hint, Modifier.padding(top = 4.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

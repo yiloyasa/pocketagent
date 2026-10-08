@@ -100,7 +100,7 @@ fun ContextUsageCard(
         ) {
             // 标题
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("上下文窗口", fontSize = 20.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
+                Text("上下文窗口", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
                 // 触达:点击区吃满 44dp(PaEditorial.Space.TouchMin),视觉仍是 28dp 圆 ——
                 // 关闭是高频操作,28dp 原始点击区太小容易点空
@@ -117,7 +117,7 @@ fun ContextUsageCard(
                             .background(PaEditorial.Canvas),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("✕", fontSize = 14.sp, color = PaEditorial.Muted)
+                        Text("✕", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted)
                     }
                 }
             }
@@ -128,13 +128,13 @@ fun ContextUsageCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(PaEditorial.Attention.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .background(PaEditorial.Attention.copy(alpha = 0.12f), RoundedCornerShape(PaEditorial.Radius.Chip))
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         usageOfflineLabel(cachedAt ?: 0L, nowMillis),
-                        fontSize = 11.sp, color = PaEditorial.Attention, maxLines = 1,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Attention, maxLines = 1,
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -145,13 +145,13 @@ fun ContextUsageCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(PaEditorial.Primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .background(PaEditorial.Primary.copy(alpha = 0.12f), RoundedCornerShape(PaEditorial.Radius.Chip))
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         compactionNoticeLabel(lastCompactedAt, nowMillis),
-                        fontSize = 11.sp, color = PaEditorial.Primary, maxLines = 1,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary, maxLines = 1,
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -160,13 +160,13 @@ fun ContextUsageCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(PaEditorial.Primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .background(PaEditorial.Primary.copy(alpha = 0.12f), RoundedCornerShape(PaEditorial.Radius.Chip))
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         "上下文压缩中 · 旧占用暂不显示",
-                        fontSize = 11.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Primary,
                         maxLines = 1,
                     )
@@ -199,36 +199,39 @@ fun ContextUsageCard(
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (compactionInProgress) {
-                        Text("压缩中", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary)
+                        Text("压缩中", fontSize = PaEditorial.Type.Heading.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary)
                         // 按 agent 点名(agentLabel 空串退中性"agent"),不再硬编码 Codex。
                         Text(
                             "等待 ${agentLabel.ifBlank { "agent" }} 完成压缩",
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.Subtle,
                         )
                     } else if (compactedPending) {
                         // 压缩态:不显示任何百分比 —— 压缩前的旧占比已失真,
                         // 新占比要等下一轮用量上报,此处绝不造数。
-                        Text("已压缩", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary)
-                        Text("等待新一轮用量上报", fontSize = 11.sp, color = PaEditorial.Subtle)
+                        Text("已压缩", fontSize = PaEditorial.Type.Heading.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary)
+                        Text("等待新一轮用量上报", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
                     } else if (windowKnown) {
+                        // 数字身份(2026-10-09):上下文百分比走等宽 JetBrains Mono(tabular)
                         Text(
                             String.format(java.util.Locale.US, "%.0f%%", ratio * 100f),
-                            fontSize = 30.sp,
+                            fontSize = PaEditorial.Type.Display.fontSize,
+                            fontFamily = PaEditorial.MonoFont,
                             fontWeight = FontWeight.SemiBold,
                             color = ringColor(ratio),
                         )
                         Text(
                             "${formatTokens(occupied)} / ${formatTokens(contextWindow)}",
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
+                            fontFamily = PaEditorial.MonoFont,
                             color = PaEditorial.Muted,
                         )
                     } else {
                         // 窗口真未知(schema 无该字段/daemon 未上报):如实显"—"不造数
                         // (README §11 既定口径,与 [ContextRing] 的 ringPercentLabel 同一形态),
                         // 不写「未知」字样(AUDIT §3.3 禁令)。
-                        Text("窗口 —", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
-                        Text("daemon 尚未上报窗口大小", fontSize = 11.sp, color = PaEditorial.Subtle)
+                        Text("窗口 —", fontSize = PaEditorial.Type.Heading.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted)
+                        Text("daemon 尚未上报窗口大小", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
                     }
                 }
             }
@@ -238,7 +241,7 @@ fun ContextUsageCard(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                     .background(PaEditorial.Canvas)
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -250,7 +253,7 @@ fun ContextUsageCard(
 
             // 指标表:4 项(输入 / 输出 / 缓存 / 缓存命中率)。
             // 【为什么是表】以后要加一项只需在 usageMetrics() 里加一行,不必再复制一段 UI。
-            Text("用量明细", fontSize = 13.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
+            Text("用量明细", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             usageMetrics().forEach { m ->
                 MetricLine(m.label, m.value(usage), toneColor(m.tone))
@@ -301,7 +304,7 @@ private fun toneColor(tone: UsageMetricTone): Color = when (tone) {
 private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
             .background(if (active) PaEditorial.Surface else PaEditorial.Canvas)
             .clickable { onClick() }
             // 触达:分段切换的最小高度吃到 44dp(README 点击区纪律),不再靠 padding 凑
@@ -309,17 +312,18 @@ private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 12.sp, color = if (active) PaEditorial.Ink else PaEditorial.Muted)
+        Text(label, fontSize = PaEditorial.Type.Caption.fontSize, color = if (active) PaEditorial.Ink else PaEditorial.Muted)
     }
 }
 
 @Composable
 private fun MetricLine(label: String, value: String, color: Color) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), fontSize = 12.sp, color = PaEditorial.Muted)
-        Box(Modifier.size(8.dp).background(color, RoundedCornerShape(2.dp)))
+        Text(label, Modifier.weight(1f), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
+        Box(Modifier.size(8.dp).background(color, RoundedCornerShape(PaEditorial.Radius.Terminal)))
         Spacer(Modifier.width(8.dp))
-        Text(value, fontSize = 13.sp, color = PaEditorial.Ink, textAlign = TextAlign.End)
+        // 数字身份(2026-10-09):用量值等宽 tabular,多行数字右缘对齐
+        Text(value, fontSize = PaEditorial.Type.BodySmall.fontSize, fontFamily = PaEditorial.MonoFont, color = PaEditorial.Ink, textAlign = TextAlign.End)
     }
 }
 

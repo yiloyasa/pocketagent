@@ -117,7 +117,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -168,7 +167,6 @@ import androidx.compose.ui.platform.LocalView
 import dev.pocketagent.app.ui.component.DeliveryStatusBadge
 import dev.pocketagent.app.ui.component.deliveryRetryable
 import dev.pocketagent.app.ui.component.deliveryVisual
-import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.component.TerminalBlockKind
 import dev.pocketagent.app.ui.component.TerminalFootnote
 import dev.pocketagent.app.ui.component.TerminalOutputBlock
@@ -436,11 +434,11 @@ internal fun CodexEventCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(bg, RoundedCornerShape(13.dp))
+            .background(bg, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .border(
                 1.dp,
                 if (PaHacker.isHacker) accent.copy(alpha = 0.35f) else PaEditorial.Hairline,
-                RoundedCornerShape(13.dp),
+                RoundedCornerShape(PaEditorial.Radius.IconButton),
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -457,7 +455,7 @@ internal fun CodexEventCard(
                 Text(
                     statusLabel,
                     Modifier
-                        .background(accent.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
+                        .background(accent.copy(alpha = 0.16f), RoundedCornerShape(PaEditorial.Radius.Terminal))
                         .padding(horizontal = 6.dp, vertical = 1.dp),
                     color = accent,
                     fontSize = (10 * uiScale).sp,
@@ -513,12 +511,12 @@ internal fun CodexEventCard(
                     .horizontalScroll(rememberScrollState())
                     .background(
                         if (PaHacker.isHacker) PaEditorial.Canvas else PaEditorial.GraphiteCode,
-                        RoundedCornerShape(8.dp),
+                        RoundedCornerShape(PaEditorial.Radius.Chip),
                     )
                     .padding(8.dp),
                 color = if (PaHacker.isHacker) PaEditorial.Muted else PaEditorial.CodeText,
                 fontSize = (10 * uiScale).sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = PaEditorial.MonoFont,
             )
         }
         if (event.url.isNotBlank()) {
@@ -526,7 +524,7 @@ internal fun CodexEventCard(
                 event.url,
                 color = if (PaHacker.isHacker) PaEditorial.Subtle else PaEditorial.Muted,
                 fontSize = (10 * uiScale).sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = PaEditorial.MonoFont,
             )
         }
         /*
@@ -562,12 +560,12 @@ internal fun CodexEventCard(
                     .fillMaxWidth()
                     .background(
                         if (PaHacker.isHacker) PaEditorial.Canvas else PaEditorial.GraphiteCode,
-                        RoundedCornerShape(8.dp),
+                        RoundedCornerShape(PaEditorial.Radius.Chip),
                     )
                     .padding(8.dp),
                 color = if (PaHacker.isHacker) PaEditorial.Muted else PaEditorial.CodeText,
                 fontSize = (10 * uiScale).sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = PaEditorial.MonoFont,
             )
         }
     }
@@ -619,8 +617,8 @@ internal fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(PanelCardColor, RoundedCornerShape(13.dp))
-            .border(1.dp, PanelHairlineColor, RoundedCornerShape(13.dp))
+            .background(PanelCardColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
+            .border(1.dp, PanelHairlineColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -635,19 +633,19 @@ internal fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
             Text(
                 "思考过程" + if (streaming) " · 正在思考" else "",
                 Modifier.weight(1f),
-                fontSize = 11.5.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = ChatAccentColor,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
-            Text(if (expanded) "收起" else "展开", fontSize = 11.sp, color = ChatSubtleColor)
+            Text(if (expanded) "收起" else "展开", fontSize = PaEditorial.Type.Caption.fontSize, color = ChatSubtleColor)
         }
         if (expanded) {
             Text(
                 text,
                 Modifier.fillMaxWidth().padding(top = 6.dp),
                 fontSize = (11.5f * scale).sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = PaEditorial.MonoFont,
                 color = ChatMutedColor,
             )
         }
@@ -696,8 +694,8 @@ internal fun PlanPanel(
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(PanelCardColor, RoundedCornerShape(13.dp))
-                .border(1.dp, PanelHairlineColor, RoundedCornerShape(13.dp))
+                .background(PanelCardColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                .border(1.dp, PanelHairlineColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .pressable { onToggle() }
                 .padding(horizontal = 12.dp, vertical = 9.dp),
         ) {
@@ -718,7 +716,7 @@ internal fun PlanPanel(
                         else -> "执行计划"
                     },
                     Modifier.weight(1f),
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = if (running) ChatAccentColor else ChatMutedColor,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -729,7 +727,7 @@ internal fun PlanPanel(
                     Text(
                         current,
                         Modifier.widthIn(max = 150.dp),
-                        fontSize = 11.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = ChatSubtleColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -756,7 +754,7 @@ internal fun PlanPanel(
                         .height(3.dp)
                         .background(
                             if (PaHacker.isHacker) PaEditorial.Hover else PaEditorial.Raised,
-                            RoundedCornerShape(2.dp),
+                            RoundedCornerShape(PaEditorial.Radius.Terminal),
                         ),
                 ) {
                     Box(
@@ -765,7 +763,7 @@ internal fun PlanPanel(
                             .height(3.dp)
                             .background(
                                 if (running) ChatAccentColor else ChatRunningColor,
-                                RoundedCornerShape(2.dp),
+                                RoundedCornerShape(PaEditorial.Radius.Terminal),
                             ),
                     )
                 }
@@ -798,7 +796,7 @@ internal fun PlanPanel(
                             Text(
                                 text,
                                 Modifier.weight(1f),
-                                fontSize = 12.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = if (status == "pending") ChatMutedColor else ChatInkColor,
                             )
                         }
@@ -903,7 +901,7 @@ private fun PlanDraftText(draft: String) {
                 Text(
                     line,
                     Modifier.weight(1f),
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     lineHeight = 17.sp,
                     color = if (isItem) ChatMutedColor else ChatSubtleColor,
                 )
@@ -1066,8 +1064,8 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(PanelCardColor, RoundedCornerShape(13.dp))
-            .border(1.dp, PanelHairlineColor, RoundedCornerShape(13.dp))
+            .background(PanelCardColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
+            .border(1.dp, PanelHairlineColor, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(
@@ -1125,7 +1123,7 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
             if (item.toolElapsedMs > 0) {
                 Text(
                     String.format(java.util.Locale.US, "%.1fs", item.toolElapsedMs / 1000.0),
-                    fontSize = 10.5.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = ChatSubtleColor,
                 )
                 Spacer(Modifier.width(8.dp))
@@ -1136,7 +1134,7 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                     "success" -> "已完成"
                     else -> "正在执行"
                 },
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = statusColor,
             )
         }
@@ -1164,7 +1162,7 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                     // 标签行:段名 + 「复制」—— 代码箱自带复制口,长 JSON/命令不必靠
                     // 长按拖选(选区工具栏在代码箱里也难用)。轻触感由 pressable 自带。
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("参数", Modifier.weight(1f), fontSize = 10.5.sp, color = ChatSubtleColor)
+                        Text("参数", Modifier.weight(1f), fontSize = PaEditorial.Type.Micro.fontSize, color = ChatSubtleColor)
                         ToolCardCopyChip("复制", item.toolArgs)
                     }
                     val argsAnnotated = remember(item.toolArgs, boxColors) {
@@ -1175,7 +1173,7 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 2.dp)
-                            .background(codeBoxColor, RoundedCornerShape(8.dp))
+                            .background(codeBoxColor, RoundedCornerShape(PaEditorial.Radius.Chip))
                             // 高度封顶 + 纵横双向滚动:超长参数/输出不再把卡撑成一屏,
                             // 长行保横向滚动不硬折(diff/JSON 的对齐语义,同回合 diff 口径)。
                             .heightIn(max = 260.dp)
@@ -1183,7 +1181,7 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                             .verticalScroll(rememberScrollState())
                             .horizontalScroll(rememberScrollState()),
                         fontSize = (10.5f * scale).sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = PaEditorial.MonoFont,
                         // 不折行,交给横向滚动(与 MarkdownText 代码块同一取舍)
                         softWrap = false,
                         color = codeTextColor,
@@ -1198,7 +1196,7 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                         Text(
                             if (item.toolStatus == "failure") "错误" else "输出",
                             Modifier.weight(1f),
-                            fontSize = 10.5.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             color = ChatSubtleColor,
                         )
                         ToolCardCopyChip("复制", item.text)
@@ -1213,13 +1211,13 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 2.dp)
-                            .background(codeBoxColor, RoundedCornerShape(8.dp))
+                            .background(codeBoxColor, RoundedCornerShape(PaEditorial.Radius.Chip))
                             .heightIn(max = 260.dp)
                             .padding(8.dp)
                             .verticalScroll(rememberScrollState())
                             .horizontalScroll(rememberScrollState()),
                         fontSize = (10.5f * scale).sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = PaEditorial.MonoFont,
                         softWrap = false,
                         color = if (item.toolStatus == "failure") ChatDeniedColor
                         else if (PaHacker.isHacker) PaEditorial.Muted else PaEditorial.CodeText,
@@ -1233,14 +1231,14 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                             Modifier
                                 .pressable { showFullOutput = !showFullOutput }
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             fontWeight = FontWeight.SemiBold,
                             color = ChatAccentColor,
                         )
                     }
                 }
                 if (item.toolArgs.isBlank() && item.text.isBlank()) {
-                    Text("等待结果…", Modifier.padding(top = 8.dp), fontSize = 11.sp, color = ChatSubtleColor)
+                    Text("等待结果…", Modifier.padding(top = 8.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = ChatSubtleColor)
                 }
             }
         }
@@ -1260,7 +1258,7 @@ private fun ToolCardCopyChip(label: String, payload: String) {
         Modifier
             .pressable { copyMessage(ctx, payload) }
             .padding(horizontal = 8.dp, vertical = 6.dp),
-        fontSize = 11.sp,
+        fontSize = PaEditorial.Type.Caption.fontSize,
         color = ChatSubtleColor,
     )
 }
@@ -1650,13 +1648,13 @@ internal fun EditorialDeliveryBadge(state: String, queuePos: Int) {
         }
         Icon(painterResource(res), null, tint = tint, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(4.dp))
-        Text(copy.word, fontSize = 10.sp, fontWeight = FontWeight(650), color = tint)
+        Text(copy.word, fontSize = PaEditorial.Type.Micro.fontSize, fontWeight = FontWeight.SemiBold, color = tint)
         if (copy.detail.isNotBlank()) {
             Spacer(Modifier.width(4.dp))
             Text(
                 "· ${copy.detail}",
-                fontSize = 10.sp,
-                fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.Micro.fontSize,
+                fontWeight = FontWeight.SemiBold,
                 color = tint.copy(alpha = 0.85f),
                 maxLines = 1,
             )
@@ -1707,7 +1705,7 @@ private fun ChatIdentityBadge(
         }
         Text(
             if (workspaceLabel.isNullOrBlank()) agentName else "$agentName · $workspaceLabel",
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             fontWeight = FontWeight.SemiBold,
             color = PaEditorial.Muted,
             maxLines = 1,
@@ -1733,8 +1731,8 @@ internal fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
-            .border(1.dp, OfflineBannerOutline, RoundedCornerShape(13.dp))
+            .background(PaEditorial.AttentionContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
+            .border(1.dp, OfflineBannerOutline, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1744,10 +1742,10 @@ internal fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(copy, fontSize = 12.sp, lineHeight = 17.sp, color = OfflineBannerText)
+            Text(copy, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = OfflineBannerText)
             Text(
                 "草稿已保存在此设备，恢复连接后由你决定是否发送",
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 lineHeight = 16.sp,
                 color = OfflineBannerText.copy(alpha = 0.85f),
             )
@@ -1757,7 +1755,7 @@ internal fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
             Modifier
                 .pressable { onRetry() }
                 .padding(horizontal = 8.dp, vertical = 8.dp),
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             fontWeight = FontWeight.SemiBold,
             color = PaEditorial.Primary,
         )
@@ -1775,8 +1773,8 @@ internal fun ApprovalEntryCard(onOpen: () -> Unit) {
             .fillMaxWidth()
             .pressable(haptic = true) { onOpen() }
             .semantics { contentDescription = "打开审批弹窗：等待你确认命令执行" }
-            .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
-            .border(1.dp, OfflineBannerOutline, RoundedCornerShape(13.dp))
+            .background(PaEditorial.AttentionContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
+            .border(1.dp, OfflineBannerOutline, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .heightIn(min = 44.dp)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1787,7 +1785,7 @@ internal fun ApprovalEntryCard(onOpen: () -> Unit) {
                 // 【三盘同构 2026-09-30】原硬编码浅盘值 #FFF0D7(图标盒)/#AC6A24(盾)/
                 // #99621E(副文),深/黑客盘的琥珀底已反相为暗琥珀,浅奶油盒压暗底
                 // 是漂移 —— 全部改走色盘:琥珀淡染/Attention/AttentionText。
-                .background(PaEditorial.Attention.copy(alpha = 0.12f), RoundedCornerShape(13.dp)),
+                .background(PaEditorial.Attention.copy(alpha = 0.12f), RoundedCornerShape(PaEditorial.Radius.IconButton)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1799,13 +1797,13 @@ internal fun ApprovalEntryCard(onOpen: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 "等待你确认命令执行",
-                fontSize = 14.sp,
+                fontSize = PaEditorial.Type.Body.fontSize,
                 fontWeight = FontWeight.Bold,
                 color = PaEditorial.Ink,
             )
             Text(
                 "查看操作范围和命令 · 点击处理",
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 lineHeight = 16.sp,
                 color = PaEditorial.AttentionText,
             )
@@ -4552,12 +4550,12 @@ internal fun ApprovalSheet(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(title, Modifier.weight(1f), fontSize = 19.sp, color = PaEditorial.Ink)
+            Text(title, Modifier.weight(1f), fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
             // 反问类没有"可展开的原文",收起/展开这一对控件对它没有意义。
             if (!isAsk) {
                 Text(
                     if (expanded) "收起" else "展开",
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Primary,
                 )
                 IconActionButton(
@@ -4575,7 +4573,7 @@ internal fun ApprovalSheet(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 4.dp),
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             color = PaEditorial.Muted,
         )
         error?.let {
@@ -4584,7 +4582,7 @@ internal fun ApprovalSheet(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp, vertical = 4.dp),
-                fontSize = 12.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Denied,
             )
         }
@@ -4601,7 +4599,7 @@ internal fun ApprovalSheet(
                 if (questions.isEmpty()) {
                     Text(
                         args?.optString("message").orEmpty().ifBlank { action.action.jsonArgs },
-                        fontSize = 13.sp, color = PaEditorial.Ink, lineHeight = 19.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink, lineHeight = 19.sp,
                     )
                 }
                 questions.forEachIndexed { idx, q ->
@@ -4614,14 +4612,14 @@ internal fun ApprovalSheet(
                         Text(
                             q.header,
                             Modifier.padding(top = groupTop, bottom = 2.dp),
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = PaEditorial.Subtle,
                         )
                     }
                     Text(
                         q.text.ifBlank { "请回答" },
                         Modifier.padding(top = if (q.header.isNotBlank()) 0.dp else groupTop, bottom = 8.dp),
-                        fontSize = 13.5.sp, color = PaEditorial.Ink, lineHeight = 19.sp,
+                        fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink, lineHeight = 19.sp,
                     )
                     if (q.options.isNotEmpty()) {
                         Column {
@@ -4645,12 +4643,12 @@ internal fun ApprovalSheet(
                                         }
                                         .background(
                                             if (active) PaEditorial.PrimaryContainer else PaEditorial.Surface,
-                                            RoundedCornerShape(12.dp),
+                                            RoundedCornerShape(PaEditorial.Radius.IconButton),
                                         )
                                         .border(
                                             0.5.dp,
                                             if (active) PaEditorial.Primary else PaEditorial.Hairline,
-                                            RoundedCornerShape(12.dp),
+                                            RoundedCornerShape(PaEditorial.Radius.IconButton),
                                         )
                                         .padding(horizontal = 14.dp, vertical = 11.dp),
                                 ) {
@@ -4660,12 +4658,12 @@ internal fun ApprovalSheet(
                                             Box(
                                                 Modifier
                                                     .size(16.dp)
-                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .clip(RoundedCornerShape(PaEditorial.Radius.Terminal))
                                                     .background(if (active) PaEditorial.Primary else Color.Transparent)
                                                     .border(
                                                         0.5.dp,
                                                         if (active) PaEditorial.Primary else PaEditorial.Subtle,
-                                                        RoundedCornerShape(4.dp),
+                                                        RoundedCornerShape(PaEditorial.Radius.Terminal),
                                                     ),
                                                 contentAlignment = Alignment.Center,
                                             ) {
@@ -4683,7 +4681,7 @@ internal fun ApprovalSheet(
                                         Column(Modifier.weight(1f)) {
                                             Text(
                                                 opt.label,
-                                                fontSize = 13.sp,
+                                                fontSize = PaEditorial.Type.BodySmall.fontSize,
                                                 color = if (active) PaEditorial.Primary else PaEditorial.Muted,
                                             )
                                             // 副文案:daemon 透传的 description,存在才显示
@@ -4691,7 +4689,7 @@ internal fun ApprovalSheet(
                                                 Text(
                                                     opt.description,
                                                     Modifier.padding(top = 3.dp),
-                                                    fontSize = 11.5.sp,
+                                                    fontSize = PaEditorial.Type.Caption.fontSize,
                                                     color = PaEditorial.Subtle,
                                                     lineHeight = 16.sp,
                                                 )
@@ -4703,12 +4701,12 @@ internal fun ApprovalSheet(
                                                     Modifier
                                                         .fillMaxWidth()
                                                         .padding(top = 8.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                                                         .background(PaEditorial.Canvas)
-                                                        .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(8.dp))
+                                                        .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Chip))
                                                         .padding(horizontal = 10.dp, vertical = 8.dp),
-                                                    fontSize = 11.sp,
-                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = PaEditorial.Type.Caption.fontSize,
+                                                    fontFamily = PaEditorial.MonoFont,
                                                     color = PaEditorial.Ink,
                                                     lineHeight = 16.sp,
                                                 )
@@ -4722,9 +4720,9 @@ internal fun ApprovalSheet(
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                             .background(PaEditorial.Surface)
-                            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp)),
+                            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                     ) {
                         BasicTextField(
                             value = cur,
@@ -4736,7 +4734,7 @@ internal fun ApprovalSheet(
                                 }
                             },
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),
-                            textStyle = TextStyle(fontSize = 13.sp, color = PaEditorial.Ink),
+                            textStyle = TextStyle(fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink),
                             cursorBrush = SolidColor(PaEditorial.Primary),
                             // 密码题:输入以密码态展示,不回显明文
                             visualTransformation = if (q.isSecret) {
@@ -4750,7 +4748,7 @@ internal fun ApprovalSheet(
                                         // pi input 的 placeholder(G4)经 askInputHint 非空才替换,键缺失回落旧文案
                                         Text(
                                             askInputHint(q),
-                                            fontSize = 13.sp, color = PaEditorial.Subtle,
+                                            fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Subtle,
                                         )
                                     }
                                     inner()
@@ -4784,9 +4782,9 @@ internal fun ApprovalSheet(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp, vertical = 12.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .background(PaEditorial.Surface)
-                    .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
+                    .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .heightIn(max = 240.dp)
                     .verticalScroll(cmdScroll),
             ) {
@@ -4794,8 +4792,8 @@ internal fun ApprovalSheet(
                     Text(
                         body,
                         Modifier.padding(14.dp),
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
+                        fontFamily = PaEditorial.MonoFont,
                         color = PaEditorial.Ink,
                         // 命令按原样换行展示(不强制单行),配合纵向滚动即可读全
                         lineHeight = 17.sp,
@@ -4815,11 +4813,11 @@ internal fun ApprovalSheet(
                 Modifier
                     .weight(1f)
                     .pressable(haptic = true) { onDecision(false, "") }
-                    .background(PaEditorial.Surface, RoundedCornerShape(16.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(if (isAsk) "取消" else "拒绝", fontSize = 16.sp, color = PaEditorial.Denied)
+                Text(if (isAsk) "取消" else "拒绝", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Denied)
             }
             Spacer(Modifier.width(12.dp))
             Box(
@@ -4830,14 +4828,14 @@ internal fun ApprovalSheet(
                     }
                     .background(
                         if (isAsk && !canSubmit) PaEditorial.Hover else PaEditorial.Primary,
-                        RoundedCornerShape(16.dp),
+                        RoundedCornerShape(PaEditorial.Radius.Card),
                     )
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (isAsk) "提交" else "允许",
-                    fontSize = 16.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize,
                     color = if (isAsk && !canSubmit) PaEditorial.Subtle else PaEditorial.OnPrimary,
                 )
             }
@@ -4953,7 +4951,11 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                     .fillMaxWidth(0.86f)
                     .widthIn(max = 310.dp)
                     .fillMaxHeight()
-                    .background(PaEditorial.Raised, RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp))
+                    .background(
+                        PaEditorial.Raised,
+                        // 方向性圆角逐处归档(2026-10-09):左滑入侧板属弹层族 → Sheet 档(23dp)
+                        RoundedCornerShape(topEnd = PaEditorial.Radius.Sheet, bottomEnd = PaEditorial.Radius.Sheet),
+                    )
                     .statusBarsPadding()
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp),
@@ -4966,10 +4968,10 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                     )
                     Spacer(Modifier.width(8.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Git", fontSize = 16.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
+                        Text("Git", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
                         Text(
                             status?.branch?.takeIf { it.isNotEmpty() }?.let { "分支 $it · $repo" } ?: repo,
-                            fontSize = 10.sp, color = PaEditorial.Subtle, maxLines = 1,
+                            fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle, maxLines = 1,
                         )
                     }
                     IconActionButton(
@@ -4985,10 +4987,10 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("当前会话未绑定工作区", fontSize = 14.sp, color = PaEditorial.Ink)
+                            Text("当前会话未绑定工作区", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
                             Text(
                                 "创建会话时选择工作文件夹后，Git 会跟随该会话",
-                                fontSize = 11.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Subtle,
                                 modifier = Modifier.padding(top = 4.dp),
                             )
@@ -4999,10 +5001,10 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("该项目还不是 Git 仓库", fontSize = 14.sp, color = PaEditorial.Ink)
+                            Text("该项目还不是 Git 仓库", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
                             Text(
                                 "在电脑上 git init 后,这里可以看状态、diff 和提交",
-                                fontSize = 11.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Subtle,
                                 modifier = Modifier.padding(top = 4.dp),
                             )
@@ -5012,12 +5014,12 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                         Modifier.weight(1f).fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(error!!, color = PaEditorial.Denied, fontSize = 12.sp)
+                        Text(error!!, color = PaEditorial.Denied, fontSize = PaEditorial.Type.Caption.fontSize)
                     }
                     status != null -> {
                         val st = status!!
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${st.changesList.size} 个变更", fontSize = 12.sp, color = PaEditorial.Muted)
+                            Text("${st.changesList.size} 个变更", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
                             Spacer(Modifier.weight(1f))
                             if (busy) {
                                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = PaEditorial.Primary)
@@ -5027,14 +5029,14 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                         }
                         Spacer(Modifier.height(8.dp))
                         if (st.changesList.isEmpty()) {
-                            Text("工作区干净", Modifier.padding(vertical = 20.dp), fontSize = 13.sp, color = PaEditorial.Muted)
+                            Text("工作区干净", Modifier.padding(vertical = 20.dp), fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
                         }
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(st.changesList, key = { it.path }) { c ->
                                 Column(
                                     Modifier
                                         .fillMaxWidth()
-                                        .background(PaEditorial.Surface, RoundedCornerShape(12.dp))
+                                        .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                         .pressable {
                                             scope.launch {
                                                 try {
@@ -5055,8 +5057,8 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                                     val dirPart = c.path.substringBeforeLast('/', "")
                                     Text(
                                         (if (untracked) "新 · " else "") + fileName,
-                                        fontSize = 12.5.sp,
-                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = PaEditorial.Type.BodySmall.fontSize,
+                                        fontFamily = PaEditorial.MonoFont,
                                         color = PaEditorial.Ink,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -5064,8 +5066,8 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                                     if (dirPart.isNotEmpty()) {
                                         Text(
                                             dirPart,
-                                            fontSize = 10.sp,
-                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = PaEditorial.Type.Micro.fontSize,
+                                            fontFamily = PaEditorial.MonoFont,
                                             color = PaEditorial.Subtle,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -5077,7 +5079,7 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                                         } else {
                                             "暂存:${gitStatusLabel(c.stagedStatus)} · 工作区:${gitStatusLabel(c.worktreeStatus)} · 点击查看 diff"
                                         },
-                                        fontSize = 9.5.sp, color = PaEditorial.Subtle, maxLines = 1,
+                                        fontSize = PaEditorial.Type.State.fontSize, color = PaEditorial.Subtle, maxLines = 1,
                                     )
                                 }
                             }
@@ -5087,13 +5089,13 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                                 Modifier
                                     .fillMaxWidth()
                                     .pressable(enabled = !busy) { showCommit = true }
-                                    .background(PaEditorial.Primary, RoundedCornerShape(14.dp))
+                                    .background(PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                     .padding(vertical = 12.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     "提交全部变更",
-                                    fontSize = 14.sp,
+                                    fontSize = PaEditorial.Type.Body.fontSize,
                                     color = PaEditorial.OnPrimary,
                                     fontWeight = FontWeight.SemiBold,
                                 )
@@ -5104,7 +5106,7 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
                         Modifier.weight(1f).fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("读取中…", fontSize = 12.sp, color = PaEditorial.Subtle)
+                        Text("读取中…", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -5116,11 +5118,11 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
     diff?.let { d ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { diff = null },
-            title = { Text("变更 (git diff)", fontSize = 14.sp) },
+            title = { Text("变更 (git diff)", fontSize = PaEditorial.Type.Body.fontSize) },
             text = {
                 Text(
                     d.take(30000).ifEmpty { "(无未暂存变更)" },
-                    fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                    fontSize = PaEditorial.Type.Micro.fontSize, fontFamily = PaEditorial.MonoFont,
                     modifier = Modifier.height(420.dp),
                 )
             },
@@ -5233,25 +5235,25 @@ private fun ExpandedInputSheet(
                 .padding(horizontal = 16.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("编辑消息", Modifier.weight(1f), fontSize = 17.sp, color = PaEditorial.Ink)
-                Text("${value.length} 字", fontSize = 11.sp, color = PaEditorial.Subtle)
+                Text("编辑消息", Modifier.weight(1f), fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
+                Text("${value.length} 字", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
                 Spacer(Modifier.width(10.dp))
                 // 完成 = 收起面板,内容原样留在底部输入框
                 Box(
                     Modifier
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                         .pressable { onDismiss() }
                         .background(PaEditorial.Surface)
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 ) {
-                    Text("完成", fontSize = 13.sp, color = PaEditorial.Ink)
+                    Text("完成", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink)
                 }
                 Spacer(Modifier.width(8.dp))
                 // 发送键触感分级:大窗里发送与底栏同档(confirm 级,见输入区发送键注释)
                 val sendHapticView = LocalView.current
                 Box(
                     Modifier
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                         .pressable(scaleDown = 0.92f, enabled = canSend) {
                             PaHaptics.confirm(sendHapticView)
                             onSend()
@@ -5260,7 +5262,7 @@ private fun ExpandedInputSheet(
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 ) {
                     Text(
-                        "发送", fontSize = 13.sp,
+                        "发送", fontSize = PaEditorial.Type.BodySmall.fontSize,
                         color = if (canSend) PaEditorial.OnPrimary else PaEditorial.Subtle,
                     )
                 }
@@ -5271,22 +5273,22 @@ private fun ExpandedInputSheet(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(PaEditorial.Radius.Card))
                     .background(PaEditorial.Surface)
-                    .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(16.dp)),
+                    .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card)),
             ) {
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier.fillMaxSize().verticalScroll(scroll).padding(14.dp),
-                    textStyle = TextStyle(fontSize = 15.sp, color = PaEditorial.Ink, lineHeight = 22.sp),
+                    textStyle = TextStyle(fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, lineHeight = 22.sp),
                     cursorBrush = SolidColor(PaEditorial.Primary),
                     decorationBox = { inner ->
                         Box {
                             if (value.isEmpty()) {
                                 Text(
                                     "随心输入,发给电脑上的 agent…",
-                                    fontSize = 15.sp, color = PaEditorial.Subtle,
+                                    fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Subtle,
                                 )
                             }
                             inner()
@@ -5419,7 +5421,7 @@ private fun ExportChatSheet(
                 Column(Modifier.weight(1f)) {
                     Text(
                         "导出对话",
-                        fontSize = 19.sp,
+                        fontSize = PaEditorial.Type.Heading.fontSize,
                         color = PaEditorial.Ink,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -5427,7 +5429,7 @@ private fun ExportChatSheet(
                     Text(
                         title.ifBlank { "未命名会话" } + " · 已选 " + selected.size + " / " + source.size + " 条" +
                             if (full == null) "(正在读取全部历史…)" else "",
-                        fontSize = 11.5.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -5482,12 +5484,12 @@ private fun ExportChatSheet(
                             }
                             .background(
                                 if (on) PaEditorial.Primary.copy(alpha = 0.20f) else PaEditorial.Surface,
-                                RoundedCornerShape(12.dp),
+                                RoundedCornerShape(PaEditorial.Radius.IconButton),
                             )
                             .border(
                                 if (on) 1.dp else 0.dp,
                                 if (on) PaEditorial.Primary else androidx.compose.ui.graphics.Color.Transparent,
-                                RoundedCornerShape(12.dp),
+                                RoundedCornerShape(PaEditorial.Radius.IconButton),
                             )
                             .padding(horizontal = 11.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -5496,8 +5498,8 @@ private fun ExportChatSheet(
                         Box(
                             Modifier
                                 .size(16.dp)
-                                .background(if (on) PaEditorial.Primary else Color.Transparent, RoundedCornerShape(5.dp))
-                                .border(1.dp, if (on) PaEditorial.Primary else PaEditorial.Subtle, RoundedCornerShape(5.dp)),
+                                .background(if (on) PaEditorial.Primary else Color.Transparent, RoundedCornerShape(PaEditorial.Radius.Terminal))
+                                .border(1.dp, if (on) PaEditorial.Primary else PaEditorial.Subtle, RoundedCornerShape(PaEditorial.Radius.Terminal)),
                             contentAlignment = Alignment.Center,
                         ) {
                             if (on) {
@@ -5511,12 +5513,12 @@ private fun ExportChatSheet(
                         Column(Modifier.weight(1f)) {
                             Text(
                                 if (chatItem.role == "user") "你" else "Agent",
-                                fontSize = 10.5.sp,
+                                fontSize = PaEditorial.Type.Micro.fontSize,
                                 color = if (chatItem.role == "user") PaEditorial.AccentText else PaEditorial.Subtle,
                             )
                             Text(
                                 chatItem.text.replace("\n", " ").take(80),
-                                fontSize = 12.5.sp,
+                                fontSize = PaEditorial.Type.BodySmall.fontSize,
                                 color = PaEditorial.Ink,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
@@ -5549,14 +5551,14 @@ private fun ExportChatSheet(
                     }
                     .background(
                         if (selected.isEmpty()) PaEditorial.Hover else PaEditorial.Primary,
-                        RoundedCornerShape(14.dp),
+                        RoundedCornerShape(PaEditorial.Radius.IconButton),
                     )
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (selected.isEmpty()) "请选择要导出的消息" else "导出 " + selected.size + " 条消息(Markdown)",
-                    fontSize = 14.5.sp,
+                    fontSize = PaEditorial.Type.Body.fontSize,
                     color = if (selected.isEmpty()) PaEditorial.Subtle else PaEditorial.OnPrimary,
                     fontWeight = FontWeight.Medium,
                 )
@@ -5614,13 +5616,13 @@ private fun ExportChatSheet(
                             }
                         }
                     }
-                    .background(if (htmlGateBlocked) PaEditorial.Hover else PaEditorial.Surface, RoundedCornerShape(14.dp))
+                    .background(if (htmlGateBlocked) PaEditorial.Hover else PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (exportingHtml) "正在电脑端渲染 HTML…" else "导出 HTML 存档(电脑端)",
-                    fontSize = 14.5.sp,
+                    fontSize = PaEditorial.Type.Body.fontSize,
                     color = if (htmlGateBlocked) PaEditorial.Subtle else PaEditorial.Muted,
                     fontWeight = FontWeight.Medium,
                 )
@@ -5638,7 +5640,7 @@ private fun ExportChip(label: String, onClick: () -> Unit) {
             .background(PaEditorial.Surface, RoundedCornerShape(50))
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        Text(label, fontSize = 12.sp, color = PaEditorial.Muted)
+        Text(label, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
     }
 }
 

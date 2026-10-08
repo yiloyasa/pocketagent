@@ -145,10 +145,10 @@ fun SubAgentCard(
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
             .background(PaEditorial.PrimaryContainer)
             // 玻璃材质语言:实色底(AccentDim) + 0.5dp 发丝高光边(同玻璃家族的亮边令牌)
-            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(12.dp))
+            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .pressableLong(
                 onClick = {
                     hf.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -178,7 +178,7 @@ fun SubAgentCard(
                     Text(
                         meta.title,
                         Modifier.weight(1f),
-                        fontSize = 13.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
                         color = PaEditorial.Ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -188,7 +188,7 @@ fun SubAgentCard(
                     Spacer(Modifier.width(5.dp))
                     Text(
                         SubAgentsLogic.statusLabel(state),
-                        fontSize = 10.5.sp,
+                        fontSize = PaEditorial.Type.Micro.fontSize,
                         color = subAgentStateColor(state),
                     )
                 }
@@ -200,7 +200,7 @@ fun SubAgentCard(
                         Text(
                             SubAgentsLogic.previewOf(currentPreview),
                             Modifier.fillMaxWidth(),
-                            fontSize = 11.5.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             lineHeight = 15.sp,
                             color = PaEditorial.Muted,
                             maxLines = 2,
@@ -226,12 +226,12 @@ fun SubAgentCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${meta.messageCount} 条消息",
-                        fontSize = 10.5.sp,
+                        fontSize = PaEditorial.Type.Micro.fontSize,
                         color = PaEditorial.AccentText,
                     )
                     Spacer(Modifier.weight(1f))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("查看对话", fontSize = 10.5.sp, color = PaEditorial.AccentText)
+                        Text("查看对话", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.AccentText)
                         Icon(
                             painterResource(AppR.drawable.ic_lucide_chevron_right), null,
                             tint = PaEditorial.AccentText, modifier = Modifier.size(12.dp),
@@ -268,10 +268,10 @@ fun SubAgentGroupCard(
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
             .background(PaEditorial.PrimaryContainer)
             // 同单卡:实色底 + 发丝高光边(材质家族统一)
-            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(12.dp))
+            .border(0.5.dp, PaGlassToken.Highlight, RoundedCornerShape(PaEditorial.Radius.IconButton))
             .animateContentSize(
                 spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
             ),
@@ -284,19 +284,19 @@ fun SubAgentGroupCard(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(3.dp, 14.dp).background(PaEditorial.Primary, RoundedCornerShape(2.dp)))
+            Box(Modifier.size(3.dp, 14.dp).background(PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.Terminal)))
             Spacer(Modifier.width(8.dp))
             Text(
                 "${children.size} 个子智能体在协同",
                 Modifier.weight(1f),
-                fontSize = 13.sp,
+                fontSize = PaEditorial.Type.BodySmall.fontSize,
                 color = PaEditorial.Ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 SubAgentsLogic.groupSummaryLine(states),
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = PaEditorial.Muted,
             )
             Spacer(Modifier.width(6.dp))
@@ -332,7 +332,7 @@ fun SubAgentGroupCard(
                     Text(
                         meta.title,
                         Modifier.weight(1f),
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Ink,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -341,7 +341,7 @@ fun SubAgentGroupCard(
                     Spacer(Modifier.width(5.dp))
                     Text(
                         SubAgentsLogic.statusLabel(st),
-                        fontSize = 10.sp,
+                        fontSize = PaEditorial.Type.Micro.fontSize,
                         color = subAgentStateColor(st),
                     )
                 }
@@ -377,7 +377,7 @@ fun SubAgentSourceLine(
         // 进来）就找不到回去的路。给一个带文案的显式入口,而不是只有一个小图标。
         Row(
             Modifier
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                 .pressable(enabled = onBackToParent != null) { onBackToParent?.invoke() }
                 .padding(horizontal = 5.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -389,7 +389,7 @@ fun SubAgentSourceLine(
             )
             Text(
                 "主对话",
-                fontSize = 11.5.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = if (onBackToParent != null) PaEditorial.AccentText else PaEditorial.Subtle,
             )
         }
@@ -402,7 +402,7 @@ fun SubAgentSourceLine(
         Text(
             if (parentTitle.isBlank()) "来自主对话" else "来自主对话 · $parentTitle",
             Modifier.weight(1f),
-            fontSize = 11.5.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -429,7 +429,7 @@ fun SubAgentSiblingSwitch(
 ) {
     Row(
         modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
             .background(PaEditorial.Surface)
             .padding(horizontal = 2.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -443,7 +443,7 @@ fun SubAgentSiblingSwitch(
         )
         Text(
             "$pos/$total",
-            fontSize = 10.5.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             color = PaEditorial.Muted,
             textAlign = TextAlign.Center,
             modifier = Modifier.width(26.dp),
@@ -505,7 +505,7 @@ fun SubAgentPeekSheet(
                 Text(
                     meta.title,
                     Modifier.weight(1f),
-                    fontSize = 15.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize,
                     color = PaEditorial.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -514,14 +514,14 @@ fun SubAgentPeekSheet(
                 Spacer(Modifier.width(5.dp))
                 Text(
                     SubAgentsLogic.statusLabel(state),
-                    fontSize = 10.5.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = subAgentStateColor(state),
                 )
             }
             Text(
                 "最近消息",
                 Modifier.padding(top = 10.dp, bottom = 4.dp),
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = PaEditorial.Subtle,
             )
             when {
@@ -535,7 +535,7 @@ fun SubAgentPeekSheet(
                     Text(
                         "暂无消息记录",
                         Modifier.padding(vertical = 18.dp),
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Subtle,
                     )
                 }
@@ -544,14 +544,14 @@ fun SubAgentPeekSheet(
                         Row(Modifier.padding(vertical = 5.dp)) {
                             Text(
                                 subAgentRoleLabel(item.role),
-                                fontSize = 10.sp,
+                                fontSize = PaEditorial.Type.Micro.fontSize,
                                 color = PaEditorial.AccentText,
                                 modifier = Modifier.width(34.dp),
                             )
                             Text(
                                 item.text,
                                 Modifier.weight(1f),
-                                fontSize = 12.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Muted,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis,
@@ -566,10 +566,10 @@ fun SubAgentPeekSheet(
                     .fillMaxWidth()
                     .padding(top = 14.dp, bottom = 18.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PaEditorial.Primary),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
             ) {
                 // 内容色读 OnPrimary 令牌(黑客盘主色电光青上白字 1.81:1,该盘=暗青)
-                Text("打开完整对话", color = PaEditorial.OnPrimary, fontSize = 13.sp)
+                Text("打开完整对话", color = PaEditorial.OnPrimary, fontSize = PaEditorial.Type.BodySmall.fontSize)
             }
         }
     }

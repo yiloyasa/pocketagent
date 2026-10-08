@@ -37,7 +37,6 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
@@ -47,7 +46,6 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
-import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
 import kotlinx.coroutines.Dispatchers
@@ -350,7 +348,7 @@ fun spansToAnnotated(spans: List<MarkdownSpan>, bullet: Boolean = false): Annota
             // 行内代码:等宽 + 底色芯片(调研结论 3:底色区分,不只靠颜色)
             MarkdownSpanKind.INLINE_CODE -> withStyle(
                 SpanStyle(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = PaEditorial.MonoFont,
                     color = PaEditorial.Primary,
                     background = PaEditorial.Raised,
                 ),
@@ -478,9 +476,9 @@ private fun MarkdownTextLine(line: MarkdownLine, fontSize: Float, color: Color =
     Text(
         text = line.annotated(),
         // 黑客终端模式:正文行整体等宽(代码块本来就是等宽,普通行随之统一)。
-        // 字体走 TerminalFont.chatFont(JetBrains Mono,下载落库 res/font);
-        // 资源缺失的回退是 theme 层的 PaHacker.mono(系统等宽)。
-        fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
+        // 字体走 theme 层令牌 PaEditorial.MonoFont(JetBrains Mono,下载落库 res/font;
+        // 等宽统一 2026-10-09)。
+        fontFamily = if (PaHacker.isHacker) PaEditorial.MonoFont else null,
         // 嵌套列表:按解析层给出的层级缩进(每级 14dp),层级一眼可辨
         modifier = Modifier
             .fillMaxWidth()
@@ -508,8 +506,9 @@ private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
     // 三盘换肤即时重映色(remember 键含 colors)。
     val scroll = rememberScrollState()
     val ctx = LocalContext.current
-    // hacker 模式下代码与正文同一 JetBrains Mono:扫描线/等宽网格逐列对齐
-    val mono = if (PaHacker.isHacker) TerminalFont.chatFont else FontFamily.Monospace
+    // 等宽统一(2026-10-09):代码块在全部色盘下都是同一 JetBrains Mono(令牌
+    // PaEditorial.MonoFont),扫描线/等宽网格逐列对齐不再是 hacker 专属
+    val mono = PaEditorial.MonoFont
     val tokens by produceState<List<CodeToken>?>(null, code, lang) {
         value = withContext(Dispatchers.Default) { tokenizeCode(code, lang) }
     }
@@ -521,9 +520,9 @@ private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
         Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
             .background(PaEditorial.Raised)
-            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp)),
+            .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton)),
     ) {
         Row(
             Modifier
@@ -535,7 +534,7 @@ private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
             if (lang.isNotBlank()) {
                 Text(
                     lang,
-                    fontSize = 10.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = PaEditorial.Muted,
                     fontFamily = mono,
                 )
@@ -547,7 +546,7 @@ private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
                     .pressable(haptic = true) { copyCodeToClipboard(ctx, code) }
                     // 10dp 竖向 padding:按钮热区约 36dp 高,紧凑但可点(触达)
                     .padding(horizontal = 10.dp, vertical = 10.dp),
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
                 fontFamily = mono,
             )
@@ -595,9 +594,9 @@ private fun MarkdownTableBlock(
         Column(
             Modifier
                 .width(IntrinsicSize.Max)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .background(PaEditorial.Surface)
-                .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(12.dp)),
+                .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton)),
         ) {
             MarkdownTableRow(header, weights, fontSize, header = true)
             rows.forEach { row ->
@@ -649,7 +648,7 @@ private fun MarkdownQuoteBlock(quotes: List<MarkdownLine>, fontSize: Float) {
             Modifier
                 .width(3.dp)
                 .fillMaxHeight()
-                .background(PaEditorial.Muted.copy(alpha = 0.6f), RoundedCornerShape(2.dp)),
+                .background(PaEditorial.Muted.copy(alpha = 0.6f), RoundedCornerShape(PaEditorial.Radius.Terminal)),
         )
         Spacer(Modifier.width(10.dp))
         Column {

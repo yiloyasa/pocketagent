@@ -76,8 +76,11 @@ class PaEditorialTokensTest {
 
     @Test
     fun `字重与字距钉值_编辑式标题是紧字距重字重`() {
-        assertEquals(FontWeight(760), PaEditorial.Type.Display.fontWeight)
-        assertEquals(FontWeight(720), PaEditorial.Type.Title.fontWeight)
+        // 【2026-10-09 字重显式化】原钉 FontWeight(760)/(720)(premium.css w760/w720);
+        // Roboto 无中间档实际渲染已取整,显式化为标准档 Bold —— 映射依据见
+        // tools/device/_pa_ui_converge.py 头注与方案(650→SemiBold、720/760→Bold)。
+        assertEquals(FontWeight.Bold, PaEditorial.Type.Display.fontWeight)
+        assertEquals(FontWeight.Bold, PaEditorial.Type.Title.fontWeight)
         assertEquals((-1.8f).sp, PaEditorial.Type.Display.letterSpacing)
         assertEquals((-0.9f).sp, PaEditorial.Type.Title.letterSpacing)
     }
@@ -107,14 +110,33 @@ class PaEditorialTokensTest {
 
     @Test
     fun `圆角与阴影钉值`() {
+        // 【机械收敛 2026-10-09】圆角六档归档:≤7→Terminal、8-11→Chip,
+        // 13=图标钮/胶囊、18=大卡、23=弹窗、100=药丸(原四档不动)
+        assertEquals(6.dp, PaEditorial.Radius.Terminal)
+        assertEquals(10.dp, PaEditorial.Radius.Chip)
         assertEquals(13.dp, PaEditorial.Radius.IconButton)
         assertEquals(18.dp, PaEditorial.Radius.Card)
         assertEquals(23.dp, PaEditorial.Radius.Sheet)
+        assertEquals(100.dp, PaEditorial.Radius.Pill)
         assertEquals(26.dp, PaEditorial.Shadow.Card.blur)
         assertEquals(8.dp, PaEditorial.Shadow.Card.dy)
         assertEquals(Color(0x10293D56), PaEditorial.Shadow.Card.color)
         assertEquals(80.dp, PaEditorial.Shadow.Modal.blur)
         assertEquals(Color(0x55071726), PaEditorial.Shadow.Modal.color)
+    }
+
+    @Test
+    fun `字体身份钉值_Display标题层Poppins_等宽JetBrainsMono`() {
+        // 【字体身份轮 2026-10-09】资源极简:不新增字体文件,poppins 只有 Bold 一档
+        assertEquals(PaEditorial.DisplayFont, PaEditorial.Type.Display.fontFamily)
+        assertEquals(PaEditorial.DisplayFont, PaEditorial.Type.Title.fontFamily)
+        // 正文/以下层级保持系统字不加速(fontFamily 缺省 null)
+        assertEquals(null, PaEditorial.Type.Body.fontFamily)
+        // 字重显式化(2026-10-09 机械收敛):Roboto 无中间档,渲染已取整 ——
+        // 原 FontWeight(760)/(720) 显式化为 Bold、(650) 显式化为 SemiBold
+        assertEquals(FontWeight.Bold, PaEditorial.Type.Display.fontWeight)
+        assertEquals(FontWeight.Bold, PaEditorial.Type.Title.fontWeight)
+        assertEquals(FontWeight.SemiBold, PaEditorial.Type.State.fontWeight)
     }
 
     // ---- 语义色档三件套(基础色/小字加深变体/浅底,取 premium.css .state) ----

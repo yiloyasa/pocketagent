@@ -685,16 +685,16 @@ private fun LazyListScope.connectedHomeItems(
                     .pressable(haptic = true) { onRetry() }
                     // 未完成语义:珊瑚浅底 + 加深珊瑚字(语义双通道:有词有色);
                     // 底色即边界,不再叠同色描边(降噪)
-                    .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
+                    .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     message, Modifier.weight(1f),
-                    fontSize = 12.sp, lineHeight = 17.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                     color = EditorialDeniedText, maxLines = 2,
                 )
-                Text("重试", fontSize = 12.sp, fontWeight = FontWeight(650), color = MaterialTheme.editorial.Primary)
+                Text("重试", fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold, color = MaterialTheme.editorial.Primary)
             }
         }
     }
@@ -737,7 +737,7 @@ private fun LazyListScope.connectedHomeItems(
                 Box(
                     Modifier
                         .size(36.dp)
-                        .background(PaEditorial.Raised, RoundedCornerShape(11.dp)),
+                        .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.Chip)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -749,11 +749,11 @@ private fun LazyListScope.connectedHomeItems(
                 Column(Modifier.weight(1f)) {
                     Text(
                         if (attentionNeedsMe > 0) "$attentionNeedsMe 项等待你处理" else "消息中心",
-                        fontSize = 13.sp, fontWeight = FontWeight(640), color = PaEditorial.Ink,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Ink,
                     )
                     Text(
                         attentionTopTitle ?: "当前没有等待处理的事项",
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = MaterialTheme.editorial.Muted,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
@@ -777,18 +777,18 @@ private fun LazyListScope.connectedHomeItems(
                 .pressable(haptic = true) { onNewThread() }
                 .heightIn(min = 74.dp)
                 .shadow(
-                    8.dp, RoundedCornerShape(18.dp),
+                    8.dp, RoundedCornerShape(PaEditorial.Radius.Card),
                     spotColor = PaEditorial.Shadow.Card.color,
                     ambientColor = PaEditorial.Shadow.Card.color,
                 )
-                .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
+                .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
                     .size(42.dp)
-                    .background(PaEditorial.PrimaryContainer, RoundedCornerShape(13.dp)),
+                    .background(PaEditorial.PrimaryContainer, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -800,13 +800,13 @@ private fun LazyListScope.connectedHomeItems(
             Column(Modifier.weight(1f)) {
                 Text(
                     "告诉 Agent 你想做什么",
-                    fontSize = 14.sp, lineHeight = 20.sp,
-                    fontWeight = FontWeight(650), color = PaEditorial.Ink,
+                    fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
+                    fontWeight = FontWeight.SemiBold, color = PaEditorial.Ink,
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
                     "选择 Agent、工作区,再开始对话",
-                    fontSize = 11.sp, lineHeight = 16.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                     color = MaterialTheme.editorial.Muted,
                 )
             }
@@ -830,7 +830,7 @@ private fun LazyListScope.connectedHomeItems(
             Box(
                 Modifier
                     .size(36.dp)
-                    .background(PaEditorial.Raised, RoundedCornerShape(11.dp)),
+                    .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.Chip)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -840,8 +840,8 @@ private fun LazyListScope.connectedHomeItems(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("电脑预览", fontSize = 13.sp, fontWeight = FontWeight(640), color = PaEditorial.Ink)
-                Text("打开电脑上正在运行的 dev server", fontSize = 11.sp, color = MaterialTheme.editorial.Muted)
+                Text("电脑预览", fontSize = PaEditorial.Type.BodySmall.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Ink)
+                Text("打开电脑上正在运行的 dev server", fontSize = PaEditorial.Type.Caption.fontSize, color = MaterialTheme.editorial.Muted)
             }
             Icon(
                 painterResource(R.drawable.ic_lucide_chevron_right), null,
@@ -871,13 +871,13 @@ private fun LazyListScope.connectedHomeItems(
                 Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Text(
                         note.title,
-                        fontSize = 12.sp, lineHeight = 17.sp,
-                        fontWeight = FontWeight(650), color = MaterialTheme.editorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
+                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.editorial.Muted,
                     )
                     Text(
                         note.hint,
                         Modifier.padding(top = 4.dp),
-                        fontSize = 11.sp, lineHeight = 17.sp, color = PaEditorial.Subtle,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = PaEditorial.Subtle,
                     )
                     Box(
                         Modifier
@@ -888,7 +888,7 @@ private fun LazyListScope.connectedHomeItems(
                     ) {
                         Text(
                             note.actionLabel,
-                            fontSize = 13.sp, fontWeight = FontWeight(650),
+                            fontSize = PaEditorial.Type.BodySmall.fontSize, fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.editorial.Primary,
                         )
                     }
@@ -903,7 +903,7 @@ private fun LazyListScope.connectedHomeItems(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "多 Agent 协同",
-                    fontSize = 16.sp, lineHeight = 22.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 22.sp,
                     fontWeight = FontWeight.Bold, color = PaEditorial.Ink,
                 )
                 Spacer(Modifier.width(8.dp))
@@ -918,7 +918,7 @@ private fun LazyListScope.connectedHomeItems(
             }
             Text(
                 collabSubtitle(collabIds),
-                fontSize = 11.sp, lineHeight = 17.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                 color = if (collabIds.isEmpty()) MaterialTheme.editorial.Muted else MaterialTheme.editorial.Primary,
             )
             if (multiAgent) {
@@ -963,7 +963,7 @@ private fun LazyListScope.connectedHomeItems(
                                 tint = PaEditorial.Subtle, modifier = Modifier.size(26.dp),
                             )
                         }
-                        Text("添加", Modifier.padding(top = 6.dp), fontSize = 11.sp, color = PaEditorial.Subtle)
+                        Text("添加", Modifier.padding(top = 6.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
                     }
                 }
             }
@@ -1039,19 +1039,19 @@ private fun RecentEmptyState(copy: HomeEmptyStateCopy?, onAction: (() -> Unit)?)
             Text(
                 "没有可显示的会话",
                 Modifier.padding(top = 12.dp),
-                fontSize = 13.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, color = MaterialTheme.editorial.Muted,
             )
         } else {
             Text(
                 copy.title,
                 Modifier.padding(top = 12.dp),
-                fontSize = 13.sp, lineHeight = 20.sp,
-                fontWeight = FontWeight(650), color = PaEditorial.Muted,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 20.sp,
+                fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted,
             )
             Text(
                 copy.hint,
                 Modifier.padding(top = 4.dp),
-                fontSize = 12.sp, lineHeight = 17.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                 color = MaterialTheme.editorial.Muted,
                 textAlign = TextAlign.Center,
             )
@@ -1062,14 +1062,14 @@ private fun RecentEmptyState(copy: HomeEmptyStateCopy?, onAction: (() -> Unit)?)
                         .padding(top = 16.dp)
                         .heightIn(min = 44.dp)
                         .pressable(haptic = true) { onAction() }
-                        .background(PaEditorial.PrimaryContainer, RoundedCornerShape(100.dp))
+                        .background(PaEditorial.PrimaryContainer, RoundedCornerShape(PaEditorial.Radius.Pill))
                         .padding(horizontal = 20.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         copy.actionLabel,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.editorial.Primary,
                     )
                 }
@@ -1096,7 +1096,7 @@ private fun LazyListScope.discoveryItems(
         Text(
             "POCKET AGENT / CONNECT",
             Modifier.padding(top = 16.dp),
-            fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
             color = PaEditorial.Subtle,
         )
     }
@@ -1112,7 +1112,7 @@ private fun LazyListScope.discoveryItems(
             Spacer(Modifier.height(8.dp))
             Text(
                 "找到你的电脑,配对后即可安全继续工作。",
-                fontSize = 13.sp, lineHeight = 22.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 22.sp, color = MaterialTheme.editorial.Muted,
             )
         }
     }
@@ -1177,10 +1177,10 @@ private fun LazyListScope.discoveryItems(
                 },
                 Modifier
                     .align(Alignment.BottomEnd)
-                    .background(MaterialTheme.editorial.Surface, RoundedCornerShape(10.dp))
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.editorial.Surface, RoundedCornerShape(PaEditorial.Radius.Chip))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Chip))
                     .padding(horizontal = 8.dp, vertical = 6.dp),
-                fontSize = 11.sp, color = PaEditorial.AccentText,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.AccentText,
             )
         }
     }
@@ -1208,13 +1208,13 @@ private fun LazyListScope.discoveryItems(
                     Text(
                         copy.title,
                         Modifier.padding(top = 12.dp),
-                        fontSize = 13.sp, lineHeight = 20.sp,
-                        fontWeight = FontWeight(650), color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 20.sp,
+                        fontWeight = FontWeight.SemiBold, color = PaEditorial.Muted,
                     )
                     Text(
                         copy.hint,
                         Modifier.padding(top = 4.dp),
-                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                         color = MaterialTheme.editorial.Muted,
                         textAlign = TextAlign.Center,
                     )
@@ -1223,14 +1223,14 @@ private fun LazyListScope.discoveryItems(
                             .padding(top = 12.dp)
                             .heightIn(min = 44.dp)
                             .pressable(haptic = true) { onManualAdd() }
-                            .background(PaEditorial.PrimaryContainer, RoundedCornerShape(100.dp))
+                            .background(PaEditorial.PrimaryContainer, RoundedCornerShape(PaEditorial.Radius.Pill))
                             .padding(horizontal = 20.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             copy.actionLabel,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight(650),
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.editorial.Primary,
                         )
                     }
@@ -1251,14 +1251,14 @@ private fun LazyListScope.discoveryItems(
                 .fillMaxWidth()
                 .pressable(haptic = true) { onManualAdd() }
                 .padding(vertical = 16.dp),
-            fontSize = 12.sp, fontWeight = FontWeight(650), color = PaEditorial.AccentText,
+            fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.AccentText,
         )
     }
     item(key = "bottomNote") {
         Text(
             "若电脑未出现,请确认 Pocket Agent 服务已启动;跨网络可通过已有的远程连接地址添加。",
             Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp),
-            fontSize = 11.sp, lineHeight = 18.sp, color = PaEditorial.Subtle,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 18.sp, color = PaEditorial.Subtle,
         )
     }
     // 离线也保留最近会话(本地快照可回看 —— 既有能力零回归)
@@ -1293,7 +1293,7 @@ private fun SectionHeader(title: String, action: String, onAction: (() -> Unit)?
     ) {
         Text(
             title,
-            fontSize = 16.sp, lineHeight = 22.sp,
+            fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 22.sp,
             fontWeight = FontWeight.Bold, color = PaEditorial.Ink,
         )
         if (onAction != null) {
@@ -1302,10 +1302,10 @@ private fun SectionHeader(title: String, action: String, onAction: (() -> Unit)?
                 Modifier
                     .pressable(haptic = true, onClick = onAction)
                     .padding(horizontal = 8.dp, vertical = 10.dp),
-                fontSize = 11.sp, color = PaEditorial.Subtle,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
             )
         } else {
-            Text(action, fontSize = 11.sp, color = PaEditorial.Subtle)
+            Text(action, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle)
         }
     }
 }
@@ -1332,12 +1332,12 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
             .pressable(haptic = true) { onClick() }
             .heightIn(min = 75.dp)
             .shadow(
-                15.dp, RoundedCornerShape(18.dp),
+                15.dp, RoundedCornerShape(PaEditorial.Radius.Card),
                 spotColor = PaEditorial.Shadow.Alert.color,
                 ambientColor = PaEditorial.Shadow.Alert.color,
             )
             // 石墨底即边界(同色描边是隐形噪音,已减);阴影承担层级
-            .background(PaEditorial.Graphite, RoundedCornerShape(18.dp))
+            .background(PaEditorial.Graphite, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(horizontal = 16.dp, vertical = 16.dp)
             .semantics {
                 contentDescription = "$agentName 请求执行命令,来自「$title」,等待你处理"
@@ -1352,14 +1352,14 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 "$agentName 请求执行命令",
-                fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold,
+                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp, fontWeight = FontWeight.Bold,
                 color = PaEditorial.OnGraphite,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 "来自「$title」· ${pendingApprovalMeta(thread.pendingApprovalsCount)}",
-                fontSize = 11.sp, lineHeight = 17.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                 color = PaEditorial.OnGraphiteMuted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
@@ -1397,8 +1397,8 @@ private fun RunningRow(thread: PThread, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 thread.title.ifEmpty { "(未命名)" },
-                fontSize = 13.sp, color = PaEditorial.Ink,
-                fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(5.dp))
@@ -1409,7 +1409,7 @@ private fun RunningRow(thread: PThread, onClick: () -> Unit) {
                     thread.updatedAtUnixMs,
                     System.currentTimeMillis(),
                 ),
-                fontSize = 11.sp, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -1447,22 +1447,22 @@ private fun RecentSessionRow(thread: PThread, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 thread.title.ifEmpty { "(未命名)" },
-                fontSize = 14.sp, color = PaEditorial.Ink,
-                fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 selectedAgentLabel(threadAgentIdOf(thread.agentId)) + " · " +
                     threadRecentMeta(thread.messageCount, thread.updatedAtUnixMs, System.currentTimeMillis()),
-                fontSize = 11.sp, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             // 未完成摘要:一行缩略("这单为什么停了"不用点进会话就能看到)
             statusView.detail?.let { summary ->
                 Text(
                     summary,
-                    fontSize = 10.5.sp, lineHeight = 15.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 15.sp,
                     color = EditorialDeniedText, maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1489,16 +1489,16 @@ private fun QuietRow(iconRes: Int, title: String, desc: String, onClick: () -> U
         Box(
             Modifier
                 .size(36.dp)
-                .background(PaEditorial.Raised, RoundedCornerShape(11.dp)),
+                .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.Chip)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(painterResource(iconRes), null, tint = PaEditorial.Primary, modifier = Modifier.size(18.dp))
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 13.sp, fontWeight = FontWeight(640), color = PaEditorial.Ink)
+            Text(title, fontSize = PaEditorial.Type.BodySmall.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Ink)
             Text(
-                desc, fontSize = 11.sp, color = MaterialTheme.editorial.Muted,
+                desc, fontSize = PaEditorial.Type.Caption.fontSize, color = MaterialTheme.editorial.Muted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -1520,15 +1520,15 @@ private fun DiscoveredHostCard(host: DiscoveredHost, onClick: () -> Unit) {
             .fillMaxWidth()
             .pressable(haptic = true) { onClick() }
             .heightIn(min = 75.dp)
-            .background(MaterialTheme.editorial.Surface, RoundedCornerShape(18.dp))
-            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
+            .background(MaterialTheme.editorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
                 .size(42.dp)
-                .background(PaEditorial.Raised, RoundedCornerShape(13.dp)),
+                .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1540,13 +1540,13 @@ private fun DiscoveredHostCard(host: DiscoveredHost, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 host.displayName,
-                fontSize = 14.sp, fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.Body.fontSize, fontWeight = FontWeight.SemiBold,
                 color = PaEditorial.Ink, maxLines = 1,
             )
             Spacer(Modifier.height(5.dp))
             Text(
                 "局域网发现 · ${host.address()}",
-                fontSize = 11.sp, color = PaEditorial.Subtle,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -1579,11 +1579,11 @@ private fun PairCodeSheet(
     var busy by remember { mutableStateOf(false) }
     PaSheet(onDismissRequest = { if (!busy) onDismiss() }) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-            Text("配对「${host.displayName}」", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = PaEditorial.Ink)
+            Text("配对「${host.displayName}」", fontSize = PaEditorial.Type.Heading.fontSize, fontWeight = FontWeight.Bold, color = PaEditorial.Ink)
             Spacer(Modifier.height(4.dp))
             Text(
                 "输入电脑上显示的 8 位配对码(${host.address()})",
-                fontSize = 12.sp, lineHeight = 17.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = MaterialTheme.editorial.Muted,
             )
             Spacer(Modifier.height(14.dp))
             OutlinedTextField(
@@ -1592,7 +1592,7 @@ private fun PairCodeSheet(
                 Modifier.fillMaxWidth(),
                 enabled = !busy,
                 singleLine = true,
-                placeholder = { Text("8 位配对码", fontSize = 14.sp, color = PaEditorial.Subtle) },
+                placeholder = { Text("8 位配对码", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Subtle) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = PaEditorial.Surface,
@@ -1607,7 +1607,7 @@ private fun PairCodeSheet(
             error?.let { msg ->
                 Spacer(Modifier.height(8.dp))
                 // 码错/证书阻断:透传原文,输入保留可改可重试(不做乐观通过)
-                Text(msg, fontSize = 12.sp, lineHeight = 17.sp, color = EditorialDeniedText)
+                Text(msg, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = EditorialDeniedText)
             }
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1617,11 +1617,11 @@ private fun PairCodeSheet(
                         .weight(1f)
                         .heightIn(min = 46.dp)
                         .pressable(haptic = true, enabled = !busy) { onDismiss() }
-                        .background(PaEditorial.Raised, RoundedCornerShape(14.dp))
-                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp)),
+                        .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("取消", fontSize = 14.sp, fontWeight = FontWeight(650), color = PaEditorial.Ink)
+                    Text("取消", fontSize = PaEditorial.Type.Body.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.Ink)
                 }
                 Box(
                     Modifier
@@ -1653,12 +1653,12 @@ private fun PairCodeSheet(
                                 if (failure == null) onPaired() else error = failure
                             }
                         }
-                        .background(PaEditorial.Graphite, RoundedCornerShape(14.dp)),
+                        .background(PaEditorial.Graphite, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         if (busy) "配对中…" else "配对并连接",
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                        fontSize = PaEditorial.Type.Body.fontSize, fontWeight = FontWeight.Bold,
                         color = if (busy) PaEditorial.OnGraphiteMuted else PaEditorial.OnGraphite,
                     )
                 }
@@ -1708,7 +1708,7 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
         Text(
             a.name,
             Modifier.padding(top = 6.dp),
-            fontSize = 12.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = if (state == HomeAgentTileState.AVAILABLE) PaEditorial.Ink else PaEditorial.Muted,
             maxLines = 1,
         )
@@ -1716,7 +1716,7 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
             // 灰显态给真实原因:能力驱动型="电脑端未安装";未接入型="接入中"
             homeAgentTileLabel(state, a.method),
             Modifier.padding(top = 2.dp),
-            fontSize = 10.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             color = if (state == HomeAgentTileState.AVAILABLE) PaEditorial.Muted else PaEditorial.Subtle,
             maxLines = 1,
         )
@@ -1747,7 +1747,7 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(agent.name, fontSize = 19.sp, color = PaEditorial.Ink)
+                Text(agent.name, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 Text(
                     // 状态行:占位展示项固定"接入中";能力驱动型分"已装 vX"/"电脑端未安装"两态
                     when {
@@ -1755,7 +1755,7 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
                         installedVersion != null -> "已装 $installedVersion"
                         else -> AgentGuideCopy.SUBTITLE_NOT_INSTALLED
                     },
-                    fontSize = 12.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = when {
                         agent.id in placeholderDisplayAgents -> PaEditorial.Muted
                         installedVersion != null -> PaEditorial.Running
@@ -1775,7 +1775,7 @@ internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDis
             Text(
                 "装好后重连 daemon,磁贴自动点亮",
                 Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
-                fontSize = 11.sp, color = PaEditorial.Subtle,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Subtle,
             )
         }
         Spacer(Modifier.height(30.dp))
@@ -1789,11 +1789,11 @@ private fun GuideBlock(title: String, body: String) {
         Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
-            .background(PaEditorial.Surface, RoundedCornerShape(16.dp))
+            .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
-        Text(title, fontSize = 12.sp, color = PaEditorial.Muted)
-        Text(body, fontSize = 13.sp, color = PaEditorial.Ink, modifier = Modifier.padding(top = 4.dp))
+        Text(title, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
+        Text(body, fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -1831,10 +1831,10 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
     PaSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("管理 agent", fontSize = 19.sp, color = PaEditorial.Ink)
+                Text("管理 agent", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 Text(
                     "停用后不再显示该 agent,正在运行的任务不受影响",
-                    fontSize = 12.sp, color = PaEditorial.Muted, modifier = Modifier.padding(top = 2.dp),
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted, modifier = Modifier.padding(top = 2.dp),
                 )
             }
             IconActionButton(R.drawable.ic_lucide_x, "关闭", onDismiss, bg = Color.Transparent, size = 38.dp, iconSize = 18.dp)
@@ -1851,7 +1851,7 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(PaEditorial.Surface, RoundedCornerShape(16.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1863,11 +1863,11 @@ fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {
                     )
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(a.name, fontSize = 15.sp, color = PaEditorial.Ink)
-                        Text(a.method + " · " + a.subtitle, fontSize = 11.sp, color = PaEditorial.Muted)
+                        Text(a.name, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
+                        Text(a.method + " · " + a.subtitle, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
                         // T-MW2:不可用(daemon 未报)与已停用(本地偏好)两态目视可分
                         if (AgentConnection.isAgentDisabled(a.id)) {
-                            Text("已停用", fontSize = 10.sp, color = PaEditorial.Subtle)
+                            Text("已停用", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
                         }
                     }
                     Switch(
@@ -1921,9 +1921,9 @@ private fun AttentionCenterSheet(
 ) {
     PaSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-            Text("消息中心", fontSize = 19.sp, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
+            Text("消息中心", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink, fontWeight = FontWeight.SemiBold)
             attentionFreshnessLabel(offline, cachedAtUnixMs, System.currentTimeMillis())?.let {
-                Text(it, Modifier.padding(top = 3.dp), fontSize = 11.sp, color = PaEditorial.Muted)
+                Text(it, Modifier.padding(top = 3.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
             }
             Spacer(Modifier.height(10.dp))
             // 四档筛选:需要我处理 / 运行中 / 已完成 / 已忽略(记住上次选择)。
@@ -1935,15 +1935,15 @@ private fun AttentionCenterSheet(
                             .pressable { AttentionCenterUiState.filter = f }
                             .background(
                                 if (selected) PaEditorial.PrimaryContainer else PaEditorial.Raised,
-                                RoundedCornerShape(100.dp),
+                                RoundedCornerShape(PaEditorial.Radius.Pill),
                             )
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
                         Text(
                             f.label,
-                            fontSize = 12.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             color = if (selected) MaterialTheme.editorial.Primary else MaterialTheme.editorial.Muted,
-                            fontWeight = if (selected) FontWeight(650) else FontWeight.Normal,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
                     }
                 }
@@ -1964,7 +1964,7 @@ private fun AttentionCenterSheet(
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 24.dp),
-                    fontSize = 13.sp, color = MaterialTheme.editorial.Muted,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize, color = MaterialTheme.editorial.Muted,
                     textAlign = TextAlign.Center,
                 )
             } else {
@@ -2011,7 +2011,7 @@ private fun AttentionItemRow(item: AttentionItem, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 item.title,
-                fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold,
                 color = PaEditorial.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             val time = (item as? AttentionItem.UnknownEvent)
@@ -2024,7 +2024,7 @@ private fun AttentionItemRow(item: AttentionItem, onClick: () -> Unit) {
                 Text(
                     meta,
                     Modifier.padding(top = 3.dp),
-                    fontSize = 11.sp, lineHeight = 16.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                     color = MaterialTheme.editorial.Muted,
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
@@ -2033,13 +2033,13 @@ private fun AttentionItemRow(item: AttentionItem, onClick: () -> Unit) {
         item.actionLabel?.let {
             Text(
                 it,
-                fontSize = 12.sp, fontWeight = FontWeight(650),
+                fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.editorial.Primary,
             )
             Spacer(Modifier.width(6.dp))
         }
         (item as? AttentionItem.UnknownEvent)?.let { u ->
-            Text(unknownStatusLabel(u.processingStatus), fontSize = 10.sp, color = PaEditorial.Subtle)
+            Text(unknownStatusLabel(u.processingStatus), fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
             Spacer(Modifier.width(6.dp))
         }
         Icon(

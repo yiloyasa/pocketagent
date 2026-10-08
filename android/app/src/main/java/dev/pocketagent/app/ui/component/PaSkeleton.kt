@@ -58,7 +58,7 @@ enum class SkeletonKind {
 @Composable
 private fun ShimmerBox(
     modifier: Modifier,
-    shape: Shape = RoundedCornerShape(8.dp),
+    shape: Shape = RoundedCornerShape(PaEditorial.Radius.Chip),
     reduceMotion: Boolean = rememberReduceMotion(),
 ) {
     if (reduceMotion) {
@@ -96,7 +96,7 @@ private fun ShimmerBox(
 @Composable
 fun PaSkeletonBar(
     modifier: Modifier,
-    shape: Shape = RoundedCornerShape(8.dp),
+    shape: Shape = RoundedCornerShape(PaEditorial.Radius.Chip),
 ) {
     ShimmerBox(modifier, shape, rememberReduceMotion())
 }
@@ -129,9 +129,9 @@ private fun SkeletonBubble(alignEnd: Boolean, reduceMotion: Boolean) {
             Modifier.fillMaxWidth(if (alignEnd) 0.62f else 0.48f),
             horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
         ) {
-            ShimmerBox(Modifier.fillMaxWidth().height(38.dp), RoundedCornerShape(14.dp), reduceMotion)
+            ShimmerBox(Modifier.fillMaxWidth().height(38.dp), RoundedCornerShape(PaEditorial.Radius.IconButton), reduceMotion)
             Spacer(Modifier.height(6.dp))
-            ShimmerBox(Modifier.fillMaxWidth(0.66f).height(38.dp), RoundedCornerShape(14.dp), reduceMotion)
+            ShimmerBox(Modifier.fillMaxWidth(0.66f).height(38.dp), RoundedCornerShape(PaEditorial.Radius.IconButton), reduceMotion)
         }
     }
 }
@@ -143,7 +143,7 @@ private fun SkeletonFileRow(reduceMotion: Boolean) {
         Modifier.fillMaxWidth().padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ShimmerBox(Modifier.size(32.dp), RoundedCornerShape(8.dp), reduceMotion)
+        ShimmerBox(Modifier.size(32.dp), RoundedCornerShape(PaEditorial.Radius.Chip), reduceMotion)
         Spacer(Modifier.width(12.dp))
         ShimmerBox(Modifier.fillMaxWidth(0.55f).height(12.dp), reduceMotion = reduceMotion)
         Spacer(Modifier.weight(1f))
@@ -158,7 +158,7 @@ private fun SkeletonCardBlock(reduceMotion: Boolean) {
         Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
             .background(PaEditorial.Surface)
             .padding(14.dp),
     ) {
@@ -185,7 +185,7 @@ private fun SkeletonHomeRecentRow(reduceMotion: Boolean) {
             ShimmerBox(Modifier.fillMaxWidth(0.42f).height(11.dp), reduceMotion = reduceMotion)
         }
         Spacer(Modifier.width(12.dp))
-        ShimmerBox(Modifier.width(52.dp).height(16.dp), RoundedCornerShape(100.dp), reduceMotion)
+        ShimmerBox(Modifier.width(52.dp).height(16.dp), RoundedCornerShape(PaEditorial.Radius.Pill), reduceMotion)
     }
 }
 
@@ -195,13 +195,13 @@ private fun SkeletonHostChoice(reduceMotion: Boolean) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(PaEditorial.Radius.Card))
             .background(PaEditorial.Surface)
-            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp))
+            .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card))
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ShimmerBox(Modifier.size(42.dp), RoundedCornerShape(13.dp), reduceMotion)
+        ShimmerBox(Modifier.size(42.dp), RoundedCornerShape(PaEditorial.Radius.IconButton), reduceMotion)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             ShimmerBox(Modifier.fillMaxWidth(0.5f).height(14.dp), reduceMotion = reduceMotion)

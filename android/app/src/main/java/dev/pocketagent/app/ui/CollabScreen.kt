@@ -190,7 +190,7 @@ fun CollabScreen(
                         Box(
                             Modifier
                                 .size(PaEditorial.Space.IconBox)
-                                .background(PaEditorial.OnGraphiteHairline, RoundedCornerShape(13.dp)),
+                                .background(PaEditorial.OnGraphiteHairline, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
@@ -207,7 +207,7 @@ fun CollabScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "把同一指令并行交给选中的 Agent;每位参与者分别回报,不混为一条对话。",
-                            fontSize = 13.sp, lineHeight = 21.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp,
                             color = PaEditorial.OnGraphiteMuted,
                         )
                     }
@@ -224,12 +224,12 @@ fun CollabScreen(
                         // 选中数明确(结论 1):0 人也如实说,不藏数字。
                         Text(
                             collabSelectionSummary(selectedAgents.size),
-                            fontSize = 12.sp, color = ed.Muted,
+                            fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Muted,
                         )
                     }
                     Text(
                         "电脑端接入协同的 agent 都在这里;不可用的标了原因",
-                        fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                     )
                     Spacer(Modifier.height(8.dp))
                     if (participants.isEmpty()) {
@@ -259,7 +259,7 @@ fun CollabScreen(
                         Text(
                             it,
                             Modifier.padding(top = 8.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                             maxLines = 2, overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -267,7 +267,7 @@ fun CollabScreen(
                         Text(
                             CollabCopy.EMPTY_NO_SELECTION,
                             Modifier.padding(top = 8.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                         )
                     }
                 }
@@ -286,7 +286,7 @@ fun CollabScreen(
                                 .padding(horizontal = 4.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("配置角色", fontSize = 13.sp, color = PaEditorial.Primary)
+                            Text("配置角色", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Primary)
                             Spacer(Modifier.width(2.dp))
                             Icon(
                                 painterResource(R.drawable.ic_lucide_chevron_right), null,
@@ -310,7 +310,7 @@ fun CollabScreen(
                             Text(
                                 "还没有成员受理回执;受理后这里会逐个出现成员卡",
                                 Modifier.padding(vertical = 8.dp),
-                                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                             )
                         }
                     } else {
@@ -368,7 +368,7 @@ fun CollabScreen(
                         Text(
                             SessionCopy.LOADING_RESTORE,
                             Modifier.padding(vertical = 8.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                         )
                     }
                 } else if (lastInstruction != null) {
@@ -386,13 +386,13 @@ fun CollabScreen(
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     lastInstruction!!,
-                                    fontSize = 13.sp, lineHeight = 21.sp, color = ed.Ink,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 21.sp, color = ed.Ink,
                                 )
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 if (dispatching) CollabCopy.BTN_DISPATCHING else SessionCopy.PROGRESS_SUBMITTED,
-                                fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle,
                             )
                         }
                     }
@@ -401,7 +401,7 @@ fun CollabScreen(
                         Text(
                             "先在上面勾选这次一起干活的 agent,他们的执行进度会逐个出现在这里",
                             Modifier.padding(vertical = 8.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                         )
                     }
                 }
@@ -414,9 +414,9 @@ fun CollabScreen(
                             Modifier
                                 .fillMaxWidth()
                                 .padding(top = 12.dp)
-                                .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                 .padding(12.dp),
-                            fontSize = 12.sp, lineHeight = 17.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                             color = EditorialTone.DENIED.text,
                         )
                     }
@@ -431,7 +431,7 @@ fun CollabScreen(
                 Text(
                     it,
                     Modifier.padding(start = 4.dp, bottom = 4.dp),
-                    fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle,
                 )
             }
             val hapticView = LocalView.current
@@ -448,8 +448,8 @@ fun CollabScreen(
                     Modifier
                         .weight(1f)
                         .heightIn(min = PaEditorial.Space.TouchMin, max = 120.dp)
-                        .background(ed.Surface, RoundedCornerShape(13.dp))
-                        .border(1.dp, ed.Hairline, RoundedCornerShape(13.dp))
+                        .background(ed.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, ed.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -457,7 +457,7 @@ fun CollabScreen(
                         if (cmd.isEmpty()) {
                             Text(
                                 "描述需要协同完成的任务…",
-                                fontSize = 14.sp, lineHeight = 21.sp, color = ed.Subtle,
+                                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 21.sp, color = ed.Subtle,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
@@ -465,7 +465,7 @@ fun CollabScreen(
                             value = cmd,
                             onValueChange = { cmd = it },
                             modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(fontSize = 14.sp, lineHeight = 21.sp, color = ed.Ink),
+                            textStyle = TextStyle(fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 21.sp, color = ed.Ink),
                             cursorBrush = SolidColor(PaEditorial.Primary),
                         )
                     }
@@ -483,15 +483,15 @@ fun CollabScreen(
                         }
                         .background(
                             if (decision.canDispatch) ed.Graphite else ed.Raised,
-                            RoundedCornerShape(13.dp),
+                            RoundedCornerShape(PaEditorial.Radius.IconButton),
                         )
                         .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         if (dispatching) CollabCopy.BTN_DISPATCHING else CollabCopy.BTN_DISPATCH,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.Body.fontSize,
+                        fontWeight = FontWeight.SemiBold,
                         color = if (decision.canDispatch) PaEditorial.OnGraphite else ed.Subtle,
                     )
                 }
@@ -554,8 +554,8 @@ private fun CollabSessionBanner(
             Text(
                 session.instruction.ifBlank { "协同任务" },
                 Modifier.weight(1f),
-                fontSize = 14.sp, lineHeight = 21.sp,
-                fontWeight = FontWeight(650), color = ed.Ink,
+                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 21.sp,
+                fontWeight = FontWeight.SemiBold, color = ed.Ink,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
             // 会话级七词徽章(色/形通道借四词体系,词用七词词表)
@@ -567,7 +567,7 @@ private fun CollabSessionBanner(
             Text(
                 summary,
                 Modifier.padding(top = 4.dp),
-                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted,
             )
         }
         // 会话级人话原因(daemon 原文;FAILED/CANCELLED 时非空)
@@ -577,9 +577,9 @@ private fun CollabSessionBanner(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
-                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(12.dp),
-                fontSize = 12.sp, lineHeight = 17.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                 color = EditorialTone.DENIED.text,
             )
         }
@@ -600,13 +600,13 @@ private fun CollabSessionBanner(
                         tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(SessionCopy.ACTION_CANCEL_SESSION, fontSize = 12.sp, color = PaEditorial.Primary)
+                    Text(SessionCopy.ACTION_CANCEL_SESSION, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary)
                 }
             } else if (session.members.isNotEmpty()) {
                 Text(
                     "${SessionCopy.ACTION_CANCEL_SESSION} · ${actions.cancelReason}",
                     Modifier.padding(horizontal = 4.dp),
-                    fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle,
                 )
             }
         }
@@ -624,11 +624,11 @@ private fun CollabStatusBadge(status: CollabStatus, raw: String?) {
         Column(horizontalAlignment = Alignment.End) {
             Text(
                 SessionCopy.statusWord(status, raw),
-                fontSize = 11.sp, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
             )
             Text(
                 SessionCopy.UNKNOWN_STATUS_NOTE,
-                fontSize = 10.sp, lineHeight = 14.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 14.sp,
                 color = MaterialTheme.editorial.Subtle,
                 modifier = Modifier.padding(top = 2.dp),
             )
@@ -674,22 +674,22 @@ private fun CollabMemberRow(
                 contentDescription = agentName,
                 modifier = Modifier
                     .size(PaEditorial.Space.IconBox)
-                    .clip(RoundedCornerShape(13.dp)),
+                    .clip(RoundedCornerShape(PaEditorial.Radius.IconButton)),
                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     agentName,
-                    fontSize = 15.sp, lineHeight = 21.sp,
-                    fontWeight = FontWeight(650), color = ed.Ink,
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold, color = ed.Ink,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 if (roleName != null) {
                     Text(
                         "角色 · $roleName",
                         Modifier.padding(top = 1.dp),
-                        fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -711,7 +711,7 @@ private fun CollabMemberRow(
             Text(
                 member.progress,
                 Modifier.padding(top = 4.dp),
-                fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -721,14 +721,14 @@ private fun CollabMemberRow(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp)
-                    .background(ed.AttentionContainer, RoundedCornerShape(13.dp))
+                    .background(ed.AttentionContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     SessionCopy.APPROVAL_WAITING_PREFIX + approval.label.ifBlank { "(电脑端没有给出动作说明)" },
                     Modifier.weight(1f),
-                    fontSize = 12.sp, lineHeight = 17.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                     color = EditorialTone.ATTENTION.text,
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
@@ -738,8 +738,8 @@ private fun CollabMemberRow(
                         Modifier
                             .pressable { onOpenApproval(approval.requestId) }
                             .padding(start = 8.dp),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.Caption.fontSize,
+                        fontWeight = FontWeight.SemiBold,
                         color = EditorialTone.ATTENTION.text,
                     )
                 }
@@ -752,13 +752,13 @@ private fun CollabMemberRow(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
-                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(
                     member.error,
                     Modifier.fillMaxWidth(),
-                    fontSize = 12.sp, lineHeight = 17.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                     color = EditorialTone.DENIED.text,
                     maxLines = if (reasonOpen) Int.MAX_VALUE else 2,
                     overflow = TextOverflow.Ellipsis,
@@ -768,8 +768,8 @@ private fun CollabMemberRow(
                     Modifier
                         .pressable { reasonOpen = !reasonOpen }
                         .padding(top = 4.dp, bottom = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp,
-                    fontWeight = FontWeight(650),
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = EditorialTone.DENIED.text,
                 )
             }
@@ -809,7 +809,7 @@ private fun CollabMemberRow(
                         tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(SessionCopy.ACTION_OPEN_SESSION, fontSize = 12.sp, color = PaEditorial.Primary)
+                    Text(SessionCopy.ACTION_OPEN_SESSION, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary)
                 }
             }
         }
@@ -841,13 +841,13 @@ private fun MemberActionText(
                 tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
             )
             Spacer(Modifier.width(4.dp))
-            Text(label, fontSize = 12.sp, color = PaEditorial.Primary)
+            Text(label, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary)
         }
     } else {
         Text(
             "$label · ${reason ?: "当前不可用"}",
             Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-            fontSize = 11.sp, lineHeight = 16.sp, color = ed.Subtle,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = ed.Subtle,
         )
     }
 }
@@ -873,7 +873,7 @@ private fun CollabSessionResults(
         if (finished.isEmpty()) {
             Text(
                 SessionCopy.MEMBER_RESULTS_EMPTY,
-                fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
             )
         } else {
             finished.forEach { member ->
@@ -882,8 +882,8 @@ private fun CollabSessionResults(
                         Text(
                             member.agentId,
                             Modifier.weight(1f),
-                            fontSize = 13.sp, lineHeight = 19.sp,
-                            fontWeight = FontWeight(650), color = ed.Ink,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 19.sp,
+                            fontWeight = FontWeight.SemiBold, color = ed.Ink,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                         CollabStatusBadge(status = member.status, raw = member.statusRaw)
@@ -895,7 +895,7 @@ private fun CollabSessionResults(
                         Text(
                             body,
                             Modifier.padding(top = 4.dp),
-                            fontSize = 12.sp, lineHeight = 18.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 18.sp,
                             color = if (member.status == CollabStatus.COMPLETED) ed.Ink else EditorialTone.DENIED.text,
                         )
                     }
@@ -911,7 +911,7 @@ private fun CollabSessionResults(
                                 tint = PaEditorial.Primary, modifier = Modifier.size(14.dp),
                             )
                             Spacer(Modifier.width(4.dp))
-                            Text(SessionCopy.VIEW_RESULT, fontSize = 12.sp, color = PaEditorial.Primary)
+                            Text(SessionCopy.VIEW_RESULT, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary)
                         }
                     }
                 }
@@ -922,12 +922,12 @@ private fun CollabSessionResults(
         Spacer(Modifier.height(4.dp))
         Text(
             SessionCopy.SUMMARY_RESULT_NONE,
-            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
         )
         Spacer(Modifier.height(4.dp))
         Text(
             SessionCopy.DIFF_MERGE_NOTICE,
-            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
         )
     }
 }
@@ -979,7 +979,7 @@ private fun CollabAgentChip(
         Spacer(Modifier.height(6.dp))
         Text(
             a.name,
-            fontSize = 12.sp, lineHeight = 17.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
             color = if (on && ready) ed.Ink else ed.Muted,
             maxLines = 1,
         )
@@ -987,7 +987,7 @@ private fun CollabAgentChip(
             Spacer(Modifier.height(2.dp))
             Text(
                 stateWord,
-                fontSize = 10.sp, lineHeight = 14.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 14.sp,
                 color = stateWordColor,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
@@ -1015,10 +1015,10 @@ private fun CollabRolePickerSheet(
     PaSheet(onDismissRequest = onDismiss) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("为 ${selectedAgentLabel(agentId)} 选角色", fontSize = 17.sp, color = ed.Ink)
+                Text("为 ${selectedAgentLabel(agentId)} 选角色", fontSize = PaEditorial.Type.Heading.fontSize, color = ed.Ink)
                 Text(
                     "同一 agent 可绑定不同岗位设定",
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
@@ -1047,7 +1047,7 @@ private fun CollabRolePickerSheet(
             if (roles.isEmpty()) {
                 Text(
                     "该 agent 还没有专属角色,去「协同角色」里新建",
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                     modifier = Modifier.padding(vertical = 6.dp),
                 )
             }
@@ -1066,7 +1066,7 @@ private fun CollabRolePickerSheet(
                     tint = PaEditorial.Primary, modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(10.dp))
-                Text("管理协同角色", fontSize = 14.sp, color = PaEditorial.Primary)
+                Text("管理协同角色", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Primary)
             }
             Spacer(Modifier.height(30.dp))
         }
@@ -1093,13 +1093,13 @@ private fun RolePickRow(title: String, desc: String, selected: Boolean, onClick:
         Column(Modifier.weight(1f)) {
             Text(
                 title,
-                fontSize = 14.sp, lineHeight = 20.sp,
-                fontWeight = FontWeight(650), color = ed.Ink,
+                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
+                fontWeight = FontWeight.SemiBold, color = ed.Ink,
             )
             if (desc.isNotBlank()) {
                 Text(
                     desc,
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted,
                     modifier = Modifier.padding(top = 2.dp),
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )

@@ -219,16 +219,16 @@ fun ContextMenu(
                                 pivotFractionY = if (flipY) 1f else 0f,
                             )
                         }
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                         // 玻璃语言:悬浮菜单 = 实色底(PaEditorial.Raised,可读性优先)+ 顶缘发丝高光
                         // + 一点投影——"浮在内容之上"的层级感来自亮边与影子,不是透。
-                        .paGlass(RoundedCornerShape(14.dp), tint = PaEditorial.Raised, shadowElevation = 16.dp)
+                        .paGlass(RoundedCornerShape(PaEditorial.Radius.IconButton), tint = PaEditorial.Raised, shadowElevation = 16.dp)
                         .padding(vertical = 6.dp),
                 ) {
                     // 对象摘要行 —— 让用户确认"这次操作针对谁"
                     Text(
                         summary,
-                        fontSize = 11.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -258,7 +258,7 @@ fun ContextMenu(
                                 )
                                 Spacer(Modifier.width(10.dp))
                             }
-                            Text(item.label, fontSize = 13.sp, color = tint)
+                            Text(item.label, fontSize = PaEditorial.Type.BodySmall.fontSize, color = tint)
                         }
                     }
                 }

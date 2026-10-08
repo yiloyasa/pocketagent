@@ -949,13 +949,13 @@ fun ThreadsScreen(
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 6.dp)
-                        .background(bannerTone.container, RoundedCornerShape(13.dp))
+                        .background(bannerTone.container, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         message, Modifier.weight(1f),
-                        fontSize = 12.sp, lineHeight = 17.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                         color = bannerTone.text, maxLines = 2,
                     )
                     Text(
@@ -963,8 +963,8 @@ fun ThreadsScreen(
                         Modifier
                             .pressable(enabled = !retrying) { retry() }
                             .padding(horizontal = 8.dp, vertical = 12.dp),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight(650),
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
+                        fontWeight = FontWeight.SemiBold,
                         // 主色只给当前操作(重试)
                         color = PaEditorial.Primary,
                     )
@@ -988,14 +988,14 @@ fun ThreadsScreen(
                 Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f)) {
                     if (query.isEmpty()) {
-                        Text("搜索会话或 Agent", fontSize = 14.sp, color = ed.Subtle, maxLines = 1)
+                        Text("搜索会话或 Agent", fontSize = PaEditorial.Type.Body.fontSize, color = ed.Subtle, maxLines = 1)
                     }
                     BasicTextField(
                         value = query,
                         onValueChange = { query = it },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        textStyle = TextStyle(fontSize = 14.sp, lineHeight = 21.sp, color = ed.Ink),
+                        textStyle = TextStyle(fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 21.sp, color = ed.Ink),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(PaEditorial.Primary),
                     )
                 }
@@ -1132,7 +1132,7 @@ fun ThreadsScreen(
                         else -> "只看某个分组(分组列表暂时读不到,点「全部」可退出)"
                     },
                     Modifier.padding(top = 6.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                     color = ed.Muted,
                 )
             }
@@ -1249,9 +1249,9 @@ fun ThreadsScreen(
                                 Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 8.dp)
-                                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                     .padding(12.dp),
-                                fontSize = 12.sp, lineHeight = 17.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                                 color = EditorialTone.DENIED.text,
                             )
                         }
@@ -1269,9 +1269,9 @@ fun ThreadsScreen(
                                 Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 8.dp)
-                                    .background(ed.DeniedContainer, RoundedCornerShape(13.dp))
+                                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                     .padding(12.dp),
-                                fontSize = 12.sp, lineHeight = 17.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                                 color = EditorialTone.DENIED.text,
                             )
                         }
@@ -1293,7 +1293,7 @@ fun ThreadsScreen(
                                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                                     containerColor = PaEditorial.Graphite,
                                 ),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                             ) { Text(emptyView.actionLabel, color = Color.White) }
                         }
                         ThreadsEmptyAction.CLEAR_FILTERS -> Row(
@@ -1577,7 +1577,7 @@ fun ThreadsScreen(
                             Spacer(Modifier.height(12.dp))
                             Text(
                                 "左滑可置顶或归档;长按查看更多管理操作。",
-                                fontSize = 12.sp, lineHeight = 17.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                                 color = ed.Subtle,
                             )
                         }
@@ -1602,7 +1602,7 @@ fun ThreadsScreen(
                     else -> "在 App 中归档"
                 },
                 Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                fontSize = 17.sp,
+                fontSize = PaEditorial.Type.Heading.fontSize,
                 color = ed.Ink,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
             )
@@ -1610,7 +1610,7 @@ fun ThreadsScreen(
                 if (action == "delete") "将删除「${session.title}」及其电脑端会话记录。"
                 else "电脑端原始会话保留。${if (action == "archive") "可在 App 已归档列表恢复。" else "从 App 列表隐藏。"}",
                 Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 10.dp),
-                fontSize = 14.sp,
+                fontSize = PaEditorial.Type.Body.fontSize,
                 color = ed.Muted,
             )
             Row(
@@ -1646,7 +1646,7 @@ fun ThreadsScreen(
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                         containerColor = if (action == "delete") PaEditorial.Denied else PaEditorial.Graphite,
                     ),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                 // 删除腿坐 Denied 实底读 OnDenied(深/黑客盘=暗红棕);石墨腿保持白字
                 ) { Text("确认", color = if (action == "delete") PaEditorial.OnDenied else Color.White) }
             }
@@ -1713,19 +1713,19 @@ fun ThreadsScreen(
                 Text(
                     t.title.ifBlank { "未命名会话" },
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    fontSize = 17.sp, color = ed.Ink,
+                    fontSize = PaEditorial.Type.Heading.fontSize, color = ed.Ink,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "移动到分组",
                     Modifier.padding(start = 24.dp, top = 16.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                 )
                 // "未分组"的含义:在**点击之前**就可见(不能点了才弹说明)
                 Text(
                     ungroupedHint(),
                     Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                 )
                 // 【分组覆盖范围说明】用户实锤:要明确"分组功能覆盖哪些 Agent"。
                 // 分组是 PocketAgent 自己的组织功能(daemon 库的 ThreadSection),
@@ -1733,7 +1733,7 @@ fun ThreadsScreen(
                 Text(
                     SECTION_COVERAGE_NOTE,
                     Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                 )
                 // 当前所在分组打上「当前」并在文案里标明 —— 用户点开就能确认"这条现在在哪"
                 SheetAction(
@@ -1761,7 +1761,7 @@ fun ThreadsScreen(
                 Text(
                     "更多操作",
                     Modifier.padding(start = 24.dp, bottom = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                 )
                 SheetAction(
                     R.drawable.ic_lucide_pin,
@@ -1794,13 +1794,13 @@ fun ThreadsScreen(
                 Text(
                     "分叉",
                     Modifier.padding(start = 24.dp, bottom = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                 )
                 SheetAction(R.drawable.ic_lucide_git_branch, "分叉会话") { forkThread(t) }
                 Text(
                     forkConsequence(),
                     Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp),
-                    fontSize = 12.sp, lineHeight = 17.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Subtle,
                 )
             }
         }
@@ -1923,8 +1923,8 @@ private fun ThreadCard(
                 value = renameField,
                 onValueChange = onRenameFieldChange,
                 singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp, color = ed.Ink),
-                shape = RoundedCornerShape(12.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = PaEditorial.Type.Heading.fontSize, color = ed.Ink),
+                shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(focus)
@@ -1950,7 +1950,7 @@ private fun ThreadCard(
                     contentDescription = null,
                     modifier = Modifier
                         .size(PaEditorial.Space.IconBox)
-                        .clip(RoundedCornerShape(13.dp)),
+                        .clip(RoundedCornerShape(PaEditorial.Radius.IconButton)),
                     contentScale = ContentScale.Crop,
                 )
                 Spacer(Modifier.width(12.dp))
@@ -1972,8 +1972,8 @@ private fun ThreadCard(
                             // weight(1f) 吃掉中段空间:时间钉在行右缘(Linear/Telegram 的
                             // 行内锚点);长标题在剩余空间内单行截断。
                             Modifier.weight(1f),
-                            fontSize = 15.sp, lineHeight = 21.sp,
-                            fontWeight = FontWeight(650),
+                            fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = ed.Ink,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -1981,7 +1981,7 @@ private fun ThreadCard(
                         Spacer(Modifier.width(8.dp))
                         Text(
                             threadRowTime(t.updatedAtUnixMs),
-                            fontSize = 11.sp, lineHeight = 16.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                             color = ed.Subtle,
                             maxLines = 1,
                         )
@@ -2001,7 +2001,7 @@ private fun ThreadCard(
                                 summary != null -> Text(
                                     summary,
                                     Modifier.weight(1f),
-                                    fontSize = 12.sp, lineHeight = 17.sp,
+                                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                                     color = EditorialTone.DENIED.text,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -2009,7 +2009,7 @@ private fun ThreadCard(
                                 countLine != null -> Text(
                                     countLine,
                                     Modifier.weight(1f),
-                                    fontSize = 12.sp, lineHeight = 17.sp,
+                                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                                     color = ed.Muted,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -2035,7 +2035,7 @@ private fun ThreadCard(
                     Text(
                         meta,
                         Modifier.fillMaxWidth().padding(top = 3.dp),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -2065,7 +2065,7 @@ private fun PcSessionCard(
             contentDescription = null,
             modifier = Modifier
                 .size(PaEditorial.Space.IconBox)
-                .clip(RoundedCornerShape(13.dp)),
+                .clip(RoundedCornerShape(PaEditorial.Radius.IconButton)),
             contentScale = ContentScale.Crop,
         )
         Spacer(Modifier.width(12.dp))
@@ -2075,8 +2075,8 @@ private fun PcSessionCard(
                 Text(
                     info.title.ifEmpty { "(未命名会话)" },
                     Modifier.weight(1f),
-                    fontSize = 15.sp, lineHeight = 21.sp,
-                    fontWeight = FontWeight(650),
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = ed.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2085,14 +2085,14 @@ private fun PcSessionCard(
                 if (importing) {
                     Text(
                         "正在打开…",
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = PaEditorial.Primary,
                         maxLines = 1,
                     )
                 } else {
                     Text(
                         threadRowTime(info.updatedAtUnixMs),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
                     )
@@ -2106,7 +2106,7 @@ private fun PcSessionCard(
             Text(
                 meta,
                 Modifier.fillMaxWidth().padding(top = 3.dp),
-                fontSize = 11.sp, lineHeight = 16.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                 color = ed.Subtle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -2138,7 +2138,7 @@ private fun PcAgentSessionCard(
             contentDescription = null,
             modifier = Modifier
                 .size(PaEditorial.Space.IconBox)
-                .clip(RoundedCornerShape(13.dp)),
+                .clip(RoundedCornerShape(PaEditorial.Radius.IconButton)),
             contentScale = ContentScale.Crop,
         )
         Spacer(Modifier.width(12.dp))
@@ -2148,8 +2148,8 @@ private fun PcAgentSessionCard(
                 Text(
                     info.title.ifEmpty { "(未命名会话)" },
                     Modifier.weight(1f),
-                    fontSize = 15.sp, lineHeight = 21.sp,
-                    fontWeight = FontWeight(650),
+                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = ed.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2158,14 +2158,14 @@ private fun PcAgentSessionCard(
                 if (importing) {
                     Text(
                         "正在打开…",
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = PaEditorial.Primary,
                         maxLines = 1,
                     )
                 } else {
                     Text(
                         threadRowTime(info.updatedAtUnixMs),
-                        fontSize = 11.sp, lineHeight = 16.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
                     )
@@ -2179,7 +2179,7 @@ private fun PcAgentSessionCard(
             Text(
                 meta,
                 Modifier.fillMaxWidth().padding(top = 3.dp),
-                fontSize = 11.sp, lineHeight = 16.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                 color = ed.Subtle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -2229,7 +2229,7 @@ private fun ThreadsSkeletonRow(reduceMotion: Boolean, index: Int) {
     ) {
         ThreadsShimmerBox(
             Modifier.size(PaEditorial.Space.IconBox),
-            RoundedCornerShape(13.dp),
+            RoundedCornerShape(PaEditorial.Radius.IconButton),
             reduceMotion,
         )
         Spacer(Modifier.width(12.dp))
@@ -2238,18 +2238,18 @@ private fun ThreadsSkeletonRow(reduceMotion: Boolean, index: Int) {
                 // 标题条宽度按行微变:整列一个形状会显得像坏掉了
                 ThreadsShimmerBox(
                     Modifier.fillMaxWidth(0.62f - (index % 3) * 0.08f).height(14.dp),
-                    RoundedCornerShape(6.dp), reduceMotion,
+                    RoundedCornerShape(PaEditorial.Radius.Terminal), reduceMotion,
                 )
                 Spacer(Modifier.width(8.dp))
                 ThreadsShimmerBox(
                     Modifier.width(44.dp).height(10.dp),
-                    RoundedCornerShape(5.dp), reduceMotion,
+                    RoundedCornerShape(PaEditorial.Radius.Terminal), reduceMotion,
                 )
             }
             Spacer(Modifier.height(7.dp))
             ThreadsShimmerBox(
                 Modifier.fillMaxWidth(0.40f - (index % 2) * 0.12f).height(10.dp),
-                RoundedCornerShape(5.dp), reduceMotion,
+                RoundedCornerShape(PaEditorial.Radius.Terminal), reduceMotion,
             )
         }
     }
@@ -2300,7 +2300,7 @@ private fun ThreadsSectionHeader(title: String, count: Int) {
     ) {
         Text(title, style = PaEditorial.Type.Heading, color = ed.Ink)
         Spacer(Modifier.weight(1f))
-        Text("$count 个会话", fontSize = 12.sp, color = ed.Muted)
+        Text("$count 个会话", fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Muted)
     }
 }
 
@@ -2323,7 +2323,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
         ) {
             Text(
                 "新建会话", Modifier.weight(1f),
-                fontSize = 17.sp, color = ed.Ink,
+                fontSize = PaEditorial.Type.Heading.fontSize, color = ed.Ink,
             )
             // 确认态:本次创建将使用的 agent,与唯一选中源 AgentConnection.selectedAgent
             // 一致(设置页/主页切换后这里同步变化),避免"切了 Pi 仍建出 codex 会话"的错觉。
@@ -2336,13 +2336,13 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
             }
             Text(
                 selectedAgentLabel(AgentConnection.selectedAgent),
-                fontSize = 12.sp, color = ed.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Muted,
             )
         }
         Text(
             "选择这个会话在电脑上的工作文件夹(agent 只在该文件夹里干活)",
             Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-            fontSize = 12.sp, lineHeight = 17.sp, color = ed.Muted,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = ed.Muted,
         )
         Spacer(Modifier.height(10.dp))
         // recents 多时靠 PaSheet 内建滚动,"浏览电脑文件夹…/取消/创建"不会被推出视口
@@ -2358,7 +2358,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                         .fillMaxWidth()
                         .pressable { picked = ws }
                         // 选中态 = 当前选择(主色浅底+主色文字;主色只给当前操作的纪律落点)
-                        .background(if (picked == ws) ed.PrimaryContainer else Color.Transparent, RoundedCornerShape(12.dp))
+                        .background(if (picked == ws) ed.PrimaryContainer else Color.Transparent, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -2369,7 +2369,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        label, fontSize = 13.sp,
+                        label, fontSize = PaEditorial.Type.BodySmall.fontSize,
                         color = if (picked == ws) PaEditorial.Primary else ed.Ink,
                         maxLines = 1,
                     )
@@ -2378,7 +2378,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
             if (recents.isEmpty()) {
                 Text(
                     "请从“浏览电脑文件夹”选择本次会话的工作区",
-                    fontSize = 12.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = ed.Subtle,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
                 )
@@ -2388,8 +2388,8 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                 Modifier
                     .fillMaxWidth()
                     .pressable { showBrowser = true }
-                    .background(ed.Surface, RoundedCornerShape(13.dp))
-                    .border(1.dp, ed.Hairline, RoundedCornerShape(13.dp))
+                    .background(ed.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                    .border(1.dp, ed.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -2398,12 +2398,12 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                     tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
                 )
                 Spacer(Modifier.width(10.dp))
-                Text("浏览电脑文件夹…", fontSize = 13.sp, color = PaEditorial.Primary)
+                Text("浏览电脑文件夹…", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Primary)
             }
             if (picked.isNotBlank()) {
                 Text(
                     "已选:$picked",
-                    fontSize = 11.sp, color = ed.Subtle,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Subtle,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
                     maxLines = 1,
                 )
@@ -2419,7 +2419,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                         containerColor = PaEditorial.Graphite,
                     ),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                 ) {
                     Text(
                         if (picked.isBlank()) "先选工作区" else "创建",
@@ -2452,7 +2452,7 @@ fun FilterChip2(label: String, selected: Boolean, onClick: () -> Unit) {
             )
             .padding(horizontal = 16.dp, vertical = 7.dp),
     ) {
-        Text(label, fontSize = 13.sp, color = if (selected) PaEditorial.Primary else PaEditorial.Muted)
+        Text(label, fontSize = PaEditorial.Type.BodySmall.fontSize, color = if (selected) PaEditorial.Primary else PaEditorial.Muted)
     }
 }
 
@@ -2487,8 +2487,8 @@ private fun EditorialFilterChip(
     ) {
         Text(
             label,
-            fontSize = 13.sp, lineHeight = 18.sp,
-            fontWeight = if (selected) FontWeight(650) else FontWeight.Normal,
+            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) PaEditorial.OnGraphite else ed.Ink,
             maxLines = 1,
         )
@@ -2496,7 +2496,7 @@ private fun EditorialFilterChip(
             Spacer(Modifier.width(6.dp))
             Text(
                 "$count",
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = if (selected) PaEditorial.OnGraphiteSubtle else ed.Subtle,
             )
         }
@@ -2553,7 +2553,7 @@ fun SheetAction(iconRes: Int, label: String, tint: Color = PaEditorial.Ink, onCl
     ) {
         Icon(painterResource(iconRes), null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
-        Text(label, fontSize = 15.sp, color = tint)
+        Text(label, fontSize = PaEditorial.Type.Heading.fontSize, color = tint)
     }
 }
 
@@ -2604,15 +2604,15 @@ private fun SectionChip(
         Spacer(Modifier.width(6.dp))
         Text(
             label,
-            fontSize = 13.sp, lineHeight = 18.sp,
-            fontWeight = if (selected) FontWeight(650) else FontWeight.Normal,
+            fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) PaEditorial.OnGraphite else ed.Ink,
             maxLines = 1,
         )
         if (count > 0) {
             Spacer(Modifier.width(6.dp))
             Text(
-                "$count", fontSize = 11.sp,
+                "$count", fontSize = PaEditorial.Type.Caption.fontSize,
                 color = if (selected) PaEditorial.OnGraphiteSubtle else ed.Subtle,
             )
         }
@@ -2637,7 +2637,7 @@ private fun NewSectionChip(onClick: () -> Unit) {
             tint = ed.Muted, modifier = Modifier.size(13.dp),
         )
         Spacer(Modifier.width(6.dp))
-        Text("新建分组", fontSize = 13.sp, color = ed.Ink)
+        Text("新建分组", fontSize = PaEditorial.Type.BodySmall.fontSize, color = ed.Ink)
     }
 }
 
@@ -2668,20 +2668,20 @@ private fun SectionManagerSheet(
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 26.dp)) {
             Text(
                 if (manage == null) "新建分组" else "分组设置",
-                fontSize = 17.sp, color = ed.Ink,
+                fontSize = PaEditorial.Type.Heading.fontSize, color = ed.Ink,
             )
             // 【分组覆盖范围说明】与长按"移动到分组"面板同一句话:分组覆盖全部
             // agent 的会话,新建/改名/删除分组的动作也只影响 PocketAgent 自己的整理。
             Text(
                 SECTION_COVERAGE_NOTE,
                 Modifier.padding(top = 4.dp),
-                fontSize = 11.sp, color = ed.Subtle,
+                fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Subtle,
             )
             if (manage != null) {
                 Text(
                     manage.name.ifBlank { "未命名分组" },
                     Modifier.padding(top = 2.dp),
-                    fontSize = 12.sp, color = ed.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = ed.Muted,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -2691,7 +2691,7 @@ private fun SectionManagerSheet(
                     "删除分组「${manage?.name?.ifBlank { "未命名分组" }.orEmpty()}」？\n" +
                         "组里的会话不会被删除,只会变成未分组。",
                     Modifier.padding(top = 14.dp),
-                    fontSize = 14.sp, color = ed.Ink,
+                    fontSize = PaEditorial.Type.Body.fontSize, color = ed.Ink,
                 )
                 Row(
                     Modifier.fillMaxWidth().padding(top = 16.dp),
@@ -2704,7 +2704,7 @@ private fun SectionManagerSheet(
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                             containerColor = PaEditorial.Denied,
                         ),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                     ) { Text("确认删除", color = PaEditorial.OnDenied) }
                 }
             } else {
@@ -2732,7 +2732,7 @@ private fun SectionManagerSheet(
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                             containerColor = PaEditorial.Graphite,
                         ),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                     ) {
                         Text(
                             if (manage == null) "创建" else "保存",

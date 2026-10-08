@@ -89,11 +89,10 @@ import pocketagent.v1.ReadFileRequest
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen(initialUrl: String = "", onBack: () -> Unit = {}) {
-    // 编辑式浅色 M3 色板只包本页子树(chrome 编辑式;WebView 内容区跟页面自身)
-    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
-        EditorialSystemBars()
-        BrowserScreenBody(initialUrl, onBack)
-    }
+    // 【色板并轨 2026-10-09】编辑式 M3 色板已上提 MainActivity NavHost 外层包全 app,
+    // 本页不再重复包裹(editorialM3Scheme 定义也已上提 theme 层)
+    EditorialSystemBars()
+    BrowserScreenBody(initialUrl, onBack)
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -424,19 +423,19 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
             Box(
                 Modifier
                     .weight(1f)
-                    .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                     .padding(horizontal = 12.dp, vertical = 11.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (input.isEmpty()) {
-                    Text("输入网址,或粘贴电脑上的文件路径", fontSize = 13.sp, color = PaEditorial.Muted)
+                    Text("输入网址,或粘贴电脑上的文件路径", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
                 }
                 BasicTextField(
                     value = input,
                     onValueChange = { input = it },
                     singleLine = true,
-                    textStyle = TextStyle(color = PaEditorial.Ink, fontSize = 13.sp),
+                    textStyle = TextStyle(color = PaEditorial.Ink, fontSize = PaEditorial.Type.BodySmall.fontSize),
                     cursorBrush = SolidColor(PaEditorial.Primary),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Uri,
@@ -491,7 +490,7 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     else -> "内置浏览器"
                 },
                 Modifier.weight(1f),
-                fontSize = 11.sp,
+                fontSize = PaEditorial.Type.Caption.fontSize,
                 color = PaEditorial.Muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -605,8 +604,8 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp)
                     .heightIn(max = 240.dp)
                     .verticalScroll(rememberScrollState())
-                    .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp)),
+                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Card)),
             ) {
                 Row(
                     Modifier
@@ -614,12 +613,12 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                         .padding(start = 14.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("电脑上的 dev server", Modifier.weight(1f), fontSize = 13.sp, color = PaEditorial.Ink)
+                    Text("电脑上的 dev server", Modifier.weight(1f), fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink)
                     if (scanning) {
-                        Text("扫描中…", fontSize = 11.sp, color = PaEditorial.Muted)
+                        Text("扫描中…", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
                     } else {
                         Text(
-                            "重新扫描", fontSize = 11.sp, color = PaEditorial.Primary,
+                            "重新扫描", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Primary,
                             modifier = Modifier.clickable { refreshDevServers() },
                         )
                     }
@@ -628,12 +627,12 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     scanning && servers.isEmpty() -> Text(
                         "正在拨 3000/5173/8000/8080 等常见端口…",
                         Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        fontSize = 11.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     )
                     servers.isEmpty() -> Text(
                         scanHint ?: "没有正在运行的 dev server",
                         Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        fontSize = 11.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     )
                     else -> servers.forEach { s ->
                         Row(
@@ -643,24 +642,24 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                                 .padding(horizontal = 14.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(":${s.port}", fontSize = 13.sp, color = PaEditorial.Primary)
+                            Text(":${s.port}", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Primary)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     s.title.ifBlank {
                                         s.serverHeader.ifBlank { "HTTP 服务" }
                                     },
-                                    fontSize = 12.5.sp, color = PaEditorial.Ink,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
                                 if (s.serverHeader.isNotBlank()) {
                                     Text(
-                                        s.serverHeader, fontSize = 10.sp, color = PaEditorial.Muted,
+                                        s.serverHeader, fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
-                            Text("打开 →", fontSize = 11.sp, color = PaEditorial.Muted)
+                            Text("打开 →", fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
                         }
                     }
                 }
@@ -668,7 +667,7 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     Text(
                         "手机与电脑需在同一网络(WiFi / Tailscale)",
                         Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
-                        fontSize = 10.sp, color = PaEditorial.Muted,
+                        fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
                     )
                 }
             }

@@ -373,13 +373,13 @@ private fun DrawerPanel(
                         Box(
                             Modifier
                                 .size(40.dp)
-                                .background(DrawerSkin.Logo, RoundedCornerShape(12.dp)),
+                                .background(DrawerSkin.Logo, RoundedCornerShape(PaEditorial.Radius.IconButton)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Image(
                                 bitmap = agentBitmap(R.mipmap.ic_launcher),
                                 contentDescription = null,
-                                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)),
+                                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(PaEditorial.Radius.Chip)),
                                 contentScale = ContentScale.Crop,
                             )
                         }
@@ -387,7 +387,7 @@ private fun DrawerPanel(
                         Column(Modifier.weight(1f)) {
                             Text(
                                 "PocketAgent",
-                                fontSize = 16.sp,
+                                fontSize = PaEditorial.Type.Heading.fontSize,
                                 color = PaEditorial.OnGraphite,
                                 fontWeight = FontWeight.SemiBold,
                             )
@@ -420,7 +420,7 @@ private fun DrawerPanel(
                                 .fillMaxWidth()
                                 .heightIn(min = 44.dp)
                                 .pressable(haptic = true) { onOpenOnboarding() }
-                                .background(DrawerSkin.ActiveBg, RoundedCornerShape(12.dp))
+                                .background(DrawerSkin.ActiveBg, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                 .padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -432,12 +432,12 @@ private fun DrawerPanel(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     "还没连上电脑",
-                                    fontSize = 13.sp, color = PaEditorial.OnGraphite,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.OnGraphite,
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
                                     "点这里,看怎么让电脑出现在手机上",
-                                    fontSize = 11.sp, color = DrawerSkin.HeadOk,
+                                    fontSize = PaEditorial.Type.Caption.fontSize, color = DrawerSkin.HeadOk,
                                 )
                             }
                             Icon(
@@ -454,7 +454,7 @@ private fun DrawerPanel(
                             Modifier
                                 .fillMaxWidth()
                                 .pressable(haptic = true) { onNewThread() }
-                                .background(PaEditorial.Primary, RoundedCornerShape(14.dp))
+                                .background(PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.IconButton))
                                 .padding(vertical = 12.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
@@ -465,7 +465,7 @@ private fun DrawerPanel(
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                "新建对话", fontSize = 14.sp,
+                                "新建对话", fontSize = PaEditorial.Type.Body.fontSize,
                                 color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
                             )
                         }
@@ -554,11 +554,11 @@ private fun DrawerPanel(
                 Text(
                     model.takeIf { it.isNotEmpty() } ?: "跟随桌面配置",
                     Modifier.weight(1f),
-                    fontSize = 10.5.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = PaEditorial.OnGraphiteSubtle,
                     maxLines = 1,
                 )
-                Text("v${BuildConfig.VERSION_NAME}", fontSize = 10.5.sp, color = PaEditorial.OnGraphiteSubtle)
+                Text("v${BuildConfig.VERSION_NAME}", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.OnGraphiteSubtle)
             }
         }
     }
@@ -581,7 +581,7 @@ private fun DrawerHostStatus(hostTitle: String, link: PaHostLink) {
         Spacer(Modifier.width(6.dp))
         Text(
             text,
-            fontSize = 10.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             color = if (link == PaHostLink.CONNECTED) DrawerSkin.HeadOk else PaEditorial.OnGraphiteSubtle,
             maxLines = 1,
         )
@@ -620,7 +620,7 @@ private fun RailContent(
         Box(
             Modifier
                 .size(44.dp)
-                .clip(RoundedCornerShape(13.dp))
+                .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .pressable { onToggleCollapsed() },
             contentAlignment = Alignment.Center,
         ) {
@@ -713,7 +713,7 @@ private fun RailIcon(
                 .pressableLong(onClick = onClick, onLongPress = { showTip = true })
                 .background(
                     if (selected) DrawerSkin.ActiveBg else Color.Transparent,
-                    RoundedCornerShape(13.dp),
+                    RoundedCornerShape(PaEditorial.Radius.IconButton),
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -731,10 +731,10 @@ private fun RailIcon(
                 Text(
                     label,
                     Modifier
-                        .background(PaEditorial.OnGraphite, RoundedCornerShape(8.dp))
+                        .background(PaEditorial.OnGraphite, RoundedCornerShape(PaEditorial.Radius.Chip))
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                     color = PaEditorial.GraphiteDrawer,
-                    fontSize = 11.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     maxLines = 1,
                 )
             }
@@ -748,7 +748,7 @@ private fun DrawerGroupLabel(text: String) {
     Text(
         text,
         Modifier.padding(start = 12.dp, top = 20.dp, bottom = 8.dp),
-        fontSize = 10.5.sp,
+        fontSize = PaEditorial.Type.Micro.fontSize,
         color = DrawerSkin.Section,
         fontWeight = FontWeight.Medium,
         letterSpacing = 1.4.sp, // 中文字距拉开一档
@@ -774,7 +774,7 @@ private fun DrawerItem(
             .pressable(haptic = true) { onClick() }
             .background(
                 if (selected) DrawerSkin.ActiveBg else Color.Transparent,
-                RoundedCornerShape(12.dp),
+                RoundedCornerShape(PaEditorial.Radius.IconButton),
             )
             .padding(start = 12.dp, end = 12.dp)
             .heightIn(min = 48.dp),
@@ -789,7 +789,7 @@ private fun DrawerItem(
         Text(
             title,
             Modifier.weight(1f),
-            fontSize = 13.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             color = if (selected) DrawerSkin.ActiveText else DrawerSkin.Link,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
@@ -809,13 +809,13 @@ private fun DrawerBadge(count: Int, content: @Composable () -> Unit) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .background(DrawerSkin.Badge, RoundedCornerShape(7.dp))
+                    .background(DrawerSkin.Badge, RoundedCornerShape(PaEditorial.Radius.Terminal))
                     .padding(horizontal = 4.dp, vertical = 1.dp),
             ) {
                 Text(
                     if (count > 99) "99+" else count.toString(),
-                    fontSize = 9.sp, lineHeight = 11.sp,
-                    color = PaEditorial.OnGraphite, fontWeight = FontWeight(650),
+                    fontSize = PaEditorial.Type.State.fontSize, lineHeight = 11.sp,
+                    color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
                 )
             }
         }
@@ -829,13 +829,13 @@ private fun DrawerBadge(count: Int, content: @Composable () -> Unit) {
 private fun DrawerBadgeText(count: Int) {
     Box(
         Modifier
-            .background(DrawerSkin.Badge, RoundedCornerShape(7.dp))
+            .background(DrawerSkin.Badge, RoundedCornerShape(PaEditorial.Radius.Terminal))
             .padding(horizontal = 6.dp, vertical = 3.dp),
     ) {
         Text(
             if (count > 99) "99+" else count.toString(),
-            fontSize = 10.sp, lineHeight = 12.sp,
-            color = PaEditorial.OnGraphite, fontWeight = FontWeight(650),
+            fontSize = PaEditorial.Type.Micro.fontSize, lineHeight = 12.sp,
+            color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
         )
     }
 }

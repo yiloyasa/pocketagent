@@ -466,11 +466,11 @@ fun HistoryQuickBubble(
                         // 以左缘中点为轴缩放:气泡从刻度条方向长出来,不是从卡片中心鼓包
                         transformOrigin = TransformOrigin(0f, 0.5f)
                     }
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                     // 玻璃语言(与 ContextMenu 同族):实色底 + 顶缘发丝高光 + 投影;
                     // 黑客模式走 GraphiteDrawer 底(契约同浮层面板)。
                     .paGlass(
-                        RoundedCornerShape(14.dp),
+                        RoundedCornerShape(PaEditorial.Radius.IconButton),
                         tint = if (hacker) PaEditorial.GraphiteDrawer else PaEditorial.Raised,
                         shadowElevation = 16.dp,
                     )
@@ -479,47 +479,47 @@ fun HistoryQuickBubble(
                 // 标题(两行):消息首行,粗体
                 Text(
                     entry.title,
-                    fontSize = 13.5.sp,
+                    fontSize = PaEditorial.Type.Body.fontSize,
                     lineHeight = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = PaEditorial.Ink,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    fontFamily = if (hacker) PaHacker.mono else null,
+                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                 )
                 Spacer(Modifier.height(5.dp))
                 // 元数据行:N/M · 日期 · 图片数 —— 单行紧凑,信息密度高
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         HistoryQuickNavLogic.positionLabel(index, entries.size),
-                        fontSize = 10.5.sp,
+                        fontSize = PaEditorial.Type.Micro.fontSize,
                         color = PaEditorial.Primary,
                         fontWeight = FontWeight.SemiBold,
-                        fontFamily = PaHacker.mono,
+                        fontFamily = PaEditorial.MonoFont,
                     )
                     val stamp = HistoryQuickNavLogic.historyStampOf(
                         entry.sentAtMs, System.currentTimeMillis(),
                     )
                     if (stamp.isNotEmpty()) {
                         Spacer(Modifier.width(6.dp))
-                        Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                        Text("·", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
                         Spacer(Modifier.width(6.dp))
                         Text(
                             stamp,
-                            fontSize = 10.5.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             color = PaEditorial.Subtle,
-                            fontFamily = PaHacker.mono,
+                            fontFamily = PaEditorial.MonoFont,
                         )
                     }
                     if (entry.imageCount > 0) {
                         Spacer(Modifier.width(6.dp))
-                        Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                        Text("·", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
                         Spacer(Modifier.width(6.dp))
                         Text(
                             "${entry.imageCount} 图",
-                            fontSize = 10.5.sp,
+                            fontSize = PaEditorial.Type.Micro.fontSize,
                             color = PaEditorial.Subtle,
-                            fontFamily = PaHacker.mono,
+                            fontFamily = PaEditorial.MonoFont,
                         )
                     }
                 }
@@ -533,15 +533,15 @@ fun HistoryQuickBubble(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .size(44.dp)
-                                .clip(RoundedCornerShape(8.dp)),
+                                .clip(RoundedCornerShape(PaEditorial.Radius.Chip)),
                         )
                         if (entry.imageCount > 1) {
                             Spacer(Modifier.width(6.dp))
                             Text(
                                 "+${entry.imageCount - 1}",
-                                fontSize = 11.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Subtle,
-                                fontFamily = PaHacker.mono,
+                                fontFamily = PaEditorial.MonoFont,
                             )
                         }
                     }
@@ -549,12 +549,12 @@ fun HistoryQuickBubble(
                     Spacer(Modifier.height(4.dp))
                     Text(
                         entry.summary,
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         lineHeight = 17.sp,
                         color = if (hacker) PaEditorial.OnGraphiteMuted else PaEditorial.Muted,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        fontFamily = if (hacker) PaHacker.mono else null,
+                        fontFamily = if (hacker) PaEditorial.MonoFont else null,
                     )
                 }
                 Spacer(Modifier.height(7.dp))
@@ -563,7 +563,7 @@ fun HistoryQuickBubble(
                     Modifier
                         .fillMaxWidth()
                         .height(2.dp)
-                        .clip(RoundedCornerShape(1.dp))
+                        .clip(RoundedCornerShape(PaEditorial.Radius.Terminal))
                         .background(if (hacker) PaEditorial.OnGraphiteSubtle else PaEditorial.Hairline),
                 ) {
                     Box(
@@ -712,17 +712,17 @@ fun HistoryQuickPanel(
             ) {
                 Text(
                     "历史消息",
-                    fontSize = 16.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize,
                     fontWeight = FontWeight.SemiBold,
                     color = PaEditorial.Ink,
-                    fontFamily = if (hacker) PaHacker.mono else null,
+                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
                     if (query.isBlank()) "${entries.size} 条" else "${filtered.size}/${entries.size} 条",
-                    fontSize = 11.5.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
                     color = PaEditorial.Subtle,
-                    fontFamily = if (hacker) PaHacker.mono else null,
+                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                 )
                 Spacer(Modifier.width(4.dp))
                 IconActionButton(
@@ -740,9 +740,9 @@ fun HistoryQuickPanel(
                 placeholder = {
                     Text(
                         "搜索这一场对话…",
-                        fontSize = 12.5.sp,
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
                         color = PaEditorial.Subtle,
-                        fontFamily = if (hacker) PaHacker.mono else null,
+                        fontFamily = if (hacker) PaEditorial.MonoFont else null,
                     )
                 },
                 leadingIcon = {
@@ -762,9 +762,9 @@ fun HistoryQuickPanel(
                     }
                 },
                 textStyle = androidx.compose.ui.text.TextStyle(
-                    fontSize = 13.sp,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Ink,
-                    fontFamily = if (hacker) PaHacker.mono else null,
+                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                 ),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = if (hacker) PaEditorial.GraphiteCode else PaEditorial.Canvas,
@@ -773,7 +773,7 @@ fun HistoryQuickPanel(
                     unfocusedIndicatorColor = Color.Transparent,
                     cursorColor = PaEditorial.Primary,
                 ),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(PaEditorial.Radius.Chip),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
@@ -788,10 +788,10 @@ fun HistoryQuickPanel(
                             .clip(RoundedCornerShape(50))
                             .clickable(onClick = onJumpEarliest)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Primary,
                         fontWeight = FontWeight.SemiBold,
-                        fontFamily = if (hacker) PaHacker.mono else null,
+                        fontFamily = if (hacker) PaEditorial.MonoFont else null,
                     )
                 }
                 if (onJumpLatest != null) {
@@ -801,10 +801,10 @@ fun HistoryQuickPanel(
                             .clip(RoundedCornerShape(50))
                             .clickable(onClick = onJumpLatest)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
-                        fontSize = 12.sp,
+                        fontSize = PaEditorial.Type.Caption.fontSize,
                         color = PaEditorial.Primary,
                         fontWeight = FontWeight.SemiBold,
-                        fontFamily = if (hacker) PaHacker.mono else null,
+                        fontFamily = if (hacker) PaEditorial.MonoFont else null,
                     )
                 }
             }
@@ -812,9 +812,9 @@ fun HistoryQuickPanel(
                 Text(
                     "还没有可跳转的用户消息",
                     Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    fontSize = 12.5.sp,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Subtle,
-                    fontFamily = if (hacker) PaHacker.mono else null,
+                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                 )
             } else {
                 // 【R2 日期上下文】按自然日分组:组头「今天/昨天/M月d日/早前」,
@@ -840,9 +840,9 @@ fun HistoryQuickPanel(
                                 Text(
                                     "本页没有匹配「${query.trim()}」的消息",
                                     Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                    fontSize = 12.5.sp,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                                     color = PaEditorial.Subtle,
-                                    fontFamily = if (hacker) PaHacker.mono else null,
+                                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                                 )
                             }
                         }
@@ -852,10 +852,10 @@ fun HistoryQuickPanel(
                             Text(
                                 group.label,
                                 Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
-                                fontSize = 11.sp,
+                                fontSize = PaEditorial.Type.Caption.fontSize,
                                 color = PaEditorial.Subtle,
                                 fontWeight = FontWeight.SemiBold,
-                                fontFamily = PaHacker.mono,
+                                fontFamily = PaEditorial.MonoFont,
                             )
                         }
                         itemsIndexed(group.entries, key = { _, e -> e.listIndex }) { i, entry ->
@@ -880,32 +880,32 @@ fun HistoryQuickPanel(
                                 Text(
                                     "${entryIndex + 1}",
                                     Modifier.width(24.dp),
-                                    fontSize = 11.5.sp,
+                                    fontSize = PaEditorial.Type.Caption.fontSize,
                                     color = if (active) PaEditorial.Primary else PaEditorial.Subtle,
                                     fontWeight = FontWeight.SemiBold,
-                                    fontFamily = PaHacker.mono,
+                                    fontFamily = PaEditorial.MonoFont,
                             )
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     entry.title,
-                                    fontSize = 14.sp,
+                                    fontSize = PaEditorial.Type.Body.fontSize,
                                     lineHeight = 19.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (active) PaEditorial.Primary else PaEditorial.Ink,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    fontFamily = if (hacker) PaHacker.mono else null,
+                                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                                 )
                                 if (entry.summary.isNotEmpty()) {
                                     Spacer(Modifier.height(3.dp))
                                     Text(
                                         entry.summary,
-                                        fontSize = 12.sp,
+                                        fontSize = PaEditorial.Type.Caption.fontSize,
                                         lineHeight = 17.sp,
                                         color = if (hacker) PaEditorial.OnGraphiteMuted else PaEditorial.Muted,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
-                                        fontFamily = if (hacker) PaHacker.mono else null,
+                                        fontFamily = if (hacker) PaEditorial.MonoFont else null,
                                     )
                                 }
                             }
@@ -930,9 +930,9 @@ fun HistoryQuickPanel(
                             Text(
                                 "全文搜索中…",
                                 Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                fontSize = 12.5.sp,
+                                fontSize = PaEditorial.Type.BodySmall.fontSize,
                                 color = PaEditorial.Subtle,
-                                fontFamily = if (hacker) PaHacker.mono else null,
+                                fontFamily = if (hacker) PaEditorial.MonoFont else null,
                             )
                         }
                     }
@@ -970,9 +970,9 @@ fun HistoryQuickPanel(
                                         else -> "没有匹配「${s.query}」的消息(电脑端未报告搜索范围)"
                                     },
                                     Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                    fontSize = 12.5.sp,
+                                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                                     color = PaEditorial.Subtle,
-                                    fontFamily = if (hacker) PaHacker.mono else null,
+                                    fontFamily = if (hacker) PaEditorial.MonoFont else null,
                                 )
                             }
                         }
@@ -995,10 +995,10 @@ private fun HistorySectionLabel(text: String) {
     Text(
         text,
         Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
-        fontSize = 11.sp,
+        fontSize = PaEditorial.Type.Caption.fontSize,
         color = PaEditorial.Subtle,
         fontWeight = FontWeight.SemiBold,
-        fontFamily = PaHacker.mono,
+        fontFamily = PaEditorial.MonoFont,
     )
 }
 
@@ -1015,24 +1015,24 @@ private fun RemoteSearchErrorRow(reason: String, hacker: Boolean) {
     ) {
         Text(
             "全文搜索失败",
-            fontSize = 10.5.sp,
+            fontSize = PaEditorial.Type.Micro.fontSize,
             color = PaEditorial.Denied,
             fontWeight = FontWeight.SemiBold,
-            fontFamily = PaHacker.mono,
+            fontFamily = PaEditorial.MonoFont,
         )
         Spacer(Modifier.height(3.dp))
         Text(
             reason,
-            fontSize = 12.5.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             lineHeight = 17.sp,
             color = if (hacker) PaEditorial.OnGraphiteMuted else PaEditorial.Muted,
         )
         Spacer(Modifier.height(2.dp))
         Text(
             "本页过滤不受影响,可稍后重试。",
-            fontSize = 11.sp,
+            fontSize = PaEditorial.Type.Caption.fontSize,
             color = PaEditorial.Subtle,
-            fontFamily = if (hacker) PaHacker.mono else null,
+            fontFamily = if (hacker) PaEditorial.MonoFont else null,
         )
     }
 }
@@ -1093,56 +1093,56 @@ private fun HistorySearchHitCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 if (hit.role == "user") "用户" else "助手",
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = PaEditorial.Primary,
                 fontWeight = FontWeight.SemiBold,
-                fontFamily = PaHacker.mono,
+                fontFamily = PaEditorial.MonoFont,
             )
             val stamp = HistoryQuickNavLogic.historyStampOf(
                 hit.createdAtMs, System.currentTimeMillis(),
             )
             if (stamp.isNotEmpty()) {
                 Spacer(Modifier.width(6.dp))
-                Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                Text("·", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     stamp,
-                    fontSize = 10.5.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = PaEditorial.Subtle,
-                    fontFamily = PaHacker.mono,
+                    fontFamily = PaEditorial.MonoFont,
                 )
             }
             if (hit.turnId.isNotBlank()) {
                 Spacer(Modifier.width(6.dp))
-                Text("·", fontSize = 10.5.sp, color = PaEditorial.Subtle)
+                Text("·", fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Subtle)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "轮次 " + hit.turnId.take(8) + if (hit.turnId.length > 8) "…" else "",
-                    fontSize = 10.5.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = PaEditorial.Subtle,
-                    fontFamily = PaHacker.mono,
+                    fontFamily = PaEditorial.MonoFont,
                 )
             }
         }
         Spacer(Modifier.height(3.dp))
         Text(
             highlightedSnippet(hit.snippet, hit.ranges, query),
-            fontSize = 12.5.sp,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
             lineHeight = 17.sp,
             color = PaEditorial.Ink,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            fontFamily = if (hacker) PaHacker.mono else null,
+            fontFamily = if (hacker) PaEditorial.MonoFont else null,
         )
         if (threadTitle.isNotBlank()) {
             Spacer(Modifier.height(2.dp))
             Text(
                 "会话 · $threadTitle",
-                fontSize = 10.5.sp,
+                fontSize = PaEditorial.Type.Micro.fontSize,
                 color = PaEditorial.Subtle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                fontFamily = if (hacker) PaHacker.mono else null,
+                fontFamily = if (hacker) PaEditorial.MonoFont else null,
             )
         }
     }

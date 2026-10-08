@@ -45,7 +45,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
@@ -95,14 +94,13 @@ fun FilesScreen(
     onBackToHome: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
 ) {
-    // 编辑式浅色 M3 色板只包本页子树(M3 组件自动落编辑式色,深色显示模式不漏深)
-    androidx.compose.material3.MaterialTheme(colorScheme = editorialM3Scheme()) {
-        EditorialSystemBars()
-        FilesScreenBody(
-            initialPath, currentTab, onOpenTerminal, onOpenSettings,
-            onOpenTaskCenter, onOpenBrowser, onBackToHome, onGoTab,
-        )
-    }
+    // 【色板并轨 2026-10-09】编辑式 M3 色板已上提 MainActivity NavHost 外层包全 app,
+    // 本页不再重复包裹(editorialM3Scheme 定义也已上提 theme 层)
+    EditorialSystemBars()
+    FilesScreenBody(
+        initialPath, currentTab, onOpenTerminal, onOpenSettings,
+        onOpenTaskCenter, onOpenBrowser, onBackToHome, onGoTab,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -442,9 +440,9 @@ private fun FilesScreenBody(
                                     },
                                 )
                                 .padding(horizontal = 4.dp, vertical = 14.dp),
-                            fontSize = 11.sp,
+                            fontSize = PaEditorial.Type.Caption.fontSize,
                             lineHeight = 16.sp,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = PaEditorial.MonoFont,
                             fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                             color = if (isCurrent) PaEditorial.Ink else PaEditorial.Primary,
                             maxLines = 1,
@@ -457,18 +455,18 @@ private fun FilesScreenBody(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp)
-                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(13.dp))
+                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         it,
                         Modifier.weight(1f),
-                        color = EditorialTone.DENIED.text, fontSize = 13.sp, lineHeight = 18.sp,
+                        color = EditorialTone.DENIED.text, fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
                     )
                     // 断线/目录打不开时给下一步:原地重试(顶层重拉盘符,目录层重进)
                     TextButton(onClick = { if (showRoots) loadRoots() else loadDir(path) }) {
-                        Text("重试", fontSize = 12.sp, color = EditorialTone.DENIED.text)
+                        Text("重试", fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
                     }
                 }
             }
@@ -478,8 +476,8 @@ private fun FilesScreenBody(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 2.dp)
-                        .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
+                        .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                         .padding(horizontal = 12.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -494,7 +492,7 @@ private fun FilesScreenBody(
                         modifier = Modifier.weight(1f).padding(vertical = 10.dp),
                         singleLine = true,
                         textStyle = TextStyle(
-                            fontSize = 13.5.sp, color = PaEditorial.Ink,
+                            fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink,
                         ),
                         cursorBrush = SolidColor(PaEditorial.Primary),
                         decorationBox = { inner ->
@@ -502,7 +500,7 @@ private fun FilesScreenBody(
                                 if (searchQuery.isEmpty()) {
                                     Text(
                                         "在当前目录中搜索文件名…",
-                                        fontSize = 13.5.sp, color = PaEditorial.Muted,
+                                        fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Muted,
                                     )
                                 }
                                 inner()
@@ -512,7 +510,7 @@ private fun FilesScreenBody(
                     if (searchQuery.isNotEmpty()) {
                         Text(
                             "${visibleEntries.size} 项",
-                            fontSize = 10.5.sp, color = PaEditorial.Muted,
+                            fontSize = PaEditorial.Type.Micro.fontSize, color = PaEditorial.Muted,
                         )
                     }
                 }
@@ -520,7 +518,7 @@ private fun FilesScreenBody(
                 Text(
                     "范围：当前目录（不含子目录），按文件名匹配，不区分大小写",
                     Modifier.padding(start = 18.dp, top = 4.dp),
-                    fontSize = 10.sp,
+                    fontSize = PaEditorial.Type.Micro.fontSize,
                     color = PaEditorial.Muted,
                 )
             }
@@ -541,7 +539,7 @@ private fun FilesScreenBody(
                 Spacer(Modifier.weight(1f))
                 Text(
                     visibleEntries.size.toString() + " 项",
-                    fontSize = 12.sp, lineHeight = 17.sp,
+                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
                     color = PaEditorial.Muted,
                 )
             }
@@ -563,7 +561,7 @@ private fun FilesScreenBody(
                         Text(
                             "当前目录没有匹配「$searchQuery」的文件",
                             Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                            fontSize = 12.5.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                             color = PaEditorial.Muted,
                         )
                     }
@@ -591,7 +589,7 @@ private fun FilesScreenBody(
                     SwipeRevealRow(
                         rowKey = e.path,
                         openKey = openKey,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(PaEditorial.Radius.Card),
                         rowBackground = PaEditorial.Surface,
                         actions = listOf(
                             SwipeAction(
@@ -642,7 +640,7 @@ private fun FilesScreenBody(
                                 .size(42.dp)
                                 .background(
                                     if (e.isDir) PaEditorial.RunningContainer else PaEditorial.PrimaryContainer,
-                                    RoundedCornerShape(13.dp),
+                                    RoundedCornerShape(PaEditorial.Radius.IconButton),
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -658,7 +656,7 @@ private fun FilesScreenBody(
                             Text(
                                 // 长文件名中间省略,保住扩展名(FilenameDisplay 规则)
                                 middleEllipsize(e.name, 26),
-                                fontSize = 15.sp, lineHeight = 21.sp,
+                                fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = PaEditorial.Ink,
                                 maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -667,7 +665,7 @@ private fun FilesScreenBody(
                             if (meta.isNotEmpty()) {
                                 Text(
                                     meta,
-                                    fontSize = 11.sp, lineHeight = 16.sp, color = PaEditorial.Muted, maxLines = 1,
+                                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = PaEditorial.Muted, maxLines = 1,
                                 )
                             }
                         }
@@ -717,21 +715,21 @@ private fun FilesScreenBody(
         androidx.compose.ui.window.Dialog(onDismissRequest = { renaming = null }) {
             Column(
                 Modifier
-                    .background(PaEditorial.Surface, RoundedCornerShape(23.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Sheet))
                     .padding(20.dp)
                     .fillMaxWidth(),
             ) {
-                Text("重命名", fontSize = 17.sp, color = PaEditorial.Ink)
+                Text("重命名", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 Text(
                     (if (e.isDir) "文件夹 · " else "文件 · ") + middleEllipsize(e.name, 30),
-                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 2.dp, bottom = 10.dp), maxLines = 1,
                 )
                 androidx.compose.material3.OutlinedTextField(
                     value = renameText,
                     onValueChange = { renameText = it },
                     singleLine = true,
-                    label = { Text("新名称", fontSize = 12.sp) },
+                    label = { Text("新名称", fontSize = PaEditorial.Type.Caption.fontSize) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(
@@ -747,7 +745,7 @@ private fun FilesScreenBody(
                             renaming = null
                         },
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PaEditorial.Graphite),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                     ) { Text("确定", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold) }
                 }
             }
@@ -762,7 +760,7 @@ private fun FilesScreenBody(
             title = {
                 Text(
                     if (e.isDir) "删除电脑上的文件夹?" else "删除电脑上的文件?",
-                    fontSize = 15.sp,
+                    fontSize = PaEditorial.Type.Heading.fontSize,
                 )
             },
             text = {
@@ -774,7 +772,7 @@ private fun FilesScreenBody(
                         "「${middleEllipsize(e.name, 30)}」将从电脑上永久删除,不进回收站。\n\n" +
                             "5 秒内可点「撤销」,但只能恢复为同名空文件,内容找不回。"
                     },
-                    fontSize = 12.5.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted,
                 )
             },
             confirmButton = {
@@ -791,12 +789,12 @@ private fun FilesScreenBody(
     askDownload?.let { e ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { askDownload = null },
-            title = { Text(middleEllipsize(e.name, 30), fontSize = 15.sp, maxLines = 1) },
+            title = { Text(middleEllipsize(e.name, 30), fontSize = PaEditorial.Type.Heading.fontSize, maxLines = 1) },
             text = {
                 Text(
                     "${e.kind.label} 这个格式没法在 App 内排版展示。\n" +
                         "下载到手机后,可以用系统里对应的应用打开。",
-                    fontSize = 12.5.sp,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                 )
             },
@@ -835,21 +833,21 @@ private fun FilesScreenBody(
         androidx.compose.ui.window.Dialog(onDismissRequest = { showCreate = false }) {
             Column(
                 Modifier
-                    .background(PaEditorial.Surface, RoundedCornerShape(23.dp))
+                    .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Sheet))
                     .padding(20.dp)
                     .fillMaxWidth(),
             ) {
-                Text("新建", fontSize = 17.sp, color = PaEditorial.Ink)
+                Text("新建", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
                 Text(
                     "位置:${path.ifEmpty { "(未进入目录)" }}",
-                    fontSize = 11.sp, color = PaEditorial.Muted,
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     modifier = Modifier.padding(top = 2.dp, bottom = 10.dp), maxLines = 1,
                 )
                 androidx.compose.material3.OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
-                    label = { Text(if (isDir) "文件夹名称" else "文件名称", fontSize = 12.sp) },
+                    label = { Text(if (isDir) "文件夹名称" else "文件名称", fontSize = PaEditorial.Type.Caption.fontSize) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(Modifier.padding(top = 10.dp)) {
@@ -871,7 +869,7 @@ private fun FilesScreenBody(
                             }
                         },
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PaEditorial.Graphite),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                     ) { Text("创建", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold) }
                 }
             }

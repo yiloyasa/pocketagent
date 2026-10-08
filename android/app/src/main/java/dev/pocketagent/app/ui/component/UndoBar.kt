@@ -224,9 +224,9 @@ fun UndoBarHost(
                 .padding(top = topPadding, start = 16.dp, end = 16.dp)
                 .fillMaxWidth()
                 .widthIn(max = 520.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .background(bg)
-                .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
+                .border(0.5.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
                 .semantics { liveRegion = LiveRegionMode.Polite },
         ) {
             Row(
@@ -238,7 +238,7 @@ fun UndoBarHost(
             ) {
                 Text(
                     feedback ?: it0.message,
-                    fontSize = 13.sp,
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
                     // 错误条坐 Denied 实底,读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514)
                     color = if (isError) PaEditorial.OnDenied else PaEditorial.Ink,
                     maxLines = 1,
@@ -253,7 +253,7 @@ fun UndoBarHost(
                     val hapticView = androidx.compose.ui.platform.LocalView.current
                     Box(
                         Modifier
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                             // 撤销是高频连点动作:按下瞬间给缩放反馈,不用裸 clickable
                             .pressable(enabled = true) {
                                 // 【触感分级】撤销=确认级动作,统一走 PaHaptics.confirm
@@ -282,7 +282,7 @@ fun UndoBarHost(
                     ) {
                         Text(
                             "撤销",
-                            fontSize = 13.sp,
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
                             color = PaEditorial.AccentText,
                             fontWeight = FontWeight.Medium,
                         )
