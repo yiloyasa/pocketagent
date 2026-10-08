@@ -27,7 +27,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.EffortOption
@@ -35,6 +34,7 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.agentBrandIcon
 import dev.pocketagent.app.ui.component.PaHaptics
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.effortLabelOf
 import dev.pocketagent.app.ui.effortsFor
 import dev.pocketagent.app.ui.modelBareName
@@ -228,11 +228,16 @@ internal fun ModelEffortCard(
     // 强度胶囊的触感落点(独立卡面,自取 LocalView;light 档见下方 onClick)
     val effortHapticView = LocalView.current
     val mono = if (PaHacker.isHacker) PaHacker.mono else null
-    Dialog(onDismissRequest = onDismiss) {
+    // 【D2 模态家族统一】裸 Dialog → PaSheet centered 变体:同一块玻璃材质、同一档
+    // spring 出场(PaMotion.sheet)、同一个 Radius.Sheet 圆角令牌(原硬编码 22dp)。
+    // 行为语义零变化:点窗外/返回键仍走 onDismiss,内容与交互一字不动。
+    PaSheet(
+        onDismissRequest = onDismiss,
+        centered = true,
+    ) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(PaEditorial.Raised, RoundedCornerShape(22.dp))
                 .padding(20.dp),
         ) {
             Row(

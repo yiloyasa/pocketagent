@@ -5,28 +5,23 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -34,16 +29,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -53,8 +43,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.ApprovalOptionButton
 import dev.pocketagent.app.ui.ApprovalOptionRole
@@ -113,7 +101,8 @@ private data class ButtonTones(val container: Color, val outline: Color, val con
  *
  * 【状态三通道】状态行 = 词 + 色 + 形([approvalPhaseGlyph] 与四词状态同一套
  * 环/点/勾/叹号,提交中保持转圈);状态变化经 Crossfade 过渡不跳变,liveRegion
- * 让读屏听到状态词。弹窗进场 spring 轻过冲([PaMotion.emphasized]),「减弱
+ * 让读屏听到状态词。弹窗出场由 PaSheet centered 统一承载(spring 轻缩放浮现,
+ * PaMotion.sheet 档),「减弱
  * 动效」开启时直达不位移。决定提交的触感(confirm 级)由宿主在 onDecide 里
  * 触发(PaHaptics.confirm),组件不重复触发以免双重震动。
  *
@@ -143,47 +132,21 @@ fun PaApprovalDialog(
     onDecideOption: (optionId: String) -> Unit = { onDecide(true) },
     agentIcon: (@Composable () -> Unit)? = null,
 ) {
-    Dialog(
+    // 【D2 模态家族统一】原裸 Dialog + 自绘遮罩卡 → PaSheet centered 变体:同一块
+    // 玻璃材质、同一档 spring 出场(PaMotion.sheet,原 emphasized 随家族统一换档)、
+    // 同一个 Radius.Sheet 圆角令牌。关闭 = 暂不处理(与决定是两条通道)、返回键
+    // 可关、点遮罩可关 —— 语义与转换前逐位一致。
+    // 内容滚动仍由 ApprovalBody 自带的整列滚动承担(外层不再叠一层,嵌套滚动打架),
+    // PaSheet centered 的 82% 屏高上限从外面把高度封顶。
+    PaSheet(
         onDismissRequest = onDismiss, // 关闭 = 暂不处理;与决定是两条通道
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = modifier,
+        centered = true,
+        shape = RoundedCornerShape(PaEditorial.Radius.Sheet),
+        scrollable = false,
     ) {
-        // 进场:spring 轻过冲(0.96 → 1.0 + 淡入);减弱动效时瞬时直达(仍有反馈,无位移)
-        val reduceMotion = rememberReduceMotion()
-        var entered by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { entered = true }
-        val enter by animateFloatAsState(
-            targetValue = if (entered) 1f else 0f,
-            animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.emphasized(),
-            label = "approvalEnter",
-        )
-        val scrimInteraction = remember { MutableInteractionSource() }
-        Box(
-            modifier
-                .fillMaxSize()
-                .background(PaEditorial.Scrim)
-                .clickable(interactionSource = scrimInteraction, indication = null) { onDismiss() },
-            contentAlignment = Alignment.Center,
-        ) {
-            val cardInteraction = remember { MutableInteractionSource() }
-            Column(
-                Modifier
-                    .graphicsLayer {
-                        alpha = enter
-                        val scale = 0.96f + 0.04f * enter
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                    .padding(horizontal = 23.dp)
-                    .widthIn(max = 360.dp)
-                    .clip(RoundedCornerShape(23.dp))
-                    .background(PaEditorial.Surface)
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(23.dp))
-                    // 卡片吃掉点击,不让冒泡到遮罩(点卡片不等于点窗外)
-                    .clickable(interactionSource = cardInteraction, indication = null) {}
-                    .padding(horizontal = 22.dp, vertical = 18.dp),
-            ) {
-                ApprovalBody(request, onDecide, onRetry, onDecideOption, agentIcon)
-            }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+            ApprovalBody(request, onDecide, onRetry, onDecideOption, agentIcon)
         }
     }
 }

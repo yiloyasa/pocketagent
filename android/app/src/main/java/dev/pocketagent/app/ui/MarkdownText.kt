@@ -4,6 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -41,7 +44,9 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.TerminalFont
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
@@ -377,7 +382,13 @@ internal fun copyCodeToClipboard(ctx: Context, code: String) {
 }
 
 @Composable
-fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float = 15f) {
+fun MarkdownText(
+    source: String,
+    modifier: Modifier = Modifier,
+    fontSize: Float = 15f,
+    /** 流式渲染(2026-10-09 精修波 D4-1):新长出来的块 140ms 级 fade-in;静止正文不受影响。 */
+    streaming: Boolean = false,
+) {
     // 【为什么按"块"而不是按"行"渲染】原来这里是 parseMarkdownForDisplay(...).forEach { Text(...) },
     // 每一行代码各自画一个带圆角的背景。后果有三个,真机上都看得到:
     //   1) 相邻行的圆角互相咬合,左右边缘漏出页底纯黑 → 视觉上是"横竖缝隙";
@@ -400,21 +411,65 @@ fun MarkdownText(source: String, modifier: Modifier = Modifier, fontSize: Float 
             groupMarkdownBlocks(parseMarkdownForDisplay(sanitizeDisplayText(source)))
         }
     }
+    // D4-1 流式新行 fade-in:只在流式路径 + 未开"减弱动效"时启用。
+    // 方案选型见 MarkdownStreamingFade 的注释 —— 不拆 source、不加第二份解析,
+    // 120ms 节流管线(displayedStream)原样复用。
+    val lineFade = streaming && !rememberReduceMotion()
     Column(modifier) {
         blocks.forEach { block ->
-            when (block) {
-                is MdBlock.Code -> MarkdownCodeBlock(block.text, block.lang, fontSize)
-                is MdBlock.Table -> MarkdownTableBlock(block.header, block.rows, fontSize)
-                is MdBlock.Quote -> MarkdownQuoteBlock(block.lines, fontSize)
-                is MdBlock.Line ->
-                    // 空行 = 段落间的呼吸:固定 6dp 节奏(旧实现画一行空文字,高度吃满整行行距)
-                    if (block.line.kind == MarkdownLineKind.PARAGRAPH && block.line.text.isBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                    } else {
-                        MarkdownTextLine(block.line, fontSize)
-                    }
+            val isBlankSpacer = block is MdBlock.Line &&
+                block.line.kind == MarkdownLineKind.PARAGRAPH &&
+                block.line.text.isBlank()
+            if (lineFade && !isBlankSpacer) {
+                MarkdownStreamingFade { RenderMdBlock(block, fontSize) }
+            } else {
+                RenderMdBlock(block, fontSize)
             }
         }
+    }
+}
+
+/**
+ * 流式块级 fade-in(D4-1):新长出来的块在首组合时播一次 ~140ms 级淡入。
+ *
+ * 【为什么用 MutableTransitionState 而不是 visible=true】AnimatedVisibility 以
+ * visible=true 首组合会直接呈现(不播进场);MutableTransitionState(false→true)
+ * 强制从不可见起播。配合 forEach 的**位置记忆** remember:同位置复用的旧块状态
+ * 已是 true 不重播,只有"列表末尾新长出来的块"拿到全新状态 —— 正是
+ * "新文本行 fade-in"的语义,已存在的内容纹丝不动。
+ *
+ * 【为什么不 per-chunk 拆两个 MarkdownText】拆"旧段+新增段"两份解析会把
+ * P1-22 合并的解析量翻倍,且代码围栏/表格跨段时边界渲染会闪错;单份解析 +
+ * 块级淡入零额外解析,节流管线零改动。
+ *
+ * 【时长口径】任务口径 140ms:走 PaMotion.press() 弹簧(stiffness 520 临界阻尼,
+ * settle≈175ms,无过冲)—— 全 app 动效令牌纪律禁裸 tween,140ms 量级里 press
+ * 档是最接近的令牌,差别在不可感知区间。
+ */
+@Composable
+private fun MarkdownStreamingFade(content: @Composable () -> Unit) {
+    val appear = remember { MutableTransitionState(false).apply { targetState = true } }
+    AnimatedVisibility(
+        visibleState = appear,
+        // 只淡入不位移:纯 fade 不触发布局跳变(下方跟随的三点位置稳定)
+        enter = fadeIn(PaMotion.press()),
+    ) { content() }
+}
+
+/** 单个 Markdown 渲染块的分发(MarkdownText 主体与流式淡入共用一份)。 */
+@Composable
+private fun RenderMdBlock(block: MdBlock, fontSize: Float) {
+    when (block) {
+        is MdBlock.Code -> MarkdownCodeBlock(block.text, block.lang, fontSize)
+        is MdBlock.Table -> MarkdownTableBlock(block.header, block.rows, fontSize)
+        is MdBlock.Quote -> MarkdownQuoteBlock(block.lines, fontSize)
+        is MdBlock.Line ->
+            // 空行 = 段落间的呼吸:固定 6dp 节奏(旧实现画一行空文字,高度吃满整行行距)
+            if (block.line.kind == MarkdownLineKind.PARAGRAPH && block.line.text.isBlank()) {
+                Spacer(Modifier.height(6.dp))
+            } else {
+                MarkdownTextLine(block.line, fontSize)
+            }
     }
 }
 
@@ -446,10 +501,22 @@ private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
     // 高一级才读得出块边界;代码文字用 TextPrimary:深色实色底上二级灰读代码费眼。
     // 【本轮新增头部条】右上角语言标注(解析层不再丢弃围栏语言)+ 复制按钮
     // (与消息长按复制同一剪贴板语义,调研结论 1)。
+    // 【D1 语法着色 2026-10-09】代码正文从 Ink 单色升级为 keyword/string/comment/number
+    // 四类轻量着色(CodeSyntax 纯函数,JVM 单测钉死);未知语言退单色,行为与旧版一致。
+    // 着色走与 P1-22 同一条异步纪律:tokenize 是 O(n) 扫描,放 Default 线程解析,
+    // 流式期间随 120ms 节流快照逐块重跑,不阻塞合成帧;色板在组合期读当前盘,
+    // 三盘换肤即时重映色(remember 键含 colors)。
     val scroll = rememberScrollState()
     val ctx = LocalContext.current
     // hacker 模式下代码与正文同一 JetBrains Mono:扫描线/等宽网格逐列对齐
     val mono = if (PaHacker.isHacker) TerminalFont.chatFont else FontFamily.Monospace
+    val tokens by produceState<List<CodeToken>?>(null, code, lang) {
+        value = withContext(Dispatchers.Default) { tokenizeCode(code, lang) }
+    }
+    val colors = syntaxColorsForCurrentPalette()
+    val annotated = remember(tokens, colors) {
+        tokens?.let { syntaxTokensToAnnotated(it, colors) } ?: AnnotatedString(code)
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -492,7 +559,7 @@ private fun MarkdownCodeBlock(code: String, lang: String, fontSize: Float) {
                 .horizontalScroll(scroll),
         ) {
             Text(
-                text = code,
+                text = annotated,
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp, top = 2.dp),
                 fontFamily = mono,
                 // 代码比正文小半号更接近"终端感",同时保证不低于 9sp 以免不可读

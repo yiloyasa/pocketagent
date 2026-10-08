@@ -114,6 +114,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -159,7 +160,10 @@ import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaHaptics
+import dev.pocketagent.app.ui.component.PaStatusGlyphSlot
 import dev.pocketagent.app.ui.component.ConnectionBanner
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.scaleIn
 import androidx.compose.ui.platform.LocalView
 import dev.pocketagent.app.ui.component.DeliveryStatusBadge
 import dev.pocketagent.app.ui.component.deliveryRetryable
@@ -492,9 +496,16 @@ internal fun CodexEventCard(
         }
         // 回合 diff:等宽展示,横向可滚(桌面上的改动行往往很长,
         // 手机上换行会把 diff 的语义彻底破坏)。石墨代码箱(编辑式)/旧底色(黑客)。
+        // 【D1 diff 着色 2026-10-09】按行首标记上色:+ → Running 系绿、- → Denied 系红、
+        // @@ → 哑色(OnGraphiteSubtle),其余行保持代码箱本色 —— 取色与
+        // PromptOptimizeDiff 的红删高亮同一套编辑式语义档(纯函数 codeBoxSpans,JVM 单测钉死)。
         if (event.diff.isNotBlank()) {
+            val diffColors = codeBoxColors(if (PaHacker.isHacker) PaEditorial.Muted else PaEditorial.CodeText)
+            val diffAnnotated = remember(event.diff, diffColors) {
+                codeBoxAnnotated(event.diff, diffColors, CodeBoxKind.DIFF)
+            }
             Text(
-                event.diff,
+                diffAnnotated,
                 Modifier
                     .fillMaxWidth()
                     .heightIn(max = 260.dp)
@@ -772,17 +783,17 @@ internal fun PlanPanel(
                             Modifier.fillMaxWidth().padding(vertical = 3.dp),
                             verticalAlignment = Alignment.Top,
                         ) {
-                            val dotColor = when (status) {
-                                "completed" -> ChatRunningColor
-                                "in_progress" -> ChatAccentColor
-                                else -> ChatSubtleColor
-                            }
+                            // D4-2 步骤点升级为"点/勾"形槽:pending→completed 的瞬间
+                            // 颜色 spring 过渡 + 勾形 spring 长出 + light 触觉(见 PlanStepDot)。
+                            // 槽位固定 10dp,点→勾切换时行高不跳。
                             Box(
                                 Modifier
                                     .padding(top = 4.dp)
-                                    .size(7.dp)
-                                    .background(dotColor, CircleShape),
-                            )
+                                    .size(10.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                PlanStepDot(status)
+                            }
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 text,
@@ -799,6 +810,63 @@ internal fun PlanPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 计划步骤的状态点(D4-2 精修):pending 灰点 / in_progress 主色点 / completed
+ * 绿色勾形 —— 勾形与 PaStatusBadge 的四词形通道(CHECK)同族,"完成"不再只靠
+ * 颜色辨(色弱可辨)。
+ *
+ * 【动效】pending→completed 瞬间:颜色 animateColorAsState(PaMotion.press 档,
+ * 无过冲不抢戏)+ 勾形经 AnimatedContent spring 缩放长出 —— 状态变化有了
+ * "落定感",不是硬切。减弱动效时 animateColorAsState 仍在(纯颜色无位移,
+ * 不属减弱范围),勾形直接切换(AnimatedContent 用 instant 过渡)。
+ *
+ * 【触觉】light 档(PaHaptics.light,刻度级):只在"观察到未完成→完成"的转变
+ * 帧打一次 —— 历史加载时整列已完成的步骤**不**齐震(用三态 remember 区分
+ * "首次看到"与"真的转变",首帧只记录不触发)。
+ */
+@Composable
+private fun PlanStepDot(status: String) {
+    val view = LocalView.current
+    val reduceMotion = rememberReduceMotion()
+    val dotColor by animateColorAsState(
+        targetValue = when (status) {
+            "completed" -> ChatRunningColor
+            "in_progress" -> ChatAccentColor
+            else -> ChatSubtleColor
+        },
+        animationSpec = PaMotion.press(),
+        label = "planStepColor",
+    )
+    // 触觉的门闩:null=本组合还没观察过(首帧只记录);false→true 的转变才打
+    var seenCompleted by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(status) {
+        val completed = status == "completed"
+        if (completed && seenCompleted == false) PaHaptics.light(view)
+        seenCompleted = completed
+    }
+    AnimatedContent(
+        targetState = status == "completed",
+        transitionSpec = {
+            if (reduceMotion) {
+                fadeIn(PaMotion.instant()) togetherWith fadeOut(PaMotion.instant())
+            } else {
+                (fadeIn(PaMotion.press()) + scaleIn(PaMotion.press(), initialScale = 0.4f))
+                    .togetherWith(fadeOut(PaMotion.standard()))
+            }
+        },
+        label = "planStepGlyph",
+    ) { completed ->
+        if (completed) {
+            Icon(
+                painterResource(AppR.drawable.ic_lucide_check), null,
+                tint = dotColor, modifier = Modifier.size(10.dp),
+            )
+        } else {
+            Box(Modifier.size(6.dp).background(dotColor, CircleShape))
         }
     }
 }
@@ -1019,7 +1087,17 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                     .graphicsLayer { rotationZ = chevronRotation },
             )
             Spacer(Modifier.width(6.dp))
-            Box(Modifier.size(8.dp).background(statusColor, CircleShape))
+            // D5-1 状态点接形通道:裸 8dp 色点 → PaStatusGlyphSlot(与 PaStatusBadge
+            // 同族的环/点/勾/叹号槽)—— 词(右侧状态词)+ 色 + 形三通道,
+            // 失败=叹号/成功=勾/执行中=点,色弱也能扫一眼分清。
+            PaStatusGlyphSlot(
+                glyph = when (item.toolStatus) {
+                    "failure" -> PaStatusGlyph.EXCLAMATION
+                    "success" -> PaStatusGlyph.CHECK
+                    else -> PaStatusGlyph.DOT
+                },
+                tint = statusColor,
+            )
             Spacer(Modifier.width(8.dp))
             // 名字与摘要共享剩余宽度(各占一半封顶,超长省略号),
             // 耗时/状态恒贴右缘 —— 与 hacker 终端工具块同一排布(两路径一张皮)。
@@ -1075,8 +1153,13 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
             Column {
                 // 代码/参数区:石墨代码箱(#1A2430)+ 代码浅蓝字(README:代码区保留石墨深色);
                 // 黑客终端保持旧底色(显示模式行为不变)。
+                // 【D5-2 双色代码箱】参数是 JSON:行内 key 一色(Mcp 紫)、value 保持
+                // 代码箱本色(正则级识别,不做完整 parser);输出区先按 diff 检测
+                // (比例>60% 启用 +/绿 -/红 @@/哑色),再退 JSON,再退单色 —— 全部
+                // 纯函数 codeBoxAnnotated,JVM 单测钉死。
                 val codeBoxColor = if (PaHacker.isHacker) PaEditorial.Canvas else PaEditorial.GraphiteCode
                 val codeTextColor = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.CodeText
+                val boxColors = codeBoxColors(codeTextColor)
                 if (item.toolArgs.isNotBlank()) {
                     // 标签行:段名 + 「复制」—— 代码箱自带复制口,长 JSON/命令不必靠
                     // 长按拖选(选区工具栏在代码箱里也难用)。轻触感由 pressable 自带。
@@ -1084,8 +1167,11 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                         Text("参数", Modifier.weight(1f), fontSize = 10.5.sp, color = ChatSubtleColor)
                         ToolCardCopyChip("复制", item.toolArgs)
                     }
+                    val argsAnnotated = remember(item.toolArgs, boxColors) {
+                        codeBoxAnnotated(item.toolArgs, boxColors)
+                    }
                     Text(
-                        item.toolArgs,
+                        argsAnnotated,
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 2.dp)
@@ -1117,8 +1203,13 @@ internal fun ToolCallCard(item: ChatItem, scale: Float) {
                         )
                         ToolCardCopyChip("复制", item.text)
                     }
+                    val outputShown = if (showFullOutput) item.text else preview.visible
+                    // 失败输出的整红是状态语义(未完成),优先于装饰性着色,不做 diff/JSON 着色
+                    val outputText =
+                        if (item.toolStatus == "failure") AnnotatedString(outputShown)
+                        else remember(outputShown, boxColors) { codeBoxAnnotated(outputShown, boxColors) }
                     Text(
-                        if (showFullOutput) item.text else preview.visible,
+                        outputText,
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 2.dp)
@@ -5083,6 +5174,8 @@ internal fun InAppMarkdown(
     modifier: Modifier = Modifier,
     fontSize: Float = 15f,
     onOpenUrl: (String) -> Unit,
+    /** 流式路径传 true:新长出来的块播 fade-in(D4-1,见 MarkdownText)。 */
+    streaming: Boolean = false,
 ) {
     val handler = remember(onOpenUrl) {
         object : androidx.compose.ui.platform.UriHandler {
@@ -5094,7 +5187,7 @@ internal fun InAppMarkdown(
     androidx.compose.runtime.CompositionLocalProvider(
         androidx.compose.ui.platform.LocalUriHandler provides handler,
     ) {
-        MarkdownText(text, modifier, fontSize)
+        MarkdownText(text, modifier, fontSize, streaming)
     }
 }
 

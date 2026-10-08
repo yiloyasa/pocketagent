@@ -88,8 +88,10 @@ object PaMotion {
         stiffness = 520f,
     )
 
-    /** 减弱动效/瞬时到位：状态直达，仅保留"变了"这个事实。 */
-    fun <T> instant(): AnimationSpec<T> = snap<T>()
+    /** 减弱动效/瞬时到位：状态直达，仅保留"变了"这个事实。
+     *  返回类型收窄为 FiniteAnimationSpec：snap 本就是有限动画，fadeIn/fadeOut
+     *  等转场函数只收 Finite，宽声明会逼调用点写死类型参数。 */
+    fun <T> instant(): FiniteAnimationSpec<T> = snap<T>()
 
     /**
      * NavHost 转场用（要求 FiniteAnimationSpec）：spring 的 settle 由参数涌现，

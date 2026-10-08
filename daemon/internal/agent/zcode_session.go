@@ -27,14 +27,18 @@
 //   - Source:引用 zcodeShape.sessionModel 同一表达式(D2:与 Descriptor 申报无
 //     第二独立来源,source-mismatch 在结构上不可能)。
 //
-// 【为什么不复刻 ensureSession 的同代短路】与 dsh_session.go 同理:threadMap 同代
-// 命中短路是 ensureSession(Run 链)的会话解析决策;适配器是"按落库引用重挂载"的
-// 恢复入口,其语义就是重挂载 —— 重启后子进程代必新,同代短路在恢复场景无从发生。
-// 若未来 Run 的会话解析改走适配器(设计稿 §6.1 收尾项),再把短路决策一并收进去。
+// 【为什么同代短路不进适配器】threadMap 同代命中短路是 ensureSession
+// (Run 链)的会话解析**第一优先序决策**(P1-7 上收后仍留在 Run:短路必须
+// 先于"有无落库引用"的分流判定,搬进 Resume 会把解析次序重排);适配器的
+// 语义就是"按落库引用重挂载"。resumeZcodeSession/createZcodeSession 仍是
+// 重挂载/新建的唯一实现,Run 链经 resumeForRun/openForRun、契约面经
+// Resume/Open 共用它们,无第二实现。
 //
-// 【过渡期双路径】本轮 Run 的既有链路(zcode.go Run → ensureSession)原样不动,
-// 本适配器是与之**并行**的映射层,当前唯一消费方是 openSharedRuntime 的 D5 工厂
-// 注入(契约交付)。
+// 【P1-7:双路径已退役】Run 的会话解析(zcode.go ensureSession)不再直连
+// resumeZcodeSession/createZcodeSession,重挂载/新建统一经本适配器;本适配器
+// 不再只是 openSharedRuntime D5 工厂注入的"并行映射层",而是 zcode 会话解析
+// 的单一协议入口(Run 链保留的只有短路优先序、账号错误直通、"resume 失败
+// 改开新会话"降级与 subscribe,均属 D4 派给 Run 的决策与轮次内状态机)。
 //
 // 【并发纪律】适配器方法目前只会被轮次 goroutine 调用(设计稿 §6.2):与 Run
 // 现状一致,withClientCtx(有界排队)保证子进程就绪,p.client 的读取窗口与
@@ -164,12 +168,24 @@ func (s *zcodeSession) Open(ctx context.Context, th *store.Thread) error {
 	if th == nil {
 		return fmt.Errorf("zcode: thread 为空,无法建立原生会话")
 	}
+	_, _, _, err := s.openForRun(ctx, th, th.Workspace)
+	return err
+}
+
+// openForRun Run 链(ensureSession)的新建入口(P1-7):与 Open 共用同一
+// createZcodeSession 实现,workspace 由调用方显式给出(Run 的轮次工作区随
+// TurnRequest 给出,与 thread 落库值在生产同源;显式参数保留旧链取值语义),
+// 并把 Run 轮次内状态机需要的两样东西交回:是否新建 与 应答快照原文
+// (图片能力门控读取 inputFormat.supportsImage)。
+func (s *zcodeSession) openForRun(ctx context.Context, th *store.Thread, workspace string) (string, bool, json.RawMessage, error) {
+	if th == nil {
+		return "", false, nil, fmt.Errorf("zcode: thread 为空,无法建立原生会话")
+	}
 	c, err := s.clientFor(ctx)
 	if err != nil {
-		return err
+		return "", false, nil, err
 	}
-	_, _, _, err = s.p.createZcodeSession(ctx, c, th, th.Workspace, int(s.p.gen.Load()))
-	return err
+	return s.p.createZcodeSession(ctx, c, th, workspace, int(s.p.gen.Load()))
 }
 
 // Resume 按 thread 里落库的引用重挂载已有原生会话。
@@ -184,15 +200,46 @@ func (s *zcodeSession) Resume(ctx context.Context, th *store.Thread) error {
 	if th == nil {
 		return fmt.Errorf("zcode: thread 为空,无法重挂载原生会话")
 	}
-	if th.ExternalSession.SessionID == "" {
-		return fmt.Errorf("%w: thread=%s", runtime.ErrNoNativeSession, th.ID)
+	_, err := s.resumeForRun(ctx, th)
+	return err
+}
+
+// resumeForRun Run 链(ensureSession)的重挂载入口(P1-7):与 Resume 共用同一
+// resumeZcodeSession 实现,并把应答快照原文交回 Run(图片能力门控读取
+// inputFormat.supportsImage;契约面 Resume 不需要它,丢弃即可)。
+func (s *zcodeSession) resumeForRun(ctx context.Context, th *store.Thread) (json.RawMessage, error) {
+	if th == nil {
+		return nil, fmt.Errorf("zcode: thread 为空,无法重挂载原生会话")
 	}
+	if th.ExternalSession.SessionID == "" {
+		return nil, fmt.Errorf("%w: thread=%s", runtime.ErrNoNativeSession, th.ID)
+	}
+	c, err := s.clientFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.p.resumeZcodeSession(ctx, c, th.ID, th.ExternalSession.SessionID, int(s.p.gen.Load()))
+}
+
+// subscribeForRun Run 链(ensureSession)的订阅入口(P1-7):协议通道与
+// resumeForRun/openForRun 同一 clientFor 来源(测试经 sessionSource 钩子注入,
+// 生产经 withClientCtx 就绪),订阅决策本身仍是 Run 轮次内状态机的事
+// (设计稿 §4-P3)—— 适配器只统一"客户端从哪来",不接管订阅语义。
+func (s *zcodeSession) subscribeForRun(ctx context.Context, threadID, sid string) error {
 	c, err := s.clientFor(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = s.p.resumeZcodeSession(ctx, c, th.ID, th.ExternalSession.SessionID, int(s.p.gen.Load()))
-	return err
+	raw, err := c.CallCtx(ctx, "session/subscribe", map[string]interface{}{
+		"sessionId": sid, "deliveryKind": "desktop-continuous", "includeSnapshot": true,
+	})
+	if err != nil {
+		return fmt.Errorf("session/subscribe: %w", err)
+	}
+	// includeSnapshot=true 的应答若带 projection,顺路刷新占用基线
+	// (字段缺失时 recordProjection 静默跳过)。
+	s.p.recordProjection(threadID, raw)
+	return nil
 }
 
 // Checkpoint 把"恢复所需的引用"写回 thread。zcode 的引用(SessionID+Cwd)在

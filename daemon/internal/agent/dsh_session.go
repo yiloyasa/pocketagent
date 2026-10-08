@@ -25,15 +25,16 @@
 //   - Source:引用 dshShape.sessionModel 同一表达式(D2:与 Descriptor 申报无
 //     第二独立来源,source-mismatch 在结构上不可能)。
 //
-// 【为什么不复刻 ensureSession 的同代短路】threadMap 同代命中短路是 ensureSession
-// (Run 链)的会话解析决策;适配器是"按落库引用重挂载"的恢复入口,其语义就是
-// 重挂载 —— 重启后子进程代必新,同代短路在恢复场景无从发生。若未来 Run 的会话
-// 解析改走适配器(设计稿 §6.1 收尾项),再把短路决策一并收进去,而不是现在在
-// 两处各写一份。
+// 【为什么同代短路不进适配器】threadMap 同代命中短路是 ensureSession
+// (Run 链)的会话解析**第一优先序决策**(P1-7 上收后仍留在 Run:短路必须
+// 先于"有无落库引用"的分流判定,搬进 Resume 会把解析次序重排);适配器的
+// 语义就是"按落库引用重挂载",重挂载成功路径的登记(同代缓存 + 目录刷新)
+// 由 Resume 内部完成 —— 两条链(生产 Run 与契约面)共用本入口,无第二实现。
 //
-// 【过渡期双路径】本轮 Run 的既有链路(dsh.go Run → ensureSession)原样不动,
-// 本适配器是与之**并行**的映射层,当前唯一消费方是 openSharedRuntime 的 D5 工厂
-// 注入(契约交付)。
+// 【P1-7:双路径已退役】Run 的会话解析(dsh.go ensureSession)不再直连
+// remountSession/createSession,重挂载/新建统一经本适配器 Resume/Open;
+// 本适配器不再只是 openSharedRuntime D5 工厂注入的"并行映射层",而是 dsh
+// 会话解析的单一协议入口(Run 链保留的只有短路优先序与升级降级决策,D4)。
 //
 // 【并发纪律】适配器方法目前只会被轮次 goroutine 调用(设计稿 §6.2):与 Run
 // 现状一致,withClientCtx(有界排队)保证子进程就绪,p.client 的读取窗口与
@@ -88,7 +89,20 @@ func (s *dshSession) ensureClient(ctx context.Context) error {
 // 既有引用分流),失败时在写回之前返回 —— thread 上的旧引用原样保留,落库引用
 // 归调用方掌管。成功时 ExternalSession.SessionID/Cwd 被新会话覆盖,即"Open 的
 // 语义是新建"。
+// workspace 取 thread 落库值;Run 链的轮次工作区(TurnRequest.Workspace)与
+// 落库值在生产恒同源(server 层以 t.Workspace 组装请求),但取值语义不同 ——
+// Run 侧走 openForRun 显式传参,不因上收改由 thread 字段旁路。
 func (s *dshSession) Open(ctx context.Context, th *store.Thread) error {
+	if th == nil {
+		return fmt.Errorf("dsh: thread 为空,无法建立原生会话")
+	}
+	return s.openForRun(ctx, th, th.Workspace)
+}
+
+// openForRun Run 链(ensureSession/升级重建)的新建入口(P1-7):与 Open 共用
+// 同一 createSession 实现,workspace 由调用方显式给出 —— Run 的会话工作区随
+// TurnRequest 给出,保留旧链的取值语义(见 Open 注释的同源说明)。
+func (s *dshSession) openForRun(ctx context.Context, th *store.Thread, workspace string) error {
 	if th == nil {
 		return fmt.Errorf("dsh: thread 为空,无法建立原生会话")
 	}
@@ -97,7 +111,7 @@ func (s *dshSession) Open(ctx context.Context, th *store.Thread) error {
 	}
 	// gen 在就绪之后读取(与 ensureSession 一致:withClient 可能重启子进程,
 	// gen 只在确定"当前代"后才有效),createSession 据此登记同代缓存。
-	_, err := s.p.createSession(ctx, th, th.Workspace, int(s.p.gen.Load()))
+	_, err := s.p.createSession(ctx, th, workspace, int(s.p.gen.Load()))
 	return err
 }
 

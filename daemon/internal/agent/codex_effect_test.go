@@ -189,6 +189,12 @@ func runFakeCodexAppServer() int {
 			respond(id, map[string]interface{}{"threadId": fmt.Sprintf("fake-thread-%d", counter)})
 		case "thread/resume":
 			logOnly(m.Method, m.Params)
+			// PA_FAKE_CODEX_RESUME_ERROR 非空 = resume 回 error 帧(B1 特征测试用:
+			// 钉 Run 链"resume 失败 → 改开新线程"的降级护栏,缺它表现为"AI 失忆")。
+			if e := os.Getenv("PA_FAKE_CODEX_RESUME_ERROR"); e != "" {
+				respondErr(id, -32000, e)
+				continue
+			}
 			counter++
 			respond(id, map[string]interface{}{"threadId": fmt.Sprintf("fake-thread-%d", counter)})
 		case "thread/read":

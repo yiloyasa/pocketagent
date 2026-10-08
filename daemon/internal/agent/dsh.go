@@ -979,31 +979,45 @@ func dshStopReason(raw json.RawMessage) string {
 // ---- 会话就绪(重挂载握手纪律:校验不能省,pi.go 同款)----
 
 // ensureSession 优先级:同代内存缓存 → ExternalSession 重挂载 → 新建。
+//
+// 【P1-7 bindSession 上收】协议路径(重挂载/新建)改经原生会话适配器
+// (dshSession.Resume/Open,内部复用 remountSession/createSession 同一实现),
+// 本函数只保留 Run 链自己的解析决策:同代短路的第一优先序、升级断裂的
+// 一次性降级重建(D4:降级留在 Run,适配器不吞)。"过渡期双路径"就此退役,
+// Run 链与契约面(openSharedRuntime 注入)走同一个适配器入口。
 func (p *DshProvider) ensureSession(ctx context.Context, req TurnRequest) (string, error) {
 	gen := int(p.gen.Load())
 	if ref, hit := p.dshThreadRefFor(req.Thread.ID); hit && ref.gen == gen {
 		return ref.id, nil
 	}
+	ns, err := p.NativeSessionFor(req.Thread)
+	if err != nil {
+		return "", err
+	}
+	ds, ok := ns.(*dshSession)
+	if !ok {
+		return "", fmt.Errorf("dsh: 原生会话适配器类型异常: %T", ns)
+	}
 	if ext := req.Thread.ExternalSession; ext.SessionID != "" {
-		sid, catOpts, err := p.remountSession(ctx, ext)
-		if err != nil {
+		if err := ns.Resume(ctx, req.Thread); err != nil {
 			// 一次性降级(唯一出口):会话确实在列、resume 仍被 agent 拒绝(-32602)
 			// = "agent 升级导致旧会话不可恢复"而非网络抖动/数据错位。此时若只是
 			// 如实报错,手机端重试永远重放同一路径,这个会话从此发不出任何消息、
 			// 用户没有出路(真机实锤,l2-20260925/RESULT.md 适配债 1)。
 			var re *dshRemountError
 			if errors.As(err, &re) && re.downgradeable {
-				return p.rebuildSessionAfterUpgrade(ctx, req, ext, gen, err)
+				return p.rebuildSessionAfterUpgrade(ctx, req, ext, err)
 			}
 			// 显式报错,不静默新开 —— "不 resume 就静默吞请求"的三方共同教训,
 			// 以及蓝本 §4.3:不在列 → 显式报错。
 			return "", err
 		}
-		p.setDshThreadRef(req.Thread.ID, threadRef{id: sid, gen: gen})
-		p.refreshCatalogFromResume(catOpts) // 探针修正②
-		return sid, nil
+		return ext.SessionID, nil
 	}
-	return p.createSession(ctx, req.Thread, req.Workspace, gen)
+	if err := ds.openForRun(ctx, req.Thread, req.Workspace); err != nil {
+		return "", err
+	}
+	return req.Thread.ExternalSession.SessionID, nil
 }
 
 // createSession session/new 新建并登记:threadMap 写入 + ExternalSession 写回
@@ -1042,12 +1056,22 @@ func (p *DshProvider) createSession(ctx context.Context, th *store.Thread, works
 //     显式拒绝,绝不降级 —— 那不是升级问题,静默新开会把错位掩盖掉;
 //   - 绝不伪造旧上下文:新会话就是新会话,日志写明原委与原 sessionId(用户仍可
 //     在桌面端找回旧记录),手机端不再看到"resume 失败且重试必败"的死路。
-func (p *DshProvider) rebuildSessionAfterUpgrade(ctx context.Context, req TurnRequest, old store.ExternalSessionRef, gen int, cause error) (string, error) {
-	sid, err := p.createSession(ctx, req.Thread, req.Workspace, gen)
+// 【P1-7】重建也经适配器 openForRun(与常规新建同一入口、同一 createSession
+// 实现,workspace 显式取轮次请求值),不再直连 createSession。
+func (p *DshProvider) rebuildSessionAfterUpgrade(ctx context.Context, req TurnRequest, old store.ExternalSessionRef, cause error) (string, error) {
+	ns, err := p.NativeSessionFor(req.Thread)
 	if err != nil {
+		return "", err
+	}
+	ds, ok := ns.(*dshSession)
+	if !ok {
+		return "", fmt.Errorf("dsh: 原生会话适配器类型异常: %T", ns)
+	}
+	if err := ds.openForRun(ctx, req.Thread, req.Workspace); err != nil {
 		// 降级也失败:两个失败都如实说出,不吞任何一个。
 		return "", fmt.Errorf("dsh 原会话 %s 不可恢复(%v),自动重建新会话又失败: %w", old.SessionID, cause, err)
 	}
+	sid := req.Thread.ExternalSession.SessionID
 	log.Printf("[dsh] 原会话 %s 因 agent 升级不可恢复(resume 被拒:%v),已自动重建新会话 %s 替换;旧上下文不再延续,本轮起在新会话继续对话", old.SessionID, cause, sid)
 	return sid, nil
 }

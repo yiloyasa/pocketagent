@@ -50,6 +50,7 @@ import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.component.PaNavIconButton
+import dev.pocketagent.app.ui.component.PaSheet
 import pocketagent.v1.OpenTerminal
 import pocketagent.v1.TerminalClientMessage
 import pocketagent.v1.TerminalInput
@@ -315,10 +316,13 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
 
     // 目录选择抽屉:默认 / 最近工作区 / 手动输入;选定即重建终端会话
     if (showDirPicker) {
-        androidx.compose.material3.ModalBottomSheet(
+        // 【D2 模态家族统一】裸 M3 ModalBottomSheet → PaSheet:同一块玻璃材质、同一个
+        // Radius.Sheet 圆角令牌(原 26dp 硬编码)、统一的浅盘 Alert 档阴影。内容列的
+        // 整列滚动(T-SS 钉子)原样保留在内容里,外层不再叠一层(scrollable=false),
+        // 高度上限由 PaSheet 内建 82% 屏高承担。
+        PaSheet(
             onDismissRequest = { showDirPicker = false },
-            containerColor = PaEditorial.Surface,
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+            scrollable = false,
         ) {
             Text(
                 "切换工作目录", Modifier.fillMaxWidth().padding(horizontal = 24.dp),

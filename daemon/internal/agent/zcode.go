@@ -607,47 +607,42 @@ func (p *ZcodeProvider) contextWindowFor(threadID string) int64 {
 // 能力门控读取 inputFormat.supportsImage(含 current 模型定位);threadMap 命中
 // (无新鲜快照)时返回 nil,门控退回 refByModel 缓存位判定。
 //
-// 【P3 拆分】重挂载与新建两个分支的函数体原样搬进了 zcode_session.go 的
-// resumeZcodeSession/createZcodeSession(Run 链与原生会话适配器共用的唯一实现);
-// 本函数保留的是 Run 链自己的决策:同代短路、"resume 失败改开新会话"的降级、
-// 账号同步错误直通、subscribe(轮次内状态机的事)。
+// 【P1-7 bindSession 上收】协议路径(重挂载/新建)改经原生会话适配器
+// (zcodeSession.resumeForRun/openForRun,内部复用 resumeZcodeSession/
+// createZcodeSession 同一实现);本函数保留的是 Run 链自己的决策:同代短路、
+// "resume 失败改开新会话"的降级、账号同步错误直通、subscribe(轮次内状态机
+// 的事,设计稿 §4-P3)。"过渡期双路径"就此退役,Run 链与契约面
+// (openSharedRuntime 注入)走同一个适配器入口。
 func (p *ZcodeProvider) ensureSession(ctx context.Context, req TurnRequest) (string, bool, json.RawMessage, error) {
 	gen := int(p.gen.Load())
 	if ref, hit := p.zcodeThreadRefFor(req.Thread.ID); hit && ref.gen == gen {
 		return ref.id, false, nil, nil
 	}
-	if sid := req.Thread.ExternalSession.SessionID; sid != "" {
-		raw, err := p.resumeZcodeSession(ctx, p.client, req.Thread.ID, sid, gen)
-		if err != nil {
-			var accountErr *zcodeapp.AccountSyncError
-			if errors.As(err, &accountErr) {
-				return "", false, nil, err
-			}
-			log.Printf("[zcode] session/resume %s 失败(改开新会话): %v", sid, err)
-		} else {
-			return sid, false, raw, p.subscribe(ctx, req.Thread.ID, sid)
-		}
-	}
-	sid, created, raw, err := p.createZcodeSession(ctx, p.client, req.Thread, req.Workspace, gen)
+	ns, err := p.NativeSessionFor(req.Thread)
 	if err != nil {
 		return "", false, nil, err
 	}
-	return sid, created, raw, p.subscribe(ctx, req.Thread.ID, sid)
-}
-
-// subscribe 订阅事件流。【实测】deliveryKind 必填(desktop-continuous),
-// 不订阅就收不到 model.streaming 的流式增量。
-func (p *ZcodeProvider) subscribe(ctx context.Context, threadID, sid string) error {
-	raw, err := p.client.CallCtx(ctx, "session/subscribe", map[string]interface{}{
-		"sessionId": sid, "deliveryKind": "desktop-continuous", "includeSnapshot": true,
-	})
-	if err != nil {
-		return fmt.Errorf("session/subscribe: %w", err)
+	zs, ok := ns.(*zcodeSession)
+	if !ok {
+		return "", false, nil, fmt.Errorf("zcode: 原生会话适配器类型异常: %T", ns)
 	}
-	// includeSnapshot=true 的应答若带 projection,顺路刷新占用基线
-	// (字段缺失时 recordProjection 静默跳过)。
-	p.recordProjection(threadID, raw)
-	return nil
+	if sid := req.Thread.ExternalSession.SessionID; sid != "" {
+		raw, rerr := zs.resumeForRun(ctx, req.Thread)
+		if rerr != nil {
+			var accountErr *zcodeapp.AccountSyncError
+			if errors.As(rerr, &accountErr) {
+				return "", false, nil, rerr
+			}
+			log.Printf("[zcode] session/resume %s 失败(改开新会话): %v", sid, rerr)
+		} else {
+			return sid, false, raw, zs.subscribeForRun(ctx, req.Thread.ID, sid)
+		}
+	}
+	sid, created, raw, err := zs.openForRun(ctx, req.Thread, req.Workspace)
+	if err != nil {
+		return "", false, nil, err
+	}
+	return sid, created, raw, zs.subscribeForRun(ctx, req.Thread.ID, sid)
 }
 
 // applyModel 把 Thread.ModelID("zcode/<modelId>")映射成 session/setModel。

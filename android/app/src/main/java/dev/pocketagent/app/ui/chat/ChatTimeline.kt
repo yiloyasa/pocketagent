@@ -105,6 +105,7 @@ import dev.pocketagent.app.ui.component.HistoryQuickNavLogic
 import dev.pocketagent.app.ui.component.HistoryTickBar
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaSkeletonList
+import dev.pocketagent.app.ui.component.paEditorialShadow
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.TerminalBlockKind
 import dev.pocketagent.app.ui.component.TerminalFootnote
@@ -119,6 +120,7 @@ import dev.pocketagent.app.ui.component.longPressMenu
 import dev.pocketagent.app.ui.component.terminalBlockKind
 import dev.pocketagent.app.ui.component.terminalScanlines
 import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
 import kotlinx.coroutines.delay
@@ -693,7 +695,30 @@ internal fun ColumnScope.ChatTimelineArea(
                     TerminalBlockKind.SKIP -> Unit
                 }
                 } else when (item.role) {
-                "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                "user" -> {
+                    // 【D3-2 同 author 连发分组】相邻两条用户消息视觉上并成一组
+                    // (ChatGPT/Claude 的气泡语言):后续消息上提 40% 间距(14dp→8.4dp),
+                    // 相接两侧的圆角收小(7dp)读作"同一段话的延续"。纯视觉:offset
+                    // 只动摆放位置,LazyColumn 的排列/锚定/回收行为零变化,黑客终端
+                    // 块(22dp 大留白的终端语言)不参与分组。
+                    val prevIsUser = index > 0 && st.items[index - 1].role == "user"
+                    val nextIsUser = index < st.items.lastIndex && st.items[index + 1].role == "user"
+                    val bubbleShape = if (PaHacker.isHacker) {
+                        RoundedCornerShape(6.dp)
+                    } else {
+                        RoundedCornerShape(
+                            topStart = if (prevIsUser) 7.dp else 20.dp,
+                            topEnd = 7.dp,
+                            bottomEnd = if (nextIsUser) 7.dp else 20.dp,
+                            bottomStart = if (nextIsUser) 7.dp else 20.dp,
+                        )
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .offset(y = if (prevIsUser && !PaHacker.isHacker) (-5.6).dp else 0.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                     // 编辑式(05):用户消息 = 石墨重点面气泡 + 白字,投递徽标挂在气泡
                     // 下方右对齐(待发送→已送达→执行中;失败保留内容可重试);
                     // 黑客终端保持旧气泡(AccentDim 终端块)与原徽标位(气泡内)。
@@ -716,8 +741,14 @@ internal fun ColumnScope.ChatTimelineArea(
                                 // 拉开层级;黑客终端模式:圆角收 6dp 读"终端块"(契约见 PaHacker)。
                                 .background(
                                     if (PaHacker.isHacker) PaEditorial.PrimaryContainer else PaEditorial.Graphite,
-                                    if (PaHacker.isHacker) RoundedCornerShape(6.dp)
-                                    else RoundedCornerShape(20.dp, 7.dp, 20.dp, 20.dp),
+                                    bubbleShape,
+                                )
+                                // D3-2 石墨气泡 0.5dp 玻璃高光边:同一块玻璃家族的亮边
+                                // 语言(PaGlassToken.Highlight,"光打在上缘"),实底石墨
+                                // 从"贴纸"变"材质"。黑客终端块保持旧语言。
+                                .then(
+                                    if (PaHacker.isHacker) Modifier
+                                    else Modifier.border(0.5.dp, PaGlassToken.Highlight, bubbleShape),
                                 )
                                 .padding(horizontal = 13.dp, vertical = 11.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -820,6 +851,7 @@ internal fun ColumnScope.ChatTimelineArea(
                             }
                         }
                     }
+                }
                 }
                 // 思考过程:可折叠卡片(字号跟随"思考显示大小"设置);
                 // 受全局"显示思考过程"开关控制,关闭时只看正文与结果
@@ -980,12 +1012,15 @@ internal fun ColumnScope.ChatTimelineArea(
                     } else {
                         // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
                         // 【P1-22】喂节流快照 displayedStream,不再逐 delta 帧直喂全文
+                        // 【D4-1】streaming=true:新长出来的块播 ~140ms fade-in
+                        // (MarkdownStreamingFade,方案与节流管线的关系见其注释)
                         Column(Modifier.fillMaxWidth()) {
                             InAppMarkdown(
                                 text = displayedStream,
                                 modifier = Modifier.fillMaxWidth(),
                                 fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
                                 onOpenUrl = onOpenBrowser,
+                                streaming = true,
                             )
                             TypingDots(
                                 Modifier.padding(start = 2.dp, top = 6.dp),
@@ -1122,6 +1157,12 @@ internal fun ColumnScope.ChatTimelineArea(
                             if (total > 0) listState.animateScrollToItem(total - 1)
                         }
                     }
+                    // D3-1 浅盘悬浮胶囊海拔:Card 档阴影让它"浮"在时间线之上;
+                    // 深色盘(含黑客)保持既有平语言,不加班驳阴影
+                    .then(
+                        if (PaEditorial.IsDark) Modifier
+                        else Modifier.paEditorialShadow(PaEditorial.Shadow.Card, RoundedCornerShape(14.dp)),
+                    )
                     .background(ChatAccentColor, RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,

@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui.anim
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -27,7 +28,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -38,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
+import dev.pocketagent.app.ui.theme.PaEditorial
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -146,14 +155,126 @@ fun SectionHeader(
     }
 }
 
-/** 空状态:图标 + 主文案 + 副文案(参考稿"连接电脑后,任务会出现在这里")。 */
+/**
+ * 品牌双描边(duotone)母题(2026-10-09 精修波 D6):Canvas/Path 自绘的 2 色
+ * 线性图形 —— 主色 + 哑色双色描边,与 lucide 细线图标同一语言(细描边、圆头、
+ * 不填色),不引入任何图片资产(资源极简铁律)。
+ *
+ * 【三个母题】发现环(Home/连接)、配对(Onboarding)、审批(EmptyState 按语境选)。
+ * 色从 PaEditorial 语义槽位取(Primary/Subtle),三盘换肤即时跟随,不造新色值。
+ */
+enum class PaDuotoneMotif { DISCOVER_RING, PAIR, APPROVAL }
+
+/**
+ * 渲染一个 duotone 母题图形(正方形画布,默认 88dp;笔画 2dp 与 lucide 图标同量级)。
+ * 纯装饰(contentDescription 由调用方语境给出),不动效(空态图形要"安静")。
+ */
 @Composable
-fun EmptyState(iconRes: Int, title: String, hint: String, modifier: Modifier = Modifier) {
+fun PaDuotoneArt(
+    motif: PaDuotoneMotif,
+    modifier: Modifier = Modifier,
+    artSize: Dp = 88.dp,
+    strokeWidth: Dp = 2.dp,
+) {
+    val primary = MaterialTheme.colorScheme.let { PaEditorial.Primary } // 主色:当前操作/品牌
+    val muted = PaEditorial.Subtle // 哑色:次级结构
+    Canvas(modifier.size(artSize)) {
+        val k = size.minDimension / 100f // 归一化 100×100 坐标 → 画布
+        val stroke = Stroke(width = strokeWidth.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        when (motif) {
+            PaDuotoneMotif.DISCOVER_RING -> {
+                // 发现环:外环(哑)+ 内环(主色)+ 圆心点(主色)+ 右上两道广播弧
+                // —— "正在找你的电脑"的雷达意象,与 Home 发现态同一母题
+                val c = center
+                drawCircle(color = muted, radius = 46f * k, center = c, style = stroke)
+                drawCircle(color = primary, radius = 30f * k, center = c, style = stroke)
+                drawCircle(color = primary, radius = 7f * k, center = c)
+                drawArc(
+                    color = primary,
+                    startAngle = -78f, sweepAngle = 38f, useCenter = false,
+                    topLeft = Offset(c.x - 38f * k, c.y - 38f * k),
+                    size = Size(76f * k, 76f * k),
+                    style = stroke,
+                )
+                drawArc(
+                    color = primary,
+                    startAngle = -30f, sweepAngle = 20f, useCenter = false,
+                    topLeft = Offset(c.x - 38f * k, c.y - 38f * k),
+                    size = Size(76f * k, 76f * k),
+                    style = stroke,
+                )
+            }
+            PaDuotoneMotif.PAIR -> {
+                // 配对:左手机(哑色圆角矩形)+ 右显示器(主色)+ 连接线 + 中央配对点
+                // —— 两台设备经一个"认亲"的点接起来
+                drawRoundRect(
+                    color = muted,
+                    topLeft = Offset(6f * k, 28f * k),
+                    size = Size(24f * k, 44f * k),
+                    cornerRadius = CornerRadius(5f * k, 5f * k),
+                    style = stroke,
+                )
+                drawRoundRect(
+                    color = primary,
+                    topLeft = Offset(60f * k, 24f * k),
+                    size = Size(34f * k, 26f * k),
+                    cornerRadius = CornerRadius(4f * k, 4f * k),
+                    style = stroke,
+                )
+                // 显示器支脚
+                drawLine(muted, Offset(77f * k, 50f * k), Offset(77f * k, 58f * k), stroke.width, StrokeCap.Round)
+                drawLine(muted, Offset(68f * k, 58f * k), Offset(86f * k, 58f * k), stroke.width, StrokeCap.Round)
+                // 连接线 + 中央配对点(主色实心,配对码的落点)
+                drawLine(muted, Offset(30f * k, 50f * k), Offset(60f * k, 37f * k), stroke.width, StrokeCap.Round)
+                drawCircle(color = primary, radius = 4.5f * k, center = Offset(45f * k, 43.5f * k))
+            }
+            PaDuotoneMotif.APPROVAL -> {
+                // 审批:盾牌(主色描边)+ 盾内对勾(哑色)—— "执行前要过你这一关"
+                val shield = Path().apply {
+                    moveTo(50f * k, 16f * k)
+                    lineTo(75f * k, 26f * k)
+                    lineTo(75f * k, 50f * k)
+                    lineTo(50f * k, 84f * k)
+                    lineTo(25f * k, 50f * k)
+                    lineTo(25f * k, 26f * k)
+                    close()
+                }
+                drawPath(shield, color = primary, style = stroke)
+                val check = Path().apply {
+                    moveTo(37f * k, 50f * k)
+                    lineTo(47f * k, 60f * k)
+                    lineTo(65f * k, 40f * k)
+                }
+                drawPath(check, color = muted, style = stroke)
+            }
+        }
+    }
+}
+
+/**
+ * 空状态:图标 + 主文案 + 副文案(参考稿"连接电脑后,任务会出现在这里")。
+ *
+ * 【D6 图形槽位】[motif] 给了就渲染 duotone 品牌母题(替代单色 lucide 图标,
+ * 主色+哑色双描边,见 [PaDuotoneArt]);null(默认)保持原单色图标 —— 向后
+ * 兼容,调用点按语境逐个配图形,不配的不动。
+ */
+@Composable
+fun EmptyState(
+    iconRes: Int,
+    title: String,
+    hint: String,
+    modifier: Modifier = Modifier,
+    motif: PaDuotoneMotif? = null,
+) {
     Column(
         modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(44.dp))
+        if (motif != null) {
+            PaDuotoneArt(motif, Modifier.padding(bottom = 16.dp))
+        } else {
+            Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(44.dp))
+        }
         Text(title, Modifier.padding(top = 14.dp), fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
         Text(hint, Modifier.padding(top = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

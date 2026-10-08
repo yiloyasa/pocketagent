@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
@@ -1121,6 +1122,22 @@ private fun LazyListScope.discoveryItems(
     }
     item(key = "art") {
         // 发现圆环(premium.css .discovery-art .orb):三层同心圆 + 中性 monitor 细线图标
+        // 【D4-3 最内圈呼吸】静态三层圆里最内圈(主色渐变盘)加 pulse 呼吸
+        // (PaMotion.pulse 900ms 往复)—— "正在搜索附近主机"的存在感提示;
+        // 只碰 graphicsLayer(缩放,绘制层),布局与外两圈零影响;
+        // 减弱动效时静态(rememberReduceMotion,循环动效的退场纪律)。
+        val reduceMotion = rememberReduceMotion()
+        val breathe by if (reduceMotion) {
+            remember { mutableStateOf(1f) }
+        } else {
+            rememberInfiniteTransition(label = "discoveryBreathe")
+                .animateFloat(
+                    initialValue = 0.965f,
+                    targetValue = 1.035f,
+                    animationSpec = PaMotion.pulse(),
+                    label = "discoveryBreathe",
+                )
+        }
         Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
             Box(
                 Modifier
@@ -1137,6 +1154,10 @@ private fun LazyListScope.discoveryItems(
                     Box(
                         Modifier
                             .size(154.dp)
+                            .graphicsLayer {
+                                scaleX = breathe
+                                scaleY = breathe
+                            }
                             .background(
                                 Brush.radialGradient(
                                     colors = listOf(PaEditorial.Surface, PaEditorial.PrimaryContainer, PaEditorial.Raised),
