@@ -71,7 +71,7 @@ pi 1.0.2 的 `runRpcMode` 只有三类 stdout 输出（rpc-mode.js:28-30 `output
 | `text_delta` | `delta` | **投影** TextDelta + textBuf 拼接 | pi_events.go MapTextDelta；pi_events_test.go |
 | `text_end` | `content`（全文） | 有因不投影：全文=已收 delta 之和，重复上屏；usage 已在帧顶层入账 | 同上 |
 | `thinking_delta` | `delta` | **投影** ThinkingDelta（HideReasoning 快照语义过滤） | pi.go emitThinkingFor；pi_slevel_test.go |
-| `thinking_end` | `content`（全文） | 同 text_end（有因不投影） | — |
+| `thinking_end` | `content`（全文） | **投影** ThinkingDelta.snapshot（2026-10-09 P1-3 接线：权威全文整帧兜底，客户端整体替换；HideReasoning 同闸门过滤） | pi_events.go MapThinkingSnapshot |
 | `toolcall_start` | `id`, `toolName` | 有因不投影：参数未齐不出半截卡（P1 取舍），STARTED 等 toolcall_end；tool_execution_start 兜底保证不悬空 | pi_events.go MapToolcallEnd 注释 |
 | `toolcall_delta` | `delta`（参数 JSON 增量） | 有因不投影：拼装过程噪音 | 同上 |
 | `toolcall_end` | `toolCall{id,name,arguments}` | **投影** STARTED 卡（参数完整） | pi_events.go MapToolcallEnd；pi_events_test.go |

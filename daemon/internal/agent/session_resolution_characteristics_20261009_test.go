@@ -466,3 +466,103 @@ func TestCodexResolveResumeFailureDowngradesToStart(t *testing.T) {
 		t.Fatalf("降级新建应登记同代缓存: %+v ok=%t", ref, ok)
 	}
 }
+
+// ---- pi/codex:上收后(P1-7 收尾)经适配器入口的 Run 链矩阵 ---------------------------
+//
+// 与 zcode 的 PostAdoption 三例同构:钉"Run 决策 × 适配器协议"的入口接线。
+//   - pi 的 Run 无法用假客户端整轮驱动(轮次内状态机要真 *piapp.Client),矩阵例
+//     钉的是 Run 现在走的那个入口:NativeSessionFor 交付 *piSession(Run 的断言
+//     目标)+ Open/Resume 经适配器复现 Run 旧链(clientFor→mount)的调用轨迹;
+//     握手形状本身由 TestPiResolveMount*(共享 mount)与 TestPiSession*(适配器
+//     契约)钉住,这里钉"入口换轨不换行为"。
+//   - codex 的 Run 级三路径(上方 TestCodexResolve*)已经走真实 Run 装配(经
+//     适配器后原样全绿即上收直证);此处补钉 Run 专属的新入口 openForRun:
+//     ephemeral/config 覆盖是 Run 的一次性请求参数,只有这条入口携带。
+
+// piSessionMatrix 夹具:provider + 经 sessionFor 注入的假挂载源(zcodeSessionMatrix
+// 同构)。seen 记录每次交付的假客户端,断言调用轨迹用。
+func piSessionMatrix() (*PiProvider, *piSession, *[]*fakeResolveMountClient) {
+	p := NewPiProvider()
+	seen := &[]*fakeResolveMountClient{}
+	p.sessionFor = func(*store.Thread) (piMountClient, error) {
+		c := &fakeResolveMountClient{sessionFile: `G:\pi\sessions\fresh.json`, sessionID: "sid-fresh"}
+		*seen = append(*seen, c)
+		return c, nil
+	}
+	return p, &piSession{p: p}, seen
+}
+
+func TestPiResolvePostAdoptionRunEntryViaAdapter(t *testing.T) {
+	// Run 的入口契约:NativeSessionFor 交付的正是 *piSession(pi.go Run 断言的
+	// 具体类型);该形态下交付不出来,NativeSessionFor 不返回 error。
+	p0 := NewPiProvider()
+	ns, err := p0.NativeSessionFor(&store.Thread{ID: "t0"})
+	if err != nil {
+		t.Fatalf("工厂不应报错: %v", err)
+	}
+	if _, ok := ns.(*piSession); !ok {
+		t.Fatalf("Run 入口断言目标应是 *piSession, 实得 %T", ns)
+	}
+
+	t.Run("重挂载=Run断线恢复轨迹", func(t *testing.T) {
+		_, ps, seen := piSessionMatrix()
+		th := &store.Thread{ID: "t1", Workspace: `G:\ws`,
+			ExternalSession: store.ExternalSessionRef{SessionID: "sid-old", SessionFile: `G:\pi\sessions\a.json`}}
+		if err := ps.Resume(context.Background(), th); err != nil {
+			t.Fatalf("经适配器重挂载应成功: %v", err)
+		}
+		if len(*seen) != 1 {
+			t.Fatalf("应恰好取一次客户端, 实得 %d", len(*seen))
+		}
+		c := (*seen)[0]
+		if len(c.switched) != 1 || !strings.HasSuffix(c.switched[0], "a.json") || c.getState != 0 {
+			t.Fatalf("重挂载轨迹应恰好一次 switch 且零 get_state: switched=%v getState=%d", c.switched, c.getState)
+		}
+	})
+	t.Run("新建=Run首轮轨迹", func(t *testing.T) {
+		_, ps, seen := piSessionMatrix()
+		th := &store.Thread{ID: "t2", Workspace: `G:\ws`}
+		if err := ps.Open(context.Background(), th); err != nil {
+			t.Fatalf("经适配器新建应成功: %v", err)
+		}
+		c := (*seen)[0]
+		if c.getState != 1 || len(c.switched) != 0 {
+			t.Fatalf("新建轨迹应恰好一次 get_state 且零 switch: getState=%d switched=%v", c.getState, c.switched)
+		}
+		if th.ExternalSession.SessionID != "sid-fresh" || th.ExternalSession.SessionFile != `G:\pi\sessions\fresh.json` {
+			t.Fatalf("新建应经 mount 回填引用: %+v", th.ExternalSession)
+		}
+	})
+}
+
+// Run 专属新建入口 openForRun:ephemeral 与 config 覆盖显式携带(合同面 Open 不带,
+// 见 codexSession 类型注释),threadId 写回 + 同代缓存登记与 Run 旧链一字不差。
+func TestCodexResolvePostAdoptionOpenForRun(t *testing.T) {
+	p, cs, fake := newCodexSessionFixture()
+	th := &store.Thread{ID: "tc-pa", Workspace: `G:\ws`}
+	tid, err := cs.openForRun(context.Background(), th, true,
+		map[string]interface{}{"model_verbosity": "low"})
+	if err != nil {
+		t.Fatalf("经适配器新建应成功: %v", err)
+	}
+	if tid == "" || th.CodexThreadID != tid {
+		t.Fatalf("新 threadId 应写回 thread: tid=%q ref=%q", tid, th.CodexThreadID)
+	}
+	if ref, ok := p.codexThreadRef("tc-pa"); !ok || ref.id != tid || ref.gen != int(p.gen.Load()) {
+		t.Fatalf("新建应登记同代缓存(当前代): %+v ok=%t want-gen=%d", ref, ok, int(p.gen.Load()))
+	}
+	if len(fake.calls) != 1 || fake.calls[0].method != "thread/start" {
+		t.Fatalf("应恰好一次 thread/start: %+v", fake.calls)
+	}
+	sp := fake.calls[0].params
+	if sp["cwd"] != `G:\ws` {
+		t.Fatalf("cwd 应取 thread 落库值, 实得 %v", sp["cwd"])
+	}
+	if sp["ephemeral"] != true {
+		t.Fatalf("Run 一次性参数 ephemeral 应显式携带, 实得 %v", sp["ephemeral"])
+	}
+	cfg, ok := sp["config"].(map[string]interface{})
+	if !ok || cfg["model_verbosity"] != "low" {
+		t.Fatalf("config 覆盖应显式携带: %v", sp["config"])
+	}
+}

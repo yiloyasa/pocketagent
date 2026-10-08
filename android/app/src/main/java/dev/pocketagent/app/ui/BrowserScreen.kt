@@ -835,7 +835,7 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                                         snap.bytes, snap.mime,
                                     )
                                     android.widget.Toast.makeText(
-                                        ctx, "离线:显示本地网页快照", android.widget.Toast.LENGTH_SHORT,
+                                        ctx, offlineSnapshotToastCopy(snap.capturedAt), android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                                 } else {
                                     view?.loadDataWithBaseURL(
@@ -1074,6 +1074,18 @@ private fun isRemote(url: String?): Boolean =
         url.startsWith("file:") || url.startsWith("ftp:"))
 
 // MIME → 后缀的映射已统一到 DocFormatRegistry.extFor(此处原先的私有重复实现已删除)。
+
+/**
+ * 离线快照 toast 文案(纯函数,JVM 单测钉死):交代"看到的是哪一刻的网页",
+ * 断网兜底才不是一笔糊涂账。快照带截至时间(capturedAt>0)→「离线:显示
+ * M月d日 HH:mm 的网页快照」;存量快照无可靠时间戳(<=0)→ 旧文案,不编造时间。
+ */
+internal fun offlineSnapshotToastCopy(capturedAtMs: Long): String {
+    if (capturedAtMs <= 0) return "离线:显示本地网页快照"
+    val stamp = java.text.SimpleDateFormat("M月d日 HH:mm", java.util.Locale.getDefault())
+        .format(java.util.Date(capturedAtMs))
+    return "离线:显示 $stamp 的网页快照"
+}
 
 /**
  * 剥掉 pc: 地址携带的预览缓存元数据(`?_pas=<size>&_pam=<mtime>`),得到干净路径。

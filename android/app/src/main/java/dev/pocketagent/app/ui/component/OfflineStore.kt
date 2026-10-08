@@ -265,18 +265,24 @@ object OfflineStore {
 
     // -------------------------------------------------------------- 网页快照缓存(离线浏览)
 
-    /** 一份网页快照:原始字节 + MIME + 建议文件名。 */
-    data class UrlSnapshot(val bytes: ByteArray, val mime: String, val name: String) {
+    /**
+     * 一份网页快照:原始字节 + MIME + 建议文件名 + 截至时刻。
+     * [capturedAt] 是快照的"截至哪一刻"(epoch ms,取自快照文件修改时间);
+     * <=0 = 存量快照无可靠时间戳,展示层回退旧文案(不编造时间)。
+     */
+    data class UrlSnapshot(val bytes: ByteArray, val mime: String, val name: String, val capturedAt: Long = 0L) {
         // ByteArray 的 data class equals 是引用比较,这里补上内容比较,避免"看起来相等其实不等"
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is UrlSnapshot) return false
-            return mime == other.mime && name == other.name && bytes.contentEquals(other.bytes)
+            return mime == other.mime && name == other.name &&
+                capturedAt == other.capturedAt && bytes.contentEquals(other.bytes)
         }
 
         override fun hashCode(): Int {
             var r = mime.hashCode()
             r = 31 * r + name.hashCode()
+            r = 31 * r + capturedAt.hashCode()
             r = 31 * r + bytes.contentHashCode()
             return r
         }
@@ -305,8 +311,12 @@ object OfflineStore {
             val mime = unhex(rest.substringBefore('.'))
             val name = unhex(rest.substringAfter('.', ""))
             val bytes = hit.readBytes()
+            // 截至时刻必须在 LRU touch 之前读:touch 会把修改时间改写成"本次查看时刻",
+            // 那是"最近看过",不是"网页截至哪一刻"。读失败(0)按无时间戳回退旧文案。
+            val mtime = hit.lastModified()
+            val capturedAt = if (mtime > 0) mtime else 0L
             runCatching { hit.setLastModified(System.currentTimeMillis()) }
-            UrlSnapshot(bytes, mime, name)
+            UrlSnapshot(bytes, mime, name, capturedAt)
         }.getOrNull()
     }
 

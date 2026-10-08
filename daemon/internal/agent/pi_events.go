@@ -25,8 +25,11 @@ import (
 
 // piAssistantEvent message_update 里的流式增量事件(只解析用得到的字段)。
 type piAssistantEvent struct {
-	Type         string          `json:"type"` // text_delta / thinking_delta / toolcall_start / toolcall_delta / toolcall_end
-	Delta        string          `json:"delta"`
+	Type  string `json:"type"` // text_delta / thinking_delta / thinking_end / toolcall_start / toolcall_delta / toolcall_end
+	Delta string `json:"delta"`
+	// Content 块终局全文(thinking_end/text_end 携带,增量帧没有):thinking 的
+	// 权威全文快照只消费 thinking_end 的这个字段(见 MapThinkingSnapshot)。
+	Content      string          `json:"content"`
 	ID           string          `json:"id"`
 	ToolName     string          `json:"toolName"`
 	ToolCall     *piToolCall     `json:"toolCall"`
@@ -72,6 +75,29 @@ func MapThinkingDelta(raw json.RawMessage) (pb.ThinkingDelta, bool) {
 		return pb.ThinkingDelta{}, false
 	}
 	return pb.ThinkingDelta{Delta: m.Assistant.Delta}, true
+}
+
+// MapThinkingSnapshot thinking_end → pb.ThinkingDelta(snapshot=权威全文帧)。
+//
+// 【终局来源判定】pi 的 message_update 家族里,thinking 块有**独立终局事件**:
+// thinking_end 携带 content = 该思考块的权威全文(0.85.1 探针实帧,
+// docs/verify/evidence/pi-p0-probe.md:141;字段面清单
+// docs/reviews/2026-10-07/field-coverage-pi.md:74 "thinking_end | content(全文)")。
+// 此前 daemon 对它"有因不投影"—— 手机端只能靠逐帧拼接 thinking_delta,丢一帧
+// 就永久缺一段。现映射成 snapshot 帧(Delta 为空,snapshot=全文):客户端收到
+// 即整体替换累积文本,作为丢帧/断连的兜底真相(proto ThinkingDelta.snapshot 契约)。
+//
+// 【为什么不动 MapThinkingDelta】它只认 thinking_delta(增量);若让它顺带认
+// thinking_end,现有调用方(pi.go 泵/回放摘要)拿到的 d.Delta 会是空串,增量
+// 语义被静默稀释 —— 终局全文走独立映射函数,调用方按需接线、两函数互不越界。
+// thinking_start(无载荷)与本函数无关;content 为空的 thinking_end 不发帧
+// (空全文没有替换语义,发了只是噪音)。
+func MapThinkingSnapshot(raw json.RawMessage) (pb.ThinkingDelta, bool) {
+	m := parseMessageUpdate(raw)
+	if m == nil || m.Assistant.Type != "thinking_end" || m.Assistant.Content == "" {
+		return pb.ThinkingDelta{}, false
+	}
+	return pb.ThinkingDelta{Snapshot: m.Assistant.Content}, true
 }
 
 // MapToolcallEnd toolcall_end → STARTED 帧(参数完整)。

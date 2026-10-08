@@ -1,5 +1,11 @@
 package agent
 
+// 【命名止血(2026-10-09 B5)】本文件与全家协议帧里到处可见的 CodexEvent **不是
+// codex 专属** —— 它是六家共用"原生事件信封":所有 agent 的未知通知/坏帧都包成
+// CodexEvent_STATUS 上屏(见下方 recordAs 的 sink 出口,曾为 :417-420 附近)。
+// 名字是 proto 时代 codex 先行的历史遗留;proto 字段改名属破坏性变更(跨端
+// wire 兼容),不做 —— 以本注释为命名事实的唯一说明,后来者勿按名字猜归属。
+
 import (
 	"encoding/json"
 	"strings"
@@ -418,6 +424,27 @@ func (r *nativeNoticeRecorder) recordAs(kind, agentID, method string, raw json.R
 		Kind: pb.CodexEvent_STATUS, Code: "native_notification", Title: agentID + " · " + method,
 		Message: "原生状态通知", RawJson: redactNativePayload(raw),
 	}}})
+}
+
+// recordBadFrame 坏帧留痕的共享件(B4 收口,2026-10-09):各家泵的
+// json.Unmarshal 解包失败分支统一走这里,method 自动带 <unparseable> 标记,
+// 与"别的会话的帧"(异线程/异会话过滤,刻意静默)在台账里可区分、可检索。
+// 限频照 codex 原口径(recordAs 语义:每键 2 条、64 键封顶 —— 坏帧通常是版本
+// 错位,同一种坏形状记两条足够定位,多了只会刷爆 200 条滚动窗)。
+//
+// 【出卡 vs 只台账:谁调用谁裁量,sink 传不传由留痕是否唯一决定】
+//   - codex 出卡(sink 传入):它的常驻全局钩子对 item/turn 系方法记
+//     KNOWN_PROJECTED/PASSTHROUGH,"这一帧坏了"在台账里只存在于泵侧,属坏帧
+//     唯一留痕的情形,按 nil-sink 语义传真 sink 出限频卡;
+//   - zcode/dsh 只台账(sink 传 nil):常驻全局钩子对同一帧已先落 UNKNOWN
+//     台账,泵侧不是唯一留痕,诊断卡只会添噪(2026-10-07 旁路审计定案的裁量,
+//     zcode_pump/dsh_title_badframe 测试钉死);
+//   - hermes 出卡:它没有常驻全局钩子,泵侧是唯一留痕;
+//   - pi 只台账:piapp 对非 JSON 行在上游直接丢弃(不入任何钩子),能到达
+//     daemon 边界的帧外层必为合法 JSON,信封二解失败属罕见畸形;且全局钩子
+//     边界无 sink 可用,台账是它唯一能落的载体。
+func (r *nativeNoticeRecorder) recordBadFrame(agentID, method string, params json.RawMessage, sink Sink) {
+	r.recordAs(runtime.KindUnknownNotification, agentID, method+":<unparseable>", params, sink)
 }
 
 // recordLedger 只写诊断台账,不向 sink 推任何帧(recordAs 的台账半边;推送的

@@ -766,22 +766,22 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 		defer close(notifDone)
 		for {
 			select {
-			case nm := <-notifCh:
-				if nm.method == "session/update" {
-					var env dshUpdateEnvelope
-					if json.Unmarshal(nm.params, &env) != nil {
-						// 【D-1(=Z-3 dsh 侧)坏帧留痕(2026-10-07 旁路审计)】解包失败
-						// 与异会话过滤此前共用一条 continue。拆开后坏帧补一条泵侧台账,
-						// 方法名带 <unparseable> 标记,与全局钩子(dshGlobalNoticeKind
-						// 对拆不开的信封记的裸 "session/update")可区分、可检索。
-						// 【裁量:只台账,不出限频 STATUS 卡】全局钩子对同一帧已先落
-						// UNKNOWN 台账,泵侧不是唯一留痕;传输级异常帧无用户处置路径,
-						// 诊断卡只会添噪。异会话过滤维持下方静默(全家同款刻意取舍)。
-						notices.recordLedgerOnly(runtime.KindUnknownNotification,
-							"dsh", "session/update:<unparseable>", nm.params)
-						processed.Add(1)
-						continue
-					}
+				case nm := <-notifCh:
+					if nm.method == "session/update" {
+						var env dshUpdateEnvelope
+						if json.Unmarshal(nm.params, &env) != nil {
+							// 【D-1(=Z-3 dsh 侧)坏帧留痕 → B4 共享件(2026-10-09)】
+							// 解包失败与异会话过滤此前共用一条 continue。拆开后坏帧走
+							// 共享 recordBadFrame:方法名带 <unparseable> 标记,与全局
+							// 钩子(dshGlobalNoticeKind 对拆不开的信封记的裸
+							// "session/update")可区分、可检索。
+							// 【裁量:只台账,不出限频 STATUS 卡】全局钩子对同一帧已先落
+							// UNKNOWN 台账,泵侧不是唯一留痕;传输级异常帧无用户处置路径,
+							// 诊断卡只会添噪。异会话过滤维持下方静默(全家同款刻意取舍)。
+							notices.recordBadFrame("dsh", "session/update", nm.params, nil)
+							processed.Add(1)
+							continue
+						}
 					if env.SessionID != sid {
 						processed.Add(1)
 						continue // 别的会话的帧不进本轮(刻意过滤,与四家同款)
@@ -800,7 +800,7 @@ func (p *DshProvider) Run(ctx context.Context, req TurnRequest, sink Sink, appro
 	}()
 	reqHandler := func(id int64, method string, params json.RawMessage) {
 		log.Printf("[dsh] 反向请求 %s 原始参数: %.400s", method, string(params))
-		p.handleDshRequest(p.client, id, method, params, ctx, sink, approve, &st.approvalWaiting)
+		p.handleDshRequest(p.client, id, method, params, ctx, sink, approve, &st.approvalWaiting, req.Thread.ID)
 	}
 	p.client.SetTurnHandlers(notifHandler, reqHandler)
 	defer func() {
@@ -1648,11 +1648,14 @@ func dshUsageUpdateFromUsedSize(raw json.RawMessage) *pb.UsageUpdate {
 //  2. 审批卡按请求真实内容构造,不猜不编造;
 //  3. 超时(2min)/断线/通道故障 → 拒绝路径,绝不伪造"同意"(红线 1)。
 //
+// threadID 是我们自己的会话 id,供应答写回失败的日志定位到具体会话(与 codex
+// 的 B4 留痕同口径)。
+//
 // 【已实证 2026-09-25】key 配齐后 dsh-p0 探针 8/8 通过:第 4 项实测
 // session/request_permission 的请求/应答原始帧与 allow/reject 双路行为、
 // 第 5 项实测 cancel 中断语义(stopReason=cancelled),形状与本实现一致;
 // 证据 docs/verify/evidence/dsh-p0-probe.md。
-func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
+func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool, threadID string) {
 	if method != "session/request_permission" {
 		// 【辅线 B】开关 ON 时,未知反向请求先弹手机通用确认卡:允许 → 回空对象 {}
 		// + 台账 KNOWN_PASSTHROUGH(用户看过脱敏原文后授权这次试探);拒绝/超时/
@@ -1705,6 +1708,15 @@ func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, p
 		Reason:    "dsh 请求授权(一次性 allow/reject,无\"始终允许\")",
 	}}})
 
+	// 【B4 应答必达性留痕】allow/reject 已定,写回失败(子进程恰好退出/管道断裂)
+	// 不再 _ = 丢弃 —— 落一行日志带线程 id 与方法名,与"绝不伪造 decision"红线
+	// 配套:痕迹不改变应答语义,只保证"答案没送到"可追查。
+	respond := func(result interface{}) {
+		if err := rsp.Respond(id, result); err != nil {
+			log.Printf("[dsh] 审批应答写回失败 thread=%s method=%s request=%d: %v", threadID, method, id, err)
+		}
+	}
+
 	askCtx, cancel := context.WithTimeout(ctx, dshApprovalTimeout)
 	defer cancel()
 	allow, _, askErr := approve(askCtx, call)
@@ -1718,11 +1730,11 @@ func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, p
 		} else {
 			log.Printf("[dsh] 审批通道失败,按拒绝处理: %v", askErr)
 		}
-		_ = rsp.Respond(id, dshapp.PermissionOutcomeSelected(rejectID))
+		respond(dshapp.PermissionOutcomeSelected(rejectID))
 	case allow:
-		_ = rsp.Respond(id, dshapp.PermissionOutcomeSelected(allowID))
+		respond(dshapp.PermissionOutcomeSelected(allowID))
 	default:
-		_ = rsp.Respond(id, dshapp.PermissionOutcomeSelected(rejectID))
+		respond(dshapp.PermissionOutcomeSelected(rejectID))
 	}
 }
 

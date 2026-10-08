@@ -186,8 +186,14 @@ func (e *Entry) WireEvents() []Event {
 				raw = mustJSON(map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{
 					"type": "text_delta", "delta": b.Text}})
 			case "thinking":
+				// 【P1-3 snapshot 契约】回放不发合成 thinking_delta 假增量(把完整
+				// 块伪装成"逐帧到达"会让断点续传场景的增量语义失真):终局全文
+				// 本就该一次给。合成 pi 线上**真实的终局事件形状**(thinking_end +
+				// content=全文,0.85.1 探针实帧同构),经 agent 包 MapThinkingSnapshot
+				// 映射成 ThinkingDelta.snapshot 帧 —— 回放与实时共用同一映射管线,
+				// 手机端收到即整体替换累积文本。
 				raw = mustJSON(map[string]any{"type": "message_update", "assistantMessageEvent": map[string]any{
-					"type": "thinking_delta", "delta": b.Thinking}})
+					"type": "thinking_end", "content": b.Thinking}})
 			case "toolCall":
 				args := b.Arguments
 				if len(args) == 0 {

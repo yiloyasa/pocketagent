@@ -389,6 +389,19 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	notif := func(raw json.RawMessage) {
 		lastNotif.Store(time.Since(turnStart).Milliseconds()) // 单调毫秒(距 turnStart),免疫墙钟跳变
 		ev := hermesapp.ParseSessionUpdate(raw)
+		if ev.SessionID == "" {
+			// 【B4 坏帧留痕(2026-10-09)】信封解不开(ParseSessionUpdate 失败时全零
+			// 返回)此前与"异会话帧"共用下方静默,轮内无任何痕迹。hermes 没有常驻
+			// 全局钩子,泵侧是坏帧的唯一留痕 —— 甄别后走共享 recordBadFrame:JSON
+			// 本身解不开 = 坏帧,出限频卡(裁量=唯一留痕,说明见
+			// native_notifications.go);解得开但没有 sessionId = 异形/异会话帧,
+			// 维持静默(全家同款取舍:写台账会被并发会话流量刷爆滚动窗)。
+			var probe map[string]json.RawMessage
+			if json.Unmarshal(raw, &probe) != nil {
+				notices.recordBadFrame("hermes", "session/update", raw, sink)
+			}
+			return
+		}
 		if ev.SessionID != sid {
 			return // 非本轮会话的帧(共享适配器上还有别的会话)不进本轮
 		}
@@ -424,7 +437,7 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		// 必须即时弹出,排进事件队列反会被慢消费冻结;它与消费者 goroutine 的
 		// sink 并发由 sink 自身的并发安全约定承担(server 层同一通道),final/
 		// toolIDs 在 req 路径不被触碰,不引入新的竞争面。
-		p.handleRequestPermission(c, id, method, params, ctx, sink, approve)
+		p.handleRequestPermission(c, id, method, params, ctx, sink, approve, req.Thread.ID)
 	}
 	// 【泵安装】从这里起 readLoop 的帧改走 notifCh 队列;卸载统一由 stopPump 负责。
 	c.SetTurnHandlers(notif, reqHandler)
@@ -833,7 +846,10 @@ var hermesApprovalTimeout = 2 * time.Minute
 //  1. 不认识的方法回 JSON-RPC error + 台账 UNKNOWN_REQUEST 留痕,绝不伪造 decision;
 //  2. 审批卡按请求真实内容构造,不猜不编造;
 //  3. 超时/断线/通道故障 → 拒绝侧,绝不伪造"同意"。
-func (p *HermesProvider) handleRequestPermission(c hermesClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook) {
+//
+// threadID 是我们自己的会话 id,供应答写回失败的日志定位到具体会话(与 codex/dsh
+// 的 B4 留痕同口径)。
+func (p *HermesProvider) handleRequestPermission(c hermesClient, id int64, method string, params json.RawMessage, ctx context.Context, sink Sink, approve ApprovalHook, threadID string) {
 	if method != "session/request_permission" {
 		log.Printf("[hermes] %s → 回 error(未实现,不伪造 decision)", method)
 		// 台账登记(2026-10-07 审计移交收口):回 error 只让对端知道"这次没做成",
@@ -876,6 +892,15 @@ func (p *HermesProvider) handleRequestPermission(c hermesClient, id int64, metho
 		Reason:    "hermes 请求授权(一次性 allow/deny;allow_session/allow_always 由桌面端 Hermes 自己管)",
 	}}})
 
+	// 【B4 应答必达性留痕】allow/deny 已定,写回失败(子进程恰好退出/管道断裂)
+	// 不再 _ = 丢弃 —— 落一行日志带线程 id 与方法名,与"绝不伪造 decision"红线
+	// 配套:痕迹不改变应答语义,只保证"答案没送到"可追查。
+	respond := func(result interface{}) {
+		if err := c.Respond(id, result); err != nil {
+			log.Printf("[hermes] 审批应答写回失败 thread=%s method=%s request=%d: %v", threadID, method, id, err)
+		}
+	}
+
 	askCtx, cancel := context.WithTimeout(ctx, hermesApprovalTimeout)
 	defer cancel()
 	allow, _, askErr := approve(askCtx, call)
@@ -886,11 +911,11 @@ func (p *HermesProvider) handleRequestPermission(c hermesClient, id int64, metho
 		} else {
 			log.Printf("[hermes] 审批通道失败,按拒绝处理: %v", askErr)
 		}
-		_ = c.Respond(id, hermesapp.PermissionOutcomeSelected(rejectID))
+		respond(hermesapp.PermissionOutcomeSelected(rejectID))
 	case allow:
-		_ = c.Respond(id, hermesapp.PermissionOutcomeSelected(allowID))
+		respond(hermesapp.PermissionOutcomeSelected(allowID))
 	default:
-		_ = c.Respond(id, hermesapp.PermissionOutcomeSelected(rejectID))
+		respond(hermesapp.PermissionOutcomeSelected(rejectID))
 	}
 }
 

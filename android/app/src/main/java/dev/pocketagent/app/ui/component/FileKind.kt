@@ -38,8 +38,13 @@ enum class PreviewMode {
 enum class FileKind(
     /** 中文类型名,直接展示给用户(如"安装包""Markdown")。 */
     val label: String,
-    /** 徽标底色。 */
-    val color: Color,
+    /**
+     * 徽标底色槽位(构造期登记的固定值)。
+     * 【D7】对 Mcp 三族(IMAGE/AUDIO/VIDEO)这只是初值;对外一律走 [color]
+     * 组合期实取 —— 旧实现把 `PaEditorial.Mcp` 在枚举类首次加载时定格,
+     * 三盘切换后徽标紫不刷新。
+     */
+    private val fixedColor: Color,
     /** 预览能力(见 [PreviewMode])。 */
     val preview: PreviewMode,
     val mime: String,
@@ -110,6 +115,15 @@ enum class FileKind(
 
     /** 能否交给 App 内置浏览器渲染。 */
     val browserViewable: Boolean get() = preview == PreviewMode.IN_APP
+
+    /**
+     * 徽标底色:用时取,不在枚举构造期定格。
+     * 【D7】Mcp 三族(IMAGE/AUDIO/VIDEO)组合期实读 [PaEditorial.Mcp]
+     * (mutableStateOf,浅/深/黑客三盘各一值)—— 换盘即刷新,三盘徽标紫
+     * 各自成立;其余族返回构造期登记的固定槽位(不随盘变的语义色)。
+     */
+    val color: Color
+        get() = if (this == IMAGE || this == AUDIO || this == VIDEO) PaEditorial.Mcp else fixedColor
 
     /** 是否属于"表格"一族(任务中心/用户数据页用它给统计口径)。 */
     val isSheet: Boolean get() = this == XLSX || this == XLS || this == ODS || this == CSV

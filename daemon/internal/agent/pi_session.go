@@ -17,10 +17,12 @@
 //   - Source:引用 piShape.sessionModel 同一表达式(D2:与 Descriptor 申报无
 //     第二独立来源,source-mismatch 在结构上不可能)。
 //
-// 【过渡期双路径】本轮 Run 的既有链路(pi.go Run → clientFor → mount)原样不动,
-// 本适配器是与之**并行**的映射层,当前唯一消费方是 openSharedRuntime 的 D5 工厂
-// 注入(契约交付)。后续切换点:Run 与 ensureMounted 的挂载调用改走适配器
-// (设计稿 §6.1,P3 之后的收尾项,需单独立项)。
+// 【P1-7:双路径已退役】Run 的会话解析(pi.go Run)不再直连 clientFor+mount 的
+// 旧两步,客户端获取统一经本适配器 mountFor(与契约面 Open/Resume 同一来源);
+// mount 仍是握手的唯一实现(Run 链与适配器共用,特征测试 TestPiResolveMount*
+// 钉住其三分支)。本适配器不再只是 openSharedRuntime D5 工厂注入的"并行映射层",
+// 而是 pi 会话解析的单一协议入口(Run 链保留的只有断点回放/订阅类轮次内状态机,
+// 设计稿 §4-P3 收窄同理)。
 //
 // 【并发纪律】适配器方法目前只会被轮次 goroutine 调用(设计稿 §6.2):mount 内部
 // 的 clients map 读写由 PiProvider.mu 保护,与 Run 现状一致;若未来诊断页直调
@@ -36,9 +38,10 @@ import (
 )
 
 // NativeSessionFactory 是 D5 的可选工厂合同(设计稿 §3-D5):provider 实现了它,
-// openSharedRuntime 才注入 rt.NativeSession;没实现的家(codex/zcode/dsh,截至
-// P1)维持 nil —— 六家增量收编互不牵连。与 Steerer/PrefsAware 同款类型断言探测,
-// 无注册名单(任何按 agent 名字分支的写法都违反 README §0.5)。
+// openSharedRuntime 才注入 rt.NativeSession;没实现的家维持 nil —— 六家增量收编
+// 互不牵连。与 Steerer/PrefsAware 同款类型断言探测,无注册名单(任何按 agent
+// 名字分支的写法都违反 README §0.5)。截至 P1-7,原生四家 pi/codex/zcode/dsh
+// 已全部实现(hermes/openai-compat 仍是外部协议家,不在原生会话收编面)。
 type NativeSessionFactory interface {
 	// NativeSessionFor 为 thread 交付原生会话适配器。
 	// 返回 error 表示"此刻交付不出来",调用方如实上报,不得假装交付成功。
@@ -84,7 +87,7 @@ func (s *piSession) Open(ctx context.Context, th *store.Thread) error {
 	}
 	saved := th.ExternalSession
 	th.ExternalSession = store.ExternalSessionRef{}
-	c, err := s.mountFor(th)
+	c, err := s.mountFor(th, th.Workspace)
 	if err != nil {
 		th.ExternalSession = saved
 		return err
@@ -111,7 +114,7 @@ func (s *piSession) Resume(ctx context.Context, th *store.Thread) error {
 	if th.ExternalSession.SessionFile == "" {
 		return fmt.Errorf("%w: thread=%s", runtime.ErrNoNativeSession, th.ID)
 	}
-	c, err := s.mountFor(th)
+	c, err := s.mountFor(th, th.Workspace)
 	if err != nil {
 		return err
 	}
@@ -132,9 +135,12 @@ func (s *piSession) Close(_ context.Context, _ *store.Thread) error { return nil
 // 冷启新进程,含 GlobalHandler/守护扩展等接线);测试经 sessionFor 钩子注入假
 // 客户端,不拉真子进程(与 remount 钩子同模式)。适配器不自带 timeout 第二实现
 // —— 预算(piSwitchBudget/piCallBudget)由 mount 内部照旧施加。
-func (s *piSession) mountFor(th *store.Thread) (piMountClient, error) {
+// workspace 由调用方给出:契约面 Open/Resume 传 th.Workspace(thread 落库值),
+// Run 链传 req.Workspace(轮次工作区随 TurnRequest 给出;两者生产同源,显式
+// 参数保留旧链取值语义,dshSession.openForRun 同款纪律)。
+func (s *piSession) mountFor(th *store.Thread, workspace string) (piMountClient, error) {
 	if hook := s.p.sessionFor; hook != nil {
 		return hook(th)
 	}
-	return s.p.clientFor(th, th.Workspace)
+	return s.p.clientFor(th, workspace)
 }

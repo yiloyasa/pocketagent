@@ -28,7 +28,7 @@ func TestHermesUnknownReverseRequestLandsInUnknownRequestLedger(t *testing.T) {
 	p := newHermesTestProvider(t, fake)
 
 	p.handleRequestPermission(fake, 21, unseenMethod, json.RawMessage(`{"token":"secret-req","x":1}`),
-		context.Background(), func(*pb.TurnServerMessage) {}, nil)
+		context.Background(), func(*pb.TurnServerMessage) {}, nil, "th-hermes-approval")
 
 	// 回复侧:-32601 语义不变,绝不带任何 decision 形状的成功应答。
 	fake.mu.Lock()
@@ -65,7 +65,7 @@ func TestHermesKnownPermissionMethodSkipsUnknownLedger(t *testing.T) {
 	p := newHermesTestProvider(t, fake)
 
 	p.handleRequestPermission(fake, 33, "session/request_permission", json.RawMessage(`{"bad":`),
-		context.Background(), func(*pb.TurnServerMessage) {}, nil)
+		context.Background(), func(*pb.TurnServerMessage) {}, nil, "th-hermes-approval")
 
 	fake.mu.Lock()
 	if len(fake.respondErr) != 1 || fake.respondErr[0].Code != -32602 {

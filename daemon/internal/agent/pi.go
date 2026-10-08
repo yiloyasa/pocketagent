@@ -450,6 +450,13 @@ func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client
 	// 挂载时回显的 set_session_name 会带 t.Title 原值回来,server 侧有
 	// "标题相同就不写库"守卫,不会形成回调环。
 	threadID := t.ID
+	// 【B4 坏帧留痕(2026-10-09)】pi 事件边界对信封二解失败(GlobalHandler 的
+	// frame 解包,此前失败时降级成"空 method + 空 payload"的台账条目,不可检索)
+	// 统一走共享 recordBadFrame,只台账不出卡:此处是常驻边界、无轮次 sink 可用,
+	// 且 piapp 对非 JSON 行在上游直接丢弃(不入任何钩子),能到达本边界的帧外层
+	// 必为合法 JSON,解包失败属罕见畸形;限频记账随该子进程生命周期(口径见
+	// native_notifications.go 的 recordBadFrame 注释)。
+	var badFrames nativeNoticeRecorder
 	nc.SetGlobalHandler(func(ev piapp.Event) {
 		var method string
 		var payload json.RawMessage
@@ -457,9 +464,11 @@ func (p *PiProvider) clientFor(t *store.Thread, workspace string) (*piapp.Client
 			Type string          `json:"type"`
 			Data json.RawMessage `json:"data"`
 		}
-		if json.Unmarshal(ev.Raw, &frame) == nil {
-			method, payload = frame.Type, frame.Data
+		if json.Unmarshal(ev.Raw, &frame) != nil {
+			badFrames.recordBadFrame("pi", "global", ev.Raw, nil)
+			return
 		}
+		method, payload = frame.Type, frame.Data
 		recordProviderEvent("pi", method, threadID, piEventNoticeKind(method), payload)
 		if name, ok := MapSessionNameChange(ev.Raw); ok && p.TitleHandler != nil {
 			go p.TitleHandler(threadID, name)
@@ -634,6 +643,15 @@ func (p *PiProvider) emitThinkingFor(t *store.Thread, delta string, sink Sink) {
 		return
 	}
 	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+}
+
+// emitThinkingSnapshotFor 是 snapshot 帧(权威全文)的线程感知出口(P1-3):
+// 与 emitThinkingFor 同一 hideReasoning 闸门 —— 隐藏推理时终局全文同样不出。
+func (p *PiProvider) emitThinkingSnapshotFor(t *store.Thread, snapshot string, sink Sink) {
+	if p.hideReasoningFor(t) {
+		return
+	}
+	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Snapshot: snapshot}}})
 }
 
 // threadModelExplicit 线程是否显式指定了 pi 模型("pi/<provider>/<model>")。
@@ -837,9 +855,28 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 	p.mu.Lock()
 	prev := p.clients[t.ID]
 	p.mu.Unlock()
-	c, err := p.clientFor(t, req.Workspace)
+	// 【P1-7 bindSession 上收】会话解析入口经原生会话适配器:客户端获取走
+	// piSession.mountFor(与契约面 Open/Resume 同一来源 —— 生产 clientFor、
+	// 测试 sessionFor 钩子),握手走 mount 唯一实现(两条链共用,TestPiResolveMount*
+	// 钉住三分支);"过渡期双路径"就此退役。workspace 显式传 req 值,保留旧链取值
+	// 语义(轮次工作区随 TurnRequest 给出,与 thread 落库值生产同源)。
+	ns, nerr := p.NativeSessionFor(t)
+	if nerr != nil {
+		return nil, nil, &piError{code: "PI_UNAVAILABLE", msg: nerr.Error()}
+	}
+	ps, psok := ns.(*piSession)
+	if !psok {
+		return nil, nil, &piError{code: "PI_UNAVAILABLE", msg: fmt.Sprintf("pi: 原生会话适配器类型异常: %T", ns)}
+	}
+	mc, err := ps.mountFor(t, req.Workspace)
 	if err != nil {
 		return nil, nil, &piError{code: "PI_UNAVAILABLE", msg: err.Error()}
+	}
+	c, cok := mc.(*piapp.Client)
+	if !cok {
+		// sessionFor 钩子只服务于契约/单测打桩(窄接口),生产恒为真客户端;
+		// 轮次内状态机(回放/用量/prompt)需要具体类型,类型不符如实报不可用。
+		return nil, nil, &piError{code: "PI_UNAVAILABLE", msg: fmt.Sprintf("pi: 会话客户端不是生产子进程客户端: %T", mc)}
 	}
 	if err := p.mount(ctx, t, c); err != nil {
 		return nil, nil, &piError{code: "PI_MOUNT_FAILED", msg: err.Error()}
@@ -965,6 +1002,12 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 				// 开关打开时 ThinkingDelta 一帧不出,见 emitThinkingFor
 				// (P2-8:有快照的线程按快照判定,老会话不随全局漂移)。
 				p.emitThinkingFor(t, d.Delta, sink)
+				return
+			}
+			if snap, ok := MapThinkingSnapshot(ev.Raw); ok {
+				// thinking_end 终局权威全文(P1-3):客户端整体替换累积文本,
+				// 丢帧/断连后的兜底真相。与增量帧互斥(thinking_end 不带 delta)。
+				p.emitThinkingSnapshotFor(t, snap.Snapshot, sink)
 				return
 			}
 			if upd, ok := MapToolcallEnd(ev.Raw); ok {
@@ -2126,6 +2169,11 @@ func replayEntryDigest(e *piapp.Entry) string {
 			}
 			if d, ok := MapThinkingDelta(ev.Raw); ok {
 				thinks += len([]rune(d.Delta))
+				continue
+			}
+			if snap, ok := MapThinkingSnapshot(ev.Raw); ok {
+				// 历史回放/thinking_end 终局全文同样计入摘要字数(P1-3 接线配平)。
+				thinks += len([]rune(snap.Snapshot))
 				continue
 			}
 			if upd, ok := MapToolcallEnd(ev.Raw); ok {

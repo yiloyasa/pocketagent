@@ -5009,9 +5009,17 @@ func (x *TextDelta) GetDelta() string {
 	return ""
 }
 
+// ThinkingDelta 思考流的两类帧(一帧只带其一,不同时出现):
+//   - delta    流式增量(与 TextDelta.delta 同语义,客户端追加拼接);
+//   - snapshot 权威全文(pi 的 thinking_end 终局事件/历史回放一次性携带)。
+//
+// 客户端收到 snapshot 即**整体替换**此前累积的思考文本 —— 它是丢帧/断连后的
+// 兜底真相,不依赖逐帧拼接的完整性。兼容性:旧客户端忽略未知字段 snapshot,
+// 增量行为不变;新客户端对 delta 为空、snapshot 非空的帧做替换、不追加。
 type ThinkingDelta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Delta         string                 `protobuf:"bytes,1,opt,name=delta,proto3" json:"delta,omitempty"`
+	Snapshot      string                 `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5049,6 +5057,13 @@ func (*ThinkingDelta) Descriptor() ([]byte, []int) {
 func (x *ThinkingDelta) GetDelta() string {
 	if x != nil {
 		return x.Delta
+	}
+	return ""
+}
+
+func (x *ThinkingDelta) GetSnapshot() string {
+	if x != nil {
+		return x.Snapshot
 	}
 	return ""
 }
@@ -7006,9 +7021,10 @@ const file_v1_thread_proto_rawDesc = "" +
 	"\x06source\x18\x05 \x01(\tR\x06sourceB\t\n" +
 	"\a_effort\"!\n" +
 	"\tTextDelta\x12\x14\n" +
-	"\x05delta\x18\x01 \x01(\tR\x05delta\"%\n" +
+	"\x05delta\x18\x01 \x01(\tR\x05delta\"A\n" +
 	"\rThinkingDelta\x12\x14\n" +
-	"\x05delta\x18\x01 \x01(\tR\x05delta\"\xf9\x01\n" +
+	"\x05delta\x18\x01 \x01(\tR\x05delta\x12\x1a\n" +
+	"\bsnapshot\x18\x02 \x01(\tR\bsnapshot\"\xf9\x01\n" +
 	"\x0eToolCallUpdate\x12:\n" +
 	"\x05phase\x18\x01 \x01(\x0e2$.pocketagent.v1.ToolCallUpdate.PhaseR\x05phase\x121\n" +
 	"\x04call\x18\x02 \x01(\v2\x1d.pocketagent.v1.ToolCallBlockR\x04call\x127\n" +

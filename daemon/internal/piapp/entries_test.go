@@ -82,8 +82,10 @@ func TestWireEventsShapes(t *testing.T) {
 	if len(evs) != 3 {
 		t.Fatalf("应有 3 条回放事件, 实得 %d", len(evs))
 	}
-	if evs[0].Type != "message_update" || !strings.Contains(string(evs[0].Raw), `"thinking_delta"`) || !strings.Contains(string(evs[0].Raw), "想一想") {
-		t.Fatalf("thinking 形状不符: %s", evs[0].Raw)
+	// 【P1-3】thinking 块回放发终局全文形状(thinking_end+content,不伪装增量),
+	// 经 agent 包 MapThinkingSnapshot 映射成 snapshot 帧。
+	if evs[0].Type != "message_update" || !strings.Contains(string(evs[0].Raw), `"thinking_end"`) || !strings.Contains(string(evs[0].Raw), `"content":"想一想"`) {
+		t.Fatalf("thinking 回放应为 thinking_end 终局形状: %s", evs[0].Raw)
 	}
 	if evs[1].Type != "message_update" || !strings.Contains(string(evs[1].Raw), `"text_delta"`) || !strings.Contains(string(evs[1].Raw), "答") {
 		t.Fatalf("text 形状不符: %s", evs[1].Raw)
@@ -115,6 +117,25 @@ func TestWireEventsShapes(t *testing.T) {
 	}
 	if m := (&Entry{ID: "m1"}).WireEvents(); m != nil {
 		t.Fatalf("无 message 条目应返回 nil: %+v", m)
+	}
+}
+
+// 【P1-3 snapshot 契约】thinking 块回放必须发终局全文(thinking_end 形状),
+// 不得拆成 thinking_delta 假增量 —— 客户端对 snapshot 整体替换、对 delta 追加,
+// 伪装增量会让断点续传场景的思考文本语义失真(完整块本就一次到齐)。
+func TestWireEventsThinkingIsSnapshotNotDelta(t *testing.T) {
+	e := &Entry{Type: "message", ID: "e9", Message: &EntryMessage{Role: "assistant",
+		Content: json.RawMessage(`[{"type":"thinking","thinking":"第一段思考"}]`)}}
+	evs := e.WireEvents()
+	if len(evs) != 1 || evs[0].Type != "message_update" {
+		t.Fatalf("应合成 1 条 message_update: %+v", evs)
+	}
+	raw := string(evs[0].Raw)
+	if !strings.Contains(raw, `"thinking_end"`) || !strings.Contains(raw, `"content":"第一段思考"`) {
+		t.Fatalf("thinking 回放应为 thinking_end+content 终局形状: %s", raw)
+	}
+	if strings.Contains(raw, `"thinking_delta"`) || strings.Contains(raw, `"delta"`) {
+		t.Fatalf("回放不得伪装增量(thinking_delta/delta 不应出现): %s", raw)
 	}
 }
 

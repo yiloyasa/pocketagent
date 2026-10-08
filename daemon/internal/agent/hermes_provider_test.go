@@ -434,7 +434,7 @@ func TestHermesUnknownReverseRequestRejected(t *testing.T) {
 	p := newHermesTestProvider(t, fake)
 
 	p.handleRequestPermission(fake, 7, "fs/read_text_file", json.RawMessage(`{}`), context.Background(),
-		func(*pb.TurnServerMessage) {}, nil)
+		func(*pb.TurnServerMessage) {}, nil, "th-hermes-approval")
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if len(fake.respondErr) != 1 || fake.respondErr[0].Code != -32601 {

@@ -85,7 +85,7 @@ func TestZcodeApprovalTimeoutAutoDeny(t *testing.T) {
 		return false, "", ctx.Err()
 	}
 	ok := p.handleZcodePermission(json.RawMessage(`"server-1"`), zcodeApprovalTestParams,
-		context.Background(), rsp, approve, &waiting, 50*time.Millisecond)
+		context.Background(), rsp, approve, &waiting, 50*time.Millisecond, "th-zcode-approval")
 	if !ok {
 		t.Fatal("审批分支应消费该请求")
 	}
@@ -112,7 +112,7 @@ func TestZcodeApprovalChannelError(t *testing.T) {
 		return false, "", errors.New("stream broken")
 	}
 	p.handleZcodePermission(json.RawMessage(`"server-2"`), zcodeApprovalTestParams,
-		context.Background(), rsp, approve, &waiting, time.Second)
+		context.Background(), rsp, approve, &waiting, time.Second, "th-zcode-approval")
 	code, msg := rsp.lastErr(t)
 	if code != -32000 {
 		t.Fatalf("通道故障应回 -32000,得到 %d", code)
@@ -132,7 +132,7 @@ func TestZcodeApprovalUserDecision(t *testing.T) {
 	p.handleZcodePermission(json.RawMessage(`"server-3"`), zcodeApprovalTestParams,
 		context.Background(), rspAllow, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return true, "", nil
-		}, &waiting, time.Second)
+		}, &waiting, time.Second, "th-zcode-approval")
 	if ans := rspAllow.lastResult(t); ans["decision"] != "allow" || ans["reason"] != "Approved once" {
 		t.Fatalf("allow 应答形状错误: %v", ans)
 	}
@@ -141,7 +141,7 @@ func TestZcodeApprovalUserDecision(t *testing.T) {
 	p.handleZcodePermission(json.RawMessage(`"server-4"`), zcodeApprovalTestParams,
 		context.Background(), rspDeny, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return false, "这个命令太危险", nil
-		}, &waiting, time.Second)
+		}, &waiting, time.Second, "th-zcode-approval")
 	if ans := rspDeny.lastResult(t); ans["decision"] != "deny" || ans["reason"] != "这个命令太危险" {
 		t.Fatalf("deny 应答形状错误: %v", ans)
 	}
@@ -153,7 +153,7 @@ func TestZcodeApprovalBadParams(t *testing.T) {
 	rsp := &fakeZcodeResponder{}
 	var waiting atomic.Bool
 	ok := p.handleZcodePermission(json.RawMessage(`"server-5"`), json.RawMessage(`{broken`),
-		context.Background(), rsp, nil, &waiting, time.Second)
+		context.Background(), rsp, nil, &waiting, time.Second, "th-zcode-approval")
 	if !ok {
 		t.Fatal("参数解析失败也应消费请求")
 	}
@@ -170,7 +170,7 @@ func TestZcodeApprovalNilChannelErrors(t *testing.T) {
 	rsp := &fakeZcodeResponder{}
 	var waiting atomic.Bool
 	ok := p.handleZcodePermission(json.RawMessage(`"server-6"`), zcodeApprovalTestParams,
-		context.Background(), rsp, nil, &waiting, time.Second)
+		context.Background(), rsp, nil, &waiting, time.Second, "th-zcode-approval")
 	if !ok {
 		t.Fatal("通道缺失分支也应消费该请求")
 	}

@@ -182,3 +182,12 @@ model.proto；同 package 非限定名引用，与 thread.proto 同款形态）�
 | HostEvent（oneof event 新分支） | 6 | selection_changed | 7 | SelectionChangedNotification | 线程有效选择变化通知；daemon 重启后首轮不发，初始真值以 TurnStarted.source / 查询型 RPC 为准 |
 | SelectionChangedNotification（host.proto，新增消息） | — | thread_id | 1 | string | 发生变化的线程 id（daemon 本地线程 id） |
 | SelectionChangedNotification | | selection | 2 | EffectiveModelSelection（复用 model.proto 既有消息） | 变化后的有效选择整包（非 diff）；空 = 清回默认（合法状态） |
+
+### thread.proto —— pi thinking 权威全文（2026-10-09，P1-3）
+
+来源：交接档 `docs/verify/handoff-2026-10-08.md` P1-3（pi thinking 权威全文替换）。
+扩展既有消息 ThinkingDelta，从现有最大号 1 续接。
+
+| 消息 | 既有最大号 | 字段 | 号 | 类型 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| ThinkingDelta（thread.proto） | 1 | snapshot | 2 | string | 权威全文：pi thinking_end 终局事件/历史回放一次性携带；客户端收到即整体替换累积思考文本（丢帧/断连兜底）；旧客户端忽略未知字段，增量行为不变 |

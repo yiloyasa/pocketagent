@@ -1,12 +1,8 @@
 package dev.pocketagent.app.ui
 
 import android.widget.Toast
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1804,6 +1800,8 @@ private fun GuideBlock(title: String, body: String) {
 /**
  * 脉冲状态点:注意区语义色的小面积视觉载体(正在执行=脉冲绿点)。
  * 系统减弱动效开启时退化为静态点,与全 app 动效纪律一致(TaskCenter/PaSkeleton 同款)。
+ * 【令牌纪律】循环规格走 PaMotion.pulse()(900ms=Loop.PULSE_MS 基线,参数逐位一致),
+ * 不再裸写 infiniteRepeatable(tween(...)) —— 令牌层只此一处,改节奏只动 PaMotion。
  */
 @Composable
 private fun PulseDot(color: Color, modifier: Modifier = Modifier, pulse: Boolean = true) {
@@ -1813,7 +1811,7 @@ private fun PulseDot(color: Color, modifier: Modifier = Modifier, pulse: Boolean
         val alpha by transition.animateFloat(
             initialValue = 1f,
             targetValue = 0.35f,
-            animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Reverse),
+            animationSpec = PaMotion.pulse(),
             label = "pulseAlpha",
         )
         Box(modifier.size(8.dp).graphicsLayer { this.alpha = alpha }.background(color, CircleShape))

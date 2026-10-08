@@ -2773,13 +2773,18 @@ private fun ZCodeStatusSection(
     }
 }
 
-/** 下载任务状态文案。 */
+/**
+ * 下载任务状态文案(四词口径,对齐 PaStatusBadge 的四词纪律:状态词越少越可信,
+ * 同义近义词各说各话会稀释语义)。五态收四词:已取消/已中断同收「已停止」
+ * (都是"没跑完且不是下载出错",用户的下一步是同一个——重新开始);失败与
+ * 停止保持可辨(失败可给原因,停止只说停下)。
+ */
 private fun statusLabel(s: TaskCenter.Status): String = when (s) {
     TaskCenter.Status.RUNNING -> "下载中"
     TaskCenter.Status.DONE -> "已完成"
     TaskCenter.Status.FAILED -> "失败"
-    TaskCenter.Status.CANCELED -> "已取消"
-    TaskCenter.Status.INTERRUPTED -> "已中断"
+    TaskCenter.Status.CANCELED -> "已停止"
+    TaskCenter.Status.INTERRUPTED -> "已停止"
 }
 
 /**

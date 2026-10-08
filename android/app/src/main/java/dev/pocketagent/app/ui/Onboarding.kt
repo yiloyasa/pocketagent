@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
+import dev.pocketagent.app.ui.anim.PaDuotoneArt
+import dev.pocketagent.app.ui.anim.PaDuotoneMotif
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.PaEditorial
@@ -133,6 +135,18 @@ private fun stepIcon(id: String): Int = when (id) {
     else -> R.drawable.ic_lucide_info
 }
 
+/**
+ * 步骤 → duotone 品牌母题(D6,三母题对三步:发现环=连接、配对=配对、
+ * 审批盾=第一条指令 —— 该步讲的正是"执行前先弹卡问你");排障页与
+ * 欢迎/收尾页保持单色 lucide 图标(母题只给"讲产品"的三页,不多不少)。
+ */
+private fun stepMotif(id: String): PaDuotoneMotif? = when (id) {
+    "connect" -> PaDuotoneMotif.DISCOVER_RING
+    "pair" -> PaDuotoneMotif.PAIR
+    "first-task" -> PaDuotoneMotif.APPROVAL
+    else -> null
+}
+
 /** 步骤标题(口语化;编号即顺序)。 */
 private fun stepTitle(id: String): String = when (id) {
     "connect" -> "第一步 · 让手机找到电脑"
@@ -159,6 +173,8 @@ private data class OnboardPage(
     val title: String,
     val blocks: List<OnboardBlock>,
     val done: Boolean = false,
+    /** duotone 品牌母题槽位(D6):非 null 且未完成时替代单色 lucide 页首图标。 */
+    val motif: PaDuotoneMotif? = null,
 )
 
 /**
@@ -187,6 +203,7 @@ private fun onboardPages(connected: Boolean): List<OnboardPage> = buildList {
                 icon = stepIcon(step.id),
                 title = stepTitle(step.id),
                 done = step.done,
+                motif = stepMotif(step.id),
                 blocks = listOf(
                     // 已完成的步骤:一句话告知并请用户直接翻页,不重复展开讲
                     if (step.done && step.note.isNotEmpty()) OnboardBlock.Lead(step.note)
@@ -346,13 +363,20 @@ private fun OnboardPageContent(page: OnboardPage) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(8.dp))
-        // 页首图标裸放(细线图标直接铺画布),主色即层级;
-        // 已完成的步骤换绿色对勾,进出两态都读得出"这步过没过"(词+色双通道)
-        Icon(
-            painterResource(page.icon), null,
-            tint = if (page.done) PaEditorial.Running else PaEditorial.Primary,
-            modifier = Modifier.size(52.dp),
-        )
+        // 页首图形(D6):讲产品的三步页配 duotone 品牌母题(主色+哑色双描边,
+        // 纯 Canvas 自绘,零图片资产);**已完成时不换装** —— 保留绿色对勾图标,
+        // "这步过没过"的词+色双通道不丢。其余页维持单色 lucide 图标。
+        if (page.motif != null && !page.done) {
+            PaDuotoneArt(page.motif) // 默认 88dp 画布,与 EmptyState 槽位同一档
+        } else {
+            // 页首图标裸放(细线图标直接铺画布),主色即层级;
+            // 已完成的步骤换绿色对勾,进出两态都读得出"这步过没过"(词+色双通道)
+            Icon(
+                painterResource(page.icon), null,
+                tint = if (page.done) PaEditorial.Running else PaEditorial.Primary,
+                modifier = Modifier.size(52.dp),
+            )
+        }
         Spacer(Modifier.height(22.dp))
         Text(
             page.title,

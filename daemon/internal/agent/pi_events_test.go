@@ -9,6 +9,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,38 @@ func TestMapThinkingDelta(t *testing.T) {
 	d, ok := MapThinkingDelta(json.RawMessage(line))
 	if !ok || d.Delta != "The" {
 		t.Fatalf("thinking_delta 映射错误: ok=%v delta=%q", ok, d.Delta)
+	}
+}
+
+// thinking_end → snapshot 权威全文帧(P1-3):终局全文一次给,客户端整体替换
+// 累积文本 —— 丢帧/断连后的兜底真相(proto ThinkingDelta.snapshot 契约)。
+// 夹具取 0.85.1 探针实帧原文(docs/verify/evidence/pi-p0-probe.md:141)。
+func TestMapThinkingSnapshot(t *testing.T) {
+	line := `{"type":"message_update","usage":{"input":14402,"output":29,"cacheRead":3776,"cacheWrite":0,"reasoning":24,"totalTokens":18207,"cost":{"input":0.020162799999999998,"output":0.0001276,"cacheRead":0.00098176,"cacheWrite":0,"total":0.02127216}},"assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"The user wants me to reply with exactly four characters: \"探针成功\" (probe successful). No tools needed."}}`
+	s, ok := MapThinkingSnapshot(json.RawMessage(line))
+	if !ok {
+		t.Fatal("thinking_end 应映射成 snapshot 帧")
+	}
+	if !strings.Contains(s.Snapshot, "探针成功") {
+		t.Fatalf("snapshot 应为权威全文: %q", s.Snapshot)
+	}
+	if s.Delta != "" {
+		t.Fatalf("snapshot 帧不得伪装增量: delta=%q", s.Delta)
+	}
+	// 两函数互不越界:snapshot 映射不认领增量帧,增量映射不认领终局帧。
+	if _, ok := MapThinkingSnapshot(json.RawMessage(`{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"The"}}`)); ok {
+		t.Fatal("thinking_delta 不应被映射成 snapshot 帧")
+	}
+	if _, ok := MapThinkingDelta(json.RawMessage(line)); ok {
+		t.Fatal("thinking_end 不应被 MapThinkingDelta 认领(回放/泵不得把全文再当增量)")
+	}
+	// 空全文没有替换语义:不发帧。
+	if _, ok := MapThinkingSnapshot(json.RawMessage(`{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":""}}`)); ok {
+		t.Fatal("空 content 的 thinking_end 不应发 snapshot 帧")
+	}
+	// thinking_start(无载荷)与终局无关。
+	if _, ok := MapThinkingSnapshot(json.RawMessage(`{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}`)); ok {
+		t.Fatal("thinking_start 不应被映射成 snapshot 帧")
 	}
 }
 

@@ -784,7 +784,16 @@ message TurnStarted {
 }
 
 message TextDelta { string delta = 1; }
-message ThinkingDelta { string delta = 1; }
+// ThinkingDelta 思考流的两类帧(一帧只带其一,不同时出现):
+//   - delta    流式增量(与 TextDelta.delta 同语义,客户端追加拼接);
+//   - snapshot 权威全文(pi 的 thinking_end 终局事件/历史回放一次性携带)。
+// 客户端收到 snapshot 即**整体替换**此前累积的思考文本 —— 它是丢帧/断连后的
+// 兜底真相,不依赖逐帧拼接的完整性。兼容性:旧客户端忽略未知字段 snapshot,
+// 增量行为不变;新客户端对 delta 为空、snapshot 非空的帧做替换、不追加。
+message ThinkingDelta {
+  string delta = 1;
+  string snapshot = 2;
+}
 
 message ToolCallUpdate {
   enum Phase {

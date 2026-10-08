@@ -955,6 +955,15 @@ func approvalCommand(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// codexApprovalWaitBudget 审批等待预算:用户可能久不点(去开会、过夜再看),
+// 等待本身是合法静默(看门狗豁免);但"手机在线、就是不点"没有任何天然上界,
+// 反向请求会永远占着 codex 侧的未决请求槽与手机端一张点不动的死卡 —— 通道不能
+// 无限挂,给 15 分钟预算(与一次深度任务轮的合理等待同量级;手机断流另有无处
+// 不在的 ctx 超时兜底,这里防的是"流还在、人不点")。超预算按"通道失败"处置
+// (照下方 askErr 分支口径:回 -32000 让 codex 按基础设施故障自行恢复,绝不
+// 伪装用户拒绝)。var 仅为缩时单测留缝,生产不要改它。
+var codexApprovalWaitBudget = 15 * time.Minute
+
 // codexApprovalResponder codexapp.Client 的应答面(最小接口,单测可注 fake,
 // 不依赖真子进程;zcode 的 zcodeResponder 同款模式)。id 用 RawMessage 与
 // codexapp 的签名同形:数字原值、字符串原文,应答原样回显。
@@ -969,13 +978,23 @@ type codexApprovalResponder interface {
 // 【P1-1】approve==nil 属审批通道缺失(TestModel 诊断 RPC 等路径传 nil):
 // 回 JSON-RPC error 让 codex 按通道故障处理,绝不替用户伪造 denied 决定
 // (与下方 askErr 分支同口径:基础设施问题不伪装成用户意志)。
-func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.RawMessage, kind codexRequestKind, method string, params json.RawMessage, files []string, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool) {
+// threadID 是我们自己的会话 id,供超时/写回失败的日志定位到具体会话(台账口径
+// 与全家一致:日志必须能回答"哪个会话的审批卡出的事")。
+func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.RawMessage, kind codexRequestKind, method string, params json.RawMessage, files []string, ctx context.Context, sink Sink, approve ApprovalHook, waiting *atomic.Bool, threadID string) {
 	// 【第二条规则】按类别构造真实的审批卡,再问手机。
 	call := buildApprovalCall(kind, method, params, files)
 	if approve == nil {
 		log.Printf("[codex] 审批通道不可用(approve==nil),%s 回 error", method)
 		_ = rsp.RespondError(id, -32000, "审批通道不可用")
 		return
+	}
+	// 【B4 应答必达性留痕】decision 已由用户定出,写回失败(子进程恰好退出/
+	// 管道断裂)时不再 _ = 丢弃 —— 落一行日志带线程 id 与方法名,与"绝不伪造
+	// decision"红线配套:痕迹不改变应答语义,只保证"答案没送到"可追查。
+	respond := func(result interface{}) {
+		if err := rsp.Respond(id, result); err != nil {
+			log.Printf("[codex] 审批应答写回失败 thread=%s method=%s: %v", threadID, method, err)
+		}
 	}
 	waiting.Store(true)
 	// 【serverRequest/resolved 竞速】我们等手机应答期间,codex 可能通知
@@ -1008,6 +1027,18 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.
 		waiting.Store(false)
 		p.unregisterPendingServerRequest(id)
 		return
+	case <-time.After(codexApprovalWaitBudget):
+		// 【B3 等待预算】用户久不点也不能无限挂(预算取舍见常量注释)。超时
+		// ≠ 用户拒绝:照"通道失败不是用户拒绝"口径回 -32000,让 codex 按基础
+		// 设施故障自行恢复,绝不回 denied 伪装用户意志;副作用收干净 —— waiting
+		// 复位(看门狗豁免解除)+ 注销未决请求(防 map 泄漏),日志带线程 id
+		// (台账口径:出事必须能定位到会话)。迟到的手机应答落 outCh 由 GC 回收。
+		log.Printf("[codex] 审批等待超预算(%s)未取得用户决定,thread=%s method=%s 回 error(非用户拒绝)",
+			codexApprovalWaitBudget, threadID, method)
+		waiting.Store(false)
+		p.unregisterPendingServerRequest(id)
+		_ = rsp.RespondError(id, -32000, fmt.Sprintf("审批等待超时(%s),未取得用户决定", codexApprovalWaitBudget))
+		return
 	}
 	waiting.Store(false)
 	p.unregisterPendingServerRequest(id)
@@ -1033,7 +1064,7 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.
 		} else if choice.Option == optAcceptSession || choice.Option == optApprovedSession {
 			log.Printf("[codex] 用户允许且本会话内同类请求不再询问, %s 回 decision=%q", method, decision)
 		}
-		_ = rsp.Respond(id, map[string]string{"decision": decision})
+		respond(map[string]string{"decision": decision})
 
 	case reqApprovalPermissions:
 		if allow {
@@ -1043,10 +1074,10 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.
 			_ = json.Unmarshal(a.Permissions, &perms)
 			// 原样授予申请的那份 profile:不做裁剪,否则"少给一个路径"会让命令
 			// 换一种方式失败,故障更难定位。
-			_ = rsp.Respond(id, map[string]interface{}{"permissions": perms, "scope": "turn"})
+			respond(map[string]interface{}{"permissions": perms, "scope": "turn"})
 		} else {
 			// 这个应答没有 decision 字段:不同意的表达方式就是"什么都不授予"。
-			_ = rsp.Respond(id, map[string]interface{}{"permissions": map[string]interface{}{}})
+			respond(map[string]interface{}{"permissions": map[string]interface{}{}})
 		}
 
 	case reqAskUser:
@@ -1054,14 +1085,14 @@ func (p *CodexProvider) handleCodexApproval(rsp codexApprovalResponder, id json.
 		_ = json.Unmarshal(params, &a)
 		// 手机端的答案放在 ApprovalDecision.note 里(JSON),这里原样转成 answers。
 		// 用 choice.Note:若 note 恰是选项信封(不该发生),剥完再解析。
-		_ = rsp.Respond(id, map[string]interface{}{"answers": splitAnswerNote(choice.Note, a.Questions)})
+		respond(map[string]interface{}{"answers": splitAnswerNote(choice.Note, a.Questions)})
 
 	case reqAskMcp:
 		action := "decline"
 		if allow {
 			action = "accept"
 		}
-		_ = rsp.Respond(id, map[string]interface{}{"action": action})
+		respond(map[string]interface{}{"action": action})
 	}
 }
 
@@ -1092,6 +1123,18 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}
 	gen := int(p.gen.Load())
 	codexTID := ""
+	// 【P1-7 bindSession 上收】会话解析统一经原生会话适配器(cs)单一入口:
+	// 重挂载走 cs.Resume、新建走 cs.openForRun,内部复用 callThreadResume/
+	// startCodexThread 唯一实现;"过渡期双路径"就此退役。Run 链保留的只有
+	// 同代短路、"resume 失败改开新线程"的降级(D4)与目标暂存补发。
+	ns, nerr := p.NativeSessionFor(req.Thread)
+	if nerr != nil {
+		return nil, nil, nerr
+	}
+	cs, csok := ns.(*codexSession)
+	if !csok {
+		return nil, nil, fmt.Errorf("codex: 原生会话适配器类型异常: %T", ns)
+	}
 	// 线程级 config 覆盖(model_verbosity / model_reasoning_summary)。
 	// 放在这里算一次:resume 与 start 都要带上,保证"回答详略/思考摘要"对
 	// 既有会话和新会话都生效(只在新建线程时带,会让老会话永远拿旧偏好)。
@@ -1109,33 +1152,31 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		codexTID = ref.id // 当前子进程仍加载着该线程
 	} else if req.Thread.CodexThreadID != "" {
 		// daemon/子进程重启后内存缓存作废:先把旧线程 resume 进当前子进程。
-		// 同上:resume 也带 config,保证"改了立刻生效"对老会话成立,且可核验。
-		// 【降级护栏同款】复用 callThreadResume 的"带 features 覆盖失败 → 摘除
-		// features 重试"逻辑,与下方 thread/start 分支同源(见 L873 注释)。否则某版
-		// codex 宣告了特性却不认 config.features 键时,resume 直接失败 → 走下面的
-		// CodexThreadID="" 改开新线程 → 用户老会话历史全丢,且只表现为"AI 失忆"。
+		// resume 也带 config,保证"改了立刻生效"对老会话成立,且可核验。
+		// 【P1-7 上收】resume 统一经适配器 Resume(callThreadResume 唯一实现,
+		// config 透传与同代缓存登记都在里面);Run 保留的只有降级决策(D4):
+		// 失败清引用改开新线程 —— 缺这条护栏时表现为"AI 失忆"(用户老会话
+		// 历史全丢),适配器绝不擅自新建。
 		log.Printf("[codex] thread/resume %s config=%v", req.Thread.CodexThreadID, cfgOverride)
-		if err := p.callThreadResume(req.Thread.CodexThreadID, cfgOverride, p.client.Call); err != nil {
-			log.Printf("[codex] thread/resume %s 失败: %v(改开新线程)", req.Thread.CodexThreadID, err)
+		if rerr := cs.Resume(ctx, req.Thread); rerr != nil {
+			log.Printf("[codex] thread/resume %s 失败: %v(改开新线程)", req.Thread.CodexThreadID, rerr)
 			req.Thread.CodexThreadID = ""
 		} else {
 			codexTID = req.Thread.CodexThreadID
-			p.setCodexThreadRef(req.Thread.ID, threadRef{id: codexTID, gen: gen})
 			log.Printf("[codex] 已 resume 旧线程 %s", codexTID)
 		}
 	}
 	if codexTID == "" {
-		// 【P3 拆分】thread/start 调用与 threadId 三级回退解析原样搬进了
-		// codex_session.go 的 startCodexThread(Run 链与原生会话适配器共用的唯一
-		// 实现);本函数保留的是 Run 链自己的编排:同代短路、resume 失败"改开
-		// 新线程"的降级、同代缓存登记、引用写回、目标暂存补发。
-		var err error
-		codexTID, err = startCodexThread(req.Workspace, req.Ephemeral, cfgOverride, p.client.Call)
-		if err != nil {
-			return nil, nil, err
+		// 【P3 拆分 + P1-7 上收】新建统一经适配器入口 openForRun(startCodexThread
+		// 是 thread/start 调用与 threadId 三级回退解析的唯一实现,同代缓存登记与
+		// 引用写回都在里面);本函数保留的是 Run 链自己的编排:同代短路、resume
+		// 失败"改开新线程"的降级、目标暂存补发。ephemeral/config 覆盖显式传入,
+		// cfgOverride 不重算第二遍。
+		tid, terr := cs.openForRun(ctx, req.Thread, req.Ephemeral, cfgOverride)
+		if terr != nil {
+			return nil, nil, terr
 		}
-		p.setCodexThreadRef(req.Thread.ID, threadRef{id: codexTID, gen: gen})
-		req.Thread.CodexThreadID = codexTID // server 层会在轮次后落库
+		codexTID = tid
 		if req.Thread.Goal != "" {
 			p.stashGoal(req.Thread.ID, req.Thread.Goal)
 		}
@@ -1176,21 +1217,11 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	// 的 clearSteerTarget(req.Thread.ID),同一个 req 就在本作用域内)。
 	notices := nativeNoticeRecorder{threadID: req.Thread.ID}
 	var subagentSeen subagentNoticeGate // 子代理 item 事件限频(语义同 nativeNoticeRecorder)
-	// 【C-1 坏帧留痕(unknown-bypass-audit.md §二 C-1,2026-10-07 收口)】
-	// 事件泵 item/turn 各 case 的参数解包失败,此前与"异线程过滤"共用同一条静默
-	// 分支 —— 坏形状与"别的会话的帧"不可区分。现在解包失败单独走 recordBadFrame:
-	// 台账 UNKNOWN(method 带 <unparseable> 标记,与 zcode/dsh 泵侧同款命名)+
-	// 限频 STATUS 卡。
-	// 【裁量:与 zcode/dsh 的"只台账"不同,这里出卡】zcode/dsh 的常驻全局钩子对
-	// 同一帧已先落 UNKNOWN 台账,泵侧不是唯一留痕;codex 的全局钩子
-	// (attachGlobalHandler)对这几个方法按 codexGlobalNoticeKinds 记的是
-	// KNOWN_PROJECTED/PASSTHROUGH —— "这一帧坏了"在台账里只存在于泵侧,属
-	// "坏帧是唯一留痕"的情形,按 recordAs 的 nil-sink 语义传真 sink 出限频卡
-	// (每键 2 条、64 键封顶,不会刷屏)。异线程过滤维持静默(全家同款刻意取舍,
-	// 见审计 §二"全家":写台账会被并发会话流量刷爆 200 条滚动窗)。
-	recordBadFrame := func(method string, params json.RawMessage) {
-		notices.recordAs(runtime.KindUnknownNotification, "codex", method+":<unparseable>", params, sink)
-	}
+	// 【C-1 坏帧留痕 → B4 共享件(2026-10-09)】事件泵 item/turn 各 case 的参数
+	// 解包失败统一走 notices.recordBadFrame("codex", …):台账 UNKNOWN(method 带
+	// <unparseable> 标记)+ 限频 STATUS 卡;异线程过滤维持静默。裁量的完整说明
+	// (codex 为何出卡而 zcode/dsh 只台账)见 native_notifications.go 的
+	// recordBadFrame 注释。
 	handleNotif := func(method string, params json.RawMessage) {
 		switch {
 		case method == "turn/started":
@@ -1205,7 +1236,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					p.setSteerTarget(req.Thread.ID, codexTID, n.Turn.Id)
 				}
 			} else {
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 			}
 		case method == "item/fileChange/patchUpdated":
 			// 累积"本回合被改动的文件",供文件变更审批卡展示(见 changeFiles 注释)。
@@ -1217,7 +1248,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			}
 			// 【C-1】解包失败此前整帧静默(审批卡将拿不到文件列表且无任何痕迹)。
 			if err := json.Unmarshal(params, &n); err != nil {
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 			} else if n.ThreadId == codexTID {
 				paths := make([]string, 0, len(n.Changes))
 				for _, ch := range n.Changes {
@@ -1272,7 +1303,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			// 等看门狗收口且无任何痕迹)。留痕不改变收口语义:finish 仍只在
 			// "解包成功且同线程"时调用,坏帧的处置路径维持原样,只是现在查得到。
 			if err := json.Unmarshal(params, &n); err != nil {
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 			} else if n.ThreadId == codexTID {
 				if n.Turn.Error != nil && n.Turn.Error.Message != "" {
 					mu.Lock()
@@ -1329,7 +1360,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			var n deltaNotif
 			// 【C-1】解包失败单独留痕;空 delta 是合法空转,维持静默。
 			if err := json.Unmarshal(params, &n); err != nil {
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 			} else if n.ThreadId == codexTID && n.Delta != "" {
 				mu.Lock()
 				streamText.WriteString(n.Delta)
@@ -1340,7 +1371,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			var n deltaNotif
 			// 【C-1】解包失败单独留痕;空 delta 是合法空转,维持静默。
 			if err := json.Unmarshal(params, &n); err != nil {
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 			} else if n.ThreadId == codexTID && n.Delta != "" {
 				// 隐藏推理过程(daemon 侧强制过滤):不把思考事件推给手机。
 				// 这是真实的行为改变,不依赖 codex 是否有原生开关 —— 本版本 codex
@@ -1389,7 +1420,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			} else if !unpacked {
 				// 【C-1】坏帧:解不开的 params 在这里单独留痕(走到这说明前面
 				// 各专案分支都不可能命中 —— 它们各自的解析同样解不开)。
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 			} else {
 				// 其余 item 类型(userMessage/reasoning 等):此前是静默丢弃,现接进
 				// 主线 A notices.record 原样包装透传(限频+脱敏自动生效)。仅透传,
@@ -1401,7 +1432,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			// 【C-1】解包失败与异线程此前共用一条 return,坏形状与"别的会话的帧"
 			// 不可区分;现在坏帧单独留痕,异线程过滤维持静默(同款口径)。
 			if err := json.Unmarshal(params, &n); err != nil {
-				recordBadFrame(method, params)
+				notices.recordBadFrame("codex", method, params, sink)
 				return
 			}
 			if n.ThreadId != codexTID {
@@ -1606,7 +1637,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 
 		// 【第二条规则】按类别构造真实的审批卡,再问手机(抽到 handleCodexApproval,
 		// zcode 的 handleZcodePermission 同款注入式单测模式)。
-		p.handleCodexApproval(c, id, kind, method, params, files, ctx, sink, approve, &approvalWaiting)
+		p.handleCodexApproval(c, id, kind, method, params, files, ctx, sink, approve, &approvalWaiting, req.Thread.ID)
 	}
 	c.SetTurnHandlers(notifHandler, reqHandler)
 	defer func() {

@@ -176,7 +176,7 @@ fun PaDuotoneArt(
     artSize: Dp = 88.dp,
     strokeWidth: Dp = 2.dp,
 ) {
-    val primary = MaterialTheme.colorScheme.let { PaEditorial.Primary } // 主色:当前操作/品牌
+    val primary = PaEditorial.Primary // 主色:当前操作/品牌
     val muted = PaEditorial.Subtle // 哑色:次级结构
     Canvas(modifier.size(artSize)) {
         val k = size.minDimension / 100f // 归一化 100×100 坐标 → 画布

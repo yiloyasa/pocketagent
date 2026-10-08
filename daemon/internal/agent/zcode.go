@@ -1394,7 +1394,9 @@ const zcodeApprovalTimeoutNote = "手机端审批等待超时(2 分钟),已自�
 
 // handleZcodePermission 处理 interaction/requestPermission(从 Run 的 ReqHandler
 // 抽出,便于单测钉死超时语义;budget 常态传 zcodeUIBudget,测试注入短超时)。
-func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx context.Context, rsp zcodeResponder, approve ApprovalHook, waiting *atomic.Bool, budget time.Duration) bool {
+// threadID 是我们自己的会话 id,供应答写回失败的日志定位到具体会话(与 codex/dsh
+// 的 B4 留痕同口径)。
+func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx context.Context, rsp zcodeResponder, approve ApprovalHook, waiting *atomic.Bool, budget time.Duration, threadID string) bool {
 	var pr zcodePermissionRequest
 	if json.Unmarshal(params, &pr) != nil {
 		_ = rsp.RespondError(rawID, -32602, "审批参数无法解析")
@@ -1408,6 +1410,14 @@ func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx
 		log.Printf("[zcode] 审批通道不可用(approve==nil),回 error")
 		_ = rsp.RespondError(rawID, -32000, "审批通道不可用")
 		return true
+	}
+	// 【B4 应答必达性留痕】decision 已定,写回失败(子进程恰好退出/管道断裂)
+	// 不再 _ = 丢弃 —— 落一行日志带线程 id 与方法名,与"绝不伪造 decision"红线
+	// 配套:痕迹不改变应答语义,只保证"答案没送到"可追查。
+	respond := func(result interface{}) {
+		if err := rsp.Respond(rawID, result); err != nil {
+			log.Printf("[zcode] 审批应答写回失败 thread=%s method=interaction/requestPermission: %v", threadID, err)
+		}
 	}
 	waiting.Store(true)
 	defer waiting.Store(false)
@@ -1426,7 +1436,7 @@ func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx
 	if askErr != nil {
 		if errors.Is(askErr, context.DeadlineExceeded) {
 			log.Printf("[zcode] 审批等待超时(%s),已自动拒绝", budget)
-			_ = rsp.Respond(rawID, zcodeApprovalAnswer(false, zcodeApprovalTimeoutNote))
+			respond(zcodeApprovalAnswer(false, zcodeApprovalTimeoutNote))
 			return true
 		}
 		// 手机端断流:这不是"用户拒绝"。回 error,让 zcode 按通道故障处理,
@@ -1438,9 +1448,9 @@ func (p *ZcodeProvider) handleZcodePermission(rawID, params json.RawMessage, ctx
 	if allow {
 		// 【实测】应答必须严格匹配 schema Jb(decision/reason,strict):
 		// 多余键(如 optionId)会让服务器抛异常 → deny"Permission request failed"。
-		_ = rsp.Respond(rawID, zcodeApprovalAnswer(true, ""))
+		respond(zcodeApprovalAnswer(true, ""))
 	} else {
-		_ = rsp.Respond(rawID, zcodeApprovalAnswer(false, note))
+		respond(zcodeApprovalAnswer(false, note))
 	}
 	return true
 }
@@ -1919,7 +1929,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			log.Printf("[zcode] 审批请求 原始参数: %.400s", string(params))
 			// 审批分支抽到 handleZcodePermission(P2-6:120s 上界 + 超时 deny
 			// 人话 + 通道故障 -32000;单测可注 fake responder/短预算)。
-			return p.handleZcodePermission(rawID, params, ctx, c, approve, &approvalWaiting, zcodeUIBudget)
+			return p.handleZcodePermission(rawID, params, ctx, c, approve, &approvalWaiting, zcodeUIBudget, req.Thread.ID)
 		case "interaction/requestUserInput":
 			return p.handleZcodeUserInput(rawID, params, ctx, c, approve, &approvalWaiting)
 		case "elicitation/create":
@@ -1975,19 +1985,17 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				}
 				var ev zcodeEventEnvelope
 				if json.Unmarshal(nm.params, &ev) != nil {
-					// 【Z-3 坏帧留痕(2026-10-07 旁路审计)】解包失败与异会话过滤
-					// 此前共用一条 continue,坏帧在轮内与"别的会话"不可区分。拆开后
-					// 给坏帧补一条泵侧台账:方法名带 <unparseable> 标记,与全局钩子
-					// (zcodeLedgerMethod 对拆不开的壳记的裸 "session/event")可区分、
-					// 可检索 —— 同一帧两条台账各说各的事实(全局=壳,泵=消费失败),
-					// 台账是索引,记全真实路径。
+					// 【Z-3 坏帧留痕 → B4 共享件(2026-10-09)】解包失败与异会话过滤
+					// 此前共用一条 continue,拆开后坏帧走共享 recordBadFrame:方法名
+					// 带 <unparseable> 标记,与全局钩子(zcodeLedgerMethod 对拆不开的
+					// 壳记的裸 "session/event")可区分、可检索 —— 同一帧两条台账各说
+					// 各的事实(全局=壳,泵=消费失败),台账是索引,记全真实路径。
 					// 【裁量:只台账,不出限频 STATUS 卡】这不是坏帧的唯一留痕:
 					// 常驻全局钩子对每条通知(含本帧)已先落 UNKNOWN 台账;传输级
 					// 异常帧也没有用户可动手脚的处置路径,诊断卡只会添噪。异会话
 					// 过滤维持下方静默 —— 全家同款刻意取舍,不写台账(会被并发
 					// 会话流量刷爆 200 条滚动窗,见 unknown-bypass-audit §二"全家")。
-					notices.recordLedgerOnly(runtime.KindUnknownNotification,
-						"zcode", "session/event:<unparseable>", nm.params)
+					notices.recordBadFrame("zcode", "session/event", nm.params, nil)
 					continue
 				}
 				if ev.SessionID != sid {

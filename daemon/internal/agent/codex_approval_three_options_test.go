@@ -251,7 +251,7 @@ func TestCodexApprovalCancelOptionEndsTurn(t *testing.T) {
 	rspV2 := &fakeCodexResponder{}
 	p.handleCodexApproval(rspV2, json.RawMessage("21"), reqApprovalCommand, "item/commandExecution/requestApproval",
 		json.RawMessage(`{"itemId":"i1","kind":"command","command":"dangerous"}`), nil,
-		context.Background(), sink, approveWithNote(false, `{"option":"cancel"}`), &waiting)
+		context.Background(), sink, approveWithNote(false, `{"option":"cancel"}`), &waiting, "th-codex-approval")
 	if n := rspV2.resultCount(); n != 1 || rspV2.results[0]["decision"] != "cancel" {
 		t.Fatalf("新版 cancel 选项应回 decision=cancel,得到 %v", rspV2.results)
 	}
@@ -259,7 +259,7 @@ func TestCodexApprovalCancelOptionEndsTurn(t *testing.T) {
 	rspLegacy := &fakeCodexResponder{}
 	p.handleCodexApproval(rspLegacy, json.RawMessage("22"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"callId":"c1","command":["dangerous"]}`), nil,
-		context.Background(), sink, approveWithNote(false, `{"option":"abort"}`), &waiting)
+		context.Background(), sink, approveWithNote(false, `{"option":"abort"}`), &waiting, "th-codex-approval")
 	if n := rspLegacy.resultCount(); n != 1 || rspLegacy.results[0]["decision"] != "abort" {
 		t.Fatalf("旧版 abort 选项应回 decision=abort,得到 %v", rspLegacy.results)
 	}
@@ -275,7 +275,7 @@ func TestCodexApprovalAcceptForSessionOption(t *testing.T) {
 	rspV2 := &fakeCodexResponder{}
 	p.handleCodexApproval(rspV2, json.RawMessage("23"), reqApprovalCommand, "item/commandExecution/requestApproval",
 		json.RawMessage(`{"itemId":"i1","kind":"command","command":"npm test"}`), nil,
-		context.Background(), sink, approveWithNote(true, `{"option":"acceptForSession"}`), &waiting)
+		context.Background(), sink, approveWithNote(true, `{"option":"acceptForSession"}`), &waiting, "th-codex-approval")
 	if n := rspV2.resultCount(); n != 1 || rspV2.results[0]["decision"] != "acceptForSession" {
 		t.Fatalf("新版会话允许应回 decision=acceptForSession,得到 %v", rspV2.results)
 	}
@@ -283,7 +283,7 @@ func TestCodexApprovalAcceptForSessionOption(t *testing.T) {
 	rspLegacy := &fakeCodexResponder{}
 	p.handleCodexApproval(rspLegacy, json.RawMessage("24"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"callId":"c1","command":["npm","test"]}`), nil,
-		context.Background(), sink, approveWithNote(true, `{"option":"approved_for_session"}`), &waiting)
+		context.Background(), sink, approveWithNote(true, `{"option":"approved_for_session"}`), &waiting, "th-codex-approval")
 	if n := rspLegacy.resultCount(); n != 1 || rspLegacy.results[0]["decision"] != "approved_for_session" {
 		t.Fatalf("旧版会话允许应回 decision=approved_for_session,得到 %v", rspLegacy.results)
 	}
@@ -316,7 +316,7 @@ func TestCodexApprovalOldPhoneUnchanged(t *testing.T) {
 		rsp := &fakeCodexResponder{}
 		p.handleCodexApproval(rsp, json.RawMessage(strconv.Itoa(30+i)), c.kind, c.method,
 			json.RawMessage(c.params), nil,
-			context.Background(), sink, approveWithNote(c.allow, ""), &waiting)
+			context.Background(), sink, approveWithNote(c.allow, ""), &waiting, "th-codex-approval")
 		if n := rsp.resultCount(); n != 1 || rsp.results[0]["decision"] != c.want {
 			t.Errorf("%s: decision = %v, want %q", c.name, rsp.results, c.want)
 		}
@@ -332,7 +332,7 @@ func TestCodexApprovalNoteEnvelopeDoesNotLeakIntoAskUser(t *testing.T) {
 	rsp := &fakeCodexResponder{}
 	p.handleCodexApproval(rsp, json.RawMessage("40"), reqAskUser, "item/tool/requestUserInput",
 		json.RawMessage(`{"itemId":"i1","questions":[{"id":"q1","question":"用哪个?","options":[{"label":"A"}]}]}`), nil,
-		context.Background(), sink, approveWithNote(true, `{"q1":{"answers":["A"]}}`), &waiting)
+		context.Background(), sink, approveWithNote(true, `{"q1":{"answers":["A"]}}`), &waiting, "th-codex-approval")
 	if n := rsp.resultCount(); n != 1 {
 		t.Fatalf("反问应答应答一次,得到 %v", rsp.results)
 	}

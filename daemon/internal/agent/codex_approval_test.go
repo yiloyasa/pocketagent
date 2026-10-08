@@ -73,7 +73,7 @@ func TestCodexApprovalNilChannelErrors(t *testing.T) {
 	var waiting atomic.Bool
 	p.handleCodexApproval(rsp, json.RawMessage("7"), reqApprovalCommand, "execCommandApproval",
 		json.RawMessage(`{"command":["rm","-rf","tmp"],"cwd":"."}`), nil,
-		context.Background(), func(*pb.TurnServerMessage) {}, nil, &waiting)
+		context.Background(), func(*pb.TurnServerMessage) {}, nil, &waiting, "th-codex-approval")
 	if n := rsp.resultCount(); n != 0 {
 		t.Fatalf("通道缺失绝不应回 decision,记录到 %d 条应答", n)
 	}
@@ -100,7 +100,7 @@ func TestCodexApprovalUserDecisionUnchanged(t *testing.T) {
 		json.RawMessage(`{"command":["ls"]}`), nil,
 		context.Background(), sink, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return false, "", nil
-		}, &waiting)
+		}, &waiting, "th-codex-approval")
 	if n := rspDeny.resultCount(); n != 1 || rspDeny.results[0]["decision"] != "denied" {
 		t.Fatalf("真实拒绝应照旧回 denied,得到 %v", rspDeny.results)
 	}
@@ -113,7 +113,7 @@ func TestCodexApprovalUserDecisionUnchanged(t *testing.T) {
 		json.RawMessage(`{"command":["ls"]}`), nil,
 		context.Background(), sink, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return true, "", nil
-		}, &waiting)
+		}, &waiting, "th-codex-approval")
 	if n := rspAllow.resultCount(); n != 1 || rspAllow.results[0]["decision"] != "approved" {
 		t.Fatalf("真实允许应照旧回 approved,得到 %v", rspAllow.results)
 	}
@@ -129,7 +129,7 @@ func TestCodexApprovalChannelErrorUnchanged(t *testing.T) {
 		json.RawMessage(`{"command":["ls"]}`), nil,
 		context.Background(), func(*pb.TurnServerMessage) {}, func(ctx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
 			return false, "", context.Canceled
-		}, &waiting)
+		}, &waiting, "th-codex-approval")
 	if code, msg := rsp.errCodes[0], rsp.errMsgs[0]; code != -32000 || !strings.Contains(msg, "审批通道失败") {
 		t.Fatalf("通道故障应回 -32000 审批通道失败,得到 %d %q", code, msg)
 	}

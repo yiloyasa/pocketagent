@@ -31,9 +31,12 @@
 //   - Source:引用 codexShape.sessionModel 同一表达式(D2:与 Descriptor 申报无
 //     第二独立来源,source-mismatch 在结构上不可能)。
 //
-// 【过渡期双路径】本轮 Run 的既有链路(codex.go Run 的 threadMap 短路 → resume →
-// 降级新建)原样不动,本适配器是与之**并行**的映射层,当前唯一消费方是
-// openSharedRuntime 的 D5 工厂注入(契约交付)。
+// 【P1-7:双路径已退役】Run 的会话解析(codex.go Run 装配段)不再直连
+// p.client.Call 的 thread/resume·thread/start:重挂载统一经本适配器 Resume、
+// 新建统一经 openForRun(两者内部复用 callThreadResume/startCodexThread 唯一
+// 实现)。本适配器不再只是 openSharedRuntime D5 工厂注入的"并行映射层",而是
+// codex 会话解析的单一协议入口(Run 链保留的只有同代短路、"resume 失败改开
+// 新线程"降级与目标暂存补发,均属 D4 派给 Run 的决策与轮次内编排)。
 //
 // 【并发纪律】适配器方法目前只会被轮次 goroutine 调用(设计稿 §6.2):与 Run
 // 现状一致,withClient(有界排队)保证子进程就绪,p.client 的读取窗口与 Run
@@ -147,17 +150,31 @@ func (s *codexSession) Open(ctx context.Context, th *store.Thread) error {
 	if th == nil {
 		return fmt.Errorf("codex: thread 为空,无法建立原生会话")
 	}
+	_, err := s.openForRun(ctx, th, false, s.p.ConfigOverrideFor(th))
+	return err
+}
+
+// openForRun Run 链(新建线程)的入口(P1-7):与 Open 共用同一 startCodexThread
+// 实现(三级回退解析 + 同代缓存登记 + 引用写回的语义一字不差,这里没有第二份)。
+// ephemeral 与 config 覆盖由调用方显式给出 —— 两者都是 Run 的一次性请求参数
+// (req.Ephemeral / 线程快照 > 全局),不属于 thread 的会话生命周期,适配器合同
+// 面 Open 不携带(见类型注释);显式传参保留旧链取值语义,Run 已算好的
+// cfgOverride 不重算第二遍(dshSession.openForRun 同款纪律)。
+func (s *codexSession) openForRun(ctx context.Context, th *store.Thread, ephemeral bool, cfgOverride map[string]interface{}) (string, error) {
+	if th == nil {
+		return "", fmt.Errorf("codex: thread 为空,无法建立原生会话")
+	}
 	call, err := s.callFor()
 	if err != nil {
-		return err
+		return "", err
 	}
-	tid, err := startCodexThread(th.Workspace, false, s.p.ConfigOverrideFor(th), call)
+	tid, err := startCodexThread(th.Workspace, ephemeral, cfgOverride, call)
 	if err != nil {
-		return err
+		return "", err
 	}
 	s.p.setCodexThreadRef(th.ID, threadRef{id: tid, gen: int(s.p.gen.Load())})
 	th.CodexThreadID = tid // server 层会在轮次后落库(与 Run 新建分支同款)
-	return nil
+	return tid, nil
 }
 
 // Resume 按 thread 里落库的引用重挂载已有原生会话。
