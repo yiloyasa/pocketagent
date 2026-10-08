@@ -20,7 +20,8 @@ import dev.pocketagent.app.ui.theme.PaEditorial
  *
  * 【兼容 shim 2026-10-09】编辑式令牌层 [PaEditorial] 是唯一事实来源,M3 colorScheme
  * 已由 editorialM3Scheme()(MainActivity NavHost 外层一次包全)接管。本对象**保留
- * 构造但仅存量引用过渡用,新代码禁用** —— Pa.* 直取还有 700+ 处,逐个换是下一刀;
+ * 构造但仅存量引用过渡用,新代码禁用** —— 2026-10-09 核查:ui/ 下 Pa.* 代码引用
+ * 已归零(仅本 shim 自身与 1 处文档提及),下一刀可连同 M3 scheme 一并退役;
  * 在那之前 Pa.* 与 PaEditorial.* 同槽位同盘灌入,不许新增消费点。
  */
 object Pa {
@@ -109,6 +110,7 @@ fun PaTheme(content: @Composable () -> Unit) {
     }
     Pa.apply(dark, hacker = AgentTheme.mode == "hacker")
     // 编辑式三色盘与 Pa 同步换肤:全部 editorial.* 消费点(700+ 处直取 + 44 处
+    // —— "700+"指 PaEditorial 令牌的正常消费量,非 Pa 残留;
     // 组合局部)随本调用零改动响应 显示模式(浅色/深色/黑客终端)。
     PaEditorial.apply(dark, hacker = AgentTheme.mode == "hacker")
     // 【兼容 shim 2026-10-09】旧 Pa 色板灌的 M3 scheme:仅存量引用过渡用,新代码禁用。

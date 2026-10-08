@@ -118,6 +118,10 @@ fun PaSheet(
     swipeDismissEnabled: Boolean = true,
     interceptBackPress: Boolean = false,
     centered: Boolean = false,
+    // 满幅沉浸变体(仅 centered 语义下生效):去卡片宽度/高度帽与玻璃皮,内容
+    // 铺满 Dialog 窗口(近黑遮罩仍由本封装提供)。为"看图"类全屏预览而设——
+    // 同一关闭语义(返回/点窗外/内容自有 clickable)与弹簧出场,只是不装卡。
+    fullBleed: Boolean = false,
     contentWindowInsets: @Composable () -> WindowInsets = {
         WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)
     },
@@ -131,6 +135,7 @@ fun PaSheet(
             scrollable = scrollable,
             swipeDismissEnabled = swipeDismissEnabled,
             interceptBackPress = interceptBackPress,
+            fullBleed = fullBleed,
             content = content,
         )
         return
@@ -193,6 +198,7 @@ private fun PaSheetCentered(
     scrollable: Boolean,
     swipeDismissEnabled: Boolean,
     interceptBackPress: Boolean,
+    fullBleed: Boolean,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Dialog(
@@ -229,6 +235,12 @@ private fun PaSheetCentered(
                 ),
             contentAlignment = Alignment.Center,
         ) {
+            // 满幅档:无卡可装——去宽度/高度帽与玻璃/海拔,内容自己铺(fillMaxSize);
+            // 弹簧出场与关闭语义保持同族。
+            val cardMods = if (fullBleed) Modifier else Modifier
+                .padding(horizontal = 23.dp)
+                .widthIn(max = 400.dp)
+                .heightIn(max = maxH)
             Column(
                 Modifier
                     .graphicsLayer {
@@ -237,16 +249,15 @@ private fun PaSheetCentered(
                         scaleX = scale
                         scaleY = scale
                     }
-                    .padding(horizontal = 23.dp)
-                    .widthIn(max = 400.dp)
-                    .heightIn(max = maxH)
+                    .then(cardMods)
                     // 浅盘海拔语言(D3):居中弹窗 = Modal 档(三档最高);深色盘不加班驳阴影
+                    // (满幅档无卡,不驳阴影不披玻璃)
                     .then(
-                        if (PaEditorial.IsDark) Modifier
+                        if (fullBleed || PaEditorial.IsDark) Modifier
                         else Modifier.paEditorialShadow(PaEditorial.Shadow.Modal, shape),
                     )
                     // 玻璃材质:透 + 顶缘高光,与底部 sheet 同一块皮
-                    .paGlass(shape)
+                    .then(if (fullBleed) Modifier else Modifier.paGlass(shape))
                     .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                     // 卡片吃掉点击,不让冒泡到遮罩(点卡片不等于点窗外)
                     .clickable(

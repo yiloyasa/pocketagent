@@ -10,6 +10,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -274,28 +275,41 @@ fun UnknownEventDetailSheet(onDismiss: () -> Unit) {
         }
     }
 
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered:requires_confirmation
+    // 动作先过一道确认。语义零变化:遮罩/返回 = 取消(pendingConfirm 清,动作不执行);
+    // 确认钮才 runAction(带当前备注);备注输入在事件行上,弹窗内不重复。
     pendingConfirm?.let { (card, action) ->
-        AlertDialog(
-            onDismissRequest = { pendingConfirm = null },
-            containerColor = PaEditorial.Surface,
-            title = { Text("确认执行「${action.label}」?", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink) },
-            text = {
+        PaSheet(onDismissRequest = { pendingConfirm = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "确认执行「${action.label}」?",
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.height(10.dp))
                 Text(
                     action.description.ifBlank { UnknownEventCopy.ACTION_DONE },
                     fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingConfirm = null
-                    runAction(card, action, notes[card.eventId] ?: "")
-                }) { Text("确认", color = PaEditorial.Primary) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingConfirm = null }) { Text("取消", color = PaEditorial.Muted) }
-            },
-        )
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SheetDialogButton(
+                        text = "取消",
+                        tones = SheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { pendingConfirm = null }
+                    SheetDialogButton(
+                        text = "确认",
+                        tones = SheetButtonTones.primary,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        pendingConfirm = null
+                        runAction(card, action, notes[card.eventId] ?: "")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -623,6 +637,49 @@ private fun ActionButton(
             action.label,
             fontSize = PaEditorial.Type.BodySmall.fontSize,
             color = if (action.destructive) EditorialTone.DENIED.text else PaEditorial.Primary,
+        )
+    }
+}
+
+// ---- PaSheet centered 弹窗的编辑式按钮(D2 模态家族统一;规格照抄
+// PaApprovalDialog 的 ApprovalButton:≥50dp 触达、IconButton 圆角、色调取槽位)----
+
+/** 弹窗按钮的编辑式色调(容器/描边/内容三色,一律取 PaEditorial 槽位)。 */
+private data class SheetButtonTones(val container: Color, val outline: Color, val content: Color) {
+    companion object {
+        /** 主操作:石墨实底白字(README:主操作用石墨重点面)。 */
+        val primary get() = SheetButtonTones(PaEditorial.Graphite, PaEditorial.Graphite, PaEditorial.OnGraphite)
+
+        /** 次操作(取消):浅底描边。 */
+        val secondary get() = SheetButtonTones(PaEditorial.Raised, PaEditorial.Hairline, PaEditorial.Ink)
+    }
+}
+
+@Composable
+private fun SheetDialogButton(
+    text: String,
+    tones: SheetButtonTones,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
+    Row(
+        modifier
+            .heightIn(min = 50.dp) // 最小触达纪律
+            .background(if (enabled) tones.container else tones.container.copy(alpha = 0.55f), shape)
+            .border(1.dp, if (enabled) tones.outline else tones.outline.copy(alpha = 0.55f), shape)
+            .pressable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text,
+            fontSize = PaEditorial.Type.Body.fontSize,
+            fontWeight = FontWeight.SemiBold,
+            color = (if (enabled) tones.content else tones.content.copy(alpha = 0.55f)),
+            maxLines = 1,
         )
     }
 }

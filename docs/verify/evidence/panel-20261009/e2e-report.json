@@ -1,0 +1,64 @@
+{
+  "steps": [
+    {
+      "step": "01-overview-eight-domains",
+      "ok": true,
+      "detail": "h1='PocketAgent daemon · 控制面板' cards=8 titles=[\"资源预算\", \"多 Agent 协同\", \"Agent 接入\", \"会话记忆\", \"未知事件\", \"审批请求\", \"连接通道 (只读)\", \"资源用量 (只读)\"]"
+    },
+    {
+      "step": "01b-empty-state-text",
+      "ok": true,
+      "detail": "sub='主机 WHOISLOVE · 版本 0.3.0 · windows · 数据目录 自定义位置 · 每 10 秒自动刷新 · 仅本机回环可访问' all-card-titles-nonempty=True"
+    },
+    {
+      "step": "02-collab-forms-render",
+      "ok": true,
+      "detail": "collab卡片表单数=3 before='多 Agent 协同 | 协同已开启:委派与扇出可用,单次扇出上限 不限 | 协同总开关: 开切到 关 | └ 关掉后 Agent 之间不能再互相派活,各自会话不受影响 | 委派子任务: 开切到 关 | └ 允许 Agent 把子任务派给别的 Agent 执行 | 并行扇出: 开切到 关 | └ 一条指令同时发给多家 Agent 并行执行 | 扇出成员上限: 0 | └ 单次扇出最多同时给几家;0'"
+    },
+    {
+      "step": "03-collab-fanout-post",
+      "ok": true,
+      "detail": "btn '切到 关' -> '切到 开' row='并行扇出: 关切到 开 | └ 一条指令同时发给多家 Agent 并行执行'"
+    },
+    {
+      "step": "03b-collab-restore",
+      "ok": true,
+      "detail": "btn restored to '切到 关'"
+    },
+    {
+      "step": "04-bswitch-row-render",
+      "ok": true,
+      "detail": "dialysis='未知事件 | 有 2 条没见过的原生事件等你查看 | 待查看: 2 条 | └ 在未知事件页逐条查看原文并选择处置 | 累计登记: 2 条 | └ 台账只保留最近 200 条,更早的会被挤出 | 超限丢弃: 0 条 | └ 因超上限丢弃的条数;不为 0 说明最近流量不小 | 未知请求透传(B 开关): 关(默认:未识别的反向请求直接安全拒绝)切到 开 | └ 与手机设置页「实验功能 · 未识别操作确认」同一份数据、同一条写通道(SetRuntimePolicy 完整策略 + CAS)'"
+    },
+    {
+      "step": "05-bswitch-toggle",
+      "ok": true,
+      "detail": "btn '切到 开' -> '切到 关' row='未知请求透传(B 开关): 开(未识别的反向请求先征询手机确认)切到 关 | └ 与手机设置页「实验功能 · 未识别操作确认」同一份数据、同一条写通道(SetRuntimePolicy 完整策略 + CAS)'"
+    },
+    {
+      "step": "05b-bswitch-restore",
+      "ok": true,
+      "detail": "restored='未知请求透传(B 开关): 关(默认:未识别的反向请求直接安全拒绝)切到 开 | └ 与手机设置页「实验功能 · 未识别操作确认」同一份数据、同一条写通道(SetRuntimePolicy 完整策略 + CAS)'"
+    },
+    {
+      "step": "06-csrf-evil-origin-blocked",
+      "ok": true,
+      "detail": "url='http://127.0.0.1:17455/api/collab' post_status=403 body='管理面板写操作拒绝跨站来源(Origin 非本机回环)\\n'"
+    },
+    {
+      "step": "07-state-untouched-after-evil-csrf",
+      "ok": true,
+      "detail": "baseline={'collab_main': '切到 关', 'fanout': '切到 关', 'bswitch_off': True} now={'collab_main': '切到 关', 'fanout': '切到 关', 'bswitch_off': True}"
+    },
+    {
+      "step": "06b-loopback-origin-allowed-by-design",
+      "ok": true,
+      "detail": "post_status=303 (设计口径:回环来源=本机可信,Origin 守卫只拒非回环;详见报告)"
+    },
+    {
+      "step": "08-final-state-normalized",
+      "ok": true,
+      "detail": "final={'collab_main': '切到 关', 'fanout': '切到 关', 'bswitch_off': True}"
+    }
+  ]
+}

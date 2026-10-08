@@ -48,7 +48,6 @@ import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.PaSheet
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import kotlinx.coroutines.Dispatchers
@@ -284,6 +283,9 @@ fun SubAgentGroupCard(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 组卡头部身份竖条(3×14dp):原 2dp 圆角,机械收敛归档 Terminal(6dp)。
+            // 6dp 在 3dp 宽的盒上被钳到半宽 1.5dp,与原 2dp(同样钳到 1.5dp)渲染全等,
+            // 视觉零差 → 保留令牌不回写 0dp 字面量(机械收敛豁免的"视觉无差"档)。
             Box(Modifier.size(3.dp, 14.dp).background(PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.Terminal)))
             Spacer(Modifier.width(8.dp))
             Text(

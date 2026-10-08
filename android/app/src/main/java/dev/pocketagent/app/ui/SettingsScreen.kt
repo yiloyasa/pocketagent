@@ -2741,8 +2741,14 @@ private fun ZCodeStatusSection(
  * 同义近义词各说各话会稀释语义)。五态收四词:已取消/已中断同收「已停止」
  * (都是"没跑完且不是下载出错",用户的下一步是同一个——重新开始);失败与
  * 停止保持可辨(失败可给原因,停止只说停下)。
+ *
+ * 【上收为 internal 纯函数(2026-10-09 UI 收尾波)】JVM 钉测试
+ * SettingsStatusLabelTest 逐项钉死五态→四词映射与闭合域,防回潮:枚举是闭合域,
+ * when 不写 else —— 未来加新状态时编译期即红,强迫回到这里补词,不允许静默
+ * 落进任何一个旧词。非法输入(持久化串解析不出枚举)在 TaskCenter.parseTasks
+ * 层已回退(整行丢弃),本函数输入域恒为合法枚举。
  */
-private fun statusLabel(s: TaskCenter.Status): String = when (s) {
+internal fun statusLabel(s: TaskCenter.Status): String = when (s) {
     TaskCenter.Status.RUNNING -> "下载中"
     TaskCenter.Status.DONE -> "已完成"
     TaskCenter.Status.FAILED -> "失败"
@@ -3586,68 +3592,84 @@ private fun UserDataPage(
     }
 
     // ---- 清除主机指纹(撤销信任)的二次确认:写清撤销的是什么信任、下次发生什么 ----
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;危险确认钮用 Denied
+    // 色槽(浅珊瑚底 + 珊瑚描边 + 加深珊瑚字)。语义零变化:遮罩/返回 = 取消。
     if (confirmClearPin) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClearPin = false },
-            title = { Text("清除主机指纹?", color = PaEditorial.Ink) },
-            text = {
+        PaSheet(onDismissRequest = { confirmClearPin = false }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text("清除主机指纹?", color = PaEditorial.Ink, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "手机会忘记这台电脑的指纹,下次连接时重新信任当前主机。" +
                         "在此之前若网络中被换成另一台机器,App 不会拦截。" +
                         "电脑上的数据与配对凭证不受影响。此操作立即生效。",
                     color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmClearPin = false
-                    AgentConnection.clearHostPin()
-                    Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
-                }) { Text("清除", color = PaEditorial.Denied) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearPin = false }) {
-                    Text("取消", color = PaEditorial.Muted)
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSheetDialogButton(
+                        text = "取消",
+                        tones = SettingsSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { confirmClearPin = false }
+                    SettingsSheetDialogButton(
+                        text = "清除",
+                        tones = SettingsSheetButtonTones.danger,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        confirmClearPin = false
+                        AgentConnection.clearHostPin()
+                        Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
+                    }
                 }
-            },
-            containerColor = PaEditorial.Surface,
-        )
+            }
+        }
     }
 
     // ---- 删除已下载文件的二次确认:删的是手机上的文件本体,电脑原件不动 ----
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;语义零变化:遮罩/返回
+    // = 取消;确认钮按实际删除结果给提示(删不掉不谎报「已删除」)。
     pendingDelete?.let { target ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("删除「${target.title.ifEmpty { "未命名文件" }}」?", color = PaEditorial.Ink) },
-            text = {
+        PaSheet(onDismissRequest = { pendingDelete = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "删除「${target.title.ifEmpty { "未命名文件" }}」?",
+                    color = PaEditorial.Ink,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "删除手机上已下载的这份文件本体" +
                         (if (target.sizeText.isNotBlank()) "(约 ${target.sizeText})" else "") +
                         ",电脑上的原件不受影响。此操作不可撤销。",
                     color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    // 条目无论如何都移除(留着只会变成打不开的死条目),
-                    // 但提示按实际删除结果说 —— 删不掉不再谎报「已删除」。
-                    val deleted = deleteLocalFile(ctx, target.localUri)
-                    TaskCenter.remove(target.id)
-                    Toast.makeText(
-                        ctx,
-                        if (deleted) "已删除" else "文件可能已被系统清理,条目已移除",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                }) { Text("删除", color = PaEditorial.Denied) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text("取消", color = PaEditorial.Muted)
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSheetDialogButton(
+                        text = "取消",
+                        tones = SettingsSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { pendingDelete = null }
+                    SettingsSheetDialogButton(
+                        text = "删除",
+                        tones = SettingsSheetButtonTones.danger,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        pendingDelete = null
+                        // 条目无论如何都移除(留着只会变成打不开的死条目),
+                        // 但提示按实际删除结果说 —— 删不掉不再谎报「已删除」。
+                        val deleted = deleteLocalFile(ctx, target.localUri)
+                        TaskCenter.remove(target.id)
+                        Toast.makeText(
+                            ctx,
+                            if (deleted) "已删除" else "文件可能已被系统清理,条目已移除",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
                 }
-            },
-            containerColor = PaEditorial.Surface,
-        )
+            }
+        }
     }
 }
 
@@ -3951,64 +3973,76 @@ private fun CacheSection(
         }
     }
 
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;危险确认钮用 Denied
+    // 色槽。语义零变化:遮罩/返回 = 取消;清空只动任务中心记录,不碰已下载文件。
     if (confirmClearTasks) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClearTasks = false },
-            title = { Text("清空任务条目?", color = PaEditorial.Ink) },
-            text = {
+        PaSheet(onDismissRequest = { confirmClearTasks = false }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text("清空任务条目?", color = PaEditorial.Ink, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "只移除任务中心的记录,已下载到手机的文件不受影响。此操作不可撤销。",
                     color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    TaskCenter.clearFinished()
-                    confirmClearTasks = false
-                    reload()
-                    toastMsg = "已清空已完成的条目"
-                }) { Text("清空", color = PaEditorial.Denied) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearTasks = false }) {
-                    Text("取消", color = PaEditorial.Muted)
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSheetDialogButton(
+                        text = "取消",
+                        tones = SettingsSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { confirmClearTasks = false }
+                    SettingsSheetDialogButton(
+                        text = "清空",
+                        tones = SettingsSheetButtonTones.danger,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        TaskCenter.clearFinished()
+                        confirmClearTasks = false
+                        reload()
+                        toastMsg = "已清空已完成的条目"
+                    }
                 }
-            },
-            containerColor = PaEditorial.Surface,
-        )
+            }
+        }
     }
 
     // ---- 会话快照二次确认(需求④:有风险项必须让用户看清后果再清) ----
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;语义零变化:遮罩/返回
+    // = 取消;清空在 IO 线程执行,主线程收尾(关弹窗/刷新/toast)。
     if (confirmClearSnap) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClearSnap = false },
-            title = { Text("清空会话快照?", color = PaEditorial.Ink) },
-            text = {
+        PaSheet(onDismissRequest = { confirmClearSnap = false }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text("清空会话快照?", color = PaEditorial.Ink, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "会话快照是「最近 N 轮」的本地副本,断网时用来回看历史。清空后需要重新从电脑拉取," +
                         "离线时将看不到这段历史;联网后会自动重建,不影响电脑端记录与登录。此操作不可撤销。",
                     color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val freed = dev.pocketagent.app.ui.component.ThreadSnapshot.clearAll()
-                        withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            confirmClearSnap = false
-                            reload()
-                            toastMsg = "已释放 ${sizeText(freed)}"
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSheetDialogButton(
+                        text = "取消",
+                        tones = SettingsSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { confirmClearSnap = false }
+                    SettingsSheetDialogButton(
+                        text = "清空",
+                        tones = SettingsSheetButtonTones.danger,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            val freed = dev.pocketagent.app.ui.component.ThreadSnapshot.clearAll()
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                confirmClearSnap = false
+                                reload()
+                                toastMsg = "已释放 ${sizeText(freed)}"
+                            }
                         }
                     }
-                }) { Text("清空", color = PaEditorial.Denied) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearSnap = false }) {
-                    Text("取消", color = PaEditorial.Muted)
                 }
-            },
-            containerColor = PaEditorial.Surface,
-        )
+            }
+        }
     }
 }
 
@@ -4399,4 +4433,51 @@ internal fun nativeModeLabel(mode: String): String = when(mode) {
     "yolo" -> "跳过审批（yolo）"
     "plan" -> "计划（原生处理）"
     else -> mode
+}
+
+// ---- PaSheet centered 弹窗的编辑式按钮(D2 模态家族统一;规格照抄
+// PaApprovalDialog 的 ApprovalButton:≥50dp 触达、IconButton 圆角、色调取槽位)----
+
+/** 弹窗按钮的编辑式色调(容器/描边/内容三色,一律取 PaEditorial 槽位)。 */
+private data class SettingsSheetButtonTones(val container: Color, val outline: Color, val content: Color) {
+    companion object {
+        /** 次操作(取消):浅底描边。 */
+        val secondary get() = SettingsSheetButtonTones(PaEditorial.Raised, PaEditorial.Hairline, PaEditorial.Ink)
+
+        /** 危险确认:浅珊瑚底 + 珊瑚描边 + 加深珊瑚字(PaApprovalDialog .danger 同款)。 */
+        val danger get() = SettingsSheetButtonTones(
+            PaEditorial.DeniedContainer,
+            PaEditorial.Denied.copy(alpha = 0.35f),
+            PaEditorial.DeniedText,
+        )
+    }
+}
+
+@Composable
+private fun SettingsSheetDialogButton(
+    text: String,
+    tones: SettingsSheetButtonTones,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
+    Row(
+        modifier
+            .heightIn(min = 50.dp) // 最小触达纪律
+            .background(if (enabled) tones.container else tones.container.copy(alpha = 0.55f), shape)
+            .border(1.dp, if (enabled) tones.outline else tones.outline.copy(alpha = 0.55f), shape)
+            .pressable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text,
+            fontSize = PaEditorial.Type.Body.fontSize,
+            fontWeight = FontWeight.SemiBold,
+            color = (if (enabled) tones.content else tones.content.copy(alpha = 0.55f)),
+            maxLines = 1,
+        )
+    }
 }

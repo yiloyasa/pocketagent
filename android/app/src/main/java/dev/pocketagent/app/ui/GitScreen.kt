@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -49,6 +48,7 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaHaptics
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
@@ -598,12 +598,12 @@ private fun GitScreenBody(
     }
 
     // diff 查看器:行级染色(+绿 / -红 / @@ 蓝)。内容区保持代码深色底
-    // (石墨代码箱,与侧边栏/代码预览同一纪律);弹窗 chrome 瓷白编辑式。
+    // (石墨代码箱,与侧边栏/代码预览同一纪律);【D2 模态家族统一】裸 AlertDialog
+    // → PaSheet centered 玻璃皮。语义零变化:点遮罩/返回/「关闭」都只是收起查看器
+    // (diff = null),不动工作区任何状态。
     diff?.let { d ->
-        AlertDialog(
-            onDismissRequest = { diff = null },
-            containerColor = PaEditorial.Surface,
-            title = {
+        PaSheet(onDismissRequest = { diff = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
                 Text(
                     // 深路径标题中间省略,保住文件名与扩展名
                     middleEllipsize(diffTitle, 64),
@@ -611,8 +611,7 @@ private fun GitScreenBody(
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
                     color = PaEditorial.Ink,
                 )
-            },
-            text = {
+                Spacer(Modifier.height(10.dp))
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -624,28 +623,47 @@ private fun GitScreenBody(
                         modifier = Modifier.height(440.dp).fillMaxWidth(),
                     )
                 }
-            },
-            confirmButton = { TextButton(onClick = { diff = null }) { Text("关闭", color = PaEditorial.Primary) } },
-        )
+                Spacer(Modifier.height(16.dp))
+                GitSheetDialogButton(
+                    text = "关闭",
+                    tones = GitSheetButtonTones.primary,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { diff = null }
+            }
+        }
     }
 
     // 丢弃单个文件的改动 —— 危险级 DESTRUCTIVE(gitActionDanger):不可恢复、Git 也找不回。
     // 红色实心确认钮 + 后果写明,与普通"确认"分级(gitDangerConfirmLabel 给出动作词)。
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;危险实心钮的 Denied/OnDenied
+    // 色槽原样保留(本文件自己的危险分级语言)。语义零变化:遮罩/返回 = 取消。
     pendingDiscard?.let { path ->
-        AlertDialog(
-            onDismissRequest = { pendingDiscard = null },
-            title = { Text("丢弃改动?", fontSize = PaEditorial.Type.Heading.fontSize) },
-            text = {
+        PaSheet(onDismissRequest = { pendingDiscard = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "丢弃改动?",
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "将撤销 ${middleEllipsize(path, 40)} 上未暂存的修改。\n" +
                         "未提交的内容不会进回收站,也无法通过 Git 找回,此操作不可恢复。",
                     fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                 )
-            },
-            confirmButton = {
-                androidx.compose.material3.Button(
-                    onClick = {
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GitSheetDialogButton(
+                        text = "取消",
+                        tones = GitSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { pendingDiscard = null }
+                    GitSheetDialogButton(
+                        text = gitDangerConfirmLabel("discard"),
+                        tones = GitSheetButtonTones.destructiveSolid,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         pendingDiscard = null
                         PaHaptics.warning(view)
                         scope.launch {
@@ -661,64 +679,73 @@ private fun GitScreenBody(
                                 error = "丢弃失败:${e.message}"
                             }
                         }
-                    },
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = PaEditorial.Denied,
-                        // onError 语义:读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514)
-                        contentColor = PaEditorial.OnDenied,
-                    ),
-                    shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
-                ) {
-                    Text(gitDangerConfirmLabel("discard"), fontWeight = FontWeight.SemiBold)
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDiscard = null }) { Text("取消") }
-            },
-        )
+            }
+        }
     }
 
     // 切换分支(有未提交改动时 git 会拒绝,由 daemon 的错误信息回显)
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;普通确认的主按钮走
+    // 石墨重点面。语义零变化:遮罩/返回 = 取消(pendingCheckout = null)。
     pendingCheckout?.let { name ->
-        AlertDialog(
-            onDismissRequest = { pendingCheckout = null },
-            title = { Text("切换到 $name?", fontSize = PaEditorial.Type.Heading.fontSize) },
-            text = {
+        PaSheet(onDismissRequest = { pendingCheckout = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "切换到 $name?",
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "工作区有未提交改动时,git 会拒绝切换,可先提交或丢弃。",
                     fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingCheckout = null
-                    scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                AgentConnection.gitService().checkoutBranch(
-                                    CheckoutBranchRequest.newBuilder()
-                                        .setRepo(repo).setBranch(name).build())
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GitSheetDialogButton(
+                        text = "取消",
+                        tones = GitSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { pendingCheckout = null }
+                    GitSheetDialogButton(
+                        text = "切换",
+                        tones = GitSheetButtonTones.primary,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        pendingCheckout = null
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    AgentConnection.gitService().checkoutBranch(
+                                        CheckoutBranchRequest.newBuilder()
+                                            .setRepo(repo).setBranch(name).build())
+                                }
+                                refresh()
+                            } catch (e: Exception) {
+                                error = "切换分支失败:${e.message}"
                             }
-                            refresh()
-                        } catch (e: Exception) {
-                            error = "切换分支失败:${e.message}"
                         }
                     }
-                }) { Text("切换", color = PaEditorial.Primary) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingCheckout = null }) { Text("取消") }
-            },
-        )
+                }
+            }
+        }
     }
 
     // 新建分支
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered + 输入行;M3 的
+    // dismiss/confirm 底部文字钮重排为 PaSheet 约定的编辑式按钮行(取消/创建)。
+    // 语义零变化:空名不打 RPC 直接返回;遮罩/返回 = 取消(输入不提交)。
     if (showCreateBranch) {
-        AlertDialog(
-            onDismissRequest = { showCreateBranch = false },
-            title = { Text("新建分支", fontSize = PaEditorial.Type.Heading.fontSize) },
-            text = {
+        PaSheet(onDismissRequest = { showCreateBranch = false }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "新建分支",
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = newBranch,
                     onValueChange = { newBranch = it },
@@ -726,12 +753,20 @@ private fun GitScreenBody(
                     label = { Text("分支名") },
                     modifier = Modifier.fillMaxWidth(),
                 )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GitSheetDialogButton(
+                        text = "取消",
+                        tones = GitSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { showCreateBranch = false }
+                    GitSheetDialogButton(
+                        text = "创建",
+                        tones = GitSheetButtonTones.primary,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         val name = newBranch.trim()
-                        if (name.isEmpty()) return@TextButton
+                        if (name.isEmpty()) return@GitSheetDialogButton
                         showCreateBranch = false
                         scope.launch {
                             try {
@@ -745,31 +780,43 @@ private fun GitScreenBody(
                                 error = "新建分支失败:${e.message}"
                             }
                         }
-                    },
-                ) { Text("创建", color = PaEditorial.Primary) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateBranch = false }) { Text("取消") }
-            },
-        )
+                    }
+                }
+            }
+        }
     }
 
     // 提交对话框
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered + 输入行;提交钮按
+    // PaSheet 约定重排为石墨主按钮,禁用条件原样(commit 非空且不在飞行中)。
+    // 语义零变化:遮罩/返回 = 取消(showCommit = false,信息保留在 commitMsg)。
     if (showCommit) {
-        AlertDialog(
-            onDismissRequest = { showCommit = false },
-            title = { Text("提交全部变更") },
-            text = {
+        PaSheet(onDismissRequest = { showCommit = false }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "提交全部变更",
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     commitMsg, { commitMsg = it },
                     label = { Text("提交信息") },
                     modifier = Modifier.fillMaxWidth(), minLines = 2,
                 )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = commitMsg.isNotBlank() && !busy,
-                    onClick = {
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GitSheetDialogButton(
+                        text = "取消",
+                        tones = GitSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { showCommit = false }
+                    GitSheetDialogButton(
+                        text = "提交",
+                        tones = GitSheetButtonTones.primary,
+                        enabled = commitMsg.isNotBlank() && !busy,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         busy = true
                         scope.launch {
                             try {
@@ -786,11 +833,10 @@ private fun GitScreenBody(
                                 busy = false
                             }
                         }
-                    },
-                ) { Text("提交") }
-            },
-            dismissButton = { TextButton(onClick = { showCommit = false }) { Text("取消") } },
-        )
+                    }
+                }
+            }
+        }
     }
 
     // 切换仓库:已知工作区 + 手填路径(修复"看不到任何 git 内容")
@@ -1048,5 +1094,51 @@ private fun DiffView(text: String, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+// ---- PaSheet centered 弹窗的编辑式按钮(D2 模态家族统一;规格照抄
+// PaApprovalDialog 的 ApprovalButton:≥50dp 触达、IconButton 圆角、色调取槽位)----
+
+/** 弹窗按钮的编辑式色调(容器/描边/内容三色,一律取 PaEditorial 槽位)。 */
+private data class GitSheetButtonTones(val container: Color, val outline: Color, val content: Color) {
+    companion object {
+        /** 主操作:石墨实底白字(README:主操作用石墨重点面)。 */
+        val primary get() = GitSheetButtonTones(PaEditorial.Graphite, PaEditorial.Graphite, PaEditorial.OnGraphite)
+
+        /** 次操作(取消):浅底描边。 */
+        val secondary get() = GitSheetButtonTones(PaEditorial.Raised, PaEditorial.Hairline, PaEditorial.Ink)
+
+        /** 危险确认(本文件分级语言):红色实心 + OnDenied 字,原 pendingDiscard 实心钮同款。 */
+        val destructiveSolid get() = GitSheetButtonTones(PaEditorial.Denied, PaEditorial.Denied, PaEditorial.OnDenied)
+    }
+}
+
+@Composable
+private fun GitSheetDialogButton(
+    text: String,
+    tones: GitSheetButtonTones,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
+    Row(
+        modifier
+            .heightIn(min = 50.dp) // 最小触达纪律
+            .background(if (enabled) tones.container else tones.container.copy(alpha = 0.55f), shape)
+            .border(1.dp, if (enabled) tones.outline else tones.outline.copy(alpha = 0.55f), shape)
+            .pressable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text,
+            fontSize = PaEditorial.Type.Body.fontSize,
+            fontWeight = FontWeight.SemiBold,
+            color = (if (enabled) tones.content else tones.content.copy(alpha = 0.55f)),
+            maxLines = 1,
+        )
     }
 }

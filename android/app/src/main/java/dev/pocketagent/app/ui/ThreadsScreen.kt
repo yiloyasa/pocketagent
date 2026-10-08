@@ -102,7 +102,6 @@ import dev.pocketagent.app.ui.component.shortWorkspace
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.EditorialTone
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
 import dev.pocketagent.app.ui.theme.paPushBack

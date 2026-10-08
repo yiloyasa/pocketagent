@@ -5,6 +5,7 @@ import dev.pocketagent.app.ui.SlashCommandInfo
 import dev.pocketagent.app.ui.history.HistoryIdentityIndex
 import dev.pocketagent.app.ui.history.MessageSpan
 import pocketagent.v1.ApprovalRequest
+import pocketagent.v1.ModelInfo
 import pocketagent.v1.ThreadStatus
 import pocketagent.v1.Usage
 
@@ -120,6 +121,16 @@ data class ChatState(
      * 本字段只是渲染镜像,与缓存对象无双向耦合(拉取 RPC 通道零改动)。
      */
     val slashCommands: List<SlashCommandInfo> = emptyList(),
+
+    /**
+     * 【2026-10-09 效果层外移】模型大表(模型芯片/弹窗的候选列表)。
+     * 写点三处(与迁出前 ChatScreen 局部变量 `models` 的三个赋值点一一对应):
+     *  - 静态预取整体替换([ChatIntent.ModelListSet],prefetchStatic 回包非空才发);
+     *  - 10s 巡检按 agent 前缀合并([ChatIntent.ModelListMerged],"先比对再赋值"
+     *    在 reducer 内 —— 内容没变返回原实例,消除每 10s 一次的空转重组);
+     *  - 统一提示条重试清空([ChatIntent.ModelListReset])。
+     */
+    val models: List<ModelInfo> = emptyList(),
 ) {
     /**
      * 时间线列表的头部偏移:时间线顶部挂「加载更早」入口时 itemsIndexed 的下标
@@ -286,6 +297,32 @@ sealed interface ChatIntent {
      *  - RPC 回包落位(`slashCommands = loaded`,失败安静降级为空表照写)。
      */
     data class SlashCommandsSettled(val commands: List<SlashCommandInfo>) : ChatIntent
+
+    // ---- 2026-10-09 效果层外移:模型大表 ----
+
+    /**
+     * 模型大表整体替换。对应迁出前静态预取效果的 `prefetched.models?.let { models = it }`
+     * (null 不发意图,由调用点的 `?.let` 承担"失败项保留旧值"语义)。
+     */
+    data class ModelListSet(val models: List<ModelInfo>) : ChatIntent
+
+    /**
+     * 模型大表按 agent 前缀合并(10s 巡检回包)。对应迁出前巡检效果的两段原式:
+     *  - 过滤:`models.filter { it.id.substringBefore('/') != agentId } + native.modelsList`
+     *    (L2 发现⑤根因收尾:provider 字段是上游供应商名,按 id 首段过滤才剔得掉旧行);
+     *  - 先比对再赋值:`if (merged != models) models = merged`(proto ModelInfo 实现
+     *    内容 equals,内容没变不换实例,消除每 10s 一次的空转重组)。
+     */
+    data class ModelListMerged(
+        val agentId: String,
+        val incoming: List<ModelInfo>,
+    ) : ChatIntent
+
+    /**
+     * 模型大表清空。对应迁出前统一提示条「重试」(失败分支)的 `models = emptyList()`
+     * 原式 —— 下一次预取/巡检回包会重新填表。
+     */
+    data object ModelListReset : ChatIntent
 }
 
 /**
@@ -314,6 +351,7 @@ object ChatStateReducer {
         threadAgentId = "",
         loadError = null,
         slashCommands = emptyList(),
+        models = emptyList(),
     )
 
     /** 头部拼接前的增量裁定(纯查询,不改状态):本次回包实际新增多少条。 */
@@ -417,6 +455,20 @@ object ChatStateReducer {
             if (state.loadError?.startsWith("离线") == true) state.copy(loadError = null) else state
 
         is ChatIntent.SlashCommandsSettled -> state.copy(slashCommands = intent.commands)
+
+        // ---- 2026-10-09 效果层外移:模型大表 ----
+
+        is ChatIntent.ModelListSet -> state.copy(models = intent.models)
+
+        is ChatIntent.ModelListMerged -> {
+            val merged = state.models.filter {
+                it.id.substringBefore('/') != intent.agentId
+            } + intent.incoming
+            // 【先比对再赋值】内容没变返回原实例(StateFlow 等值去重,不触发下游重组)
+            if (merged == state.models) state else state.copy(models = merged)
+        }
+
+        ChatIntent.ModelListReset -> state.copy(models = emptyList())
     }
 }
 

@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.EmptyState
+import dev.pocketagent.app.ui.anim.PaDuotoneMotif
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.collab.CollabCopy as SessionCopy
@@ -238,6 +239,7 @@ fun CollabScreen(
                             R.drawable.ic_lucide_git_branch,
                             "暂无可协同的 agent",
                             "电脑端启用协作能力后,这里会列出可选项",
+                            motif = PaDuotoneMotif.DISCOVER_RING, // 协同发现:雷达环 = 正在找电脑端可协同的 agent
                         )
                     } else {
                         Row(

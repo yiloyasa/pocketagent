@@ -42,10 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.pocketagent.app.R as AppR
-import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.ui.ChatDeniedColor
 import dev.pocketagent.app.ui.Attachment
 import dev.pocketagent.app.ui.TurnSession
@@ -71,15 +68,14 @@ import dev.pocketagent.app.ui.SheetAction
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import pocketagent.v1.SetThreadGoalRequest
+import pocketagent.v1.Thread as PThread
 
 /**
  * 会话页低频面板族(C1 拆分,2026-10-09):附件大图预览 / 更多(终止-导出-压缩-
  * 分叉-回滚) / 斜杠伪命令"/目标" / 回滚确认。各自从 ChatScreen 巨函数整体迁出,
- * 渲染与交互一字不差;RPC(本组仅 SetThreadGoal)随迁原样 —— 下一轮再收 ViewModel。
+ * 渲染与交互一字不差;RPC(本组仅 SetThreadGoal)已收 ChatViewModel(2026-10-09
+ * 效果层外移,面板只消费 Result 出 Toast)。
  */
 @Composable
 internal fun ChatAttachmentViewer(
@@ -88,9 +84,16 @@ internal fun ChatAttachmentViewer(
 ) {
     selectedAttachment.value?.let { attachment ->
         val preview = loadAttachmentPreview(ctx, attachment)
-        Dialog(
+        // 【2026-10-09 收编】原裸 Dialog(usePlatformDefaultWidth = false)→ PaSheet
+        // fullBleed 满幅变体(居中家族的"看图"档):大图预览要满幅沉浸,塞 400dp 卡
+        // 会毁掉检视体验;关闭语义逐位一致(返回键/点窗外 = onDismissRequest),
+        // 点内容仍由内容自有的 clickable 承接"点图即关"。
+        // scrollable = false:大图预览无滚动。
+        PaSheet(
             onDismissRequest = { selectedAttachment.value = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+            centered = true,
+            fullBleed = true,
+            scrollable = false,
         ) {
             Column(
                 Modifier
@@ -256,7 +259,10 @@ internal fun ChatMoreSheet(
 
 /**
  * 斜杠伪命令"/目标"底栏(C1 拆分,2026-10-09):SetThreadGoal 落库并就地刷新
- * 顶栏目标文案。从 ChatScreen 巨函数整体迁出,RPC/交互一字不差。
+ * 顶栏目标文案。从 ChatScreen 巨函数整体迁出,交互一字不差。
+ * 【2026-10-09 效果层外移】RPC 收进 [ChatViewModel.setThreadGoal](Result 形态),
+ * 本面板经 [onSetGoal] 消费:成功刷新顶栏文案/关闭/人话回执,失败人话 Toast,
+ * 文案与迁出前逐字一致。
  */
 @Composable
 internal fun ChatGoalSheet(
@@ -265,6 +271,8 @@ internal fun ChatGoalSheet(
     threadId: String,
     ctx: android.content.Context,
     scope: kotlinx.coroutines.CoroutineScope,
+    /** 设置目标(目标原文照传):VM 出 Result,这里只出 Toast 与就地刷新。 */
+    onSetGoal: suspend (String) -> Result<PThread>,
 ) {
     // ---- 斜杠面板伪命令"/目标":设置会话目标(SetThreadGoal)----
     // 由斜杠卡面的 /目标 伪命令打开(GOAL 动作,见上方候选段)。daemon 的
@@ -325,14 +333,8 @@ internal fun ChatGoalSheet(
                             goalSaving = true
                             scope.launch {
                                 try {
-                                    val t = withContext(Dispatchers.IO) {
-                                        AgentConnection.threadService().setThreadGoal(
-                                            SetThreadGoalRequest.newBuilder()
-                                                .setThreadId(threadId)
-                                                .setGoal(goalDraft.trim())
-                                                .build(),
-                                        )
-                                    }
+                                    // getOrThrow:失败从原 RPC 抛出点浮出,catch 文案零变化
+                                    val t = onSetGoal(goalDraft.trim()).getOrThrow()
                                     // 顶栏目标文案就地刷新(GoalDisplayLogic 与 GetThread 同一套口径)
                                     threadGoalLine.value = GoalDisplayLogic.goalLine(t)
                                     slashGoalSheet.value = false

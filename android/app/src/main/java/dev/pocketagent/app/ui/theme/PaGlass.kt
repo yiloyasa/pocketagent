@@ -101,7 +101,9 @@ fun rememberGlassBlurAvailable(): Boolean = remember {
  * @param shadowElevation 悬浮玻璃（浮层卡）给一点投影；贴边的导航栏/编辑条给 0。
  */
 fun Modifier.paGlass(
-    shape: Shape = RoundedCornerShape(PaEditorial.Radius.Terminal),
+    // 尖角特例(机械收敛豁免):默认 0dp 保留"贴边尖角玻璃"语义(导航栏/编辑条
+    // 与屏幕边齐平,不收圆角);要圆角的调用方一律显式传 Radius 档。
+    shape: Shape = RoundedCornerShape(0.dp),
     tint: Color? = null,
     hairline: Boolean = true,
     shadowElevation: Dp = 0.dp,

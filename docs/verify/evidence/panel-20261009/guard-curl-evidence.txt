@@ -1,0 +1,51 @@
+=== guard-1: Host 头非回环 GET / → 期望 403(DNS rebinding 守卫) ===
+HTTP/1.1 403 Forbidden
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Thu, 08 Oct 2026 20:07:11 GMT
+Content-Length: 65
+
+管理面板仅限本机回环访问(Host 头非回环已拒绝)
+
+=== guard-2: Host 头非回环 POST /api/collab → 期望 403 ===
+HTTP/1.1 403 Forbidden
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Thu, 08 Oct 2026 20:07:11 GMT
+Content-Length: 65
+
+管理面板仅限本机回环访问(Host 头非回环已拒绝)
+
+=== guard-3: 回环 Host + 非回环 Origin POST → 期望 403(跨站来源守卫) ===
+HTTP/1.1 403 Forbidden
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Thu, 08 Oct 2026 20:07:11 GMT
+Content-Length: 64
+
+管理面板写操作拒绝跨站来源(Origin 非本机回环)
+
+=== guard-4: 回环 Host + Sec-Fetch-Site: cross-site POST → 期望 403 ===
+HTTP/1.1 403 Forbidden
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Thu, 08 Oct 2026 20:07:11 GMT
+Content-Length: 56
+
+管理面板写操作拒绝跨站请求(Sec-Fetch-Site)
+
+=== guard-5: 白名单外键 key=evil → 期望 400(红线3:词表外一律拒绝) ===
+HTTP/1.1 400 Bad Request
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Thu, 08 Oct 2026 20:07:11 GMT
+Content-Length: 47
+
+未知开关键(可用:collab/delegate/fanout)
+
+=== guard-6(对照组): 回环 Host 无 Origin POST → 期望 303(合法写通道放行) ===
+HTTP/1.1 303 See Other
+Location: /
+Date: Thu, 08 Oct 2026 20:07:11 GMT
+Content-Length: 0
+

@@ -232,7 +232,6 @@ import dev.pocketagent.app.ui.history.HistoryLocatePlan
 import dev.pocketagent.app.ui.history.HistorySearchHit
 import dev.pocketagent.app.ui.history.HistorySearchRepository
 import dev.pocketagent.app.ui.history.HistorySearchState
-import dev.pocketagent.app.ui.history.MessageSpan
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
@@ -258,13 +257,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import pocketagent.v1.ApprovalRequest
 import pocketagent.v1.CodexEvent
 import pocketagent.v1.CreateThreadRequest
 import pocketagent.v1.CodexSettings
-import pocketagent.v1.GetCodexSettingsRequest
 import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.GitStatusRequest
 import pocketagent.v1.GitDiffRequest
@@ -272,21 +269,9 @@ import pocketagent.v1.GitCommitRequest
 import pocketagent.v1.GetThreadHistoryRequest
 import pocketagent.v1.SearchThreadMessagesRequest
 import pocketagent.v1.GetThreadRequest
-import pocketagent.v1.ForkThreadRequest
-import pocketagent.v1.RollbackThreadRequest
-import pocketagent.v1.CompactThreadRequest
-import pocketagent.v1.ClearQueuedInputsRequest
-import pocketagent.v1.StartReviewRequest
-import pocketagent.v1.SetThreadGoalRequest
 import pocketagent.v1.ExportThreadHtmlRequest
-import pocketagent.v1.ListModelsRequest
-import pocketagent.v1.ListSlashCommandsRequest
-import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ModelInfo
-import pocketagent.v1.SetCodexSettingsRequest
-import pocketagent.v1.ApproveGuardianDeniedActionRequest
 import pocketagent.v1.Thread as PThread
-import pocketagent.v1.ThreadMessage
 import pocketagent.v1.ThreadStatus
 import pocketagent.v1.WriteFileRequest
 
@@ -2106,7 +2091,12 @@ fun ChatScreen(
     val session by chatVm.session.collectAsState()
     DisposableEffect(chatVm, threadId) {
         chatVm.bindSession(threadId)
-        onDispose { chatVm.unbindSession() }
+        onDispose {
+            chatVm.unbindSession()
+            // 模型 10s 巡检循环与投影绑定同一生命周期(2026-10-09 效果层外移):
+            // 离开页面即停,不留会发 RPC 的在飞循环 —— 与 bindSession/unbindSession 成对。
+            chatVm.stopModelInspection()
+        }
     }
     // ---- 输入框修订号(P4 Task 2 前置小改)----
     // 内容每变一次 +1:优化预览的防覆盖闸拿它对比"请求发起时刻的修订号"
@@ -2435,7 +2425,10 @@ fun ChatScreen(
     // 会话重建归 null —— 上一会话的失败不再带进新会话,方向与第一层同款更干净。
     val threadWorkspace = chatState.threadWorkspace
     var codexSettings by remember { mutableStateOf<CodexSettings?>(null) }
-    var models by remember { mutableStateOf(listOf<ModelInfo>()) }
+    // 【2026-10-09 效果层外移】模型大表已收进 ChatViewModel(ChatState)—— 只读投影;
+    // 写点三处全在 VM/意图侧:巡检合并(ModelListMerged)、静态预取替换(ModelListSet)、
+    // 重试清空(ModelListReset)。读点零改动。
+    val models = chatState.models
     val loadError = chatState.loadError
     // 【P3 Task 8】离线快照标志已收进 ChatViewModel(ChatState)—— 此处为只读投影,
     // 写入走 chatVm.send(见离线横幅/错误条重试/getThread 效果各写点)。
@@ -2456,51 +2449,11 @@ fun ChatScreen(
     val historyOldestMessageId = chatState.oldestMessageId
 
     /**
-     * ThreadMessage 列表 → (ChatItem 序列, 消息级身份跨度)。历史映射一条
-     * ThreadMessage ≥ 1 个 ChatItem(块拆分,见 HistoryMessageMapper),跨度
-     * 记下每条消息映射出的连续段,搜索命中才能按 message_id 找回时间线下标。
+     * 【2026-10-09 效果层外移】ThreadMessage → ChatItem/身份跨度的拼装配方与
+     * 「头部拼接」落地(st.items.addAll(0,…) + 封顶 + PrependApplied)已收进
+     * ChatViewModel([ChatViewModel.prependHistory] / 私有 buildHistoryBatch):
+     * 本页与全文搜索定位共用同一入口,滚动锚定(delta)仍由调用方持有。
      */
-    fun buildHistoryBatch(messages: List<ThreadMessage>): Pair<List<ChatItem>, List<MessageSpan>> {
-        val items = mutableListOf<ChatItem>()
-        val spans = mutableListOf<MessageSpan>()
-        for ((i, m) in messages.withIndex()) {
-            val start = items.size
-            // C2:历史条目领稳定 id(daemon message_id 合成,旧 daemon 退序号)
-            items += historyChatItemsWithIds(listOf(m))
-            spans += MessageSpan(
-                messageId = m.messageId,
-                turnId = m.turnId,
-                sequenceInResponse = i,
-                itemStart = start,
-                itemCount = items.size - start,
-                role = m.role,
-            )
-        }
-        return items to spans
-    }
-
-    /**
-     * 【Task 7 加载更早升级】历史片段落地:按「已加载最旧 message id」锚点只把
-     * 回包头部的新消息**拼到列表头部**,不做整列表替换 —— daemon 幂等回尾部,
-     * 回包 = 更早新增段 + 已加载部分;锚点之前的那段才是新增。已加载条目的引用
-     * 不变,LazyColumn 不整表重组;回包没有新消息(重复拉取)时零列表变动。
-     * 旧 daemon 回包 message_id 为空时退「回包条数 - 已加载条数」条数兜底。
-     *
-     * @return 实际新拼入的 ChatItem 条数(调用方的滚动锚点 delta 直接用)。
-     */
-    fun prependHistoryMessages(messages: List<ThreadMessage>): Int {
-        if (messages.isEmpty()) return 0
-        // 【P3 Task 8】拼接量裁定与身份索引推进收进 ChatViewModel(纯 reducer);
-        // 这里只落地 st.items(对话流资产)并回传新条数(滚动锚点 delta 直接用)。
-        val newCount = chatVm.planPrepend(messages.map { it.messageId })
-        if (newCount <= 0) return 0
-        val (newItems, newSpans) = buildHistoryBatch(messages.take(newCount))
-        st.items.addAll(0, newItems)
-        // C3:前插后统一封顶(超 400 中间截断;已加载条目引用稳定不变)
-        TurnSession.enforceTimelineCap(st)
-        chatVm.send(ChatIntent.PrependApplied(newSpans, newItems.size, messages.first().messageId))
-        return newItems.size
-    }
 
     // 提示词优化:输入/开关/离线态任一变化都重算按钮可见性(单一事实来源是输入,
     // 状态机只记"请求在飞";纯逻辑见 PromptOptimizeLogic.kt,JVM 单测钉行为)。
@@ -2657,7 +2610,7 @@ fun ChatScreen(
     LaunchedEffect(connectionEpoch, reloadToken) {
         val prefetched = chatVm.prefetchStatic()
         prefetched.codexSettings?.let { codexSettings = it }
-        prefetched.models?.let { models = it }
+        prefetched.models?.let { chatVm.send(ChatIntent.ModelListSet(it)) }
         prefetched.hostName?.let { hostName = it }
         prefetched.recentThreads?.let { recentThreads = it }
         recentLoading = false
@@ -2709,52 +2662,29 @@ fun ChatScreen(
     // 门控闸 = 一次性 CompletableDeferred,注册观察者后复查状态(消除 START 竞态),
     // finally 必摘观察者 —— 协程随组合销毁取消时闸被取消,观察者照样移除,零泄漏。
     val hostLifecycle = (LocalContext.current as? ComponentActivity)?.lifecycle
-    LaunchedEffect(threadId,sessionAgent,connectionEpoch) {
-        while(true) {
-            // 前台门控:STOP 状态不跑 RPC;挂起等 ON_START,回前台立即补跑再进 10s 节奏
-            if (hostLifecycle != null) {
-                val gate = CompletableDeferred<Unit>()
-                val gateObserver = LifecycleEventObserver { _, event ->
-                    if (event == Lifecycle.Event.ON_START) gate.complete(Unit)
-                }
-                hostLifecycle.addObserver(gateObserver)
-                try {
-                    if (!hostLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) gate.await()
-                } finally { hostLifecycle.removeObserver(gateObserver) }
+    // 【2026-10-09 效果层外移 · 任务3】10s 巡检循环收进 ChatViewModel.startModelInspection:
+    // 循环体(RPC/模型表合并/原生选择回填/仓库刷新)与 scope 纪律(挂 sessionScope,
+    // 离开页面随上方 DisposableEffect 的 onDispose 停表 —— 与保活心跳同款)都在 VM;
+    // 本效果只做两件迁出前就属于 UI 的事:
+    //  ① 键控重启:threadId/sessionAgent/connectionEpoch 任一变化即重入 start
+    //     (内部先停旧循环,等价原 LaunchedEffect 的取消重建);
+    //  ② 前台门注入:Activity Lifecycle 是宿主资产不进 VM(【P1-20】口径:无
+    //     lifecycle-runtime-compose 依赖,用宿主 Lifecycle + 一次性 CompletableDeferred
+    //     消除 START 竞态,finally 必摘观察者 —— 代码原样搬自原效果体开头)。
+    suspend fun foregroundGate() {
+        if (hostLifecycle != null) {
+            val gate = CompletableDeferred<Unit>()
+            val gateObserver = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_START) gate.complete(Unit)
             }
-            if(sessionAgent.isNotEmpty() && AgentConnection.connState.value=="ok") {
-                try {
-                    val native=withContext(Dispatchers.IO) {
-                        AgentConnection.modelServiceSlow().listModels(ListModelsRequest.newBuilder()
-                            .setAgentId(sessionAgent).setThreadId(threadId).build())
-                    }
-                    if(native.modelsCount>0) {
-                        // 【P1-20 · 先比对再赋值】List equals 按内容逐元素比(proto ModelInfo
-                        // 实现 equals):内容没变就不换实例,消除每 10s 一次的空转重组。
-                        // 【L2 发现⑤根因收尾】大表行的 provider 字段存的是上游供应商名
-                        // (pi 系 = zai-coding-cn/deepseek),按 provider 过滤等于没滤,
-                        // 本 agent 旧行永存、大表持续膨胀;改与 modelsForAgent 同口径
-                        // 按 id 首段过滤,旧行剔除、native 申报行唯一入库。
-                        val merged=models.filter { it.id.substringBefore('/')!=sessionAgent }+native.modelsList
-                        if(merged!=models) models=merged
-                    }
-                    TurnSession.acceptRuntimeSelection(threadId,native.currentModelId,
-                        if(native.hasCurrentEffort()) native.currentEffort else null)
-                    // 【P3-T4 接线②】巡检回包喂仓库:仓库没有外部写入通道(交底口径
-                    // 只有 open/send/refresh 三入口),按二选一方案改调 repository.refresh()
-                    // —— GetThread(24)+ListModels(5) 真值整树替换,选择状态只有仓库
-                    // 一个写者,不再双路写。本巡检的既有职责(10s 节奏/前台门控/模型表
-                    // 合并/原生选择回填 acceptRuntimeSelection)原样保留。
-                    // 【竞态安全】refresh 自带在飞守卫(pending 非空时只更新模型表,
-                    // 不覆盖乐观投影);失败只标仓库 error,不影响本巡检。
-                    if (ModelSelectionRepository.currentThreadId() == threadId) {
-                        ModelSelectionRepository.refresh()
-                    }
-                } catch(e: kotlinx.coroutines.CancellationException) { throw e }
-                catch(_:Exception) { /* Keep last verified runtime state during network recovery. */ }
-            }
-            delay(10_000)
+            hostLifecycle.addObserver(gateObserver)
+            try {
+                if (!hostLifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) gate.await()
+            } finally { hostLifecycle.removeObserver(gateObserver) }
         }
+    }
+    LaunchedEffect(threadId, sessionAgent, connectionEpoch) {
+        chatVm.startModelInspection(threadId, sessionAgent, ::foregroundGate)
     }
     val requestedModel=(AgentConnection.threadModel(threadId) ?: threadModelId).takeIf {
         it.isEmpty() || it.startsWith("$sessionAgent/")
@@ -2847,13 +2777,13 @@ fun ChatScreen(
         codexSettings = b.build()
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    codexSettings = AgentConnection.modelService().setCodexSettings(
-                        SetCodexSettingsRequest.newBuilder()
-                            .setApprovalPolicy(id)
-                            .setSandbox(codexSettings?.sandbox ?: "")
-                            .build())
-                }
+                // 【2026-10-09 效果层外移】RPC 段在 ChatViewModel.setApprovalPolicy
+                // (sandbox 取乐观赋值后的现值,与迁出前同值 —— 乐观赋值只改 approvalPolicy);
+                // getOrThrow 让失败从原 RPC 抛出点浮出,catch 文案零变化。
+                codexSettings = chatVm.setApprovalPolicy(
+                    sandbox = codexSettings?.sandbox ?: "",
+                    approvalPolicy = id,
+                ).getOrThrow()
                 Toast.makeText(ctx, "审批策略 → ${APPROVALS.find { it.first == id }?.second}", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(ctx, "切换失败:${e.message}", Toast.LENGTH_SHORT).show()
@@ -2872,15 +2802,8 @@ fun ChatScreen(
     fun approveGuardian(ev: CodexEvent) {
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().approveGuardianDeniedAction(
-                        ApproveGuardianDeniedActionRequest.newBuilder()
-                            .setThreadId(threadId)
-                            .setReviewId(ev.reviewId)
-                            .setTargetItemId(ev.targetItemId)
-                            .build(),
-                    )
-                }
+                // 【2026-10-09 效果层外移】RPC 段在 ChatViewModel.approveGuardianDenied
+                chatVm.approveGuardianDenied(threadId, ev.reviewId, ev.targetItemId).getOrThrow()
                 // 成功:收起入口并留住"已推翻"的状态(离开页面再回来也不会又冒出按钮)
                 TurnSession.markGuardianOverridden(threadId, ev.reviewId)
                 Toast.makeText(ctx, "已推翻这次驳回,电脑会继续执行", Toast.LENGTH_SHORT).show()
@@ -3108,7 +3031,9 @@ fun ChatScreen(
                     Toast.makeText(ctx, "正在加载更早的历史以定位…", Toast.LENGTH_SHORT).show()
                     val msgs = historySearchRepository.fetchTargetMessages(plan.requestedRounds)
                     if (msgs.isEmpty()) return null
-                    val grew = prependHistoryMessages(msgs) > 0
+                    // 【2026-10-09 效果层外移】头部拼接落地经 ChatViewModel.prependHistory
+                    // (与「加载更早」共用同一条落地通道;delta 语义原样)
+                    val grew = chatVm.prependHistory(threadId, msgs) > 0
                     // 【P3 Task 8】状态写入经 ViewModel 意图(裁定逻辑原样)
                     chatVm.send(ChatIntent.RoundsAdvancedIfBeyond(plan.requestedRounds))
                     // 截断位与身份索引可信位跟随最新回包(sequence 坐标系随之校准)
@@ -3216,159 +3141,43 @@ fun ChatScreen(
     // goal 本地库兜底):有则显示一行,无则不占位。
     val threadGoalLine = remember(threadId) { mutableStateOf<String?>(null) } // 【PF4】换会话重置,理由同 threadWorkspace
     LaunchedEffect(threadId, connectionEpoch, reloadToken) {
+        // 【2026-10-09 效果层外移 · 任务1】本效果的 RPC/getThread/历史回填/快照兜底
+        // 整体收进 ChatViewModel 三阶段方法(行为零变化);滚动锚定是 UI 副作用 ——
+        // VM 返回结果对象,这里只按结果位做 listState.scrollToItem(到底,原式)。
+        //
         // 【P1-4 阶段 D · 离线快照】已知断网(down)进页且时间线还没内容:
         // 直接用本地只读副本渲染 + 顶部横幅 + 输入停用。checking 是巡检中间态,
         // 不算断网;有连接时行为完全不变。恢复连接会触发 connectionEpoch 变化
         // 重跑本效果,由在线分支把 offlineSnapshot 归位。
         if (st.items.isEmpty()) {
-            val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
-            if (snap != null) {
-                st.items.clear()
-                // 【深优 R2 修复】快照里的真实时间戳必须带上 —— 此前在这里被丢弃,
-                // 且快照非空会跳过下面的在线加载,导致历史导航的日期分组全程失效
-                st.items.addAll(snap.map {
-                    ChatItem(role = it.role, text = it.text, sentAtMs = it.savedAtMs, id = nextChatItemId(it.role))
-                })
-                TurnSession.enforceTimelineCap(st)
-                if (st.items.isNotEmpty()) listState.scrollToItem(st.items.size - 1)
-                // 【P3 Task 8】离线快照标志经 ViewModel 意图落位(在线路径不动身份索引)
-                chatVm.send(ChatIntent.ShowOfflineSnapshot(dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)))
-                // 【P3 Task 8 第二层】快照黄条比红条有信息量:清掉加载错误(原 loadError = null)
-                chatVm.send(ChatIntent.LoadErrorCleared)
-            }
-            // 无快照(null):不伪造内容,继续走在线加载(失败时按原有报错分支提示)
-        }
-        try {
-            val t = withContext(Dispatchers.IO) {
-                AgentConnection.threadService().getThread(GetThreadRequest.newBuilder().setThreadId(threadId).build())
-            }
-            // 【P3 Task 8 第二层】会话元数据四项(title/status/workspace/agentId)
-            // 一次落位经 ViewModel;三条原式(空标题不覆盖/空工作区→null/空
-            // agentId→"codex")收进 reducer(ThreadHeaderLoaded)。
-            chatVm.send(
-                ChatIntent.ThreadHeaderLoaded(
-                    title = t.title,
-                    status = t.status,
-                    workspace = t.workspace,
-                    agentId = t.agentId,
-                ),
-            )
-            // 【P1-6】顺手把会话名交给通知模块:后台轮次完成时,通知标题用真实会话名
-            PaNotifications.rememberTitle(threadId, t.title)
-            if (AgentConnection.threadModel(threadId) == null) AgentConnection.setThreadModel(threadId, t.modelId)
-            if (AgentConnection.threadEffort(threadId) == null) AgentConnection.setThreadEffort(threadId, t.effort)
-            // 会话真实生效模型(daemon 落库):模型芯片/弹窗选中态的数据源
-            threadModelId = t.modelId
-            if(st.replyCh==null) st.pendingApproval=t.pendingApprovalsList.firstOrNull()
-            if (!st.running && !st.recovering) {
-                if(t.status==ThreadStatus.THREAD_STATUS_RUNNING) TurnSession.retryRecovery(threadId)
-                else if(t.lastTurnError.isNotBlank()) st.errorMessage=t.lastTurnError
-            }
-            // 目标回读(只增):daemon 在 GetThread 里现读 codex 的 thread/goal/get,
-            // 这里只管把"目标:xxx"文案算出来;读不到/没设目标时为 null,不占位。
-            threadGoalLine.value = GoalDisplayLogic.goalLine(t)
-        } catch (e: Exception) {
-            // 【P3 Task 8 第二层】getThread 失败经 ViewModel(LoadErrorReported)
-            chatVm.send(ChatIntent.LoadErrorReported("无法加载会话：${e.message ?: "连接失败"}"))
-        }
-        try {
-            // 后台轮次进行中(或已有实时列表)时不覆盖
-            if (!st.running && !st.recovering &&
-                (st.items.isEmpty() || connectionEpoch > 0 || reloadToken > 0)
-            ) {
-                // 【F-D 历史按轮加载】只拉最近 historyRoundsLoaded 轮(设置档位起步,
-                // 「加载更早」累加);重连/刷新沿用累计轮数,视图不缩水。导出、
-                // 恢复/resync(TurnSession)与导出面板仍走全量,与这里互不影响。
-                val resp = withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().getThreadHistory(
-                        openThreadHistoryRequest(threadId, historyRoundsLoaded),
-                    )
-                }
-                // 【F-D】是否被截断决定时间线顶部「加载更早」的显隐(纯函数在
-                // HistoryRoundsLogic,JVM 单测钉住;空响应=还没有历史,不显示)
-                val truncated = HistoryRoundsLogic.canLoadEarlier(
-                    firstRole = resp.messagesList.firstOrNull()?.role,
-                    roundCount = resp.messagesList.count { it.role == "user" },
-                    requestedRounds = historyRoundsLoaded,
-                )
-                if (resp.messagesList.isNotEmpty()) {
-                    // 【Task 7】落地同时重建消息级身份索引(message_id→时间线跨度,
-                    // 搜索命中定位的数据底座)与「已加载最旧 id」锚点(加载更早
-                    // 防重复拉取用)。
-                    val (items, spans) = buildHistoryBatch(resp.messagesList)
-                    st.items.clear()
-                    st.items.addAll(items)
-                    // C3:整表回填后统一封顶(超 400 中间截断)
-                    TurnSession.enforceTimelineCap(st)
-                    // 【P3 Task 8】身份索引/最旧锚点/截断位经 ViewModel 一次落位
-                    // (knownTotal 保留在 reducer 内,普通拉取不洗掉搜索回包的全量基准)
-                    chatVm.send(
-                        ChatIntent.HistoryTailLoaded(
-                            spans = spans,
-                            oldestMessageId = resp.messagesList.first().messageId,
-                            truncated = truncated,
-                        ),
-                    )
-                    listState.scrollToItem(st.items.size - 1)
-                }
-                // 【P3 Task 8】截断位在 if 外落位(原语义:空回包也更新入口显隐;
-                // 非空回包与 HistoryTailLoaded 落同值,幂等)
-                chatVm.send(ChatIntent.TruncationSettled(truncated))
-                // 【离线快照】成功后落一份本地只读副本(只留 role+text:
-                // 图片/工具结果离线圈不了,宁可少显示也不能错显示)。
-                // 【深优 R2 修复】时间戳随行保存 —— 此前整列剥掉,快照恢复后
-                // 历史导航的日期分组全部退化为「早前」。
-                dev.pocketagent.app.ui.component.ThreadSnapshot.saveMessages(
-                    threadId,
-                    st.items
-                        .filter { it.role != "tool" && it.attachments.isEmpty() && it.text.isNotBlank() }
-                        .map { dev.pocketagent.app.ui.component.ThreadSnapshot.Msg(it.role, it.text, it.sentAtMs) },
-                )
-            }
-            st.historyLoaded = true
-            // 【P3 Task 8】恢复在线撤掉残留的离线提示(flag + 落盘时间成对清)
-            chatVm.send(ChatIntent.BackOnline)
-            // 【P3 Task 8 第二层】只清「离线」前缀残留的条件收进 reducer(原式
-            // `if (loadError?.startsWith("离线") == true) loadError = null`)
-            chatVm.send(ChatIntent.LoadErrorClearedIfOffline)
-        } catch (e: Exception) {
-            // 连不上:有快照就渲染快照 + 顶部横幅(输入同时停用),没有才报错(保持原行为)。
-            val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
-            if (!snap.isNullOrEmpty() && st.items.isEmpty()) {
-                st.items.clear()
-                st.items.addAll(snap.map {
-                    ChatItem(role = it.role, text = it.text, id = nextChatItemId(it.role))
-                })
-                TurnSession.enforceTimelineCap(st)
+            if (chatVm.prefillOfflineSnapshot(threadId) && st.items.isNotEmpty()) {
                 listState.scrollToItem(st.items.size - 1)
-                // 快照条目没有 daemon 身份:身份索引一并作废(离线下搜索本就不可达,
-                // 重连重建 —— 绝不让旧索引把命中指进快照列表)
-                // 【P3 Task 8】resetIdentity = true 对应迁出前的索引/锚点清空
-                chatVm.send(
-                    ChatIntent.ShowOfflineSnapshot(
-                        dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId),
-                        resetIdentity = true,
-                    ),
-                )
-                // 【P3 Task 8 第二层】快照兜底不报错:清掉加载错误(原 loadError = null)
-                chatVm.send(ChatIntent.LoadErrorCleared)
-            } else {
-                chatVm.send(ChatIntent.LoadErrorReported("无法加载会话历史：${e.message ?: "连接失败"}"))
-                chatVm.send(ChatIntent.BackOnline)
             }
+            // 无快照:不伪造内容,继续走在线加载(失败时按原有报错分支提示)
         }
+        // 阶段②getThread:失败已按原文案落 loadError 横幅(返回 null);成功回填
+        // 会话真实生效模型(daemon 落库,模型芯片/弹窗选中态的数据源)与目标顶栏文案
+        chatVm.loadThreadHead(threadId)?.let { head ->
+            threadModelId = head.modelId
+            threadGoalLine.value = head.goalLine
+        }
+        // 阶段③历史尾部回填(含失败快照兜底;后台轮次进行中/已有实时列表时门控在 VM 内原式)
+        val tail = chatVm.loadHistoryTail(threadId, historyRoundsLoaded, connectionEpoch, reloadToken)
+        if (tail.backfilled) listState.scrollToItem(st.items.size - 1)
+        if (tail.snapshotFallback) listState.scrollToItem(st.items.size - 1)
     }
 
     /**
      * 【F-D 加载更早 / Task 7 升级】时间线顶部入口:累计轮数再加一个设置档位重拉。
      * daemon 幂等返回尾部,本次回包 = 更早新增段 + 已加载部分 —— 落地走
-     * [prependHistoryMessages]:按「已加载最旧 message id」锚点只把头部新消息
+     * [ChatViewModel.fetchEarlierHistory]→[ChatViewModel.prependHistory]:
+     * 按「已加载最旧 message id」锚点只把头部新消息
      * 拼到列表前,**不做整列表替换**(已加载条目引用不变,不整表重组;回包没有
      * 新消息时零列表变动,重复拉取无副作用)。旧 daemon 无 id 时退条数兜底,
      * 行为等价旧的"整体替换但 delta 修正"。
      *
      * 滚动锚点(保留):拉取前记 LazyListState 的 firstVisibleItem(下标+偏移),
-     * 头部拼接后旧条目整体下移 delta = 新拼入条目数,锚点下标 + delta 就是原来
+     * 头部拼接后旧条目整体下移 delta = 新拼入条数,锚点下标 + delta 就是原来
      * 那条消息,页面不跳动;锚点在 0(「加载更早」按钮自己)说明用户已翻到顶,
      * 直接回列表顶部。
      */
@@ -3380,26 +3189,16 @@ fun ChatScreen(
         scope.launch {
             try {
                 val next = HistoryRoundsLogic.nextRounds(historyRoundsLoaded, AgentConnection.historyRounds)
-                val resp = withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().getThreadHistory(openThreadHistoryRequest(threadId, next))
-                }
-                if (resp.messagesList.isNotEmpty()) {
-                    val delta = prependHistoryMessages(resp.messagesList)
-                    chatVm.send(ChatIntent.RoundsAdvanced(next))
-                    val target = if (anchorIndex <= 0) 0 else (anchorIndex + delta).coerceAtMost(st.items.size - 1)
+                // 【2026-10-09 效果层外移】RPC+头部拼接+轮数/截断位落位在
+                // ChatViewModel.fetchEarlierHistory;这里只按结果做滚动锚定:
+                // 头部拼接后旧条目整体下移 delta = 新拼入条数,锚点下标 + delta 就是
+                // 原来那条消息,页面不跳动;锚点在 0(「加载更早」按钮自己)说明用户
+                // 已翻到顶,直接回列表顶部。回包为空(receivedCount==0)不滚动(原式)。
+                val r = chatVm.fetchEarlierHistory(threadId, next)
+                if (r.receivedCount > 0) {
+                    val target = if (anchorIndex <= 0) 0 else (anchorIndex + r.appendedCount).coerceAtMost(st.items.size - 1)
                     listState.scrollToItem(target, if (anchorIndex <= 0) 0 else anchorOffset)
                 }
-                // 身份索引的"已到全量"可信位跟随最新截断位(sequence 兼容定位用)
-                // 【P3 Task 8】截断位与可信位经 ViewModel 成对落位
-                chatVm.send(
-                    ChatIntent.TruncationSettled(
-                        HistoryRoundsLogic.canLoadEarlier(
-                            firstRole = resp.messagesList.firstOrNull()?.role,
-                            roundCount = resp.messagesList.count { it.role == "user" },
-                            requestedRounds = next,
-                        ),
-                    ),
-                )
             } catch (e: Exception) {
                 Toast.makeText(ctx, "加载更早失败：${e.message ?: "连接失败"}", Toast.LENGTH_SHORT).show()
             } finally {
@@ -3466,10 +3265,9 @@ fun ChatScreen(
         forkBusy = true
         scope.launch {
             try {
-                val nt = withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().forkThread(
-                        ForkThreadRequest.newBuilder().setThreadId(threadId).build())
-                }
+                // 【2026-10-09 效果层外移】RPC 在 ChatViewModel.forkThread(Result 形态);
+                // getOrThrow 让失败从原 RPC 抛出点浮出,catch/finally 文案与语义零变化。
+                val nt = chatVm.forkThread(threadId).getOrThrow()
                 Toast.makeText(ctx, "已分叉出「${nt.title}」", Toast.LENGTH_SHORT).show()
                 onOpenThread(nt.id)
             } catch (e: Exception) {
@@ -3486,13 +3284,8 @@ fun ChatScreen(
         rollbackBusy = true
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().rollbackThread(
-                        RollbackThreadRequest.newBuilder()
-                            .setThreadId(threadId)
-                            .setNumTurns(turns)
-                            .build())
-                }
+                // RPC 在 ChatViewModel.rollbackThread(Result 形态)
+                chatVm.rollbackThread(threadId, turns).getOrThrow()
                 rollbackOpen.value = false
                 // 重新拉一次历史:daemon 会把本地历史裁掉,但手机端手上那份还是旧的,
                 // 不重拉就会出现"回滚了但屏幕上那几条还在"。
@@ -3517,11 +3310,8 @@ fun ChatScreen(
         showMore.value = false
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().compactThread(
-                        CompactThreadRequest.newBuilder().setThreadId(threadId).build(),
-                    )
-                }
+                // RPC 在 ChatViewModel.compactThread(Result 形态)
+                chatVm.compactThread(threadId).getOrThrow()
                 Toast.makeText(ctx, "已请求压缩上下文,完成后会显示压缩状态", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(ctx, e.message ?: "压缩上下文失败", Toast.LENGTH_LONG).show()
@@ -3549,14 +3339,9 @@ fun ChatScreen(
         reviewBusy = true
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().startReview(
-                        StartReviewRequest.newBuilder()
-                            .setThreadId(threadId)
-                            .setFocus(focus)
-                            .build(),
-                    )
-                }
+                // RPC 在 ChatViewModel.startReview(Result 形态);review/start 是
+                // "发起即回",审查产出以事件流回本会话,这里不需要任何后续轮询
+                chatVm.startReview(threadId, focus).getOrThrow()
                 Toast.makeText(ctx, "已发起计划审查,结果将以事件形式出现在会话中", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
                 Toast.makeText(ctx, slashReviewFailureMessage(e), Toast.LENGTH_LONG).show()
@@ -3581,17 +3366,15 @@ fun ChatScreen(
     fun clearQueuedInputs() {
         scope.launch {
             try {
-                val resp = withContext(Dispatchers.IO) {
-                    AgentConnection.threadService().clearQueuedInputs(
-                        ClearQueuedInputsRequest.newBuilder().setThreadId(threadId).build(),
-                    )
-                }
+                // 【2026-10-09 效果层外移】RPC 在 ChatViewModel.clearQueuedInputs
+                // (Result 形态,回执条数原样);镜像归零与排队气泡回收照旧在本页落地
+                val counts = chatVm.clearQueuedInputs(threadId).getOrThrow()
                 st.queuedCount = 0
                 clearDeliveryTags(st.items.toList(), queuedOnly = true)?.let { replaced ->
                     st.items.clear()
                     st.items.addAll(replaced)
                 }
-                Toast.makeText(ctx, queueClearedNotice(resp.steered, resp.followUp), Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, queueClearedNotice(counts.steered, counts.followUp), Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(ctx, queueClearFailureMessage(e), Toast.LENGTH_LONG).show()
             }
@@ -3725,7 +3508,7 @@ fun ChatScreen(
                         // 【P3 Task 8 第二层】重试清错误经 ViewModel(原 loadError = null)
                         chatVm.send(ChatIntent.LoadErrorCleared)
                         codexSettings = null
-                        models = emptyList()
+                        chatVm.send(ChatIntent.ModelListReset)
                         reloadToken++
                     }
                 },
@@ -4010,6 +3793,9 @@ fun ChatScreen(
             threadId = threadId,
             ctx = ctx,
             scope = scope,
+            // 【2026-10-09 效果层外移】SetThreadGoal RPC 收进 ChatViewModel.setThreadGoal
+            // (Result 形态);面板内 Toast/关闭/目标文案刷新语义零变化
+            onSetGoal = { chatVm.setThreadGoal(threadId, it) },
         )
     }
 

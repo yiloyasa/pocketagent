@@ -7,18 +7,19 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -760,45 +762,54 @@ private fun ControlNumberEditDialog(
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = PaEditorial.Surface,
-        title = { Text(item.label, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink) },
-        text = {
-            Column {
-                Text("当前:${item.current}", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered + 输入行;M3 底部文字钮
+    // 重排为编辑式按钮行(取消/保存)。语义零变化:onDismiss = 遮罩/返回/取消同通道,
+    // 校验失败不关闭、RPC 失败错误留在弹窗内。
+    PaSheet(onDismissRequest = onDismiss, centered = true) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+            Text(item.label, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
+            Spacer(Modifier.height(8.dp))
+            Text("当前:${item.current}", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = text,
+                // 只保留数字;光标位置由 TextFieldValue 自带(见 [budgetInputValue])。
+                onValueChange = { v -> text = v.copy(text = v.text.filter { c -> c.isDigit() }) },
+                singleLine = true,
+                label = { Text("新上限($unit)", fontSize = PaEditorial.Type.BodySmall.fontSize) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (error != null) {
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = text,
-                    // 只保留数字;光标位置由 TextFieldValue 自带(见 [budgetInputValue])。
-                    onValueChange = { v -> text = v.copy(text = v.text.filter { c -> c.isDigit() }) },
-                    singleLine = true,
-                    label = { Text("新上限($unit)", fontSize = PaEditorial.Type.BodySmall.fontSize) },
+                Text(error!!, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.DeniedText)
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                RuntimeSheetDialogButton(
+                    text = "取消",
+                    tones = RuntimeSheetButtonTones.secondary,
+                    modifier = Modifier.weight(1f),
+                    onClick = onDismiss,
                 )
-                if (error != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(error!!, fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
+                RuntimeSheetDialogButton(
+                    text = "保存",
+                    tones = RuntimeSheetButtonTones.primary,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    val n = text.text.toLongOrNull()
+                    if (n == null) {
+                        error = "请填一个非负整数"
+                        return@RuntimeSheetDialogButton
+                    }
+                    scope.launch {
+                        ControlPlaneState.applyNumber(item.domainId, item.id, n)
+                            .onSuccess { onResult() }
+                            .onFailure { error = it.message }
+                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val n = text.text.toLongOrNull()
-                if (n == null) {
-                    error = "请填一个非负整数"
-                    return@TextButton
-                }
-                scope.launch {
-                    ControlPlaneState.applyNumber(item.domainId, item.id, n)
-                        .onSuccess { onResult() }
-                        .onFailure { error = it.message }
-                }
-            }) { Text("保存", color = PaEditorial.Primary) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = PaEditorial.Muted) }
-        },
-    )
+        }
+    }
 }
 
 /**
@@ -821,55 +832,61 @@ private fun ControlSelectEditDialog(
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = PaEditorial.Surface,
-        title = { Text(item.label, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink) },
-        text = {
-            Column {
-                Text("当前:${item.current}", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
-                Spacer(Modifier.height(8.dp))
-                item.options.forEach { opt ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .pressable { selected = opt },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = selected == opt,
-                            onClick = { selected = opt },
-                        )
-                        Text(opt, fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
-                    }
-                }
-                if (item.hint.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(item.hint, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
-                }
-                if (error != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(error!!, fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;单选行/提示/错误原样,
+    // M3 底部文字钮重排为编辑式按钮行。语义零变化:onDismiss = 遮罩/返回/取消同
+    // 通道;未预选(现值不在候选)时保存禁用;RPC 失败错误留在弹窗内。
+    PaSheet(onDismissRequest = onDismiss, centered = true) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+            Text(item.label, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
+            Spacer(Modifier.height(8.dp))
+            Text("当前:${item.current}", fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted)
+            Spacer(Modifier.height(8.dp))
+            item.options.forEach { opt ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressable { selected = opt },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = selected == opt,
+                        onClick = { selected = opt },
+                    )
+                    Text(opt, fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Ink)
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = selected != null,
-                onClick = {
-                    val v = selected ?: return@TextButton
+            if (item.hint.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(item.hint, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
+            }
+            if (error != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(error!!, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.DeniedText)
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                RuntimeSheetDialogButton(
+                    text = "取消",
+                    tones = RuntimeSheetButtonTones.secondary,
+                    modifier = Modifier.weight(1f),
+                    onClick = onDismiss,
+                )
+                RuntimeSheetDialogButton(
+                    text = "保存",
+                    tones = RuntimeSheetButtonTones.primary,
+                    enabled = selected != null,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    val v = selected ?: return@RuntimeSheetDialogButton
                     scope.launch {
                         ControlPlaneState.applySelect(item.domainId, item.id, v, item.options)
                             .onSuccess { onDismiss() }
                             .onFailure { error = it.message }
                     }
-                },
-            ) { Text("保存", color = PaEditorial.Primary) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = PaEditorial.Muted) }
-        },
-    )
+                }
+            }
+        }
+    }
 }
 
 /** 恢复横幅:降级摘要 + **逐条**"哪句没跑到"(只报条数等于没说)。 */
@@ -1074,55 +1091,69 @@ private fun BudgetEditDialog(
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = PaEditorial.Surface,
-        title = { Text(row.label, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = text,
-                    // 只保留数字;光标位置由 TextFieldValue 自带(见 [budgetInputValue])。
-                    onValueChange = { v -> text = v.copy(text = v.text.filter { c -> c.isDigit() }) },
-                    singleLine = true,
-                    label = { Text("新上限($unit)", fontSize = PaEditorial.Type.BodySmall.fontSize) },
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered + 输入行;三个动作按
+    // PaSheet 约定重排:「恢复默认」为按钮行上方的安静文字动作(不挤主行),
+    // 主行 = 取消/保存(M3 dismiss/confirm 布局不同,按 PaSheet 内容约定重排)。
+    // 语义零变化:恢复默认仍走 saveRuntimeEdit(key, null);onDismiss = 遮罩/返回/
+    // 取消同通道;校验失败不关闭、RPC 失败错误留在弹窗内。
+    PaSheet(onDismissRequest = onDismiss, centered = true) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+            Text(row.label, fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = text,
+                // 只保留数字;光标位置由 TextFieldValue 自带(见 [budgetInputValue])。
+                onValueChange = { v -> text = v.copy(text = v.text.filter { c -> c.isDigit() }) },
+                singleLine = true,
+                label = { Text("新上限($unit)", fontSize = PaEditorial.Type.BodySmall.fontSize) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (error != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(error!!, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.DeniedText)
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                RuntimeSheetDialogButton(
+                    text = "取消",
+                    tones = RuntimeSheetButtonTones.secondary,
+                    modifier = Modifier.weight(1f),
+                    onClick = onDismiss,
                 )
-                if (error != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(error!!, fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
+                RuntimeSheetDialogButton(
+                    text = "保存",
+                    tones = RuntimeSheetButtonTones.primary,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    val n = text.text.toLongOrNull()
+                    if (n == null) {
+                        error = "请填一个非负整数"
+                        return@RuntimeSheetDialogButton
+                    }
+                    scope.launch {
+                        // 字节类键的输入单位是 MB,必须换算成字节再写(与控制中心
+                        // applyControlBudgetNumber 同一口径)。修复存量 bug:旧实现
+                        // 把「8 MB」的 8 原样写成 8 字节 —— 与窗口显示的现值差一百万
+                        // 倍,而字节字段小值=把该类资源预算砍到几乎为零。
+                        val scaled = if (unit == "MB") n shl 20 else n
+                        val err = saveRuntimeEdit(row.key, scaled)
+                        if (err != null) error = err else onResult(null)
+                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val n = text.text.toLongOrNull()
-                if (n == null) {
-                    error = "请填一个非负整数"
-                    return@TextButton
-                }
-                scope.launch {
-                    // 字节类键的输入单位是 MB,必须换算成字节再写(与控制中心
-                    // applyControlBudgetNumber 同一口径)。修复存量 bug:旧实现
-                    // 把「8 MB」的 8 原样写成 8 字节 —— 与窗口显示的现值差一百万
-                    // 倍,而字节字段小值=把该类资源预算砍到几乎为零。
-                    val scaled = if (unit == "MB") n shl 20 else n
-                    val err = saveRuntimeEdit(row.key, scaled)
-                    if (err != null) error = err else onResult(null)
-                }
-            }) { Text("保存", color = PaEditorial.Primary) }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = {
+            Spacer(Modifier.height(10.dp))
+            // 次要动作「恢复默认」:安静一行的文字动作,与主行拉开层级
+            TextButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
                     scope.launch {
                         val err = saveRuntimeEdit(row.key, null)
                         if (err != null) error = err else onResult(null)
                     }
-                }) { Text("恢复默认", color = PaEditorial.Muted) }
-                TextButton(onClick = onDismiss) { Text("取消", color = PaEditorial.Muted) }
-            }
-        },
-    )
+                },
+            ) { Text("恢复默认", color = PaEditorial.Muted) }
+        }
+    }
 }
 
 /** 只取现值的数字部分("8 MB" → "8"),避免把单位当输入内容回填。 */
@@ -1358,37 +1389,51 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
     }
 
     // ---- 清除确认:独立弹窗,文案把"动什么/不动什么"说死 ----
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;危险确认钮用 Denied
+    // 色槽。语义零变化:提交中(clearing)时遮罩/返回/取消都不再关(原 onDismissRequest
+    // 的 !clearing 门控原样保留);确认钮的乐观更新/快照回滚链路一字不动。
     pendingClear?.let { target ->
-        AlertDialog(
+        PaSheet(
             onDismissRequest = { if (!clearing) pendingClear = null },
-            containerColor = PaEditorial.Surface,
-            title = {
-                Text("清除这个会话的记忆?", fontSize = PaEditorial.Type.Heading.fontSize, color = PaEditorial.Ink)
-            },
-            text = {
-                Column {
-                    Text(
-                        target.threadId,
-                        fontSize = PaEditorial.Type.Caption.fontSize,
-                        fontFamily = PaEditorial.MonoFont,
-                        color = PaEditorial.Muted,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "只清除 PocketAgent 在电脑端记的这份会话记忆" +
-                            "(${target.entries} 条 · ${formatBytesLabel(target.bytes)})，" +
-                            "不动电脑端原生程序里的会话内容。清除后这个会话的记忆从零开始。",
-                        fontSize = PaEditorial.Type.BodySmall.fontSize,
-                        color = PaEditorial.Muted,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !clearing,
-                    onClick = {
+            centered = true,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    "清除这个会话的记忆?",
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    target.threadId,
+                    fontSize = PaEditorial.Type.Caption.fontSize,
+                    fontFamily = PaEditorial.MonoFont,
+                    color = PaEditorial.Muted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "只清除 PocketAgent 在电脑端记的这份会话记忆" +
+                        "(${target.entries} 条 · ${formatBytesLabel(target.bytes)})，" +
+                        "不动电脑端原生程序里的会话内容。清除后这个会话的记忆从零开始。",
+                    fontSize = PaEditorial.Type.BodySmall.fontSize,
+                    color = PaEditorial.Muted,
+                )
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    RuntimeSheetDialogButton(
+                        text = "取消",
+                        tones = RuntimeSheetButtonTones.secondary,
+                        enabled = !clearing,
+                        modifier = Modifier.weight(1f),
+                    ) { pendingClear = null }
+                    RuntimeSheetDialogButton(
+                        text = "清除",
+                        tones = RuntimeSheetButtonTones.danger,
+                        enabled = !clearing,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         clearing = true
                         rollbackNote = null
                         // 冻结快照:失败回滚还原的是"点确认那一刻"的界面。
@@ -1414,16 +1459,10 @@ private fun ThreadMemorySheet(agentId: String, onDismiss: () -> Unit) {
                             clearing = false
                             pendingClear = null
                         }
-                    },
-                ) { Text("清除", color = EditorialTone.DENIED.text) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !clearing,
-                    onClick = { pendingClear = null },
-                ) { Text("取消", color = PaEditorial.Muted) }
-            },
-        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1455,5 +1494,55 @@ private fun MemoryThreadRow(row: ThreadMemoryRowUi, clearing: Boolean, onClear: 
         TextButton(onClick = onClear, enabled = !clearing) {
             Text("清除", fontSize = PaEditorial.Type.BodySmall.fontSize, color = EditorialTone.DENIED.text)
         }
+    }
+}
+
+// ---- PaSheet centered 弹窗的编辑式按钮(D2 模态家族统一;规格照抄
+// PaApprovalDialog 的 ApprovalButton:≥50dp 触达、IconButton 圆角、三档色调)----
+
+/** 弹窗按钮的编辑式色调(容器/描边/内容三色,一律取 PaEditorial 槽位)。 */
+private data class RuntimeSheetButtonTones(val container: Color, val outline: Color, val content: Color) {
+    companion object {
+        /** 主操作:石墨实底白字(README:主操作用石墨重点面)。 */
+        val primary get() = RuntimeSheetButtonTones(PaEditorial.Graphite, PaEditorial.Graphite, PaEditorial.OnGraphite)
+
+        /** 次操作(取消):浅底描边。 */
+        val secondary get() = RuntimeSheetButtonTones(PaEditorial.Raised, PaEditorial.Hairline, PaEditorial.Ink)
+
+        /** 危险确认:浅珊瑚底 + 珊瑚描边 + 加深珊瑚字(PaApprovalDialog .danger 同款)。 */
+        val danger get() = RuntimeSheetButtonTones(
+            PaEditorial.DeniedContainer,
+            PaEditorial.Denied.copy(alpha = 0.35f),
+            PaEditorial.DeniedText,
+        )
+    }
+}
+
+@Composable
+private fun RuntimeSheetDialogButton(
+    text: String,
+    tones: RuntimeSheetButtonTones,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
+    Row(
+        modifier
+            .heightIn(min = 50.dp) // 最小触达纪律
+            .background(if (enabled) tones.container else tones.container.copy(alpha = 0.55f), shape)
+            .border(1.dp, if (enabled) tones.outline else tones.outline.copy(alpha = 0.55f), shape)
+            .pressable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text,
+            fontSize = PaEditorial.Type.Body.fontSize,
+            fontWeight = FontWeight.SemiBold,
+            color = (if (enabled) tones.content else tones.content.copy(alpha = 0.55f)),
+            maxLines = 1,
+        )
     }
 }

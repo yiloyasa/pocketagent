@@ -267,7 +267,8 @@ object OfflineStore {
 
     /**
      * 一份网页快照:原始字节 + MIME + 建议文件名 + 截至时刻。
-     * [capturedAt] 是快照的"截至哪一刻"(epoch ms,取自快照文件修改时间);
+     * [capturedAt] 是快照的"截至哪一刻"(epoch ms,新格式取自**文件名内嵌**的
+     * 十六进制时间戳,旧格式回退文件修改时间,见 [getUrl]);
      * <=0 = 存量快照无可靠时间戳,展示层回退旧文案(不编造时间)。
      */
     data class UrlSnapshot(val bytes: ByteArray, val mime: String, val name: String, val capturedAt: Long = 0L) {
@@ -288,13 +289,30 @@ object OfflineStore {
         }
     }
 
-    /** 存一份网页快照。文件名 = md5(url) + "." + hex(mime) + "." + hex(name)(mime/name 编码进文件名,免 sidecar)。 */
-    fun putUrl(url: String, bytes: ByteArray, mime: String, name: String) {
+    /**
+     * 存一份网页快照。
+     *
+     * 文件名 = md5(url) + "." + hex(capturedAt) + "." + hex(mime) + "." + hex(name)
+     * —— 与既有 mime/name 同一套"编码进文件名、免 sidecar"方案,capturedAt 以十六进制
+     * epoch 毫秒作 urlhash 后的第一段。读路径按段数区分新旧格式(见 [getUrl]),
+     * 旧格式文件(无时间戳段)不迁移、照常可读。
+     *
+     * @param capturedAtMs 快照"截至哪一刻"(epoch ms),默认写入时刻;
+     *                     <=0 时写 "0" 占位,读路径照旧回退 mtime,不编造时间。
+     */
+    fun putUrl(
+        url: String,
+        bytes: ByteArray,
+        mime: String,
+        name: String,
+        capturedAtMs: Long = System.currentTimeMillis(),
+    ) {
         val d = dirFor("url") ?: return
         if (url.isBlank() || bytes.isEmpty()) return
         runCatching {
             val key = cacheKey(url)
-            File(d, "$key.${hex(mime)}.${hex(name)}").writeBytes(bytes)
+            val capHex = if (capturedAtMs > 0) capturedAtMs.toString(16) else "0"
+            File(d, "$key.$capHex.${hex(mime)}.${hex(name)}").writeBytes(bytes)
             evictIfNeeded("url")
         }
     }
@@ -307,14 +325,33 @@ object OfflineStore {
             val key = cacheKey(url)
             val hit = d.listFiles { f -> f.isFile && f.name.startsWith("$key.") }
                 ?.maxByOrNull { it.lastModified() } ?: return@runCatching null
-            val rest = hit.name.substringAfter("$key.") // "<hexMime>.<hexName>"
-            val mime = unhex(rest.substringBefore('.'))
-            val name = unhex(rest.substringAfter('.', ""))
+            val rest = hit.name.substringAfter("$key.")
+            // 段语义:hex 段内不含点,段数即格式判据 ——
+            //   新格式 "<capturedAtHex>.<hexMime>.<hexName>"(三段);
+            //   旧格式 "<hexMime>.<hexName>"(两段,无时间戳段,mtime 回退)。
+            // >3 段按"首段时间戳 + mime 次段 + 其余原样回拼"防御解析,不抛异常。
+            val segs = rest.split('.')
+            var capturedAt = 0L
+            var mime = ""
+            var name = ""
+            if (segs.size >= 3) {
+                capturedAt = segs[0].toLongOrNull(16) ?: 0L
+                mime = unhex(segs[1])
+                name = unhex(segs.drop(2).joinToString("."))
+            } else {
+                mime = unhex(segs.getOrElse(0) { "" })
+                name = unhex(segs.drop(1).joinToString("."))
+            }
             val bytes = hit.readBytes()
             // 截至时刻必须在 LRU touch 之前读:touch 会把修改时间改写成"本次查看时刻",
-            // 那是"最近看过",不是"网页截至哪一刻"。读失败(0)按无时间戳回退旧文案。
-            val mtime = hit.lastModified()
-            val capturedAt = if (mtime > 0) mtime else 0L
+            // 那是"最近看过",不是"网页截至哪一刻"。新格式的时间戳来自文件名,与 touch
+            // 彻底解耦(第二次查看不再漂移 —— 当年取 mtime 的漂移缺陷就地根治);
+            // 旧格式或时间戳段缺失/非法(<=0)回退 mtime,再不行按 0 = 无时间戳,
+            // 展示层回退旧文案,不编造时间。
+            if (capturedAt <= 0L) {
+                val mtime = hit.lastModified()
+                capturedAt = if (mtime > 0) mtime else 0L
+            }
             runCatching { hit.setLastModified(System.currentTimeMillis()) }
             UrlSnapshot(bytes, mime, name, capturedAt)
         }.getOrNull()

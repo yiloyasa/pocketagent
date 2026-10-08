@@ -89,7 +89,6 @@ import dev.pocketagent.app.ui.component.homeAgentTileState
 import dev.pocketagent.app.ui.component.homeDiscoveryEmptyCopy
 import dev.pocketagent.app.ui.component.homeRecentEmptyCopy
 import dev.pocketagent.app.ui.component.homeShowsRecentSkeleton
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
 import dev.pocketagent.app.ui.theme.paPushBack
@@ -1726,8 +1725,9 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
 /**
  * agent 可用性引导弹窗:灰显磁贴点击后讲清"为什么不可用、怎么装"。
  * 统一玻璃浮层 PaSheet(玻璃底 + 内建滚动与高度上限,防小屏溢出)。
- * 【皮肤说明】浮层是基座玻璃皮肤(随主题换肤),内部沿用 Pa.* 与浮层一致,
- * 不与固定浅色的编辑式令牌混排(否则深色模式下玻璃上放墨字不可读)。
+ * 【皮肤说明】浮层是基座玻璃皮肤(随主题换肤),内部已全部走 PaEditorial 语义槽位
+ * 与 MaterialTheme.editorial(editorialM3Scheme 三盘同灌,深色/黑客盘同构可用)——
+ * 旧 Pa.* 色板引用已清零(PaTheme 的兼容 shim 不再有本页消费点)。
  */
 @Composable
 internal fun AgentGuideSheet(agent: AgentInfo, capabilities: List<String>, onDismiss: () -> Unit) {
@@ -1823,7 +1823,8 @@ private fun PulseDot(color: Color, modifier: Modifier = Modifier, pulse: Boolean
 /**
  * 管理 agent 抽屉:真实图标 + 名称 + 连接方式副标题 + 开关。
  * 统一玻璃浮层 PaSheet;列表滚动交给 PaSheet 内建滚动(高度上限防溢出)。
- * 【皮肤说明】同 AgentGuideSheet:玻璃浮层内部沿用 Pa.*(见上)。
+ * 【皮肤说明】同 AgentGuideSheet:浮层内部已全部走 PaEditorial 语义槽位
+ * 与 MaterialTheme.editorial(旧 Pa.* 引用已清零)。
  */
 @Composable
 fun ManageAgentsSheet(agents: List<AgentInfo>, onDismiss: () -> Unit) {

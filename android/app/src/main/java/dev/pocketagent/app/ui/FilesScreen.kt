@@ -5,12 +5,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -51,10 +54,13 @@ import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
+import dev.pocketagent.app.ui.anim.PaDuotoneMotif
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
+import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaDownloader
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaNavIconButton
+import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.PreviewMode
 import dev.pocketagent.app.ui.component.SkeletonKind
@@ -574,6 +580,8 @@ private fun FilesScreenBody(
                                 AppR.drawable.ic_lucide_monitor,
                                 "没有读到任何盘符",
                                 "确认电脑端 daemon 正在运行,再点右上角「刷新」",
+                                // 发现环母题:读不到盘符 = 没发现/连不上电脑(与 Home 发现态同一意象)
+                                motif = PaDuotoneMotif.DISCOVER_RING,
                             )
                             else -> EmptyState(
                                 AppR.drawable.ic_lucide_folder_plus,
@@ -754,16 +762,18 @@ private fun FilesScreenBody(
 
     // 删除确认:动作发生在**电脑上**(不是手机本地),目录是递归删除,后果不可逆。
     // 语义必须写清:删的是电脑上的文件;Undo 也只能有限恢复(空目录/空文件)。
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered:同一块玻璃材质、同一档
+    // spring 出场;危险确认钮用 Denied 色槽(PaApprovalDialog 的 .danger 同款)。
+    // 语义零变化:点遮罩/返回键 = 取消(pendingDelete = null),确认钮才触发删除。
     pendingDelete?.let { e ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = {
+        PaSheet(onDismissRequest = { pendingDelete = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
                 Text(
                     if (e.isDir) "删除电脑上的文件夹?" else "删除电脑上的文件?",
                     fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
                 )
-            },
-            text = {
+                Spacer(Modifier.height(10.dp))
                 Text(
                     if (e.isDir) {
                         "「${middleEllipsize(e.name, 30)}」及其全部内容将从电脑上永久删除,不进回收站。\n\n" +
@@ -774,42 +784,67 @@ private fun FilesScreenBody(
                     },
                     fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    deleteEntry(e)
-                }) { Text("删除", color = EditorialTone.DENIED.text, fontWeight = FontWeight.SemiBold) }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-        )
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FilesSheetDialogButton(
+                        text = "取消",
+                        tones = FilesSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { pendingDelete = null }
+                    FilesSheetDialogButton(
+                        text = "删除",
+                        tones = FilesSheetButtonTones.danger,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        pendingDelete = null
+                        deleteEntry(e)
+                    }
+                }
+            }
+        }
     }
 
     // 不能内置预览时的引导:说清楚为什么,并给一步到位的下载动作
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;主动作走石墨重点面
+    // (README:主操作用石墨,主色只给"当前操作")。语义零变化:遮罩/返回 = 取消。
     askDownload?.let { e ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { askDownload = null },
-            title = { Text(middleEllipsize(e.name, 30), fontSize = PaEditorial.Type.Heading.fontSize, maxLines = 1) },
-            text = {
+        PaSheet(onDismissRequest = { askDownload = null }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text(
+                    middleEllipsize(e.name, 30),
+                    fontSize = PaEditorial.Type.Heading.fontSize,
+                    color = PaEditorial.Ink,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "${e.kind.label} 这个格式没法在 App 内排版展示。\n" +
                         "下载到手机后,可以用系统里对应的应用打开。",
                     fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    PaDownloader.downloadFromPc(e.path)
-                    PaHaptics.light(view)
-                    android.widget.Toast.makeText(
-                        ctx, "已开始下载 " + e.name, android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                    askDownload = null
-                }) { Text("下载到手机") }
-            },
-            dismissButton = { TextButton(onClick = { askDownload = null }) { Text("取消") } },
-        )
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FilesSheetDialogButton(
+                        text = "取消",
+                        tones = FilesSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { askDownload = null }
+                    FilesSheetDialogButton(
+                        text = "下载到手机",
+                        tones = FilesSheetButtonTones.primary,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        PaDownloader.downloadFromPc(e.path)
+                        PaHaptics.light(view)
+                        android.widget.Toast.makeText(
+                            ctx, "已开始下载 " + e.name, android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        askDownload = null
+                    }
+                }
+            }
+        }
     }
 
     if (drawerCtrl.visible) {
@@ -874,5 +909,55 @@ private fun FilesScreenBody(
                 }
             }
         }
+    }
+}
+
+// ---- PaSheet centered 弹窗的编辑式按钮(D2 模态家族统一;规格照抄
+// PaApprovalDialog 的 ApprovalButton:≥50dp 触达、IconButton 圆角、三档色调)----
+
+/** 弹窗按钮的编辑式色调(容器/描边/内容三色,一律取 PaEditorial 槽位)。 */
+private data class FilesSheetButtonTones(val container: Color, val outline: Color, val content: Color) {
+    companion object {
+        /** 主操作:石墨实底白字(README:主操作用石墨重点面)。 */
+        val primary get() = FilesSheetButtonTones(PaEditorial.Graphite, PaEditorial.Graphite, PaEditorial.OnGraphite)
+
+        /** 次操作(取消):浅底描边。 */
+        val secondary get() = FilesSheetButtonTones(PaEditorial.Raised, PaEditorial.Hairline, PaEditorial.Ink)
+
+        /** 危险确认:浅珊瑚底 + 珊瑚描边 + 加深珊瑚字(PaApprovalDialog .danger 同款)。 */
+        val danger get() = FilesSheetButtonTones(
+            PaEditorial.DeniedContainer,
+            PaEditorial.Denied.copy(alpha = 0.35f),
+            PaEditorial.DeniedText,
+        )
+    }
+}
+
+@Composable
+private fun FilesSheetDialogButton(
+    text: String,
+    tones: FilesSheetButtonTones,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
+    Row(
+        modifier
+            .heightIn(min = 50.dp) // 最小触达纪律
+            .background(if (enabled) tones.container else tones.container.copy(alpha = 0.55f), shape)
+            .border(1.dp, if (enabled) tones.outline else tones.outline.copy(alpha = 0.55f), shape)
+            .pressable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text,
+            fontSize = PaEditorial.Type.Body.fontSize,
+            fontWeight = FontWeight.SemiBold,
+            color = (if (enabled) tones.content else tones.content.copy(alpha = 0.55f)),
+            maxLines = 1,
+        )
     }
 }
