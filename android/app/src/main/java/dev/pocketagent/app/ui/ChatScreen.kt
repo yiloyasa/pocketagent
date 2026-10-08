@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -3660,20 +3661,42 @@ fun ChatScreen(
         // "Agent·工作区+状态点"跟在标题旁,不再单独占一张大卡);本槽仅在断线时
         // 出现内容 —— 未连接时状态仍显示上次更新,绝不出现"正在执行"。
         // 【C1 拆分】主机状态槽迁至 ui/chat/ChatComposer.kt(ChatHostStatusArea)
-        val chatHostStatus: @Composable () -> Unit = {
-            ChatHostStatusArea(
-                connDown = connDown,
-                hostName = hostName,
-                offlineSnapshotAt = offlineSnapshotAt,
-                chatBanner = chatBanner,
-                onReload = { reloadToken++ },
-            )
+        // 【P2-9 同批(插槽稳定性)】hostStatus 插槽 lambda remember 化:key = 捕获的
+        // 裸值(connDown/offlineSnapshotAt)+ remember 态(chatBanner);hostName/
+        // reloadToken 是状态委托,读取在执行时,不进 key。
+        val chatHostStatus: @Composable () -> Unit = remember(
+            connDown, offlineSnapshotAt, chatBanner,
+        ) {
+            val slot: @Composable () -> Unit = {
+                ChatHostStatusArea(
+                    connDown = connDown,
+                    hostName = hostName,
+                    offlineSnapshotAt = offlineSnapshotAt,
+                    chatBanner = chatBanner,
+                    onReload = { reloadToken++ },
+                )
+            }
+            slot
         }
         // 【C1 拆分】底部输入区整体迁至 ui/chat/ChatComposer.kt(ChatComposerArea);
         // 此处只保留薄委托,两条骨架的输入区外壳(黑客终端/编辑式)不变。
         // 【P2-10】草稿以 provider 形态传入:参数在 ChatComposerArea 内部读取,
         // 击键只重组输入区子树,不再把整页订阅到 st.draft。
-        val chatComposerBody: @Composable ColumnScope.() -> Unit = {
+        // 【P2-9 同批(插槽稳定性)】本 lambda 也是 PaScreenScaffold bottomBar 插槽的
+        // 内容体:照 chatMiddle 先例以捕获的裸值集为 key remember(计算体
+        // DisallowComposableCalls,只构造 lambda;session/input/codexSettings/
+        // promptOptState/voiceLandedTick/modelFlashTick/voiceElapsedSec/voiceState
+        // 等状态委托的读取发生在执行时,归执行作用域订阅,不进 key)。捕获的局部
+        // 函数(setInput/doCompact/doStartReview/openAttachment/reportVoiceUnavailable/
+        // setApproval/optimizeCurrentInput/send)只触键控值与状态委托,不依赖键外易变态。
+        val chatComposerBody: @Composable ColumnScope.() -> Unit = remember(
+            threadId, st, ctx, hapticView, scope, attachments, threadAgentId, slashCommands,
+            offlineSnapshot, hostCaps, slashGoalSheet, voiceListening, voiceReplaceMode,
+            micPermission, voiceController, expandedInputOpen, modelName, effortLabel,
+            showQuickModels, sessionAgent, windowIsFallback, contextWindow,
+            showContextCard, showGitPanel, pickFiles,
+        ) {
+            val content: @Composable ColumnScope.() -> Unit = {
             ChatComposerArea(
                 threadId = threadId,
                 session = session,
@@ -3715,6 +3738,8 @@ fun ChatScreen(
                 onOptimizeInput = ::optimizeCurrentInput,
                 onSend = ::send,
             )
+            }
+            content
         } // chatComposerBody 薄委托到此结束
 
         // —— 骨架分叉:黑客终端保持原 Column 骨架(显示模式行为不变);
@@ -3755,9 +3780,20 @@ fun ChatScreen(
                 }
             }
         } else {
-            PaScreenScaffold(
-                title = threadTitle.ifBlank { "会话" },
-                titleContent = {
+            // 【P2-9 插槽稳定性落地】PaScreenScaffold 的全部插槽 lambda(titleContent/
+            // leading/trailing/hostStatus/bottomBar/content)照 chatMiddle 先例以
+            // 捕获的裸值集为 key remember(计算体 DisallowComposableCalls,只构造并
+            // 返回 lambda;session.pendingApproval/showMore.value 等状态委托的读取
+            // 发生在执行时,归骨架内执行作用域订阅)。此前各插槽逐帧新 lambda,
+            // 骨架入参每帧判"已变化"整块跟着重组(契约见 PaScreenScaffold KDoc,
+            // 本处即该契约点名的收敛落地)。
+            // 富标题插槽:key = 身份行的全部裸值(threadAgentId/threadWorkspace/
+            // identityStatus)+ remember 态(approvalDialogOpen);approvalWaiting 读的
+            // session.pendingApproval 在执行时取现值。
+            val chatTitleContent: @Composable RowScope.() -> Unit = remember(
+                threadAgentId, threadWorkspace, identityStatus, approvalDialogOpen,
+            ) {
+                val slot: @Composable RowScope.() -> Unit = {
                     // 布局修复(2026-09-30):标题右侧跟 当前 Agent·工作区 + 状态点
                     // (绿=正常/蓝=运行中/红=故障/琥珀=待处理);原大身份卡取消。
                     Spacer(Modifier.width(10.dp))
@@ -3772,32 +3808,34 @@ fun ChatScreen(
                         onOpenApproval = { approvalDialogOpen.value = true },
                         agentIconRes = agentBrandIcon(threadAgentId),
                     )
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .paPushBack(drawerCtrl.visible)
-                    .edgeSwipeToOpenDrawer(
-                        onDragFraction = drawerCtrl::onDrag,
-                        onRelease = drawerCtrl::onRelease,
-                    ),
-                leading = {
+                }
+                slot
+            }
+            // 导航插槽:key = 各自捕获(onBack 参数 / showMore remember 态)。
+            val chatLeading: @Composable () -> Unit = remember(onBack) {
+                val slot: @Composable () -> Unit = {
                     PaNavIconButton(
                         onClick = onBack,
                         contentDescription = "返回",
                         iconRes = AppR.drawable.ic_lucide_chevron_left,
                         plain = true,
                     )
-                },
-                // 唯一次操作(README 骨架纪律):「更多」收口终止/导出/最近会话等低频动作
-                trailing = {
+                }
+                slot
+            }
+            val chatTrailing: @Composable () -> Unit = remember(showMore) {
+                val slot: @Composable () -> Unit = {
                     PaNavIconButton(
                         onClick = { showMore.value = true },
                         contentDescription = "更多",
                         iconRes = AppR.drawable.ic_lucide_ellipsis,
                     )
-                },
-                hostStatus = chatHostStatus,
-                bottomBar = {
+                }
+                slot
+            }
+            // 底部输入外壳:key = chatComposerBody(其自身已 remember,裸值键集见上)。
+            val chatBottomBar: @Composable () -> Unit = remember(chatComposerBody) {
+                val slot: @Composable () -> Unit = {
                     // 输入区外壳(编辑式):导航栏高度已由骨架 bottomBar 消费,
                     // 这里只避让键盘 —— 与旧 max(ime,nav) 语义等价(键盘弹出时导航栏在其后)。
                     Column(
@@ -3808,10 +3846,31 @@ fun ChatScreen(
                     ) {
                         chatComposerBody()
                     }
-                },
-            ) {
-                chatMiddle()
+                }
+                slot
             }
+            // 内容插槽:key = chatMiddle(remember 态,裸值键集见上)。
+            val chatContent: @Composable ColumnScope.() -> Unit = remember(chatMiddle) {
+                val slot: @Composable ColumnScope.() -> Unit = { chatMiddle() }
+                slot
+            }
+            PaScreenScaffold(
+                title = threadTitle.ifBlank { "会话" },
+                titleContent = chatTitleContent,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .paPushBack(drawerCtrl.visible)
+                    .edgeSwipeToOpenDrawer(
+                        onDragFraction = drawerCtrl::onDrag,
+                        onRelease = drawerCtrl::onRelease,
+                    ),
+                leading = chatLeading,
+                // 唯一次操作(README 骨架纪律):「更多」收口终止/导出/最近会话等低频动作
+                trailing = chatTrailing,
+                hostStatus = chatHostStatus,
+                bottomBar = chatBottomBar,
+                content = chatContent,
+            )
         }
         // 历史消息快速查看浮层(视频样板二版):从左缘滑出,宽 ~62%、scrim 0.25
         // (去遮挡:能隐约看到正文 —— 速查不是切页);黑客模式 GraphiteDrawer 底 +

@@ -78,6 +78,12 @@ func main() {
 	// P0-3:mDNS 局域网自动发现。手机在"没填过地址/换了新 WiFi"时靠它找到本机;
 	// 关闭只影响便利性,手动填地址仍可用。
 	mdnsEnable := flag.Bool("mdns", true, "启用 mDNS 局域网自动发现(_pocketagent._tcp)")
+	// 【release-smoke-20261009 修复】mDNS 实例名覆盖:实例名默认取主机名
+	// (hostDisplayName → os.Hostname),同机跑第二个 daemon 时两个实例广播同名,
+	// 手机端浏览去重后只能看见一个(同机冒烟因此永久冲突)。传 -name 给第二个
+	// 实例起不同实例名,同机"注册→浏览互见"场景从此可用;不传 = 维持 Hostname
+	// 现状,单 daemon 零行为变化。只影响 mDNS 广播,不改 GetHostInfo.displayName。
+	name := flag.String("name", "", "mDNS 实例名(默认取主机名;同机多 daemon 时用不同 -name 区分,如 -name pa-second)")
 	// P1 终端会话生命周期:所有 Attach 断开(无 reader)的会话闲置这么久后
 	// 自动杀 shell 并回收,防 pwsh+conhost 随开关终端页线性泄漏;
 	// 0 = 禁用回收(旧版行为)。有 reader 在场的会话绝不回收。
@@ -442,9 +448,14 @@ func main() {
 				port = p
 			}
 		}
+		// 实例名:-name 显式指定优先(同机多 daemon 场景),否则维持主机名现状。
+		mdnsName := srv.DisplayName()
+		if n := strings.TrimSpace(*name); n != "" {
+			mdnsName = n
+		}
 		reg, err := mdns.Register(mdns.Config{
 			HostID:      srv.HostID(),
-			DisplayName: srv.DisplayName(),
+			DisplayName: mdnsName,
 			Port:        port,
 			TLSEnabled:  !*plaintext,
 		}, nil)
@@ -452,7 +463,7 @@ func main() {
 			log.Printf("WARNING: mDNS 自动发现未启用(不影响手动填地址连接): %v", err)
 		} else {
 			mdnsReg = reg
-			log.Printf("mDNS 自动发现已启用: _pocketagent._tcp 端口 %d 主机 %s", port, srv.DisplayName())
+			log.Printf("mDNS 自动发现已启用: _pocketagent._tcp 端口 %d 实例 %s", port, mdnsName)
 		}
 	}
 

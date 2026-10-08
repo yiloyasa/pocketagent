@@ -106,5 +106,6 @@ fun isAppVersionTooOld(appVersion: String, minAppVersion: String): Boolean {
     return false
 }
 
-/** 连接诊断里"App 版本过旧"提示位的人话文案(与 connectionFailureLabel 同族)。 */
-fun appVersionOutdatedLabel(): String = "App 版本过旧，请更新手机端 App（电脑端要求更高版本）"
+// 【文案收敛(2026-10-09 修复轮)】原 appVersionOutdatedLabel()(唯一消费方
+// AgentConnection.appVersionOutdatedMessage 已删,本函数随之零消费)已移除;
+// "App 版本过旧"提示文案唯一事实源 = ui/SettingsScreen.appVersionOutdatedHint。

@@ -127,11 +127,10 @@ object AgentConnection {
     /** daemon 报告的最低版本原文(空 = 对端未报告/旧 daemon),供提示位展开细节。 */
     val minAppVersionRequired = kotlinx.coroutines.flow.MutableStateFlow("")
 
-    /** daemon 报告 min_app_version 时的提示文案(纯函数在 ConnectionDiagnostics)。 */
-    fun appVersionOutdatedMessage(): String = buildString {
-        append(appVersionOutdatedLabel())
-        minAppVersionRequired.value.takeIf { it.isNotBlank() }?.let { append("(要求 ≥ $it)") }
-    }
+    // 【文案收敛(2026-10-09 修复轮)】原 appVersionOutdatedMessage()(label + "要求 ≥ x"
+    // 拼接)全仓零消费点,已删;版本提示文案唯一事实源 = 设置页纯函数
+    // appVersionOutdatedHint(消费 appVersionOutdated/minAppVersionRequired 两个流,
+    // SettingsPageWiringLogicTest 钉死),不再有第二份近似文案。
 
     /**
      * GetHostInfo 成功后的统一入口:caps 快照 + 版本闸一起刷新。
@@ -1211,6 +1210,25 @@ object AgentConnection {
         connError.value = null
     }
 
+    /**
+     * 仅切换目标地址,不动 token(设置页「保存并测试连接」配对码路径的第一拍,
+     * 见 [saveAndTestConnection]:先切通道再配对)。
+     *
+     * 语义 = [setCredentials] 的地址侧:地址/手填地址持久化、通道立即重建指向
+     * 新目标、连接状态置 checking 并清错误;差异只有 token 原样保留 —— 配对码
+     * 不是 token,绝不能经 [setCredentials] 的 token 位落进敏感库(配对失败时
+     * 会把 8 位码残留成"已存 token",污染后续自动重连)。
+     */
+    fun switchAddressKeepingToken(addr: String) {
+        val trimmed = addr.trim()
+        address = trimmed
+        manualAddress = trimmed
+        persist()
+        shutdown()
+        connState.value = "checking"
+        connError.value = null
+    }
+
     fun channel(): ManagedChannel {
         channel?.let { if (!it.isShutdown && !it.isTerminated) return it }
         synchronized(this) {
@@ -1894,6 +1912,80 @@ fun credentialModeFor(v: String): CredentialMode = when {
     isPairCodeForm(v) -> CredentialMode.PAIR_CODE
     else -> CredentialMode.TOKEN
 }
+
+/**
+ * 「保存并测试连接」的单步操作面:生产实现([AgentConnectionSaveOps])直接打在
+ * [AgentConnection] 单例上;JVM 单测注入**记录调用序的 fake**,钉死
+ * 「先切凭证(切通道)、后配对、再连接」的顺序(saveAndTestConnection 唯一消费方)。
+ */
+interface SaveConnectionOps {
+    /** 仅切换目标地址(不动 token;配对码路径第一拍,见 [AgentConnection.switchAddressKeepingToken])。 */
+    fun switchAddress(addr: String)
+
+    /** 切换地址 + token(token/留空直连路径,原 [AgentConnection.setCredentials] 语义)。 */
+    fun setCredentials(addr: String, token: String)
+
+    /** 用 8 位配对码在【当前已切换到的目标】上注册领 token;成功时 token 已入敏感库。 */
+    fun authorize(pairCode: String): PairCodeResult
+
+    /** 多候选回退连接("测试"那一步);null = 没连上。 */
+    fun connect(): pocketagent.v1.HostInfo?
+
+    /** 当前内存 token(配对成功后供调用方把输入框同步成真 token)。 */
+    fun currentToken(): String
+}
+
+/** 生产实现:每步原样落在 [AgentConnection] 上,顺序由 [saveAndTestConnection] 唯一决定。 */
+internal object AgentConnectionSaveOps : SaveConnectionOps {
+    override fun switchAddress(addr: String) = AgentConnection.switchAddressKeepingToken(addr)
+    override fun setCredentials(addr: String, token: String) = AgentConnection.setCredentials(addr, token)
+    override fun authorize(pairCode: String): PairCodeResult = AgentConnection.authorizeWithPairCodeDetailed(pairCode)
+    override fun connect(): pocketagent.v1.HostInfo? = AgentConnection.connectWithFallback()
+    override fun currentToken(): String = AgentConnection.token
+}
+
+/** [saveAndTestConnection] 一轮的结论(设置页据此出回执/错误,不再自己编排顺序)。 */
+data class SaveAndTestResult(
+    /** 是否连上(= connect 命中候选);配对失败时恒 false。 */
+    val connected: Boolean,
+    /** 配对失败的 daemon 原文(如实透传,AUDIT §3.3);非配对失败为 null。 */
+    val pairError: String? = null,
+    /**
+     * 配对成功后的权威 token(真 token,非 8 位配对码):调用方拿它把输入框
+     * 同步掉,防止配对码残留在 token 位、下次"保存"把真 token 冲掉;无需同步为 null。
+     */
+    val authToken: String? = null,
+)
+
+/**
+ * 设置页「保存并测试连接」的可测核心(release-smoke-20261009 配对顺序缺陷修复)。
+ *
+ * 【顺序缺陷与修法】旧实现在【当前生效地址】的通道上先 authorize 再
+ * setCredentials(addr) —— 用户改填新地址(或同机存在第二个 daemon)时,8 位
+ * 配对码被发给旧目标实例,新地址的 daemon 反而收不到。现在顺序在这里唯一钉死:
+ *
+ *   配对码: switchAddress(通道先指向新目标) → authorize(在**新目标**上配对) → connect
+ *   token/留空: setCredentials(地址+token 一起切) → connect(原本就无此缺陷)
+ *
+ * 「保存并测试」仍一次完成,只是先切凭证后配对。单测
+ * (AgentConnectionSaveOrderTest)注入记录调用序的 fake 精确断言该顺序。
+ */
+fun saveAndTestConnection(addr: String, credentialInput: String, ops: SaveConnectionOps): SaveAndTestResult =
+    when (credentialModeFor(credentialInput)) {
+        CredentialMode.PAIR_CODE -> {
+            ops.switchAddress(addr)
+            val paired = ops.authorize(credentialInput)
+            if (!paired.ok) {
+                SaveAndTestResult(connected = false, pairError = paired.error)
+            } else {
+                SaveAndTestResult(connected = ops.connect() != null, authToken = ops.currentToken())
+            }
+        }
+        CredentialMode.TOKEN, CredentialMode.EMPTY -> {
+            ops.setCredentials(addr, credentialInput)
+            SaveAndTestResult(connected = ops.connect() != null)
+        }
+    }
 
 /** 配对结果:ok=是否拿到 token(已入敏感库并持久化);error=失败原文(供 UI 如实透传)。 */
 data class PairCodeResult(val ok: Boolean, val error: String? = null)

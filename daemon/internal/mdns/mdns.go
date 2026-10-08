@@ -50,7 +50,11 @@ const ProtocolVersion = "1"
 type Config struct {
 	// HostID 主机稳定标识(daemon server 的 host_id),手机端用它区分"这是哪台电脑"。
 	HostID string
-	// DisplayName 展示名(与 GetHostInfo.displayName 一致),同时用作 mDNS 实例名。
+	// DisplayName 展示名,同时用作 mDNS 实例名。与 GetHostInfo.displayName 同源
+	// (主机名);cmd/pocketagentd 的 -name flag 可显式覆盖(同机多 daemon 场景,
+	// release-smoke-20261009:同名实例会被浏览端去重合并,第二个 daemon 从此不可见),
+	// 覆盖后实例名可能与 GetHostInfo.displayName 不同 —— 手机端展示走 TXT name
+	// ([Entry.DisplayName]),实例名只承担"同网段唯一"职责。
 	DisplayName string
 	// Port gRPC 实际监听端口(一般 7246)。
 	Port int
@@ -83,16 +87,21 @@ func Register(cfg Config, ifaces []net.Interface) (*Registrar, error) {
 		TXTKeyName + "=" + cfg.DisplayName,
 		TXTKeyTLS + "=" + tlsFlag,
 	}
-	// 实例名取展示名;为空时退回 host_id,保证实例名不为空(DNS-SD 要求非空)。
-	instance := cfg.DisplayName
-	if strings.TrimSpace(instance) == "" {
-		instance = cfg.HostID
-	}
-	srv, err := zeroconf.Register(instance, Service, Domain, cfg.Port, text, ifaces)
+	srv, err := zeroconf.Register(instanceName(cfg), Service, Domain, cfg.Port, text, ifaces)
 	if err != nil {
 		return nil, fmt.Errorf("mdns: 注册 _pocketagent._tcp 失败: %w", err)
 	}
 	return &Registrar{server: srv}, nil
+}
+
+// instanceName 决定 mDNS 服务实例名(完整实例名 = 返回值 + Service + Domain):
+// 非空 DisplayName 优先(含 -name 覆盖);为空白时退回 HostID,保证实例名不为空
+// (DNS-SD 要求非空)。独立成函数供单测钉死取名顺序(不依赖真实多播网卡)。
+func instanceName(cfg Config) string {
+	if n := strings.TrimSpace(cfg.DisplayName); n != "" {
+		return n
+	}
+	return cfg.HostID
 }
 
 // Shutdown 发 GOODBYE 并停掉应答循环,让局域网内缓存尽快过期。

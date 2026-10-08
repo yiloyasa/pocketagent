@@ -17,6 +17,17 @@ internal data class SenseVoiceModelState(
     val error: String? = null,
     /** 【2026-10-09 分发资格批】模型不在本地且未在下载:需先触发下载才有语音可用。 */
     val needsDownload: Boolean = false,
+    /**
+     * 【2026-10-09 修复轮】曾尝试下载且失败未恢复(显式失败标志)。
+     *
+     * 【为什么必须单独立位】此前 needsDownload=true 同时覆盖"从没下载过"与
+     * "下载失败回退"两种落点,设置页唯一判别通道是 error 文案是否等于
+     * [NEEDS_DOWNLOAD_MESSAGE] 占位 —— 文案一改(或失败恰好带出同文案)判定就翻。
+     * 现在失败由本位明说:置位只发生在 [prepareBundledModel] 的失败路径;
+     * ready / 重校验通过(verifyLocalModel)即随新状态归零 = "已恢复"。
+     * 消费方(SettingsScreen.senseVoiceDownloadAction)以它判"重试下载"。
+     */
+    val downloadFailed: Boolean = false,
 )
 
 /**
@@ -136,6 +147,9 @@ internal object SenseVoiceModelManager {
             } catch (e: Exception) {
                 mutable.value = SenseVoiceModelState(
                     needsDownload = true,
+                    // 【显式失败标志】下载失败落点:与"从没下载过"(downloadFailed=false)
+                    // 在状态位上可判别,UI 不再只靠 error 文案比对占位常量。
+                    downloadFailed = true,
                     error = e.message ?: "语音模型下载失败",
                 )
             } finally { busy.set(false) }

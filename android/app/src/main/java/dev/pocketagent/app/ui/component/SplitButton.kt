@@ -135,7 +135,11 @@ fun SplitButton(
                     Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
                     Text(
                         mainLabel,
-                        fontSize = if (compact) 10.5.sp else 13.sp,
+                        // 【尺寸豁免】仅 compact 档非 Type 令牌:10.5sp 与 34dp 紧凑按钮
+                        // 几何联动,低于 Micro(11)档(当前生效值短词,紧凑弹窗场景);
+                        // 常规档已收编 BodySmall(13/21)。(常规 15sp 标签档的豁免注释
+                        // 见上方主标签 Text —— 同一裁决,几何联动语义一致。)
+                        fontSize = if (compact) 10.5.sp else PaEditorial.Type.BodySmall.fontSize,
                         color = PaEditorial.Primary,
                         fontWeight = FontWeight.Medium,
                     )

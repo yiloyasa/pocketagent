@@ -112,6 +112,35 @@ func TestParseTXT(t *testing.T) {
 	}
 }
 
+// TestInstanceName 钉死实例名取名顺序(release-smoke-20261009 同机双 daemon 冲突
+// 修复的 pure 部分,不依赖真实多播网卡):
+//   - DisplayName 非空(含 cmd/pocketagentd 的 -name 覆盖)→ 实例名 = DisplayName;
+//   - DisplayName 空白 → 退回 HostID(旧行为,保证 DNS-SD 实例名非空);
+//   - 两者皆空 → 空串由 Register 的端口类校验链兜底,这里如实钉出该边界。
+func TestInstanceName(t *testing.T) {
+	cases := []struct {
+		name        string
+		displayName string
+		hostID      string
+		want        string
+	}{
+		{"-name 覆盖优先", "pa-second", "host-abc", "pa-second"},
+		{"默认展示名即主机名", "DESKTOP-ABC123", "host-abc", "DESKTOP-ABC123"},
+		{"空白展示名退回HostID", "", "host-abc", "host-abc"},
+		{"纯空白展示名退回HostID", "   ", "host-abc", "host-abc"},
+		{"覆盖名带首尾空白被trim", "  pa-second  ", "host-abc", "pa-second"},
+		{"两者皆空为空串", "", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := instanceName(Config{DisplayName: tc.displayName, HostID: tc.hostID})
+			if got != tc.want {
+				t.Fatalf("instanceName = %q, 期望 %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEntryHelpers(t *testing.T) {
 	e := Entry{
 		Instance: "inst",

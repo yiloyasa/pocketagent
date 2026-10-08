@@ -69,9 +69,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.pocketagent.app.AgentConnection
-import dev.pocketagent.app.CredentialMode
 import dev.pocketagent.app.R
-import dev.pocketagent.app.credentialModeFor
 import dev.pocketagent.app.ui.RuntimeControlState
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.PaMotion
@@ -824,42 +822,36 @@ private fun SettingsScreenBody(
         settingsError = null
         pairError = null
         scope.launch {
-            var pairFailure: String? = null
-            val connected = try {
+            val result = try {
                 withContext(Dispatchers.IO) {
-                    // 【T-32 配对码形态 → 先注册后连接】输入框是 8 位纯数字(daemon 配对码
-                    // 形态)时,先走 Authorize/RegisterByPairCode 领真 token(内部已入敏感库
-                    // 并持久化),再连接;其余输入维持原路径(非空 token 直连 / 留空直连)。
-                    if (credentialModeFor(token) == CredentialMode.PAIR_CODE) {
-                        val paired = AgentConnection.authorizeWithPairCodeDetailed(token)
-                        if (!paired.ok) {
-                            pairFailure = paired.error
-                            return@withContext null
-                        }
-                        // 配对成功:AgentConnection 已持真 token,把输入框状态同步成真 token
-                        // —— 否则下面的 setCredentials(addr, token) 会把 8 位配对码
-                        // 覆盖回 token 位,真 token 立刻被冲掉。
-                        token = AgentConnection.token
-                    }
-                    AgentConnection.setCredentials(addr, token)
-                    AgentConnection.connectWithFallback()
+                    // 【配对顺序修复(release-smoke-20261009)】顺序编排收进
+                    // saveAndTestConnection(可测核心):先 switchAddress/setCredentials 把
+                    // 通道指向新填地址,配对码再在**新目标**上 authorize —— 旧实现先在
+                    // 当前通道 authorize,同机有第二个 daemon 时配对码发给错误实例。
+                    // 「保存并测试」仍一次完成。原 T-32 注释(配对码形态 → 先注册后连接)
+                    // 的形态分流语义不变,只是切地址提前到配对之前。
+                    dev.pocketagent.app.saveAndTestConnection(addr, token, dev.pocketagent.app.AgentConnectionSaveOps)
                 }
             } catch (e: Exception) {
                 settingsError = "连接失败：${humanizeError(e)}"
-                null
+                connectionSaving = false
+                return@launch
             }
             connectionSaving = false
+            // 配对成功:输入框同步成真 token(saveAndTestConnection 返回的权威值)——
+            // 否则 8 位配对码残留在 token 位,下次保存会把真 token 冲掉。
+            result.authToken?.let { token = it }
             when {
-                connected != null -> {
+                result.connected -> {
                     Toast.makeText(
                         ctx,
                         "连接成功 · ${AgentConnection.connTransport.value}",
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
-                pairFailure != null -> {
+                result.pairError != null -> {
                     // daemon 原文如实透传(AUDIT §3.3:如"配对码错误"),不加工不改写。
-                    pairError = pairFailure
+                    pairError = result.pairError
                     Toast.makeText(ctx, "配对失败", Toast.LENGTH_SHORT).show()
                 }
                 else -> {
@@ -4319,19 +4311,26 @@ internal fun appVersionOutdatedHint(minAppVersion: String): String =
  * 三态口径(与 SenseVoiceModelManager 的状态流一一对齐,UI 不自持状态):
  *  · ready(就绪)或 preparing(下载中,进度走既有"初始化 X%"通道)→ null,
  *    按钮消失/不出现;
- *  · 其余(!ready && !preparing)必摆按钮 —— needsDownload 态摆"下载";
- *    下载失败态(Manager 失败路径会回到 needsDownload=true + error,此时 error
- *    是真实失败原因而非"未下载"占位文案)摆"重试"。两者只有按钮文案之差,
- *    失败原因本身经既有 desc 通道(speech.error)透出,这里不重复拼错误串。
+ *  · 其余(!ready && !preparing)必摆按钮 —— 未下载态摆"下载";
+ *    下载失败态摆"重试"。两者只有按钮文案之差,失败原因本身经既有 desc 通道
+ *    (speech.error)透出,这里不重复拼错误串。
  *
- * 【为什么按文案识别占位】Manager 侧 needsDownload=true 同时覆盖"从没下载过"
- * (error = NEEDS_DOWNLOAD_MESSAGE 占位)与"下载失败回退"(error = 真实原因)
- * 两种落点,除 error 文案外无第二判别通道;Manager 是禁碰文件,故在此钉文案
- * 比对 —— Manager 若改占位文案,这里会静默把失败态判成"下载",该风险由单测
- * 与 Manager 侧 const 同源引用兜住(两处引用同一常量,改一处即编译可见)。
+ * 【失败判别主通道 = downloadFailed】Manager 已加显式失败标志
+ * (SenseVoiceModelState.downloadFailed,prepareBundledModel 失败置位、
+ * ready/重校验通过归零):"重试"判定首选它,不再依赖文案比对。
+ * 【NEEDS_DOWNLOAD_MESSAGE 文案比对保留为兼容回退】旧会话里 Manager 状态可能
+ * 还是没有该位的旧落点(失败与未下载同落 needsDownload=true,唯一判别通道是
+ * error 文案);error 非占位文案仍判"重试",两处引用同一常量,改一处即编译可见。
  */
-internal fun senseVoiceDownloadAction(ready: Boolean, preparing: Boolean, error: String?): String? = when {
+internal fun senseVoiceDownloadAction(
+    ready: Boolean,
+    preparing: Boolean,
+    downloadFailed: Boolean,
+    error: String?,
+): String? = when {
     ready || preparing -> null
+    downloadFailed -> "重试下载语音模型"
+    // 兼容回退:无 downloadFailed 位的旧状态,按文案识别失败(非占位 = 真实原因)。
     error != null && error != SenseVoiceModelManager.NEEDS_DOWNLOAD_MESSAGE -> "重试下载语音模型"
     else -> "下载语音模型（约 228MB，建议 Wi-Fi）"
 }
@@ -4436,9 +4435,9 @@ private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models:
             // 【按需下载正路入口】模型不再随 APK 打包(SenseVoiceModelManager 三态,
             // 上轮已就位):needsDownload → 摆下载按钮(此前只有"点麦克风才触发"
             // 一条暗路);下载中沿用下方既有"初始化 X%"进度通道;就绪后按钮消失;
-            // 下载失败(error 非空且非"未下载"占位文案)→ desc 走既有错误通道 +
-            // 重试按钮。可见性/文案判定收在纯函数 senseVoiceDownloadAction(单测钉死)。
-            val downloadAction = senseVoiceDownloadAction(speech.ready, speech.preparing, speech.error)
+            // 下载失败 → desc 走既有错误通道 + 重试按钮(判别主通道 =
+            // downloadFailed 显式标志,文案比对仅作旧状态兼容回退,见纯函数 KDoc)。
+            val downloadAction = senseVoiceDownloadAction(speech.ready, speech.preparing, speech.downloadFailed, speech.error)
             SettingRow(
                 title = "SenseVoice Small INT8（按需下载）",
                 desc = speech.error
