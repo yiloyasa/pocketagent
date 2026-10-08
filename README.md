@@ -36,7 +36,7 @@
 |---|---|
 | Git | 分支 `main`，**代码基线** `316e6ac`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
 | 六家 agent 版本基线 | codex **0.160.0**、pi **1.0.2**、zcode（桌面当前版，fork 7 型 union 已适配）、dsh **0.2.0-rc.2**、hermes（定位修复后全接入）、Claude 会话只读导入（externalconv） |
-| 测试基线 | Android **1540 用例 / 0 失败 / 0 错误**（2026-10-07 实跑）；daemon 测试包**全绿 0 FAIL**（**2026-10-08 收尾轮复跑**）；RPC **7 服务 / 93 RPC** |
+| 测试基线 | Android **1599 用例 / 0 失败 / 0 错误**（2026-10-09 实跑）；daemon 测试包**全绿 0 FAIL**（**2026-10-09 实测复跑**）；RPC **7 服务 / 93 RPC** |
 | 真机 | 小米 13（`8e0e7bbe`）经 **USB `adb reverse`** 通道全自动化 L2 验收 **15 项 13 PASS**（2026-10-07，证据 `docs/verify/evidence/l2-20261007/`）：六家 agent 真轮全通、pi 用量链路直证（ctx_window=1M / 环 0.25% 数学正确）；1 BLOCKED=语音须真人手指；无线兜底走 Tailscale |
 | **下一刀（交接待办）★** | ① 语音 L2 真人手指补验（唯一 BLOCKED 项）② codex 自报 5 个废弃配置键清理 ③ pi thinking 权威全文替换（pb 受限）④ zcode fork 真机点选验证 ⑤ codex 轮询超时预算（writeStdin 卡）⑥ panel 浏览器直点开关（E2 被取消项，规格见 `docs/overnight-20261001.md`）⑦ bindSession 上收。明细与背景 → **`docs/verify/handoff-2026-10-08.md`（交接总档）** |
 | 遗留小项（已核销或拍板） | ~~daemon `GetHistory` 填 `created_at_unix_ms`~~（已落地，`thread_history_id_test` 直证）~~巡检大表膨胀~~（2026-10-07 `ad15c5d` 按 id 首段过滤修复）~~dsh 凭据链~~（key 已落 daemon 数据目录，L2 真机全轮跑通）~~attachmentEntryHiddenFor 遗留壳~~（实为能力门控活代码）~~unknown_events.go 陈旧注释~~（诚实"预留档"说明）~~InvalidateVersionCache~~（2026-10-01 已删）~~dshModelsBudget const→var~~（拍板维持 const） |
