@@ -2,8 +2,8 @@
 
 > 手机上的 AI 编程代理遥控器。**手机只做遥控，agent 跑在你自己的电脑上，全程零云服务器。**
 >
-> **本文件是项目唯一的上下文文档** —— 功能、架构、模块、数据流、入口、配置、依赖、现状、阻碍、坑，全部收敛在这里。
-> **新会话 / 协作者只读 §0 速览即可开工**；其余章节按需查阅，不必通读。
+> **本文件是项目唯一的上下文文档**（`AGENTS.md` 是 AI 协作者命令/环境速查入口）—— 功能、架构、模块、数据流、入口、配置、依赖、现状、阻碍、坑，全部收敛在这里。
+> **新会话 / 协作者先读 `AGENTS.md`，再读 §0 速览即可开工**；其余章节按需查阅，不必通读。
 > 过程性文档（调研/计划/评审）已舍弃，台账见 `_archives/_docs-discarded_20260920-manifest.json`、`_archives/_cleanup_20260922-manifest.json`。
 
 ---
@@ -25,30 +25,29 @@
 
 - 手机：Kotlin + Jetpack Compose（minSdk 26 / compileSdk 35）
 - daemon：Go **1.27.1**（无 ORM / 无框架，依赖极简）
-- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 85 RPC**，8 proto / 2182 行
-  （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**）
-- 代码：android main **121** `.kt` / test **141** `.kt`；daemon Go **540** 文件（生成 pb.go **15**，手写 **525** 含测试）
+- 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 93 RPC**，8 proto / 2588 行
+  （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**，2026-10-08 校验 8 文件全一致）
+- 代码：android main **151** `.kt` / test **162** `.kt`；daemon Go **639** 文件（生成 pb.go **15**，手写 **624** 含测试）
 - 版本：**0.2.2 / versionCode 5**
 
-### 0.3 当前状态（真值锚点 · 2026-10-01 整理轮）
+### 0.3 当前状态（真值锚点 · 2026-10-08 收尾轮）
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，**代码基线** `73dbf5f`（2026-10-01：连接层四连修 + **全面优化三轮×4并发**（R1 首页/列表/设置/抽屉 → R2 聊天/审批/交互组件/文件Git → R3 主题动效根层/协同/任务离线/Markdown 渲染，调研对标 ChatGPT App/M3 Expressive/Linear/NN/g）+ **历史导航深优三轮**（R1 实时刷选 requestScrollToItem / R2 日期上下文三路数据链接真 / R3 面板搜索+最早最新快跳））；工作树保持干净，当前提交以 `git log` 为准 |
-| 连接层（真机日志实证修复） | ① `connectWithFallback` 探测移出 connectionLock（原锁内串行探测实测挂起全部调用方 **28.3s**，ART Long monitor contention 实证）+ 并行竞速恢复（serial=true 是 TOFU 阶段遗留，重连被拖到 23.5s）② 探活连续失败闸（单次失败不再撕含 WatchEvents 的健康通道，"26s/轮连接断"风暴根因）③ 探活补 `withWaitForReady`（回退临时通道带、共享探活不带 → "回退必成功探活必失败"自持循环）④ Tailscale 候选独立 15s 预算（DERP 冷启动 8-20s，7s 竞速预算会错杀唯一活路）⑤ 探活异常落日志（此前两端日志都无迹可寻） |
-| 测试基线 | Android **1233 用例 / 0 失败 / 0 错误**（基线从 712 → 1233，两轮优化 +521）；daemon 全量包绿；RPC **7 服务/85 RPC** |
-| 真机 | 手机 8e0e7bbe 已装 2026-10-01 版（211.9MB）并经 **Tailscale** 连通（校园网 AP 隔离下 LAN 不通，VPN 兜底链路实测可用）；历史导航实时刷选/面板搜索/快跳/分组均已真机截图验证（`G:\pa\pa-live*.png` / `pa-panel.png` / `pa-search.png`，不入 git） |
-| **下一刀（已明确）★** | ① daemon `GetHistory` 填充 `created_at_unix_ms`（手机侧日期分组已就绪，当前全部诚实归「早前」）② MIUI 边缘手势拦截非确定性（x<24dp 拖动偶发被系统吞，40dp 触控带+gestureExclusion 已缓解；通用用户引导"稍靠右按压"）③ FileKind 枚举快照 Mcp 色不随换盘（改组合期读取）④ SettingsScreen statusLabel 收口四词口径 ⑤ BrowserScreen 离线快照 toast 带"截至 X" |
-| 遗留小项（已核销或拍板） | ~~attachmentEntryHiddenFor 遗留壳~~（实为能力门控活代码，挂账有误）~~unknown_events.go 陈旧注释~~（实为诚实的"预留档"说明）~~InvalidateVersionCache~~（零调用真死代码，2026-10-01 已删）~~dshModelsBudget const→var~~（拍板：维持 const，无覆写需求） |
+| Git | 分支 `main`，**代码基线** `316e6ac`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
+| 六家 agent 版本基线 | codex **0.160.0**、pi **1.0.2**、zcode（桌面当前版，fork 7 型 union 已适配）、dsh **0.2.0-rc.2**、hermes（定位修复后全接入）、Claude 会话只读导入（externalconv） |
+| 测试基线 | Android **1540 用例 / 0 失败 / 0 错误**（2026-10-07 实跑）；daemon 测试包**全绿 0 FAIL**（**2026-10-08 收尾轮复跑**）；RPC **7 服务 / 93 RPC** |
+| 真机 | 小米 13（`8e0e7bbe`）经 **USB `adb reverse`** 通道全自动化 L2 验收 **15 项 13 PASS**（2026-10-07，证据 `docs/verify/evidence/l2-20261007/`）：六家 agent 真轮全通、pi 用量链路直证（ctx_window=1M / 环 0.25% 数学正确）；1 BLOCKED=语音须真人手指；无线兜底走 Tailscale |
+| **下一刀（交接待办）★** | ① 语音 L2 真人手指补验（唯一 BLOCKED 项）② codex 自报 5 个废弃配置键清理 ③ pi thinking 权威全文替换（pb 受限）④ zcode fork 真机点选验证 ⑤ codex 轮询超时预算（writeStdin 卡）⑥ panel 浏览器直点开关（E2 被取消项，规格见 `docs/overnight-20261001.md`）⑦ bindSession 上收。明细与背景 → **`docs/verify/handoff-2026-10-08.md`（交接总档）** |
+| 遗留小项（已核销或拍板） | ~~daemon `GetHistory` 填 `created_at_unix_ms`~~（已落地，`thread_history_id_test` 直证）~~巡检大表膨胀~~（2026-10-07 `ad15c5d` 按 id 首段过滤修复）~~dsh 凭据链~~（key 已落 daemon 数据目录，L2 真机全轮跑通）~~attachmentEntryHiddenFor 遗留壳~~（实为能力门控活代码）~~unknown_events.go 陈旧注释~~（诚实"预留档"说明）~~InvalidateVersionCache~~（2026-10-01 已删）~~dshModelsBudget const→var~~（拍板维持 const） |
+| 挂账未核实（10-01 清单残余） | ① FileKind 枚举快照 Mcp 色不随换盘（改组合期读取）② SettingsScreen statusLabel 收口四词口径 ③ BrowserScreen 离线快照 toast 带"截至 X" —— 三项未被后续轮次显式核销，接手后先核实再动 |
 
 ### 0.4 现阶段阻碍（按优先级）★
 
-1. **真机依赖**：UI 交互与 gRPC 联调依赖手机在线（USB / 局域网 / Tailscale 三档）；离线时只能跑 JVM / go 单测。当前校园网 AP 隔离使 LAN 候选不可达，Tailscale 是实际主通道（手机侧 VPN 开启）。
-2. **MIUI 边缘手势拦截**：手势导航设备上 x<24dp 的触摸会被系统非确定性吞掉（同一位置有时可达有时被拦）；已用 40dp 触控带 + systemGestureExclusion（系统上限 200dp）+ 负 offset 贴边把影响压到最低，但极左缘无法 100% 根除（系统设计如此）。
+1. **真机依赖**：UI 交互与 gRPC 联调依赖手机在线，三档通道 **USB `adb reverse`（已全自动化验收，首选）→ 局域网 / mDNS → Tailscale（无线兜底，校园网 AP 隔离时 LAN 不可达）**；离线时只能跑 JVM / go 单测。
+2. **MIUI 边缘手势拦截**：手势导航设备上 x<24dp 的触摸会被系统非确定性吞掉（同一位置有时可达有时被拦）；已用 40dp 触控带 + systemGestureExclusion（系统上限 200dp）+ 负 offset 贴边把影响压到最低，但极左缘无法 100% 根除（系统设计如此，通用用户引导"稍靠右按压"）。
 3. **codex 实验特性警告**：为支持 Default 模式反问卡，daemon 强注 `default_mode_request_user_input`，而 codex 自报其 `stage=underDevelopment` → **开启即弹警告**；抑制需写用户 `~/.codex/config.toml`（**红线封死**）→ 只能诚实降级（不支持就不显示入口）。
-4. **dsh 凭据注入链**：缺 key 时报 `no API key for provider route "deepseek-official"`；云 LLM 真实委派尚未端到端验证。
-5. **mDNS 广播受抢占**：UDP 5353 被常驻浏览器独占时（daemon 日志有 WARNING），手机无法 mDNS 发现主机；局域网直连需手动地址或重启 daemon。
-6. **演示视频工作区**：`video/pocket-agent-showcase/`（Remotion）去留待用户决定。
+4. **mDNS 广播受抢占**：UDP 5353 被常驻浏览器独占时（daemon 日志有 WARNING），手机无法 mDNS 发现主机；局域网直连需手动地址或重启 daemon。
 
 ### 0.5 铁律（红线，违反即打回）
 
@@ -61,10 +60,12 @@
 
 ### 0.6 文档地图
 
+- **`AGENTS.md`** = **AI 协作者（codex / claude 等）入口**：命令速查 + 本机环境事实 + 红线速查，新接手的 agent 先读它。
 - **本文件（README）** = 项目整体上下文（唯一）。
 - **`AUDIT.md`** = 唯一审核标准（甲乙丙丁分级 / L0–L2 三层 / 红线一票否决）。
+- **`docs/verify/handoff-2026-10-08.md`** = 交接总档（最近一次交接：现状全景 / 待办明细 / 验证基线复现 / 坑库）。
 - 审核入口脚本 `tools/audit/pa_audit.py`（六条规则，`--json` 机器可读）；真机驱动 `tools/device/`。
-- 工作区根 `_archives/` = 冷数据归档（只搬不删）；`apk-analysis/` = MobileCodex 生态逆向对比（项目前身调研）。
+- 工作区根 `_archives/` = 冷数据归档（只搬不删）；`apk-analysis/` = MobileCodex 生态逆向对比（项目前身调研）。两者均在仓库外 `G:\项目1\` 下。
 
 ---
 
@@ -82,7 +83,7 @@
 |---|---|---|
 | Android | Kotlin + Jetpack Compose（BOM 2024.09 / M3），minSdk 26 / target·compileSdk 35 | `grpc-okhttp`+`grpc-protobuf-lite` 1.66；`security-crypto`（Keystore 加密 token）；`webkit`（xterm.js 容器）；`navigation-compose`；`kotlinx-coroutines`；**sherpa-onnx 1.13.8 AAR**（SenseVoice 端侧识别，构建时下载校验）。**vosk-android 已整体摘除（2026-09-20）**：引擎选择收敛为「系统识别 → 端侧 SenseVoice」两级，共享错误码迁至 `VoiceErrors.kt` |
 | daemon | Go **1.27.1** | `grpc` 1.83.2、`protobuf` 1.36.12、`go-pty`、`zeroconf`。**依赖极简，无 ORM / 无框架** |
-| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 84 RPC**：Thread 35、Git 10、Fs 9、Runtime 13、Model 9、Host 5、Terminal 3（8 proto / 2146 行） |
+| 协议 | protobuf / gRPC `pocketagent.v1` | **7 服务 / 93 RPC**：Thread 42、Git 10、Fs 9、Runtime 14、Model 9、Host 6、Terminal 3（8 proto / 2588 行） |
 | 终端 | xterm.js 6（WebView）+ JS bridge | ↔ daemon `go-pty`，字节流一致画面一致 |
 
 > 图标全用 lucide 矢量（`ic_lucide_*`）+ 品牌 PNG，**故意不引** `material-icons-extended`（曾占 DEX 一半）。
