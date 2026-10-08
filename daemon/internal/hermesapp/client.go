@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/rpcwire"
 	"github.com/pocketagent/daemon/internal/runtime"
 )
 
@@ -29,15 +30,19 @@ type hermesHandlers struct {
 }
 
 // Client 是一条 ACP stdio 连接(python -m acp_adapter)。
-// 并发模型与 zcodeapp/dshapp 同族:请求用 pending map 关联应答,写入串行化,
-// 通知(session/update 流)分发给钩子,收尸 waitOnce 保证只 Wait 一次。
+// 并发模型与 zcodeapp/dshapp 同族:请求用 pending map 关联应答,写入经
+// rpcwire.Wire 串行化(worker 持锁 + 写预算,2026-10-09 波 A 收编;旧实现
+// "调用方持锁、超时放锁"会让残尾巴帧与下一帧交错 —— codexapp 修掉的坏帧病,
+// 随收编一并获得防护),通知(session/update 流)分发给钩子,收尸 waitOnce
+// 保证只 Wait 一次(hermes 的收尸要顺带叫醒 pending,与四家的纯日志收尸不同,
+// 保留在本包 reap)。
 type Client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
 	mu      sync.Mutex
-	writeMu sync.Mutex
+	wire    rpcwire.Wire
 	nextID  int64
 	pending map[int64]chan rpcResp
 	// abandoned 记录"调用方已放弃"的轮次长调用(见 CallTurnCtx / giveUpTurn):
@@ -160,6 +165,7 @@ func startProcess(exe string, args []string, dir string) (*Client, error) {
 	c := &Client{
 		cmd:     cmd,
 		stdin:   stdin,
+		wire:    rpcwire.Wire{Tag: "hermes-acp", Name: "hermes ACP"},
 		stdout:  bufio.NewReaderSize(stdout, 8*1024*1024),
 		pending: map[int64]chan rpcResp{},
 		exited:  make(chan struct{}),
@@ -337,46 +343,25 @@ type wireMsg struct {
 }
 
 // writeBudget 是单帧 stdin 写的预算:适配器挂死不读管道时 Write 会无限期阻塞,
-// 无预算的写会把 writeMu 持有方与整条调用链拖死(readLoop 的 -32601 应答、审批
-// 应答、取消帧收尾都可能陪葬)。
+// 无预算的写会把整条调用链拖死(readLoop 的 -32601 应答、审批应答、取消帧收尾
+// 都可能陪葬)。预算机制(含 worker 持锁的坏帧防护)收编在 rpcwire.Wire,
+// 此处只留本包的取值。
 const writeBudget = 5 * time.Second
 
+// writeFrame 序列化一帧并写 stdin(追加换行,NDJSON 每行一帧)。
+//
+// 【2026-10-09 收编 rpcwire】旧实现是"writeFrame 外层持 writeMu + 超时放锁 +
+// 后台 Write 裸飞",注释声称 os.File 自带写锁不会交错 —— 该判断是错的(裸
+// Write 的并发交错正是 codexapp 2026-10-04 修掉的坏帧病)。收编后统一 worker
+// 持锁语义:超时返回后残写仍持锁到真正结束,后续帧不会与它交错;超时必须按
+// "连接可能已坏"对待,绝不能当成"这帧没发出去"而重发(后台写完成后补发会
+// 造成重复帧)。
 func (c *Client) writeFrame(v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.writeWithBudget(append(raw, '\n'), writeBudget)
-}
-
-// writeWithBudget 在 budget 内完成一次 stdin 写,超时即返回错误。
-// 【超时语义】返回错误只代表"预算内没写完",底层 Write 可能仍在后台 goroutine 里
-// 继续执行(管道写没有取消手段);超时必须按"连接可能已坏"对待 —— 后续写大概率
-// 继续超时,由调用方 Close 收尸,绝不能当成"这帧没发出去"而重发(后台写完成后
-// 补发会造成重复帧)。
-// 【并发安全】超时放弃后 writeMu 随 writeFrame 返回而释放,迟到的后台 Write 不再
-// 持有 writeMu;os.File 底层写自带写锁,与本方后续写按 syscall 串行,不会交错出帧
-// (最坏是迟到的帧排在后面,连接已坏场景次序无关紧要)。
-// 【波次口径】本波包内自包含私有 helper,不建跨包公共件(波 4 统一收敛)。
-func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
-	type writeOutcome struct {
-		err error
-	}
-	done := make(chan writeOutcome, 1) // 带缓冲:放弃路径不阻塞后台写 goroutine
-	go func() {
-		_, err := c.stdin.Write(data)
-		done <- writeOutcome{err: err}
-	}()
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
-	select {
-	case out := <-done:
-		return out.err
-	case <-timer.C:
-		return fmt.Errorf("hermes ACP stdin 写超时(%s;写可能仍在后台完成)", budget)
-	}
+	return c.wire.Write(c.stdin, append(raw, '\n'), writeBudget)
 }
 
 // callTimeout 是 CallCtx(短控制调用)的兜底应答预算(与 codex/zcode 的

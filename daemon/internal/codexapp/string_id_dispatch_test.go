@@ -8,7 +8,7 @@
 //     (2026-10-04 起直透:负数句柄桥已随签名 RawMessage 化整体删除);
 //   - 数字 id 的反向请求/应答 → 行为与旧版逐字节一致(id 原样回显数字)。
 //
-// 另钉 writeWithBudget:stdin 卡死时写按预算超时返回,不再无限期阻塞调用方。
+// 另钉写预算(rpcwire.Wire 收编后):stdin 卡死时写按预算超时返回,不再无限期阻塞调用方。
 package codexapp
 
 import (
@@ -145,14 +145,15 @@ func TestRespondRejectsAbsentID(t *testing.T) {
 	}
 }
 
-// stdin 卡死(没人读管道):writeWithBudget 按预算返回错误,调用方不再无限期阻塞。
+// stdin 卡死(没人读管道):写预算机制(rpcwire.Wire 收编后)按预算超时返回,
+// 调用方不再无限期阻塞。
 func TestWriteWithBudgetTimesOut(t *testing.T) {
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close(); _ = pr.Close() }) // 关管道,放行卡在 Write 上的 worker
 	c := &Client{stdin: pw}
 
 	start := time.Now()
-	err := c.writeWithBudget([]byte("{\"jsonrpc\":\"2.0\"}\n"), 100*time.Millisecond)
+	err := c.wire.Write(c.stdin, []byte("{\"jsonrpc\":\"2.0\"}\n"), 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("无人读管道,写必须超时报错")
 	}
@@ -167,7 +168,7 @@ func TestWriteWithBudgetTimesOut(t *testing.T) {
 // 正常路径:预算内写完返回 nil,内容逐字节落管(含换行)。
 func TestWriteWithBudgetSuccess(t *testing.T) {
 	c, lines := newStringIDTestClient(t)
-	if err := c.writeWithBudget([]byte("{\"ping\":1}\n"), writeBudget); err != nil {
+	if err := c.wire.Write(c.stdin, []byte("{\"ping\":1}\n"), writeBudget); err != nil {
 		t.Fatalf("预算内写不应报错: %v", err)
 	}
 	select {

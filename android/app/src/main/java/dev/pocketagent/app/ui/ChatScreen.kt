@@ -214,7 +214,17 @@ import dev.pocketagent.app.ui.component.HistoryQuickPanel
 import dev.pocketagent.app.ui.component.HistoryTickBar
 // 【P3 Task 8】页面级长期状态分层:ChatScreen 只 collect ChatViewModel 的投影,
 // 写入经 ChatIntent 意图(状态树/纯 reducer 在 ui/chat/ChatState.kt)。
+import dev.pocketagent.app.ui.chat.ChatApprovalFlow
+import dev.pocketagent.app.ui.chat.ChatComposerArea
+import dev.pocketagent.app.ui.chat.ChatAttachmentViewer
+import dev.pocketagent.app.ui.chat.ChatContextUsagePanel
+import dev.pocketagent.app.ui.chat.ChatGoalSheet
+import dev.pocketagent.app.ui.chat.ChatMoreSheet
+import dev.pocketagent.app.ui.chat.ChatQuickModelsPanel
+import dev.pocketagent.app.ui.chat.ChatRollbackSheet
+import dev.pocketagent.app.ui.chat.ChatHostStatusArea
 import dev.pocketagent.app.ui.chat.ChatIntent
+import dev.pocketagent.app.ui.chat.ChatTimelineArea
 import dev.pocketagent.app.ui.chat.ChatViewModel
 import dev.pocketagent.app.ui.history.HistoryLocatePlan
 import dev.pocketagent.app.ui.history.HistorySearchHit
@@ -278,9 +288,28 @@ import pocketagent.v1.ThreadMessage
 import pocketagent.v1.ThreadStatus
 import pocketagent.v1.WriteFileRequest
 
+/**
+ * ChatItem 稳定 id 的进程级序号:每条进入时间线的 ChatItem 都在**构造处**领一个
+ * 全进程唯一的 id(见 [nextChatItemId]),历史回填则优先用 daemon 的 message_id
+ * 合成(见 [historyChatItemId])—— LazyColumn 的 itemsIndexed 拿它做 key,
+ * 历史前插(addAll(0,…))时既有条目 key 不位移,可见区 item 不再整体重执行。
+ */
+private val chatItemIdSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+/** 生成一个新的 ChatItem 稳定 id(实时帧/落卡/快照等一次性构造统一走这里)。 */
+internal fun nextChatItemId(role: String): String = "ci-$role-${chatItemIdSeq.incrementAndGet()}"
+
+/**
+ * 历史回填条目的稳定 id:daemon 带 message_id 时用 "hm-<id>#<块序号>"
+ * (同一条消息重拉得到同一 key,整表回填后 LazyColumn 仍能按 key 复用节点);
+ * 旧 daemon 无 id 时退进程级序号(每次构造不同,行为等同旧的按位置匹配)。
+ */
+internal fun historyChatItemId(messageId: String, subIndex: Int): String =
+    if (messageId.isNotBlank()) "hm-$messageId#$subIndex" else nextChatItemId("hist")
+
 /** 一条聊天记录(用户/助手/工具过程/思考过程/执行计划)。 */
 data class ChatItem(
-    val role: String, // user / assistant / tool / thinking / plan / codex_event
+    val role: String, // user / assistant / tool / thinking / plan / codex_event / items_trimmed
     val text: String = "",
     val toolName: String = "",
     val toolStatus: String = "", // running / success / failure
@@ -288,6 +317,12 @@ data class ChatItem(
     val toolArgs: String = "",
     val toolElapsedMs: Double = 0.0,
     val streaming: Boolean = false,
+    /**
+     * 构造时捕获的附件快照(C2 稳定化审计):写入点只有 composer 的整体重赋值
+     * (`attachments + uploaded` / `- at` / `= emptyList()`,每次都产新列表)与
+     * 历史映射的 `listOf(...)` 一次性构造 —— **构造后绝不再 mutate**,持有旧引用
+     * 的 ChatItem 永远看到同一份不可变内容。
+     */
     val attachments: List<Attachment> = emptyList(),
     val codexEvent: CodexEvent? = null,
     /** 执行计划步骤(turn/plan),每项 "status|text"。 */
@@ -307,6 +342,19 @@ data class ChatItem(
      * daemon 历史(ThreadMessage.created_at_unix_ms)/离线快照(Msg.savedAtMs)。
      */
     val sentAtMs: Long = 0,
+    /**
+     * 时间线 key(C2):构造处领的全进程唯一 id,itemsIndexed 拿它做 key。
+     * 空串 = 旧构造路径漏领(历史遗留/usage 等不进时间线的角色),key 回退
+     * 按位置生成,绝不因重复空串崩 LazyColumn。原地更新(工具卡/审查卡/投递
+     * 标签)必须沿用被替换实例的 id(copy 天然保留),否则节点被拆掉重建。
+     */
+    val id: String = "",
+    /**
+     * role == "items_trimmed" 时有效:C3 内存上限截断后,中间被折叠的**早期
+     * 原始消息**条数(含此前一轮截断已折叠的累计)。渲染为「⋯ 已折叠 N 条早期
+     * 消息」细行;不进 checkpoint / 导出 / 历史导航(那些路径按 role 过滤)。
+     */
+    val trimmedCount: Int = 0,
 )
 
 /**
@@ -318,7 +366,10 @@ data class ChatItem(
  * 滚动/流式追加期最大的组合浪费。纯函数:桶映射可 JVM 单测(ChatItemContentTypeTest)。
  */
 internal fun chatItemContentType(hackerMode: Boolean, item: ChatItem): Any =
-    if (hackerMode) terminalBlockKind(item) else item.role
+    // C3 折叠标记行(items_trimmed)两种主题同一渲染形态(细行),桶固定为专属
+    // 字符串:不随 hackerMode 在 OUTPUT/role 桶间漂移,滚动回收不与正文互毁。
+    if (item.role == "items_trimmed") "items_trimmed"
+    else if (hackerMode) terminalBlockKind(item) else item.role
 
 /** 已上传到电脑的附件(手机 → daemon 工作区 .pocketagent-uploads)。 */
 data class Attachment(
@@ -330,7 +381,7 @@ data class Attachment(
     val previewData: ByteArray? = null,
 )
 
-private fun loadAttachmentPreview(context: Context, attachment: Attachment): ImageBitmap? {
+internal fun loadAttachmentPreview(context: Context, attachment: Attachment): ImageBitmap? {
     return runCatching {
         if (attachment.previewData != null) {
             BitmapFactory.decodeByteArray(
@@ -346,7 +397,7 @@ private fun loadAttachmentPreview(context: Context, attachment: Attachment): Ima
 }
 
 @Composable
-private fun CodexEventCard(
+internal fun CodexEventCard(
     event: CodexEvent,
     uiScale: Float = 1f,
     guardianOverridden: Boolean = false,
@@ -526,7 +577,7 @@ private fun CodexEventCard(
  * 减弱动效时瞬时到位(不播位移,消息照常出现)。
  */
 @Composable
-private fun MessageEnterAnimation(
+internal fun MessageEnterAnimation(
     arm: Boolean,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
@@ -552,7 +603,7 @@ private fun MessageEnterAnimation(
  * 流式时默认展开(边想边看),落定后默认收起(避免长思考淹没正文)。
  */
 @Composable
-private fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
+internal fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
     var expanded by remember(streaming) { mutableStateOf(streaming) }
     Column(
         Modifier
@@ -610,7 +661,7 @@ private fun ThinkingCard(text: String, scale: Float, streaming: Boolean) {
  * 每段单独一行、行距拉开,读到哪一步一眼能分清 —— 只改排版,不动整体结构。
  */
 @Composable
-private fun PlanPanel(
+internal fun PlanPanel(
     steps: List<String>,
     draft: String,
     running: Boolean,
@@ -911,7 +962,7 @@ internal fun toolOutputPreview(
 }
 
 @Composable
-private fun ToolCallCard(item: ChatItem, scale: Float) {
+internal fun ToolCallCard(item: ChatItem, scale: Float) {
     // P0-4:常规工具卡默认折叠一行(▸ 工具名+摘要 · 状态/耗时),点击展开全量参数/输出。
     // 默认展开判定走纯函数 toolCardDefaultExpanded(红线卡 > 全局设置 > 子代理委派,
     // 优先级理由见该函数注释);折叠状态 rememberSaveable 按消息 id(toolId)留档 ——
@@ -1462,24 +1513,24 @@ internal fun approvalUiCopy(action: ApprovalRequest): ApprovalUiCopy {
 // 仍由 PaHacker 契约与 TerminalBlocks 承担。
 
 /** 通用卡面:瓷白表面(黑客盘=近黑 #0C0D11)。 */
-private val PanelCardColor: Color get() = PaEditorial.Surface
+internal val PanelCardColor: Color get() = PaEditorial.Surface
 /** 通用细线。 */
-private val PanelHairlineColor: Color get() = PaEditorial.Hairline
+internal val PanelHairlineColor: Color get() = PaEditorial.Hairline
 /** 琥珀提示面的描边/文字(离线横幅与待审批入口同族)。 */
-private val OfflineBannerOutline: Color get() = PaEditorial.AttentionContainer
-private val OfflineBannerText: Color get() = PaEditorial.AttentionText
+internal val OfflineBannerOutline: Color get() = PaEditorial.AttentionContainer
+internal val OfflineBannerText: Color get() = PaEditorial.AttentionText
 /** 正文主色。 */
-private val ChatInkColor: Color get() = PaEditorial.Ink
+internal val ChatInkColor: Color get() = PaEditorial.Ink
 /** 次级文字。 */
-private val ChatMutedColor: Color get() = PaEditorial.Muted
+internal val ChatMutedColor: Color get() = PaEditorial.Muted
 /** 三级文字。 */
-private val ChatSubtleColor: Color get() = PaEditorial.Subtle
+internal val ChatSubtleColor: Color get() = PaEditorial.Subtle
 /** 语义强调(进行中/可点链接)。 */
-private val ChatAccentColor: Color get() = PaEditorial.Primary
+internal val ChatAccentColor: Color get() = PaEditorial.Primary
 /** 语义绿(运行/成功)。 */
-private val ChatRunningColor: Color get() = PaEditorial.Running
+internal val ChatRunningColor: Color get() = PaEditorial.Running
 /** 语义红(未完成/拒绝)。 */
-private val ChatDeniedColor: Color get() = PaEditorial.Denied
+internal val ChatDeniedColor: Color get() = PaEditorial.Denied
 
 // =====================================================================================
 // 编辑式会话页新增小组件(2026-09-29 UI 整体升级·第二波 2/4)
@@ -1491,7 +1542,7 @@ private val ChatDeniedColor: Color get() = PaEditorial.Denied
  * 色:未送达=珊瑚红;已送达=绿;等待=次级灰(进行中的中性,主色只给"当前操作")。
  */
 @Composable
-private fun EditorialDeliveryBadge(state: String, queuePos: Int) {
+internal fun EditorialDeliveryBadge(state: String, queuePos: Int) {
     val copy = editorialDeliveryCopy(state, queuePos)
     if (copy.word.isEmpty()) return
     val visual = deliveryVisual(state, queuePos)
@@ -1587,7 +1638,7 @@ private fun ChatIdentityBadge(
  * 只换编辑式皮:琥珀浅底 + 细线描边 + 琥珀字(语义双通道:词在,色只是辅助)。
  */
 @Composable
-private fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
+internal fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1627,7 +1678,7 @@ private fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
  * README 红线的界面落点:入口卡只负责"把你带进弹窗",批准/拒绝只在 PaApprovalDialog。
  */
 @Composable
-private fun ApprovalEntryCard(onOpen: () -> Unit) {
+internal fun ApprovalEntryCard(onOpen: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1873,14 +1924,14 @@ internal fun effortsFor(
  * 输入框内容超过该字符数时,给"展开编辑"图标轻微高亮(PaEditorial.Primary),
  * 提示用户可点开大窗编辑长文本(见输入栏展开图标)。
  */
-private const val EXPAND_HINT_THRESHOLD = 80
+internal const val EXPAND_HINT_THRESHOLD = 80
 
 /**
  * 附件 chip 里文件名的中间省略上限(见 [middleEllipsize])。
  * 取值远大于常见文件名,保证正常名字完整可读(配合最多 3 行换行);
  * 只有病态长名才退化为"保留扩展名的中间省略"。
  */
-private const val ATTACH_CHIP_NAME_MAX = 80
+internal const val ATTACH_CHIP_NAME_MAX = 80
 
 /**
  * 【PA-REAL-0004 回归常量】输入区可点控件的最小触控箱边长(dp)。
@@ -1957,11 +2008,15 @@ fun ChatScreen(
     // snapshotFlow 桥),下方读点改读投影;写入通道(st.items/pendingApproval/
     // errorMessage/approvalError/queuedCount/historyLoaded/草稿)与 TurnSession 命令
     // 通道(send/cancelTurn/retryRecovery/answerApproval/...)仍由本页直接持有。
-    // bindSession 在 remember(threadId) 内同步播种(首帧即真实值,不留默认态闪帧),
-    // 随会话换绑;DisposableEffect 负责离开页面解绑。
-    val session by remember(threadId) { chatVm.bindSession(threadId); chatVm.session }
-        .collectAsState()
+    // bindSession/unbindSession 成对挂在 DisposableEffect(见下方效果块):绑定体
+    // 同步播种投影(首帧即真实值,不留默认态闪帧),随会话换绑,离开页面解绑。
+    // bindSession 的副作用挂 DisposableEffect(C4):绑定/解绑对称成对,随会话
+    // 换绑(onDispose 旧会话 → effect 体绑新会话),不再在 remember 初始化器里
+    // 做副作用绑定。效果体在组合成功后、首帧绘制前运行,投影播种值同帧生效,
+    // 首帧不闪默认态。
+    val session by chatVm.session.collectAsState()
     DisposableEffect(chatVm, threadId) {
+        chatVm.bindSession(threadId)
         onDispose { chatVm.unbindSession() }
     }
     // ---- 输入框修订号(P4 Task 2 前置小改)----
@@ -2037,9 +2092,8 @@ fun ChatScreen(
     val voiceController = remember { VoiceController(scope = scope, initialThreadId = threadId) }
     val voiceState by voiceController.state.collectAsState()
 
-    // ---- 【语音交互动画】两个一次性触发器(纯 UI,不进状态机) ----
-    // 【动画 ①】麦克风按下涟漪:每次点按 +1,组合层据此重放一圈"扩散 + 淡出"的圆环。
-    var micRippleTick by remember { mutableStateOf(0) }
+    // ---- 【语音交互动画】一次性触发器(纯 UI,不进状态机) ----
+    // 【动画 ①】麦克风按下涟漪触发器已随输入区迁至 ChatComposerArea(仅输入区消费)。
     // 【动画 ③】识别文本落框:Final 消费并入输入框时 +1,驱动输入框一次轻微的"落定"脉动,
     // 配合输入区的 animateContentSize 构成"文本飞入输入框"的过渡感。
     var voiceLandedTick by remember { mutableStateOf(0) }
@@ -2168,7 +2222,7 @@ fun ChatScreen(
     // 【裁定】识别完成默认【追加】到输入框(空格衔接,不覆盖已有内容);长按麦克风切换
     // 【替换】模式(开关式,图标着色 + 读屏描述 + Toast 同步反馈)。两种模式都不改写
     // 原文的大小写与标点。识别文本只并入输入框(走 setInput,修订号同车),绝不自动发送。
-    var voiceReplaceMode by remember { mutableStateOf(false) }
+    val voiceReplaceMode = remember { mutableStateOf(false) }
     // 每轮 Final 只消费一次(以 sessionId 防重:finalText 在下一轮 Start 前一直驻留域状态)。
     var voiceConsumedFinalForSid by remember { mutableStateOf(0L) }
     LaunchedEffect(voiceState.phase, voiceState.sessionId) {
@@ -2177,7 +2231,7 @@ fun ChatScreen(
             voiceConsumedFinalForSid != voiceState.sessionId
         ) {
             voiceConsumedFinalForSid = voiceState.sessionId
-            setInput(voiceApplyToInput(input, spoken, replace = voiceReplaceMode))
+            setInput(voiceApplyToInput(input, spoken, replace = voiceReplaceMode.value))
             voiceLandedTick++ // 【动画 ③】文本落框触发输入框"落定"脉动(见输入区)
         }
     }
@@ -2208,34 +2262,34 @@ fun ChatScreen(
         else -> false
     }
 
-    var showModelCard by remember { mutableStateOf(false) }
+    val showModelCard = remember { mutableStateOf(false) }
     // 【历史消息快速查看】左缘刻度条点开/关闭的浮层(视频样板交互)。
     // rememberSaveable:进程重建(切主题/配置变化)后面板开合态不丢。
-    var showHistoryPanel by rememberSaveable { mutableStateOf(false) }
+    val showHistoryPanel = rememberSaveable { mutableStateOf(false) }
     // 【模型快速切换面板】模型行下拉箭头直接展开的轻面板(单点即切,
     // 不再强制进 ModelEffortCard 二级弹窗;"更多…"仍可进完整选择卡)。
-    var showQuickModels by remember { mutableStateOf(false) }
+    val showQuickModels = remember { mutableStateOf(false) }
     // 切换成功后的行内反馈 tick:驱动模型名一次轻量闪光(真实选择才有,不造假状态)
     var modelFlashTick by remember { mutableStateOf(0) }
-    var showContextCard by remember { mutableStateOf(false) }
+    val showContextCard = remember { mutableStateOf(false) }
     var showDrawer by remember { mutableStateOf(false) }
     // 侧边栏跟手:手势与面板共用同一个进度(0..1),手指在哪面板就在哪
     val drawerCtrl = dev.pocketagent.app.ui.component.rememberDrawerController()
     var showNewThread by remember { mutableStateOf(false) }
-    var showGitPanel by remember { mutableStateOf(false) }
-    var showExport by remember { mutableStateOf(false) }
+    val showGitPanel = remember { mutableStateOf(false) }
+    val showExport = remember { mutableStateOf(false) }
     // 子代理卡长按快览(T-SUB):非 null 时弹快览层(渲染在文件中部 sheet 区),
     // 收起不影响任何状态 —— 蓝本 §4.3"不打断主对话浏览的偷看"。
-    var peekSub by remember(threadId) { mutableStateOf<SubAgentThreadMeta?>(null) }
+    val peekSub = remember(threadId) { mutableStateOf<SubAgentThreadMeta?>(null) }
     // 「更多」面板:分叉 / 回滚。这两件事都是**偶尔做一次**的会话级动作,
     // 单独给顶栏加两个常驻按钮会让它变挤,收进一个入口更稳。
-    var showMore by remember { mutableStateOf(false) }
+    val showMore = remember { mutableStateOf(false) }
     // 【内置伪命令"/目标"的弹窗开关】斜杠卡面伪命令点选 = 执行动作:/目标
     // 打开下方的设置目标底栏(slashGoalSheet 块),/压缩 直接走 doCompact(),
     // /计划(review:<agentId> 位会话,现仅 codex)直接走 doStartReview()。
-    var slashGoalSheet by remember { mutableStateOf(false) }
+    val slashGoalSheet = remember { mutableStateOf(false) }
     // 回滚选择(二级面板):先选丢几个回合,再确认
-    var rollbackOpen by remember { mutableStateOf(false) }
+    val rollbackOpen = remember { mutableStateOf(false) }
     var rollbackBusy by remember { mutableStateOf(false) }
     // 手动压缩是低频的会话级动作,与回滚一样放在“更多”里。
     var compactBusy by remember { mutableStateOf(false) }
@@ -2246,10 +2300,10 @@ fun ChatScreen(
     var reviewBusy by remember { mutableStateOf(false) }
     // 【长文本大窗编辑】输入框最多 4 行,写长需求/贴代码时不够用。
     // 打开一个整屏可用高度的编辑面板,内容与输入框双向同一份 state。
-    var expandedInputOpen by remember { mutableStateOf(false) }
+    val expandedInputOpen = remember { mutableStateOf(false) }
     // 【执行计划面板】任务完成后计划卡不再散落在时间线里,而是收进会话上方
     // 一个可展开/收起的面板:默认收起(顶部只留一行进度摘要),点开看完整步骤。
-    var planPanelOpen by remember { mutableStateOf(false) }
+    val planPanelOpen = remember { mutableStateOf(false) }
     // 最近一次计划的步骤(时间线里落定的 + 正在流式的,取最新的一份)
     // 【P3 Task 8 第三层】派生已上收 TurnSessionUiState.latestPlan(投影内同式:
     // 时间线 plan 卡取最新,流式草稿兜底),此处只投影。
@@ -2258,7 +2312,7 @@ fun ChatScreen(
     // 键用 Boolean 而不是步骤列表:只在"从无到有"时触发一次,
     // 之后用户手动收起不会被反复弹开。
     LaunchedEffect(latestPlan.isNotEmpty()) {
-        if (latestPlan.isNotEmpty()) planPanelOpen = true
+        if (latestPlan.isNotEmpty()) planPanelOpen.value = true
     }
     // 侧边栏用的最近会话:和模型/设置一起预取,打开抽屉时直接就是数据,不必等网络
     var recentThreads by remember { mutableStateOf(listOf<PThread>()) }
@@ -2269,20 +2323,20 @@ fun ChatScreen(
     BackHandler(enabled = true) {
         when {
             drawerCtrl.visible -> drawerCtrl.close()
-            showHistoryPanel -> showHistoryPanel = false
-            rollbackOpen -> rollbackOpen = false
-            showMore -> showMore = false
-            showExport -> showExport = false
-            showGitPanel -> showGitPanel = false
-            showContextCard -> showContextCard = false
-            showModelCard -> showModelCard = false
+            showHistoryPanel.value -> showHistoryPanel.value = false
+            rollbackOpen.value -> rollbackOpen.value = false
+            showMore.value -> showMore.value = false
+            showExport.value -> showExport.value = false
+            showGitPanel.value -> showGitPanel.value = false
+            showContextCard.value -> showContextCard.value = false
+            showModelCard.value -> showModelCard.value = false
             // 计划面板展开时,返回先收起面板(它是最贴近"当前屏幕状态"的一层)
-            planPanelOpen -> planPanelOpen = false
+            planPanelOpen.value -> planPanelOpen.value = false
             else -> onBack()
         }
     }
-    var attachments by remember { mutableStateOf(listOf<Attachment>()) }
-    var selectedAttachment by remember { mutableStateOf<Attachment?>(null) }
+    val attachments = remember { mutableStateOf(listOf<Attachment>()) }
+    val selectedAttachment = remember { mutableStateOf<Attachment?>(null) }
     // 【PF4】按 threadId 记忆:导航 launchSingleTop 复用同一 ChatScreen 实例,
     // 会话切换必须重置本会话的 daemon 回填值,不能闪现上一会话的残值。
     // 【P3 Task 8 第二层】threadWorkspace/loadError 已收进 ChatViewModel(ChatState)
@@ -2322,7 +2376,8 @@ fun ChatScreen(
         val spans = mutableListOf<MessageSpan>()
         for ((i, m) in messages.withIndex()) {
             val start = items.size
-            items += historyToChatItems(listOf(m))
+            // C2:历史条目领稳定 id(daemon message_id 合成,旧 daemon 退序号)
+            items += historyChatItemsWithIds(listOf(m))
             spans += MessageSpan(
                 messageId = m.messageId,
                 turnId = m.turnId,
@@ -2352,6 +2407,8 @@ fun ChatScreen(
         if (newCount <= 0) return 0
         val (newItems, newSpans) = buildHistoryBatch(messages.take(newCount))
         st.items.addAll(0, newItems)
+        // C3:前插后统一封顶(超 400 中间截断;已加载条目引用稳定不变)
+        TurnSession.enforceTimelineCap(st)
         chatVm.send(ChatIntent.PrependApplied(newSpans, newItems.size, messages.first().messageId))
         return newItems.size
     }
@@ -2387,28 +2444,9 @@ fun ChatScreen(
     // SlashCommandCache 与拉取 RPC 原样留在这里(缓存去重通道零改动)。
     val slashCommands = chatState.slashCommands
     LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, slashTokenOf(input) != null, session.running) {
-        if (!isSlashPanelAgent(threadAgentId)) {
-            // 非面板会话(zcode/codex/pi 之外)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
-            chatVm.send(ChatIntent.SlashCommandsSettled(emptyList()))
-            return@LaunchedEffect
-        }
-        val cached = SlashCommandCache.get(threadId)
-        if (cached != null) chatVm.send(ChatIntent.SlashCommandsSettled(cached))
-        val loaded = try {
-            withContext(Dispatchers.IO) {
-                AgentConnection.threadService()
-                    .withDeadlineAfter(SLASH_COMMANDS_DEADLINE_S, TimeUnit.SECONDS)
-                    .listSlashCommands(
-                        ListSlashCommandsRequest.newBuilder().setThreadId(threadId).setRefresh(true).build(),
-                    )
-                    .commandsList
-                    .map { SlashCommandInfo(it.name, it.description, it.inputHint) }
-            }
-        } catch (_: Exception) {
-            emptyList() // 拉不到就没有面板,不是错误
-        }
-        SlashCommandCache.put(threadId, loaded)
-        chatVm.send(ChatIntent.SlashCommandsSettled(loaded))
+        // 【C1 RPC 入 VM】拉取/缓存/镜像落位三段整体收进 ChatViewModel.refreshSlashCommands
+        // (语义逐字保留:非面板清空 → 缓存先渲染 → RPC 回包/失败降级空表)。
+        chatVm.refreshSlashCommands(threadId, threadAgentId)
     }
     // 「优化」点击(P4 Task 2):走仓库发 RPC,结果进预览弹层等用户确认,不再
     // 直接替换输入框。daemon 侧整段预算 150s,手机端 deadline 再兜余量(仓库的
@@ -2524,47 +2562,15 @@ fun ChatScreen(
     val thinkScale = AgentConnection.thinkTextScale
 
     // codex 桌面端设置(审批策略芯片用)+ 模型列表(芯片显示模型名用)
+    // 【C1 RPC 入 VM】四路 RPC 收进 ChatViewModel.prefetchStatic;失败项回 null,
+    // 这里只在非空时覆盖(与迁出前"catch 不覆盖已有值"同一语义),加载错误的
+    // "现值为空才写"裁定在 VM(LoadErrorSetIfAbsent)。
     LaunchedEffect(connectionEpoch, reloadToken) {
-        try {
-            withContext(Dispatchers.IO) {
-                codexSettings = AgentConnection.modelService()
-                    .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
-            }
-        } catch (e: Exception) {
-            // 不覆盖已有提示:离线快照的黄条比这里的红条更有信息量(真机验证发现
-            // 两个并行加载共用 loadError,后完成者会把"离线:显示的是本地记录"顶掉)
-            // 【P3 Task 8 第二层】"现值为空才写"的条件收进 reducer(LoadErrorSetIfAbsent
-            // 对权威现值判定;原地读投影有一帧滞后,会把先到的错误顶掉)。
-            chatVm.send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型设置：${e.message ?: "连接失败"}"))
-        }
-        try {
-            withContext(Dispatchers.IO) {
-                models = AgentConnection.modelServiceSlow()
-                    .listModels(ListModelsRequest.newBuilder().build()).modelsList
-            }
-        } catch (e: Exception) {
-            chatVm.send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型列表：${e.message ?: "连接失败"}"))
-        }
-        try {
-            withContext(Dispatchers.IO) {
-                hostName = AgentConnection.hostService()
-                    .getHostInfo(GetHostInfoRequest.getDefaultInstance()).displayName
-            }
-        } catch (_: Exception) {
-            // 电脑名取不到不影响聊天,侧边栏回退到通用文案
-        }
-        try {
-            withContext(Dispatchers.IO) {
-                recentThreads = AgentConnection.threadService()
-                    .listThreads(
-                        ListThreadsRequest.newBuilder()
-                            .setIncludeArchived(false)
-                            .build())
-                    .threadsList
-            }
-        } catch (_: Exception) {
-            // 拉不到就显示空态,不影响当前会话
-        }
+        val prefetched = chatVm.prefetchStatic()
+        prefetched.codexSettings?.let { codexSettings = it }
+        prefetched.models?.let { models = it }
+        prefetched.hostName?.let { hostName = it }
+        prefetched.recentThreads?.let { recentThreads = it }
         recentLoading = false
     }
 
@@ -2726,8 +2732,8 @@ fun ChatScreen(
     }
     // ② 卡片打开期间每 3s 刷新一次;卡片关闭即随 LaunchedEffect 作用域取消,不会漏取消。
     var usageRefreshTick by remember { mutableStateOf(0) }
-    LaunchedEffect(showContextCard) {
-        if (!showContextCard) return@LaunchedEffect
+    LaunchedEffect(showContextCard.value) {
+        if (!showContextCard.value) return@LaunchedEffect
         while (true) {
             delay(3000)
             usageRefreshTick++
@@ -2797,7 +2803,7 @@ fun ChatScreen(
 
     fun openAttachment(attachment: Attachment) {
         if (attachmentKind(attachment.name, attachment.mediaType) == AttachmentKind.IMAGE) {
-            selectedAttachment = attachment
+            selectedAttachment.value = attachment
             return
         }
         val uri = attachment.localUri?.let(Uri::parse)
@@ -2860,7 +2866,7 @@ fun ChatScreen(
                         )
                     }
                 }
-                attachments = attachments + uploaded
+                attachments.value = attachments.value + uploaded
                 Toast.makeText(ctx, "已上传 ${uploaded.size} 个附件", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(ctx, "附件上传失败:${e.message}", Toast.LENGTH_SHORT).show()
@@ -2872,9 +2878,9 @@ fun ChatScreen(
     // 【为什么放列表容器层】常规气泡与 hacker 终端块共用同一条 LazyColumn,跟随/
     // 未读/胶囊只在容器层做一次,两条渲染路径天然一致;判定全走纯函数
     // (shouldAutoScroll / accumulateUnreadBlocks 等,JVM 单测钉死)。
-    var followBottom by remember(threadId) { mutableStateOf(true) }
+    val followBottom = remember(threadId) { mutableStateOf(true) }
     // 离底期间累计的未读新块数(胶囊上的 N;回到底部即清零)
-    var unreadBlocks by remember(threadId) { mutableStateOf(0) }
+    val unreadBlocks = remember(threadId) { mutableStateOf(0) }
     // 程序滚动标记:不是 UI 状态(不参与重组),只用来让"距底观测"忽略我们自己
     // 发起的 scrollToItem —— 否则跟随滚动进行中的中间位置会被误判成"用户滚走了"。
     val programmaticScroll = remember(threadId) { AtomicBoolean(false) }
@@ -2907,7 +2913,7 @@ fun ChatScreen(
 
     /** 浮层点卡片:跳到那条消息并关浮层(浮层自己不持列表状态)。 */
     fun jumpToHistoryEntry(listIndex: Int) {
-        showHistoryPanel = false
+        showHistoryPanel.value = false
         scope.launch {
             programmaticScroll.set(true)
             try {
@@ -2916,7 +2922,7 @@ fun ChatScreen(
                 programmaticScroll.set(false)
             }
             // 跳去历史 = 用户主动离开底部:解除跟随,新内容交给「↓ N 条新内容」胶囊
-            followBottom = false
+            followBottom.value = false
         }
     }
 
@@ -2934,7 +2940,7 @@ fun ChatScreen(
     fun scrubToHistoryTick(entryIndex: Int) {
         val entry = historyEntries.getOrNull(entryIndex) ?: return
         programmaticScroll.set(true)
-        followBottom = false
+        followBottom.value = false
         listState.requestScrollToItem(entry.listIndex)
     }
 
@@ -2944,12 +2950,12 @@ fun ChatScreen(
      * 胶囊一致(程序滚动标记挡住距底观测,完成后重申跟随)。
      */
     fun jumpToLatestFromHistory() {
-        showHistoryPanel = false
+        showHistoryPanel.value = false
         scope.launch {
             programmaticScroll.set(true)
             try {
                 listState.scrollToItem(st.items.size - 1)
-                followBottom = true
+                followBottom.value = true
             } finally {
                 programmaticScroll.set(false)
             }
@@ -3072,23 +3078,23 @@ fun ChatScreen(
             if (programmaticScroll.get()) return@collect
             val nowFollowing = shouldFollowDistance(distance)
             // 从"离底"被用户亲手滚回"贴底":一次轻触觉确认跟随已恢复(可选,跟减弱动效)
-            if (nowFollowing && !followBottom && !reduceMotion) {
+            if (nowFollowing && !followBottom.value && !reduceMotion) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
-            followBottom = nowFollowing
-            if (nowFollowing) unreadBlocks = 0
+            followBottom.value = nowFollowing
+            if (nowFollowing) unreadBlocks.value = 0
         }
     }
 
     // 新内容到达:仅当"本来在跟随"(或用户其实仍在距底 100px 内)才自动回底;
     // 真离底(上滑阅读)绝不拽动,只累加未读块数交给「↓ N 条新内容」胶囊。
     LaunchedEffect(st.items.size, st.streamText.length / STREAM_BLOCK_CHARS, st.streaming) {
-        val wasFollowing = followBottom
+        val wasFollowing = followBottom.value
         val itemBlocks = (st.items.size - arriveItemCount).coerceAtLeast(0)
         val streamBlocks = (streamBlockIndex(st.streamText.length) - arriveStreamBlocks).coerceAtLeast(0)
         arriveItemCount = st.items.size
         arriveStreamBlocks = streamBlockIndex(st.streamText.length)
-        unreadBlocks = accumulateUnreadBlocks(wasFollowing, unreadBlocks, itemBlocks, streamBlocks)
+        unreadBlocks.value = accumulateUnreadBlocks(wasFollowing, unreadBlocks.value, itemBlocks, streamBlocks)
         val total = st.items.size + if (st.streaming) 1 else 0
         // 用户手势进行中(drag/fling,且非我们的程序滚动)绝不抢滚动:同一帧里
         // "上滑"与"新内容到达"撞车时,以用户为准 —— 下一帧距底观测会解除跟随,
@@ -3101,7 +3107,7 @@ fun ChatScreen(
             try {
                 listState.scrollToItem(total - 1)
                 // 重申跟随:程序回底不是"用户离底",距底观测被标记挡住看不到这帧
-                followBottom = true
+                followBottom.value = true
             } finally {
                 programmaticScroll.set(false)
             }
@@ -3119,7 +3125,7 @@ fun ChatScreen(
     val threadStatus = chatState.threadStatus
     // 【桌面只读回显】会话目标顶栏文案(GoalDisplayLogic:goal_detail 电脑端现读优先,
     // goal 本地库兜底):有则显示一行,无则不占位。
-    var threadGoalLine by remember(threadId) { mutableStateOf<String?>(null) } // 【PF4】换会话重置,理由同 threadWorkspace
+    val threadGoalLine = remember(threadId) { mutableStateOf<String?>(null) } // 【PF4】换会话重置,理由同 threadWorkspace
     LaunchedEffect(threadId, connectionEpoch, reloadToken) {
         // 【P1-4 阶段 D · 离线快照】已知断网(down)进页且时间线还没内容:
         // 直接用本地只读副本渲染 + 顶部横幅 + 输入停用。checking 是巡检中间态,
@@ -3132,8 +3138,9 @@ fun ChatScreen(
                 // 【深优 R2 修复】快照里的真实时间戳必须带上 —— 此前在这里被丢弃,
                 // 且快照非空会跳过下面的在线加载,导致历史导航的日期分组全程失效
                 st.items.addAll(snap.map {
-                    ChatItem(role = it.role, text = it.text, sentAtMs = it.savedAtMs)
+                    ChatItem(role = it.role, text = it.text, sentAtMs = it.savedAtMs, id = nextChatItemId(it.role))
                 })
+                TurnSession.enforceTimelineCap(st)
                 if (st.items.isNotEmpty()) listState.scrollToItem(st.items.size - 1)
                 // 【P3 Task 8】离线快照标志经 ViewModel 意图落位(在线路径不动身份索引)
                 chatVm.send(ChatIntent.ShowOfflineSnapshot(dev.pocketagent.app.ui.component.ThreadSnapshot.messagesAt(threadId)))
@@ -3170,7 +3177,7 @@ fun ChatScreen(
             }
             // 目标回读(只增):daemon 在 GetThread 里现读 codex 的 thread/goal/get,
             // 这里只管把"目标:xxx"文案算出来;读不到/没设目标时为 null,不占位。
-            threadGoalLine = GoalDisplayLogic.goalLine(t)
+            threadGoalLine.value = GoalDisplayLogic.goalLine(t)
         } catch (e: Exception) {
             // 【P3 Task 8 第二层】getThread 失败经 ViewModel(LoadErrorReported)
             chatVm.send(ChatIntent.LoadErrorReported("无法加载会话：${e.message ?: "连接失败"}"))
@@ -3202,6 +3209,8 @@ fun ChatScreen(
                     val (items, spans) = buildHistoryBatch(resp.messagesList)
                     st.items.clear()
                     st.items.addAll(items)
+                    // C3:整表回填后统一封顶(超 400 中间截断)
+                    TurnSession.enforceTimelineCap(st)
                     // 【P3 Task 8】身份索引/最旧锚点/截断位经 ViewModel 一次落位
                     // (knownTotal 保留在 reducer 内,普通拉取不洗掉搜索回包的全量基准)
                     chatVm.send(
@@ -3238,7 +3247,10 @@ fun ChatScreen(
             val snap = withContext(Dispatchers.IO) { dev.pocketagent.app.ui.component.ThreadSnapshot.readThreadSnapshot(threadId) }
             if (!snap.isNullOrEmpty() && st.items.isEmpty()) {
                 st.items.clear()
-                st.items.addAll(snap.map { ChatItem(role = it.role, text = it.text) })
+                st.items.addAll(snap.map {
+                    ChatItem(role = it.role, text = it.text, id = nextChatItemId(it.role))
+                })
+                TurnSession.enforceTimelineCap(st)
                 listState.scrollToItem(st.items.size - 1)
                 // 快照条目没有 daemon 身份:身份索引一并作废(离线下搜索本就不可达,
                 // 重连重建 —— 绝不让旧索引把命中指进快照列表)
@@ -3314,9 +3326,9 @@ fun ChatScreen(
     fun send(text: String): Boolean {
         if (text.isBlank() || offlineSnapshot) return false
         val wasRunning = st.running // 先取:TurnSession.send 里可能刚把轮次置为 running
-        val sent = attachments
+        val sent = attachments.value
         if (!TurnSession.send(threadId, text, sent)) return false
-        attachments = emptyList()
+        attachments.value = emptyList()
         if (wasRunning) {
             // 运行中提交的回执:发送语义随 daemon 的 steer:<agentId> 位如实二选一
             // (有位=真插话进当前轮次,缺位=daemon 排队兜底);最终落点以时间线
@@ -3357,7 +3369,7 @@ fun ChatScreen(
         // 【防重入闸】与 doRollback/doCompact 同款:forkThread 在途时再点直接忽略,
         // 不重复发请求、不叠 Toast。
         if (forkBusy) return
-        showMore = false
+        showMore.value = false
         if (st.running) {
             Toast.makeText(ctx, "任务正在执行,等它跑完再分叉", Toast.LENGTH_SHORT).show()
             return
@@ -3392,7 +3404,7 @@ fun ChatScreen(
                             .setNumTurns(turns)
                             .build())
                 }
-                rollbackOpen = false
+                rollbackOpen.value = false
                 // 重新拉一次历史:daemon 会把本地历史裁掉,但手机端手上那份还是旧的,
                 // 不重拉就会出现"回滚了但屏幕上那几条还在"。
                 reloadToken++
@@ -3413,7 +3425,7 @@ fun ChatScreen(
             return
         }
         compactBusy = true
-        showMore = false
+        showMore.value = false
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -3508,7 +3520,7 @@ fun ChatScreen(
     // 【PF4】按 threadId 记忆:菜单目标/选择模式请求持有旧会话 ChatItem 引用,
     // 换会话必须作废(否则跨会话 copy/quote/retry 操作到上一会话的消息)。
     var messageMenuTarget by remember(threadId) { mutableStateOf<ChatItem?>(null) }
-    var messageSelectArmed by remember(threadId) { mutableStateOf<ChatItem?>(null) }
+    val messageSelectArmed = remember(threadId) { mutableStateOf<ChatItem?>(null) }
 
     val connSt = AgentConnection.connState.collectAsState().value
     val hasFailure = loadError != null ||
@@ -3550,161 +3562,19 @@ fun ChatScreen(
         editorialThreadStatusView(status, pending, session.errorMessage ?: "")
     }
 
-    // =====================================================================
-    // 审批弹窗状态机(README §审批弹窗状态机;皮 = component/PaApprovalDialog,
-    // 纯逻辑 = ui/EditorialApproval,数据流 = 现有 daemon ApprovalRequest 链)
-    //
-    // 请求(TurnSession.APPROVAL_REQUEST → st.pendingApproval)
-    //   → 组装 ApprovalRequestUi(PENDING)并自动弹窗
-    //   → onDecide → submitting(allow) → TurnSession.answerApproval(现有 SubmitApproval 链)
-    //   → 请求从 st.pendingApproval 移除 = 服务端链路收下 → serverConfirmed → settled
-    //     → ALLOWED/DENIED 终态词展示一拍 → 清弹窗、清待审批 UI
-    //   → 提交失败(st.approvalError 非空且请求仍在)→ markUnavailable(人话原因)+ 重试
-    //   → 请求在电脑端被先行处理(APPROVAL_RESOLVED/轮次终局清卡)→ markUnavailable 收场
-    // 红线:dismiss(弹窗外点击/返回)= 暂不处理,请求保持待审批,绝不等于拒绝;
-    //       不做乐观通过 —— 终态词只在提交链路收下请求后出现。
-    // =====================================================================
-    var approvalUi by remember(threadId) { mutableStateOf<ApprovalRequestUi?>(null) }
-    var approvalDialogOpen by remember(threadId) { mutableStateOf(false) }
-    LaunchedEffect(session.pendingApproval?.requestId) {
-        val ap = session.pendingApproval
-        if (ap == null) {
-            val ui = approvalUi ?: return@LaunchedEffect
-            approvalUi = when (ui.phase) {
-                // 提交在途时请求消失 = answerApproval 已收下(通道/RPC 二选一成功)
-                // → 服务端确认,落终态词(「移除待审批 UI」自此有了确认依据)
-                ApprovalPhase.SUBMITTING -> ui.serverConfirmed(ui.submittedChoice == true).settled()
-                // 未提交时请求消失 = 已在电脑端被处理(快照回填/竞速清理)→ 如实说,不给假决定
-                ApprovalPhase.RECEIVED, ApprovalPhase.PENDING ->
-                    ui.markUnavailable("这条审批已在电脑端被处理，无需再次决定")
-                else -> ui
-            }
-        } else if (approvalUi?.requestId != ap.requestId) {
-            // 新请求到达:组装白名单文案并自动弹窗(既有"请求即达"行为,容器换成弹窗)
-            val copy = approvalUiCopy(ap)
-            approvalUi = ApprovalRequestUi(
-                requestId = ap.requestId,
-                threadId = threadId,
-                agentName = selectedAgentLabel(threadAgentId),
-                sessionTitle = threadTitle.ifBlank { "会话" },
-                purpose = copy.purpose,
-                workspace = copy.cwd.ifBlank { threadWorkspace.orEmpty() },
-                actionKind = copy.actionKind,
-                command = copy.command,
-                phase = ApprovalPhase.PENDING,
-                // 【R2 三选项装配】daemon(R1-C1)透出的选项列表与详情:有则审批卡
-                // 渲染三按钮(本次允许/本会话允许/拒绝);旧 daemon 无此字段 → 空
-                // 列表走旧两按钮分支,双向兼容。
-                options = ap.optionsList.toApprovalOptionUi(),
-                details = ap.details,
-            )
-            approvalDialogOpen = true
-        }
-    }
-    // 提交失败:TurnSession 置 approvalError 且请求仍在 → 暂无法处理(人话原因+重试)
-    LaunchedEffect(session.approvalError) {
-        val err = session.approvalError ?: return@LaunchedEffect
-        val ui = approvalUi ?: return@LaunchedEffect
-        if (session.pendingApproval?.requestId == ui.requestId) {
-            approvalUi = ui.markUnavailable(err)
-        }
-    }
-    // 相位收尾:CONFIRMED 一拍后落终态词;终态/请求已消失的失效态展示一拍后自动收弹窗。
-    // 提交失败的 UNAVAILABLE(请求仍在)**不**自动关 —— 保留请求和决定界面等重试。
-    LaunchedEffect(approvalUi?.phase) {
-        val ui = approvalUi ?: return@LaunchedEffect
-        when (ui.phase) {
-            ApprovalPhase.CONFIRMED -> {
-                delay(500)
-                approvalUi = approvalUi?.settled()
-            }
-            ApprovalPhase.ALLOWED, ApprovalPhase.DENIED -> {
-                delay(900)
-                approvalDialogOpen = false
-                approvalUi = null
-            }
-            ApprovalPhase.UNAVAILABLE -> if (session.pendingApproval == null) {
-                delay(1400)
-                approvalDialogOpen = false
-                approvalUi = null
-            }
-            else -> {}
-        }
-    }
-
-    // 反问类(request_user_input / mcp_elicitation)仍走既有问题卡:PaApprovalDialog
-    // 的白名单没有"问题/选项/自由输入"的槽位(基座组件禁改),而反问必须把答案经
-    // note 通道回给 daemon —— 两类语义在数据层同链,在界面层分容器。红线语义
-    // (不可下滑关闭/拦截返回/不替用户做决定)由 PaSheetConvergenceTest 钉住不动。
-    session.pendingApproval?.let { ap ->
-        if (askIsAskAction(ap.action.name)) {
-            ApprovalSheet(
-                action = ap,
-                error = session.approvalError,
-                onDecision = { approved, note ->
-                    // 语义触觉(P1-5):审批提交 = 轻击确认 —— 手指离开屏幕的瞬间就有
-                    // "已交出去了"的物理回执,不等网络往返。
-                    PaHaptics.confirm(hapticView)
-                    TurnSession.answerApproval(threadId, ap.requestId, approved, note)
-                },
-            )
-        }
-    }
-
-    // 审批弹窗本体:phase 驱动,决定按钮/重试/暂不处理三条通道(见上方状态机注释)
-    approvalUi?.let { ui ->
-        if (approvalDialogOpen) {
-            val brandRes = agentBrandIcon(threadAgentId)
-            val agentIconSlot: (@Composable () -> Unit)? = if (brandRes != null) {
-                {
-                    Icon(
-                        painterResource(brandRes), null,
-                        tint = Color.Unspecified, modifier = Modifier.size(28.dp),
-                    )
-                }
-            } else {
-                null
-            }
-            PaApprovalDialog(
-                request = ui,
-                onDecide = { allow ->
-                    if (ui.decideEnabled) {
-                        // 触感按决定语义分档(同动作全局同强度):允许 = confirm
-                        // (已交出去);拒绝 = warning(打断电脑端的活,分量更重)。
-                        if (allow) PaHaptics.confirm(hapticView) else PaHaptics.warning(hapticView)
-                        approvalUi = ui.submitting(allow)
-                        // 现有 SubmitApproval 链:通道直发,失败回退 submitApproval RPC;
-                        // 请求是否被收下以 st.pendingApproval 的移除为准(见上方状态机)
-                        TurnSession.answerApproval(threadId, ui.requestId, allow)
-                    }
-                },
-                onDecideOption = { optionId ->
-                    if (ui.decideEnabled) {
-                        // 三按钮的第三按钮(acceptForSession 等):同为允许语义 →
-                        // confirm 档;选项 id 原词走同一条 answerApproval 链
-                        // (approved=true + option,daemon 按协议版本翻译)。
-                        PaHaptics.confirm(hapticView)
-                        approvalUi = ui.submitting(allow = true, option = optionId)
-                        TurnSession.answerApproval(
-                            threadId, ui.requestId, approved = true, option = optionId,
-                        )
-                    }
-                },
-                onDismiss = {
-                    // 关闭 = 暂不处理(请求保持待审批,入口卡/身份行可再次打开)。
-                    // 仅提交中/服务端确认中不关 —— 决定已在途,关掉会让确认没有落点。
-                    if (ui.phase != ApprovalPhase.SUBMITTING && ui.phase != ApprovalPhase.CONFIRMED) {
-                        approvalDialogOpen = false
-                    }
-                },
-                onRetry = {
-                    st.approvalError = null
-                    approvalUi = approvalUi?.retry()
-                },
-                agentIcon = agentIconSlot,
-            )
-        }
-    }
+    // 【C1 拆分】审批弹窗状态机整体迁至 ui/chat/ChatApproval.kt;弹窗开合旗标
+    // approvalDialogOpen 留在本页(时间线入口卡/身份徽章也开它),随参数直传。
+    val approvalDialogOpen = remember(threadId) { mutableStateOf(false) }
+    ChatApprovalFlow(
+        threadId = threadId,
+        threadAgentId = threadAgentId,
+        threadTitle = threadTitle,
+        threadWorkspace = threadWorkspace,
+        session = session,
+        st = st,
+        hapticView = hapticView,
+        approvalDialogOpen = approvalDialogOpen,
+    )
 
     // 根布局包一层 Box:给「已优化提示词[撤销]」的 UndoBar 提供顶部悬浮层
     // (不挤内容;FilesScreen/ThreadsScreen 同款用法)。Column 本体不动。
@@ -3712,1766 +3582,144 @@ fun ChatScreen(
         // 【会话中段 lambda】目标/子代理/提示条/审批入口/计划面板/时间线/「新内容」胶囊
         // —— 黑客终端骨架(原 Column)与编辑式骨架(PaScreenScaffold)一字不差共用;
         // 首部的旧顶栏与断连横幅是黑客终端专属 chrome,块内按 PaHacker 条件渲染。
+        // 【C1 拆分】中段子树(时间线区)整体迁至 ui/chat/ChatTimeline.kt 的
+        // ChatTimelineArea;此处只保留薄委托,两条骨架(黑客 Column / PaScreenScaffold)
+        // 共用段与迁移前一字不差。重试链等闭包捕获以回调下放,语义原样。
         val chatMiddle: @Composable ColumnScope.() -> Unit = {
-        // 中段条块的水平留白:黑客骨架外层无边距,条块自带 14dp;编辑式骨架由
-        // PaScreenScaffold 统一给 23dp 页边距,条块不再另加(8px 网格不叠两层)。
-        val midGutter = if (PaHacker.isHacker) 14.dp else 0.dp
-        if (PaHacker.isHacker) {
-        // ---- 顶栏:☰ 侧边栏(会话列表/搜索)+ 标题 + 状态点 ----
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconActionButton(AppR.drawable.ic_lucide_menu, "菜单", { drawerCtrl.open() }, bg = PaEditorial.Surface)
-            Spacer(Modifier.width(14.dp))
-            // 【会话页顶部:所用 agent 的图标 + 名称】此前顶栏只有标题,用户看不出
-            // "这轮在跟哪个 agent 说话"——尤其四个 agent 能力差异明显(能否派发子
-            // 智能体、能否看子代理对话),归属必须一眼可见。图标走 AgentBrand 唯一
-            // 映射;未知 agent 不画图标只留名字(不塞通用图标冒充身份)。
-            agentBrandIcon(threadAgentId)?.let { res ->
-                Icon(
-                    painterResource(res), null,
-                    tint = PaEditorial.Primary, modifier = Modifier.size(15.dp),
-                )
-                Spacer(Modifier.width(5.dp))
-            }
-            Text(
-                selectedAgentLabel(threadAgentId),
-                fontSize = 11.5.sp, color = PaEditorial.Muted, maxLines = 1,
-            )
-            Spacer(Modifier.width(8.dp))
-            // 【必须显式 Ellipsis】Modifier.weight(1f) 已把宽度约束死,默认
-        // TextOverflow.Clip 会"干净地"切掉尾巴且不画省略号,看起来像文字坏了。
-        Text(
-            threadTitle, Modifier.weight(1f), fontSize = 16.sp, color = PaEditorial.Ink,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-            // 终止正在跑的轮次(用户反馈:任务跑飞了没法自己停)
-            if (session.running) {
-                IconActionButton(
-                    AppR.drawable.ic_lucide_square, "终止任务",
-                    {
-                        // 终止 = warning 档(打断电脑端的活;与发送键原位终止、
-                        // 「更多」面板终止同一档 —— 同动作全局同强度)
-                        PaHaptics.warning(hapticView)
-                        TurnSession.cancelTurn(threadId)
-                        Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
-                    },
-                    bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp, tint = PaEditorial.Denied,
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            IconActionButton(
-                AppR.drawable.ic_lucide_download, "导出对话",
-                { showExport = true },
-                bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp,
-            )
-            Spacer(Modifier.width(8.dp))
-            IconActionButton(
-                AppR.drawable.ic_lucide_ellipsis, "更多",
-                { showMore = true },
-                bg = PaEditorial.Surface, size = 34.dp, iconSize = 16.dp,
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier
-                    .size(14.dp)
-                    .pressable(
-                        scaleDown = 0.86f,
-                        enabled = hasFailure,
-                    ) {
-                        if (st.recoveryError != null || st.recovering) {
-                            TurnSession.retryRecovery(threadId)
-                        } else {
-                            // 【P3 Task 8 第二层】重试清错误经 ViewModel(原 loadError = null)
-                            chatVm.send(ChatIntent.LoadErrorCleared)
-                            codexSettings = null
-                            models = emptyList()
-                            reloadToken++
-                        }
-                    }
-                    .padding(3.dp)
-                    .background(if (hasFailure) PaEditorial.Denied else PaEditorial.Primary, CircleShape),
-            )
-            Spacer(Modifier.width(14.dp))
-        }
-
-        // ---- 断连全局横幅(P1-2):daemon 断连时与主页/会话列表同一条状态 ----
-        // 只在 connState==down 时出现(见组件注释的 checking 纪律),重连成功自动消失;
-        // 手动重试走本页既有 reloadToken 重载链(横幅自己不实现重连)。
-        ConnectionBanner(onRetry = { reloadToken++ })
-        } // PaHacker:旧顶栏 + 断连横幅(黑客终端专属 chrome 到此为止)
-
-        // ---- 会话目标(桌面只读回显,只增):有则显示一行,无则不占位 ----
-        // 数据来自 GetThread 的 goal_detail(电脑端 thread/goal/get 现读),
-        // 文案由 GoalDisplayLogic 计算;与标题行同边距,单行省略不顶时间线。
-        threadGoalLine?.let { goal ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = midGutter),
-            ) {
-                Text(
-                    goal,
-                    fontSize = 11.5.sp,
-                    color = PaEditorial.Muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-
-        // ---- 子对话来源行(T-SUB,蓝本 §5.1):当前线程是某主线程的子代理线程时, ----
-        // 标题下补一行"来自主对话 · 父标题" + 兄弟 ◀ n/N ▶ 切换钮(降级钮方案,
-        // 取舍见 SubAgentCard.kt 文件头)。切兄弟 = 导航 chat/{siblingId} 打开
-        // 上一条/下一条子线程,转场走 NavHost 全局动效(与主对话↔子对话同款)。
-        // ---- 子代理接入口(规范 §18.1/§18.2):固定在会话页顶部,不随消息滚动 ----
-        // 以前它是消息列表里的一个 item:滚两下就找不到,语义上还像"一条消息"。
-        // 现在上移到主对话区域**之上**的固定区;顺带落实 §18.2 —— 子代理消息不再
-        // 混进主对话流(主对话只呈现自己的消息),子代理只能从这里的入口下钻。
-        val subChildren = remember(SubAgentsState.threads, threadId) {
-            SubAgentsLogic.childrenOf(SubAgentsState.threads, threadId)
-        }
-        val subRunIds = remember(session.running, SubAgentsState.lastRefreshedAt) {
-            TurnSession.runningThreadIds() // TurnSession 无锁快照,不进 Compose 状态
-        }
-        // 【出入场】子代理卡区块出现/消失走 AnimatedContent(淡入+轻微上移 / 淡出,
-        // 全 spring 可打断):subChildren 出现的瞬间卡片"浮入",清空时平滑让位,
-        // 不硬跳占位。内容刷新(数量不变)不重播转场(同一 targetState)。
-        AnimatedContent(
-            targetState = subChildren.isNotEmpty(),
-            transitionSpec = {
-                (fadeIn(PaMotion.emphasized()) + slideInVertically(PaMotion.emphasized()) { it / 6 })
-                    .togetherWith(fadeOut(PaMotion.standard()))
-            },
-            label = "subAgentEntry",
-        ) { present ->
-            if (present) {
-            Box(Modifier.fillMaxWidth().padding(horizontal = midGutter, vertical = 2.dp)) {
-                if (subChildren.size == 1) {
-                    val only = subChildren[0]
-                    SubAgentCard(
-                        meta = only,
-                        state = SubAgentsLogic.runStateOf(only, subRunIds),
-                        onOpen = { onOpenThread(only.threadId) },
-                        onPeek = { peekSub = only },
-                    )
-                } else {
-                    SubAgentGroupCard(
-                        children = subChildren,
-                        liveRunIds = subRunIds,
-                        onOpen = { meta -> onOpenThread(meta.threadId) },
-                        onPeek = { meta -> peekSub = meta },
-                    )
-                }
-            }
-            }
-        }
-
-        // 【门控】父 id 明确已知才显示;关系未知(契约缺口)时不占位、不猜。
-        val subChildGroup = remember(threadId, SubAgentsState.threads) {
-            SubAgentsState.childGroupOf(threadId)
-        }
-        if (subChildGroup != null) {
-            val (subPos, subTotal) = SubAgentsLogic.siblingPos(subChildGroup.siblings, threadId)
-            // 父会话是否仍可达(在本库快照里):决定"返回主对话"是可用还是置灰。
-            val parentReachable = SubAgentsState.threads.any {
-                it.threadId == subChildGroup.parentThreadId
-            }
-            SubAgentSourceLine(
-                parentTitle = subChildGroup.parentTitle,
-                pos = subPos,
-                total = subTotal,
-                onPrev = {
-                    SubAgentsLogic.siblingNav(subChildGroup.siblings, threadId, -1)?.let(onOpenThread)
-                },
-                onNext = {
-                    SubAgentsLogic.siblingNav(subChildGroup.siblings, threadId, +1)?.let(onOpenThread)
-                },
-                // 规范 §18.3:父会话仍在本库里才给入口;不可达(已删除/未同步)时传 null
-                // → 控件置灰,不给点了没反应的假入口。
-                onBackToParent = if (parentReachable) {
-                    { onOpenThread(subChildGroup.parentThreadId) }
-                } else {
-                    null
-                },
-            )
-        }
-
-        // ---- 连接 / 加载 / 恢复提示条 ----
-        // 【统一出口】原先这里只渲染 loadError,于是 TurnSession 里那一整套
-        // "断线后自动把电脑端任务结果捞回来"的状态(recovering / recoveryError /
-        // errorMessage)**在界面上完全不可见**。真机表现就是用户说的:
-        // "连接中断后仍显示红色、没有任何等待 UI" —— 他没法区分
-        // "正在自动恢复"和"彻底失败了",只能干等。
-        //
-        // 现在按优先级合并成一条提示,并且等待态带进度指示:
-        //   恢复失败 > 恢复中(等待) > 轮次错误 > 页面加载错误
-        run {
-            val waiting = session.recovering
-            val noticeMsg = when {
-                session.recoveryError != null -> session.recoveryError
-                waiting -> session.errorMessage ?: "连接已断开，正在恢复电脑端任务结果"
-                session.errorMessage != null -> session.errorMessage
-                loadError != null -> loadError
-                else -> null
-            }
-            if (noticeMsg != null) {
-                // 等待态用琥珀(警示但非失败),彻底失败/加载失败用珊瑚红
-                // (编辑式语义色档:ATTENTION / DENIED;黑客终端保持旧黄/红)
-                val tone = if (PaHacker.isHacker) {
-                    if (waiting) PaEditorial.Attention else PaEditorial.Denied
-                } else {
-                    if (waiting) PaEditorial.Attention else PaEditorial.Denied
-                }
-                // 【人话标题】daemon 报错常把内部方法名当首行("session/resume\n<id> 失败:"),
-                // 直接上屏像天书(L2 真机挑刺);标题换人话(恢复会话/发送消息/新建会话),
-                // 正文保持错误原文;没有方法名前缀时整条原文照抄(纯函数 humanizeMethodError)。
-                val split = humanizeMethodError(noticeMsg)
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = midGutter, vertical = 2.dp)
-                        .background(PaEditorial.Surface, RoundedCornerShape(13.dp))
-                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(13.dp))
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 等待态:转圈告诉用户"它在动",不是卡死了
-                    if (waiting) {
-                        CircularProgressIndicator(
-                            Modifier.size(12.dp),
-                            strokeWidth = 1.5.dp,
-                            color = tone,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            split?.first ?: noticeMsg,
-                            fontSize = 12.sp,
-                            color = if (!waiting && offlineSnapshot) tone.copy(alpha = 0.85f) else tone,
-                            // 拆不出方法名时整条原文照抄,保留原 2 行;拆出后标题一行
-                            maxLines = if (split == null) 2 else 1,
-                        )
-                        split?.second?.takeIf { it.isNotBlank() }?.let {
-                            Text(
-                                it,
-                                fontSize = 11.sp,
-                                color = if (!waiting && offlineSnapshot) tone.copy(alpha = 0.85f) else tone,
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                    // 自动恢复进行中不给"重试"—— 重复点只会打断它自己的重试节奏。
-                    // 只有"彻底失败"和"页面加载失败"才需要用户推一把。
-                    if (!waiting) {
-                        TextButton(onClick = {
-                            if (st.recoveryError != null) {
-                                TurnSession.retryRecovery(threadId)
-                            } else {
-                                // 【P3 Task 8 第二层】重试清错误经 ViewModel(原 loadError = null)
-                                chatVm.send(ChatIntent.LoadErrorCleared)
-                                chatVm.send(ChatIntent.ClearSnapshotFlag)
-                                reloadToken++
-                            }
-                        }) {
-                            Text(
-                                "重试",
-                                fontSize = 11.5.sp,
-                                color = PaEditorial.Primary,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // ---- 离线快照横幅(P1-4 阶段 D:断连进页用本地只读副本渲染)----
-        // 与错误提示条分开:它不是"失败",是"明确知道自己在看旧数据"。
-        // 输入栏同时停用(见下方输入区),恢复连接后 connectionEpoch 变化自动回到在线。
-        if (offlineSnapshot) {
-            val banner = offlineSnapshotBanner(offlineSnapshotAt)
-            if (banner != null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = midGutter, vertical = 2.dp)
-                        .background(PaEditorial.AttentionContainer, RoundedCornerShape(13.dp))
-                        .border(1.dp, OfflineBannerOutline, RoundedCornerShape(13.dp))
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painterResource(AppR.drawable.ic_lucide_info), null,
-                        tint = PaEditorial.Attention, modifier = Modifier.size(13.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "$banner · 显示的是电脑端会话的本地副本,输入已停用",
-                        Modifier.weight(1f),
-                        fontSize = 11.5.sp, color = OfflineBannerText, maxLines = 2,
-                    )
-                    TextButton(onClick = {
-                        chatVm.send(ChatIntent.ClearSnapshot)
-                        reloadToken++
-                    }) {
-                    Text(
-                        "重试",
-                        fontSize = 11.5.sp,
-                        color = PaEditorial.Primary,
-                    )
-                    }
-                }
-            }
-        }
-
-        // ---- 待审批入口卡(05 会话页;README:审批只在弹窗里决策)----
-        // 这张卡只是**入口**(点开 PaApprovalDialog),卡上不放任何批准/拒绝按钮;
-        // 弹窗关闭(暂不处理)后从这里或顶部身份行再次进入。请求与弹窗相位的状态机
-        // 见上方"审批弹窗状态机"块。反问类请求有自己的常驻问题卡,不进这张入口。
-        val pendingApprovalEntry = session.pendingApproval
-        if (pendingApprovalEntry != null && !askIsAskAction(pendingApprovalEntry.action.name)) {
-            ApprovalEntryCard(onOpen = { approvalDialogOpen = true })
-        }
-
-        // ---- 执行计划面板 ----
-        // 【用户诉求】计划不再随时间线滚走:未完成时在会话原位置仍能看到步骤,
-        // 跑完之后那张卡不移除,而是把它**提到会话上方**收成一个可展开的面板,
-        // 需要回顾时点开,不需要时收起只留一行进度摘要。
-        //
-        // 【本轮修正 · 真因】这里原先还挂着 `&& AgentConnection.showThinking`。
-        // 那是「显示思考过程」的开关,跟交互计划毫无关系 —— 用户一旦把它关掉,
-        // 计划面板就跟着一起消失,现象正是"桌面 agent 明明有这个能力,却不显示"。
-        // 计划该不该出现只取决于**有没有计划数据**,不该受其它显示开关连坐。
-        if (latestPlan.isNotEmpty()) {
-            PlanPanel(
-                steps = latestPlan,
-                draft = if (session.running) st.planStream else "",
-                running = session.running,
-                expanded = planPanelOpen,
-                onToggle = { planPanelOpen = !planPanelOpen },
-                outerGutter = midGutter,
-            )
-        }
-
-        // ---- 流式正文节流快照(P1-22)----
-        // delta 帧高频直喂 InAppMarkdown,即便解析已异步化(MarkdownText 的 produceState),
-        // 高频重组 + 解析排队仍会让长流式累计 O(n²) 掉帧。这里把直喂改为 ~120ms 合并快照:
-        // 中间帧只写 displayedStream,间隔内到达的 delta 自然合并,流式视觉延迟无感。
-        // 【最终帧一致性兜底】两条路径不经 delay 立即追平:
-        //   1) 流结束(!streaming);
-        //   2) 正文被整段转存进 items(TurnSession 在工具调用开始时把 streamText 清空 ——
-        //      快照必须同步清空,否则该段会在气泡里残留成"既在历史又在气泡"的重复)。
-        // 且每次 delay 醒来都重读 st.streamText 的最新值(不沿用 collect 到的旧值),
-        // 任何时刻快照最终必等于 streamText,尾巴不丢。
-        var displayedStream by remember(st) { mutableStateOf("") }
-        LaunchedEffect(st) {
-            snapshotFlow { st.streaming to st.streamText }
-                .collect { (running, text) ->
-                    when {
-                        !running || text.isEmpty() -> displayedStream = text
-                        text != displayedStream -> {
-                            delay(STREAM_RENDER_THROTTLE_MS)
-                            displayedStream = st.streamText
-                        }
-                    }
-                }
-        }
-
-        // ---- 消息列表(思考过程 / 工具调用都在时间线原位置展示)----
-        // 【进入动画的武装记录】记住"上一帧组合时的条目数":仅在"末尾追加了新消息"
-        // 的那一帧允许进入动画(见 MessageEnterAnimation)。null = 本页首帧,绝不播
-        // (打开会话加载历史时整套静默出现);SideEffect 在组合后登记当前数量,
-        // 回滚缩容/加载更早前插都不满足"末尾追加",不会误触发。
-        val prevItemCount = remember(threadId) { mutableStateOf<Int?>(null) }
-        // 「撤回排队」入口(pi 0.87.1 clear_queue):
-        // 【能力位数据源】读函数级的 hostCaps 共享快照(与主页网格/设置页同一
-        // 真源),门控纯函数 queueClearVisible 锁三重条件(agent==pi + 确有排队 +
-        // daemon 宣告 queue_clear:pi)—— 旧 daemon / 非 pi 会话 / 没有排队都不出
-        // 按钮,不显示点了必败的假入口。
-        val queueClearOn = queueClearVisible(threadAgentId, session.queuedCount, hostCaps)
-        // 按钮只挂在最后一条排队消息上:同一条队列一张入口,不逐条重复
-        val lastQueuedIndex = session.lastQueuedIndex
-        // 消息列表容器(Box):列表本体 + P0-1 的「↓ N 条新内容」悬浮胶囊同层,
-        // 常规气泡与 hacker 终端块共用(锚定状态与胶囊都只此一份)。
-        Box(Modifier.weight(1f)) {
-        LazyColumn(
-            Modifier
-                .fillMaxSize()
-                // 黑客终端骨架自带 16dp;编辑式骨架由 PaScreenScaffold 统一 23dp 页边距
-                .padding(horizontal = if (PaHacker.isHacker) 16.dp else 0.dp)
-                // 黑客终端模式:CRT 扫描线(2dp 周期暗线,alpha 4%,只碰绘制层);
-                // 叠在内容之上,常规主题零影响(见 TerminalBlocks.terminalScanlines)。
-                .then(if (PaHacker.isHacker) Modifier.terminalScanlines() else Modifier),
-            state = listState,
-            // 黑客终端模式:块间留白 22dp(Warp 口径:留白>分割线);常规主题 14dp 不动
-            verticalArrangement = Arrangement.spacedBy(if (PaHacker.isHacker) 22.dp else 14.dp),
-            contentPadding = PaddingValues(vertical = 12.dp),
-        ) {
-            // 【F-D 加载更早】历史被截断时在时间线顶部给出的增量入口;离线快照
-            // (只读旧数据)不显示。点击后重拉更大的轮数并保持滚动锚点,见 loadEarlier。
-            if (historyTruncated && !offlineSnapshot) {
-                item(key = "load-earlier") {
-                    Box(
-                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (loadingEarlier) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            TextButton(onClick = { loadEarlier() }) {
-                                Text(
-                                    "加载更早",
-                                    fontSize = 12.5.sp,
-                                    color = PaEditorial.Primary,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            // 【PF4】contentType 按渲染形态分桶(见 chatItemContentType):滚动回收只
-            // 同形态复用,不同形态不再互毁重建。无稳定 id(改 ChatItem/TurnSession 越权)
-            // 故不加 key,位置匹配语义原样保留 —— 纯复用提示,不碰投影。
-            itemsIndexed(
-                st.items,
-                contentType = { _, item -> chatItemContentType(PaHacker.isHacker, item) },
-            ) { index, item ->
-                // 进入动画只武装"新消息追加"的那一帧(见上方 prevItemCount 注释)
-                val prevCount = prevItemCount.value
-                val enterArm = prevCount != null &&
-                    index == st.items.lastIndex &&
-                    st.items.size > prevCount
-                // R2-A:本条消息的「选择文本」模式。长按默认开菜单(见用户/回复气泡的
-                // longPressMenu),选一段文字改为从菜单进入 —— 手柄拖选能力不丢,但不再
-                // 与菜单抢同一个长按手势。滑出屏幕即复位(remember 跟随 item 生命周期)。
-                var selectMode by remember { mutableStateOf(false) }
-                LaunchedEffect(messageSelectArmed) {
-                    // 比引用不比值:内容完全相同的两条消息只命中被长按的那一条
-                    if (messageSelectArmed === item) {
-                        selectMode = true
-                        messageSelectArmed = null
-                    }
-                }
-                MessageEnterAnimation(arm = enterArm) {
-                    if (PaHacker.isHacker) {
-                    // 黑客终端模式:主对话读作"终端会话"——四类 Block(输入/输出/工具/脚注),
-                    // 映射走纯函数 terminalBlockKind(JVM 单测钉住);无终端形态的 item
-                    // (thinking/codex_event)保持既有渲染,plan/usage 照旧不进时间线。
-                    when (terminalBlockKind(item)) {
-                        TerminalBlockKind.USER -> TerminalUserBlock(
-                            item, uiScale,
-                            // 「撤回排队」入口与常规主题同一门控:只挂最后一条排队消息
-                            queueClearOn = queueClearOn && index == lastQueuedIndex,
-                            onClearQueued = { clearQueuedInputs() },
-                            // P0-2:daemon 拒收(overflow)时整条 Block 可点击重发,
-                            // 与常规气泡同一 retryDelivery(失败级才武装,见组件内判定)
-                            onRetryDelivery = { retryDelivery(item) },
-                            attachmentsContent = if (item.attachments.isEmpty()) null else { {
-                                item.attachments.chunked(2).forEach { rowAttachments ->
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        rowAttachments.forEach { attachment ->
-                                            AttachmentCard(
-                                                attachment = attachment,
-                                                preview = remember(
-                                                    attachment.name,
-                                                    attachment.previewData?.contentHashCode(),
-                                                ) {
-                                                    loadAttachmentPreview(ctx, attachment)
-                                                },
-                                                modifier = Modifier.weight(1f),
-                                                onClick = { openAttachment(attachment) },
-                                            )
-                                        }
-                                        if (rowAttachments.size == 1) {
-                                            Spacer(Modifier.weight(1f))
-                                        }
-                                    }
-                                }
-                            } },
-                        )
-                        TerminalBlockKind.TOOL -> TerminalToolBlock(item, uiScale)
-                        TerminalBlockKind.OUTPUT -> TerminalOutputBlock(
-                            item.text, uiScale,
-                            onOpenUrl = onOpenBrowser,
-                        )
-                        TerminalBlockKind.KEEP_EXISTING -> when (item.role) {
-                            "thinking" -> if (AgentConnection.showThinking) {
-                                ThinkingCard(item.text, thinkScale, streaming = false)
-                            } else Unit
-                            "codex_event" -> item.codexEvent?.let { ev ->
-                                CodexEventCard(
-                                    event = ev,
-                                    uiScale = uiScale,
-                                    guardianOverridden = session.guardianOverridden.contains(ev.reviewId),
-                                    onApproveGuardian = { approveGuardian(it) },
-                                    onOpenSettings = onOpenSettings,
-                                )
-                            }
-                            else -> Unit
-                        }
-                        TerminalBlockKind.SKIP -> Unit
-                    }
-                    } else when (item.role) {
-                    "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        // 编辑式(05):用户消息 = 石墨重点面气泡 + 白字,投递徽标挂在气泡
-                        // 下方右对齐(待发送→已送达→执行中;失败保留内容可重试);
-                        // 黑客终端保持旧气泡(AccentDim 终端块)与原徽标位(气泡内)。
-                        Column(Modifier.widthIn(max = 320.dp), horizontalAlignment = Alignment.End) {
-                        Column(
-                            Modifier
-                                .widthIn(max = 300.dp)
-                                // R2-A:长按气泡 = 上下文菜单(复制全文/选择文本/引用回复,
-                                // 失败级再加「重试发送」)。P0-2 失败级(队列满拒收)的
-                                // "点按重发"保留为单击动作(longPressMenu 契约:挂了它就
-                                // 不再叠加 clickable,单击经 onClick 传入);其余投递状态
-                                // 点了没有可重试的东西,不武装点按。
-                                .longPressMenu(
-                                    messageMenu,
-                                    onClick = if (deliveryRetryable(item.deliverState) && !offlineSnapshot) {
-                                        { retryDelivery(item) }
-                                    } else null,
-                                )
-                                    // 编辑式:石墨重点面(#1E2835)承载用户输入,与瓷白助手正文
-                                    // 拉开层级;黑客终端模式:圆角收 6dp 读"终端块"(契约见 PaHacker)。
-                                    .background(
-                                        if (PaHacker.isHacker) PaEditorial.PrimaryContainer else PaEditorial.Graphite,
-                                        if (PaHacker.isHacker) RoundedCornerShape(6.dp)
-                                        else RoundedCornerShape(20.dp, 7.dp, 20.dp, 20.dp),
-                                    )
-                                    .padding(horizontal = 13.dp, vertical = 11.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                item.attachments.chunked(2).forEach { rowAttachments ->
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        rowAttachments.forEach { attachment ->
-                                            AttachmentCard(
-                                                attachment = attachment,
-                                                preview = remember(
-                                                    attachment.name,
-                                                    attachment.previewData?.contentHashCode(),
-                                                ) {
-                                                    loadAttachmentPreview(ctx, attachment)
-                                                },
-                                                modifier = Modifier.weight(1f),
-                                                onClick = { openAttachment(attachment) },
-                                            )
-                                        }
-                                        if (rowAttachments.size == 1) {
-                                            Spacer(Modifier.weight(1f))
-                                        }
-                                    }
-                                }
-                                if (item.text.isNotBlank()) {
-                                    // R2-A:长按默认开上下文菜单;要拖选一段从菜单进
-                                    // 「选择文本」(与回复气泡同一交互,见 assistant 分支注释)
-                                    if (selectMode) {
-                                        SelectionContainer {
-                                            Text(
-                                                item.text,
-                                                color = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.OnGraphite,
-                                                fontSize = (14 * uiScale).sp,
-                                                lineHeight = (21 * uiScale).sp,
-                                                // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
-                                                fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
-                                            )
-                                        }
-                                    } else {
-                                        Text(
-                                            item.text,
-                                            color = if (PaHacker.isHacker) PaEditorial.Ink else PaEditorial.OnGraphite,
-                                            fontSize = (14 * uiScale).sp,
-                                            lineHeight = (21 * uiScale).sp,
-                                            // 黑客终端模式:等宽字体是风格的本体(契约见 PaHacker)。
-                                            fontFamily = if (PaHacker.isHacker) PaHacker.mono else null,
-                                        )
-                                    }
-                                    if (selectMode) {
-                                        Text(
-                                            "完成选择",
-                                            Modifier
-                                                .pressable { selectMode = false }
-                                                .padding(top = 4.dp),
-                                            fontSize = 10.5.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = ChatAccentColor,
-                                        )
-                                    }
-                                }
-                                // 黑客终端模式:投递徽标留在气泡内(旧位置,行为不变);
-                                // 编辑式徽标移到气泡下方(见外层 Column 尾部)。
-                                if (PaHacker.isHacker && item.deliverState.isNotEmpty()) {
-                                    val visual = deliveryVisual(item.deliverState, item.queuePos)
-                                    if (visual.label.isNotEmpty()) {
-                                        Spacer(Modifier.height(2.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            DeliveryStatusBadge(item.deliverState, item.queuePos)
-                                        }
-                                    }
-                                }
-                            }
-                            // 编辑式投递徽标 + 「撤回排队」(四态措辞对齐设计:待发送→已送达→
-                            // 执行中;失败保留内容可重试)。QueueFlushed 后标签被 TurnSession
-                            // 收掉,这条消息自动变回普通用户消息。
-                            if (!PaHacker.isHacker && item.deliverState.isNotEmpty()) {
-                                val copy = editorialDeliveryCopy(item.deliverState, item.queuePos)
-                                if (copy.word.isNotEmpty()) {
-                                    Spacer(Modifier.height(3.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        EditorialDeliveryBadge(item.deliverState, item.queuePos)
-                                        // 「撤回排队」:只挂在最后一条排队消息的回执行上,
-                                        // 门控见 queueClearOn 的注释 —— 撤回是对
-                                        // 还没执行的输入做反悔,与"终止任务"同级的
-                                        // 干预动作,用红字让分量看得见。
-                                        if (queueClearOn && index == lastQueuedIndex) {
-                                            Text(
-                                                "撤回排队",
-                                                Modifier
-                                                    .pressable(haptic = true) { clearQueuedInputs() }
-                                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                                                fontSize = 10.sp,
-                                                color = ChatDeniedColor,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // 思考过程:可折叠卡片(字号跟随"思考显示大小"设置);
-                    // 受全局"显示思考过程"开关控制,关闭时只看正文与结果
-                    "thinking" -> if (AgentConnection.showThinking) {
-                        ThinkingCard(item.text, thinkScale, streaming = false)
-                    } else Unit
-                    // 执行计划:已提到会话上方的可折叠面板里(见 PlanPanel),
-                    // 时间线里不再重复一张卡 —— 避免同一步骤在屏幕上有两份。
-                    "plan" -> Unit
-                    // 工具调用:一次调用一条卡,含参数/输出/耗时,可展开看详情
-                    "tool" -> ToolCallCard(item, uiScale)
-                    // 后台 Codex/MCP 事件只影响右上角状态点，不再把诊断卡片
-                    // 连续插入会话正文。
-                    // 【本轮修正】以前这里是一句 `-> Unit`,把所有 codex 事件
-                    // 一律丢弃 —— 连"审查者驳回了动作"这种用户必须知情(而且可以
-                    // 推翻)的事件也一起丢了。现在按 shouldShowCodexEventInTimeline
-                    // 的分类渲染:诊断类在源头就不进 items,进 items 的都要看得见。
-                    "codex_event" -> item.codexEvent?.let { ev ->
-                        CodexEventCard(
-                            event = ev,
-                            uiScale = uiScale,
-                            guardianOverridden = session.guardianOverridden.contains(ev.reviewId),
-                            onApproveGuardian = { approveGuardian(it) },
-                            onOpenSettings = onOpenSettings,
-                        )
-                    }
-                    "usage" -> Unit
-                    else -> Column(
-                        Modifier
-                            .fillMaxWidth()
-                            // R2-A:长按回复 = 上下文菜单(复制全文/选择文本/引用回复)。
-                            // 【与旧交互的衔接】此前正文套常驻 SelectionContainer,长按
-                            // 直接进拖选 —— "长按复制整条"因此被移除过一次(手势互抢)。
-                            // 现在长按优先开菜单,拖选改为菜单「选择文本」进入的显式模式
-                            // (见本 item 顶部 selectMode):两个能力都在,不再互抢手势,
-                            // 与 ChatGPT/Claude 官方 App 的消息菜单同构。
-                            .longPressMenu(messageMenu) { messageMenuTarget = item },
-                    ) {
-                        // 选择模式:手柄拖选任意片段,系统工具栏给"复制/全选";
-                        // 平时渲染普通正文,长按交给菜单。「完成选择」退出。
-                        if (selectMode) {
-                            SelectionContainer {
-                                InAppMarkdown(
-                                    text = item.text,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
-                                    onOpenUrl = onOpenBrowser,
-                                )
-                            }
-                        } else {
-                            InAppMarkdown(
-                                text = item.text,
-                                modifier = Modifier.fillMaxWidth(),
-                                fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
-                                onOpenUrl = onOpenBrowser,
-                            )
-                        }
-                        if (selectMode) {
-                            Text(
-                                "完成选择",
-                                Modifier
-                                    .pressable { selectMode = false }
-                                    .padding(top = 4.dp),
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = ChatAccentColor,
-                            )
-                        }
-                        // 消息里如果给了电脑上的文件路径,唯一的动作是"用浏览器打开"
-                        // —— 会话正文只负责展示输出;要存到手机,在浏览器顶栏点"下载到手机"。
-                        val pcFiles = remember(item.text) { extractPcPaths(item.text) }
-                        if (pcFiles.isNotEmpty()) {
-                            pcFiles.take(3).forEach { path ->
-                                val fileName = path.substringAfterLast('/').substringAfterLast('\\')
-                                Row(
-                                    Modifier.padding(top = 6.dp).fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Row(
-                                        Modifier.pressable(haptic = true) {
-                                            onOpenBrowser("pc:" + path)
-                                        },
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(
-                                            painterResource(AppR.drawable.ic_lucide_globe), null,
-                                            tint = ChatAccentColor, modifier = Modifier.size(13.dp),
-                                        )
-                                        Spacer(Modifier.width(5.dp))
-                                        Text("在浏览器打开 $fileName", fontSize = 10.5.sp, color = ChatAccentColor)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    }
-                }
-            }
-            // 流式思考:边想边展示,和落定的思考卡同款样式
-            if (st.running && AgentConnection.showThinking && st.thinkingText.isNotEmpty()) {
-                item(key = "streaming-thinking") {
-                    ThinkingCard(st.thinkingText, thinkScale, streaming = true)
-                }
-            }
-            // 流式执行计划:已由上方 PlanPanel 承担(它同时兼做收起的进度条),
-            // 这里不再重复渲染,否则同一步骤会出现两份。
-            if (session.streaming) {
-                item(key = "streaming-bubble") {
-                    if (PaHacker.isHacker) {
-                    // 黑客终端模式:流式输出块(块尾 braille 转轮,80ms/帧);
-                    // 等首 token 时正文为空,TerminalOutputBlock 只渲染转轮本身。
-                    // 【节流(审查 open 项 7,2026-10-04 评估收口)】TerminalOutputBlock
-                    // 正文并非纯文本:内部走 MarkdownText → produceState(key=source)
-                    // 对每次 source 变化全文重解析 parseMarkdownForDisplay。直喂
-                    // st.streamText = 每个 delta 帧一次全文重解析(解析虽在
-                    // Dispatchers.Default、且有取消合并,长流式仍是累计 O(n²) 的
-                    // CPU 热点)。改喂上方 displayedStream(120ms 合并快照,P1-22
-                    // 同一数据源),与非黑客路径同一节流口径;终帧一致性由该快照的
-                    // 「!streaming 立即追平」语义兜底,尾巴不丢。
-                    TerminalOutputBlock(
-                        displayedStream, uiScale,
-                        onOpenUrl = onOpenBrowser,
-                        streaming = true,
-                    )
+            ChatTimelineArea(
+                threadId = threadId,
+                threadTitle = threadTitle,
+                threadAgentId = threadAgentId,
+                session = session,
+                st = st,
+                ctx = ctx,
+                hapticView = hapticView,
+                drawerCtrl = drawerCtrl,
+                hasFailure = hasFailure,
+                threadGoalLine = threadGoalLine.value,
+                loadError = loadError,
+                offlineSnapshot = offlineSnapshot,
+                offlineSnapshotAt = offlineSnapshotAt,
+                historyTruncated = historyTruncated,
+                loadingEarlier = loadingEarlier,
+                queueClearOn = queueClearVisible(threadAgentId, session.queuedCount, hostCaps),
+                uiScale = uiScale,
+                thinkScale = thinkScale,
+                listState = listState,
+                messageMenu = messageMenu,
+                messageSelectArmed = messageSelectArmed,
+                peekSub = peekSub,
+                approvalDialogOpen = approvalDialogOpen,
+                planPanelOpen = planPanelOpen,
+                showExport = showExport,
+                showMore = showMore,
+                showHistoryPanel = showHistoryPanel,
+                unreadBlocks = unreadBlocks,
+                followBottom = followBottom,
+                historyEntries = historyEntries,
+                historyCurrentIndex = historyCurrentIndex,
+                historyDrag = historyDrag,
+                historyDayStarts = historyDayStarts,
+                onOpenThread = onOpenThread,
+                onOpenBrowser = onOpenBrowser,
+                onOpenSettings = onOpenSettings,
+                onApproveGuardian = { approveGuardian(it) },
+                onRetryDelivery = { retryDelivery(it) },
+                onOpenAttachment = { openAttachment(it) },
+                onClearQueued = { clearQueuedInputs() },
+                onLoadEarlier = { loadEarlier() },
+                onReload = { reloadToken++ },
+                onReloadAfterFailure = {
+                    if (st.recoveryError != null || st.recovering) {
+                        TurnSession.retryRecovery(threadId)
                     } else {
-                    // 【流式两相切换】等首 token(三点) → 正文流式:AnimatedContent +
-                    // spring 过渡(淡入+轻微上移,可打断)。AnimatedContent 自带尺寸
-                    // 过渡,相位切换时高度不跳变;正文帧间更新不重播转场(同一 targetState)。
-                    // 相位跟节流快照走(displayedStream 而非 streamText):首帧正文
-                    // 就绪前保持"三点"相位,不会闪一帧空正文。
-                    AnimatedContent(
-                        targetState = displayedStream.isEmpty(),
-                        transitionSpec = {
-                            (fadeIn(PaMotion.emphasized()) +
-                                slideInVertically(PaMotion.emphasized()) { it / 8 })
-                                .togetherWith(fadeOut(PaMotion.standard()))
-                        },
-                        label = "streamPhase",
-                    ) { waiting ->
-                        if (waiting) {
-                            // 等待首个 token:三点跳动"正在输入"指示(替代旧的光标闪烁)。
-                            // 编辑式:瓷白卡面+细线(旧玻璃材质保留给黑客终端以外的主题切换
-                            // 会打架,这里按模式取面);三点自身只动 graphicsLayer(见 TypingDots)。
-                            Row(Modifier.fillMaxWidth()) {
-                                Box(
-                                    Modifier
-                                        .then(
-                                            if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(18.dp))
-                                            else Modifier
-                                                .background(PaEditorial.Surface, RoundedCornerShape(18.dp))
-                                                .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(18.dp)),
-                                        )
-                                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                                ) {
-                                    TypingDots()
-                                }
-                            }
-                        } else {
-                            // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
-                            // 【P1-22】喂节流快照 displayedStream,不再逐 delta 帧直喂全文
-                            Column(Modifier.fillMaxWidth()) {
-                                InAppMarkdown(
-                                    text = displayedStream,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    fontSize = (if (PaHacker.isHacker) 15f else 14f) * uiScale,
-                                    onOpenUrl = onOpenBrowser,
-                                )
-                                TypingDots(
-                                    Modifier.padding(start = 2.dp, top = 6.dp),
-                                    dotSize = 4.dp,
-                                )
-                            }
-                        }
+                        // 【P3 Task 8 第二层】重试清错误经 ViewModel(原 loadError = null)
+                        chatVm.send(ChatIntent.LoadErrorCleared)
+                        codexSettings = null
+                        models = emptyList()
+                        reloadToken++
                     }
+                },
+                onRetryNotice = {
+                    if (st.recoveryError != null) {
+                        TurnSession.retryRecovery(threadId)
+                    } else {
+                        chatVm.send(ChatIntent.LoadErrorCleared)
+                        chatVm.send(ChatIntent.ClearSnapshotFlag)
+                        reloadToken++
                     }
-                }
-            }
-            // 黑客终端模式:回合脚注(④)—— 轮次终局后挂在列表末尾右对齐。
-            // 【不造数据】只在"有真实终局知识"时出现:运行中/恢复中绝不显示;
-            // 有失败信息给 ✗,有真实 token 用量给 ✓ N tok,什么都没有只给 ✓。
-            if (PaHacker.isHacker && !session.running && !session.recovering && session.recoveryError == null &&
-                (session.turnUsage != null || session.errorMessage != null)
-            ) {
-                item(key = "turn-footnote") {
-                    TerminalFootnote(
-                        formatTurnFootnote(
-                            success = session.errorMessage == null,
-                            elapsedMs = 0.0, // 回合时长无现成数据,不编造
-                            outputTokens = session.turnUsage?.outputTokens ?: 0,
-                        ),
-                    )
-                }
-            }
-        }
-        // 【R1 收口】hermes 等会话首次进入的两条"空白路"补齐(时间线 Box 的同层
-        // 覆盖层,不进 LazyColumn —— 头部 item 会让既有的 historyListOffset 滚动
-        // 锚定差一位;而骨架/空态只在 st.items 为空时出现,覆盖层无遮挡问题,
-        // 列表与覆盖层在同一帧原子切换,不会闪叠):
-        //  · 历史在途 → 消息气泡骨架(与真实气泡同轮廓,切内容不跳变;整块折叠为
-        //    单条「正在加载」读屏播报);
-        //  · 历史加载完且确实为空 → 空态(事实 + 下一步),不发愣。
-        // 判定走纯函数(shouldShowTimelineSkeleton / shouldShowTimelineEmptyState,
-        // TimelineSkeletonEmptyTest 钉死):报错横幅、离线副本、运行/恢复中都不摆。
-        if (shouldShowTimelineSkeleton(
-                itemsEmpty = session.itemsEmpty,
-                historyLoaded = session.historyLoaded,
-                hasLoadError = loadError != null,
-                offlineSnapshot = offlineSnapshot,
-            )
-        ) {
-            // 气泡实际高度 ≈82dp,按它推条数,切到真实内容时高度不跳
-            PaSkeletonList(SkeletonKind.MESSAGE_BUBBLE, perRowHeight = 82.dp)
-        }
-        if (shouldShowTimelineEmptyState(
-                itemsEmpty = session.itemsEmpty,
-                historyLoaded = session.historyLoaded,
-                hasLoadError = loadError != null,
-                offlineSnapshot = offlineSnapshot,
-                running = session.running,
-                recovering = session.recovering,
-            )
-        ) {
-            val (emptyHead, emptySub) = timelineEmptyStateCopy(selectedAgentLabel(threadAgentId))
-            Column(
-                Modifier.fillMaxWidth().padding(top = 96.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Icon(
-                    painterResource(AppR.drawable.ic_lucide_message_square), null,
-                    tint = PaEditorial.Subtle, modifier = Modifier.size(28.dp),
-                )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    emptyHead,
-                    fontSize = 14.sp, lineHeight = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = PaEditorial.Muted,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    emptySub,
-                    fontSize = 12.sp, lineHeight = 18.sp,
-                    color = PaEditorial.Subtle,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
-            // 历史消息快速查看(视频样板二版+R1 实时刷选):左缘垂直刻度条 —— 每条
-            // 用户消息一个刻度点(Canvas 一次绘制);轻点开完整列表浮层;按住拖动 =
-            // 预览气泡跟手 + **列表实时滚动到手指所指**(拖到哪看到哪),松手精确锚定。
-            HistoryTickBar(
-                count = historyEntries.size,
-                currentIndex = historyCurrentIndex,
-                drag = historyDrag,
-                onOpenPanel = { showHistoryPanel = true },
-                onJump = { entryIndex -> jumpToHistoryTick(entryIndex) },
-                onScrub = { entryIndex -> scrubToHistoryTick(entryIndex) },
+                },
+                onReloadSnapshot = {
+                    chatVm.send(ChatIntent.ClearSnapshot)
+                    reloadToken++
+                },
+                onJumpTick = { jumpToHistoryTick(it) },
+                onScrubTick = { scrubToHistoryTick(it) },
                 onScrubEnd = { programmaticScroll.set(false) },
-                dayStarts = historyDayStarts,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    // 【真机修正 2026-10-01】本 Box 已被 PaScreenScaffold 收进 23dp
-                    // 页边距内,直接 align 会把刻度条推进正文列(实测 bounds x=63px
-                    // 起,正压在助手文本上)——负 offset 拉回屏幕真实左缘,视觉
-                    // 10dp 全程悬在边距区,这才是不挡字的硬保证。
-                    .offset(x = -PaEditorial.Space.PageMargin),
+                onMenuTarget = { messageMenuTarget = it },
+                scope = scope,
             )
-            // 按住拖动的紧凑预览气泡:只在预览期间存在(scale+fade 出入场),
-            // 松手即收 —— 平时零遮挡。align TopStart 让气泡 Y 与刻度条同坐标系;
-            // 同样负 offset 出页边距,内部 16dp 间隙才是"距屏幕左缘 16dp"。
-            HistoryQuickBubble(
-                drag = historyDrag,
-                entries = historyEntries,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset(x = -PaEditorial.Space.PageMargin),
-            )
-            // P0-1「↓ N 条新内容」胶囊:仅在用户离底且确有未读新块时浮现(PaEditorial.Primary 底)。
-            // 点击平滑滚回底部、恢复跟随并清零未读(轻触觉由 pressable 自带)——
-            // 流式输出从此不再把上滑阅读历史的用户拽回来。
-            // 【全限定名】这里在 Column 作用域内,ColumnScope.AnimatedVisibility 扩展
-            // 会抢走隐式接收者解析;盒子层要的是顶层函数,写全限定名绕开歧义。
-            androidx.compose.animation.AnimatedVisibility(
-                visible = unreadBlocks > 0 && !followBottom,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = 12.dp),
-                enter = fadeIn(PaMotion.emphasized()) +
-                    slideInVertically(PaMotion.emphasized()) { it / 2 },
-                exit = fadeOut(PaMotion.standard()),
-                label = "unreadPill",
-            ) {
-                Row(
-                    Modifier
-                        .pressable(haptic = true) {
-                            scope.launch {
-                                followBottom = true
-                                unreadBlocks = 0
-                                val total = session.itemCount + if (session.streaming) 1 else 0
-                                if (total > 0) listState.animateScrollToItem(total - 1)
-                            }
-                        }
-                        .background(ChatAccentColor, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painterResource(AppR.drawable.ic_lucide_chevron_down), null,
-                        tint = PaEditorial.OnPrimary, modifier = Modifier.size(12.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "${unreadBlocks.coerceAtLeast(1)} 条新内容",
-                        color = PaEditorial.OnPrimary,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-            }
-        }
-        // 组合完成后登记本帧条目数(下一帧据此判定"是否末尾追加了新消息")
-        SideEffect { prevItemCount.value = st.items.size }
-        } // chatMiddle lambda 到此结束(两条骨架共用段的下边界)
+        } // chatMiddle 薄委托到此结束
 
         // ---- 编辑式主机状态槽(05/12):只承载离线件(主机胶囊+断线横幅) ----
         // 会话身份已上移到标题行右侧(ChatIdentityBadge,2026-09-30 布局修复:
         // "Agent·工作区+状态点"跟在标题旁,不再单独占一张大卡);本槽仅在断线时
         // 出现内容 —— 未连接时状态仍显示上次更新,绝不出现"正在执行"。
+        // 【C1 拆分】主机状态槽迁至 ui/chat/ChatComposer.kt(ChatHostStatusArea)
         val chatHostStatus: @Composable () -> Unit = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // 离线(12):主机胶囊 OFFLINE + 上次更新时间 —— 未连接时状态仍显示
-                // 上次更新,绝不出现"正在执行"(hostChipCaption 的构造性保证);
-                // 断线横幅保留既有机制(自动重连计数/排队条数/手动重试),草稿不丢。
-                // 主机胶囊只认"已知断网"(down);横幅可见性走三态状态机 —— checking
-                // 断过也保持可见,两者口径不同是有意的(见上方 chatBanner 注释)。
-                if (connDown) {
-                    PaHostChip(
-                        hostName = hostName.ifBlank { "电脑" },
-                        link = PaHostLink.OFFLINE,
-                        lastUpdateText = offlineSnapshotAt.takeIf { it > 0 }?.let {
-                            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(it))
-                        },
-                    )
-                }
-                if (chatBanner.visible) {
-                    ChatOfflineBanner(
-                        copy = connectionBannerCopy(chatBanner.attempts, TurnSession.totalQueuedInputs()),
-                        onRetry = { reloadToken++ },
-                    )
-                }
-            }
-        }
-
-        // ---- 底部输入区 lambda:两条骨架共用同一份内容,外壳按骨架取底安全/边距 ----
-        val chatComposerBody: @Composable ColumnScope.() -> Unit = {
-        // ---- 输入区(对标图五):附件行 + 双行胶囊 [输入 / + 审批 模型·强度 发送] ----
-            // 已上传附件 chips:出现/收起走 AnimatedContent(展开+淡入 / 收缩+淡出,
-            // 全 spring 可打断)—— 编辑条"带附件 ↔ 无附件"两个状态之间不再硬跳。
-            AnimatedContent(
-                targetState = attachments.isNotEmpty(),
-                transitionSpec = {
-                    (fadeIn(PaMotion.emphasized()) + expandVertically(PaMotion.emphasized()))
-                        .togetherWith(fadeOut(PaMotion.standard()) + shrinkVertically(PaMotion.standard()))
-                },
-                label = "attachRow",
-            ) { hasAttachments ->
-                if (hasAttachments) {
-                    Column {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    attachments.forEach { at ->
-                        Row(
-                            Modifier
-                                // 单击预览 / 长按复制完整文件名(复用消息长按复制的写法)
-                                .pressableLong(
-                                    onClick = { openAttachment(at) },
-                                    onLongPress = { copyMessage(ctx, at.name) },
-                                )
-                                .background(PaEditorial.Raised, RoundedCornerShape(10.dp))
-                                // PA-REAL-0004 收尾:chip 命中高度抬到 ≥48dp(原 ≈29dp)。
-                                // 垂直 padding 7→0,由"移除叉"的 48dp 触控箱顶起;胶囊圆角/
-                                // 配色/内容排布不变,仅整体增高到最小触控标准。
-                                .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
-                                .padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                painterResource(
-                                    if (attachmentKind(at.name, at.mediaType) == AttachmentKind.IMAGE) {
-                                        AppR.drawable.ic_lucide_image
-                                    } else {
-                                        AppR.drawable.ic_lucide_file_text
-                                    },
-                                ),
-                                null,
-                                tint = PaEditorial.Primary, modifier = Modifier.size(13.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            // 文件名最多 3 行、可换行;宽度封顶以强制换行(横向滚动行里若不封顶,
-                            // 文本会一直延伸并被视口裁掉)。真需省略时保留扩展名(见 middleEllipsize)。
-                            Text(
-                                middleEllipsize(at.name, ATTACH_CHIP_NAME_MAX),
-                                Modifier.widthIn(max = 220.dp),
-                                fontSize = 11.sp, color = PaEditorial.Ink,
-                                maxLines = 3, softWrap = true, overflow = TextOverflow.Ellipsis,
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            // PA-REAL-0004 收尾:移除叉命中区 13→48dp(原叉仅 13dp,chip 本体
-                            // 点击是"预览"不能替代移除,故必须独立放大);叉视觉 13dp 居中不变。
-                            // 前置 6dp Spacer 保留,触控箱自带居中留白即视觉间距。
-                            Box(
-                                Modifier
-                                    .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                                    .pressable { attachments = attachments - at },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    painterResource(AppR.drawable.ic_lucide_x), null,
-                                    tint = PaEditorial.Subtle,
-                                    modifier = Modifier.size(13.dp),
-                                )
-                            }
-                        }
-                    }
-                    }
-                        Spacer(Modifier.height(8.dp))
-                    }
-                }
-            }
-
-            // 【生效模型名】已上提到函数作用域(effectiveModel 声明处):
-            // hacker 模式的 tmux 状态条在输入栏上方,与本栏共用同一个 modelName。
-
-            var approvalMenu by remember { mutableStateOf(false) }
-            // 【聚焦辉光】输入框聚焦/失焦经 spring 淡入淡出 1dp 主色描边:
-            // "正在输入"有一圈安静的状态光,而不是生硬的有/无两态。
-            val inputInteraction = remember { MutableInteractionSource() }
-            val inputFocused by inputInteraction.collectIsFocusedAsState()
-            val focusGlow by animateFloatAsState(
-                targetValue = if (inputFocused) 1f else 0f,
-                animationSpec = PaMotion.standard(),
-                label = "inputFocusGlow",
+            ChatHostStatusArea(
+                connDown = connDown,
+                hostName = hostName,
+                offlineSnapshotAt = offlineSnapshotAt,
+                chatBanner = chatBanner,
+                onReload = { reloadToken++ },
             )
-            // 编辑式:瓷白输入卡 + 细线(18dp 圆角);黑客终端保持玻璃材质(26dp)。
-            val composerShape = if (PaHacker.isHacker) RoundedCornerShape(26.dp) else RoundedCornerShape(18.dp)
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(26.dp), hairline = true)
-                        else Modifier
-                            .background(PaEditorial.Surface, composerShape)
-                            .border(1.dp, PaEditorial.Hairline, composerShape),
-                    )
-                    .border(
-                        1.dp,
-                        PaEditorial.Primary.copy(alpha = 0.30f * focusGlow),
-                        composerShape,
-                    )
-                    .animateContentSize(PaMotion.emphasized()),
-            ) {
-                // [斜杠命令卡面(纵向)] 会话是面板 agent(zcode/codex/pi 三源)且输入以 "/"
-                // 开头时,列出该线程可用的命令 + 内置伪命令(zcode=会话快照 slashCommands[],
-                // codex=skills 映射,pi=get_commands 真名映射,daemon 按 agent_id 路由同一
-                // RPC;内置伪命令由 slashCandidatesFor 置顶合并,/压缩 认 compact:<id>、
-                // /计划 认 review:<id> 能力位,缺位不进列表)。点选按动作分流:
-                //   - FILL 普通命令 → applySlashPick 回填(zcode/pi→"/命令 " 保留后续文字,
-                //     pi 真命令由 pi 原生展开;codex→自然语言触发技能);
-                //   - GOAL/COMPACT/REVIEW 内置伪命令 → 执行动作(弹目标底栏 / doCompact /
-                //     doStartReview),不填输入框,并把敲出的 "/词元" 清掉
-                //     (stripSlashToken,避免把伪命令名当正文发出;REVIEW 的词元后
-                //     残留文字作为审查重点 focus 下发)。
-                // 视觉:纵向可滑卡面(最大 320dp,每行名称+说明完整不截断)—— 取代旧
-                // "横滚 8 条"候选条,解决 codex/pi 长列表"看不全"的问题;
-                // 可见性/过滤/合并/回填纯逻辑在 SlashCommandsLogic.kt。
-                val slashCandidates = if (slashPanelVisible(threadAgentId, input, slashCommands, offlineSnapshot, hostCaps)) {
-                    filterSlashCandidates(slashCandidatesFor(threadAgentId, slashCommands, hostCaps), input)
-                } else {
-                    emptyList()
-                }
-                if (slashCandidates.isNotEmpty()) {
-                    Text(
-                        "${slashCandidates.size} 个命令 · 上下滑动查看",
-                        fontSize = 10.sp,
-                        color = ChatSubtleColor,
-                        modifier = Modifier.padding(start = 16.dp, top = 8.dp),
-                    )
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = minOf(180, LocalConfiguration.current.screenHeightDp / 4).dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(start = 10.dp, end = 10.dp, top = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        slashCandidates.forEach { c ->
-                            // 每行一张卡:命令名 + 完整说明(不设 maxLines,描述长也看得全)。
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .pressable {
-                                        when (c.action) {
-                                            SlashAction.GOAL -> {
-                                                setInput(stripSlashToken(input))
-                                                slashGoalSheet = true
-                                            }
-                                            SlashAction.COMPACT -> {
-                                                setInput(stripSlashToken(input))
-                                                doCompact()
-                                            }
-                                            SlashAction.REVIEW -> {
-                                                // "/计划":词元后已敲的文字作为审查重点
-                                                // (通常为空,daemon 有默认口径),清空输入框后发起。
-                                                val reviewFocus = stripSlashToken(input)
-                                                setInput("")
-                                                doStartReview(reviewFocus)
-                                            }
-                                            SlashAction.FILL -> setInput(applySlashPick(input, c, threadAgentId))
-                                        }
-                                    }
-                                    .background(
-                                        PaEditorial.Raised,
-                                        RoundedCornerShape(12.dp),
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    "/" + c.name,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = ChatAccentColor,
-                                )
-                                if (c.description.isNotBlank()) {
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        c.description,
-                                        fontSize = 11.sp,
-                                        color = ChatMutedColor,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                // 【未知助手空态】会话归属 agent 已知但不在三源面板名单(zcode/codex/pi
-                // 之外,如旧库残值/将来的第 4 个 agent)且敲出了 "/" → 人话空态,不静默
-                // (AUDIT §3.3:遇未知值给人话,禁止"未知/错误"字样)。agentId 还没拉到
-                // (加载中)与离线态都不提示,避免闪错/与离线横幅重复;纯逻辑见
-                // slashUnknownAgentHintVisible(SlashCommandsLogic.kt)。
-                if (slashUnknownAgentHintVisible(threadAgentId, input, offlineSnapshot)) {
-                    Text(
-                        SLASH_UNKNOWN_AGENT_HINT,
-                        fontSize = 11.sp,
-                        color = ChatSubtleColor,
-                        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
-                    )
-                }
-                // 第一行:输入框 + 整个输入栏右上角的"展开编辑"小标识
-                // 【为什么放右上角】它是低频辅助动作。放进工具行会和发送键 / 模型 chip
-                // 抢注意力,用户明确要求"不要在右侧,也不要在发送键左边"。挪到整个胶囊的
-                // 右上角后:不起眼(小号 + TextTertiary)、又始终可达,不占工具行的横向预算。
-                // 【动画 ③·文本落框】识别文本并入时行数可能 0→1/1→2:外层 Box 挂
-                // animateContentSize,高度变化平滑过渡(轻量,不引入额外布局);叠加
-                // BasicTextField 上一次 alpha "落定"脉动,构成"文本飞入输入框"的过渡感。
-                val voiceLandPulse = remember { Animatable(1f) }
-                LaunchedEffect(voiceLandedTick) {
-                    if (voiceLandedTick > 0) {
-                        voiceLandPulse.snapTo(0.45f)
-                        // 落定脉动走 spring 令牌:中途再收到语音片段,从当前透明度续走不跳变
-                        voiceLandPulse.animateTo(1f, PaMotion.emphasized())
-                    }
-                }
-                Box(Modifier.fillMaxWidth().animateContentSize()) {
-                    // 【行数跟踪】展开编辑按钮只在文本占超过 2 行时出现 —— 输入区右上角
-                    // 常驻 ↗ 与工具行"+"一上一下两个浮点,短文本时像两个入口互相打架
-                    // (L2 真机挑刺);长文本才是它存在的时刻。行数取自真实排版
-                    // (TextLayoutResult.lineCount,含自动换行),不按字符数猜。
-                    var inputWrapLines by remember { mutableStateOf(1) }
-                    BasicTextField(
-                        value = input,
-                        onValueChange = { setInput(it) },
-                        onTextLayout = { inputWrapLines = it.lineCount },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            // 【动画 ③】文本落定脉动:识别文本并入的一瞬整框 45%→100% 透明度
-                            // (spring ~0.3s),只动绘制层(alpha),不触发重新布局,开销可忽略
-                            .graphicsLayer { alpha = voiceLandPulse.value }
-                            // 右侧预留 30dp:保证右上角图标不会压住光标 / 末尾文字
-                            .padding(start = 18.dp, end = 30.dp, top = 12.dp, bottom = 12.dp)
-                            .heightIn(min = 24.dp),
-                        // 黑客终端模式:输入框字体等宽(JetBrains Mono,见 TerminalFont)
-                        textStyle = TextStyle(
-                            fontSize = 15.sp,
-                            color = ChatInkColor,
-                            fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
-                        ),
-                        // 聚焦态喂给外层胶囊的辉光描边(见上方 inputFocused)
-                        interactionSource = inputInteraction,
-                        cursorBrush = SolidColor(ChatAccentColor),
-                        maxLines = 4,
-                        // 【P1-4】running 不再锁输入(运行中发消息=插入/排队);
-                        // 只在离线快照态停用 —— 离线发不出去,别让用户白打一段话。
-                        enabled = true,
-                        decorationBox = { inner ->
-                            // 黑客终端模式:输入非空时行首渲染 `❯ ` 提示符装饰(PaEditorial.Primary);
-                            // 空输入显示 hint,不显示 ❯(见 composerShowsPrompt 纯函数)。
-                            Row(verticalAlignment = Alignment.Top) {
-                                if (PaHacker.isHacker && composerShowsPrompt(input)) {
-                                    Text(
-                                        "❯ ",
-                                        color = ChatAccentColor,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = TerminalFont.chatFont,
-                                    )
-                                }
-                                Box {
-                                    if (input.isEmpty()) {
-                                        Text(
-                                            when {
-                                                offlineSnapshot -> "离线中，可继续编辑草稿；重连后发送…"
-                                                // 【P4 Task 6】识别进行中:placeholder 优先展示引擎的
-                                                // 部分转写(实时反馈);无字时按相给占位 ——
-                                                // 停止后的 STOPPING/TRANSCRIBING(端侧转写窗口)
-                                                // 显示"转写中…",出稿后回 IDLE 占位符切回常规文案。
-                                                voiceListening ->
-                                                    // 【P4 Task 6】识别中的实时反馈:优先展示引擎部分转写,
-                                                    // 没有字时按相给占位(停止后 TRANSCRIBING=转写中)。
-                                                    voiceState.partialText.ifBlank {
-                                                        if (voiceState.phase == VoicePhase.TRANSCRIBING ||
-                                                            voiceState.phase == VoicePhase.STOPPING
-                                                        ) {
-                                                            "转写中…"
-                                                        } else {
-                                                            "语音输入中…"
-                                                        }
-                                                    }
-                                                // 黑客终端模式:hint 改为指令口吻(规格文案)
-                                                PaHacker.isHacker -> "输入指令…"
-                                                else -> "继续输入,或询问当前进度…"
-                                            },
-                                            fontSize = 15.sp,
-                                            color = ChatSubtleColor,
-                                            fontFamily = if (PaHacker.isHacker) TerminalFont.chatFont else null,
-                                        )
-                                    }
-                                    inner()
-                                }
-                            }
-                        },
-                    )
-                    // 展开编辑:内容超过 EXPAND_HINT_THRESHOLD 时轻微提亮到 PaEditorial.Primary,
-                    // 保留原有"长文本可展开大窗"的提示语义;平时保持低调(TextTertiary)。
-                    // 【条件露出】文本 ≤2 行时整块不渲染(见上方 inputWrapLines)——
-                    // 只在真的需要大窗编辑时出现,输入区右上角不再常驻一个浮点。
-                    if (inputWrapLines > 2) {
-                    Box(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(end = 10.dp, top = 6.dp)
-                            // PA-REAL-0004 收尾:命中区 22→48dp;视觉图标(15dp)用内层
-                            // padding 钉回原 22dp 盒中心(距盒右上角 11dp),位置零漂移。
-                            .size(INPUT_TOUCH_TARGET_DP.dp)
-                            .pressable { expandedInputOpen = true },
-                        contentAlignment = Alignment.TopEnd,
-                    ) {
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_maximize_2), "展开编辑",
-                            tint = if (input.length > EXPAND_HINT_THRESHOLD) ChatAccentColor else ChatSubtleColor,
-                            modifier = Modifier
-                                .padding(end = 3.5.dp, top = 3.5.dp)
-                                .size(15.dp),
-                        )
-                    }
-                    }
-                }
-                // [模型名全宽行] 当前生效的模型名**恒显且完整**:不截断、不限行数。
-                // 【为什么改恒显】上一版只在名字超过 14 字符时才补这一行,于是"长度没超、
-                // 但已被工具行省略号挤断"的名字依然读不全(用户反馈"模型名仍未完整显示")。
-                // 现在无条件显示全文;整行同时内联"运行中模型确认",把原本独立的一行合并进来
-                // (设计取向:能一行放下的不要分行),少一层堆叠且不丢信息。整行作模型/强度
-                // 点击入口;所有控件触控箱仍走 INPUT_TOUCH_TARGET_DP(PA-REAL-0004)。
-                //
-                // 【2026-09-30 快速切换】点击整行(含下拉箭头)直接展开**快速切换面板**:
-                // 最近用过的模型单点即切,不再强制进 ModelEffortCard 二级弹窗(两段式太重);
-                // 面板尾部「更多…」仍进完整选择卡(跟随桌面/全部模型入口不丢)。模型名
-                // 11sp→13sp、Muted→Ink:这是高频操作控件,字号与对比度按主控件档给。
-                Box {
-                Row(Modifier.fillMaxWidth().pressable { showQuickModels = true }
-                    .semantics { contentDescription = "切换模型与思考强度" }
-                    // PA-REAL-0004:整行高度 ≥48dp(实测 37.8dp)。heightIn 在 padding 外层,
-                    // 内容(verticalAlignment=CenterVertically)在 48dp 内居中,只是上下多留白。
-                    .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
-                    // 【下移贴工具行】旧 padding(vertical=8)让模型名悬在输入区中段,与占位
-                    // 文字读成一团(L2 真机挑刺);收成 top=4/bottom=0 —— 与占位文字拉开
-                    // 4dp,视觉归入下方工具行一组(模型选择是"控件"不是提示文案)。
-                    .padding(start = 16.dp, end = 16.dp, top = 4.dp), verticalAlignment=Alignment.CenterVertically) {
-                    // 运行中模型确认:真机上"模型 · 强度 · 最近运行: 模型 · 强度"连读
-                    // 出现"最大"重复三次(用户裁决:信息过载难读)。精简为把"最近运行"
-                    // 收进快速切换面板头部(那里才是对比"当前 vs 正在跑"的语境)。
-                    val runningHint = ""
-                    val base = modelName + if (effortLabel != "默认") " · $effortLabel" else ""
-                    // 切换成功行内反馈:modelFlashTick(快速面板/完整卡真实选中后 +1)驱动
-                    // 模型名一次 Primary→Ink 的轻量闪光(纯绘制层动效,不造假状态;
-                    // 模型名本体由生效链即时更新,闪的只是"刚变过"的提示)。
-                    val nameFlash = remember { Animatable(0f) }
-                    LaunchedEffect(modelFlashTick) {
-                        if (modelFlashTick > 0) {
-                            nameFlash.snapTo(1f)
-                            nameFlash.animateTo(0f, tween(650))
-                        }
-                    }
-                    val nameColor = lerp(ChatInkColor, ChatAccentColor, nameFlash.value)
-                    Text(
-                        buildAnnotatedString {
-                            withStyle(SpanStyle(fontSize = 13.sp, color = nameColor, fontWeight = FontWeight.Medium)) {
-                                append(base)
-                            }
-                            if (runningHint.isNotEmpty()) {
-                                withStyle(SpanStyle(fontSize = 12.sp, color = ChatMutedColor)) {
-                                    append(runningHint)
-                                }
-                            }
-                        },
-                        modifier=Modifier.weight(1f),
-                        maxLines=2, overflow=TextOverflow.Ellipsis)
-                    Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "展开快速切换模型", tint=ChatMutedColor,modifier=Modifier.requiredSize(18.dp))
-                }
-                // 快速切换面板:锚在模型行上方弹出;focusable 让面板外点击/返回键关闭。
-                // 【2026-10-02 流畅度修复】面板从行内 Popup 挪到与 showModelCard 同层的
-                // 稳定组合位(见文件底部 showModelCard 挂载点)—— 流式输出每帧重组会
-                // 反复打断行内 Popup(真机:轮次运行中点模型行面板闪没/开不出,用户
-                // 裁决"切换不流畅"的主因)。稳定层挂载不受输入区逐帧重组影响。
-                }
-                // 第二行:工具行
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = 10.dp, end = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                        verticalAlignment=Alignment.CenterVertically) {
-                    // [+ 附件]
-                    // 【image_input 位门控】daemon 逐 agent 宣告 image_input:<id>(dsh 无位,
-                    // 发图必败),附件按钮是手机端唯一的图片入口 —— 缺位会话隐藏,免得
-                    // 选完图必吃失败壳;带位 agent 不动(见 attachmentEntryHiddenFor)。
-                    if (!attachmentEntryHiddenFor(threadAgentId, hostCaps)) {
-                    Box(
-                        Modifier
-                            // PA-REAL-0004:触控箱 ≥48dp(原 32dp);图标仍 20dp 居中,视觉不变。
-                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            .pressable { pickFiles.launch("*/*") },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_plus), "添加附件",
-                            tint = ChatMutedColor, modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    Spacer(Modifier.width(2.dp))
-                    }
-                    // [Git] 会话项目的版本管理侧栏
-                    Box(
-                        Modifier
-                            // PA-REAL-0004 收尾:命中区 32→48dp;图标仍 18dp 居中,视觉不变。
-                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            .pressable { showGitPanel = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painterResource(AppR.drawable.ic_lucide_git_branch), "项目 Git",
-                            tint = ChatMutedColor, modifier = Modifier.size(18.dp),
-                        )
-                    }
-                    Spacer(Modifier.width(2.dp))
-                    // [优化](实验功能,开关在 设置-外观与阅读,默认关):把口语化输入
-                    // 改写成给 AI 的清晰指令;可见性走 PromptOptimizeState 状态机
-                    // (开关开 + 在线 + 输入非空 + 不在请求中)。请求中转圈,防重复点击。
-                    if (promptOptState.buttonVisible || promptOptState.inFlight) {
-                        Box(
-                            Modifier
-                                // PA-REAL-0004 收尾:命中区 32→48dp;转圈/星形图标绘制
-                                // 尺寸不变,只放大不可见命中区。
-                                .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                                .pressable { optimizeCurrentInput() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (promptOptState.inFlight) {
-                                TypingDots(dotSize = 3.dp, gap = 2.dp)
-                            } else {
-                                Icon(
-                                    painterResource(AppR.drawable.ic_lucide_sparkles), "优化提示词",
-                                    tint = ChatAccentColor, modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(2.dp))
-                    }
-                    // [审批策略] 会话内无缝切换 —— 扁平可点区域(图标 + 文字 + chevron),
-                    // 去掉 PaEditorial.Raised 胶囊底色回落到参考图的视觉层级(只借排版,颜色仍走 Pa)。
-                    // DropdownMenu 的全部逻辑与 APPROVALS 取值映射保持不变。
-                    if (sessionAgent == "codex") {
-                    Box {
-                        Row(
-                            Modifier
-                                .pressable { approvalMenu = true }
-                                // PA-REAL-0004 收尾:整 chip 命中高度抬到 ≥48dp(原 ≈25dp)。
-                                // heightIn 在 padding 外层(同"切换模型"整行口径),内容在
-                                // 48dp 内垂直居中,视觉排布不变。
-                                .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            val cur = codexSettings?.approvalPolicy ?: "on-request"
-                            val danger = cur == "never"
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_triangle_alert), null,
-                                tint = if (danger) ChatDeniedColor else ChatAccentColor,
-                                modifier = Modifier.size(13.dp),
-                            )
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                APPROVALS.find { it.first == cur }?.second ?: "按需询问",
-                                fontSize = 11.5.sp,
-                                maxLines=1, overflow=TextOverflow.Ellipsis, modifier=Modifier.widthIn(max=72.dp),
-                                color = if (danger) ChatDeniedColor else ChatInkColor,
-                            )
-                            Spacer(Modifier.width(2.dp))
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_chevron_down), null,
-                                tint = ChatSubtleColor, modifier = Modifier.size(12.dp),
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = approvalMenu,
-                            onDismissRequest = { approvalMenu = false },
-                            containerColor = if (PaHacker.isHacker) PaEditorial.Raised else PaEditorial.Surface,
-                            shape = RoundedCornerShape(16.dp),
-                        ) {
-                            APPROVALS.forEach { (id, label, desc) ->
-                                val active = (codexSettings?.approvalPolicy ?: "on-request") == id
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Column(Modifier.weight(1f)) {
-                                                Text(
-                                                    label, fontSize = 14.sp,
-                                                    color = if (active) ChatAccentColor else ChatInkColor,
-                                                )
-                                                Text(desc, fontSize = 10.5.sp, color = ChatSubtleColor)
-                                            }
-                                            if (active) {
-                                                Icon(
-                                                    painterResource(AppR.drawable.ic_lucide_check), null,
-                                                    tint = ChatAccentColor, modifier = Modifier.size(16.dp),
-                                                )
-                                            }
-                                        }
-                                    },
-                                    onClick = {
-                                        approvalMenu = false
-                                        setApproval(id)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    }
-                    // [上下文窗口] 常显:圆形占用环 —— 外圈一个圆环,环内直接显示实际使用占比。
-                    // 【本轮改版】旧版是「圆形图标 + 上下文 128k」的胶囊:横向占位大,而且
-                    // 看不出窗口被占了多少。现在环内给占比(≥80% 黄、≥95% 红),窗口总量与
-                    // 用量明细点开卡面看;窗口未知或还没上报用量时环内是"—",绝不假装 0%。
-                    val ctxWindowKnown = !windowIsFallback && contextWindow > 0
-                    val ctxUsage = session.turnUsage
-                    val ctxRingKnown = ctxWindowKnown && ctxUsage != null
-                    // 压缩同步:压缩后旧占用已失真,小环进入"已压"态而非继续显示旧占比。
-                    val ctxCompacted = compactionPending(session.turnUsage, session.lastCompactedAt)
-                    val ctxRatio =
-                        if (ctxRingKnown) usageTotalTokens(ctxUsage).toFloat() / contextWindow.toFloat() else 0f
-                    // 【空值不渲染】窗口未知或还没有用量时报"—"的空环,悬在工具行中间
-                    // 像一个没有意义的"—"按钮(L2 真机挑刺);没有真值就整块不出,
-                    // 拿到窗口+用量(或已压缩)才回场 —— 宁可缺席,不摆占位符。
-                    if (ctxRingKnown || ctxCompacted) {
-                    Box(
-                        Modifier
-                            // PA-REAL-0004 收尾:展示型控件的命中区 34→48dp;环视觉仍
-                            // 28dp 居中不变(见下方 ContextRing 的 size),只放大命中区。
-                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            .semantics {
-                                contentDescription = "上下文窗口 " +
-                                    (if (ctxCompacted) "已压缩" else ringPercentLabel(ctxRatio, ctxRingKnown)) +
-                                    if (ctxWindowKnown) " (窗口 ${contextWindow / 1000}k)" else ""
-                            }
-                            .pressable(haptic = true) { showContextCard = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ContextRing(
-                            ratio = ctxRatio,
-                            windowKnown = ctxRingKnown,
-                            modifier = Modifier.size(28.dp),
-                            compacted = ctxCompacted,
-                        )
-                    }
-                    Spacer(Modifier.width(2.dp))
-                    }
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    // 【P4 Task 6 语音输入】麦克风:无权限先申请(RECORD_AUDIO),有权限启动
-                    // VoiceController 会话(系统识别优先,端侧 SenseVoice 兜底);识别中图标区
-                    // 换成波形跳动柱;再点一次 = 停止并交付结果。识别文本只并入输入框
-                    // (默认追加,长按切替换模式),绝不自动发送(保留编辑权)。
-                    // 【动画 ②·识别中波形】4 根跳动柱替代旧的整体缩放脉动:柱间时长
-                    // 错开(430/560/500/650ms)避免"同起同落"的机械感;空闲分支不挂
-                    // InfiniteTransition,不空转。柱高用 scaleY 绘制层缩放,不改布局。
-                    val micWave: List<Float> = if (voiceListening) {
-                        val wave = rememberInfiniteTransition(label = "micWave")
-                        listOf(
-                            wave.animateFloat(
-                                initialValue = 0.35f, targetValue = 1f,
-                                animationSpec = infiniteRepeatable(tween(430), RepeatMode.Reverse),
-                                label = "wave1",
-                            ).value,
-                            wave.animateFloat(
-                                initialValue = 1f, targetValue = 0.3f,
-                                animationSpec = infiniteRepeatable(tween(560), RepeatMode.Reverse),
-                                label = "wave2",
-                            ).value,
-                            wave.animateFloat(
-                                initialValue = 0.3f, targetValue = 1f,
-                                animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
-                                label = "wave3",
-                            ).value,
-                            wave.animateFloat(
-                                initialValue = 1f, targetValue = 0.4f,
-                                animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
-                                label = "wave4",
-                            ).value,
-                        )
-                    } else {
-                        listOf(1f, 1f, 1f, 1f)
-                    }
-                    // 【动画 ①·按下涟漪】点按重放一圈"扩散 + 淡出"的 Accent 圆环:
-                    // micRippleTick 每次点击 +1,Animatable 0→1 驱动半径与透明度。
-                    val micRipple = remember { Animatable(0f) }
-                    LaunchedEffect(micRippleTick) {
-                        if (micRippleTick > 0) {
-                            micRipple.snapTo(0f)
-                            micRipple.animateTo(1f, tween(420))
-                        }
-                    }
-                    Box(
-                        Modifier
-                            // PA-REAL-0004:触控箱 ≥48dp(原 40dp);涟漪/波形/图标的绘制尺寸
-                            // 都不变,只是不可见的命中区放大。
-                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            // 【P4 Task 6】点按 = 开始/停止(按相裁决);长按 = 切换追加/替换模式。
-                            .semantics {
-                                // TalkBack 单一描述(图标本体不再各挂 contentDescription,避免读两遍):
-                                // 空闲 = 模式;进行中 = 时长 + 引擎名 + 停止指引。
-                                contentDescription = if (voiceListening) {
-                                    "语音输入中,已录 $voiceElapsedSec 秒,${voiceEngineLabel(voiceState.engine)};" +
-                                        "点按停止并出稿" + if (voiceReplaceMode) ",替换模式" else ""
-                                } else if (voiceReplaceMode) {
-                                    "语音输入(替换模式):点按开始,长按切回追加模式"
-                                } else {
-                                    "语音输入:点按开始,长按切换替换模式"
-                                }
-                            }
-                            .pressableLong(
-                                onClick = {
-                                    micRippleTick++ // 【动画 ①】按下即起涟漪(不依赖识别结果)
-                                    val granted = ContextCompat.checkSelfPermission(
-                                        ctx, Manifest.permission.RECORD_AUDIO,
-                                    ) == PackageManager.PERMISSION_GRANTED
-                                    when (voiceState.phase) {
-                                        // 空闲/失败:开新一轮(无权限则只申请,回答后经 Permission 事件续跑)
-                                        VoicePhase.IDLE, VoicePhase.ERROR -> {
-                                            if (granted && voiceController.current().engine == VoiceEngineKind.UNAVAILABLE) {
-                                                // 引擎没建起来(端侧初始化中/失败):如实报因,可自愈重试
-                                                reportVoiceUnavailable()
-                                            } else {
-                                                voiceController.send(VoiceEvent.Start)
-                                            }
-                                            if (!granted) micPermission.launch(Manifest.permission.RECORD_AUDIO)
-                                        }
-                                        // 收音中/启动中:停止并交付最终转写
-                                        VoicePhase.STARTING, VoicePhase.LISTENING ->
-                                            voiceController.send(VoiceEvent.Stop)
-                                        // 暂停中:再点一次 = 恢复(同会话继续,文本累计不清)
-                                        VoicePhase.PAUSED -> voiceController.send(VoiceEvent.Start)
-                                        // 等权限弹窗/停止收尾/端侧转写中:防抖,忽略连点
-                                        VoicePhase.REQUESTING_PERMISSION, VoicePhase.STOPPING,
-                                        VoicePhase.TRANSCRIBING,
-                                        -> {}
-                                    }
-                                },
-                                onLongPress = {
-                                    voiceReplaceMode = !voiceReplaceMode
-                                    PaHaptics.light(hapticView)
-                                    Toast.makeText(
-                                        ctx,
-                                        if (voiceReplaceMode) "语音输入已切到替换模式:识别结果将覆盖输入框" else "语音输入已切到追加模式:识别结果将接在输入框后",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        // 涟漪圆环:仅动画进行中绘制(0..1),结束后自然隐藏
-                        val ripple = micRipple.value
-                        if (ripple > 0f && ripple < 1f) {
-                            Box(
-                                Modifier
-                                    .size(32.dp)
-                                    .graphicsLayer {
-                                        scaleX = 0.5f + ripple
-                                        scaleY = 0.5f + ripple
-                                    }
-                                    .background(ChatAccentColor.copy(alpha = 0.22f * (1f - ripple)), CircleShape),
-                            )
-                        }
-                        if (voiceListening) {
-                            // 识别中:波形柱接管图标位(32dp 盒内 4 柱,基线高 16dp)
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(2.5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                micWave.forEach { v ->
-                                    Box(
-                                        Modifier
-                                            .width(2.5.dp)
-                                            .height(16.dp)
-                                            .graphicsLayer { scaleY = v }
-                                            .background(ChatAccentColor, RoundedCornerShape(2.dp)),
-                                    )
-                                }
-                            }
-                        } else {
-                            // 替换模式点亮 Accent 色(视觉反馈);读屏描述统一挂在上方
-                            // Box 的 semantics(避免读两遍),图标本体不再各挂描述。
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_mic), null,
-                                tint = if (voiceReplaceMode) ChatAccentColor else ChatMutedColor,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    // [发送 / 插入]
-                    // 【P1-4】running 时输入可用,发送键变为「插入运行中任务」:
-                    // 图标(列表+勾)与箭头区分,内容描述同步,让读屏与视觉都能分清
-                    // "开新任务"与"插进正在跑的任务(或排队)"。离线快照态一律禁用。
-                    val sendEnabled = !offlineSnapshot && input.isNotBlank() && !session.recovering
-                    val inserting = session.running
-                    // R2 停止可达性:运行中且输入为空 → 发送键原位变「终止」键(与
-                    // ChatGPT/Codex 移动端同位语义:拇指不动就能停),不再是灰死的箭头。
-                    // 运行中且输入非空 = P1-4 的「插入」,语义让位给输入;顶栏(黑客终端)
-                    // 与「更多」(编辑式)的终止入口原样保留作兜底。
-                    val canStopTurn = session.running && input.isBlank() && !offlineSnapshot
-                    Box(
-                        Modifier
-                            // PA-REAL-0004:触控箱 ≥48dp(原 40dp)。Accent 圆底下沉一层保持
-                            // 40dp 视觉不变(按下缩放仍作用于整体),只放大不可见命中区。
-                            .sizeIn(minWidth = INPUT_TOUCH_TARGET_DP.dp, minHeight = INPUT_TOUCH_TARGET_DP.dp)
-                            // 发送键 = 触感分级 confirm 档(发的动作值得重反馈,不再是
-                            // 与普通点击同档的轻触);终止键 = warning 档(打断电脑端的
-                            // 活,分量比发送更重)。反馈都在触发瞬间发生。
-                            .pressable(scaleDown = 0.88f, enabled = sendEnabled || canStopTurn) {
-                                if (canStopTurn) {
-                                    PaHaptics.warning(hapticView)
-                                    TurnSession.cancelTurn(threadId)
-                                    Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    PaHaptics.confirm(hapticView)
-                                    if (send(input)) setInput("")
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            Modifier
-                                .requiredSize(40.dp)
-                                .background(
-                                    when {
-                                        canStopTurn -> ChatDeniedColor
-                                        sendEnabled -> ChatAccentColor
-                                        PaHacker.isHacker -> PaEditorial.Hover
-                                        else -> PaEditorial.Raised
-                                    },
-                                    CircleShape,
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                painterResource(
-                                    when {
-                                        canStopTurn -> AppR.drawable.ic_lucide_square
-                                        inserting -> AppR.drawable.ic_lucide_list_checks
-                                        else -> AppR.drawable.ic_lucide_arrow_up
-                                    }
-                                ),
-                                when {
-                                    canStopTurn -> "终止任务"
-                                    inserting -> "插入运行中任务"
-                                    else -> "发送"
-                                },
-                                // 内容色:sendEnabled 腿坐 Primary 实底,读 OnPrimary 令牌
-                                //(黑客盘电光青上白字 1.81:1);canStopTurn 腿坐 Denied
-                                // 实底,读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514,
-                                // 白字仅 2.51/2.77:1 已废)。
-                                tint = when {
-                                    canStopTurn -> PaEditorial.OnDenied
-                                    sendEnabled -> PaEditorial.OnPrimary
-                                    else -> ChatSubtleColor
-                                },
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    }
-                }
-            }
-        } // chatComposerBody lambda 到此结束
+        }
+        // 【C1 拆分】底部输入区整体迁至 ui/chat/ChatComposer.kt(ChatComposerArea);
+        // 此处只保留薄委托,两条骨架的输入区外壳(黑客终端/编辑式)不变。
+        val chatComposerBody: @Composable ColumnScope.() -> Unit = {
+            ChatComposerArea(
+                threadId = threadId,
+                session = session,
+                ctx = ctx,
+                hapticView = hapticView,
+                input = input,
+                setInput = ::setInput,
+                attachments = attachments,
+                threadAgentId = threadAgentId,
+                slashCommands = slashCommands,
+                offlineSnapshot = offlineSnapshot,
+                hostCaps = hostCaps,
+                slashGoalSheet = slashGoalSheet,
+                onCompact = ::doCompact,
+                onStartReview = ::doStartReview,
+                onOpenAttachment = ::openAttachment,
+                voiceLandedTick = voiceLandedTick,
+                voiceListening = voiceListening,
+                voiceState = voiceState,
+                voiceReplaceMode = voiceReplaceMode,
+                voiceElapsedSec = voiceElapsedSec,
+                micPermission = micPermission,
+                voiceController = voiceController,
+                reportVoiceUnavailable = ::reportVoiceUnavailable,
+                expandedInputOpen = expandedInputOpen,
+                modelName = modelName,
+                effortLabel = effortLabel,
+                showQuickModels = showQuickModels,
+                modelFlashTick = modelFlashTick,
+                sessionAgent = sessionAgent,
+                codexSettings = codexSettings,
+                onSetApproval = ::setApproval,
+                windowIsFallback = windowIsFallback,
+                contextWindow = contextWindow,
+                showContextCard = showContextCard,
+                showGitPanel = showGitPanel,
+                pickFiles = pickFiles,
+                promptOptState = promptOptState,
+                onOptimizeInput = ::optimizeCurrentInput,
+                onSend = ::send,
+            )
+        } // chatComposerBody 薄委托到此结束
 
         // —— 骨架分叉:黑客终端保持原 Column 骨架(显示模式行为不变);
         //       常规会话走编辑式 PaScreenScaffold(标题=会话名/返回/一个次操作/主机状态槽)。
@@ -5525,7 +3773,7 @@ fun ChatScreen(
                         statusView = identityStatus,
                         approvalWaiting = session.pendingApproval != null &&
                             !askIsAskAction(session.pendingApproval!!.action.name),
-                        onOpenApproval = { approvalDialogOpen = true },
+                        onOpenApproval = { approvalDialogOpen.value = true },
                         agentIconRes = agentBrandIcon(threadAgentId),
                     )
                 },
@@ -5547,7 +3795,7 @@ fun ChatScreen(
                 // 唯一次操作(README 骨架纪律):「更多」收口终止/导出/最近会话等低频动作
                 trailing = {
                     PaNavIconButton(
-                        onClick = { showMore = true },
+                        onClick = { showMore.value = true },
                         contentDescription = "更多",
                         iconRes = AppR.drawable.ic_lucide_ellipsis,
                     )
@@ -5574,11 +3822,11 @@ fun ChatScreen(
         // 等宽字,常规模式 Surface 底 —— 全走 editorial 槽位。
         // 点卡片 → scrollToItem 跳转并关闭;Scrim 点击/返回键 → 关闭(BackHandler 见上)。
         HistoryQuickPanel(
-            visible = showHistoryPanel,
+            visible = showHistoryPanel.value,
             entries = historyEntries,
             currentIndex = historyCurrentIndex,
             onJump = { listIndex -> jumpToHistoryEntry(listIndex) },
-            onDismiss = { showHistoryPanel = false },
+            onDismiss = { showHistoryPanel.value = false },
             onJumpEarliest = historyEntries.firstOrNull()?.let { entry ->
                 { jumpToHistoryEntry(entry.listIndex) }
             },
@@ -5625,7 +3873,7 @@ fun ChatScreen(
                             setInput(quoteMessageIntoDraft(input, menuTarget.text))
                             Toast.makeText(ctx, "已引用到输入框,补充一句即可发送", Toast.LENGTH_SHORT).show()
                         }
-                        "select" -> messageSelectArmed = menuTarget
+                        "select" -> messageSelectArmed.value = menuTarget
                         "retry" -> retryDelivery(menuTarget)
                     }
                     messageMenuTarget = null
@@ -5641,54 +3889,49 @@ fun ChatScreen(
         UndoBarHost(promptOptUndo, Modifier.align(Alignment.TopCenter))
     }
 
-    selectedAttachment?.let { attachment ->
-        val preview = loadAttachmentPreview(ctx, attachment)
-        Dialog(
-            onDismissRequest = { selectedAttachment = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.92f))
-                    .clickable { selectedAttachment = null },
-            ) {
-                // 标题行:预览态显示**完整文件名**(不省略、可换行),长按复制完整名。
-                // 这样"名字被裁"的老问题在点开预览后彻底消失(需求:预览标题行要完整可见)。
-                Text(
-                    attachment.name,
-                    Modifier
-                        .fillMaxWidth()
-                        .pressableLong(
-                            onClick = {},
-                            onLongPress = { copyMessage(ctx, attachment.name) },
-                        )
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    maxLines = 3,
-                    softWrap = true,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Box(
-                    Modifier.fillMaxWidth().weight(1f),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (preview != null) {
-                        androidx.compose.foundation.Image(
-                            preview,
-                            contentDescription = attachment.name,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(18.dp),
-                        )
-                    } else {
-                        Text("无法预览：${attachment.name}", color = Color.White)
-                    }
-                }
-            }
-        }
+    // 【C1 拆分】附件预览大图迁至 ui/chat/ChatSheets.kt
+    if (selectedAttachment.value != null) {
+        ChatAttachmentViewer(selectedAttachment = selectedAttachment, ctx = ctx)
+    }
+
+    // 【C1 拆分】「更多」面板迁至 ui/chat/ChatSheets.kt
+    if (showMore.value) {
+        ChatMoreSheet(
+            showMore = showMore,
+            showExport = showExport,
+            rollbackOpen = rollbackOpen,
+            drawerCtrl = drawerCtrl,
+            threadId = threadId,
+            threadAgentId = threadAgentId,
+            hostCaps = hostCaps,
+            running = session.running,
+            compactBusy = compactBusy,
+            ctx = ctx,
+            hapticView = hapticView,
+            onCompact = ::doCompact,
+            onFork = ::doFork,
+        )
+    }
+
+    // 【C1 拆分】"/目标"底栏迁至 ui/chat/ChatSheets.kt
+    if (slashGoalSheet.value) {
+        ChatGoalSheet(
+            slashGoalSheet = slashGoalSheet,
+            threadGoalLine = threadGoalLine,
+            threadId = threadId,
+            ctx = ctx,
+            scope = scope,
+        )
+    }
+
+    // 【C1 拆分】回滚面板迁至 ui/chat/ChatSheets.kt
+    if (rollbackOpen.value) {
+        ChatRollbackSheet(
+            rollbackOpen = rollbackOpen,
+            userTurnCount = session.userTurnCount,
+            rollbackBusy = rollbackBusy,
+            onRollback = ::doRollback,
+        )
     }
 
     // ---- 会话侧边栏:最近会话(搜索 + 最近使用时间)+ 底部全局入口 ----
@@ -5725,290 +3968,23 @@ fun ChatScreen(
         )
     }
 
-    // ---- 更多:分叉 / 回滚 ----
-    if (showMore) {
-        // 【本轮换 PaSheet】统一玻璃浮层(滚动/高度上限/安全区内建)
-        PaSheet(onDismissRequest = { showMore = false }) {
-            Column(Modifier.fillMaxWidth().padding(bottom = 26.dp)) {
-                Text(
-                    "会话操作",
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    fontSize = 17.sp, color = PaEditorial.Ink,
-                )
-                Spacer(Modifier.height(10.dp))
-                if (threadAgentId=="zcode") {
-                    Column(Modifier.fillMaxWidth().padding(horizontal=20.dp)) {
-                        NativePermissionsSection("zcode",threadId)
-                    }
-                }
-                // 【能力位门控】三个动作按 daemon 逐 agent 宣告的 compact/fork/
-                // rollback:<agentId> 位点亮(判定见 ThreadActionGateTest 钉死的纯函数):
-                // dsh 会话三项全无位 → 只剩标题与(zcode 的)权限区,不摆点了必败的
-                // 假入口;分隔线只在两个可见区段之间出现,不出现在末尾。
-                val compactOn = compactActionOn(threadAgentId, hostCaps)
-                val forkOn = forkActionOn(threadAgentId, hostCaps)
-                val rollbackOn = rollbackActionOn(threadAgentId, hostCaps)
-                // 编辑式骨架(05):顶栏只留一个次操作(「更多」),低频动作收进本面板;
-                // 黑客终端顶栏按钮原样保留,不重复给入口。
-                if (!PaHacker.isHacker) {
-                    if (session.running) {
-                        SheetAction(AppR.drawable.ic_lucide_square, "终止当前任务", ChatDeniedColor) {
-                            showMore = false
-                            // 终止 = warning 档(与顶栏终止键、发送键原位终止同档)
-                            PaHaptics.warning(hapticView)
-                            TurnSession.cancelTurn(threadId)
-                            Toast.makeText(ctx, "已请求终止电脑端任务", Toast.LENGTH_SHORT).show()
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    SheetAction(AppR.drawable.ic_lucide_menu, "最近会话") {
-                        showMore = false
-                        drawerCtrl.open()
-                    }
-                    SheetAction(AppR.drawable.ic_lucide_download, "导出对话") {
-                        showMore = false
-                        showExport = true
-                    }
-                    if (threadAgentId == "zcode" || compactOn || forkOn || rollbackOn) {
-                        Spacer(Modifier.height(6.dp))
-                        HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = PaEditorial.Hairline)
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
-                if (compactOn) {
-                    SheetAction(
-                        AppR.drawable.ic_lucide_refresh_cw,
-                        if (compactBusy) "压缩中…" else "压缩上下文",
-                        PaEditorial.Primary,
-                    ) { doCompact() }
-                    Text(
-                        // 文案按会话归属 agent 动态(daemon 的 CompactThread 已按 AgentID
-                        // 路由):Pi 会话说"让 Pi 压缩",codex 会话说"让 Codex 压缩"。
-                        // 真机实锤(图9):过去硬编码"让 Codex 压缩…",Pi 会话里张冠李戴。
-                        compactionConsequenceCopy(threadAgentId),
-                        Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
-                        fontSize = 11.5.sp, color = PaEditorial.Subtle,
-                    )
-                    if (forkOn || rollbackOn) {
-                        HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = PaEditorial.Hairline)
-                    }
-                }
-                if (forkOn) {
-                    SheetAction(AppR.drawable.ic_lucide_git_branch, "分叉会话") { doFork() }
-                    Text(
-                        forkConsequence(),
-                        Modifier.padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
-                        fontSize = 11.5.sp, color = PaEditorial.Subtle,
-                    )
-                    if (rollbackOn) {
-                        HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = PaEditorial.Hairline)
-                    }
-                }
-                if (rollbackOn) {
-                    SheetAction(
-                        AppR.drawable.ic_lucide_undo_2, "回滚…", PaEditorial.Denied,
-                    ) {
-                        showMore = false
-                        rollbackOpen = true
-                    }
-                    Text(
-                        rollbackSummary(),
-                        Modifier.padding(start = 24.dp, end = 24.dp),
-                        fontSize = 11.5.sp, color = PaEditorial.Subtle,
-                    )
-                }
-            }
-        }
-    }
 
-    // ---- 斜杠面板伪命令"/目标":设置会话目标(SetThreadGoal)----
-    // 由斜杠卡面的 /目标 伪命令打开(GOAL 动作,见上方候选段)。daemon 的
-    // SetThreadGoal 按 agent 落库并下发(codex thread/goal/set、zcode session/goal,
-    // pi 落库跟随),成功后用返回的 Thread 刷新顶栏目标文案,不整页重拉。
-    if (slashGoalSheet) {
-        var goalDraft by remember { mutableStateOf("") }
-        var goalSaving by remember { mutableStateOf(false) }
-        // 【本轮换 PaSheet】统一玻璃浮层
-        PaSheet(onDismissRequest = { if (!goalSaving) slashGoalSheet = false }) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 26.dp)) {
-                Text(
-                    "设置会话目标",
-                    Modifier.fillMaxWidth(),
-                    fontSize = 17.sp, color = PaEditorial.Ink,
-                )
-                Text(
-                    "目标会作为常驻上下文:agent 在这个会话里的每一轮都会看到它。",
-                    Modifier.padding(top = 4.dp, bottom = 10.dp),
-                    fontSize = 11.5.sp, color = PaEditorial.Subtle,
-                )
-                BasicTextField(
-                    value = goalDraft,
-                    onValueChange = { goalDraft = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        // min 72 给短目标留形,max 200 封顶:目标再长输入框也不再增高,
-                        // "保存目标"按钮始终在视口内(否则长目标把按钮推出 sheet 不可点,
-                        // 同 SLA-21a / README §12 坑 6)。高度有界后 CoreTextField 内容
-                        // 内部滚动并跟随光标,交互破坏最小(整列滚动会把按钮滚走)。
-                        .heightIn(min = 72.dp, max = 200.dp)
-                        .background(PaEditorial.Surface, RoundedCornerShape(12.dp))
-                        .padding(12.dp),
-                    textStyle = TextStyle(fontSize = 14.sp, color = PaEditorial.Ink),
-                    cursorBrush = SolidColor(PaEditorial.Primary),
-                    decorationBox = { inner ->
-                        Box {
-                            if (goalDraft.isEmpty()) {
-                                Text(
-                                    "例如:全程用 Kotlin,改动只落在 daemon 模块…",
-                                    fontSize = 14.sp, color = PaEditorial.Subtle,
-                                )
-                            }
-                            inner()
-                        }
-                    },
-                )
-                Spacer(Modifier.height(12.dp))
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable(haptic = true) {
-                            if (goalSaving) return@pressable
-                            if (goalDraft.isBlank()) {
-                                Toast.makeText(ctx, "先写点什么作为目标(或清空后关闭)", Toast.LENGTH_SHORT).show()
-                                return@pressable
-                            }
-                            goalSaving = true
-                            scope.launch {
-                                try {
-                                    val t = withContext(Dispatchers.IO) {
-                                        AgentConnection.threadService().setThreadGoal(
-                                            SetThreadGoalRequest.newBuilder()
-                                                .setThreadId(threadId)
-                                                .setGoal(goalDraft.trim())
-                                                .build(),
-                                        )
-                                    }
-                                    // 顶栏目标文案就地刷新(GoalDisplayLogic 与 GetThread 同一套口径)
-                                    threadGoalLine = GoalDisplayLogic.goalLine(t)
-                                    slashGoalSheet = false
-                                    Toast.makeText(ctx, "已设置会话目标", Toast.LENGTH_SHORT).show()
-                                } catch (e: Exception) {
-                                    Toast.makeText(ctx, e.message ?: "设置目标失败", Toast.LENGTH_LONG).show()
-                                } finally {
-                                    goalSaving = false
-                                }
-                            }
-                        }
-                        .background(if (goalSaving) PaEditorial.Hover else PaEditorial.Primary, RoundedCornerShape(14.dp))
-                        .padding(vertical = 13.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        if (goalSaving) "正在保存…" else "保存目标",
-                        // saving 腿坐 Hover 底保持白字;就绪腿坐 Primary 实底读 OnPrimary
-                        fontSize = 14.5.sp,
-                        color = if (goalSaving) Color.White else PaEditorial.OnPrimary,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-            }
-        }
-    }
 
-    // ---- 回滚:选丢几个回合,再确认 ----
-    // 回合数从时间线里现数(每条用户消息 = 一个回合)。数不出回合(历史还没加载出来)
-    // 就不给选项 —— 免得用户选完必然失败。
-    if (rollbackOpen) {
-        val turnTotal = session.userTurnCount
-        val options = rollbackOptions(turnTotal)
-        var picked by remember(turnTotal) { mutableStateOf(1) }
-        // 【本轮换 PaSheet】统一玻璃浮层;滚动由封装内建(选项随回合数增长时
-        // "取消/确认回滚"不会被推出视口,同 SLA-21a 语义),内容列不再自带 verticalScroll。
-        PaSheet(onDismissRequest = { rollbackOpen = false }) {
-            // 整列可滚(PaSheet 提供):选项随回合数增长(每条用户消息=一个回合),长会话时
-            // "取消/确认回滚"保持可点(被滚动裁掉的节点不进无障碍树也不可点,README §12 坑 6)。
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 26.dp),
-            ) {
-                Text(
-                    "回滚会话",
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    fontSize = 17.sp, color = PaEditorial.Ink,
-                )
-                if (options.isEmpty()) {
-                    Text(
-                        "这个会话还没有可回滚的回合。",
-                        Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
-                        fontSize = 13.sp, color = PaEditorial.Subtle,
-                    )
-                } else {
-                    Text(
-                        rollbackConsequence(picked),
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
-                        fontSize = 12.sp, color = PaEditorial.Muted,
-                    )
-                    options.forEach { n ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressable { picked = n }
-                                .padding(horizontal = 24.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                painterResource(
-                                    if (picked == n) AppR.drawable.ic_lucide_circle_check
-                                    else AppR.drawable.ic_lucide_undo_2,
-                                ),
-                                null,
-                                tint = if (picked == n) PaEditorial.Denied else PaEditorial.Subtle,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                rollbackOptionLabel(n, turnTotal),
-                                fontSize = 15.sp,
-                                color = if (picked == n) PaEditorial.Ink else PaEditorial.Muted,
-                            )
-                        }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        TextButton(onClick = { rollbackOpen = false }, enabled = !rollbackBusy) {
-                            Text("取消")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            enabled = !rollbackBusy,
-                            onClick = { doRollback(picked) },
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = PaEditorial.Denied,
-                            ),
-                            shape = RoundedCornerShape(14.dp),
-                        ) { Text("确认回滚", color = PaEditorial.OnDenied) }
-                    }
-                }
-            }
-        }
-    }
 
     // 导出对话(可多选)
-    if (showExport) {
+    if (showExport.value) {
         ExportChatSheet(
             title = threadTitle,
-            items = st.items.toList(),
+            // C3:折叠标记行不是消息,不进导出选择
+            items = st.items.toList().filter { it.role != "items_trimmed" },
             threadId = threadId,
             // 会话归属 agent(GetThread 里带回来):HTML 存档按 export_html:<agentId>
             // 能力位门控,位来自共享快照 hostCaps
             agentId = threadAgentId,
             capabilities = hostCaps,
-            onDismiss = { showExport = false },
+            onDismiss = { showExport.value = false },
             onExport = { text, count ->
-                showExport = false
+                showExport.value = false
                 PaDownloader.saveTextAsFile(
                     "会话-%s-%s.md".format(
                         threadTitle.ifBlank { "未命名" }.take(20).replace(Regex("[\\\\/:*?\"<>|]"), "_"),
@@ -6025,7 +4001,7 @@ fun ChatScreen(
 
     // 子代理快览(T-SUB,蓝本 §4.3):长按内联卡/组卡行弹出的"偷看"层,
     // 最近消息 + 「打开完整对话」;收起不影响任何状态。
-    val peekMeta = peekSub
+    val peekMeta = peekSub.value
     if (peekMeta != null) {
         val peekRunIds = remember(peekMeta.threadId, SubAgentsState.lastRefreshedAt) {
             TurnSession.runningThreadIds()
@@ -6034,22 +4010,22 @@ fun ChatScreen(
             meta = peekMeta,
             state = SubAgentsLogic.runStateOf(peekMeta, peekRunIds),
             onOpenFull = {
-                peekSub = null
+                peekSub.value = null
                 onOpenThread(peekMeta.threadId)
             },
-            onDismiss = { peekSub = null },
+            onDismiss = { peekSub.value = null },
         )
     }
 
     // 长文本大窗编辑(需求:输入过长时可增大输入框窗口)
-    if (expandedInputOpen) {
+    if (expandedInputOpen.value) {
         ExpandedInputSheet(
             value = input,
             onValueChange = { setInput(it) },
-            onDismiss = { expandedInputOpen = false },
+            onDismiss = { expandedInputOpen.value = false },
             onSend = {
                 val text = input
-                expandedInputOpen = false
+                expandedInputOpen.value = false
                 if (send(text)) setInput("")
             },
             canSend = !offlineSnapshot && input.isNotBlank() && !session.recovering,
@@ -6115,14 +4091,14 @@ fun ChatScreen(
     }
 
     // ---- 右侧 Git 侧栏:该会话所在项目的版本管理 ----
-    if (showGitPanel) {
+    if (showGitPanel.value) {
         ThreadGitPanel(
             repoPath = threadWorkspace,
-            onClose = { showGitPanel = false },
+            onClose = { showGitPanel.value = false },
         )
     }
 
-    if (showModelCard) {
+    if (showModelCard.value) {
         // 【P3-T4 拆分】卡面整体搬至 ui/model.ModelEffortCard:页面只传仓库状态与
         // 意图出口,不再传 initialSelectedId(选中态唯一来源 =
         // ModelSelectionReducer.display(repository.state);daemon 真值 > 乐观投影 >
@@ -6142,242 +4118,41 @@ fun ChatScreen(
                 }
                 ModelSelectionRepository.send(intent)
             },
-            onDismiss = { showModelCard = false },
+            onDismiss = { showModelCard.value = false },
             // 卡内真实选中 → 关卡后模型行给一次行内闪光(与快速面板同一反馈口径)
             onPicked = { modelFlashTick++ },
         )
     }
 
-    // 【快速切换面板(2026-10-02 流畅度修复)】从输入区行内 Popup 挪到此处与
-    // showModelCard 同层的稳定组合位 —— 输入区在流式输出时每帧重组,行内 Popup
-    // 被反复打断(真机:轮次运行中点模型行,面板闪没/开不出,用户裁决"切换不
-    // 流畅"的主因)。稳定层挂载后不受逐帧重组影响。
-    if (showQuickModels) {
-        // 【L2 真机发现 5 · 两卡同源】模型清单改用与完整卡(ui/model.ModelEffortCard)
-        // 完全同一份数据:ModelSelectionRepository.state.models(daemon 会话级申报,
-        // listModelsWithSelection 按 agent/thread 收窄)经同一条 modelsForAgent 过滤
-        // —— 与卡面第 203 行逐字同式。
-        // 【根因】旧实现读本页全局大表 models(不带 agent 过滤的全 agent ListModels
-        // + 10s 巡检合并),而巡检合并的过滤键是 provider 字段:大表里 pi 系模型的
-        // provider 是上游供应商(如 zai-coding-cn)而非 "pi",永远滤不掉,于是 pi
-        // 会话的快速面板摆出 6 个模型、完整卡按申报只有 2 个 —— 同一入口两级清单。
-        // 【以申报为准】申报表就是 daemon 会为该会话接受的 set_model 全集:表外模型
-        // 选了也会被真值回填校正(L2 发现 1 的静默回退正是表外选择),且 reducer 的
-        // 失效 effort 清理(cleanEffortFor)只认申报表。清单统一后,选中态
-        // (qm.id == effectiveModelId)、MRU 失效淘汰、提交流(applyModelPick →
-        // 仓库 SelectModel)全部原样不动。
-        val cardModels = remember(modelSelectionState.models, sessionAgent) {
-            modelsForAgent(modelSelectionState.models, sessionAgent)
-        }
-        val quickModels = remember(cardModels, sessionAgent) {
-            ModelQuickSwitchLogic.quickModels(sessionAgent, cardModels)
-        }
-        Popup(
-            alignment = Alignment.BottomStart,
-            onDismissRequest = { showQuickModels = false },
-            properties = PopupProperties(focusable = true),
-        ) {
-            Column(
-                Modifier
-                    .widthIn(max = 330.dp)
-                    // 黑客模式 GraphiteDrawer 底 + 等宽字;常规 Surface 底(同浮层口径)
-                    .background(
-                        if (PaHacker.isHacker) PaEditorial.GraphiteDrawer else PaEditorial.Surface,
-                        RoundedCornerShape(14.dp),
-                    )
-                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(14.dp))
-                    .padding(vertical = 6.dp),
-            ) {
-                val mono = if (PaHacker.isHacker) PaHacker.mono else null
-                val effortHapticView = LocalView.current
-                // 【面板头部:当前 vs 正在跑】模型行精简后,"正在运行的模型"信息
-                // 收进这里 —— 对比语境(当前选择 vs 实际在跑)在面板里才读得通。
-                if (st.runningEffort != null && st.runningModel.isNotBlank()) {
-                    // 【统一翻译层】申报表优先、全 agent 大表补位、裸名/原 id 兜底
-                    // (modelDisplayLabel,L2 发现 5:正在跑的模型不在申报表里时
-                    // 不再把 "hermes/deepseek-flash" 这类裸 id 直接亮出来)
-                    val actualName = modelDisplayLabel(st.runningModel, cardModels, sessionModels)
-                    Text(
-                        "正在运行：$actualName · ${effortLabelOf(st.runningEffort.orEmpty())}",
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
-                    )
-                }
-                if (quickModels.isEmpty()) {
-                    Text(
-                        // 【两卡同源】空态判定跟着申报表走:申报表空 = 完整卡此刻
-                        // 也只显示"Agent 暂未报告模型,请刷新",两级入口说同一句话
-                        if (cardModels.isEmpty()) "暂无可用模型，请进完整选择器刷新"
-                        else "暂无可快速切换的模型",
-                        Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        fontSize = 12.5.sp, color = PaEditorial.Subtle, fontFamily = mono,
-                    )
-                }
-                quickModels.forEach { qm ->
-                    val current = qm.id == effectiveModelId
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .pressable {
-                                showQuickModels = false
-                                applyModelPick(threadId, sessionAgent, qm.id)
-                                modelFlashTick++ // 行内闪光:模型名刚真实切过一次
-                            }
-                            .heightIn(min = 44.dp)
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                // 【统一翻译层】与面板头部同一条解析链:申报表 displayName
-                                // → 大表 displayName → 裸名/原 id(行数据自带的 qm.label
-                                // 只查申报表,这里补上大表补位,避免申报表缺展示名时露裸 id)
-                                modelDisplayLabel(qm.id, cardModels, sessionModels),
-                                fontSize = 13.5.sp,
-                                color = if (current) PaEditorial.Primary else PaEditorial.Ink,
-                                fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                fontFamily = mono,
-                            )
-                            if (qm.detail.isNotEmpty()) {
-                                Text(
-                                    qm.detail, fontSize = 10.5.sp,
-                                    color = PaEditorial.Subtle, fontFamily = mono,
-                                )
-                            }
-                        }
-                        if (current) {
-                            Spacer(Modifier.width(8.dp))
-                            Icon(
-                                painterResource(AppR.drawable.ic_lucide_check), "当前模型",
-                                tint = PaEditorial.Primary, modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
-                }
-                // 【思考强度行(2026-10-02 流畅度补全)】强度切换此前藏在"更多…"二级
-                // 完整卡里,一级面板只有模型 —— 用户裁决"切换不流畅"的第二主因。
-                // 这里按会话 agent 的档位集渲染强度胶囊,单点即切
-                // (下一轮生效语义与完整卡一致);【P3-T4 接线④】选中态来自仓库
-                // display(ModelSelectionReducer.display),点击改发 SelectEffort 意图
-                // —— 不再直读/直写 AgentConnection.selectedEffort 与 setThreadEffort。
-                // 【两卡同源(L2 发现 5)】强度档位改走完整卡同一条 cardEffortLevels:
-                // daemon 真值 available_efforts(仓库 display 回传)优先,退申报表
-                // effortsFor。旧实现读全局大表,其 provider 字段是上游供应商而非
-                // agent id,effortsFor 的 agent 匹配永远落空 —— pi 会话在快速面板
-                // 只看得到内置五档(默认/低/中/高/极高),完整卡却是 pi 动态全集
-                // (默认/关/低/高/最大),同一发现的两半。选中态
-                // (modelSelection?.effort)与单点即切的下发链原样不动。
-                val quickEfforts = remember(cardModels, effectiveModelId, sessionAgent, modelSelection?.availableEfforts) {
-                    cardEffortLevels(
-                        models = cardModels,
-                        agentId = sessionAgent,
-                        modelId = effectiveModelId,
-                        daemonEfforts = modelSelection?.availableEfforts.orEmpty(),
-                    )
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "强度",
-                        Modifier.padding(start = 6.dp),
-                        fontSize = 11.sp, color = PaEditorial.Subtle, fontFamily = mono,
-                    )
-                    quickEfforts.forEach { e ->
-                        val selected = modelSelection?.effort == e.id
-                        Text(
-                            e.label,
-                            Modifier
-                                .clip(RoundedCornerShape(50))
-                                .pressable {
-                                    PaHaptics.light(effortHapticView)
-                                    ModelSelectionRepository.send(ModelSelectionIntent.SelectEffort(e.id))
-                                }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                            fontSize = 12.sp,
-                            color = if (selected) PaEditorial.Primary else PaEditorial.Muted,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            fontFamily = mono,
-                        )
-                    }
-                }
-                // 面板尾:「更多…」进完整选择卡(跟随桌面/全部模型/强度档位)
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                        .height(1.dp)
-                        .background(PaEditorial.Hairline)
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressable {
-                            showQuickModels = false
-                            showModelCard = true
-                        }
-                        .heightIn(min = 44.dp)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "更多…",
-                        Modifier.weight(1f),
-                        fontSize = 13.sp, color = PaEditorial.Muted, fontFamily = mono,
-                    )
-                    Icon(
-                        painterResource(AppR.drawable.ic_lucide_chevron_right), "打开完整模型选择器",
-                        tint = PaEditorial.Subtle, modifier = Modifier.size(15.dp),
-                    )
-                }
-            }
-        }
+    // 【C1 拆分】快速切换面板迁至 ui/chat/ChatQuickPanels.kt
+    if (showQuickModels.value) {
+        ChatQuickModelsPanel(
+            showQuickModels = showQuickModels,
+            showModelCard = showModelCard,
+            modelSelectionState = modelSelectionState,
+            modelSelection = modelSelection,
+            sessionAgent = sessionAgent,
+            sessionModels = sessionModels,
+            effectiveModelId = effectiveModelId,
+            st = st,
+            threadId = threadId,
+            onModelPicked = { modelFlashTick++ },
+        )
     }
 
-    // 上下文窗口明细:点输入栏"上下文"胶囊打开(真实用量卡,替代旧估算版)。
-    // 【断网可读】打开时先读本地缓存,再用实时数据覆盖;usageRefreshTick / 连接恢复
-    // 都会让 cached 重新求值,从而"自动刷新"(读取 tick 作为 remember 键即登记了订阅)。
-    if (showContextCard) {
-        UsageCache.init(ctx)
-        val cached = remember(usageRefreshTick, connOk, threadId) { UsageCache.load(threadId) }
-        // 实时窗口已知就用实时值;否则退回缓存里的最后一次真实窗口。
-        val liveWindowKnown = !windowIsFallback && contextWindow > 0
-        val cw: Long
-        val fb: Boolean
-        if (liveWindowKnown) {
-            cw = contextWindow
-            fb = false
-        } else if (cached != null && cached.contextWindow > 0) {
-            cw = cached.contextWindow
-            fb = cached.windowIsFallback
-        } else {
-            cw = contextWindow
-            fb = windowIsFallback
-        }
-        ContextUsageCard(
-            contextWindow = cw,
-            windowIsFallback = fb,
-            turnUsage = session.turnUsage ?: cached?.turnUsage,
-            totalUsage = session.totalUsage ?: cached?.totalUsage,
-            // 压缩同步:daemon 转发的"上下文已压缩"事件到达后,这里给出明确的压缩状态,
-            // 而不是继续显示压缩前的旧占用(可能超出实际窗口)。
-            compactionInProgress = session.compactionInProgress,
-            lastCompactedAt = session.lastCompactedAt,
-            // 压缩等待文案按会话归属 agent("等待 Pi/Codex 完成压缩"),不硬编码 codex。
-            agentLabel = selectedAgentLabel(sessionAgent),
-            // 只有"已知断网"(down)才显示离线提示条;checking 不显示(见上方 ③ 的注释)。
-            online = !connDown,
-            cachedAt = cached?.updatedAt,
-            nowMillis = System.currentTimeMillis(),
-            onDismiss = { showContextCard = false },
+    // 【C1 拆分】上下文明细卡迁至 ui/chat/ChatQuickPanels.kt
+    if (showContextCard.value) {
+        ChatContextUsagePanel(
+            showContextCard = showContextCard,
+            ctx = ctx,
+            usageRefreshTick = usageRefreshTick,
+            connOk = connOk,
+            connDown = connDown,
+            threadId = threadId,
+            sessionAgent = sessionAgent,
+            windowIsFallback = windowIsFallback,
+            contextWindow = contextWindow,
+            session = session,
         )
     }
 }
@@ -6560,7 +4335,7 @@ internal fun askIsAskAction(name: String): Boolean = name in ApprovalAskNames
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ApprovalSheet(
+internal fun ApprovalSheet(
     action: ApprovalRequest,
     error: String?,
     onDecision: (Boolean, String) -> Unit,
@@ -7303,7 +5078,7 @@ fun ThreadGitPanel(repoPath: String?, onClose: () -> Unit) {
  * Compose 1.7 的 LinkAnnotation 默认走 LocalUriHandler(系统浏览器),这里接管掉。
  */
 @Composable
-private fun InAppMarkdown(
+internal fun InAppMarkdown(
     text: String,
     modifier: Modifier = Modifier,
     fontSize: Float = 15f,
@@ -7775,7 +5550,7 @@ private fun ExportChip(label: String, onClick: () -> Unit) {
 }
 
 /** 复制一条消息的文本到系统剪贴板(长按消息触发)。 */
-private fun copyMessage(ctx: Context, text: String) {
+internal fun copyMessage(ctx: Context, text: String) {
     if (text.isBlank()) return
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     cm.setPrimaryClip(android.content.ClipData.newPlainText("PocketAgent 消息", text))

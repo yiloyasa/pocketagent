@@ -50,16 +50,19 @@ class ChatInputTouchTargetTest {
 
     // ---- T-D2 收尾:逐控件源码结构钉(字符串锚点定位,行号漂移免疫) ----
 
-    /** 从模块目录或仓库根向上定位 ChatScreen.kt(镜像/仓库两处布局都兼容)。 */
+    /**
+     * 从模块目录或仓库根向上定位输入区源码文件(镜像/仓库两处布局都兼容)。
+     * 【C1 拆分(2026-10-09)】输入区整体迁至 ui/chat/ChatComposer.kt,钉子跟随。
+     */
     private fun locateChatScreen(): File {
-        val rel = "src/main/java/dev/pocketagent/app/ui/ChatScreen.kt"
+        val rel = "src/main/java/dev/pocketagent/app/ui/chat/ChatComposer.kt"
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         repeat(6) {
             val cur = dir ?: return@repeat
             listOf(File(cur, rel), File(cur, "android/app/$rel")).firstOrNull { it.isFile }?.let { return it }
             dir = cur.parentFile
         }
-        error("找不到 ChatScreen.kt(从 ${System.getProperty("user.dir")} 向上查 6 层)")
+        error("找不到 chat/ChatComposer.kt(从 ${System.getProperty("user.dir")} 向上查 6 层)")
     }
 
     /** 截取 [from] 锚点到其后首个 [to] 锚点之间的源码片段(均须存在且有序)。 */
@@ -125,7 +128,7 @@ class ChatInputTouchTargetTest {
     /** 附件 chip 移除叉:独立 48×48 触控箱(原仅 13dp);chip 本体命中高度 ≥48dp。 */
     @Test
     fun attachmentChipAndRemoveXMeet48dp() {
-        val src = fragment("attachments.forEach { at ->", "attachments - at }")
+        val src = fragment("attachments.value.forEach { at ->", "attachments.value - at }")
         assertTrue("附件 chip 缺 $touchHeight(T-D2 回归)", src.contains(touchHeight))
         assertTrue("移除叉缺独立 $touchBox 触控箱(T-D2 回归)", src.contains(touchBox))
         // 旧形态钉死:13dp 图标直接挂 clickable 的写法不许回来

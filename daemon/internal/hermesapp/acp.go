@@ -523,7 +523,7 @@ func (c *Client) Prompt(ctx context.Context, sessionID, text string) (*PromptOut
 // CancelSession 发 session/cancel 通知,叫停一个正在跑的轮次。协议上没有受理
 // 回执 —— 返回错误仅代表写入失败/超时,"是否真停了"以 prompt 侧的终局应答
 // (stopReason=cancelled)或调用方自己的 ctx 返回为准。
-// 【超时安全】stdin 写在 writeFrame 里有 5s 预算(writeWithBudget):适配器挂死
+// 【超时安全】stdin 写在 writeFrame 里有 5s 预算(rpcwire.Wire 收编后的写预算):适配器挂死
 // 不读管道时,取消帧最迟 5s 返回错误;即便预算内没写完,后台写也可能仍在进行 ——
 // 那时连接已无救,调用方会 Close 收尸;轮次收尾绝不能陪葬在取消帧上。
 func (c *Client) CancelSession(ctx context.Context, sessionID string) error {

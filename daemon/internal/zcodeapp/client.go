@@ -34,30 +34,31 @@ import (
 	"time"
 
 	"github.com/pocketagent/daemon/internal/hidewin"
+	"github.com/pocketagent/daemon/internal/rpcwire"
 	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
 // Client 是一条 app-server 子进程连接。并发安全:请求用 pending map 关联应答,
-// 写入由 writeMu 串行化,通知/反向请求分发给钩子(通知钩子在 readLoop 里同步
-// 调用必须快进快出;反向请求【P2-5】已改 goroutine 分发 —— 审批等待最长 120s,
-// 同步执行会把 readLoop 堵死,通知泵与请求应答全停)。
+// 写入由 rpcwire.Wire 串行化(worker 持锁 + 写预算,2026-10-09 波 A 收编;
+// 旧实现"调用方持锁、超时放锁"会让残尾巴帧与下一帧交错 —— codexapp 修掉的
+// 坏帧病,随收编一并获得防护),通知/反向请求分发给钩子(通知钩子在 readLoop
+// 里同步调用必须快进快出;反向请求【P2-5】已改 goroutine 分发 —— 审批等待
+// 最长 120s,同步执行会把 readLoop 堵死,通知泵与请求应答全停)。
 type Client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
 	mu        sync.Mutex
-	writeMu   sync.Mutex
 	nextID    int64
 	pending   map[int64]chan rpcResp
 	handlerMu sync.Mutex
 
-	// waitOnce 保证 cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait):意外退出
-	// (readLoop EOF,要拿退出码写死因日志)与 Close 主动收尸两条路径共用
-	// reapWithLog(与 piapp 同款,2026-09-19 补)。
-	waitOnce sync.Once
+	// wire 收编自本包的 stdio 传输小件(写互斥 + 写预算 + 收尸 Once + Kill/关
+	// 管道),与 codexapp/piapp/dshapp/hermesapp 五家同款。
+	wire rpcwire.Wire
 
-	// exited:reapWithLog 收尸完成后置 1(Alive 判定:启动闪退重试用)。
+	// exited:收尸完成后置 1(Alive 判定:启动闪退重试用),经 markExited 接入。
 	exited atomic.Int32
 
 	// NotifHandler 当轮通知钩子(session/event 等),由 Run 按轮装上/卸下。
@@ -326,9 +327,9 @@ func Start(opts StartOptions) (*Client, error) {
 	c := &Client{
 		cmd:      cmd,
 		stdin:    stdin,
+		wire:     rpcwire.Wire{Tag: "zcode", Name: "ZCode"},
 		stdout:   bufio.NewReaderSize(stdout, 8*1024*1024), // 单行上限 65536B,给 8MB 保险
 		pending:  map[int64]chan rpcResp{},
-		waitOnce: sync.Once{},
 		accounts: newDesktopAccounts(cmd.Env),
 	}
 	c.syncHandlers() // readLoop 的读面就位(此刻 handler 均为 nil:上层 Start 之后才装)
@@ -359,30 +360,18 @@ func (c *Client) Alive() bool {
 
 // PID 返回子进程 PID(日志定位用);未知返回 0。
 func (c *Client) PID() int {
-	if c.cmd != nil && c.cmd.Process != nil {
-		return c.cmd.Process.Pid
-	}
-	return 0
+	return c.wire.PID(c.cmd)
 }
 
-// reapWithLog 收尸(cmd.Wait)并把退出码写进标准 log(daemon.log)。
-// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用;waitOnce 保证
-// cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait)。正常 Kill 关闭时退出码
-// 非 0 属预期,日志里带 why 字段区分,不会被误读成崩溃。
+// markExited 收尸完成后置 exited(Alive 判定:启动闪退重试用)。经
+// rpcwire.Wire 的 onReaped 钩子接入(意外退出与 Close 两条收尸路径共用)。
+func (c *Client) markExited() { c.exited.Store(1) }
+
+// reapWithLog 收尸(cmd.Wait 只一次)并把退出码写进标准 log(daemon.log)。
+// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用。机制收编在
+// rpcwire.Wire(2026-10-09),此处是本包接线(markExited 随收尸落地)。
 func (c *Client) reapWithLog(why string) {
-	if c.cmd == nil {
-		return
-	}
-	c.waitOnce.Do(func() {
-		err := c.cmd.Wait()
-		code := -1
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && ee.Exited() {
-			code = ee.ExitCode()
-		}
-		c.exited.Store(1)
-		log.Printf("[zcode] ZCode 子进程退出(%s) PID=%d 退出码=%d err=%v", why, c.PID(), code, err)
-	})
+	c.wire.ReapWithLog(c.cmd, why, c.markExited)
 }
 
 // wireMsg 一行协议帧。ID 用 RawMessage:我们发出的请求 id 是数字,而服务器反向
@@ -480,36 +469,12 @@ func (c *Client) forget(id int64) {
 }
 
 // writeBudget 单帧写入 stdin 的等待预算。子进程卡死/不读管道时裸 Write 会
-// 无限阻塞 —— 持 writeMu 期间堵死会把所有后续写(乃至 Close)一起冻住。
+// 无限阻塞。预算机制(含 worker 持锁的坏帧防护,2026-10-09 随收编 rpcwire
+// 获得)在 rpcwire.Wire,此处只留本包的取值。
 const writeBudget = 5 * time.Second
 
-// writeWithBudget 在 budget 时间内尝试完成一次 stdin 写。写序语义不变:
-// Write 仍受 writeMu 串行化(预算只限制"等 Write 返回"的时长,不绕过互斥)。
-//
-// 【已知语义】超时返回 error 后,执行 Write 的 goroutine 无法取消,**写可能
-// 仍在后台完成**(帧最终可能落进管道)。调用方按失败处理即可:协议层要么
-// 放弃本轮、要么随子进程一起被判死;os.File 允许多 goroutine 并发调用,
-// 超时后残留的 Write 与后续 Write/Close 并发不会 panic。
-func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := c.stdin.Write(data)
-		errCh <- err
-	}()
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
-	select {
-	case err := <-errCh:
-		return err
-	case <-timer.C:
-		return fmt.Errorf("写入 ZCode 子进程 stdin 超时(>%s),写可能仍在后台完成", budget)
-	}
-}
-
 func (c *Client) writeLine(raw []byte) error {
-	return c.writeWithBudget(append(raw, '\n'), writeBudget)
+	return c.wire.WriteLine(c.stdin, raw, writeBudget)
 }
 
 // Respond 应答服务器反向请求(rawID 原样回显 —— 服务器的 id 是字符串)。
@@ -588,7 +553,7 @@ func (c *Client) dispatch(m *wireMsg) {
 			return
 		}
 		// 无 handler 的兜底 -32601 同样走异步派发:stdin 写可能因子进程不读
-		// 管道而阻塞(预算见 writeWithBudget),失败应答的路径必须保持可达、
+		// 管道而阻塞(预算见 rpcwire.Wire 的写预算),失败应答的路径必须保持可达、
 		// 但绝不允许堵读泵 —— 对齐上方【P2-5】goroutine 分发模式。
 		id, method := m.ID, m.Method
 		go func() {
@@ -665,7 +630,7 @@ func (c *Client) autoAnswer(m *wireMsg) bool {
 		}()
 		return true
 	case "startup/storagePath":
-		// 应答形状是静态的,但 stdin 写本身可能阻塞(见 writeWithBudget):
+		// 应答形状是静态的,但 stdin 写本身可能阻塞(见 rpcwire.Wire 的写预算):
 		// 异步派发,不让 readLoop 等一次 Write(对齐【P2-5】goroutine 分发模式;
 		// autoAnswer 同步返回 true 的"已受理"语义不变)。
 		id := m.ID
@@ -695,15 +660,7 @@ func (c *Client) autoAnswer(m *wireMsg) bool {
 // (agent/zcode.go 的"杀掉重来"路径),泄漏会持续累积。收尸走 reapWithLog
 // (退出码落 daemon.log),放专门 goroutine,不拖住 Close 调用方
 // (与 piapp 同款,范式来自 term/manager.go:Kill 后 goroutine Wait)。
+// 机制收编在 rpcwire.Wire.Close,markExited 随收尸落地(Alive 转 false)。
 func (c *Client) Close() {
-	cmd := c.cmd
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-	c.writeMu.Lock()
-	_ = c.stdin.Close()
-	c.writeMu.Unlock()
-	if cmd != nil {
-		go c.reapWithLog("Close 主动关闭")
-	}
+	c.wire.Close(c.cmd, c.stdin, "Close 主动关闭", c.markExited)
 }

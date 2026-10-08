@@ -51,6 +51,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/hidewin"
 	"github.com/pocketagent/daemon/internal/hostenv"
+	"github.com/pocketagent/daemon/internal/rpcwire"
 	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
@@ -182,7 +183,11 @@ type Client struct {
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
-	writeMu sync.Mutex
+	// wire 收编自本包的 stdio 传输小件(写互斥 + 写预算 + 收尸 Once + Kill/关管道,
+	// 2026-10-09 波 A 落进 rpcwire,五家同款)。收编同时统一到 worker 持锁语义:
+	// 本包旧实现是"调用方持锁、超时放锁",超时返回后残尾巴帧与下一帧可能交错 ——
+	// codexapp 2026-10-04 修掉的坏帧病,此处随收编一并获得防护。
+	wire rpcwire.Wire
 
 	mu        sync.Mutex
 	nextID    int64
@@ -221,10 +226,6 @@ type Client struct {
 	// reaped 在 Close 的收尸 Wait 完成后关闭(确认句柄已回收;reapOnce 防重复 Close)。
 	reaped   chan struct{}
 	reapOnce sync.Once
-
-	// waitOnce 保证 cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait):意外退出
-	// (readLoop EOF,要拿退出码写日志)与 Close 主动收尸两条路径共用 reapWithLog。
-	waitOnce sync.Once
 
 	deathOnce sync.Once
 	deathCh   chan struct{} // readLoop 退出时关闭:上层据此把轮次判死(PI_CRASHED)
@@ -397,6 +398,7 @@ func Start(opts StartOptions) (*Client, error) {
 	c := &Client{
 		cmd:     cmd,
 		stdin:   stdin,
+		wire:    rpcwire.Wire{Tag: "pi", Name: "pi"},
 		stdout:  bufio.NewReaderSize(stdout, 8*1024*1024), // 图片 base64 单行数 MB
 		pending: map[string]chan piResp{},
 		deathCh: make(chan struct{}),
@@ -507,37 +509,13 @@ func (c *Client) forget(id string) {
 }
 
 // writeBudget 单帧写入 stdin 的等待预算。pi 的单行可带数 MB base64 图片
-// (读缓冲 8MB 的另一半),子进程卡死/不读管道时裸 Write 会无限阻塞 —— 持
-// writeMu 期间堵死会把所有后续写(乃至 Close)一起冻住。
+// (读缓冲 8MB 的另一半),子进程卡死/不读管道时裸 Write 会无限阻塞 ——
+// 预算机制(含 worker 持锁的坏帧防护,2026-10-09 随收编 rpcwire 获得)在
+// rpcwire.Wire,此处只留本包的取值。
 const writeBudget = 5 * time.Second
 
-// writeWithBudget 在 budget 时间内尝试完成一次 stdin 写。写序语义不变:
-// Write 仍受 writeMu 串行化(预算只限制"等 Write 返回"的时长,不绕过互斥)。
-//
-// 【已知语义】超时返回 error 后,执行 Write 的 goroutine 无法取消,**写可能
-// 仍在后台完成**(帧最终可能落进管道)。调用方按失败处理即可:协议层要么
-// 放弃本轮、要么随子进程一起被判死;os.File 允许多 goroutine 并发调用,
-// 超时后残留的 Write 与后续 Write/Close 并发不会 panic。
-func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := c.stdin.Write(data)
-		errCh <- err
-	}()
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
-	select {
-	case err := <-errCh:
-		return err
-	case <-timer.C:
-		return fmt.Errorf("写入 pi 子进程 stdin 超时(>%s),写可能仍在后台完成", budget)
-	}
-}
-
 func (c *Client) writeLine(raw []byte) error {
-	return c.writeWithBudget(append(raw, '\n'), writeBudget)
+	return c.wire.WriteLine(c.stdin, raw, writeBudget)
 }
 
 // RespondUI 回写 extension_ui_response(dialog 应答)。
@@ -590,32 +568,23 @@ func (c *Client) readLoop() {
 
 // PID 返回子进程 PID(日志定位用);未知返回 0。
 func (c *Client) PID() int {
-	if c.cmd != nil && c.cmd.Process != nil {
-		return c.cmd.Process.Pid
-	}
-	return 0
+	return c.wire.PID(c.cmd)
 }
 
-// reapWithLog 收尸(cmd.Wait)并把退出码写进标准 log(daemon.log)。
-// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用;waitOnce 保证
-// cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait)。正常 Kill 关闭时退出码
-// 非 0 属预期,日志里带 why 字段区分,不会被误读成崩溃。
-func (c *Client) reapWithLog(why string) {
-	if c.cmd == nil {
-		return
+// markReaped 收尸完成后的收尾:关闭 reaped 通道(确认句柄已回收,Close 调用方
+// 据此等收尸落地)。reaped 为 nil(直构测试 Client)时无操作;reapOnce 防重复
+// 关闭。经 rpcwire.Wire 的 onReaped 钩子接入(意外退出与 Close 两条收尸路径共用)。
+func (c *Client) markReaped() {
+	if c.reaped != nil {
+		c.reapOnce.Do(func() { close(c.reaped) })
 	}
-	c.waitOnce.Do(func() {
-		err := c.cmd.Wait()
-		code := -1
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && ee.Exited() {
-			code = ee.ExitCode()
-		}
-		log.Printf("[pi] pi 子进程退出(%s) PID=%d 退出码=%d err=%v", why, c.PID(), code, err)
-		if c.reaped != nil {
-			c.reapOnce.Do(func() { close(c.reaped) })
-		}
-	})
+}
+
+// reapWithLog 收尸(cmd.Wait 只一次)并把退出码写进标准 log(daemon.log)。
+// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用。机制收编在
+// rpcwire.Wire(2026-10-09),此处是本包接线(markReaped 随收尸落地)。
+func (c *Client) reapWithLog(why string) {
+	c.wire.ReapWithLog(c.cmd, why, c.markReaped)
 }
 
 func (c *Client) dispatch(line []byte) {
@@ -747,17 +716,9 @@ func (c *Client) DeathCh() <-chan struct{} { return c.deathCh }
 // 句柄/管道 —— 长跑 daemon 每次重挂载(旧 client Close)都泄一个。范式抄
 // term/manager.go:Kill 后放独立 goroutine Wait,Close 本身不等(Kill 后
 // Wait 通常毫秒级返回;重复 Close 只是多收一次 "already called" 错误,无害)。
+// 机制收编在 rpcwire.Wire.Close,markReaped 随收尸落地(关 reaped 通道)。
 func (c *Client) Close() {
-	cmd := c.cmd
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-	c.writeMu.Lock()
-	_ = c.stdin.Close()
-	c.writeMu.Unlock()
-	if cmd != nil {
-		go c.reapWithLog("Close 主动关闭")
-	}
+	c.wire.Close(c.cmd, c.stdin, "Close 主动关闭", c.markReaped)
 }
 
 // ---- 会话模型(set_model)----

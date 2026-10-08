@@ -45,7 +45,7 @@ class PaSheetConvergenceTest {
     /** ApprovalSheet 段:从函数签名起到 ExpandedInputSheet 签名前。 */
     private fun approvalSection(): String {
         val src = chatSource()
-        val start = src.indexOf("private fun ApprovalSheet(")
+        val start = src.indexOf("fun ApprovalSheet(")
         assertTrue("ApprovalSheet 应存在", start >= 0)
         val end = src.indexOf("private fun ExpandedInputSheet(", start)
         assertTrue("ExpandedInputSheet 应在 ApprovalSheet 之后", end > start)
@@ -55,7 +55,7 @@ class PaSheetConvergenceTest {
     /** ExpandedInputSheet 段:函数签名起到下一个顶层私有函数为止。 */
     private fun expandedInputSection(): String {
         val src = chatSource()
-        val start = src.indexOf("private fun ExpandedInputSheet(")
+        val start = src.indexOf("fun ExpandedInputSheet(")
         assertTrue("ExpandedInputSheet 应存在", start >= 0)
         val end = src.indexOf("private fun ExportChatSheet(", start)
         assertTrue("ExportChatSheet 应在 ExpandedInputSheet 之后", end > start)

@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
@@ -40,6 +41,7 @@ import pocketagent.v1.TurnClientMessage
 import pocketagent.v1.TurnInput
 import pocketagent.v1.TurnServerMessage
 import pocketagent.v1.HostEvent
+import pocketagent.v1.ThreadMessage
 
 /**
  * 轮次会话单例 —— 解决"退出对话界面,之前发的消息就不工作了":
@@ -119,6 +121,13 @@ object TurnSession {
         var lastSequence by mutableStateOf(0L)
         var draft by mutableStateOf("")
         var lastSnapshotAt = 0L
+        /**
+         * 最近一次访问时刻(C3 空闲回收的依据,墙钟毫秒)。访问 = [TurnSession.state]
+         * 的任何 get/创建(读写都经它),外加页面正打开时的 VM 心跳保活(见
+         * ChatViewModel.bindSession)。普通字段非快照状态:30 分钟粒度的判定,
+         * 多线程下的可见性竞态无害。0 = 从未记录(等价"刚访问过"之外的老值)。
+         */
+        var lastAccessAt = 0L
     }
 
     private val states = java.util.concurrent.ConcurrentHashMap<String, State>()
@@ -196,6 +205,130 @@ object TurnSession {
                 fresh.lastCompactedAt = snap.compactedAt
             }
         }
+    }.also { it.lastAccessAt = System.currentTimeMillis() } // C3:任何 get/写都算访问
+
+    /**
+     * 只刷新访问时刻、**不创建** State(C3)。给页面正打开期间的 VM 心调用:
+     * 保活"正在被看的那一个",不去为一个只是被提及的 threadId 拉起空 State。
+     */
+    fun touch(threadId: String) {
+        states[threadId]?.let { it.lastAccessAt = System.currentTimeMillis() }
+    }
+
+    // ---- 【C3】State 空闲回收 -------------------------------------------------
+    //
+    // 【为什么回收】states 是进程级 ConcurrentHashMap,此前只有删除会话时 release,
+    // 开过的会话 State(时间线 items + 全部快照状态)永久驻留 —— 长用 App 内存只增
+    // 不减。回收口径:
+    //  - running / recovering 的会话绝不回收(后台还在跑/恢复中,收走 = 分裂脑);
+    //  - 最近 [KEEP_RECENT_SESSIONS] 个访问过的会话豁免(用户刚切走不能立刻丢);
+    //  - 其余超过 [SESSION_IDLE_RECYCLE_MS] 无访问(访问 = state() 任何 get/写
+    //    + 页面打开期间的 VM 心跳)即回收:强制作一次 checkpoint(兜住尾巴)后
+    //    关恢复信号通道并移除 —— 与 [release] 同一收尾。之后再 state(threadId)
+    //    会 getOrPut 出全新 State(用量走 ThreadUsageStore 回显),合法路径。
+    //  - [runningThreadIds] 的 10s 轮询**不算**访问:通知轮询会保活一切,回收失效。
+
+    /** 非运行会话的空闲回收阈值(30 分钟无访问)。 */
+    internal const val SESSION_IDLE_RECYCLE_MS = 30L * 60 * 1000
+
+    /** 无论如何都保留的最近访问会话数(防用户刚切走就丢)。 */
+    internal const val KEEP_RECENT_SESSIONS = 6
+
+    /** 回收巡检节奏(远小于阈值即可,扫一趟是 O(会话数) 的字典遍历)。 */
+    private const val RECYCLE_SWEEP_INTERVAL_MS = 60_000L
+
+    /** 空闲回收判定的纯输入(与 State 解耦,JVM 单测直接构造)。 */
+    internal data class SessionIdleInfo(
+        val threadId: String,
+        val lastAccessAt: Long,
+        /** running || recovering:在跑/恢复中,永不回收。 */
+        val active: Boolean,
+    )
+
+    /**
+     * 回收判定(纯函数):返回本轮应回收的 threadId 集合。
+     * running/recovering 豁免;按 lastAccessAt 排序保留最近 [keepRecent] 个豁免;
+     * 其余 now - lastAccessAt > idleMs 的回收。
+     */
+    internal fun evictableThreadIds(
+        sessions: List<SessionIdleInfo>,
+        nowMs: Long,
+        idleMs: Long = SESSION_IDLE_RECYCLE_MS,
+        keepRecent: Int = KEEP_RECENT_SESSIONS,
+    ): List<String> {
+        val protected = sessions.filter { it.active }
+            .plus(sessions.filterNot { it.active }.sortedByDescending { it.lastAccessAt }.take(keepRecent))
+            .map { it.threadId }.toSet()
+        return sessions.filter { it.threadId !in protected && nowMs - it.lastAccessAt > idleMs }
+            .map { it.threadId }
+    }
+
+    /** 回收巡检作用域:不能用主 scope(Main dispatcher 在 JVM 单测里不存在)。 */
+    private val recycleScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    init {
+        recycleScope.launch {
+            while (true) {
+                delay(RECYCLE_SWEEP_INTERVAL_MS)
+                runCatching { sweepIdleStates() }
+            }
+        }
+    }
+
+    private fun sweepIdleStates() {
+        val now = System.currentTimeMillis()
+        val snapshot = states.entries.map { (tid, st) ->
+            SessionIdleInfo(tid, st.lastAccessAt, st.running || st.recovering)
+        }
+        for (tid in evictableThreadIds(snapshot, now)) {
+            val st = states[tid] ?: continue
+            // 复查在跑位(快照与移除之间可能开跑):宁可漏收一轮,不可收走在跑的
+            if (st.running || st.recovering) continue
+            // 兜住尾巴:takeLast(60) 之外的内容只有内存里有,先强落一次盘
+            checkpoint(tid, st, force = true)
+            states.remove(tid)?.recoverySignal?.close()
+        }
+    }
+
+    // ---- 【C3】items 内存上限 -------------------------------------------------
+    //
+    // 【为什么封顶】st.items 无上限增长:checkpoint 落盘只取 takeLast(60),内存
+    // 却全量留着 —— 几百轮长会话把消息/工具输出(单条 tool 输出已截 4000 字)全
+    // 驻留。封顶策略:超过 [TIMELINE_MAX_ITEMS] 时中间截断(保头部
+    // [TIMELINE_KEEP_HEAD] 条 + 尾部 [TIMELINE_KEEP_TAIL] 条),折叠段以
+    // role="items_trimmed" 标记行呈现。checkpoint / 离线快照 / 导出按各自口径
+    // 过滤,不受标记行影响;身份索引(HistoryIdentityIndex)的 itemStart 坐标
+    // 在截断后整体漂移,搜索定位会退到文本对齐/缺口拉取兜底 —— 有界努力的
+    // 降级链本来就在,不造假命中。
+
+    /** 时间线内存硬上限(条)。 */
+    internal const val TIMELINE_MAX_ITEMS = 400
+
+    /** 截断时保留的头部条数(最早加载的历史段)。 */
+    internal const val TIMELINE_KEEP_HEAD = 50
+
+    /** 截断时保留的尾部条数(最近的消息,滚动/跟随都发生在这一段)。 */
+    internal const val TIMELINE_KEEP_TAIL = 300
+
+    /**
+     * 截断裁定(纯函数):超上限时返回"头 KEEP_HEAD + 折叠标记 + 尾 KEEP_TAIL",
+     * 未超上限返回原引用(调用方零成本)。已存在的折叠标记不重复:头尾切片里
+     * 的旧标记剔除,其 trimmedCount 并进新标记的累计数。
+     */
+    internal fun trimmedTimelineItems(items: List<ChatItem>): List<ChatItem> {
+        if (items.size <= TIMELINE_MAX_ITEMS) return items
+        val head = items.take(TIMELINE_KEEP_HEAD).filter { it.role != "items_trimmed" }
+        val tail = items.takeLast(TIMELINE_KEEP_TAIL).filter { it.role != "items_trimmed" }
+        val foldedMarkers = items.filter { it.role == "items_trimmed" }.sumOf { it.trimmedCount }
+        val folded = items.size - head.size - tail.size -
+            items.count { it.role == "items_trimmed" } + foldedMarkers
+        return head + ChatItem(role = "items_trimmed", trimmedCount = folded, id = nextChatItemId("trimmed")) + tail
+    }
+
+    /** 把时间线压回上限内(超限时经 swapItems 整表替换,同引用零变化)。 */
+    internal fun enforceTimelineCap(st: State) {
+        val trimmed = trimmedTimelineItems(st.items.toList())
+        swapItems(st, trimmed)
     }
 
     /** Restore only saved active turns. Never re-send the original prompt. */
@@ -206,8 +339,9 @@ object TurnSession {
                 val st=state(saved.threadId)
                 if(st.running || st.recovering || st.items.isNotEmpty()) continue
                 st.items.addAll(saved.messages.map {
-                    ChatItem(it.role, it.text, sentAtMs = it.savedAtMs)
+                    ChatItem(it.role, it.text, sentAtMs = it.savedAtMs, id = nextChatItemId(it.role))
                 })
+                enforceTimelineCap(st)
                 st.streamText=saved.stream
                 st.thinkingText=saved.thinking
                 st.lastSequence=saved.sequence
@@ -265,7 +399,7 @@ object TurnSession {
     private fun commitThinking(st: State) {
         val t = st.thinkingText
         if (t.isBlank()) return
-        st.items.add(ChatItem("thinking", t.trim()))
+        st.items.add(ChatItem("thinking", t.trim(), id = nextChatItemId("thinking")))
         st.thinkingText = ""
     }
 
@@ -276,9 +410,11 @@ object TurnSession {
     private fun commitPlan(st: State) {
         val steps = st.planSteps
         if (steps.isEmpty()) return
-        // 同一轮内已落过卡则原地更新(轮次只会提交一次,防御性写法)
+        // 同一轮内已落过卡则原地更新(轮次只会提交一次,防御性写法);
+        // 原地更新沿用旧实例 id(C2:key 不变,LazyColumn 节点复用)
         val idx = st.items.indexOfLast { it.role == "plan" }
-        val card = ChatItem("plan", planSteps = steps)
+        val fresh = ChatItem("plan", planSteps = steps)
+        val card = if (idx >= 0) fresh.copy(id = st.items[idx].id) else fresh
         if (idx >= 0) st.items[idx] = card else st.items.add(card)
         st.planSteps = emptyList()
         st.planStream = ""
@@ -308,7 +444,7 @@ object TurnSession {
 
     private fun commitFinalText(st: State, text: String) {
         if (text.isNotBlank()) {
-            st.items.add(ChatItem("assistant", text))
+            st.items.add(ChatItem("assistant", text, id = nextChatItemId("assistant")))
         }
     }
 
@@ -351,14 +487,14 @@ object TurnSession {
      * 同一件事出现好几张卡 —— 用户会以为发生了好几次。
      */
     private fun upsertCodexEventItem(st: State, event: pocketagent.v1.CodexEvent) {
-        val card = codexEventToChatItem(event)
         val key = codexEventTimelineKey(event)
         if (key.isNotEmpty()) {
             val idx = st.items.indexOfLast {
                 it.role == "codex_event" && it.codexEvent?.let { e -> codexEventTimelineKey(e) } == key
             }
             if (idx >= 0) {
-                st.items[idx] = card
+                // 原地更新:沿用被替换实例的 id(C2:key 不变,LazyColumn 节点复用)
+                st.items[idx] = codexEventToChatItem(event).copy(id = st.items[idx].id)
                 return
             }
         }
@@ -371,7 +507,13 @@ object TurnSession {
         ) {
             return
         }
-        st.items.add(card)
+        // 新卡 id:同 key 事件(前一张已被截断/滚出)用 key 合成,保证同源事件
+        // 在时间线里恒一个 key;无 key 的普通事件进程序号。
+        st.items.add(
+            codexEventToChatItem(event).copy(
+                id = if (key.isNotEmpty()) "ce-$key" else nextChatItemId("codex_event"),
+            ),
+        )
     }
 
     /** 用户推翻了某次审查的驳回结论:收起入口并记住状态。 */
@@ -464,7 +606,7 @@ object TurnSession {
         val sent = ch.trySend(TurnClientMessage.newBuilder().setInput(input).build())
         if (!sent.isSuccess) return false
         // 时间线先挂「发送中…」小标签;daemon 的 Steered/Queued 回执决定最终状态
-        st.items.add(ChatItem("user", text, attachments = attachments, deliverState = DELIVERY_PENDING, sentAtMs = System.currentTimeMillis()))
+        st.items.add(ChatItem("user", text, attachments = attachments, deliverState = DELIVERY_PENDING, sentAtMs = System.currentTimeMillis(), id = nextChatItemId("user")))
         // 任务中心:同一会话自动合并累计(rounds+1),与首轮同一条目
         TaskCenter.trackMessage(threadId, text.replace('\n', ' ').take(24))
         return true
@@ -491,7 +633,7 @@ object TurnSession {
         // 【任务中心】登记这一轮消息处理 —— 之后退出聊天页也由 TaskCenter 持有引用,
         // 侧边栏角标与任务中心列表由此得到数据来源(此前无人调用,角标恒 0)。
         TaskCenter.trackMessage(threadId, text.replace('\n', ' ').take(24))
-        st.items.add(ChatItem("user", text, attachments = attachments, sentAtMs = System.currentTimeMillis()))
+        st.items.add(ChatItem("user", text, attachments = attachments, sentAtMs = System.currentTimeMillis(), id = nextChatItemId("user")))
 
         val turnInput = buildTurnInput(threadId, text, attachments)
         scope.launch {
@@ -687,7 +829,7 @@ object TurnSession {
                 val tc = ev.toolCall
                 if (tc.phase == ToolCallUpdate.Phase.STARTED) {
                     if (st.streamText.isNotEmpty()) {
-                        st.items.add(ChatItem("assistant", st.streamText))
+                        st.items.add(ChatItem("assistant", st.streamText, id = nextChatItemId("assistant")))
                         st.streamText = ""
                     }
                     commitThinking(st)
@@ -698,6 +840,7 @@ object TurnSession {
                             toolId = tc.call.id,
                             toolArgs = tc.call.jsonArgs,
                             toolStatus = "running",
+                            id = nextChatItemId("tool"),
                         ),
                     )
                 } else {
@@ -720,6 +863,8 @@ object TurnSession {
                         toolElapsedMs = res?.elapsedMs ?: 0.0,
                         text = (res?.output ?: "").take(4000),
                         toolStatus = if (res?.ok == false) "failure" else "success",
+                        // 原地回填沿用旧卡 id(C2:key 不变,LazyColumn 节点复用)
+                        id = prev?.id ?: nextChatItemId("tool"),
                     )
                     if (idx >= 0) st.items[idx] = updated else st.items.add(updated)
                 }
@@ -776,7 +921,7 @@ object TurnSession {
                 commitThinking(st)
                 commitPlan(st)
                 if (st.streamText.isNotEmpty()) {
-                    st.items.add(ChatItem("assistant", st.streamText))
+                    st.items.add(ChatItem("assistant", st.streamText, id = nextChatItemId("assistant")))
                 } else {
                     // 终局兜底:Codex 没发 delta 时,正文在 completed.final_blocks。
                     commitFinalText(st, finalText(ev.completed.finalBlocksList))
@@ -818,7 +963,7 @@ object TurnSession {
                 commitThinking(st)
                 commitPlan(st)
                 if (st.streamText.isNotEmpty()) {
-                    st.items.add(ChatItem("assistant", st.streamText))
+                    st.items.add(ChatItem("assistant", st.streamText, id = nextChatItemId("assistant")))
                 } else {
                     // 失败帧同样可能只带 partial_text,不能让已产出的正文消失。
                     commitFinalText(st, ev.failed.partialText)
@@ -843,6 +988,9 @@ object TurnSession {
             }
             else -> {}
         }
+        // C3:帧路径统一封顶入口(O(1) 检查,超限才整表替换);放在 checkpoint 前,
+        // 落盘的 takeLast(60) 取到的是封顶后的尾部。
+        enforceTimelineCap(st)
         checkpoint(threadId,st,force=sawEnd)
         return sawEnd
     }
@@ -1077,7 +1225,8 @@ object TurnSession {
                 }
                 if (status == ThreadStatus.THREAD_STATUS_IDLE && snapshot.second.lastTurnError.isNotBlank()) {
                     st.items.clear()
-                    st.items.addAll(historyToChatItems(history))
+                    st.items.addAll(historyChatItemsWithIds(history))
+                    enforceTimelineCap(st)
                     st.lastSequence=0
                     st.errorMessage=snapshot.second.lastTurnError
                     finishRecovery(threadId,st,ok=false)
@@ -1090,7 +1239,8 @@ object TurnSession {
                 if (status == ThreadStatus.THREAD_STATUS_IDLE && (history.size > baseline || completedAfterReconnect)) {
                     recovered = true
                     st.items.clear()
-                    st.items.addAll(historyToChatItems(history))
+                    st.items.addAll(historyChatItemsWithIds(history))
+                    enforceTimelineCap(st)
                     // 【P1-5】全量回填的内容不是逐帧应用出来的,事件断点对回填后
                     // 的本地视图不再有意义,必须作废 —— 否则下次恢复会从旧断点
                     // 重放已回填过的帧,时间线出现重复。
@@ -1190,7 +1340,8 @@ object TurnSession {
                 }
                 val current = st.items.count { it.role == "user" || it.role == "assistant" }
                 st.items.clear()
-                st.items.addAll(historyToChatItems(history))
+                st.items.addAll(historyChatItemsWithIds(history))
+                enforceTimelineCap(st)
                 // 【P1-5】全量回填后事件断点作废(与 recoverOrphanTurn 的全量路径
                 // 同一语义):内容来源不是逐帧应用,旧断点重放会造成时间线重复。
                 st.lastSequence = 0
@@ -1302,3 +1453,17 @@ internal fun emptyOutputNotice(state: OutputState): Pair<String, String>? = when
  */
 internal fun projectedTotalUsage(update: pocketagent.v1.UsageUpdate): pocketagent.v1.Usage? =
     if (update.hasTotalUsage()) update.totalUsage else null
+
+/**
+ * daemon 历史 → 带稳定 id 的 ChatItem 列表(C2)。块拆分仍走 HistoryMessageMapper
+ * (那条文件不动),这里只按消息逐条补 id:daemon 带 message_id 用 "hm-<id>#<块序>"
+ * (重拉同一条消息 = 同一 key,整表回填后 LazyColumn 按节点复用),旧 daemon 无 id
+ * 退进程级序号。恢复回填(resync/recover)与打开会话/加载更早(ChatScreen)共用。
+ */
+internal fun historyChatItemsWithIds(messages: Iterable<ThreadMessage>): List<ChatItem> = buildList {
+    for (m in messages) {
+        historyToChatItems(listOf(m)).forEachIndexed { sub, item ->
+            add(item.copy(id = historyChatItemId(m.messageId, sub)))
+        }
+    }
+}

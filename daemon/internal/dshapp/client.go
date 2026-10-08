@@ -37,6 +37,7 @@ import (
 
 	"github.com/pocketagent/daemon/internal/hidewin"
 	"github.com/pocketagent/daemon/internal/hostenv"
+	"github.com/pocketagent/daemon/internal/rpcwire"
 	"github.com/pocketagent/daemon/internal/stderrdrain"
 )
 
@@ -194,16 +195,16 @@ type Client struct {
 	stdout *bufio.Reader
 
 	mu        sync.Mutex
-	writeMu   sync.Mutex
 	nextID    int64
 	pending   map[int64]chan rpcResp
 	dead      bool // readLoop EOF / Close 置位(与 pending 同锁);Alive 读它
 	handlerMu sync.Mutex
 
-	// waitOnce 保证 cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait):意外退出
-	// (readLoop EOF,要拿退出码写死因日志)与 Close 主动收尸两条路径共用
-	// reapWithLog(codexapp/piapp/zcodeapp 三方一致范式)。
-	waitOnce sync.Once
+	// wire 收编自本包的 stdio 传输小件(写互斥 + 写预算 + 收尸 Once + Kill/关
+	// 管道,2026-10-09 波 A 落进 rpcwire,五家同款)。收编同时统一到 worker 持锁
+	// 语义:本包旧实现"调用方持锁、超时放锁"会让残尾巴帧与下一帧交错 ——
+	// codexapp 修掉的坏帧病,此处随收编一并获得防护。
+	wire rpcwire.Wire
 
 	// NotifHandler 当轮通知钩子(Run 按轮装卸):session/update 流。
 	// Deprecated: 裸字段仅兼容独占客户端的旧探针。并发路径必须用 Setter;
@@ -327,6 +328,7 @@ func startProcess(exe string, args []string, opts StartOptions) (*Client, error)
 	c := &Client{
 		cmd:     cmd,
 		stdin:   stdin,
+		wire:    rpcwire.Wire{Tag: "dsh", Name: "dsh acp"},
 		stdout:  bufio.NewReaderSize(stdout, 8*1024*1024), // 单行帧要扛长上下文/图(piapp 64KB 必炸的教训,蓝本 §4.2 给足 8MB)
 		pending: map[int64]chan rpcResp{},
 	}
@@ -495,37 +497,13 @@ func (c *Client) Notify(method string, params interface{}) error {
 }
 
 // writeBudget 单帧写入 stdin 的等待预算。单行帧要扛长上下文/图(读缓冲 8MB
-// 的另一半),子进程卡死/不读管道时裸 Write 会无限阻塞 —— 持 writeMu 期间
-// 堵死会把所有后续写(乃至 Close)一起冻住。
+// 的另一半),子进程卡死/不读管道时裸 Write 会无限阻塞。预算机制(含 worker
+// 持锁的坏帧防护,2026-10-09 随收编 rpcwire 获得)在 rpcwire.Wire,此处只留
+// 本包的取值。
 const writeBudget = 5 * time.Second
 
-// writeWithBudget 在 budget 时间内尝试完成一次 stdin 写。写序语义不变:
-// Write 仍受 writeMu 串行化(预算只限制"等 Write 返回"的时长,不绕过互斥)。
-//
-// 【已知语义】超时返回 error 后,执行 Write 的 goroutine 无法取消,**写可能
-// 仍在后台完成**(帧最终可能落进管道)。调用方按失败处理即可:协议层要么
-// 放弃本轮、要么随子进程一起被判死;os.File 允许多 goroutine 并发调用,
-// 超时后残留的 Write 与后续 Write/Close 并发不会 panic。
-func (c *Client) writeWithBudget(data []byte, budget time.Duration) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := c.stdin.Write(data)
-		errCh <- err
-	}()
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
-	select {
-	case err := <-errCh:
-		return err
-	case <-timer.C:
-		return fmt.Errorf("写入 dsh 子进程 stdin 超时(>%s),写可能仍在后台完成", budget)
-	}
-}
-
 func (c *Client) writeLine(raw []byte) error {
-	return c.writeWithBudget(append(raw, '\n'), writeBudget)
+	return c.wire.WriteLine(c.stdin, raw, writeBudget)
 }
 
 // Respond 应答服务器的反向请求(审批)。
@@ -640,10 +618,7 @@ type rpcResp struct {
 
 // PID 返回子进程 PID(日志定位用);未知返回 0。
 func (c *Client) PID() int {
-	if c.cmd != nil && c.cmd.Process != nil {
-		return c.cmd.Process.Pid
-	}
-	return 0
+	return c.wire.PID(c.cmd)
 }
 
 // Alive 报告子进程是否还活着(readLoop 已见 EOF 即死)。
@@ -654,38 +629,19 @@ func (c *Client) Alive() bool {
 	return !c.dead
 }
 
-// reapWithLog 收尸(cmd.Wait)并把退出码写进标准 log(daemon.log)。
-// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用;waitOnce 保证
-// cmd.Wait 只执行一次(exec.Cmd 不允许二次 Wait)。
+// reapWithLog 收尸(cmd.Wait 只一次)并把退出码写进标准 log(daemon.log)。
+// 意外退出(readLoop EOF)与 Close 主动关闭两条路径共用。机制收编在
+// rpcwire.Wire(2026-10-09),此处是本包接线。
 func (c *Client) reapWithLog(why string) {
-	if c.cmd == nil {
-		return
-	}
-	c.waitOnce.Do(func() {
-		err := c.cmd.Wait()
-		code := -1
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && ee.Exited() {
-			code = ee.ExitCode()
-		}
-		log.Printf("[dsh] dsh acp 子进程退出(%s) PID=%d 退出码=%d err=%v", why, c.PID(), code, err)
-	})
+	c.wire.ReapWithLog(c.cmd, why, nil)
 }
 
 // Close 结束子进程并收割(Kill 后必须 Wait 收尸,防句柄/管道泄漏 —— codexapp
-// P1-7 同款;收尸放专门 goroutine,不拖住 Close 调用方)。
+// P1-7 同款;收尸放专门 goroutine,不拖住 Close 调用方)。机制收编在
+// rpcwire.Wire.Close;dead 置位是本包的 Alive 判定,留在接线层。
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.dead = true
 	c.mu.Unlock()
-	cmd := c.cmd
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-	c.writeMu.Lock()
-	_ = c.stdin.Close()
-	c.writeMu.Unlock()
-	if cmd != nil {
-		go c.reapWithLog("Close 主动关闭")
-	}
+	c.wire.Close(c.cmd, c.stdin, "Close 主动关闭", nil)
 }

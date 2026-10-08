@@ -57,6 +57,10 @@ class SheetScrollOverflowRegressionTest {
     private fun chatSource(): String =
         locate("src/main/java/dev/pocketagent/app/ui/ChatScreen.kt").readText()
 
+    /** 【C1 拆分(2026-10-09)】回滚/目标两个会话 sheet 迁至 ui/chat/ChatSheets.kt。 */
+    private fun chatSheetsSource(): String =
+        locate("src/main/java/dev/pocketagent/app/ui/chat/ChatSheets.kt").readText()
+
     private fun homeSource(): String =
         locate("src/main/java/dev/pocketagent/app/ui/HomeScreen.kt").readText()
 
@@ -115,18 +119,18 @@ class SheetScrollOverflowRegressionTest {
 
     @Test
     fun `回滚会话sheet_内容列必须可滚动且确认取消可达`() {
-        val src = section(chatSource(), "if (rollbackOpen) {", "\"确认回滚\"")
+        val src = section(chatSheetsSource(), "if (rollbackOpen.value) {", "\"确认回滚\"")
         // 滚动保证收口进 PaSheet(内建 heightIn+verticalScroll),见 assertSheetScrollGuarantee
         assertSheetScrollGuarantee(src, "回滚会话 sheet")
         // 关键控件必须都在该可滚区域内:选项列表 + 取消(确认回滚本身是段尾边界,单独钉)
         assertTrue(src.contains("options.forEach"))
         assertTrue(src.contains("取消"))
-        assertTrue(chatSource().contains("\"确认回滚\""))
+        assertTrue(chatSheetsSource().contains("\"确认回滚\""))
     }
 
     @Test
     fun `设置会话目标sheet_输入框高度必须封顶且保存按钮不随长目标出视口`() {
-        val src = section(chatSource(), "if (slashGoalSheet) {", "\"已设置会话目标\"")
+        val src = section(chatSheetsSource(), "if (slashGoalSheet.value) {", "\"已设置会话目标\"")
         assertTrue(
             "目标输入框缺 heightIn(min=..., max=...) 封顶 —— 目标文本一长输入框无限增高," +
                 "把\"保存目标\"推出视口不可点(T-SS 回归)",

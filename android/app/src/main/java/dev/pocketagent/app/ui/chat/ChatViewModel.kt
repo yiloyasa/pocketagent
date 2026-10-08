@@ -3,7 +3,12 @@ package dev.pocketagent.app.ui.chat
 import androidx.compose.runtime.snapshotFlow
 import dev.pocketagent.app.AgentConnection
 import dev.pocketagent.app.ui.DELIVERY_QUEUED
+import dev.pocketagent.app.ui.SLASH_COMMANDS_DEADLINE_S
+import dev.pocketagent.app.ui.SlashCommandCache
+import dev.pocketagent.app.ui.SlashCommandInfo
 import dev.pocketagent.app.ui.TurnSession
+import dev.pocketagent.app.ui.isSlashPanelAgent
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,6 +18,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import pocketagent.v1.CodexSettings
+import pocketagent.v1.GetCodexSettingsRequest
+import pocketagent.v1.GetHostInfoRequest
+import pocketagent.v1.ListModelsRequest
+import pocketagent.v1.ListSlashCommandsRequest
+import pocketagent.v1.ListThreadsRequest
+import pocketagent.v1.ModelInfo
+import pocketagent.v1.Thread as PThread
+import java.util.concurrent.TimeUnit
 
 /**
  * ChatScreen 页面级长期状态的持有者(2026-10-04 计划 Task 8,第一层分层;
@@ -81,6 +96,15 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
         sessionJob?.cancel()
         _session.value = turnSessionUiStateOf(TurnSession.state(threadId))
         sessionJob = sessionScope.launch {
+            // C3 保活心跳:页面开着 = 该会话"正被访问",TurnSession 空闲回收
+            // 不收走正在被查看的会话(只保活这一个;通知轮询不算访问)。随
+            // sessionJob 取消(unbind/换绑)一并停。
+            launch {
+                while (true) {
+                    TurnSession.touch(threadId)
+                    delay(SESSION_KEEPALIVE_MS)
+                }
+            }
             snapshotFlow { turnSessionUiStateOf(TurnSession.state(threadId)) }
                 .collect { _session.value = it }
         }
@@ -90,6 +114,101 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
     fun unbindSession() {
         sessionJob?.cancel()
         sessionJob = null
+    }
+
+    // ---- 【C1 第三步】RPC 直调收进意图层:composable 只调 vm 方法 ----
+
+    /**
+     * 斜杠命令拉取(zcode/codex/pi 三源;迁自 ChatScreen 的 LaunchedEffect,
+     * RPC/缓存/意图落位三段语义逐字保留):非面板会话清空镜像(缓存残留不漏);
+     * 缓存命中先渲染;RPC 失败安静降级为空表照写,绝不 Toast 打断输入。
+     */
+    suspend fun refreshSlashCommands(threadId: String, agentId: String) {
+        if (!isSlashPanelAgent(agentId)) {
+            // 非面板会话(zcode/codex/pi 之外)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
+            send(ChatIntent.SlashCommandsSettled(emptyList()))
+            return
+        }
+        val cached = SlashCommandCache.get(threadId)
+        if (cached != null) send(ChatIntent.SlashCommandsSettled(cached))
+        val loaded = try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.threadService()
+                    .withDeadlineAfter(SLASH_COMMANDS_DEADLINE_S, TimeUnit.SECONDS)
+                    .listSlashCommands(
+                        ListSlashCommandsRequest.newBuilder().setThreadId(threadId).setRefresh(true).build(),
+                    )
+                    .commandsList
+                    .map { SlashCommandInfo(it.name, it.description, it.inputHint) }
+            }
+        } catch (_: Exception) {
+            emptyList() // 拉不到就没有面板,不是错误
+        }
+        SlashCommandCache.put(threadId, loaded)
+        send(ChatIntent.SlashCommandsSettled(loaded))
+    }
+
+    /**
+     * 侧栏/模型芯片静态预取的四件套回包(迁自 ChatScreen 的 LaunchedEffect):
+     * RPC 与"现值为空才写"的加载错误裁定在 VM;**失败项回 null,UI 侧赋值保留
+     * 旧值**(与迁出前"catch 不覆盖已有值"同一语义)。四个加载互相独立,
+     * 后两个(电脑名/最近会话)失败静默 —— 不影响当前会话。
+     */
+    data class StaticPrefetch(
+        val codexSettings: CodexSettings? = null,
+        val models: List<ModelInfo>? = null,
+        val hostName: String? = null,
+        val recentThreads: List<PThread>? = null,
+    )
+
+    suspend fun prefetchStatic(): StaticPrefetch {
+        val settings = try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.modelService()
+                    .getCodexSettings(GetCodexSettingsRequest.newBuilder().build())
+            }
+        } catch (e: Exception) {
+            // 不覆盖已有提示:离线快照的黄条比这里的红条更有信息量(真机验证发现
+            // 两个并行加载共用 loadError,后完成者会把"离线:显示的是本地记录"顶掉)
+            send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型设置：${e.message ?: "连接失败"}"))
+            null
+        }
+        val models = try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.modelServiceSlow()
+                    .listModels(ListModelsRequest.newBuilder().build()).modelsList
+            }
+        } catch (e: Exception) {
+            send(ChatIntent.LoadErrorSetIfAbsent("无法加载模型列表：${e.message ?: "连接失败"}"))
+            null
+        }
+        val hostName = try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.hostService()
+                    .getHostInfo(GetHostInfoRequest.getDefaultInstance()).displayName
+            }
+        } catch (_: Exception) {
+            null // 电脑名取不到不影响聊天,侧边栏回退到通用文案
+        }
+        val recent = try {
+            withContext(Dispatchers.IO) {
+                AgentConnection.threadService()
+                    .listThreads(
+                        ListThreadsRequest.newBuilder()
+                            .setIncludeArchived(false)
+                            .build(),
+                    )
+                    .threadsList
+            }
+        } catch (_: Exception) {
+            null // 拉不到就显示空态,不影响当前会话
+        }
+        return StaticPrefetch(settings, models, hostName, recent)
+    }
+
+    private companion object {
+        /** 页面保活心跳节奏(远小于 TurnSession 的 30 分钟空闲阈值)。 */
+        const val SESSION_KEEPALIVE_MS = 60_000L
     }
 }
 

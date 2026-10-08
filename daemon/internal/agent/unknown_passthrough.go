@@ -20,6 +20,13 @@
 // consumeCodexUnknownRequest)、pi(extension_ui_request 的未知 method,见
 // consumePiUnknownUIRequest —— pi 的应答通道只有 extension_ui_response payload,
 // 拒绝路用协议原生的 {"cancelled":true} 兜底,没有 -32601 错误码形状)。
+//
+// 【2026-10-09 波 A 收编】四段 handler 原是"一份骨架 × 四份手写接线"(approve
+// 缺失检查 → 2min 预算 → 三分支日志 → 允许回 {} + KNOWN_PASSTHROUGH 台账/拒绝
+// 回落,逐字重复四遍)。共享骨架抽成 askUnknownApproval:通道检查、预算、
+// waiting 旗标、三分支日志、允许路的应答出口与台账出口全部收进骨架;四家只剩
+// 各自的应答形状闭包(Respond / Respond / RespondUI)与协议专有面(codex 的
+// resolved 竞速、pi 的 cancelled:true 拒绝尾)。
 package agent
 
 import (
@@ -121,8 +128,89 @@ const unknownPassthroughLedgerNote = "用户已在手机查看脱敏原文并允
 // 两处已足够,冻结结构零改动。若未来需要"拒绝原因细分"(超时 vs 用户拒绝),
 // 应走台账 note 或 steward 侧协议字段,不在 provider 结构体上就地生长。
 
+// errUnknownRequestResolved codex 专有哨兵:等手机期间桌面端已解决该请求
+// (serverRequest/resolved 竞速)。askUnknownApproval 据此把请求按"已消费"终结
+// —— 不再应答、不落台账(收尾在 codex 的 approve 闭包内完成,见
+// consumeCodexUnknownRequest)。
+var errUnknownRequestResolved = errors.New("unknown request already resolved on desktop")
+
+// askUnknownApproval 未知反向请求透传确认的共享骨架(dsh/zcode/codex/pi 四家
+// 接线,2026-10-09 波 A 从四份手写重复收编成一份)。
+//
+// 阶段与出口:
+//  1. approve == nil → 审批通道缺失(TestModel 诊断 RPC 等路径):手机从未被
+//     询问,绝不能当成"用户看过并允许" —— 基础设施问题不伪装成用户意志
+//     (红线 1)。返回 (false, false):未问询、未消费,交回调用方的既有安全
+//     拒绝路径;
+//  2. budget 内问手机(waiting 旗标置位/复位:等手机决定是合法静默,看门狗放行;
+//     pi 无此旗标传 nil;budget=0 表示不另设预算 —— codex 的 server 侧 approve
+//     自带 2min,旧实现即直透 ctx);
+//  3. 三分支日志,均按拒绝处理(失败安全方向 —— 最坏损失是"用户本想允许但没
+//     来得及点",而不是"没答应却被当成答应了"),返回 (true, false):
+//     问过了但未消费,交回调用方既有路径(dsh/zcode/codex 的 -32601 +
+//     UNKNOWN_REQUEST 台账由调用方落,与 OFF 态走同一段代码,口径天然一致;
+//     pi 的 cancelled:true 尾在 consumePiUnknownUIRequest);
+//  4. 用户允许 → respondAllow 闭包回空对象 {}(尽力应答,不是伪造业务结果;
+//     应答形状差异 Respond/RespondUI 收进闭包)+ 台账 KNOWN_PASSTHROUGH
+//     (允许路台账出口收进本骨架,四处同款:SourceAgent/SourceMethod/脱敏载荷/
+//     应答语义备注;带会话归属的三家与不带的 dsh 走同一份字段,空串即无归属),
+//     返回 (true, true)。
+//
+// 【codex 的专有出口】其 approve 闭包内含 serverRequest/resolved 竞速治理,桌面端
+// 已解决时返回 errUnknownRequestResolved 哨兵:本骨架按 (true, true) 终结 ——
+// 请求已按专有路径收尾(撤卡、注销登记),不得再应答、不落台账。
+func askUnknownApproval(ctx context.Context, agentID, threadID, method string, params json.RawMessage,
+	approve ApprovalHook, waiting *atomic.Bool, budget time.Duration, respondAllow func()) (asked, consumed bool) {
+
+	if approve == nil {
+		return false, false
+	}
+	call := buildUnknownRequestCall(agentID, method, params)
+	if waiting != nil {
+		waiting.Store(true)
+		defer waiting.Store(false)
+	}
+	actx := ctx
+	if budget > 0 {
+		var cancel context.CancelFunc
+		actx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+	allow, _, askErr := approve(actx, call)
+	switch {
+	case askErr != nil && errors.Is(askErr, errUnknownRequestResolved):
+		return true, true
+	case askErr != nil && budget > 0 && errors.Is(askErr, context.DeadlineExceeded):
+		// 预算内无应答:按拒绝处理。budget=0(codex)不设此分支 —— server 侧
+		// approve 自带 2min 预算,DeadlineExceeded 到这里与通道失败同观感,保持
+		// 其旧实现的单一"通道失败"日志口径。
+		log.Printf("[%s] 未知请求确认 %v 无应答,按拒绝处理(method=%s)", agentID, budget, method)
+		return true, false
+	case askErr != nil:
+		log.Printf("[%s] 未知请求确认通道失败,按拒绝处理(method=%s): %v", agentID, method, askErr)
+		return true, false
+	case !allow:
+		log.Printf("[%s] 用户拒绝未知请求(method=%s)", agentID, method)
+		return true, false
+	}
+	// 用户看过脱敏原文后允许(语义取舍见文件头注释 —— 试探性未知操作由用户知情
+	// 授权,不是伪造业务结果):先回空对象 {},再落 KNOWN_PASSTHROUGH 台账备查。
+	respondAllow()
+	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
+		ThreadID:       threadID,
+		SourceAgent:    agentID,
+		SourceMethod:   method,
+		NormalizedKind: runtime.KindKnownPassthrough,
+		RawPayload:     redactNativePayload(params),
+		Note:           unknownPassthroughLedgerNote,
+	})
+	return true, true
+}
+
 // handleDshUnknownRequest dsh 的未知反向请求透传确认(B 开关 ON 时由
-// handleDshRequest 的未知分支调用)。
+// handleDshRequest 的未知分支调用)。骨架(通道检查/dshApprovalTimeout 预算/
+// 三分支日志/允许路应答+台账)在 askUnknownApproval,此处只接 dsh 的应答形状
+// (Respond 回空对象)。
 //
 // 返回 true = 已消费(用户允许,已回 {});返回 false = 未消费,交回调用方走既有
 // 安全拒绝路径(-32601 + 台账 UNKNOWN_REQUEST,与 OFF 态逐字节一致)。拒绝/超时
@@ -130,81 +218,22 @@ const unknownPassthroughLedgerNote = "用户已在手机查看脱敏原文并允
 //
 // 【vet】approve 拿到的卡为指针:pb 消息含锁,按值传 hook 会被 copylocks 拒绝。
 func (p *DshProvider) handleDshUnknownRequest(rsp dshClient, id int64, method string, params json.RawMessage, ctx context.Context, approve ApprovalHook, waiting *atomic.Bool) bool {
-	if approve == nil {
-		// 审批通道缺失(TestModel 诊断 RPC 等路径):手机从未被询问,绝不能当成
-		// "用户看过并允许" —— 基础设施问题不伪装成用户意志(红线 1)。
-		return false
-	}
-	call := buildUnknownRequestCall("dsh", method, params)
-	waiting.Store(true)
-	defer waiting.Store(false)
-	// 沿用 dsh 审批同款 2min 预算:超时按拒绝处理(失败安全方向 —— 最坏损失是
-	// "用户本想允许但没来得及点",而不是"没答应却被当成答应了")。
-	askCtx, cancel := context.WithTimeout(ctx, dshApprovalTimeout)
-	defer cancel()
-	allow, _, askErr := approve(askCtx, call)
-	switch {
-	case askErr != nil && errors.Is(askErr, context.DeadlineExceeded):
-		log.Printf("[dsh] 未知请求确认 %v 无应答,按拒绝处理(method=%s)", dshApprovalTimeout, method)
-		return false
-	case askErr != nil:
-		log.Printf("[dsh] 未知请求确认通道失败,按拒绝处理(method=%s): %v", method, askErr)
-		return false
-	case !allow:
-		log.Printf("[dsh] 用户拒绝未知请求(method=%s)", method)
-		return false
-	}
-	// 用户看过脱敏原文后允许:回空对象 {} + 台账 KNOWN_PASSTHROUGH(语义取舍见
-	// 文件头注释 —— 试探性未知操作由用户知情授权,不是伪造业务结果)。
-	_ = rsp.Respond(id, map[string]interface{}{})
-	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-		SourceAgent:    "dsh",
-		SourceMethod:   method,
-		NormalizedKind: runtime.KindKnownPassthrough,
-		RawPayload:     redactNativePayload(params),
-		Note:           unknownPassthroughLedgerNote,
-	})
-	return true
+	_, consumed := askUnknownApproval(ctx, "dsh", "", method, params, approve, waiting, dshApprovalTimeout,
+		func() { _ = rsp.Respond(id, map[string]interface{}{}) })
+	return consumed
 }
 
 // handleZcodeUnknownRequest zcode 的未知反向请求透传确认(B 开关 ON 时由 Run 的
 // ReqHandler 调用;抽成方法便于注入单测,与 handleZcodePermission 同款模式)。
+// 骨架在 askUnknownApproval,此处只接 zcode 的应答形状(Respond 原样回显 rawID)。
 //
 // 返回 true = 已消费(用户允许,已回 {});返回 false = 未消费,交回 Run 的既有
 // 路径落台账并让 zcodeapp 客户端层统一回 -32601,与 OFF 态逐字节一致。
 // budget 常态传 zcodeUIBudget(120s ≈ 2min 预算),测试注入毫秒级短超时。
 func (p *ZcodeProvider) handleZcodeUnknownRequest(rawID json.RawMessage, method, threadID string, params json.RawMessage, ctx context.Context, rsp zcodeResponder, approve ApprovalHook, waiting *atomic.Bool, budget time.Duration) bool {
-	if approve == nil {
-		// 审批通道缺失:手机从未被询问,交回既有安全拒绝路径,不伪装用户意志。
-		return false
-	}
-	actx, acancel := context.WithTimeout(ctx, budget)
-	defer acancel()
-	// askViaPhone 内部置位/复位 waiting 旗标(等手机决定是合法静默,看门狗放行)。
-	allow, _, askErr := p.askViaPhone(actx, buildUnknownRequestCall("zcode", method, params), approve, waiting)
-	switch {
-	case askErr != nil && errors.Is(askErr, context.DeadlineExceeded):
-		log.Printf("[zcode] 未知请求确认等待超时(%s),按拒绝处理(method=%s)", budget, method)
-		return false
-	case askErr != nil:
-		log.Printf("[zcode] 未知请求确认通道失败,按拒绝处理(method=%s): %v", method, askErr)
-		return false
-	case !allow:
-		log.Printf("[zcode] 用户拒绝未知请求(method=%s)", method)
-		return false
-	}
-	// 用户看过脱敏原文后允许:回空对象 {}(语义取舍见文件头注释)。台账带
-	// threadID,与既有 UNKNOWN_REQUEST 登记同粒度,事后能对回会话。
-	_ = rsp.Respond(rawID, map[string]interface{}{})
-	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-		ThreadID:       threadID,
-		SourceAgent:    "zcode",
-		SourceMethod:   method,
-		NormalizedKind: runtime.KindKnownPassthrough,
-		RawPayload:     redactNativePayload(params),
-		Note:           unknownPassthroughLedgerNote,
-	})
-	return true
+	_, consumed := askUnknownApproval(ctx, "zcode", threadID, method, params, approve, waiting, budget,
+		func() { _ = rsp.Respond(rawID, map[string]interface{}{}) })
+	return consumed
 }
 
 // consumeCodexUnknownRequest codex 的未知反向请求透传确认(B 开关 ON 时由 Run 的
@@ -221,11 +250,11 @@ func (p *ZcodeProvider) handleZcodeUnknownRequest(rawID json.RawMessage, method,
 // (`"result": true` 即任意 JSON 值)。所以 {} 是协议合法的最小诚实应答 —— 尽力
 // 应答,不是伪造业务结果(语义取舍见文件头注释)。
 //
-// 返回 true = 请求已终结,调用方不得再应答;两种情形:
-//   - 用户允许:已回 {} + 台账 KNOWN_PASSTHROUGH;
-//   - 等待期间桌面端已解决(serverRequest/resolved 竞速,与 handleCodexApproval
-//     同款治理):已让手机撤卡(幽灵审批卡治理),codex 侧已不在等待,此刻再回
-//     {} 或 -32601 都是重复应答协议噪声,也不落台账。
+// 【serverRequest/resolved 竞速(与 handleCodexApproval 同款治理)】等手机期间
+// 桌面端可能已解决该请求:approve 闭包(askWithResolvedRace)里 goroutine 问
+// 手机并与 resolved 信号 select,桌面端先赢时撤卡(sink 发 ApprovalResolved,
+// 幽灵审批卡治理)、注销登记、返回 errUnknownRequestResolved 哨兵 —— 骨架据此
+// 终结请求(已消费),此刻再回 {} 或 -32601 都是重复应答协议噪声,也不落台账。
 //
 // 返回 false = 未消费(开关关/审批通道缺失/拒绝/超时/通道故障),调用方交回
 // reqUnknown 分支的既有路径:-32601 + UNKNOWN_REQUEST 台账,与 OFF 态走同一段
@@ -234,63 +263,38 @@ func (p *CodexProvider) consumeCodexUnknownRequest(rsp codexApprovalResponder, i
 	if !unknownPassthroughQuery() {
 		return false
 	}
-	if approve == nil {
-		// 审批通道缺失(TestModel 诊断 RPC 等路径):手机从未被询问,绝不能当成
-		// "用户看过并允许" —— 基础设施问题不伪装成用户意志(红线 1)。
-		return false
+	// askWithResolvedRace:骨架的 approve 面 + codex 专有的桌面端解决竞速。
+	askWithResolvedRace := func(actx context.Context, call *pb.ToolCallBlock) (bool, string, error) {
+		resolved := p.registerPendingServerRequest(id)
+		type approveOut struct {
+			allow bool
+			note  string
+			err   error
+		}
+		outCh := make(chan approveOut, 1)
+		go func() {
+			a, n, e := approve(actx, call)
+			outCh <- approveOut{a, n, e}
+		}()
+		select {
+		case out := <-outCh:
+			p.unregisterPendingServerRequest(id)
+			return out.allow, out.note, out.err
+		case <-resolved:
+			// 迟到的手机应答落进带缓冲的 outCh,由 GC 回收,无泄漏。
+			log.Printf("[codex] 未知请求 %s(id=%s)已在桌面端被解决,不再等待手机确认", method, codexRequestIDKey(id))
+			sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
+				Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
+			}}})
+			p.unregisterPendingServerRequest(id)
+			return false, "", errUnknownRequestResolved
+		}
 	}
-	waiting.Store(true)
-	// 【serverRequest/resolved 竞速】与 handleCodexApproval 同款:等手机期间桌面端
-	// 可能已解决该请求,提前结束等待并让手机撤卡。
-	resolved := p.registerPendingServerRequest(id)
-	type approveOut struct {
-		allow bool
-		note  string
-		err   error
-	}
-	outCh := make(chan approveOut, 1)
-	go func() {
-		a, n, e := approve(ctx, buildUnknownRequestCall("codex", method, params))
-		outCh <- approveOut{a, n, e}
-	}()
-	var out approveOut
-	select {
-	case out = <-outCh:
-	case <-resolved:
-		// 迟到的手机应答落进带缓冲的 outCh,由 GC 回收,无泄漏。
-		log.Printf("[codex] 未知请求 %s(id=%s)已在桌面端被解决,不再等待手机确认", method, codexRequestIDKey(id))
-		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ApprovalResolved{ApprovalResolved: &pb.ApprovalResolved{
-			Note: "这条审批已在电脑端被处理,手机上的审批卡已同步关闭。",
-		}}})
-		waiting.Store(false)
-		p.unregisterPendingServerRequest(id)
-		return true
-	}
-	waiting.Store(false)
-	p.unregisterPendingServerRequest(id)
-	switch {
-	case out.err != nil:
-		// 超时/断流:不是"用户拒绝",但同样交回既有安全拒绝路径 —— codex 侧 2min
-		// 预算在 server 的 approve 钩子里,到这里即已超时;失败安全方向(最坏损失
-		// 是"用户本想允许但没来得及点",不是"没答应却被当成答应了")。
-		log.Printf("[codex] 未知请求确认通道失败,按拒绝处理(method=%s): %v", method, out.err)
-		return false
-	case !out.allow:
-		log.Printf("[codex] 用户拒绝未知请求(method=%s)", method)
-		return false
-	}
-	// 用户看过脱敏原文后允许:回空对象 {}(应答形状依据见上方函数注释)+ 台账
-	// KNOWN_PASSTHROUGH,粒度与 reqUnknown 既有登记一致(带 threadID 可对回会话)。
-	_ = rsp.Respond(id, map[string]interface{}{})
-	sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-		ThreadID:       threadID,
-		SourceAgent:    "codex",
-		SourceMethod:   method,
-		NormalizedKind: runtime.KindKnownPassthrough,
-		RawPayload:     redactNativePayload(params),
-		Note:           unknownPassthroughLedgerNote,
-	})
-	return true
+	// budget=0:server 侧 approve 自带 2min 预算,骨架不另设(旧实现即直透 ctx,
+	// 超时/断流按"通道失败"留痕,口径不变)。
+	_, consumed := askUnknownApproval(ctx, "codex", threadID, method, params, askWithResolvedRace, waiting, 0,
+		func() { _ = rsp.Respond(id, map[string]interface{}{}) })
+	return consumed
 }
 
 // piUIRequestKnown 判定一个 extension_ui_request 的 method 是否**已知**。
@@ -324,12 +328,13 @@ type piUIClient interface {
 //
 // 【pi 与 dsh/zcode 的形状差异,如实声明】pi 的反向请求没有 JSON-RPC 应答通道:
 // extension_ui_response 只有 payload,没有 -32601 错误码形状。所以:
-//   - 允许 → 回写空 payload {}(尽力应答,语义同 dsh/zcode 的空对象)+
-//     台账 KNOWN_PASSTHROUGH;
+//   - 允许 → 回写空 payload {}(尽力应答,语义同 dsh/zcode 的空对象)+ 台账
+//     KNOWN_PASSTHROUGH(允许路出口在 askUnknownApproval 骨架内);
 //   - 拒绝/超时 → 回写协议原生兜底拒绝 {"cancelled":true}(piapp 的失败安全
 //     同款:dialog 无 timeout 会永久挂起,answered cancelled 是唯一能"放走"
 //     等待方的安全拒绝)+ 台账 UNKNOWN_REQUEST,备注写明走了 cancelled 而非
-//     -32601,事后排查不误判。
+//     -32601,事后排查不误判 —— 该尾留在本函数:pi 没有"交回调用方回 -32601"
+//     的既有路径(OFF 态是静默),骨架的未消费出口接不住它。
 //
 // 返回 true = 已消费(已回写);返回 false = 未消费(开关关/已知 method/id 缺失/
 // 审批通道缺失),调用方维持原样静默 —— OFF 态与历史逐字节一致(pi 的未知请求
@@ -346,34 +351,14 @@ func (p *PiProvider) consumePiUnknownUIRequest(c piUIClient, raw json.RawMessage
 		// id 缺失无法回写;已知 method 归各自专线。都交回调用方原样静默。
 		return false
 	}
-	if approve == nil {
+	asked, consumed := askUnknownApproval(ctx, "pi", threadID, frame.Method, raw, approve, nil, piUIBudget,
+		func() { _ = c.RespondUI(frame.ID, map[string]any{}) })
+	if !asked {
 		// 审批通道缺失:手机从未被询问,交回原样静默,不伪装用户意志(红线 1)。
 		return false
 	}
-	// 沿用 pi dialog 审批同款 2min 预算(piUIBudget):超时按拒绝处理,失败安全
-	// 方向与 dsh/zcode 一致。
-	askCtx, cancel := context.WithTimeout(ctx, piUIBudget)
-	defer cancel()
-	allow, _, askErr := approve(askCtx, buildUnknownRequestCall("pi", frame.Method, raw))
-	switch {
-	case askErr != nil && errors.Is(askErr, context.DeadlineExceeded):
-		log.Printf("[pi] 未知请求确认 %v 无应答,按拒绝处理(method=%s)", piUIBudget, frame.Method)
-	case askErr != nil:
-		log.Printf("[pi] 未知请求确认通道失败,按拒绝处理(method=%s): %v", frame.Method, askErr)
-	case !allow:
-		log.Printf("[pi] 用户拒绝未知请求(method=%s)", frame.Method)
-	default:
-		// 用户看过脱敏原文后允许:回写空对象 {}(尽力应答,非业务结果)。
-		_ = c.RespondUI(frame.ID, map[string]any{})
-		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-			ThreadID:       threadID,
-			SourceAgent:    "pi",
-			SourceMethod:   frame.Method,
-			NormalizedKind: runtime.KindKnownPassthrough,
-			RawPayload:     redactNativePayload(raw),
-			Note:           unknownPassthroughLedgerNote,
-		})
-		return true
+	if consumed {
+		return true // 允许路:骨架已回 {} + 记 KNOWN_PASSTHROUGH
 	}
 	// 拒绝/超时/通道故障:回写 pi 协议原生兜底拒绝(没有 -32601 可用,见函数注释)
 	// + 台账 UNKNOWN_REQUEST。台账必须落:pi 对未知请求的 OFF 态是静默,若这里也
