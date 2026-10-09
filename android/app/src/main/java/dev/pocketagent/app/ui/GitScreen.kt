@@ -47,12 +47,16 @@ import dev.pocketagent.app.ui.anim.EmptyState
 import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.component.PaEmptyContext
+import dev.pocketagent.app.ui.component.PaErrorCard
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
+import dev.pocketagent.app.ui.component.paEmptyStateMotifOf
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.EditorialTone
@@ -395,23 +399,31 @@ private fun GitScreenBody(
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding(),
         ) {
-            error?.let {
-                Text(
-                    it.removePrefix("INVALID_ARGUMENT: ").removePrefix("INTERNAL: "),
-                    Modifier
-                        .fillMaxWidth()
-                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                        .padding(12.dp),
-                    color = EditorialTone.DENIED.text,
-                    fontSize = PaEditorial.Type.BodySmall.fontSize,
-                    lineHeight = 18.sp,
+            error?.let { raw ->
+                // 统一错误卡(PaErrorCard):原文经映射表翻成人话(未配对 → 「还没和电脑配对
+                // · 去配对」;连通类 → 「连不上电脑 · 查看排查」),原始错误(含 gRPC 前缀)
+                // 点按卡片展开「详情」可查 —— 盘点实锤"裸 mono 小字 + 无重试不一致",此处归一。
+                PaErrorCard(
+                    view = paErrorViewOf(raw),
+                    context = "Git",
+                    onRetry = { refresh() },
+                    onGoPair = onOpenSettings,
                 )
                 Spacer(Modifier.height(8.dp))
             }
 
             when {
                 // 有明确错误时不再同时摆一个"这里还不是 Git 仓库"的空态 —— 两者并排会让人分不清到底哪个是真的
-                error != null && status == null -> {}
+                // 【不再整页空白】盘点实锤(截图 29):错误横幅后 tab + 空白,无空态结构。
+                // 错误卡在上面讲"为什么",这里补空态讲"现在是什么状态 + 下一步"(发现/连接语境)。
+                error != null && status == null -> {
+                    EmptyState(
+                        AppR.drawable.ic_lucide_monitor,
+                        "拿不到仓库状态",
+                        "连接恢复后点右上角「刷新」重试;或换一个仓库目录",
+                        motif = paEmptyStateMotifOf(PaEmptyContext.DISCOVER),
+                    )
+                }
                 notRepo -> EmptyState(
                     AppR.drawable.ic_lucide_git_branch,
                     "这个目录不是 Git 仓库",
@@ -881,11 +893,13 @@ private fun GitTab(label: String, selected: Boolean, onClick: () -> Unit) {
             // 触达区 ≥44dp(工程纪律 R2-D 7):视觉仍按胶囊排,热区拉到下限
             .heightIn(min = 44.dp)
             .background(
-                if (selected) PaEditorial.PrimaryContainer else Color.Transparent,
-                RoundedCornerShape(50),
+                // chips 家族统一(2026-10-09):选中 = 石墨底白字,未选中 = 透明底细线描边,
+                // 与 EditorialFilterChip/KindTab 同一语言(盘点实锤:此处原为蓝底选中,与全局不一致)
+                if (selected) PaEditorial.Graphite else Color.Transparent,
+                RoundedCornerShape(PaEditorial.Radius.Pill),
             )
             .then(
-                if (selected) Modifier else Modifier.border(1.dp, PaEditorial.Hairline, RoundedCornerShape(50)),
+                if (selected) Modifier else Modifier.border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Pill)),
             )
             .padding(horizontal = 14.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
@@ -894,7 +908,7 @@ private fun GitTab(label: String, selected: Boolean, onClick: () -> Unit) {
             label,
             fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (selected) PaEditorial.Primary else PaEditorial.Muted,
+            color = if (selected) PaEditorial.OnGraphite else PaEditorial.Muted,
         )
     }
 }

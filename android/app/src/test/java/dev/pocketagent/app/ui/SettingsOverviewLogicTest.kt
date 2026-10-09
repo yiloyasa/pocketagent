@@ -90,15 +90,11 @@ class SettingsOverviewLogicTest {
         )
     }
 
-    // ---- S2:Daemon 桥接行摘要(对话显示散项聚拢后,改取实验功能开关)----------
+    // ---- S2/F2:Daemon 桥接行摘要随「Daemon 桥接与输入」页消亡而移除 ----------
+    // (F2:一级页 Daemon 行删除,daemonBridgeSummary 纯函数一并下线,
+    //  优化按钮开关改在「对话与输入」组就地展示,不再有行摘要。)
 
-    @Test
-    fun `Daemon桥接行摘要 取优化按钮开关状态_本地偏好断连可读`() {
-        assertEquals("优化按钮关", daemonBridgeSummary(false))
-        assertEquals("优化按钮开", daemonBridgeSummary(true))
-    }
-
-    // ---- 主机信任摘要 -------------------------------------------------------------
+    // ---- 主机信任摘要(「连接与配对」页内复用同一纯函数)--------------------------
 
     @Test
     fun `主机信任摘要 未锁定陈述事实_已锁定给前16位`() {

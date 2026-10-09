@@ -1043,7 +1043,13 @@ internal fun ColumnScope.ChatTimelineArea(
                             }
                         }
                     } else {
-                        // 流式输出中:正文 + 行内小号三点跟随(仍在生成,比光标更自然)
+                        // 流式输出中:正文 + 底部 Running 系能量细线跟随
+                        // 【A1 流式能量线(2026-10-09 方向 C)】"正在生成"视觉从跟随三点
+                        // 升级为能量细线:色只走 PaEditorial.Running(运行态能量色=
+                        // Running 系专用纪律,见 PaEditorial 头注铁律 2;主色不混入),
+                        // 呼吸走 PaMotion.pulse,减弱动效静态 —— 见 StreamingEnergyLine。
+                        // 首 token 前的"三点"相位(TypingDots 卡)保留:零正文时细线
+                        // 单独撑不住"在思考"的语义,两相语言(等三点/流中细线)分工。
                         // 【P1-22】喂节流快照 displayedStream,不再逐 delta 帧直喂全文
                         // 【D4-1】streaming=true:新长出来的块播 ~140ms fade-in
                         // (MarkdownStreamingFade,方案与节流管线的关系见其注释)
@@ -1055,10 +1061,7 @@ internal fun ColumnScope.ChatTimelineArea(
                                 onOpenUrl = onOpenBrowser,
                                 streaming = true,
                             )
-                            TypingDots(
-                                Modifier.padding(start = 2.dp, top = 6.dp),
-                                dotSize = 4.dp,
-                            )
+                            StreamingEnergyLine(Modifier.padding(top = 8.dp))
                         }
                     }
                 }

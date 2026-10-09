@@ -103,7 +103,7 @@ fun onboardSteps(connected: Boolean): List<OnboardStep> = listOf(
         done = connected,
         sentence = "手机和电脑连同一个 WiFi,电脑上装好桌面端,它就会出现在手机上。",
         action = "在电脑上运行桌面端安装包里的 install.bat,装完回到这里点「下一步」。" +
-            "没自动出现的话,到「设置 → 连接」手动填电脑的地址。",
+            "没自动出现的话,到「设置 → 连接与配对」手动填电脑的地址。",
         note = "电脑已经连上了,这一步直接跳过。",
     ),
     OnboardStep(
@@ -123,7 +123,7 @@ fun onboardSteps(connected: Boolean): List<OnboardStep> = listOf(
         id = "trouble",
         done = false,
         sentence = "电脑没出现在手机上?按顺序过这几件小事。",
-        action = "①电脑开着桌面端;②手机和电脑连同一个 WiFi(或插数据线);③还不行,到「设置 → 连接」手动填地址;" +
+        action = "①电脑开着桌面端;②手机和电脑连同一个 WiFi(或插数据线);③还不行,到「设置 → 连接与配对」手动填地址;" +
             "④路由器开了 AP 隔离,或防火墙拦了自动发现,也会搜不到电脑,同样手填地址就能连;" +
             "⑤地址没错却连不上,多半是电脑上 7246 端口被别的程序占了,换个端口重新装桌面端。",
     ),

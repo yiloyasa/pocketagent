@@ -49,8 +49,13 @@ import dev.pocketagent.app.R as AppR
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.EditorialTone
+import dev.pocketagent.app.ui.component.PaErrorAction
+import dev.pocketagent.app.ui.component.PaErrorBar
+import dev.pocketagent.app.ui.component.PaErrorKind
+import dev.pocketagent.app.ui.component.PaErrorView
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaSheet
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import pocketagent.v1.OpenTerminal
 import pocketagent.v1.TerminalClientMessage
 import pocketagent.v1.TerminalInput
@@ -265,6 +270,20 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                 ),
             )
         }
+        // 统一错误横幅(PaErrorBar;盘点 14:终端错误此前只是标题区第三行小字,无动作无出口):
+        // terminalState == error 时在头部之下给一条人话横幅 —— 原文经映射表翻译
+        // (未配对 → 「还没和电脑配对」;连通类 → 「连不上电脑」),点按展开原始错误;
+        // 重试 = 重建终端会话(sessionKey++ 与目录切换同一重建路径)。本页无配对页
+        // 导航通道,按宁缺勿假不摆「去配对」按钮。
+        if (terminalState == "error") {
+            PaErrorBar(
+                view = paErrorViewOf(terminalError ?: "终端连接失败"),
+                onRetry = { sessionKey++ },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = PaEditorial.Space.NavGutter, vertical = 6.dp),
+            )
+        }
         // sessionKey 必须同时重建 WebView。只重建 gRPC bridge 会留下旧的
         // JavaScript 回调，切换目录后按键和输出仍然会发给旧 PTY。
         if (!terminalReady) {
@@ -345,10 +364,19 @@ private fun TerminalScreenBody(onBack: () -> Unit = {}) {
                 )
             }
             switchError?.let {
-                Text(
-                    it,
-                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-                    fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text,
+                // 目录切换失败:文案已是人话(「目录不可用,原终端仍保持不变:…」),
+                // 不走映射表,自组 PaErrorView 走统一横幅样式(色调/详情纪律与其他页一致)。
+                PaErrorBar(
+                    view = PaErrorView(
+                        kind = PaErrorKind.DAEMON,
+                        headline = it,
+                        raw = it,
+                        action = PaErrorAction.NONE,
+                        tone = EditorialTone.DENIED,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 6.dp),
                 )
             }
             // 整列可滚:recents 无上限,多时"浏览电脑文件夹…"等操作行会被推出视口

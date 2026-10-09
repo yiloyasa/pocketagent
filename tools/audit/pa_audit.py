@@ -377,8 +377,8 @@ class RosterRule:
          "kind": "豁免", "note": "附录A#1：批1裁定，封闭 SDK 错误码名单（当前模式通常不命中，登记防误报)"},
         {"file": "HomeScreen.kt", "anchor": "fun buildAgents(capabilities: List<String>): List<AgentInfo> = listOf(",
          "kind": "豁免", "note": "附录A#4：pa_audit 首轮裁定，展示基线目录（available 为基线缺省，能力判定走 resolveAgentAvailability 动态+extra 追加）"},
-        {"file": "SettingsScreen.kt", "anchor": '"text_generation:$it" in capabilities || (capabilities.none { c -> c.startsWith("text_generation:") } && it in setOf("codex","pi","zcode"))',
-         "kind": "豁免", "note": "附录A#5：pa_audit 首轮裁定，旧 daemon 无 text_generation capability 时的优化 agent 兜底（主路径动态判定在前）"},
+        {"file": "SettingsScreen.kt", "anchor": '(optimizerCaps.none { c -> c.startsWith("text_generation:") } && it in setOf("codex", "pi", "zcode"))',
+         "kind": "豁免", "note": "附录A#5：pa_audit 首轮裁定，旧 daemon 无 text_generation capability 时的优化 agent 兜底（主路径动态判定在前）；2026-10-09 设置页 IA 重构随「对话与输入」组迁移，锚更新到新代码形状（同逻辑同豁免）"},
         {"file": "AgentScopeBadge.kt", "anchor": "internal val SESSION_DISPLAY_SCOPES",
          "kind": "豁免", "note": "附录A#7：批次0 裁定（2026-10-04），presentation-only 展示顺序徽章，不参与能力判定；新增 agent 须同步本行+AgentScopeBadgeTest 防漂移用例"},
     ]

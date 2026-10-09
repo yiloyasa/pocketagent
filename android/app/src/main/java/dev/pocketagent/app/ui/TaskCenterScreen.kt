@@ -65,6 +65,7 @@ import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.DocFormatRegistry
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaEmptyContext
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaStatusBadge
@@ -72,6 +73,7 @@ import dev.pocketagent.app.ui.component.RedownloadPlan
 import dev.pocketagent.app.ui.component.RetryGate
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.fileKindOf
+import dev.pocketagent.app.ui.component.paEmptyStateMotifOf
 import dev.pocketagent.app.ui.component.redownloadNeedsPc
 import dev.pocketagent.app.ui.component.redownloadPlanOf
 import dev.pocketagent.app.ui.theme.EditorialTone
@@ -431,14 +433,42 @@ fun TaskCenterScreen(
                 val pageKind = if (page == 0) TaskCenter.Kind.MESSAGE else TaskCenter.Kind.DOWNLOAD
                 val rows = all.filter { it.kind == pageKind }
                 if (rows.isEmpty()) {
+                    // 动作位(显式类型的槽位值):有真实去处的 tab 才摆 —— 消息 tab 回会话列表;
+                    // 下载 tab 没有有意义的下一步,宁缺不摆。
+                    val emptyAction: (@Composable () -> Unit)? =
+                        if (pageKind == TaskCenter.Kind.MESSAGE) {
+                            {
+                                // 主 tab 索引 1 = 会话(与 currentTab 同一口径)
+                                androidx.compose.material3.TextButton(
+                                    onClick = { onGoTab(1) },
+                                ) { Text("去会话列表", color = PaEditorial.Primary) }
+                            }
+                        } else {
+                            null
+                        }
+                    // 空态三件套(图形 + 一句话 + 动作位,空态体系统一 2026-10-09):
+                    //  · 消息与审批 tab → 审批语境母题(等待的用户动作就是审批/查看);
+                    //  · 文件下载 tab 语境不符,宁缺不配母题,图标换成 download 与消息 tab 分型
+                    //    (盘点实锤:两 tab 与 Home 最近会话共用 checklist 图标,语义混用);
+                    //  · 导航教学(「左右滑动可切到…」)移出空态文案(盘点 27:教学不进空态)。
                     EmptyState(
-                        iconRes = R.drawable.ic_lucide_list_checks,
+                        iconRes = if (pageKind == TaskCenter.Kind.MESSAGE) {
+                            R.drawable.ic_lucide_list_checks
+                        } else {
+                            R.drawable.ic_lucide_download
+                        },
                         title = if (pageKind == TaskCenter.Kind.MESSAGE) "还没有处理中的任务" else "还没有下载任务",
                         hint = if (pageKind == TaskCenter.Kind.MESSAGE) {
-                            "在会话里发一条消息,这里会显示它的进度;左右滑动可切到文件下载"
+                            "在会话里发一条消息,这里会显示它的进度"
                         } else {
-                            "在会话里点文件旁的下载,进度会汇总到这里;左右滑动可切回消息处理"
+                            "在会话里点文件旁的下载,进度会汇总到这里"
                         },
+                        motif = if (pageKind == TaskCenter.Kind.MESSAGE) {
+                            paEmptyStateMotifOf(PaEmptyContext.APPROVAL)
+                        } else {
+                            null
+                        },
+                        action = emptyAction,
                     )
                 } else {
                     LazyColumn(

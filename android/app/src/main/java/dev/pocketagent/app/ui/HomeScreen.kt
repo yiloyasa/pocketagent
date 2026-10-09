@@ -10,12 +10,17 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -78,7 +83,10 @@ import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaHostChip
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
+import dev.pocketagent.app.ui.component.PaRunningEnergyLine
+import dev.pocketagent.app.ui.component.PaRunningSessionUi
 import dev.pocketagent.app.ui.component.PaScreenScaffold
+import dev.pocketagent.app.ui.component.PaSessionBar
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.PaStatusBadge
@@ -105,6 +113,7 @@ import dev.pocketagent.app.ui.attention.topAttentionSummary
 import dev.pocketagent.app.ui.attention.unknownEventAttentionItems
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import pocketagent.v1.CreateThreadRequest
@@ -115,16 +124,24 @@ import pocketagent.v1.Thread as PThread
 import pocketagent.v1.ThreadStatus
 
 // ============================================================================
-// 编辑式首页(UI 整体升级·第二波 1/4 首页组)
+// 编辑式首页(UI 整体升级 · 第二波 1/4 首页组;方向 C 大卡台阶 2026-10-09)
 //
-// 【信息架构】docs/design/2026-09-29-pocketagent-ui README §页面与主操作:
-//   顶部统一主机状态(PaHostChip)→ 待审批优先(石墨重点面卡,.alert)→
-//   运行中任务横条(.run-row + PaStatusBadge「正在执行」)→ 新建(主色仅此处
-//   当前操作,.new-task)→ 可用 Agent → 最近会话(留白 + 细分隔线,不套多层卡)。
+// 【信息架构】docs/design/2026-09-29-pocketagent-ui README §页面与主操作 基础上,
+// 按 docs/design/ui-language-research-20261009.md 方向 C 的 N5 大卡台阶重排视觉
+// 权重(数据流零变化,只改"谁占哪一级"):
+//   顶部统一主机状态(PaHostChip)
+//   → 运行中会话=大卡(第一级:Graphite 暗面 + 运行态能量细线 + 实时状态语,
+//     占双行高;.run-hero)
+//   → 待审批=中卡(第二级:白面 + Attention 琥珀系边,.alert 降档)
+//   → 新建(主色仅此处当前操作,.new-task)→ 可用 Agent → 多 agent 协同
+//     (能力驱动)→ 最近会话(留白 + 细分隔线,不套多层卡)= 其余小卡级。
+// 【双层世界】方向 C N1:运行中会话另有底部 mini 条(PaSessionBar,系统导航栏
+//   上方常驻悬浮),点按直达会话页 —— Chat 页内不挂载(会话页自带沉浸态)。
 // 【发现主机态】screens/01-home-discovery.png:eyebrow + 34/39 Display 主标题 +
 //   发现圆环 + 「发现的电脑」卡(选主机 → 输配对码),手动添加是次操作。
 // 【令牌纪律】整页取 MaterialTheme.editorial.*(固定浅色盘);石墨深色只出现在
-//   待审批卡与管理抽屉(README:层次而非满屏深色)。管理/引导/配对浮层仍走玻璃
+//   运行中大卡、待审批语义与管理抽屉(README:层次而非满屏深色;C2 铁律:
+//   暗面=Graphite 专属,禁止自调深色)。管理/引导/配对浮层仍走玻璃
 //   PaSheet(基座组件,随主题换肤),其内部保留 Pa.* 与浮层皮肤一致 —— 固定浅色
 //   的编辑式墨字不上玻璃,否则深色模式下不可读。
 // ============================================================================
@@ -404,6 +421,22 @@ fun HomeScreen(
     // agent 磁贴「正在执行」小徽章:该 agent 名下有运行中会话(已剔除停用)就点亮
     val runningAgentIds = remember(attention) { agentIdsOfRunning(attention.running) }
 
+    // 【方向 C · N1 双层世界】运行中会话 mini 条的数据源:TurnSession 既有的
+    // peek/runningThreadIds 只读快照(5s 轮询,不新增语义、不算访问)∪ 本页
+    // 既有 listThreads 三分的 attention.running(daemon 快照,带标题/归属/起点)。
+    // 并集去重映射成展示模型(见 buildPaRunningSessions 纯函数,单测钉死);
+    // mini 条只在 Home 世界挂载(下方 Box),Chat 页自带沉浸态不挂载。
+    var liveRunningIds by remember { mutableStateOf(setOf<String>()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            liveRunningIds = TurnSession.runningThreadIds()
+            delay(5_000)
+        }
+    }
+    val barSessions = remember(attention, liveRunningIds, recent) {
+        buildPaRunningSessions(attention.running, liveRunningIds, recent, System.currentTimeMillis())
+    }
+
     // 【Task 5 Attention Center】电脑端新消息:具备 runtime.v1 且在线时轻量刷新一次
     // (单路 RPC,与设置页共用 RuntimeControlState.unknownEvents 同一份真值,不建
     // 第二数据源);离线时不打 —— 中心用本地缓存 + 时间戳如实呈现。
@@ -436,100 +469,126 @@ fun HomeScreen(
     val discoveredHosts = AgentConnection.mdnsDiscovery
         ?.hosts?.collectAsState()?.value.orEmpty()
 
-    PaScreenScaffold(
-        title = if (connected) "工作台" else "连接电脑",
-        modifier = modifier
-            .fillMaxSize()
-            .paPushBack(overlayActive)
-            .edgeSwipeToOpenDrawer(
-                onDragFraction = drawerCtrl::onDrag,
-                onRelease = drawerCtrl::onRelease,
-            ),
-        leading = {
-            PaNavIconButton(
-                onClick = { drawerCtrl.open() },
-                contentDescription = "菜单",
-                iconRes = R.drawable.ic_lucide_menu,
-                plain = true,
-            )
-        },
-        trailing = {
-            PaNavIconButton(
-                onClick = onOpenSettings,
-                contentDescription = "设置",
-                iconRes = R.drawable.ic_lucide_settings,
-            )
-        },
-        hostStatus = if (connected) {
-            {
-                PaHostChip(
-                    hostName = host?.displayName ?: "电脑",
-                    link = link,
-                    channelLabel = connTransport.ifBlank { null },
-                    lastUpdateText = lastUpdateText(lastLoadedAtMs),
-                    onClick = onOpenSettings, // 主机状态 → 连接管理(README §页面骨架)
+    // 系统导航栏 insets(手势条/三键):mini 条的贴底让位与列表尾部让位共用
+    val bottomBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    Box(Modifier.fillMaxSize()) {
+        PaScreenScaffold(
+            title = if (connected) "工作台" else "连接电脑",
+            modifier = modifier
+                .fillMaxSize()
+                .paPushBack(overlayActive)
+                .edgeSwipeToOpenDrawer(
+                    onDragFraction = drawerCtrl::onDrag,
+                    onRelease = drawerCtrl::onRelease,
+                ),
+            leading = {
+                PaNavIconButton(
+                    onClick = { drawerCtrl.open() },
+                    contentDescription = "菜单",
+                    iconRes = R.drawable.ic_lucide_menu,
+                    plain = true,
                 )
-            }
-        } else {
-            null
-        },
-    ) {
-        LazyColumn(Modifier.fillMaxSize()) {
-            if (connected) {
-                connectedHomeItems(
-                    loadError = loadError,
-                    onRetry = { reloadKey++ },
-                    firstLoadDone = firstLoadDone,
-                    attention = attention,
-                    attentionExists = attentionItems.isNotEmpty(),
-                    attentionNeedsMe = attentionNeedsMe,
-                    attentionTopTitle = topAttention?.title,
-                    onOpenAttention = { showAttentionCenter = true },
-                    onOpenThread = onOpenThread,
-                    onOpenTaskCenter = onOpenTaskCenter,
-                    onNewThread = { showNewThread = true },
-                    currentAgentLabel = selectedAgentLabel(AgentConnection.selectedAgent),
-                    onOpenBrowser = onOpenBrowser,
-                    visibleAgents = visibleAgents,
-                    runningAgentIds = runningAgentIds,
-                    onAgentTap = { a ->
-                        if (a.available) {
-                            // 选中 agent = 切换后端,随后去会话页(既有行为:会话按 agent 分流);
-                            // 终端只在用户主动点【终端】时打开。
-                            AgentConnection.switchAgent(a.id)
-                            Toast.makeText(ctx, "已切换到「${a.name}」", Toast.LENGTH_SHORT).show()
-                            onGoTab(1)
-                        } else {
-                            // 灰显=引导:弹窗讲清"为什么不可用、怎么装"
-                            guideAgent = a
-                        }
-                    },
-                    onManageAgents = { showManage = true },
-                    collabIds = collabIds,
-                    multiAgent = multiAgent,
-                    onOpenCollab = onOpenCollab,
-                    onOpenCollabRoles = onOpenCollabRoles,
-                    onAddAgentTap = {
-                        Toast.makeText(ctx, "更多 agent 接入后可在此添加", Toast.LENGTH_SHORT).show()
-                    },
-                    recent = recent,
-                    disabledAgents = disabledAgents,
-                    onOpenSessions = { onGoTab(1) },
+            },
+            trailing = {
+                PaNavIconButton(
+                    onClick = onOpenSettings,
+                    contentDescription = "设置",
+                    iconRes = R.drawable.ic_lucide_settings,
                 )
+            },
+            hostStatus = if (connected) {
+                {
+                    PaHostChip(
+                        hostName = host?.displayName ?: "电脑",
+                        link = link,
+                        channelLabel = connTransport.ifBlank { null },
+                        lastUpdateText = lastUpdateText(lastLoadedAtMs),
+                        onClick = onOpenSettings, // 主机状态 → 连接管理(README §页面骨架)
+                    )
+                }
             } else {
-                discoveryItems(
-                    link = link,
-                    hosts = discoveredHosts,
-                    onRefresh = { reloadKey++ },
-                    onPickHost = { pairHost = it },
-                    onManualAdd = onOpenSettings,
-                    recent = recent,
-                    disabledAgents = disabledAgents,
-                    onOpenThread = onOpenThread,
-                    onOpenSessions = { onGoTab(1) },
-                )
+                null
+            },
+        ) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                // mini 条可见时给列表尾部让位(条高 ~58 + 间距 12 + 导航栏 insets),
+                // 最后一张卡不被悬浮条盖住;条退场后恢复原节奏
+                contentPadding = PaddingValues(
+                    bottom = if (barSessions.isNotEmpty()) 70.dp + bottomBarInset else 0.dp,
+                ),
+            ) {
+                if (connected) {
+                    connectedHomeItems(
+                        loadError = loadError,
+                        onRetry = { reloadKey++ },
+                        firstLoadDone = firstLoadDone,
+                        attention = attention,
+                        attentionExists = attentionItems.isNotEmpty(),
+                        attentionNeedsMe = attentionNeedsMe,
+                        attentionTopTitle = topAttention?.title,
+                        onOpenAttention = { showAttentionCenter = true },
+                        onOpenThread = onOpenThread,
+                        onOpenTaskCenter = onOpenTaskCenter,
+                        onNewThread = { showNewThread = true },
+                        currentAgentLabel = selectedAgentLabel(AgentConnection.selectedAgent),
+                        onOpenBrowser = onOpenBrowser,
+                        visibleAgents = visibleAgents,
+                        runningAgentIds = runningAgentIds,
+                        onAgentTap = { a ->
+                            if (a.available) {
+                                // 选中 agent = 切换后端,随后去会话页(既有行为:会话按 agent 分流);
+                                // 终端只在用户主动点【终端】时打开。
+                                AgentConnection.switchAgent(a.id)
+                                Toast.makeText(ctx, "已切换到「${a.name}」", Toast.LENGTH_SHORT).show()
+                                onGoTab(1)
+                            } else {
+                                // 灰显=引导:弹窗讲清"为什么不可用、怎么装"
+                                guideAgent = a
+                            }
+                        },
+                        onManageAgents = { showManage = true },
+                        collabIds = collabIds,
+                        multiAgent = multiAgent,
+                        onOpenCollab = onOpenCollab,
+                        onOpenCollabRoles = onOpenCollabRoles,
+                        onAddAgentTap = {
+                            Toast.makeText(ctx, "更多 agent 接入后可在此添加", Toast.LENGTH_SHORT).show()
+                        },
+                        recent = recent,
+                        disabledAgents = disabledAgents,
+                        onOpenSessions = { onGoTab(1) },
+                    )
+                } else {
+                    discoveryItems(
+                        link = link,
+                        hosts = discoveredHosts,
+                        onRefresh = { reloadKey++ },
+                        onPickHost = { pairHost = it },
+                        onManualAdd = onOpenSettings,
+                        recent = recent,
+                        disabledAgents = disabledAgents,
+                        onOpenThread = onOpenThread,
+                        onOpenSessions = { onGoTab(1) },
+                    )
+                }
             }
         }
+
+        // 运行中会话 mini 条(方向 C N1):系统导航栏上方的常驻悬浮位;出现/消失
+        // 弹簧由 PaSessionBar 自管。点按=跳转会话;停止位接 TurnSession.cancelTurn
+        // 现有停止语义(只对手机端在跑的会话亮出,电脑端会话不摆假停止)。
+        PaSessionBar(
+            sessions = barSessions,
+            onOpenSession = onOpenThread,
+            onStopSession = { TurnSession.cancelTurn(it) },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp),
+        )
     }
 
     if (showManage) {
@@ -617,9 +676,10 @@ fun HomeScreen(
             onOpenOnboarding = onOpenOnboarding,
             onOpenBrowser = { onOpenBrowser() },
             onOpenCollab = if (multiAgent) { { onOpenCollab() } } else null,
-            // 消息中心入口(Task 5):有注意项才摆入口(无数据不摆假入口);
-            // 角标 = 需要我处理的条数。未传回调的页面(ChatScreen 等)不显示该项。
-            onOpenAttention = if (attentionItems.isNotEmpty()) { { showAttentionCenter = true } } else null,
+            // 消息中心入口(抽屉恒定修复 2026-10-09):Home 恒接线 —— 中心自会如实
+            // 呈现"这一档暂时没有内容",入口不再随注意项有无闪烁式增减;条目集合
+            // 恒定的判定在 AppDrawer.buildDrawerNavEntries(单测钉死)。
+            onOpenAttention = { showAttentionCenter = true },
             attentionBadge = attentionNeedsMe,
         )
     }
@@ -641,8 +701,9 @@ fun HomeScreen(
 // ---------------------------------------------------------------- 已连接态(02)
 
 /**
- * 已连接首页的 LazyColumn 内容。区块顺序 = README §页面与主操作 02 行:
- * 待审批 → 运行中 → 新建 → 可用 Agent → 协同(能力驱动)→ 最近会话。
+ * 已连接首页的 LazyColumn 内容。区块顺序 = 方向 C N5 大卡台阶(2026-10-09 重排,
+ * 数据流不变):正在进行(大卡)→ 需要你处理(中卡)→ 消息中心摘要 → 新建 →
+ * 可用 Agent → 协同(能力驱动)→ 最近会话。
  */
 private fun LazyListScope.connectedHomeItems(
     loadError: String?,
@@ -698,26 +759,28 @@ private fun LazyListScope.connectedHomeItems(
         }
     }
 
-    // ---- 待审批优先(石墨重点面卡,琥珀语义):无待审批整区不渲染,不摆空壳 ----
-    // 【为什么排第一】出事的东西最优先:审批卡在等用户,埋在历史里就是
-    // "agent 停摆等人却不知道"。点卡 = 既有 onOpenThread 进会话,会话内审批
-    // 弹窗接住,不新建路由。
+    // ---- 大卡台阶第一级:正在进行(方向 C N5)——
+    // 运行中会话升为 Graphite 暗面大卡(占双行高,运行态能量细线 + 实时状态语),
+    // 与底部 mini 条同母题(运行态能量色=品牌记忆点);无运行中 → 整区不渲染。
+    if (attention.running.isNotEmpty()) {
+        item(key = "runningHeader") {
+            SectionHeader("正在进行", "查看全部 →", onAction = onOpenTaskCenter)
+        }
+        items(attention.running.take(4), key = { "running-${it.id}" }) { t ->
+            RunningHeroCard(thread = t, onClick = { onOpenThread(t.id) })
+        }
+    }
+
+    // ---- 大卡台阶第二级:需要你处理(待审批中卡)——
+    // 待审批从石墨 .alert 降为中卡(白面 + Attention 琥珀系边),视觉权重让位给
+    // 运行中大卡;无待审批整区不渲染,不摆空壳。点卡 = 既有 onOpenThread 进会话,
+    // 会话内审批弹窗接住,不新建路由。
     if (attention.pendingApproval.isNotEmpty()) {
         item(key = "pendingHeader") {
             SectionHeader("需要你处理", "${attention.pendingApproval.size} 项等待你处理")
         }
         items(attention.pendingApproval.take(4), key = { "pending-${it.id}" }) { t ->
             PendingApprovalCard(thread = t, onClick = { onOpenThread(t.id) })
-        }
-    }
-
-    // ---- 正在进行:与待审批互斥归组;无运行中 → 整区不渲染 ----
-    if (attention.running.isNotEmpty()) {
-        item(key = "runningHeader") {
-            SectionHeader("正在进行", "查看全部 →", onAction = onOpenTaskCenter)
-        }
-        items(attention.running.take(4), key = { "running-${it.id}" }) { t ->
-            RunningRow(thread = t, onClick = { onOpenThread(t.id) })
         }
     }
 
@@ -1316,9 +1379,12 @@ private fun Hairline() {
 }
 
 /**
- * 待审批石墨重点面卡(premium.css .alert + screens/02):
- * 石墨底、琥珀盾牌、白标题、石墨次级副文;点击 → 对应会话(会话内审批弹窗接住,
+ * 待审批中卡(方向 C · N5 大卡台阶的第二级):白面 + Attention 琥珀系边,
+ * 视觉权重让位给运行中大卡(第一级),但"等待你处理"的语义双通道不变
+ * (琥珀盾形通道 + 状态词)。点击 → 对应会话(会话内审批弹窗接住,
  * 背景保留原页,关闭后仍能在本区找到任务)。
+ * 【语义边界】系边取 ATTENTION(待处理)而非 DENIED —— DENIED 珊瑚只给真失败,
+ * 待审批不是失败(设计依据 §2.3 Things 3 calm 纪律与 C6 取舍)。
  */
 @Composable
 private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
@@ -1329,15 +1395,15 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
             .fillMaxWidth()
             .padding(bottom = 8.dp)
             .pressable(haptic = true) { onClick() }
-            .heightIn(min = 75.dp)
+            .heightIn(min = 64.dp)
             .shadow(
-                15.dp, RoundedCornerShape(PaEditorial.Radius.Card),
-                spotColor = PaEditorial.Shadow.Alert.color,
-                ambientColor = PaEditorial.Shadow.Alert.color,
+                8.dp, RoundedCornerShape(PaEditorial.Radius.Card),
+                spotColor = PaEditorial.Shadow.Card.color,
+                ambientColor = PaEditorial.Shadow.Card.color,
             )
-            // 石墨底即边界(同色描边是隐形噪音,已减);阴影承担层级
-            .background(PaEditorial.Graphite, RoundedCornerShape(PaEditorial.Radius.Card))
-            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .background(PaEditorial.Surface, RoundedCornerShape(PaEditorial.Radius.Card))
+            .border(1.dp, PaEditorial.Attention, RoundedCornerShape(PaEditorial.Radius.Card))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
             .semantics {
                 contentDescription = "$agentName 请求执行命令,来自「$title」,等待你处理"
             },
@@ -1351,56 +1417,73 @@ private fun PendingApprovalCard(thread: PThread, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(
                 "$agentName 请求执行命令",
-                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp, fontWeight = FontWeight.Bold,
-                color = PaEditorial.OnGraphite,
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 19.sp, fontWeight = FontWeight.Bold,
+                color = PaEditorial.Ink,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 "来自「$title」· ${pendingApprovalMeta(thread.pendingApprovalsCount)}",
                 fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
-                color = PaEditorial.OnGraphiteMuted,
+                color = PaEditorial.Muted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
         Spacer(Modifier.width(8.dp))
         Icon(
             painterResource(R.drawable.ic_lucide_chevron_right), null,
-            tint = PaEditorial.Hairline, modifier = Modifier.size(18.dp),
+            tint = PaEditorial.Subtle, modifier = Modifier.size(18.dp),
         )
     }
 }
 
 /**
- * 运行中横条(premium.css .run-row):留白 + 细分隔线,不做卡片;
- * 状态词唯一来源 PaStatusBadge(EditorialStatus.RUNNING)=「正在执行」。
- * 本区块只在主机已连接时渲染 —— 离线绝不显示「正在执行」(构造性保证)。
+ * 运行中会话大卡(方向 C · N5 大卡台阶的第一级 + N4 机魂):
+ * Graphite 暗面(C2 铁律:暗面只许 Graphite 槽位)+ 左缘运行态能量细线
+ * (Running 呼吸,减弱动效静态,与 mini 条同母题)+ 实时状态语(时间维度),
+ * 占双行高(小行 56dp × 2)。状态词唯一来源仍是 PaStatusBadge
+ * (EditorialStatus.RUNNING)=「正在执行」。本区块只在主机已连接时渲染 ——
+ * 离线绝不显示「正在执行」(构造性保证)。
  */
 @Composable
-private fun RunningRow(thread: PThread, onClick: () -> Unit) {
+private fun RunningHeroCard(thread: PThread, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(PaEditorial.Radius.Card)
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 56.dp)
+            .padding(bottom = 10.dp)
             .pressable(haptic = true) { onClick() }
-            .padding(vertical = 12.dp),
+            .heightIn(min = 112.dp)
+            .shadow(
+                15.dp, shape,
+                spotColor = PaEditorial.Shadow.Alert.color,
+                ambientColor = PaEditorial.Shadow.Alert.color,
+            )
+            .background(PaEditorial.Graphite, shape)
+            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .semantics {
+                contentDescription =
+                    "「${thread.title.ifEmpty { "(未命名)" }}」正在执行,点按查看"
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        PaRunningEnergyLine(height = 44.dp)
+        Spacer(Modifier.width(14.dp))
         Image(
             bitmap = agentBitmap(agentBadgeRes(thread.agentId)),
             contentDescription = null,
-            modifier = Modifier.size(32.dp),
+            modifier = Modifier.size(52.dp),
             contentScale = ContentScale.Crop,
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 thread.title.ifEmpty { "(未命名)" },
-                fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Ink,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
+                fontWeight = FontWeight.SemiBold, color = PaEditorial.OnGraphite,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 selectedAgentLabel(threadAgentIdOf(thread.agentId)) + " · " + runningMetaLabel(
                     // 起点缺席(旧 daemon/未知)传 null,回退"最近活动"展示
@@ -1408,7 +1491,8 @@ private fun RunningRow(thread: PThread, onClick: () -> Unit) {
                     thread.updatedAtUnixMs,
                     System.currentTimeMillis(),
                 ),
-                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp, color = MaterialTheme.editorial.Muted,
+                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
+                color = PaEditorial.OnGraphiteMuted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -2180,6 +2264,58 @@ internal fun partitionHomeAttention(threads: List<PThread>, disabledAgents: Set<
 /** 运行中会话的归属 agent 集合(纯函数):agent 磁贴「正在执行」小徽章的数据源。 */
 internal fun agentIdsOfRunning(running: List<PThread>): Set<String> =
     running.map { threadAgentIdOf(it.agentId) }.toSet()
+
+/**
+ * mini 条的运行中会话并集(方向 C N1;纯函数,单测覆盖 HomeRunningMiniBarTest)。
+ *
+ * 【两个真源,各取所长】
+ *  - [daemonRunning]=首页既有 listThreads 三分的运行组(daemon 快照:带标题/归属/
+ *    turn_started,但随 reloadKey/重连才刷新);
+ *  - [liveRunningIds]=[TurnSession.runningThreadIds] 只读快照(进程内真相,5s
+ *    轮询即新鲜,但只有 threadId)。
+ * 并集去重:同 id 以 daemon 快照为准(信息更全);live 独有的(快照滞后窗口期)
+ * 从 [knownThreads](本页已加载的会话列表)补全名片,补不到的给未命名占位 ——
+ * 数据全真,不编标题。[stoppable] 只有 live 侧为真:停止走 TurnSession.cancelTurn
+ * 现有语义,daemon 侧(电脑端发起)的会话手机端没有停止通道,不摆假停止位。
+ *
+ * 【排序】启动键倒序(turn_started 优先,缺则 updatedAt):「最近启动的一个」
+ * 做 mini 条主会话;稳定排序,并列保持传入顺序。
+ */
+internal fun buildPaRunningSessions(
+    daemonRunning: List<PThread>,
+    liveRunningIds: Set<String>,
+    knownThreads: List<PThread>,
+    nowMs: Long,
+): List<PaRunningSessionUi> {
+    val known = knownThreads.associateBy { it.id }
+    val merged = LinkedHashMap<String, PThread>()
+    daemonRunning.forEach { if (it.id.isNotBlank()) merged[it.id] = it }
+    liveRunningIds.forEach { tid ->
+        if (tid.isNotBlank()) {
+            merged.getOrPut(tid) {
+                known[tid] ?: PThread.newBuilder().setId(tid).setUpdatedAtUnixMs(nowMs).build()
+            }
+        }
+    }
+    return merged.values.map { t ->
+        val agentId = threadAgentIdOf(t.agentId)
+        PaRunningSessionUi(
+            threadId = t.id,
+            title = t.title.ifBlank { "(未命名)" },
+            agentLabel = selectedAgentLabel(agentId),
+            statusWhisper = runningMetaLabel(
+                if (t.hasTurnStartedUnixMs()) t.turnStartedUnixMs else null,
+                t.updatedAtUnixMs,
+                nowMs,
+            ),
+            iconRes = agentBadgeRes(agentId),
+            startedSortKey =
+                if (t.hasTurnStartedUnixMs() && t.turnStartedUnixMs > 0) t.turnStartedUnixMs
+                else t.updatedAtUnixMs,
+            stoppable = t.id in liveRunningIds,
+        )
+    }.sortedByDescending { it.startedSortKey }
+}
 
 /**
  * 待审批卡元信息(纯函数,四词口径):有审批对象=报数;

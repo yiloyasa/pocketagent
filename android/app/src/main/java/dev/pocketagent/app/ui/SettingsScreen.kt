@@ -76,6 +76,7 @@ import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.component.PaHostChip
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaPaths
@@ -403,42 +404,53 @@ internal data class SettingsSearchEntry(
 
 /**
  * 设置搜索索引(静态,字符串与各分区行的 title/desc 同源 —— 改分区文案时
- * 这里一并改)。覆盖:一级导航行(连接 / Agent / 外观 / 会话与对话 / 数据与缓存 /
- * 安全 / 关于 的 S2 新分组)、Agent 与模型/Daemon/用户数据各页的代表分区、
- * 运行时控制台。
+ * 这里一并改)。【F2 对齐】每条 target 落"名实相符"的页:一入口一落地页,
+ * 旧 userdata/daemon/appearance 三个 sub id 不再出现在任何条目里;就地展示的
+ * 一级组(对话与输入 / 外观)target=null 仅展示归属。
  */
 internal fun settingsSearchIndex(): List<SettingsSearchEntry> = listOf(
-    SettingsSearchEntry("连接与配对", "地址 · 配对码 · 主机指纹", "连接", "userdata"),
-    SettingsSearchEntry("Daemon 桥接与输入", "连接策略 · 语音 · 实验功能", "连接", "daemon"),
-    SettingsSearchEntry("用户数据管理", "连接 · 配对 · 下载内容 · 存储占用", "连接", "userdata"),
-    SettingsSearchEntry("会话与对话", "显示思考 · 工具详情 · 历史轮数", "会话与对话"),
+    // —— ① 连接:连接与配对 / 下载与存储 各落其页;主机信任并入连接页 ——
+    SettingsSearchEntry("连接与配对", "地址 · 配对码 · 主机指纹 · 连接策略", "连接", "connection"),
+    SettingsSearchEntry("下载与存储", "下载内容 · 缓存清理 · 存储占用", "连接", "downloads"),
+    SettingsSearchEntry("主机信任", "首连锁定电脑指纹 · 防止连到别的机器", "连接", "connection"),
+    SettingsSearchEntry("下载内容", "文件 · 网页 · 快照缓存", "下载与存储", "downloads"),
+    SettingsSearchEntry("存储占用", "清理缓存 · 浏览器数据 · 会话快照", "下载与存储", "downloads"),
+    // —— ② Agent(技能与插件直达自己的二级页)——
     SettingsSearchEntry("Agent 与模型", "切换 Agent · 权限 · 模型 · MCP", "Agent", "agent"),
-    SettingsSearchEntry("外观与阅读", "显示模式 · 文字尺寸", "外观", "appearance"),
-    SettingsSearchEntry("下载与存储", "下载内容 · 缓存清理 · 存储占用", "数据与缓存", "userdata"),
-    SettingsSearchEntry("审批与沙箱", "命令要不要批准 · 文件可写范围", "安全", "agent"),
-    SettingsSearchEntry("主机信任", "首连锁定电脑指纹 · 防止连到别的机器", "安全", "userdata"),
-    SettingsSearchEntry("电脑控制台", "预算 · 运行时形态 · 记忆透析", "运行时"),
-    SettingsSearchEntry("版本", "版本号 · 电脑系统信息", "关于"),
-    SettingsSearchEntry("显示模式", "跟随系统 · 浅色 · 深色 · 黑客终端", "外观与阅读", "appearance"),
-    SettingsSearchEntry("字号", "界面文字缩放 · 思考文字缩放", "外观与阅读", "appearance"),
-    SettingsSearchEntry("语音识别", "SenseVoice · 按需下载模型", "Daemon 桥接与输入", "daemon"),
     SettingsSearchEntry("切换 Agent", "Codex · Pi · ZCode", "Agent 与模型", "agent"),
+    SettingsSearchEntry("审批与沙箱", "命令要不要批准 · 文件可写范围", "安全", "agent"),
     SettingsSearchEntry("审批策略", "仅信任 · 按需询问 · 完全访问", "Agent 与模型", "agent"),
     SettingsSearchEntry("沙箱模式", "读写权限 · 网络访问", "Agent 与模型", "agent"),
     SettingsSearchEntry("模型与思考", "默认模型 · 思考强度 · 可用模型", "Agent 与模型", "agent"),
-    SettingsSearchEntry("技能与插件", "能力 · 技能 · 插件列表", "Agent 与模型", "agent"),
+    SettingsSearchEntry("技能与插件", "能力 · 技能 · 插件列表", "Agent 与模型", "capabilities"),
     SettingsSearchEntry("MCP 服务器", "集成 · 服务器状态", "Agent 与模型", "agent"),
-    SettingsSearchEntry("下载内容", "文件 · 网页 · 快照缓存", "用户数据管理", "userdata"),
-    SettingsSearchEntry("存储占用", "清理缓存 · 浏览器数据 · 会话快照", "用户数据管理", "userdata"),
+    // —— ③ 对话与输入(一级就地展示,无二级页可跳)——
+    SettingsSearchEntry("对话与输入", "显示思考 · 工具详情 · 历史轮数 · 优化按钮 · 语音识别", "对话与输入"),
+    SettingsSearchEntry("优化提示词按钮", "会话输入栏 · 七种改写模式", "对话与输入"),
+    SettingsSearchEntry("语音识别", "SenseVoice · 按需下载模型", "对话与输入"),
+    // —— ④ 外观(就地化,无二级页可跳)——
+    SettingsSearchEntry("外观", "显示模式 · 界面字号 · 思考字号", "外观"),
+    SettingsSearchEntry("显示模式", "跟随系统 · 浅色 · 深色 · 黑客终端", "外观"),
+    SettingsSearchEntry("字号", "界面文字缩放 · 思考文字缩放", "外观"),
+    // —— ⑤ 电脑控制台(RuntimeSection 独立二级页,补齐此前的缺失 target)——
+    SettingsSearchEntry("电脑控制台", "预算 · 运行时形态 · 记忆透析 · 未识别操作确认", "运行时", "console"),
+    SettingsSearchEntry("未识别操作确认", "未识别操作先征求同意(实验)", "电脑控制台", "console"),
+    // —— ⑦ 关于 ——
+    SettingsSearchEntry("版本", "版本号 · 电脑系统信息", "关于"),
 )
 
 /**
- * Daemon 桥接与输入行的值摘要(S2:对话显示散项已聚拢到一级「会话与对话」组,
- * 该页剩的可调项里唯一有开关状态的是实验功能的优化按钮 —— 摘要如实取它;
- * 连接策略是固定事实,语音识别无开关,都不进摘要)。
+ * 深链/路由的 sub 参数归一化(纯函数):合法二级页 id 原样返回;
+ * 「userdata」是拆页前的旧 id(任务中心下载卡的历史深链),兼容映射到
+ * 「downloads」;空串与未知值(含已消亡的 daemon/appearance)返回 null =
+ * 停在一级页,不猜落点。
  */
-internal fun daemonBridgeSummary(optimizePromptEnabled: Boolean): String =
-    if (optimizePromptEnabled) "优化按钮开" else "优化按钮关"
+internal fun normalizeSettingsSub(sub: String): String? = when (sub) {
+    "" -> null
+    "userdata" -> "downloads"
+    "connection", "downloads", "agent", "capabilities", "console" -> sub
+    else -> null
+}
 
 /**
  * 设置搜索过滤(纯函数):空/空白查询 = 不进入搜索模式(返回空列表,页面照常
@@ -469,42 +481,47 @@ internal fun matchRange(title: String, query: String): IntRange? {
 /**
  * 设置页(重做版:一级导航、二级编辑)。
  *
- * 【信息架构(S2 调整:按"使用频率 + 风险"重排)】
- *  1. 一级页 = 电脑连接卡(hostStatus 槽)+ 七个卡组:连接(最高频)/ Agent /
- *     外观 / 会话与对话(S2 新增:显示思考 / 工具详情 / 历史轮数,从 Daemon 页
- *     散项聚拢)/ 数据与缓存 / 安全 / 关于(另有运行时=控制中心区段,低频专业域,
- *     能力位点亮才出现)。相关项聚成卡组,组间留白 > 组内行距;每个导航行带
- *     "当前值摘要"——本地偏好断连照常出值,依赖主机的项断连如实标"需连接主机";
- *  2. 所有编辑动作收进二级页:连接与配对+下载与存储 → 用户数据管理 /
- *     Daemon 桥接与输入(连接策略 · 语音 · 实验功能)/ 外观与阅读 / Agent 与模型
- *     (安全组的两行分别深链前两者);
+ * 【信息架构(F2 重排:入口 = 页名一一映射,"多入口落一页" 4→0)】
+ *  1. 一级页 = 电脑连接卡(hostStatus 槽,芯片直落「连接与配对」)+ 七个卡组:
+ *     连接(连接与配对 / 下载与存储,各落其名实相符的二级页)/ Agent /
+ *     对话与输入(显示思考 · 工具详情 · 历史轮数 · 优化提示词按钮 · 语音识别,
+ *     全部就地展示)/ 外观(显示模式与两级字号就地化)/ 运行时(一行导航 →
+ *     「电脑控制台」二级页)/ 安全(审批与沙箱)/ 关于。每个导航行带"当前值摘要"
+ *     ——本地偏好断连照常出值,依赖主机的项断连如实标"需连接主机";
+ *  2. 二级页:连接与配对(原「用户数据管理 · 连接」区 + 自安全组并入的主机指纹
+ *     信任 + Daemon 页迁来的连接策略说明)/ 下载与存储(下载清单 + CacheSection)/
+ *     Agent 与模型 / 技能与插件 / 电脑控制台(RuntimeSection 整体 +
+ *     未识别操作确认)。消亡页:用户数据管理(拆为两页)、Daemon 桥接与输入
+ *     (内容三向分流)、外观与阅读(就地化);
  *  3. 多选项设置仍统一 SplitButton;危险操作(撤销信任/删除数据)二次确认 +
  *     说明后果;开关给状态词与轻触感反馈;
  *  4. 【S2 作用域徽章】"仅作用于某 agent"的分区说明统一收敛为 AgentScopeBadge
  *     小标签(codex/pi/zcode/hermes),谁生效一眼可辨。
  *
  * 【逻辑未变】审批/沙箱/模型/思考强度照样走 writeCodex 乐观更新 + 失败回滚;
- * 连接凭证照样走 setCredentials + connectWithFallback。
+ * 连接凭证照样走 setCredentials + connectWithFallback;深链 sub 参数 userdata
+ * 兼容映射 downloads([normalizeSettingsSub])。
  */
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    /** 任务中心点下载卡片进来时直达「用户数据管理」二级页。 */
-    openUserData: Boolean = false,
+    /** 深链直达二级页:connection/downloads/console/agent/capabilities;
+     *  旧参数 userdata 兼容映射 downloads(任务中心下载卡的历史落点)。 */
+    openSub: String = "",
     /** 用内置浏览器查看已下载的网页/文本(由 MainActivity 提供导航)。 */
     onOpenBrowser: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // 【色板并轨 2026-10-09】编辑式 M3 色板已上提 MainActivity NavHost 外层包全 app,
     // 本页不再重复包裹
-    SettingsScreenBody(onBack, openUserData, onOpenBrowser, modifier)
+    SettingsScreenBody(onBack, openSub, onOpenBrowser, modifier)
 }
 
 @Composable
 private fun SettingsScreenBody(
     onBack: () -> Unit,
-    /** 任务中心点下载卡片进来时直达「用户数据管理」二级页。 */
-    openUserData: Boolean = false,
+    /** 深链直达二级页(经 [normalizeSettingsSub] 归一化,旧 id userdata → downloads)。 */
+    openSub: String = "",
     /** 用内置浏览器查看已下载的网页/文本(由 MainActivity 提供导航)。 */
     onOpenBrowser: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -894,7 +911,8 @@ private fun SettingsScreenBody(
     }
 
     // ---------------- 二级页路由(不引入导航组件,设置页自洽) ----------------
-    var subPage by remember { mutableStateOf<String?>(if (openUserData) "userdata" else null) }
+    // 深链 sub 参数先经归一化:旧 id userdata 兼容映射 downloads,未知值回一级页。
+    var subPage by remember { mutableStateOf(normalizeSettingsSub(openSub)) }
     // 设置搜索(审计 P1-3 子项):非空 = 搜索模式,分组列表让位给过滤后的命中行
     var settingsQuery by remember { mutableStateOf("") }
 
@@ -915,8 +933,10 @@ private fun SettingsScreenBody(
         if (subPage != null) backFromSubPage() else onBack()
     }
 
-    if (subPage == "userdata") {
-        UserDataPage(
+    if (subPage == "connection") {
+        // 【F2 拆页正名】原「用户数据管理」的连接/配对/指纹语义独立成页,
+        // 一级页「连接与配对」行与页顶主机芯片的唯一落地页。
+        ConnectionPage(
             onBack = { subPage = null },
             addr = addr,
             onAddr = { addr = it },
@@ -929,18 +949,21 @@ private fun SettingsScreenBody(
             onSaveAndTest = { saveAndTestConnection() },
             onSaveOnly = { saveCredentialsOnly() },
             onRescan = { rescanCandidates() },
-            onOpenBrowser = onOpenBrowser,
         )
         return
     }
-    if (subPage == "daemon") {
-        // 【F3 终验】S2 把「全局对话显示」上收一级页后,DaemonPage 不再需要写入通道
-        // (思考三项走上方 codexWriter),原 writer 形参随之移除 —— 一个偏好只有一处控件。
-        DaemonPage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) }, models = modelChoices, capabilities = host?.capabilitiesList.orEmpty())
+    if (subPage == "downloads") {
+        // 【F2 拆页正名】下载清单 + 存储占用/缓存清理;深链 userdata 亦兼容落此页。
+        DownloadsPage(onBack = { subPage = null }, onOpenBrowser = onOpenBrowser)
         return
     }
-    if (subPage == "appearance") {
-        AppearancePage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) })
+    if (subPage == "console") {
+        // 【F2】RuntimeSection 整体移入二级页「电脑控制台」(文件不动,只换挂载点);
+        // 「未识别操作确认」自 Daemon 页随迁,与预算块共用同一 RuntimeControlState 真值。
+        // 【推背模糊】记忆透析弹层打开时内容根后退一层,与一级页/AgentPage 同机制。
+        Box(Modifier.fillMaxSize().paPushBack(RuntimeControlState.dialysisSheetOpen)) {
+            ComputerConsolePage(onBack = { subPage = null }, onFeedback = { showSettingsFeedback(it) })
+        }
         return
     }
     if (subPage == "capabilities") {
@@ -1014,26 +1037,14 @@ private fun SettingsScreenBody(
     // 各导航行的"当前值摘要"(R1-C:不用点进去就知道现状)——取值映射全部在
     // SettingsOverviewLogic 的纯函数里(单测钉死),这里只喂状态。
     val connSummary = connectionSummary(connStateTop, connTransportTop)
-    // Daemon 桥接与输入行(S2:对话显示三项已聚拢到下方「会话与对话」组就地展示,
-    // 该行摘要改取页内唯一带状态的实验功能开关;本地偏好,断连可读)。
-    val daemonSummary = daemonBridgeSummary(AgentConnection.optimizePromptEnabled)
     // 下载与存储行:本地任务清单(断连可用),只数已完成的下载。
     val allTasksTop by TaskCenter.tasks.collectAsState()
     val doneDownloadsTop = allTasksTop.count {
         it.kind == TaskCenter.Kind.DOWNLOAD && it.status == TaskCenter.Status.DONE
     }
-    // 主机信任行:随 connectionEpoch 重读(首次握手锁定后从"未锁定"变"已锁定")。
-    val epochTop = AgentConnection.connectionEpoch.collectAsState().value
-    val lockedPinTop = remember(epochTop) { AgentConnection.lockedFingerprint() }
-    val themeLabel = listOf(
-        "system" to "跟随系统", "light" to "浅色", "dark" to "深色",
-        "hacker" to "黑客终端",
-    ).firstOrNull { it.first == AgentConnection.themeMode }?.second ?: "跟随系统"
-    val uiScaleLabel = when {
-        AgentConnection.uiTextScale < 0.95f -> "小"
-        AgentConnection.uiTextScale > 1.05f -> "大"
-        else -> "标准"
-    }
+    // 【F2】主机信任行并入「连接与配对」页(页内自算指纹)、外观行就地化、
+    // Daemon 行消亡 —— 三者的原摘要取值(hostTrustSummary/themeLabel/uiScaleLabel/
+    // daemonBridgeSummary)随行一并移除,不留无主代码。
 
     // ---------------- 一级页 ----------------
     // 编辑式骨架(README:状态栏 → 顶部导航 → 主机状态 → 内容);系统栏图标
@@ -1055,7 +1066,8 @@ private fun SettingsScreenBody(
             )
         },
         hostStatus = {
-            // 当前主机(PaHostChip 唯一事实源):点进去 = 连接与配对(用户数据管理页顶部)。
+            // 当前主机(PaHostChip 唯一事实源):点进去 = 「连接与配对」页
+            // (F2:芯片不再落「用户数据管理」,入口名 = 页名)。
             Column {
                 Text(
                     "当前连接",
@@ -1075,7 +1087,7 @@ private fun SettingsScreenBody(
                         connTransportTop.ifBlank { "直连" },
                         host?.os?.takeIf { it.isNotBlank() },
                     ).joinToString(" · "),
-                    onClick = { subPage = "userdata" },
+                    onClick = { subPage = "connection" },
                 )
                 // 版本闸提示行(纯提示位,不做弹窗/不阻断):daemon 报告的最低版本
                 // 高于本机 App 时,在连接信息卡内联一条警示,风格随设置页既有警示行
@@ -1116,6 +1128,9 @@ private fun SettingsScreenBody(
             item(key = "banner") {
                 Column {
                     settingsError?.let { message ->
+                        // 【错误态体系】headline 走 PaStateViews 映射表(未配对/连不上/电脑端说),
+                        // 原始错误缩略进副行保住诊断信息;重试动作原样。
+                        val errView = paErrorViewOf(message)
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -1128,7 +1143,21 @@ private fun SettingsScreenBody(
                                 tint = EditorialTone.DENIED.text, modifier = Modifier.size(15.dp),
                             )
                             Spacer(Modifier.width(9.dp))
-                            Text(message, Modifier.weight(1f), fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    errView.headline,
+                                    fontSize = PaEditorial.Type.Caption.fontSize,
+                                    color = EditorialTone.DENIED.text,
+                                )
+                                if (errView.raw != message) {
+                                    Text(
+                                        message,
+                                        fontSize = PaEditorial.Type.State.fontSize,
+                                        color = EditorialTone.DENIED.text.copy(alpha = 0.75f),
+                                        maxLines = 2,
+                                    )
+                                }
+                            }
                             TextButton(onClick = {
                                 settingsError = null
                                 AgentConnection.connectionEpoch.value += 1
@@ -1199,20 +1228,23 @@ private fun SettingsScreenBody(
             }
 
             if (settingsQuery.isBlank()) {
-            // 当前主机卡已上移到骨架的 hostStatus 槽(PaHostChip,点进去 = 连接与配对)。
+            // 当前主机卡已上移到骨架的 hostStatus 槽(PaHostChip,点进去 = 「连接与配对」页)。
             //
-            // 【S2 分组语义(按"使用频率 + 风险"重排)】一级页七个卡组:连接(最高频)/
-            // Agent / 外观 / 会话与对话(S2 新增,自 Daemon 页聚拢)/ 数据与缓存 /
-            // 安全 / 关于(另有运行时=控制中心区段,低频专业域,排在会话与对话之后、
-            // 数据与缓存之前)。相关项聚成卡组:组间留白(GroupLabel top=16dp)>
+            // 【F2 分组语义(入口 = 页名一一映射)】一级页七个卡组:连接(连接与配对 /
+            // 下载与存储,各落其名实相符的二级页)/ Agent / 对话与输入(就地展示)/
+            // 外观(就地展示)/ 运行时(一行 →「电脑控制台」二级页)/ 安全 / 关于。
+            // 相关项聚成卡组:组间留白(GroupLabel top=16dp)>
             // 组内行距(12dp);组头小字说明本组职责;组内 1dp 细线分隔,组间零分割线
             // (留白分层)。每个导航行带"当前值摘要"—— 本地偏好类断连照常出值,
             // 依赖主机的项(审批/沙箱/电脑信息)断连如实标"需连接主机"。
 
-            // ---------- 连接 ----------
+            // ---------- 连接(F2:连接与配对 / 下载与存储 各落其名实相符的页)----------
+            // 原「Daemon 桥接与输入」行删除(内容三向分流:优化按钮与语音识别并入
+            // 下方「对话与输入」组、未识别操作确认归「电脑控制台」、连接策略说明
+            // 归「连接与配对」页头);原「数据与缓存」组的「下载与存储」行就近并入本组。
             item(key = "connect") {
                 Column {
-                    GroupLabel(R.drawable.ic_lucide_globe, "连接", "通道、配对与输入桥接")
+                    GroupLabel(R.drawable.ic_lucide_globe, "连接", "通道 · 配对 · 下载与存储")
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -1227,16 +1259,16 @@ private fun SettingsScreenBody(
                             value = connSummary,
                             chevron = true,
                             divider = true,
-                            onClick = { subPage = "userdata" },
+                            onClick = { subPage = "connection" },
                         )
                         SettingRow(
-                            title = "Daemon 桥接与输入",
-                            desc = "连接策略 · 语音 · 实验功能",
-                            icon = R.drawable.ic_lucide_server,
+                            title = "下载与存储",
+                            desc = "下载内容 · 缓存清理 · 存储占用",
+                            icon = R.drawable.ic_lucide_folder,
                             iconBox = true,
-                            value = daemonSummary,
+                            value = downloadStorageSummary(doneDownloadsTop),
                             chevron = true,
-                            onClick = { subPage = "daemon" },
+                            onClick = { subPage = "downloads" },
                         )
                     }
                 }
@@ -1265,38 +1297,131 @@ private fun SettingsScreenBody(
                 }
             }
 
-            // ---------- 外观 ----------
+            // ---------- 外观(F2 就地化:三个控件直接上提一级页)----------
+            // 「外观与阅读」二级页消亡:显示模式 / 界面字号 / 思考字号就地对 UI 观感
+            // 生效,不值得一次跳页。控件与写入路径(AgentConnection.themeMode /
+            // setTextScale)自 AppearancePage 原样平移,语义零变化。
             item(key = "appearance") {
                 Column {
-                    GroupLabel(R.drawable.ic_lucide_sliders, "外观")
+                    GroupLabel(R.drawable.ic_lucide_sliders, "外观", "显示模式 · 文字尺寸")
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .paSettingsCard()
                             .padding(horizontal = 16.dp),
                     ) {
-                        SettingRow(
-                            title = "外观与阅读",
-                            desc = "显示模式 · 文字尺寸",
-                            icon = R.drawable.ic_lucide_settings,
-                            iconBox = true,
-                            value = themeLabel + " · " + uiScaleLabel,
-                            chevron = true,
-                            onClick = { subPage = "appearance" },
+                        // 显示模式:4 档(跟随系统/浅色/深色/黑客终端)
+                        val modeOptions = listOf(
+                            Triple("system", "跟随系统", "自动跟随系统深浅色"),
+                            Triple("light", "浅色", "始终使用浅色界面"),
+                            Triple("dark", "深色", "始终使用深色界面"),
+                            // 黑客终端:绿色磷光/等宽/纯黑,效果落在主对话(PaHacker 消费契约)
+                            Triple("hacker", "黑客终端", "绿色磷光 · 等宽 · 主对话终端风"),
                         )
+                        val currentModeIdx = modeOptions
+                            .indexOfFirst { it.first == AgentConnection.themeMode }
+                            .coerceAtLeast(0)
+                        SplitButton(
+                            label = "显示模式",
+                            mainLabel = modeOptions[currentModeIdx].second,
+                            onMainClick = {
+                                val next = modeOptions[(currentModeIdx + 1) % modeOptions.size]
+                                AgentConnection.themeMode = next.first
+                                AgentTheme.mode = next.first
+                                showSettingsFeedback("显示模式已保存")
+                            },
+                            options = modeOptions.map { (id, name, desc) ->
+                                SplitOption(
+                                    title = name,
+                                    desc = desc,
+                                    selected = AgentConnection.themeMode == id,
+                                ) {
+                                    AgentConnection.themeMode = id
+                                    AgentTheme.mode = id
+                                    showSettingsFeedback("显示模式已保存")
+                                }
+                            },
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // 界面文字大小:主=循环切换,下拉=三选一
+                        val uiOptions = listOf(
+                            Triple("0.9", "小", 0.9f),
+                            Triple("1.0", "标准", 1.0f),
+                            Triple("1.15", "大", 1.15f),
+                        )
+                        val uiIdx = uiOptions.indexOfFirst {
+                            kotlin.math.abs(it.third - AgentConnection.uiTextScale) < 0.02f
+                        }.coerceAtLeast(0)
+                        SplitButton(
+                            label = "界面文字大小",
+                            mainLabel = uiOptions[uiIdx].second,
+                            onMainClick = {
+                                val next = uiOptions[(uiIdx + 1) % uiOptions.size]
+                                AgentConnection.setTextScale(next.third, AgentConnection.thinkTextScale)
+                                showSettingsFeedback("界面字号已保存")
+                            },
+                            options = uiOptions.map { (_, label, v) ->
+                                SplitOption(
+                                    title = label,
+                                    selected = kotlin.math.abs(v - AgentConnection.uiTextScale) < 0.02f,
+                                ) {
+                                    AgentConnection.setTextScale(v, AgentConnection.thinkTextScale)
+                                    showSettingsFeedback("界面字号已保存")
+                                }
+                            },
+                        )
+                        // 实时预览:改动立刻可见;卡内扁平行,无底色子容器
+                        Text(
+                            "预览:这是一段界面文字,当前字号 ×" +
+                                String.format(java.util.Locale.US, "%.2f", AgentConnection.uiTextScale),
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            fontSize = (13 * AgentConnection.uiTextScale).sp,
+                            color = PaEditorial.Muted,
+                        )
+
+                        // 思考显示大小
+                        val thinkOptions = listOf(
+                            Triple("0.85", "小", 0.85f),
+                            Triple("1.0", "标准", 1.0f),
+                            Triple("1.25", "大", 1.25f),
+                        )
+                        val thinkIdx = thinkOptions.indexOfFirst {
+                            kotlin.math.abs(it.third - AgentConnection.thinkTextScale) < 0.02f
+                        }.coerceAtLeast(0)
+                        SplitButton(
+                            label = "思考显示大小",
+                            mainLabel = thinkOptions[thinkIdx].second,
+                            onMainClick = {
+                                val next = thinkOptions[(thinkIdx + 1) % thinkOptions.size]
+                                AgentConnection.setTextScale(AgentConnection.uiTextScale, next.third)
+                                showSettingsFeedback("思考字号已保存")
+                            },
+                            options = thinkOptions.map { (_, label, v) ->
+                                SplitOption(
+                                    title = label,
+                                    selected = kotlin.math.abs(v - AgentConnection.thinkTextScale) < 0.02f,
+                                ) {
+                                    AgentConnection.setTextScale(AgentConnection.uiTextScale, v)
+                                    showSettingsFeedback("思考字号已保存")
+                                }
+                            },
+                        )
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
             }
 
-            // ---------- 会话与对话(S2 新增)----------
-            // 原 Daemon 页「全局对话显示」的三项散项(显示思考 / 工具详情 / 历史轮数)
-            // 按使用频率聚拢为一级分组就地展示 —— 它们是对话观感的高频开关,不该藏在
-            // 二级页;写入路径原样(思考走 daemon 七项写入通道,工具/历史是本地偏好),
-            // Daemon 页不再保留副本(一个偏好只有一处控件,不出现第二个事实源)。
-            // 组头作用域徽章:这组对所有已接入 agent 生效(S2 作用域徽章纪律)。
+            // ---------- 对话与输入(F2:组名自「会话与对话」改定)----------
+            // S2 已把 Daemon 页「全局对话显示」三项就地展示;F2 再吸收原 Daemon 页
+            // 残余的「优化提示词按钮(+优化用 Agent/模型)」与「语音识别」,写入路径
+            // 原样平移 —— Daemon 桥接与输入页随之消亡(一个偏好只有一处控件,
+            // 不出现第二个事实源)。组头作用域徽章:这组对所有已接入 agent 生效。
             item(key = "session") {
                 Column {
-                    GroupLabel(R.drawable.ic_lucide_brain, "会话与对话", "思考与工具的展示 · 历史加载")
+                    GroupLabel(R.drawable.ic_lucide_brain, "对话与输入", "思考 · 工具展示 · 输入优化 · 语音输入")
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -1382,44 +1507,156 @@ private fun SettingsScreenBody(
                                 }
                             },
                         )
+                        Spacer(Modifier.height(12.dp))
+
+                        // 输入优化(自 Daemon 页「实验功能」迁入,控件与写入路径原样):
+                        // 提示词优化默认关,依赖电脑端 Agent 且消耗其 Token Plan 配额。
+                        SplitButton(
+                            label = "优化提示词按钮",
+                            // 模式说明(P4 Task 3「可解释」):七种改写模式与预览弹层风格芯片
+                            // 共用同一口径(见 promptOptimizeStyleHint / daemon promptOptimizeStyleTemplates),
+                            // 并写明两条红线 —— 只改写不执行、结果经确认才替换输入框。
+                            caption = "在会话输入栏显示「优化」按钮,把口语化输入改写成给 AI 的清晰指令;由下方选定的 Agent 与模型生成，会消耗对应配额。" +
+                                "改写模式七种:默认(说清楚、不扩写)/精简(一句话)/详细(要点列表)/实施计划(目标·范围·验收)/排错(现象·环境·复现·期望)/" +
+                                "测试(输入·行为·验证)/代码审查(风险·影响·证据)。优化只改写、不会自动执行,结果经你确认才会替换输入框",
+                            mainLabel = if (AgentConnection.optimizePromptEnabled) "开" else "关",
+                            onMainClick = {
+                                AgentConnection.optimizePromptEnabled = !AgentConnection.optimizePromptEnabled
+                                showSettingsFeedback(if (AgentConnection.optimizePromptEnabled) "已在输入栏启用优化按钮" else "已关闭优化按钮")
+                            },
+                            options = listOf(
+                                SplitOption("开", selected = AgentConnection.optimizePromptEnabled) {
+                                    AgentConnection.optimizePromptEnabled = true
+                                    showSettingsFeedback("已在输入栏启用优化按钮")
+                                },
+                                SplitOption("关", selected = !AgentConnection.optimizePromptEnabled) {
+                                    AgentConnection.optimizePromptEnabled = false
+                                    showSettingsFeedback("已关闭优化按钮")
+                                },
+                            ),
+                        )
+                        // 优化用 Agent/模型的候选来自电脑端模型表(与原 Daemon 页同一过滤口径)。
+                        val optimizerCaps = host?.capabilitiesList.orEmpty()
+                        val optimizerAgents = modelChoices.map { it.provider }.distinct().filter {
+                            "text_generation:$it" in optimizerCaps ||
+                                (optimizerCaps.none { c -> c.startsWith("text_generation:") } && it in setOf("codex", "pi", "zcode"))
+                        }
+                        // 【R1-C 结论 5】优化按钮本体是本地开关,但"用哪个 Agent/模型"的候选来自
+                        // 电脑端模型表 —— 断连时如实标注,不摆空下拉让人误以为没有可选。
+                        if (modelChoices.isEmpty()) {
+                            Text(
+                                "优化使用的 Agent 与模型列表需连接主机后读取",
+                                fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
+                                modifier = Modifier.padding(vertical = 6.dp),
+                            )
+                        }
+                        SplitButton(label = "优化使用的 Agent", mainLabel = agentDisplay(AgentConnection.optimizeAgent),
+                            onMainClick = { if (optimizerAgents.isNotEmpty()) {
+                                val index = optimizerAgents.indexOf(AgentConnection.optimizeAgent)
+                                AgentConnection.setOptimizer(optimizerAgents[(index + 1) % optimizerAgents.size], "")
+                            } },
+                            options = optimizerAgents.map { id -> SplitOption(agentDisplay(id), selected = id == AgentConnection.optimizeAgent) { AgentConnection.setOptimizer(id, "") } })
+                        val optimizerModels = modelChoices.filter { it.provider == AgentConnection.optimizeAgent && !it.id.endsWith("/default") }
+                        SplitButton(label = "优化使用的模型", mainLabel = optimizerModels.find { it.id == AgentConnection.optimizeModel }?.displayName ?: "Agent 默认模型",
+                            onMainClick = { if (optimizerModels.isNotEmpty()) AgentConnection.setOptimizer(AgentConnection.optimizeAgent, optimizerModels.first().id) },
+                            options = listOf(SplitOption("Agent 默认模型", selected = AgentConnection.optimizeModel.isEmpty()) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent, "") }) +
+                                optimizerModels.map { m -> SplitOption(m.displayName, selected = m.id == AgentConnection.optimizeModel) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent, m.id) } })
+                        Spacer(Modifier.height(12.dp))
+
+                        // 语音识别(自 Daemon 页「语音识别」区原样迁入):端侧离线识别模型
+                        // 管理 —— 下载 / 进度 / 失败重试。有系统识别服务的设备可直接用系统识别。
+                        Text(
+                            "语音识别",
+                            fontSize = PaEditorial.Type.Caption.fontSize,
+                            lineHeight = 16.sp,
+                            letterSpacing = 1.2.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = PaEditorial.Muted,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        LaunchedEffect(Unit) { SenseVoiceModelManager.init(ctx) }
+                        val speech by SenseVoiceModelManager.state.collectAsState()
+                        // 【按需下载正路入口】模型不再随 APK 打包(SenseVoiceModelManager 三态,
+                        // 上轮已就位):needsDownload → 摆下载按钮(此前只有"点麦克风才触发"
+                        // 一条暗路);下载中沿用既有"初始化 X%"进度通道;就绪后按钮消失;
+                        // 下载失败 → desc 走既有错误通道 + 重试按钮(判别主通道 =
+                        // downloadFailed 显式标志,文案比对仅作旧状态兼容回退,见纯函数 KDoc)。
+                        val downloadAction = senseVoiceDownloadAction(speech.ready, speech.preparing, speech.downloadFailed, speech.error)
+                        SettingRow(
+                            title = "SenseVoice Small INT8（按需下载）",
+                            desc = speech.error
+                                ?: "符合中文输入习惯 · 自动标点与数字规范化 · 音频不离开设备",
+                            value = when {
+                                speech.ready -> "已就绪"
+                                speech.preparing -> "初始化 ${speech.preparedBytes * 100 / SenseVoiceModelManager.TOTAL_BYTES}%"
+                                speech.needsDownload -> "未下载"
+                                else -> "内置"
+                            },
+                            divider = false,
+                        )
+                        if (downloadAction != null) {
+                            Spacer(Modifier.height(6.dp))
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = PaEditorial.Space.TouchMin)
+                                    .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                                    .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
+                                    .pressable(haptic = true) { SenseVoiceModelManager.prepareBundledModel() }
+                                    .padding(horizontal = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                            ) {
+                                Text(
+                                    downloadAction,
+                                    fontSize = PaEditorial.Type.Body.fontSize,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = PaEditorial.Primary,
+                                )
+                            }
+                        }
+                        Text(
+                            "有系统识别服务时可直接使用；否则使用 SenseVoice 离线识别(模型首次启用时联网下载一次,音频不离开设备)。录音权限被拒绝时只请求权限。",
+                            fontSize = PaEditorial.Type.Caption.fontSize,
+                            color = PaEditorial.Muted,
+                        )
                         Spacer(Modifier.height(6.dp))
                     }
                 }
             }
 
-            // ---------- 运行时(控制中心区段,低频专业域)----------
-            // 只加这一行:区段本体在 ui/RuntimeSection.kt(排版 + 交互都在那边),
-            // 免得继续往这个大文件里长内容。S2 排序:能力位(runtime.v1)点亮才出现,
-            // 按使用频率排在会话与对话之后、数据与缓存之前。
-            item(key = "runtime") { RuntimeSection() }
-
-            // ---------- 数据与缓存 ----------
-            item(key = "data") {
-                Column {
-                    GroupLabel(R.drawable.ic_lucide_folder, "数据与缓存", "都保存在这台手机上")
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .paSettingsCard()
-                            .padding(horizontal = 16.dp),
-                    ) {
-                        SettingRow(
-                            title = "下载与存储",
-                            desc = "下载内容 · 缓存清理 · 存储占用",
-                            icon = R.drawable.ic_lucide_folder,
-                            iconBox = true,
-                            value = downloadStorageSummary(doneDownloadsTop),
-                            chevron = true,
-                            onClick = { subPage = "userdata" },
-                        )
+            // ---------- 运行时(F2:RuntimeSection 移入二级页「电脑控制台」)----------
+            // 一级页只剩一行导航:1548 行区段本体(含 4 个弹层)整体挂在
+            // subPage="console",搜索索引同步补 target(此前「电脑控制台」target=null,
+            // 搜到也跳不过去)。能力位(runtime.v1)不点亮照旧不出现 —— 无能力不显示假入口。
+            item(key = "runtime") {
+                val runtimeCaps by AgentConnection.hostCapabilities.collectAsState()
+                if (runtimeControlCapable(runtimeCaps)) {
+                    Column {
+                        GroupLabel(R.drawable.ic_lucide_server, "运行时", "电脑端预算与策略")
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .paSettingsCard()
+                                .padding(horizontal = 16.dp),
+                        ) {
+                            SettingRow(
+                                title = "电脑控制台",
+                                desc = "预算 · 运行时形态 · 记忆透析 · 未识别操作确认",
+                                icon = R.drawable.ic_lucide_server,
+                                iconBox = true,
+                                chevron = true,
+                                onClick = { subPage = "console" },
+                            )
+                        }
                     }
                 }
             }
 
-            // ---------- 安全 ----------
+            // ---------- 安全(F2:主机信任行删除,指纹信任并入「连接与配对」页)----------
             item(key = "safety") {
                 Column {
-                    GroupLabel(R.drawable.ic_lucide_shield, "安全", "执行权限与主机信任")
+                    GroupLabel(R.drawable.ic_lucide_shield, "安全", "执行权限")
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -1438,17 +1675,7 @@ private fun SettingsScreenBody(
                                 settings != null,
                             ),
                             chevron = true,
-                            divider = true,
                             onClick = { subPage = "agent" },
-                        )
-                        SettingRow(
-                            title = "主机信任",
-                            desc = "首连锁定电脑指纹,防止连到别的机器",
-                            icon = R.drawable.ic_lucide_monitor,
-                            iconBox = true,
-                            value = hostTrustSummary(lockedPinTop),
-                            chevron = true,
-                            onClick = { subPage = "userdata" },
                         )
                     }
                 }
@@ -1679,125 +1906,9 @@ private fun SubPageScaffold(
 }
 
 /**
- * 二级页:外观与阅读 —— 字号 / 思考 / 工具详情 / 显示模式。
+ * 【F2 消亡页】「外观与阅读」二级页已删除:显示模式 / 界面字号 / 思考字号三个
+ * 控件就地化上提一级页「外观」组(见 SettingsScreenBody 的 item(key="appearance"))。
  */
-@Composable
-private fun AppearancePage(
-    onBack: () -> Unit,
-    onFeedback: (String) -> Unit,
-) {
-    SubPageScaffold(title = "外观与阅读", onBack = onBack) {
-        SectionBlock(icon = R.drawable.ic_lucide_monitor, title = "字号") {
-            Spacer(Modifier.height(10.dp))
-            // 界面文字大小:主=循环切换,下拉=三选一
-            val uiOptions = listOf(
-                Triple("0.9", "小", 0.9f),
-                Triple("1.0", "标准", 1.0f),
-                Triple("1.15", "大", 1.15f),
-            )
-            val uiIdx = uiOptions.indexOfFirst {
-                kotlin.math.abs(it.third - AgentConnection.uiTextScale) < 0.02f
-            }.coerceAtLeast(0)
-            SplitButton(
-                label = "界面文字大小",
-                mainLabel = uiOptions[uiIdx].second,
-                onMainClick = {
-                    val next = uiOptions[(uiIdx + 1) % uiOptions.size]
-                    AgentConnection.setTextScale(next.third, AgentConnection.thinkTextScale)
-                    onFeedback("界面字号已保存")
-                },
-                options = uiOptions.map { (_, label, v) ->
-                    SplitOption(
-                        title = label,
-                        selected = kotlin.math.abs(v - AgentConnection.uiTextScale) < 0.02f,
-                    ) {
-                        AgentConnection.setTextScale(v, AgentConnection.thinkTextScale)
-                        onFeedback("界面字号已保存")
-                    }
-                },
-            )
-            Spacer(Modifier.height(8.dp))
-            // 实时预览:改动立刻可见(唯一保留的说明性内容);卡内扁平行,无底色子容器
-            Text(
-                "预览:这是一段界面文字,当前字号 ×" +
-                    String.format(java.util.Locale.US, "%.2f", AgentConnection.uiTextScale),
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                fontSize = (13 * AgentConnection.uiTextScale).sp,
-                color = PaEditorial.Muted,
-            )
-            Spacer(Modifier.height(8.dp))
-
-            // 思考显示大小
-            val thinkOptions = listOf(
-                Triple("0.85", "小", 0.85f),
-                Triple("1.0", "标准", 1.0f),
-                Triple("1.25", "大", 1.25f),
-            )
-            val thinkIdx = thinkOptions.indexOfFirst {
-                kotlin.math.abs(it.third - AgentConnection.thinkTextScale) < 0.02f
-            }.coerceAtLeast(0)
-            SplitButton(
-                label = "思考显示大小",
-                mainLabel = thinkOptions[thinkIdx].second,
-                onMainClick = {
-                    val next = thinkOptions[(thinkIdx + 1) % thinkOptions.size]
-                    AgentConnection.setTextScale(AgentConnection.uiTextScale, next.third)
-                    onFeedback("思考字号已保存")
-                },
-                options = thinkOptions.map { (_, label, v) ->
-                    SplitOption(
-                        title = label,
-                        selected = kotlin.math.abs(v - AgentConnection.thinkTextScale) < 0.02f,
-                    ) {
-                        AgentConnection.setTextScale(AgentConnection.uiTextScale, v)
-                        onFeedback("思考字号已保存")
-                    }
-                },
-            )
-            Spacer(Modifier.height(6.dp))
-        }
-
-        SectionBlock(icon = R.drawable.ic_lucide_sliders, title = "显示模式") {
-            Spacer(Modifier.height(10.dp))
-            val modeOptions = listOf(
-                Triple("system", "跟随系统", "自动跟随系统深浅色"),
-                Triple("light", "浅色", "始终使用浅色界面"),
-                Triple("dark", "深色", "始终使用深色界面"),
-                // 黑客终端:绿色磷光/等宽/纯黑,效果落在主对话(PaHacker 消费契约)
-                Triple("hacker", "黑客终端", "绿色磷光 · 等宽 · 主对话终端风"),
-            )
-            val currentModeIdx = modeOptions
-                .indexOfFirst { it.first == AgentConnection.themeMode }
-                .coerceAtLeast(0)
-            SplitButton(
-                label = "显示模式",
-                mainLabel = modeOptions[currentModeIdx].second,
-                onMainClick = {
-                    val next = modeOptions[(currentModeIdx + 1) % modeOptions.size]
-                    AgentConnection.themeMode = next.first
-                    AgentTheme.mode = next.first
-                    onFeedback("显示模式已保存")
-                },
-                options = modeOptions.map { (id, name, desc) ->
-                    SplitOption(
-                        title = name,
-                        desc = desc,
-                        selected = AgentConnection.themeMode == id,
-                    ) {
-                        AgentConnection.themeMode = id
-                        AgentTheme.mode = id
-                        onFeedback("显示模式已保存")
-                    }
-                },
-            )
-            Spacer(Modifier.height(6.dp))
-        }
-
-        Spacer(Modifier.height(20.dp))
-    }
-}
 
 /**
  * 一条能力(skill / hook / plugin)的展示行。
@@ -2425,10 +2536,10 @@ private fun AgentPage(
                 // daemon 把它们写进自己拉起的 app-server 子进程内存态,
                 // 不会改写用户桌面 codex 的 config.toml。
                 // 整句"仅控制 Codex 生成方式"收敛为作用域徽章;跨 agent 的思考/工具
-                // 显示已聚拢到一级页「会话与对话」,指路文案同步改。
+                // 显示已聚拢到一级页「对话与输入」,指路文案同步改。
                 AgentScopeBadge(listOf("codex"), Modifier.padding(bottom = 6.dp))
                 Text(
-                    "仅控制 Codex 的生成方式；全部 Agent 的思考与工具显示在「会话与对话」调整。",
+                    "仅控制 Codex 的生成方式；全部 Agent 的思考与工具显示在「对话与输入」调整。",
                     fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
@@ -3203,16 +3314,18 @@ fun SettingRow(
 private data class DlFileState(val exists: Boolean, val realSize: Long?)
 
 /**
- * 二级页:用户数据管理 —— 连接地址 + 全部下载内容。
+ * 二级页:连接与配对(F2 自「用户数据管理」拆正名)。
  *
- * 【设计取向】连接编辑与下载内容(查看 / 分享 / 删除)统一收在这里;
- * 文件类型与任务中心用同一套 [fileKindOf] 判定,两处显示不会打架。
- *
- * 【离线可靠】下载列表只来自本地持久化的任务清单(SharedPreferences),不依赖任何 daemon
- * 状态;查看/分享直接用 [PaDownloader] 的本地 content URI,零 daemon 往返。
+ * 【页 = 名】一级页「连接与配对」行与页顶主机芯片的唯一落地页:连接状态、
+ * 三通道端点(点按复制)、地址 / token、保存并测试,外加 ——
+ *  · 主机指纹信任区(自一级页「安全」组的「主机信任」行并入:指纹本就是
+ *    连接安全的一部分,不再单独开一个入口);
+ *  · 「连接策略」页头说明(自 Daemon 页迁来,一处说明,不再两页各说一遍)。
+ * 控件与写入路径(saveAndTestConnection / setCredentials / connectWithFallback)
+ * 自原「用户数据管理 · 连接」区原样平移,语义零变化。
  */
 @Composable
-private fun UserDataPage(
+private fun ConnectionPage(
     onBack: () -> Unit,
     addr: String,
     onAddr: (String) -> Unit,
@@ -3226,61 +3339,22 @@ private fun UserDataPage(
     onSaveAndTest: () -> Unit,
     onSaveOnly: () -> Unit,
     onRescan: () -> Unit,
-    onOpenBrowser: (String) -> Unit,
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val allTasks by TaskCenter.tasks.collectAsState()
-    // 【离线可靠】列表只来自本地持久化的任务清单(SharedPreferences),不依赖任何 daemon 状态 ——
-    // 断网/连不上时照样渲染,不会变成"0 个文件"。
-    val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
-    val doneDownloads = downloads.filter { it.status == TaskCenter.Status.DONE }
-
-    // 每条已下载文件的"是否还在 / 真实体积":本地查 MediaStore / 文件系统,零 daemon 往返。
-    // 结果进 state,列表据此决定显示「查看/分享」还是「文件已被删除」。
-    val dlStates by produceState(emptyMap<String, DlFileState>(), downloads) {
-        value = withContext(Dispatchers.IO) {
-            doneDownloads.associate { d ->
-                val exists = if (d.localUri.isNotEmpty()) PaDownloader.localFileExists(ctx, d.localUri) else false
-                val size = if (exists) PaDownloader.queryLocalFileSize(ctx, d.localUri) else null
-                d.id to DlFileState(exists, size)
-            }
-        }
-    }
-
-    // 下载占用:优先用"文件真实字节数"(MediaStore 查回),查不到才回退到条目上记录的体积字符串;
-    // 两者都没有就记为未知 —— 绝不用 0 冒充"没占用"。
-    val downloadBytes = doneDownloads.sumOf { d ->
-        val real = dlStates[d.id]?.realSize
-        real ?: if (d.sizeText.isNotEmpty()) parseHumanSize(d.sizeText) else null ?: 0L
-    }
-    val downloadUnknown = doneDownloads.any { d ->
-        val real = dlStates[d.id]?.realSize
-        (real ?: if (d.sizeText.isNotEmpty()) parseHumanSize(d.sizeText) else null) == null
-    }
-    val doneCount = doneDownloads.size
-
-    // 旧版本下载条目是 10 字段格式,没有 localUri → 查看/分享图标被门控隐藏。
-    // 进页面按文件名反向找回本地路径,找回后 attachLocalUriIfEmpty→persist()
-    // 会重新发射列表,图标随之出现。legacyTried 记录已尝试的 id,防止重组时反复查 MediaStore。
-    val legacyTried = remember { mutableSetOf<String>() }
-    LaunchedEffect(downloads) {
-        for (d in downloads) {
-            if (d.status != TaskCenter.Status.DONE || d.localUri.isNotEmpty()) continue
-            if (!legacyTried.add(d.id)) continue
-            val uri = withContext(Dispatchers.IO) { PaDownloader.resolveLocalUri(ctx, d.title) }
-            if (uri.isNotEmpty()) TaskCenter.attachLocalUriIfEmpty(d.id, uri)
-        }
-    }
     val connState = AgentConnection.connState.collectAsState().value
     val transport = AgentConnection.connTransport.collectAsState().value
     val connAddr = AgentConnection.connAddress.collectAsState().value
-    // 【R1-C 结论 2】危险操作必须二次确认 + 说明后果:本页两个不可逆动作
-    // (清除主机指纹=撤销信任;删除下载文件=清除数据)都先挂确认位,弹窗文案
-    // 写清"动什么/不动什么/可不可逆",绝不一击即中。
+    // 【R1-C 结论 2】危险操作必须二次确认 + 说明后果:清除主机指纹 = 撤销信任,
+    // 先挂确认位,弹窗文案写清"动什么/不动什么/可不可逆",绝不一击即中。
     var confirmClearPin by remember { mutableStateOf(false) }
-    var pendingDelete by remember { mutableStateOf<TaskCenter.Task?>(null) }
 
-    SubPageScaffold(title = "用户数据管理", onBack = onBack) {
+    SubPageScaffold(title = "连接与配对", onBack = onBack) {
+        // 页头说明(自 Daemon 页「连接策略」迁来)
+        Text(
+            "USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",
+            fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted,
+            modifier = Modifier.padding(vertical = 12.dp),
+        )
         SectionBlock(icon = R.drawable.ic_lucide_globe, title = "连接") {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 11.dp),
@@ -3394,40 +3468,8 @@ private fun UserDataPage(
                 Spacer(Modifier.height(4.dp))
             }
 
-            // ---- 已锁定主机指纹(P0-1 TOFU)----
-            // 展示已锁定指纹的前 16 位十六进制;「清除」后回到首连信任 —— daemon 重装
-            // 或电脑换证书导致的"指纹不匹配"就从这里解开。随 connectionEpoch 重读,
-            // 首次成功握手锁定后这一行会自动出现。
-            val epochForPin = AgentConnection.connectionEpoch.collectAsState().value
-            val lockedPin = remember(epochForPin) { AgentConnection.lockedFingerprint() }
-            if (lockedPin != null) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "已锁定主机指纹",
-                            fontSize = PaEditorial.Type.BodySmall.fontSize,
-                            color = PaEditorial.Ink,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            lockedPin.take(16) + "…(SHA-256,首次连接时锁定)",
-                            Modifier.padding(top = 2.dp),
-                            fontSize = PaEditorial.Type.Micro.fontSize,
-                            color = PaEditorial.Muted,
-                        )
-                    }
-                    Text(
-                        "清除",
-                        // 危险色已区分(Denied);动作本体交给确认弹窗,不一击即清。
-                        Modifier.pressable(haptic = true) { confirmClearPin = true },
-                        fontSize = PaEditorial.Type.Caption.fontSize,
-                        color = PaEditorial.Denied,
-                    )
-                }
-            }
+            // 【F2】已锁定主机指纹行已移入下方独立的「主机信任」分区
+            // (自一级页「安全」组并入;行内容与清除确认原样,不在此重复渲染)。
 
             // 【T-32】配对失败原文:必须紧挨输入框展示(connError 被重连循环覆盖,
             // 不能承载;settingsError 横幅只在一级页渲染,二级页看不见)。
@@ -3485,6 +3527,156 @@ private fun UserDataPage(
 
         Spacer(Modifier.height(14.dp))
 
+        // 主机指纹信任(F2 自一级页「安全」组的「主机信任」行并入连接页)
+        SectionBlock(icon = R.drawable.ic_lucide_monitor, title = "主机信任") {
+            Spacer(Modifier.height(10.dp))
+            // ---- 已锁定主机指纹(P0-1 TOFU)----
+            // 展示已锁定指纹的前 16 位十六进制;「清除」后回到首连信任 —— daemon 重装
+            // 或电脑换证书导致的"指纹不匹配"就从这里解开。随 connectionEpoch 重读,
+            // 首次成功握手锁定后这一行会自动出现。
+            val epochForPin = AgentConnection.connectionEpoch.collectAsState().value
+            val lockedPin = remember(epochForPin) { AgentConnection.lockedFingerprint() }
+            // 摘要沿用一级页「主机信任」行的既有纯函数(单测钉死):未锁定陈述事实,
+            // 已锁定给前 16 位。
+            Text(
+                hostTrustSummary(lockedPin),
+                Modifier.padding(bottom = 8.dp),
+                fontSize = PaEditorial.Type.Caption.fontSize,
+                color = PaEditorial.Muted,
+            )
+            if (lockedPin != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "已锁定主机指纹",
+                            fontSize = PaEditorial.Type.BodySmall.fontSize,
+                            color = PaEditorial.Ink,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            lockedPin.take(16) + "…(SHA-256,首次连接时锁定)",
+                            Modifier.padding(top = 2.dp),
+                            fontSize = PaEditorial.Type.Micro.fontSize,
+                            color = PaEditorial.Muted,
+                        )
+                    }
+                    Text(
+                        "清除",
+                        // 危险色已区分(Denied);动作本体交给确认弹窗,不一击即清。
+                        Modifier.pressable(haptic = true) { confirmClearPin = true },
+                        fontSize = PaEditorial.Type.Caption.fontSize,
+                        color = PaEditorial.Denied,
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+
+        Spacer(Modifier.height(20.dp))
+    }
+
+    // ---- 清除主机指纹(撤销信任)的二次确认:写清撤销的是什么信任、下次发生什么 ----
+    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;危险确认钮用 Denied
+    // 色槽(浅珊瑚底 + 珊瑚描边 + 加深珊瑚字)。语义零变化:遮罩/返回 = 取消。
+    if (confirmClearPin) {
+        PaSheet(onDismissRequest = { confirmClearPin = false }, centered = true) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
+                Text("清除主机指纹?", color = PaEditorial.Ink, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "手机会忘记这台电脑的指纹,下次连接时重新信任当前主机。" +
+                        "在此之前若网络中被换成另一台机器,App 不会拦截。" +
+                        "电脑上的数据与配对凭证不受影响。此操作立即生效。",
+                    color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
+                )
+                Spacer(Modifier.height(18.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsSheetDialogButton(
+                        text = "取消",
+                        tones = SettingsSheetButtonTones.secondary,
+                        modifier = Modifier.weight(1f),
+                    ) { confirmClearPin = false }
+                    SettingsSheetDialogButton(
+                        text = "清除",
+                        tones = SettingsSheetButtonTones.danger,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        confirmClearPin = false
+                        AgentConnection.clearHostPin()
+                        Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 二级页:下载与存储(F2 自「用户数据管理」拆正名)。
+ *
+ * 【设计取向】下载内容清单(查看 / 分享 / 删除)与存储占用 / 缓存清理(原
+ * CacheSection)收在一页;文件类型与任务中心用同一套 [fileKindOf] 判定,
+ * 两处显示不会打架。
+ *
+ * 【离线可靠】下载列表只来自本地持久化的任务清单(SharedPreferences),不依赖任何 daemon
+ * 状态;查看/分享直接用 [PaDownloader] 的本地 content URI,零 daemon 往返。
+ */
+@Composable
+private fun DownloadsPage(
+    onBack: () -> Unit,
+    /** 用内置浏览器查看已下载的网页/文本(由 MainActivity 提供导航)。 */
+    onOpenBrowser: (String) -> Unit,
+) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val allTasks by TaskCenter.tasks.collectAsState()
+    // 【离线可靠】列表只来自本地持久化的任务清单(SharedPreferences),不依赖任何 daemon 状态 ——
+    // 断网/连不上时照样渲染,不会变成"0 个文件"。
+    val downloads = allTasks.filter { it.kind == TaskCenter.Kind.DOWNLOAD }
+    val doneDownloads = downloads.filter { it.status == TaskCenter.Status.DONE }
+
+    // 每条已下载文件的"是否还在 / 真实体积":本地查 MediaStore / 文件系统,零 daemon 往返。
+    // 结果进 state,列表据此决定显示「查看/分享」还是「文件已被删除」。
+    val dlStates by produceState(emptyMap<String, DlFileState>(), downloads) {
+        value = withContext(Dispatchers.IO) {
+            doneDownloads.associate { d ->
+                val exists = if (d.localUri.isNotEmpty()) PaDownloader.localFileExists(ctx, d.localUri) else false
+                val size = if (exists) PaDownloader.queryLocalFileSize(ctx, d.localUri) else null
+                d.id to DlFileState(exists, size)
+            }
+        }
+    }
+
+    // 下载占用:优先用"文件真实字节数"(MediaStore 查回),查不到才回退到条目上记录的体积字符串;
+    // 两者都没有就记为未知 —— 绝不用 0 冒充"没占用"。
+    val downloadBytes = doneDownloads.sumOf { d ->
+        val real = dlStates[d.id]?.realSize
+        real ?: if (d.sizeText.isNotEmpty()) parseHumanSize(d.sizeText) else null ?: 0L
+    }
+    val downloadUnknown = doneDownloads.any { d ->
+        val real = dlStates[d.id]?.realSize
+        (real ?: if (d.sizeText.isNotEmpty()) parseHumanSize(d.sizeText) else null) == null
+    }
+    val doneCount = doneDownloads.size
+
+    // 旧版本下载条目是 10 字段格式,没有 localUri → 查看/分享图标被门控隐藏。
+    // 进页面按文件名反向找回本地路径,找回后 attachLocalUriIfEmpty→persist()
+    // 会重新发射列表,图标随之出现。legacyTried 记录已尝试的 id,防止重组时反复查 MediaStore。
+    val legacyTried = remember { mutableSetOf<String>() }
+    LaunchedEffect(downloads) {
+        for (d in downloads) {
+            if (d.status != TaskCenter.Status.DONE || d.localUri.isNotEmpty()) continue
+            if (!legacyTried.add(d.id)) continue
+            val uri = withContext(Dispatchers.IO) { PaDownloader.resolveLocalUri(ctx, d.title) }
+            if (uri.isNotEmpty()) TaskCenter.attachLocalUriIfEmpty(d.id, uri)
+        }
+    }
+    // 【R1-C 结论 2】删除下载文件 = 清除数据,先挂确认位再动手。
+    var pendingDelete by remember { mutableStateOf<TaskCenter.Task?>(null) }
+
+    SubPageScaffold(title = "下载与存储", onBack = onBack) {
         SectionBlock(
             icon = R.drawable.ic_lucide_download,
             title = "下载内容 · " + doneCount + " 个文件" +
@@ -3613,44 +3805,10 @@ private fun UserDataPage(
         Spacer(Modifier.height(20.dp))
     }
 
-    // ---- 清除主机指纹(撤销信任)的二次确认:写清撤销的是什么信任、下次发生什么 ----
-    // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;危险确认钮用 Denied
-    // 色槽(浅珊瑚底 + 珊瑚描边 + 加深珊瑚字)。语义零变化:遮罩/返回 = 取消。
-    if (confirmClearPin) {
-        PaSheet(onDismissRequest = { confirmClearPin = false }, centered = true) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
-                Text("清除主机指纹?", color = PaEditorial.Ink, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "手机会忘记这台电脑的指纹,下次连接时重新信任当前主机。" +
-                        "在此之前若网络中被换成另一台机器,App 不会拦截。" +
-                        "电脑上的数据与配对凭证不受影响。此操作立即生效。",
-                    color = PaEditorial.Muted, fontSize = PaEditorial.Type.BodySmall.fontSize,
-                )
-                Spacer(Modifier.height(18.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SettingsSheetDialogButton(
-                        text = "取消",
-                        tones = SettingsSheetButtonTones.secondary,
-                        modifier = Modifier.weight(1f),
-                    ) { confirmClearPin = false }
-                    SettingsSheetDialogButton(
-                        text = "清除",
-                        tones = SettingsSheetButtonTones.danger,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        confirmClearPin = false
-                        AgentConnection.clearHostPin()
-                        Toast.makeText(ctx, "已清除指纹,下次连接将重新信任主机", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-    }
-
     // ---- 删除已下载文件的二次确认:删的是手机上的文件本体,电脑原件不动 ----
     // 【D2 模态家族统一】裸 AlertDialog → PaSheet centered;语义零变化:遮罩/返回
     // = 取消;确认钮按实际删除结果给提示(删不掉不谎报「已删除」)。
+    // (清除主机指纹的二次确认在「连接与配对」页,同款 PaSheet。)
     pendingDelete?.let { target ->
         PaSheet(onDismissRequest = { pendingDelete = null }, centered = true) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
@@ -4335,151 +4493,68 @@ internal fun senseVoiceDownloadAction(
     else -> "下载语音模型（约 228MB，建议 Wi-Fi）"
 }
 
-/** writer 形参已随 S2 聚拢移除(F3 终验):对话显示三项只留在一级页「会话与对话」。 */
+/**
+ * 二级页:电脑控制台(F2:RuntimeSection 整体移入,一级页不再内嵌 1548 行区段)。
+ *
+ * 【为什么是页不是区段】搜索索引一直叫它「电脑控制台」,却因区段内嵌一级页而
+ * 没有落地页可跳(target=null);现在一级页「运行时」组一行导航落到这里,
+ * 搜索命中可直达。
+ * 【迁移纪律】RuntimeSection.kt 文件不动、只换挂载点;RuntimeControlState 状态源
+ * 不改,记忆透析 / 预算编辑等弹层的返回键仍由设置页统一 BackHandler 覆盖
+ * (subPage 非空 → 先退二级页)。「未识别操作确认」自 Daemon 页随迁(见下)。
+ */
 @Composable
-private fun DaemonPage(onBack: () -> Unit, onFeedback: (String) -> Unit, models: List<ModelInfo>, capabilities: List<String>) {
-    SubPageScaffold(title = "Daemon 桥接与输入", onBack = onBack) {
-        SectionBlock(icon = R.drawable.ic_lucide_server, title = "连接策略") {
-            Text("USB → 局域网直连 → Tailscale 保底。已连接时保持当前通道，断流后自动恢复任务结果。",
-                fontSize = PaEditorial.Type.BodySmall.fontSize, color = PaEditorial.Muted, modifier = Modifier.padding(vertical=12.dp))
-        }
-        // 【S2 聚拢】原「全局对话显示」分区(显示思考 / 工具详情 / 历史轮数)已整体
-        // 上收为一级页「会话与对话」组(高频观感开关不该藏在二级页);写入路径原样,
-        // 这里不再保留副本 —— 一个偏好只有一处控件,不会有第二个事实源。
-
-        // 实验功能:提示词优化(默认关;依赖电脑端 ZCode 且消耗其 Token Plan 配额)
-        SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "实验功能") {
-            Spacer(Modifier.height(10.dp))
-            SplitButton(
-                label = "优化提示词按钮",
-                // 模式说明(P4 Task 3「可解释」):七种改写模式与预览弹层风格芯片
-                // 共用同一口径(见 promptOptimizeStyleHint / daemon promptOptimizeStyleTemplates),
-                // 并写明两条红线 —— 只改写不执行、结果经确认才替换输入框。
-                caption = "在会话输入栏显示「优化」按钮,把口语化输入改写成给 AI 的清晰指令;由下方选定的 Agent 与模型生成，会消耗对应配额。" +
-                    "改写模式七种:默认(说清楚、不扩写)/精简(一句话)/详细(要点列表)/实施计划(目标·范围·验收)/排错(现象·环境·复现·期望)/" +
-                    "测试(输入·行为·验证)/代码审查(风险·影响·证据)。优化只改写、不会自动执行,结果经你确认才会替换输入框",
-                mainLabel = if (AgentConnection.optimizePromptEnabled) "开" else "关",
-                onMainClick = {
-                    AgentConnection.optimizePromptEnabled = !AgentConnection.optimizePromptEnabled
-                    onFeedback(if (AgentConnection.optimizePromptEnabled) "已在输入栏启用优化按钮" else "已关闭优化按钮")
-                },
-                options = listOf(
-                    SplitOption("开", selected = AgentConnection.optimizePromptEnabled) {
-                        AgentConnection.optimizePromptEnabled = true
-                        onFeedback("已在输入栏启用优化按钮")
-                    },
-                    SplitOption("关", selected = !AgentConnection.optimizePromptEnabled) {
-                        AgentConnection.optimizePromptEnabled = false
-                        onFeedback("已关闭优化按钮")
-                    },
-                ),
-            )
-            val optimizerAgents = models.map { it.provider }.distinct().filter {
-                "text_generation:$it" in capabilities || (capabilities.none { c -> c.startsWith("text_generation:") } && it in setOf("codex","pi","zcode"))
-            }
-            // 【R1-C 结论 5】优化按钮本体是本地开关,但"用哪个 Agent/模型"的候选来自
-            // 电脑端模型表 —— 断连时如实标注,不摆空下拉让人误以为没有可选。
-            if (models.isEmpty()) {
-                Text(
-                    "优化使用的 Agent 与模型列表需连接主机后读取",
-                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                )
-            }
-            SplitButton(label="优化使用的 Agent", mainLabel=agentDisplay(AgentConnection.optimizeAgent),
-                onMainClick={ if(optimizerAgents.isNotEmpty()) {
-                    val index=optimizerAgents.indexOf(AgentConnection.optimizeAgent)
-                    AgentConnection.setOptimizer(optimizerAgents[(index+1)%optimizerAgents.size], "")
-                } },
-                options=optimizerAgents.map { id -> SplitOption(agentDisplay(id), selected=id==AgentConnection.optimizeAgent) { AgentConnection.setOptimizer(id, "") } })
-            val optimizerModels=models.filter { it.provider==AgentConnection.optimizeAgent && !it.id.endsWith("/default") }
-            SplitButton(label="优化使用的模型", mainLabel=optimizerModels.find { it.id==AgentConnection.optimizeModel }?.displayName ?: "Agent 默认模型",
-                onMainClick={ if(optimizerModels.isNotEmpty()) AgentConnection.setOptimizer(AgentConnection.optimizeAgent,optimizerModels.first().id) },
-                options=listOf(SplitOption("Agent 默认模型", selected=AgentConnection.optimizeModel.isEmpty()) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent, "") }) +
-                    optimizerModels.map { m -> SplitOption(m.displayName, selected=m.id==AgentConnection.optimizeModel) { AgentConnection.setOptimizer(AgentConnection.optimizeAgent,m.id) } })
-
-            // 【辅线 B】未识别操作确认(实验,全局默认关):读 daemon RuntimePolicy 的
-            // 全局布尔,写走既有 SetRuntimePolicy(完整策略 + CAS,与「运行时」区段的
-            // budget 块共用 [RuntimeControlState] 同一份真值 —— 两个界面一个数)。
-            // 开启后 agent 发来的未识别反向请求先弹手机确认卡,由用户逐次决定;
-            // 关闭(默认)时 daemon 直接安全拒绝,行为与历史一致。
-            LaunchedEffect(Unit) { RuntimeControlState.ensureBudgetSnapshot() }
-            val passthroughScope = rememberCoroutineScope()
-            val passthroughOn = unknownRequestPassthroughOn(RuntimeControlState.budget?.policy)
-            fun setPassthrough(on: Boolean, done: String) {
-                passthroughScope.launch {
-                    val err = RuntimeControlState.saveBudget { b -> applyUnknownRequestPassthrough(b, on) }
-                    onFeedback(err ?: done)
-                }
-            }
-            SplitButton(
-                label = "未识别操作确认(实验)",
-                caption = "开启后,agent 发来的未识别操作会先征求你的同意,而不是直接拒绝",
-                mainLabel = if (passthroughOn) "开" else "关",
-                onMainClick = { setPassthrough(!passthroughOn, if (!passthroughOn) "已开启:未识别操作将先征求你的同意" else "已关闭:未识别操作将直接安全拒绝") },
-                options = listOf(
-                    SplitOption("开", selected = passthroughOn) { setPassthrough(true, "已开启:未识别操作将先征求你的同意") },
-                    SplitOption("关", selected = !passthroughOn) { setPassthrough(false, "已关闭:未识别操作将直接安全拒绝") },
-                ),
-            )
-            Spacer(Modifier.height(6.dp))
-        }
-
-        // 【端侧语音】离线识别模型管理:系统识别不可用的设备(无识别服务 ROM/无 GMS)
-        // 靠它落地语音输入 —— 下载 / 进度 / 失败重试 / 删除释放空间。
-        SectionBlock(icon = R.drawable.ic_lucide_mic, title = "语音识别") {
-            Spacer(Modifier.height(10.dp))
-            val context = LocalContext.current
-            LaunchedEffect(Unit) { SenseVoiceModelManager.init(context) }
-            val speech by SenseVoiceModelManager.state.collectAsState()
-            // 【按需下载正路入口】模型不再随 APK 打包(SenseVoiceModelManager 三态,
-            // 上轮已就位):needsDownload → 摆下载按钮(此前只有"点麦克风才触发"
-            // 一条暗路);下载中沿用下方既有"初始化 X%"进度通道;就绪后按钮消失;
-            // 下载失败 → desc 走既有错误通道 + 重试按钮(判别主通道 =
-            // downloadFailed 显式标志,文案比对仅作旧状态兼容回退,见纯函数 KDoc)。
-            val downloadAction = senseVoiceDownloadAction(speech.ready, speech.preparing, speech.downloadFailed, speech.error)
-            SettingRow(
-                title = "SenseVoice Small INT8（按需下载）",
-                desc = speech.error
-                    ?: "符合中文输入习惯 · 自动标点与数字规范化 · 音频不离开设备",
-                value = when {
-                    speech.ready -> "已就绪"
-                    speech.preparing -> "初始化 ${speech.preparedBytes * 100 / SenseVoiceModelManager.TOTAL_BYTES}%"
-                    speech.needsDownload -> "未下载"
-                    else -> "内置"
-                },
-                divider = false,
-            )
-            if (downloadAction != null) {
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = PaEditorial.Space.TouchMin)
-                        .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                        .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                        .pressable(haptic = true) { SenseVoiceModelManager.prepareBundledModel() }
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    Text(
-                        downloadAction,
-                        fontSize = PaEditorial.Type.Body.fontSize,
-                        fontWeight = FontWeight.SemiBold,
-                        color = PaEditorial.Primary,
-                    )
-                }
-            }
-            Text(
-                "有系统识别服务时可直接使用；否则使用 SenseVoice 离线识别(模型首次启用时联网下载一次,音频不离开设备)。录音权限被拒绝时只请求权限。",
-                fontSize = PaEditorial.Type.Caption.fontSize,
-                color = PaEditorial.Muted,
-            )
-            Spacer(Modifier.height(6.dp))
-        }
+private fun ComputerConsolePage(onBack: () -> Unit, onFeedback: (String) -> Unit) {
+    SubPageScaffold(title = "电脑控制台", onBack = onBack) {
+        UnknownRequestConfirmSection(onFeedback = onFeedback)
+        Spacer(Modifier.height(14.dp))
+        RuntimeSection()
+        Spacer(Modifier.height(20.dp))
     }
 }
+
+/**
+ * 「未识别操作确认」(实验,全局默认关;自 Daemon 页原样随迁):
+ * 读 daemon RuntimePolicy 的全局布尔,写走既有 SetRuntimePolicy(完整策略 + CAS,
+ * 与「运行时」区段的 budget 块共用 [RuntimeControlState] 同一份真值 —— 两个界面
+ * 一个数,随迁才不散)。
+ * 开启后 agent 发来的未识别反向请求先弹手机确认卡,由用户逐次决定;
+ * 关闭(默认)时 daemon 直接安全拒绝,行为与历史一致。
+ */
+@Composable
+private fun UnknownRequestConfirmSection(onFeedback: (String) -> Unit) {
+    LaunchedEffect(Unit) { RuntimeControlState.ensureBudgetSnapshot() }
+    val passthroughScope = rememberCoroutineScope()
+    val passthroughOn = unknownRequestPassthroughOn(RuntimeControlState.budget?.policy)
+    fun setPassthrough(on: Boolean, done: String) {
+        passthroughScope.launch {
+            val err = RuntimeControlState.saveBudget { b -> applyUnknownRequestPassthrough(b, on) }
+            onFeedback(err ?: done)
+        }
+    }
+    SectionBlock(icon = R.drawable.ic_lucide_sparkles, title = "实验功能") {
+        Spacer(Modifier.height(10.dp))
+        SplitButton(
+            label = "未识别操作确认(实验)",
+            caption = "开启后,agent 发来的未识别操作会先征求你的同意,而不是直接拒绝",
+            mainLabel = if (passthroughOn) "开" else "关",
+            onMainClick = { setPassthrough(!passthroughOn, if (!passthroughOn) "已开启:未识别操作将先征求你的同意" else "已关闭:未识别操作将直接安全拒绝") },
+            options = listOf(
+                SplitOption("开", selected = passthroughOn) { setPassthrough(true, "已开启:未识别操作将先征求你的同意") },
+                SplitOption("关", selected = !passthroughOn) { setPassthrough(false, "已关闭:未识别操作将直接安全拒绝") },
+            ),
+        )
+        Spacer(Modifier.height(6.dp))
+    }
+}
+
+/**
+ * 【F2 消亡页】「Daemon 桥接与输入」二级页已删除,内容三向分流:
+ *  · 「连接策略」说明文字 → 「连接与配对」页头;
+ *  · 「实验功能 · 优化提示词按钮(+优化用 Agent/模型)」与「语音识别(SenseVoice)」
+ *    → 一级页「对话与输入」组就地展示;
+ *  · 「未识别操作确认」→「电脑控制台」页([UnknownRequestConfirmSection])。
+ */
 
 @Composable
 internal fun NativePermissionsSection(agentId: String, threadId: String = "", initial: CodexSettings? = null) {

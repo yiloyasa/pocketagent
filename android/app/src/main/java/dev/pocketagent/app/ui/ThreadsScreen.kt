@@ -88,6 +88,12 @@ import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.component.ConnectionBanner
+import dev.pocketagent.app.ui.component.PaErrorBar
+import dev.pocketagent.app.ui.component.PaErrorCard
+import dev.pocketagent.app.ui.component.PaErrorView
+import dev.pocketagent.app.ui.component.PaErrorAction
+import dev.pocketagent.app.ui.component.PaErrorKind
+import dev.pocketagent.app.ui.component.PaEmptyContext
 import dev.pocketagent.app.ui.component.PaHostChip
 import dev.pocketagent.app.ui.component.PaHostLink
 import dev.pocketagent.app.ui.component.PaNavIconButton
@@ -98,6 +104,9 @@ import dev.pocketagent.app.ui.component.SwipeAction
 import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.ThreadPins
 import dev.pocketagent.app.ui.component.ThreadSnapshot
+import dev.pocketagent.app.ui.component.paEmptyStateMotifOf
+import dev.pocketagent.app.ui.component.paErrorViewOf
+import dev.pocketagent.app.ui.component.paIsSameErrorKind
 import dev.pocketagent.app.ui.component.shortWorkspace
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.rememberUndoState
@@ -942,32 +951,31 @@ fun ThreadsScreen(
             )
 
             loadError?.let { message ->
-                // 语义横幅(不算卡):琥珀=离线快照、珊瑚=失败;语义色 + 状态说明双通道
-                val bannerTone = if (offline) EditorialTone.ATTENTION else EditorialTone.DENIED
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp)
-                        .background(bannerTone.container, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        message, Modifier.weight(1f),
-                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
-                        color = bannerTone.text, maxLines = 2,
+                // 统一错误横幅(PaErrorBar):人话一句话 + 动作位 + 原文详情(点按展开)。
+                // 离线快照分支的文案来自 buildListBanner(已是人话,不是 daemon 错误),
+                // 不走映射表,由这里自组 PaErrorView;其余(loadError 常为
+                // 「…失败：UNAUTHENTICATED: token 无效」等原文)经 paErrorViewOf 翻译,
+                // 未配对 → 琥珀「还没和电脑配对 · 去配对」,连通类 → 「连不上电脑」。
+                val bannerView = if (offline) {
+                    PaErrorView(
+                        kind = PaErrorKind.CONNECTIVITY,
+                        headline = message,
+                        raw = message,
+                        action = PaErrorAction.NONE,
+                        tone = EditorialTone.ATTENTION,
                     )
-                    Text(
-                        if (retrying) "进行中…" else "重试",
-                        Modifier
-                            .pressable(enabled = !retrying) { retry() }
-                            .padding(horizontal = 8.dp, vertical = 12.dp),
-                        fontSize = PaEditorial.Type.BodySmall.fontSize,
-                        fontWeight = FontWeight.SemiBold,
-                        // 主色只给当前操作(重试)
-                        color = PaEditorial.Primary,
-                    )
+                } else {
+                    paErrorViewOf(message)
                 }
+                PaErrorBar(
+                    view = bannerView,
+                    onRetry = { retry() },
+                    retrying = retrying,
+                    // 配对页导航通道:复用既有 onOpenSettings(设置 → 连接与配对);
+                    // MainActivity 后续可深链 settings?sub=userdata 直达。
+                    onGoPair = { onOpenSettings() },
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
             }
 
             // ---- 搜索(临时视图状态,设计稿 04):标题/工作区/agent 名,返回键先清 ----
@@ -1242,17 +1250,20 @@ fun ThreadsScreen(
                         ungrouped = filter == THREAD_FILTER_UNGROUPED,
                     )
                     if (!narrowingActive) {
+                        // 同屏错误判重(paIsSameErrorKind,纯函数):未配对/断连时列表与
+                        // 电脑会话两个来源报的是同一根源,顶部横幅已在讲的那句不再重复 ——
+                        // 盘点实锤"同一屏错误信息重复出现最多 4 次",这里收掉重复的来源。
+                        val primaryError = loadError
                         pcError?.let { message ->
-                            Text(
-                                message,
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                                    .padding(12.dp),
-                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
-                                color = EditorialTone.DENIED.text,
-                            )
+                            if (!paIsSameErrorKind(primaryError, message)) {
+                                PaErrorCard(
+                                    view = paErrorViewOf(message),
+                                    context = "电脑上的 codex 会话",
+                                    onRetry = { retry() },
+                                    onGoPair = { onOpenSettings() },
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                )
+                            }
                         }
                         // Pi/ZCode 电脑会话的读取失败:只在筛到对应 agent 时展示对应侧
                         // 的错误(分源各记,筛"Pi"不弹 ZCode 未装的红字,反之亦然;
@@ -1263,22 +1274,32 @@ fun ThreadsScreen(
                             else -> null
                         }
                         agentPcMessage?.let { message ->
-                            Text(
-                                message,
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                                    .padding(12.dp),
-                                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
-                                color = EditorialTone.DENIED.text,
-                            )
+                            if (!paIsSameErrorKind(primaryError, message)) {
+                                PaErrorCard(
+                                    view = paErrorViewOf(message),
+                                    context = when (agentFilter) {
+                                        AGENT_FILTER_PI -> "电脑上的 Pi 会话"
+                                        else -> "电脑上的 ZCode 会话"
+                                    },
+                                    onRetry = { retry() },
+                                    onGoPair = { onOpenSettings() },
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                )
+                            }
                         }
                     }
                     EmptyState(
                         iconRes = emptyView.iconRes,
                         title = emptyView.title,
                         hint = emptyView.hint,
+                        // 空态语境 → duotone 母题(纯函数取值口,语境不符宁缺):
+                        // 真的还没有会话(引导新建)空是因为"还没开始用电脑干活",
+                        // 属发现/连接语境 → 发现环;归档/分组/搜索筛空的空态语境不符,不配图形。
+                        motif = if (emptyView.action == ThreadsEmptyAction.NEW_THREAD) {
+                            paEmptyStateMotifOf(PaEmptyContext.DISCOVER)
+                        } else {
+                            null
+                        },
                     )
                     // 空态的下一步动作(调研 4):能走的路给成按钮,不给死胡同。
                     when (emptyView.action) {
@@ -1288,12 +1309,13 @@ fun ThreadsScreen(
                         ) {
                             Button(
                                 onClick = { showNewThread = true },
-                                // 主操作:石墨重点面白字(README:主按钮用石墨)
+                                // 主操作:石墨重点面白字(README:主按钮用石墨;内容色读
+                                // OnGraphite 令牌,不直写 White —— 深/黑客盘同源不漂移)
                                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                                     containerColor = PaEditorial.Graphite,
                                 ),
                                 shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
-                            ) { Text(emptyView.actionLabel, color = Color.White) }
+                            ) { Text(emptyView.actionLabel, color = PaEditorial.OnGraphite) }
                         }
                         ThreadsEmptyAction.CLEAR_FILTERS -> Row(
                             Modifier.fillMaxWidth(),
@@ -1646,8 +1668,13 @@ fun ThreadsScreen(
                         containerColor = if (action == "delete") PaEditorial.Denied else PaEditorial.Graphite,
                     ),
                     shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
-                // 删除腿坐 Denied 实底读 OnDenied(深/黑客盘=暗红棕);石墨腿保持白字
-                ) { Text("确认", color = if (action == "delete") PaEditorial.OnDenied else Color.White) }
+                // 删除腿坐 Denied 实底读 OnDenied(深/黑客盘=暗红棕);石墨腿读 OnGraphite 令牌
+                ) {
+                    Text(
+                        "确认",
+                        color = if (action == "delete") PaEditorial.OnDenied else PaEditorial.OnGraphite,
+                    )
+                }
             }
         }
     }
@@ -2422,7 +2449,7 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                 ) {
                     Text(
                         if (picked.isBlank()) "先选工作区" else "创建",
-                        color = if (picked.isBlank()) ed.Subtle else Color.White,
+                        color = if (picked.isBlank()) ed.Subtle else PaEditorial.OnGraphite,
                     )
                 }
             }
@@ -2439,19 +2466,35 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
 }
 
 
-/** 小过滤 chip(活跃/已归档;FilesScreen 等旧版页面仍在用,保持原样)。 */
+/**
+ * 小过滤 chip(旧版页面仍在用;2026-10-09 chips 家族统一:选中 = 石墨底白字,
+ * 未选中 = 瓷白底细线描边,与 EditorialFilterChip/KindTab 同一语言 ——
+ * 盘点实锤"选中 chip 黑底白字与蓝底混杂",主操作语言只有石墨一种)。
+ * 44dp 最小点击区;使用点仅剩 FilesScreen 新建弹层(均在本轮统一范围内)。
+ */
 @Composable
 fun FilterChip2(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
+            .heightIn(min = PaEditorial.Space.TouchMin)
             .pressable { onClick() }
             .background(
-                if (selected) PaEditorial.PrimaryContainer else PaEditorial.Surface,
-                RoundedCornerShape(50),
+                if (selected) PaEditorial.Graphite else PaEditorial.Surface,
+                RoundedCornerShape(PaEditorial.Radius.Pill),
             )
-            .padding(horizontal = 16.dp, vertical = 7.dp),
+            .then(
+                if (selected) Modifier
+                else Modifier.border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Pill)),
+            )
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = PaEditorial.Type.BodySmall.fontSize, color = if (selected) PaEditorial.Primary else PaEditorial.Muted)
+        Text(
+            label,
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) PaEditorial.OnGraphite else PaEditorial.Ink,
+        )
     }
 }
 
@@ -2727,7 +2770,7 @@ private fun SectionManagerSheet(
                     Button(
                         enabled = field.isNotBlank() && !busy,
                         onClick = { onSubmit(field) },
-                        // 主操作:石墨重点面白字(README:主按钮用石墨)
+                        // 主操作:石墨重点面白字(README:主按钮用石墨;内容读 OnGraphite 令牌)
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                             containerColor = PaEditorial.Graphite,
                         ),
@@ -2735,7 +2778,7 @@ private fun SectionManagerSheet(
                     ) {
                         Text(
                             if (manage == null) "创建" else "保存",
-                            color = if (field.isNotBlank() && !busy) Color.White else ed.Subtle,
+                            color = if (field.isNotBlank() && !busy) PaEditorial.OnGraphite else ed.Subtle,
                         )
                     }
                 }

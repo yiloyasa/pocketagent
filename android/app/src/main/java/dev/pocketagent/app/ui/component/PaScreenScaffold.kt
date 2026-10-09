@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -21,8 +22,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -32,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.theme.PaEditorial
+import kotlin.math.roundToInt
 
 /**
  * 页面骨架(README「实现落地建议」四类共享组件之四)——
@@ -74,6 +79,14 @@ import dev.pocketagent.app.ui.theme.PaEditorial
  * @param hostStatus 主机状态槽(建议放 [PaHostChip]);null = 本页不展示。
  * @param bottomBar 底部输入/主操作区(自动避让导航条);null = 内容直落到底。
  * @param content 页面内容(已含 23dp 水平边距;滚动由页面自管)。
+ * @param immersiveHeader 沉浸石墨头部(方向 C · N2,2026-10-09):true 时头部区
+ *   (状态栏底+导航行+主机状态槽)整体用 [PaEditorial.Graphite] 打底,与内容区
+ *   形成"台上/台下"两层世界 —— 暗面=Graphite 家族专属铁律的落点之一。状态栏
+ *   底永远石墨(不随收放,常驻一条"台下"边);文字走 OnGraphite 档。默认 false
+ *   = 既有画布语言,既有各屏零改动。
+ * @param headerExpandFraction 头部收放系数 0..1(滚动方向驱动,调用方用 PaMotion
+ *   插值后传入):1=全开,0=全收(导航行+主机状态槽卷收让位正文,状态栏石墨边
+ *   常驻)。仅 [immersiveHeader]=true 时生效;传值需在 0..1(内部夹逼)。
  */
 @Composable
 fun PaScreenScaffold(
@@ -84,46 +97,74 @@ fun PaScreenScaffold(
     trailing: (@Composable () -> Unit)? = null,
     hostStatus: (@Composable () -> Unit)? = null,
     bottomBar: (@Composable () -> Unit)? = null,
+    // 新参必须在 [content] 之前:既有各屏全部以尾随 lambda 传 content,
+    // 尾随 lambda 永远映射最后一个参数,追加在后面会全线破调用点。
+    immersiveHeader: Boolean = false,
+    headerExpandFraction: Float = 1f,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier
             .fillMaxSize()
-            .background(PaEditorial.Canvas)
-            .statusBarsPadding(),
+            .background(PaEditorial.Canvas),
     ) {
-        // 顶部导航:68dp 高,左导航钮 + 标题 + 唯一次操作
-        Row(
+        // 顶部导航:68dp 高,左导航钮 + 标题 + 唯一次操作。
+        // 【沉浸头部】immersiveHeader=true:石墨打底在 statusBarsPadding 外层
+        // (状态栏区一并石墨);常规路径与此改版前逐像素等价 —— 状态栏 inset 由
+        // 本头部块消费(等价于旧的根级 statusBarsPadding,布局顺序不变)。
+        val headerHost: Modifier = if (immersiveHeader) {
             Modifier
-                .heightIn(min = PaEditorial.Space.NavHeight)
-                .padding(horizontal = PaEditorial.Space.NavGutter),
-            verticalAlignment = Alignment.CenterVertically,
+                .background(PaEditorial.Graphite)
+                .statusBarsPadding()
+        } else {
+            Modifier.statusBarsPadding()
+        }
+        val headerCollapseModifier: Modifier = if (immersiveHeader) {
+            Modifier.headerCollapse(headerExpandFraction)
+        } else {
+            Modifier
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(headerHost),
         ) {
-            leading?.let {
-                it()
-                Spacer(Modifier.width(12.dp))
-            }
-            if (titleContent != null) {
+            // 收放壳:仅沉浸头部生效(常规头部直通,零开销);内容按全高测量、
+            // 布局高度取比例、超出裁剪 + 内容淡出 —— 收起读作"卷上去"不是挤压重排。
+            Column(headerCollapseModifier) {
                 Row(
                     Modifier
-                        .weight(1f)
-                        .semantics { this.contentDescription = title },
+                        .heightIn(min = PaEditorial.Space.NavHeight)
+                        .padding(horizontal = PaEditorial.Space.NavGutter),
                     verticalAlignment = Alignment.CenterVertically,
-                    content = titleContent,
-                )
-            } else {
-                Text(
-                    title,
-                    Modifier.weight(1f),
-                    style = PaEditorial.Type.Title,
-                    color = PaEditorial.Ink,
-                    maxLines = 1,
-                )
+                ) {
+                    leading?.let {
+                        it()
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    if (titleContent != null) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .semantics { this.contentDescription = title },
+                            verticalAlignment = Alignment.CenterVertically,
+                            content = titleContent,
+                        )
+                    } else {
+                        Text(
+                            title,
+                            Modifier.weight(1f),
+                            style = PaEditorial.Type.Title,
+                            color = if (immersiveHeader) PaEditorial.OnGraphite else PaEditorial.Ink,
+                            maxLines = 1,
+                        )
+                    }
+                    trailing?.invoke()
+                }
+                hostStatus?.let {
+                    Box(Modifier.padding(horizontal = PaEditorial.Space.PageMargin)) { it() }
+                }
             }
-            trailing?.invoke()
-        }
-        hostStatus?.let {
-            Box(Modifier.padding(horizontal = PaEditorial.Space.PageMargin)) { it() }
         }
         Column(
             Modifier
@@ -138,9 +179,39 @@ fun PaScreenScaffold(
 }
 
 /**
+ * 头部收放壳(方向 C · N2 沉浸石墨头部):按 [expand](0..1)收放高度 —— 内容按
+ * 全高测量,布局高度取比例值,超出部分裁剪,内容随收起淡出(0.35 保底,不是
+ * 完全消失,卷收过程仍读得出"那是头部")。expand=1 时高度零裁剪、alpha 恒 1,
+ * 行为直通。纯布局层:不读任何组合状态,供骨架按帧插值调用。
+ */
+private fun Modifier.headerCollapse(expand: Float): Modifier {
+    val fraction = expand.coerceIn(0f, 1f)
+    val fade = 0.35f + 0.65f * fraction
+    return this
+        .clipToBounds()
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            val height = (placeable.height * fraction).roundToInt()
+            layout(placeable.width, height) {
+                if (height > 0) {
+                    // 高度裁到比例值,内容原位摆放;淡出走下方内层 graphicsLayer
+                    // (placeRelative 的 alpha/layerBlock 位参在本工程 compose-ui
+                    // 1.7 已移除,见其候选签名只有 zIndex)。
+                    placeable.placeRelative(0, 0)
+                }
+            }
+        }
+        // 淡出:graphicsLayer 在 layout 内层,包裹"被摆放的头部内容"的绘制,
+        // 纯绘制层 alpha,不触发重新布局。
+        .graphicsLayer { alpha = fade }
+}
+
+/**
  * 顶部导航圆钮(premium.css .icon-button):44dp 白底方格、13dp 圆角、细线描边;
  * [plain] = 无底无框的裸钮(返回箭头常用);[active] = 当前操作(主色浅底+主色图,
- * 主色只用于当前操作的纪律落点)。
+ * 主色只用于当前操作的纪律落点);[onGraphite] = 坐石墨沉浸头部的形态(方向 C ·
+ * N2):透明底 + OnGraphite 图 + OnGraphiteHairline 细边 —— 头部收放/换盘时
+ * 同一套几何,只换内容色,不另造第二种导航钮。
  *
  * @param contentDescription 读屏名(必填 —— 图标钮没有文字,无障碍名不能省)。
  */
@@ -152,20 +223,26 @@ fun PaNavIconButton(
     modifier: Modifier = Modifier,
     active: Boolean = false,
     plain: Boolean = false,
+    onGraphite: Boolean = false,
 ) {
     val shape = RoundedCornerShape(PaEditorial.Radius.IconButton)
     val container = when {
         active -> PaEditorial.PrimaryContainer
-        plain -> Color.Transparent
+        plain || onGraphite -> Color.Transparent
         else -> PaEditorial.Surface
     }
-    val tint = if (active) PaEditorial.Primary else PaEditorial.Ink
+    val tint = when {
+        active -> PaEditorial.Primary
+        onGraphite -> PaEditorial.OnGraphite
+        else -> PaEditorial.Ink
+    }
+    val borderColor = if (onGraphite) PaEditorial.OnGraphiteHairline else PaEditorial.Hairline
     Box(
         modifier
             .size(44.dp)
             .background(container, shape)
             .then(
-                if (plain) Modifier else Modifier.border(1.dp, PaEditorial.Hairline, shape),
+                if (plain) Modifier else Modifier.border(1.dp, borderColor, shape),
             )
             .pressable(onClick = onClick)
             .semantics { this.contentDescription = contentDescription },
@@ -184,6 +261,7 @@ fun PaNavIconButton(
     modifier: Modifier = Modifier,
     active: Boolean = false,
     plain: Boolean = false,
+    onGraphite: Boolean = false,
 ) {
-    PaNavIconButton(onClick, contentDescription, painterResource(iconRes), modifier, active, plain)
+    PaNavIconButton(onClick, contentDescription, painterResource(iconRes), modifier, active, plain, onGraphite)
 }

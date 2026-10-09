@@ -54,14 +54,15 @@ import dev.pocketagent.app.ui.anim.IconActionButton
 import dev.pocketagent.app.ui.component.DocFormatRegistry
 import dev.pocketagent.app.ui.component.OfflineStore
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaErrorBar
 import dev.pocketagent.app.ui.component.TaskCenter
 import dev.pocketagent.app.ui.component.WebDownloadBridge
 import dev.pocketagent.app.ui.component.WebNavPolicy
 import dev.pocketagent.app.ui.component.humanSize
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaHacker
-import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -130,6 +131,8 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
     var scanning by remember { mutableStateOf(false) }
     var servers by remember { mutableStateOf<List<DevServer>>(emptyList()) }
     var scanHint by remember { mutableStateOf<String?>(null) }
+    // 扫描失败(与"没扫到"的空态提示 scanHint 分开源):走 PaErrorBar 统一呈现。
+    var scanError by remember { mutableStateOf<String?>(null) }
 
     /**
      * 按当前页面来源同步脚本桥的挂载/卸载。
@@ -306,6 +309,7 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
         scope.launch {
             scanning = true
             scanHint = null
+            scanError = null
             try {
                 val list = withContext(Dispatchers.IO) {
                     AgentConnection.hostService()
@@ -317,7 +321,9 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                     scanHint = "没发现正在运行的 dev server(常见端口 3000/5173/8000/8080…)"
                 }
             } catch (e: Exception) {
-                scanHint = "扫描失败:${e.message ?: "请先连接电脑"}"
+                // 扫描失败与"没扫到"分开:失败走统一错误横幅(人话 + 重试 + 原文详情),
+                // 不再把失败文本混进"没有正在运行"的空态提示里。
+                scanError = "扫描失败:${e.message ?: "请先连接电脑"}"
             } finally {
                 scanning = false
             }
@@ -628,6 +634,16 @@ private fun BrowserScreenBody(initialUrl: String = "", onBack: () -> Unit = {}) 
                         "正在拨 3000/5173/8000/8080 等常见端口…",
                         Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
+                    )
+                    // 扫描失败:统一错误横幅(人话 + 原地重扫 + 原文详情;本页无配对页
+                    // 导航通道,按宁缺勿假不摆「去配对」)。
+                    scanError != null -> PaErrorBar(
+                        view = paErrorViewOf(scanError.orEmpty()),
+                        onRetry = { refreshDevServers() },
+                        retryLabel = "重新扫描",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
                     servers.isEmpty() -> Text(
                         scanHint ?: "没有正在运行的 dev server",

@@ -334,7 +334,7 @@ object PaDownloader {
         // 而任务条目还留着 localUri —— 直接打开会静默失败或白屏。
         // 先校验存在性,失效就明说并给出去处。
         if (!localFileExists(ctx, uri)) {
-            toast(ctx, "文件已被移动或删除\n可在「设置 → 用户数据管理」里移除该条目")
+            toast(ctx, "文件已被移动或删除\n可在「设置 → 下载与存储」里移除该条目")
             return
         }
         val kind = fileKindOf(title)

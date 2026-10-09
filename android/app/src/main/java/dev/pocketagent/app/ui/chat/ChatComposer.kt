@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -58,6 +59,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -87,6 +91,7 @@ import dev.pocketagent.app.ui.ChatInkColor
 import dev.pocketagent.app.ui.ChatMutedColor
 import dev.pocketagent.app.ui.ChatSubtleColor
 import dev.pocketagent.app.ui.EXPAND_HINT_THRESHOLD
+import dev.pocketagent.app.ui.agentBrandIcon
 import dev.pocketagent.app.ui.attachmentEntryHiddenFor
 import dev.pocketagent.app.ui.INPUT_TOUCH_TARGET_DP
 import dev.pocketagent.app.ui.SLASH_UNKNOWN_AGENT_HINT
@@ -107,18 +112,24 @@ import dev.pocketagent.app.ui.voiceEngineLabel
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.pressableLong
+import dev.pocketagent.app.ui.anim.rememberReduceMotion
 import dev.pocketagent.app.ui.ContextRing
+import dev.pocketagent.app.ui.PaStatusGlyph
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaHostChip
 import dev.pocketagent.app.ui.component.PaHostLink
+import dev.pocketagent.app.ui.component.PaStatusGlyphSlot
 import dev.pocketagent.app.ui.component.connectionBannerCopy
+import dev.pocketagent.app.ui.component.paEditorialShadow
 import dev.pocketagent.app.ui.component.TypingDots
 import dev.pocketagent.app.ui.component.composerShowsPrompt
 import dev.pocketagent.app.ui.compactionPending
 import dev.pocketagent.app.ui.ringPercentLabel
+import dev.pocketagent.app.ui.statusGlyphOf
 import dev.pocketagent.app.ui.usageTotalTokens
 import dev.pocketagent.app.ui.PromptOptimizeState
 import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
 import dev.pocketagent.app.ui.voice.VoiceController
@@ -182,9 +193,50 @@ internal fun ColumnScope.ChatComposerArea(
     promptOptState: PromptOptimizeState,
     onOptimizeInput: () -> Unit,
     onSend: (String) -> Boolean,
+    // ---- 【方向 C · N1 上滑沉浸 / A2 海拔】2026-10-09 新参(纯视觉/交互层) ----
+    /** true = 沉浸态:输入栏收窄为单行胶囊(点击 [onExpandImmersed] 展开,正文获得全高)。 */
+    immersed: Boolean,
+    /** 从胶囊展开全尺寸输入区(胶囊整枚是按钮;数据零位移,草稿/附件全在参数里)。 */
+    onExpandImmersed: () -> Unit,
+    /** 胶囊点开计数:>0 且变化时,展开分支组合后给输入框请求聚焦(点胶囊=我要输入)。 */
+    expandFocusTick: Int,
 ) {
     // 【动画 ①】麦克风按下涟漪触发器(随迁自 ChatScreen:仅输入区消费)
     var micRippleTick by remember { mutableStateOf(0) }
+    // 【N1 沉浸两相】单行胶囊(点击展开) ↔ 全尺寸输入区:AnimatedContent 尺寸过渡
+    // (spring 可打断);减弱动效直切(instant,反馈仍在位移消失)。胶囊态不组合
+    // 完整输入区 —— 输入栏收成一行,正文自然获得全高。草稿/附件/各浮层开合
+    // 全部外置(hoist 在 ChatScreen/参数),两相切换零数据位移、零行为变化。
+    val reduceMotion = rememberReduceMotion()
+    // 【点胶囊=我要输入】展开过渡后给输入框请求聚焦;拿不到节点(过渡中)就放弃,
+    // 用户点一下输入框自然聚焦 —— runCatching 兜底,不崩溃不阻塞。
+    val composerFocus = remember { FocusRequester() }
+    LaunchedEffect(expandFocusTick) {
+        if (expandFocusTick > 0) {
+            kotlinx.coroutines.delay(120)
+            runCatching { composerFocus.requestFocus() }
+        }
+    }
+    AnimatedContent(
+        targetState = immersed,
+        transitionSpec = {
+            if (reduceMotion) {
+                fadeIn(PaMotion.instant()).togetherWith(fadeOut(PaMotion.instant()))
+            } else {
+                (fadeIn(PaMotion.emphasized()) + expandVertically(PaMotion.emphasized()))
+                    .togetherWith(fadeOut(PaMotion.standard()) + shrinkVertically(PaMotion.standard()))
+            }
+        },
+        label = "composerImmerse",
+    ) { collapsed ->
+        if (collapsed) {
+            ChatComposerCapsule(
+                input = input,
+                threadAgentId = threadAgentId,
+                running = session.running || session.recovering,
+                onExpand = onExpandImmersed,
+            )
+        } else {
     // ---- 输入区(对标图五):附件行 + 双行胶囊 [输入 / + 审批 模型·强度 发送] ----
         // 已上传附件 chips:出现/收起走 AnimatedContent(展开+淡入 / 收缩+淡出,
         // 全 spring 可打断)—— 编辑条"带附件 ↔ 无附件"两个状态之间不再硬跳。
@@ -277,15 +329,37 @@ internal fun ColumnScope.ChatComposerArea(
         )
         // 编辑式:瓷白输入卡 + 细线(18dp 圆角);黑客终端保持玻璃材质(26dp)。
         val composerShape = if (PaHacker.isHacker) RoundedCornerShape(PaEditorial.Radius.Sheet) else RoundedCornerShape(PaEditorial.Radius.Card)
+        // 【A2 输入栏浮起】海拔语言:输入栏从"贴在底栏的格子"变"浮在海面上的操作台"。
+        //  · 浅盘:Shadow.Alert 档投影 + 玻璃高光边(PaGlassToken.Highlight,"光打在上缘",
+        //    与石墨用户气泡同一亮边家族)—— 悬浮件的既有档位,零新增令牌;
+        //  · 深盘:保持细线(M3 暗色"色调面替代阴影"纪律,不加班驳阴影);
+        //  · 黑客终端:玻璃材质不变。
+        // 【聚焦浮起增强,对齐既有辉光不叠加】投影 blur/dy 随 focusGlow(0..1)增大、
+        // 整卡上浮 2dp —— 与下方既有的主色辉光描边同一驱动、同一弹簧,是同一束
+        // "聚焦"的两种表达,不是第二层独立光效。
+        val composerShell = when {
+            PaHacker.isHacker -> Modifier.paGlass(RoundedCornerShape(PaEditorial.Radius.Sheet), hairline = true)
+            PaEditorial.IsDark -> Modifier
+                .background(PaEditorial.Surface, composerShape)
+                .border(1.dp, PaEditorial.Hairline, composerShape)
+            else -> {
+                val alert = PaEditorial.Shadow.Alert
+                val lift = PaEditorial.ShadowSpec(
+                    blur = alert.blur * (1f + 0.20f * focusGlow),
+                    dy = alert.dy * (1f + 0.20f * focusGlow),
+                    color = alert.color,
+                )
+                Modifier
+                    .offset(y = (-2 * focusGlow).dp)
+                    .paEditorialShadow(lift, composerShape)
+                    .background(PaEditorial.Surface, composerShape)
+                    .border(1.dp, PaGlassToken.Highlight, composerShape)
+            }
+        }
         Column(
             Modifier
                 .fillMaxWidth()
-                .then(
-                    if (PaHacker.isHacker) Modifier.paGlass(RoundedCornerShape(PaEditorial.Radius.Sheet), hairline = true)
-                    else Modifier
-                        .background(PaEditorial.Surface, composerShape)
-                        .border(1.dp, PaEditorial.Hairline, composerShape),
-                )
+                .then(composerShell)
                 .border(
                     1.dp,
                     PaEditorial.Primary.copy(alpha = 0.30f * focusGlow),
@@ -416,6 +490,9 @@ internal fun ColumnScope.ChatComposerArea(
                     onTextLayout = { inputWrapLines = it.lineCount },
                     modifier = Modifier
                         .fillMaxWidth()
+                        // 【N1 胶囊点开聚焦】FocusRequester 挂点:expandFocusTick 驱动的
+                        // 请求经它落到本输入框(见函数头部 composerFocus 效果块)
+                        .focusRequester(composerFocus)
                         // 【动画 ③】文本落定脉动:识别文本并入的一瞬整框 45%→100% 透明度
                         // (spring ~0.3s),只动绘制层(alpha),不触发重新布局,开销可忽略
                         .graphicsLayer { alpha = voiceLandPulse.value }
@@ -519,16 +596,26 @@ internal fun ColumnScope.ChatComposerArea(
             // 最近用过的模型单点即切,不再强制进 ModelEffortCard 二级弹窗(两段式太重);
             // 面板尾部「更多…」仍进完整选择卡(跟随桌面/全部模型入口不丢)。模型名
             // 11sp→13sp、Muted→Ink:这是高频操作控件,字号与对比度按主控件档给。
-            Box {
+            // 【A3 模型/agent 胶囊】身份行从纯文字行升级为胶囊(Pill,PaStatusBadge 族
+            // 语言:药丸圆角 100dp + 容器底 Raised + 状态形通道):[agent 图标] +
+            // [模型 · 强度] + [状态形通道] + [展开指示]。快速切换面板入口保持在胶囊内
+            // (整枚胶囊仍是唯一点击入口,弹层锚点/触控箱 48dp 口径不变)。
+            Box(Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 2.dp)) {
             Row(Modifier.fillMaxWidth().pressable { showQuickModels.value = true }
                 .semantics { contentDescription = "切换模型与思考强度" }
-                // PA-REAL-0004:整行高度 ≥48dp(实测 37.8dp)。heightIn 在 padding 外层,
-                // 内容(verticalAlignment=CenterVertically)在 48dp 内居中,只是上下多留白。
+                // PA-REAL-0004:整行高度 ≥48dp(口径不变);胶囊底(Raised)吃满 48dp 身。
                 .heightIn(min = INPUT_TOUCH_TARGET_DP.dp)
-                // 【下移贴工具行】旧 padding(vertical=8)让模型名悬在输入区中段,与占位
-                // 文字读成一团(L2 真机挑刺);收成 top=4/bottom=0 —— 与占位文字拉开
-                // 4dp,视觉归入下方工具行一组(模型选择是"控件"不是提示文案)。
-                .padding(start = 16.dp, end = 16.dp, top = 4.dp), verticalAlignment=Alignment.CenterVertically) {
+                .background(PaEditorial.Raised, RoundedCornerShape(PaEditorial.Radius.Pill))
+                .border(1.dp, PaEditorial.Hairline, RoundedCornerShape(PaEditorial.Radius.Pill))
+                .padding(start = 12.dp, end = 12.dp), verticalAlignment=Alignment.CenterVertically) {
+                // agent 品牌图标:身份一眼可辨;未知 agent 不画图标(不塞通用图标冒充身份)
+                agentBrandIcon(sessionAgent)?.let { res ->
+                    Icon(
+                        painterResource(res), null,
+                        tint = Color.Unspecified, modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
                 // 运行中模型确认:真机上"模型 · 强度 · 最近运行: 模型 · 强度"连读
                 // 出现"最大"重复三次(用户裁决:信息过载难读)。精简为把"最近运行"
                 // 收进快速切换面板头部(那里才是对比"当前 vs 正在跑"的语境)。
@@ -558,6 +645,18 @@ internal fun ColumnScope.ChatComposerArea(
                     },
                     modifier=Modifier.weight(1f),
                     maxLines=2, overflow=TextOverflow.Ellipsis)
+                Spacer(Modifier.width(6.dp))
+                // 状态形通道(PaStatusBadge 族):待审批=空心环(琥珀,等你)/运行中=
+                // Running 呼吸点;空闲不摆 —— 宁缺勿滥,与上下文环同一"不造假"纪律。
+                // 词在语义层(读屏描述见整行 semantics),胶囊内只留形+色不挤字。
+                when {
+                    session.pendingApproval != null ->
+                        PaStatusGlyphSlot(PaStatusGlyph.RING, PaEditorial.Attention)
+                    session.running || session.recovering ->
+                        RunningPulseDot()
+                    else -> {}
+                }
+                Spacer(Modifier.width(6.dp))
                 Icon(painterResource(AppR.drawable.ic_lucide_chevron_down), "展开快速切换模型", tint=ChatMutedColor,modifier=Modifier.requiredSize(18.dp))
             }
             // 快速切换面板:锚在模型行上方弹出;focusable 让面板外点击/返回键关闭。
@@ -954,6 +1053,72 @@ internal fun ColumnScope.ChatComposerArea(
                 }
             }
         }
+        } // else(全尺寸输入区)分支到此为止;沉浸态胶囊分支见 [ChatComposerCapsule]
+    }
+}
+
+/**
+ * 沉浸态单行输入胶囊(方向 C · N1,播放页 mini 条语言):agent 图标 + 草稿预览
+ * (或占位)+ 运行态能量点 + 展开指示。整枚胶囊是一个按钮(点击展开全尺寸输入
+ * 区),不是可编辑输入框 —— 编辑权在全尺寸态,胶囊只做"输入还挂着"的存在感与
+ * 入口。海拔语言与全尺寸态同款(A2):浅盘 Alert 档投影 + 玻璃高光边,深盘细线,
+ * 黑客终端玻璃。
+ */
+@Composable
+private fun ChatComposerCapsule(
+    input: () -> String,
+    threadAgentId: String,
+    running: Boolean,
+    onExpand: () -> Unit,
+) {
+    val capsuleShape = RoundedCornerShape(PaEditorial.Radius.Pill)
+    val capsuleShell = when {
+        PaHacker.isHacker -> Modifier.paGlass(capsuleShape, hairline = true)
+        // 深盘:色调面替代阴影的既有纪律,细线描边不加投影
+        PaEditorial.IsDark -> Modifier
+            .background(PaEditorial.Surface, capsuleShape)
+            .border(1.dp, PaEditorial.Hairline, capsuleShape)
+        // 浅盘:Alert 档投影 + 玻璃高光边(光打在上缘),胶囊浮在正文之上
+        else -> Modifier
+            .paEditorialShadow(PaEditorial.Shadow.Alert, capsuleShape)
+            .background(PaEditorial.Surface, capsuleShape)
+            .border(1.dp, PaGlassToken.Highlight, capsuleShape)
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(capsuleShell)
+            .pressable(haptic = true) { onExpand() }
+            .semantics { contentDescription = "展开输入栏" }
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        agentBrandIcon(threadAgentId)?.let { res ->
+            Icon(
+                painterResource(res), null,
+                tint = Color.Unspecified, modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            input().ifBlank { "继续输入,或询问当前进度…" },
+            Modifier.weight(1f),
+            fontSize = PaEditorial.Type.BodySmall.fontSize,
+            color = if (input().isBlank()) ChatSubtleColor else ChatInkColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (running) {
+            Spacer(Modifier.width(8.dp))
+            // 运行态能量点:Running 系呼吸点(铁律见 PaEditorial 头注;减弱动效静态)
+            RunningPulseDot()
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            painterResource(AppR.drawable.ic_lucide_chevron_up), null,
+            tint = ChatMutedColor, modifier = Modifier.size(16.dp),
+        )
+    }
 }
 
 /**

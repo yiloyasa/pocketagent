@@ -104,13 +104,68 @@ private object DrawerSkin {
 private val DrawerPanelWidth = 330.dp
 private val DrawerRailWidth = 76.dp
 
-/** 侧边栏主导航项(rail 与展开态共用同一份:同序/同图标/同角标 —— README §侧边栏)。 */
-private data class DrawerEntry(
+// ---------------------------------------------------------------- 导航条目(恒定层)
+
+/** 置灰原因词(状态词落字,不单靠灰度):消息中心在未接线的页面。 */
+internal const val DRAWER_HINT_ATTENTION_OFF = "在主页查看"
+
+/** 置灰原因词:协同能力未接入(daemon 无 collab:<id> 接线事实)。 */
+internal const val DRAWER_HINT_COLLAB_OFF = "未接入"
+
+/**
+ * 抽屉导航项的稳定规格(纯数据,id/图标/标题/归属 tab 全部静态)。
+ * [tab] ≥0 = 主导航 tab 项;-1 = 动作项(无选中态,如消息中心/协同)。
+ */
+internal data class DrawerNavEntrySpec(
+    val id: String,
     val icon: Int,
     val title: String,
-    /** 无障碍/长按提示名(rail 态没有文字,名称不能省)。 */
     val tab: Int,
 )
+
+/** 规格接线后的一行:同一规格只有 [enabled]/[disabledHint] 随接线状态变化。 */
+internal data class DrawerNavEntry(
+    val spec: DrawerNavEntrySpec,
+    val enabled: Boolean,
+    /** 置灰时的一句真实原因;enabled=true 恒为 null。 */
+    val disabledHint: String?,
+)
+
+/** 稳定规格清单(纯函数,单测钉死):顺序即渲染顺序,任何接线组合下不变。 */
+internal fun drawerNavEntrySpecs(): List<DrawerNavEntrySpec> = listOf(
+    DrawerNavEntrySpec("home", R.drawable.ic_lucide_monitor, "主页", 0),
+    DrawerNavEntrySpec("threads", R.drawable.ic_lucide_message_square, "会话", 1),
+    DrawerNavEntrySpec("taskCenter", R.drawable.ic_lucide_list_checks, "任务中心", 4),
+    DrawerNavEntrySpec("files", R.drawable.ic_lucide_folder, "文件", 2),
+    DrawerNavEntrySpec("git", R.drawable.ic_lucide_git_branch, "Git", 3),
+    DrawerNavEntrySpec("attention", R.drawable.ic_lucide_info, "消息中心", -1),
+    DrawerNavEntrySpec("collab", R.drawable.ic_lucide_share_2, "多 Agent 协同", -1),
+)
+
+/**
+ * 导航条目集合恒定(纯函数,单测覆盖 DrawerConstancyTest):
+ *
+ * 【修的是什么】上轮盘点实锤「同一分钟内多 Agent 协同条目时有时无」—— 旧实现把
+ * 消息中心/协同两个条目绑在调用方的瞬态状态上(协同绑 sharedCaps 快照、消息中心
+ * 绑注意项有无),状态一变条目就凭空增减,导航位置跳变。
+ * 【怎么修】条目**恒渲染**,只按接线状态切可用性:未接线 = 置灰(石墨面的 Muted
+ * 槽 OnGraphiteSubtle)+ 原因词落字 + 点按无动作,**不再消失**。
+ * 【置灰原因词是真话】协同未接线 =「未接入」(能力事实);消息中心未接线 =
+ * 「在主页查看」(中心是主页的浮层,其余页面不接线 —— 不是功能不存在)。
+ *
+ * @param attentionWired 调用方是否接了消息中心回调
+ * @param collabWired    调用方是否接了协同回调(首页在 daemon 报 collab:<id> 时才接)
+ */
+internal fun buildDrawerNavEntries(
+    attentionWired: Boolean,
+    collabWired: Boolean,
+): List<DrawerNavEntry> = drawerNavEntrySpecs().map { spec ->
+    when (spec.id) {
+        "attention" -> DrawerNavEntry(spec, attentionWired, DRAWER_HINT_ATTENTION_OFF.takeIf { !attentionWired })
+        "collab" -> DrawerNavEntry(spec, collabWired, DRAWER_HINT_COLLAB_OFF.takeIf { !collabWired })
+        else -> DrawerNavEntry(spec, enabled = true, disabledHint = null)
+    }
+}
 
 /**
  * 全局侧边栏 —— 底部导航栏移除后的唯一主导航(编辑式石墨层)。
@@ -146,12 +201,12 @@ fun AppDrawer(
     onNewThread: (() -> Unit)? = null,
     /** 传了就显示"网页"快捷入口(内置浏览器)。 */
     onOpenBrowser: (() -> Unit)? = null,
-    /** 传了就显示"多 Agent 协同"导航项(首页在设备确实支持协同时才传,无能力不显示假入口)。 */
+    /** 传了就可用"多 Agent 协同"导航项(首页在 daemon 报 collab:<id> 时才传)。未传 = 条目置灰「未接入」,不再消失(抽屉恒定修复)。 */
     onOpenCollab: (() -> Unit)? = null,
     /**
-     * 传了就显示"消息中心"入口(2026-10-04 用户处理中心计划 Task 5,Attention Center)。
-     * 可空:没传的页面不渲染该入口 —— 与 onOpenCollab 同一纪律,没接线不摆假入口;
-     * 首页在有注意项时才传,其他页面(ChatScreen 等)保持缺省即隐藏。
+     * 传了就可用"消息中心"入口(2026-10-04 用户处理中心计划 Task 5)。
+     * 未传 = 条目置灰「在主页查看」,不再消失(抽屉恒定修复:条目集合恒定,
+     * 不随调用方瞬态状态增减 —— 修"同一分钟内条目时有时无"的实锤)。
      */
     onOpenAttention: (() -> Unit)? = null,
     /** 消息中心角标 = 「需要我处理」条数(与首页摘要同源;0 = 不显示角标)。 */
@@ -289,7 +344,7 @@ fun AppDrawer(
  * collapsed=true 收起:76dp 窄 rail,仅图标垂直排列,点图标直接跳转,
  * 长按图标浮出文字提示(Android 无悬停,长按为等价交互)。
  * 宽度切换由外层 animateDpAsState 驱动,内容用 Crossfade 淡切,偏好已持久化。
- * 展开与收起是**同一份导航清单**(DrawerNavEntries):顺序、图标、当前项高亮、
+ * 展开与收起是**同一份恒定导航清单**(buildDrawerNavEntries):顺序、图标、当前项高亮、
  * 任务角标完全一致(README §侧边栏与回退)。
  */
 @Composable
@@ -312,18 +367,14 @@ private fun DrawerPanel(
     onOpenBrowser: (() -> Unit)? = null,
     onClose: () -> Unit,
 ) {
-    // 主导航(工作空间组):设计 06 的顺序,任务中心带未读角标;
-    // Git 是既有 tab 零回归保留;协同仅在有回调(=设备支持)时出现。
-    val navEntries = buildList {
-        add(DrawerEntry(R.drawable.ic_lucide_monitor, "主页", 0))
-        add(DrawerEntry(R.drawable.ic_lucide_message_square, "会话", 1))
-        add(DrawerEntry(R.drawable.ic_lucide_list_checks, "任务中心", 4))
-        add(DrawerEntry(R.drawable.ic_lucide_folder, "文件", 2))
-        add(DrawerEntry(R.drawable.ic_lucide_git_branch, "Git", 3))
-    }
+    // 主导航(恒定集合,2026-10-09 抽屉恒定修复):设计 06 的顺序,任务中心带
+    // 未读角标;消息中心/多 Agent 协同**恒渲染**,未接线置灰而非消失(见
+    // buildDrawerNavEntries 的 KDoc —— 修"同一分钟内协同条目时有时无"的实锤)。
+    val navEntries = buildDrawerNavEntries(
+        attentionWired = onOpenAttention != null,
+        collabWired = onOpenCollab != null,
+    )
     val connLink = homeHostLink(AgentConnection.connState.value)
-    // 消息中心:仅在调用方传了回调时出现(展开态与 rail 态同一份可达性)。
-    val showAttention = onOpenAttention != null
 
     Column(
         modifier
@@ -471,33 +522,28 @@ private fun DrawerPanel(
                         }
                     }
 
-                    // ---------- 工作空间(主导航;任务中心带未读角标) ----------
+                    // ---------- 工作空间(主导航,恒定集合;任务中心带未读角标) ----------
                     DrawerGroupLabel("工作空间")
                     navEntries.forEach { e ->
                         DrawerItem(
-                            icon = e.icon,
-                            title = e.title,
-                            selected = e.tab == currentTab,
-                            badge = if (e.tab == 4) unread else 0,
-                            onClick = { onGoTab(e.tab) },
-                        )
-                    }
-                    if (showAttention) {
-                        DrawerItem(
-                            icon = R.drawable.ic_lucide_info,
-                            title = "消息中心",
-                            selected = false,
-                            badge = attentionBadge,
-                            onClick = { onOpenAttention?.invoke() },
-                        )
-                    }
-                    if (onOpenCollab != null) {
-                        DrawerItem(
-                            icon = R.drawable.ic_lucide_share_2,
-                            title = "多 Agent 协同",
-                            selected = false,
-                            badge = 0,
-                            onClick = onOpenCollab,
+                            icon = e.spec.icon,
+                            title = e.spec.title,
+                            selected = e.spec.tab == currentTab,
+                            badge = when {
+                                e.spec.tab == 4 -> unread
+                                e.spec.id == "attention" -> attentionBadge
+                                else -> 0
+                            },
+                            enabled = e.enabled,
+                            hint = e.disabledHint,
+                            // 动作项按 id 分派;未接线时 enabled=false 点按不可达(置灰不消失)
+                            onClick = {
+                                when (e.spec.id) {
+                                    "attention" -> onOpenAttention?.invoke()
+                                    "collab" -> onOpenCollab?.invoke()
+                                    else -> onGoTab(e.spec.tab)
+                                }
+                            },
                         )
                     }
 
@@ -589,14 +635,15 @@ private fun DrawerHostStatus(hostTitle: String, link: PaHostLink) {
 }
 
 /**
- * 收起态窄 rail:仅图标垂直排列,与展开态共用 [navEntries](同序/同图标/同高亮/同角标)。
- * 点图标直接执行跳转;长按浮出文字提示(≈桌面 hover tooltip),1.5s 后自动消失。
+ * 收起态窄 rail:仅图标垂直排列,与展开态共用 [navEntries](同一恒定集合:
+ * 同序/同图标/同高亮/同角标/同置灰态)。点图标直接执行跳转;长按浮出文字提示
+ * (≈桌面 hover tooltip,1.5s 后自动消失),置灰项的长按提示带原因词。
  */
 @Composable
 private fun RailContent(
     currentTab: Int,
     unread: Int,
-    navEntries: List<DrawerEntry>,
+    navEntries: List<DrawerNavEntry>,
     onGoTab: (Int) -> Unit,
     onOpenTerminal: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -636,24 +683,27 @@ private fun RailContent(
             RailIcon(R.drawable.ic_lucide_plus, "新建对话", onClick = onNewThread)
             Spacer(Modifier.height(8.dp))
         }
-        // 主导航:与展开态同一份清单、同一顺序、同一角标(任务中心)
+        // 主导航:与展开态同一份恒定清单、同一顺序、同一角标;未接线置灰而非消失
         navEntries.forEach { e ->
             RailIcon(
-                e.icon, e.title,
-                selected = e.tab == currentTab,
-                badge = if (e.tab == 4) unread else 0,
-            ) { onGoTab(e.tab) }
-            Spacer(Modifier.height(8.dp))
-        }
-        if (onOpenAttention != null) {
-            RailIcon(
-                R.drawable.ic_lucide_info, "消息中心",
-                badge = attentionBadge,
-            ) { onOpenAttention?.invoke() }
-            Spacer(Modifier.height(8.dp))
-        }
-        if (onOpenCollab != null) {
-            RailIcon(R.drawable.ic_lucide_share_2, "多 Agent 协同", onClick = onOpenCollab)
+                e.spec.icon,
+                // rail 没有文字:置灰原因词并进长按提示/读屏名,不摆哑巴灰块
+                label = if (e.enabled) e.spec.title
+                else "${e.spec.title}(${e.disabledHint})",
+                selected = e.spec.tab == currentTab,
+                badge = when {
+                    e.spec.tab == 4 -> unread
+                    e.spec.id == "attention" -> attentionBadge
+                    else -> 0
+                },
+                enabled = e.enabled,
+            ) {
+                when (e.spec.id) {
+                    "attention" -> onOpenAttention?.invoke()
+                    "collab" -> onOpenCollab?.invoke()
+                    else -> onGoTab(e.spec.tab)
+                }
+            }
             Spacer(Modifier.height(8.dp))
         }
         RailDivider()
@@ -690,6 +740,8 @@ private fun RailDivider() {
 /**
  * rail 图标钮:44dp 圆角方块(≥44dp 点击区);选中态 .drawer-link.active 同款
  * #31475e 底 + 近白图标;长按在右侧浮出文字提示。
+ * [enabled]=false 置灰(石墨面的 Muted 槽 OnGraphiteSubtle):点按无动作,
+ * 长按提示照常浮出(label 已并进原因词)—— 条目恒在,能力如实。
  */
 @Composable
 private fun RailIcon(
@@ -697,6 +749,7 @@ private fun RailIcon(
     label: String,
     selected: Boolean = false,
     badge: Int = 0,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     var showTip by remember { mutableStateOf(false) }
@@ -706,21 +759,29 @@ private fun RailIcon(
             showTip = false
         }
     }
+    val tint = when {
+        !enabled -> PaEditorial.OnGraphiteSubtle
+        selected -> DrawerSkin.ActiveText
+        else -> DrawerSkin.RailIcon
+    }
     Box {
         Box(
             Modifier
                 .size(44.dp)
-                .pressableLong(onClick = onClick, onLongPress = { showTip = true })
+                .pressableLong(
+                    onClick = { if (enabled) onClick() },
+                    onLongPress = { showTip = true },
+                )
                 .background(
                     if (selected) DrawerSkin.ActiveBg else Color.Transparent,
                     RoundedCornerShape(PaEditorial.Radius.IconButton),
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            DrawerBadge(count = badge) {
+            DrawerBadge(count = if (enabled) badge else 0) {
                 Icon(
                     painterResource(iconRes), label,
-                    tint = if (selected) DrawerSkin.ActiveText else DrawerSkin.RailIcon,
+                    tint = tint,
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -758,6 +819,8 @@ private fun DrawerGroupLabel(text: String) {
 /**
  * 导航行:.drawer-link 语言 —— 46dp 最小高度、12dp 圆角、图标 + 单行文字;
  * 选中态 #31475e 底 + #f5faff 字(当前页高亮);任务中心行尾挂未读角标。
+ * [enabled]=false 置灰态(恒定修复):图标/文字落石墨面的 Muted 槽
+ * (OnGraphiteSubtle),原因词落字(状态不单靠灰度),点按无动作,角标隐藏。
  */
 @Composable
 private fun DrawerItem(
@@ -766,12 +829,14 @@ private fun DrawerItem(
     selected: Boolean,
     badge: Int,
     onClick: () -> Unit,
+    enabled: Boolean = true,
+    hint: String? = null,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(vertical = 1.dp)
-            .pressable(haptic = true) { onClick() }
+            .pressable(haptic = true, enabled = enabled) { onClick() }
             .background(
                 if (selected) DrawerSkin.ActiveBg else Color.Transparent,
                 RoundedCornerShape(PaEditorial.Radius.IconButton),
@@ -782,7 +847,11 @@ private fun DrawerItem(
     ) {
         Icon(
             painterResource(icon), null,
-            tint = if (selected) DrawerSkin.ActiveText else DrawerSkin.Link,
+            tint = when {
+                !enabled -> PaEditorial.OnGraphiteSubtle
+                selected -> DrawerSkin.ActiveText
+                else -> DrawerSkin.Link
+            },
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(12.dp))
@@ -790,11 +859,24 @@ private fun DrawerItem(
             title,
             Modifier.weight(1f),
             fontSize = PaEditorial.Type.BodySmall.fontSize,
-            color = if (selected) DrawerSkin.ActiveText else DrawerSkin.Link,
+            color = when {
+                !enabled -> PaEditorial.OnGraphiteSubtle
+                selected -> DrawerSkin.ActiveText
+                else -> DrawerSkin.Link
+            },
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
         )
-        if (badge > 0) {
+        if (!enabled && hint != null) {
+            // 置灰原因词(状态词落字):「在主页查看」/「未接入」,真实原因不哑灰
+            Text(
+                hint,
+                fontSize = PaEditorial.Type.Micro.fontSize,
+                color = PaEditorial.OnGraphiteSubtle,
+                maxLines = 1,
+            )
+        }
+        if (enabled && badge > 0) {
             DrawerBadgeText(count = badge)
         }
     }

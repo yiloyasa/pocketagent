@@ -13,7 +13,9 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -256,7 +258,14 @@ fun PaDuotoneArt(
  *
  * 【D6 图形槽位】[motif] 给了就渲染 duotone 品牌母题(替代单色 lucide 图标,
  * 主色+哑色双描边,见 [PaDuotoneArt]);null(默认)保持原单色图标 —— 向后
- * 兼容,调用点按语境逐个配图形,不配的不动。
+ * 兼容,调用点按语境逐个配图形,不配的不动。语境 → 母题的取值口统一走
+ * [dev.pocketagent.app.ui.component.paEmptyStateMotifOf](纯函数,单测钉死),
+ * 调用点不再各自手挑图形(语境不符宁缺)。
+ *
+ * 【动作位槽位(2026-10-09 空态体系统一)】空态三件套纪律 = 图形 + 一句话 +
+ * 动作位("下一步去哪"):有明确下一步的空态经 [action] 槽给一个居中按钮
+ * (文案与回调由调用方决定);没有明确下一步就传 null(默认),宁缺勿假,
+ * 不摆"点了没反应"的假出口。令牌与图形本体不动 —— 本组件只加这一个槽。
  */
 @Composable
 fun EmptyState(
@@ -265,6 +274,7 @@ fun EmptyState(
     hint: String,
     modifier: Modifier = Modifier,
     motif: PaDuotoneMotif? = null,
+    action: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -277,6 +287,10 @@ fun EmptyState(
         }
         Text(title, Modifier.padding(top = 14.dp), fontSize = PaEditorial.Type.Body.fontSize, color = MaterialTheme.colorScheme.onBackground)
         Text(hint, Modifier.padding(top = 4.dp), fontSize = PaEditorial.Type.Caption.fontSize, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (action != null) {
+            Spacer(Modifier.height(14.dp))
+            action()
+        }
     }
 }
 

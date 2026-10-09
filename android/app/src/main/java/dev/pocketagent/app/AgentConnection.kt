@@ -221,7 +221,7 @@ object AgentConnection {
         val detail = when {
             kind == ConnectionFailureKind.CERT_MISMATCH ->
                 "$raw(主机可能被冒充,或电脑端 daemon 重装;确认安全后在" +
-                    "「设置 → 用户数据管理 → 已锁定主机指纹」清除后重连)"
+                    "「设置 → 连接与配对 → 主机信任」清除后重连)"
             candidate == USB_ADDR ->
                 "$raw(USB 直连需在电脑上执行 adb reverse tcp:7246 tcp:7246)"
             else -> raw

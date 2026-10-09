@@ -282,8 +282,9 @@ private fun RootNav() {
                         onOpenBrowser = { url ->
                             nav.navigate("browser?url=" + android.net.Uri.encode(url))
                         },
-                        // 下载任务点卡片本体 → 直达设置里的「用户数据管理」
-                        onOpenUserData = { nav.navigate("settings?sub=userdata") },
+                        // 下载任务点卡片本体 → 直达设置里的「下载与存储」(F2 拆页后
+                        // 的正名落点;旧参数 userdata 在 SettingsScreen 内兼容映射同页)
+                        onOpenUserData = { nav.navigate("settings?sub=downloads") },
                         onBackToHome = backToHome,
                     )
                 }
@@ -326,9 +327,11 @@ private fun RootNav() {
         ) { entry ->
             SettingsScreen(
                 onBack = { nav.popBackStack() },
-                // 任务中心点下载卡片 → 直达「用户数据管理」二级页
-                openUserData = entry.arguments?.getString("sub") == "userdata",
-                // "用户数据管理"里可以直接用内置浏览器打开已下载的网页/文本
+                // 深链二级页:connection / downloads / console / agent / capabilities;
+                // 旧参数 userdata 兼容映射为 downloads(SettingsScreen.normalizeSettingsSub,
+                // 任务中心下载卡的历史深链不失效),未知值回一级页。
+                openSub = entry.arguments?.getString("sub").orEmpty(),
+                // 「下载与存储」页里可以直接用内置浏览器打开已下载的网页/文本
                 onOpenBrowser = { url ->
                     nav.navigate("browser?url=" + android.net.Uri.encode(url))
                 },

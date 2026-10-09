@@ -64,11 +64,13 @@ import dev.pocketagent.app.ui.collab.CollabMemberUi
 import dev.pocketagent.app.ui.collab.CollabSessionReducer
 import dev.pocketagent.app.ui.collab.CollabSessionRepository
 import dev.pocketagent.app.ui.collab.CollabStatus
+import dev.pocketagent.app.ui.component.PaErrorCard
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaScreenScaffold
 import dev.pocketagent.app.ui.component.PaSheet
 import dev.pocketagent.app.ui.component.PaStatusBadge
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import dev.pocketagent.app.ui.theme.EditorialTone
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
@@ -408,18 +410,17 @@ fun CollabScreen(
                     }
                 }
 
-                // ---- 错误呈现(断线说明 / 操作失败原因):如实给原文,不粉饰 ----
+                // ---- 错误呈现(断线说明 / 操作失败原因):统一错误卡(PaErrorCard)。
+                // 原文经映射表翻成人话(未配对 → 「还没和电脑配对」;连通类 → 「连不上电脑」;
+                // 其余 → 「电脑端说:」+原文缩略),原始错误点按卡片展开「详情」可查。
+                // 本页没有配对页导航通道(无 onOpenSettings 形参),按宁缺勿假不摆「去配对」
+                // 按钮 —— MainActivity 接线后把回调传进来即可点亮。
                 session.error?.let { err ->
                     item {
-                        Text(
-                            err,
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp)
-                                .background(ed.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                                .padding(12.dp),
-                            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
-                            color = EditorialTone.DENIED.text,
+                        PaErrorCard(
+                            view = paErrorViewOf(err),
+                            context = "协同",
+                            modifier = Modifier.padding(top = 12.dp),
                         )
                     }
                 }

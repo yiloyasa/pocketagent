@@ -230,6 +230,10 @@ import dev.pocketagent.app.ui.chat.ChatHostStatusArea
 import dev.pocketagent.app.ui.chat.ChatIntent
 import dev.pocketagent.app.ui.chat.ChatTimelineArea
 import dev.pocketagent.app.ui.chat.ChatViewModel
+// 【方向 C · N1 上滑沉浸】滚动方向 → 两层收放的判定纯函数与累计夹逼档
+// (ui/chat/ChatImmersive.kt,JVM 单测 ChatImmersiveLogicTest 钉死)
+import dev.pocketagent.app.ui.chat.IMMERSIVE_ACC_CLAMP_PX
+import dev.pocketagent.app.ui.chat.immersiveScrollDecision
 import dev.pocketagent.app.ui.history.HistoryLocatePlan
 import dev.pocketagent.app.ui.history.HistorySearchHit
 import dev.pocketagent.app.ui.history.HistorySearchRepository
@@ -1734,8 +1738,11 @@ internal fun EditorialDeliveryBadge(state: String, queuePos: Int) {
 }
 
 /**
- * 会话身份卡(05 HostStatus 槽):agent 图标 + 「agent · 工作区」+ 四词状态徽章。
- * 待审批时整卡可点 → 打开审批弹窗(卡上只做入口,不放批准/拒绝按钮)。
+ * 会话身份胶囊(方向 C · A3/N2,2026-10-09):agent 图标 + 「agent · 工作区」+
+ * 四词状态形通道,装进石墨沉浸头部的胶囊(Pill)—— 复用 PaStatusBadge 族语言
+ * (药丸圆角 + 形通道环/点/勾/叹号,PaStatusGlyphSlot),文字走 OnGraphite 档、
+ * 胶囊底取 GraphiteDrawer(比头部 Graphite 深一档的既有槽位,三盘同构)。
+ * 待审批时整枚胶囊可点 → 打开审批弹窗(胶囊上只做入口,不放批准/拒绝按钮)。
  */
 @Composable
 private fun ChatIdentityBadge(
@@ -1746,49 +1753,56 @@ private fun ChatIdentityBadge(
     onOpenApproval: () -> Unit,
     agentIconRes: Int?,
 ) {
-    // 状态圆点(用户口径):蓝=运行中 / 绿=正常(已完成) / 红=故障(未完成) /
-    // 琥珀=等待你处理;审批等待时整枚徽章可点,直达审批弹窗。
+    // 状态形通道颜色(用户口径):蓝=运行中 / 绿=正常(已完成) / 红=故障(未完成) /
+    // 琥珀=等待你处理;形状走 PaStatusBadge 族(环=等用户/点=进行中/勾=已完成/
+    // 叹号=未完成),读屏另带「状态:」词 —— 语义不单靠颜色。
     val dotColor = when (statusView.status) {
         EditorialStatus.RUNNING -> PaEditorial.Primary
         EditorialStatus.COMPLETED -> PaEditorial.Running
         EditorialStatus.WAITING_FOR_YOU -> PaEditorial.Attention
         EditorialStatus.NOT_COMPLETED -> PaEditorial.Denied
     }
+    val capsuleShape = RoundedCornerShape(PaEditorial.Radius.Pill)
     Row(
         Modifier
+            .background(PaEditorial.GraphiteDrawer, capsuleShape)
+            .border(1.dp, PaEditorial.OnGraphiteHairline, capsuleShape)
             .then(
                 if (approvalWaiting) {
                     Modifier
                         .pressable(haptic = true) { onOpenApproval() }
                         .semantics { contentDescription = "打开审批弹窗" }
                 } else Modifier
-            ),
+            )
+            .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (agentIconRes != null) {
-            // 2026-09-30 品牌图标 18→24dp:标题行身份一眼可辨(用户令);原色
-            // tint=Unspecified 不变,未知 agent 仍不画图标(不塞通用图标冒充身份)。
+            // 品牌图标 tint=Unspecified 不变,未知 agent 仍不画图标(不塞通用图标冒充身份);
+            // 胶囊内 24→18dp:胶囊身高度收敛,头部一行仍然立得稳。
             Icon(
                 painterResource(agentIconRes), null,
-                tint = Color.Unspecified, modifier = Modifier.size(24.dp),
+                tint = Color.Unspecified, modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(5.dp))
         }
         Text(
             if (workspaceLabel.isNullOrBlank()) agentName else "$agentName · $workspaceLabel",
-            fontSize = PaEditorial.Type.BodySmall.fontSize,
+            // weight(fill=false):长工作区名吃掉剩余宽度后省略,状态形通道永远可见
+            Modifier.weight(1f, fill = false),
+            fontSize = PaEditorial.Type.Caption.fontSize,
             fontWeight = FontWeight.SemiBold,
-            color = PaEditorial.Muted,
+            color = PaEditorial.OnGraphiteMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.width(7.dp))
+        Spacer(Modifier.width(6.dp))
         Box(
-            Modifier
-                .size(8.dp)
-                .background(dotColor, CircleShape)
-                .semantics { contentDescription = "状态:" + statusView.label },
-        )
+            Modifier.semantics { contentDescription = "状态:" + statusView.label },
+            contentAlignment = Alignment.Center,
+        ) {
+            PaStatusGlyphSlot(statusGlyphOf(statusView.status), dotColor)
+        }
     }
 }
 
@@ -3195,6 +3209,72 @@ fun ChatScreen(
         }
     }
 
+    // ---- 方向 C · N1/N2 上滑沉浸(播放页语言:石墨头部卷收 + 输入栏收窄为胶囊)----
+    // 一条滚动方向观测驱动两层收放:上滑累计跨过头部阈值先收石墨头部,跨过输入栏
+    // 阈值再把输入栏收成单行胶囊(正文获得全高);下滑或回底一步复原。判定全在
+    // 纯函数 immersiveScrollDecision(ui/chat/ChatImmersive.kt,阈值/节流/回顶回底
+    // 特判,JVM 单测钉死),本效果只做"同 item 内偏移差分累计 + 落值":
+    //  · 差分只在同一首可见 item 内做(跨 item 时 offset 基线跳变,只更新基线);
+    //  · 程序滚动(跳历史/回底锚定)带 programmaticScroll 标记,不参与裁定 ——
+    //    流式自动跟底绝不把沉浸态当"用户滚走";
+    //  · acc 有夹逼上限,方向抖动天然互相抵消(节流防抖);落值是布尔翻转,
+    //    逐帧高频滚动也不会逐帧驱动动画。
+    val headerCollapsed = remember(threadId) { mutableStateOf(false) }
+    val composerImmersed = remember(threadId) { mutableStateOf(false) }
+    // 沉浸态下点胶囊手动展开:展开后保持全尺寸输入栏,直到下滑/回底复原时一并清。
+    val composerCapsuleTapped = remember(threadId) { mutableStateOf(false) }
+    // 胶囊点开次数(展开后输入框聚焦钩子的触发器,消费在 ChatComposerArea)。
+    var composerExpandTick by remember { mutableStateOf(0) }
+    LaunchedEffect(listState) {
+        var lastIndex = listState.firstVisibleItemIndex
+        var lastOffset = listState.firstVisibleItemScrollOffset
+        var acc = 0
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                if (index != lastIndex) {
+                    lastIndex = index
+                    lastOffset = offset
+                    return@collect
+                }
+                val delta = offset - lastOffset
+                lastOffset = offset
+                if (delta == 0 || programmaticScroll.get()) return@collect
+                acc = (acc + delta).coerceIn(-IMMERSIVE_ACC_CLAMP_PX, IMMERSIVE_ACC_CLAMP_PX)
+                val decision = immersiveScrollDecision(
+                    headerCollapsed = headerCollapsed.value,
+                    composerImmersed = composerImmersed.value,
+                    accumulatedPx = acc,
+                    atTop = index == 0 && offset == 0,
+                    atBottom = shouldFollowDistance(distanceFromBottomOfList(listState)),
+                )
+                if (decision != null) {
+                    headerCollapsed.value = decision.first
+                    if (decision.second) composerCapsuleTapped.value = false
+                    composerImmersed.value = decision.second
+                    acc = 0
+                }
+            }
+    }
+    // 「↓ N 条新内容」胶囊回底 / 程序回底恢复跟随时,沉浸态同步复原 —— 与方向
+    // 观测互补:直接跳底没有"下滑差分",靠 followBottom 翻转这条兜底
+    // ("下滑回到底部输入栏复原"的第二条硬保证)。
+    LaunchedEffect(followBottom.value) {
+        if (followBottom.value &&
+            (headerCollapsed.value || composerImmersed.value || composerCapsuleTapped.value)
+        ) {
+            headerCollapsed.value = false
+            composerImmersed.value = false
+            composerCapsuleTapped.value = false
+        }
+    }
+    // 头部收放插值:滚动是动量手势,弹簧走 PaMotion.momentum(从当前值续走、
+    // 可打断、带回位);减弱动效直切(PaMotion.instant,反馈仍在位移消失)。
+    val headerExpandFraction by animateFloatAsState(
+        targetValue = if (headerCollapsed.value) 0f else 1f,
+        animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.momentum(),
+        label = "chatHeaderImmerse",
+    )
+
     // 新内容到达:仅当"本来在跟随"(或用户其实仍在距底 100px 内)才自动回底;
     // 真离底(上滑阅读)绝不拽动,只累加未读块数交给「↓ N 条新内容」胶囊。
     // 【P0-1】旧形态把 (items.size, streamText.length/24, streaming) 写进
@@ -3737,6 +3817,14 @@ fun ChatScreen(
                 promptOptState = promptOptState,
                 onOptimizeInput = ::optimizeCurrentInput,
                 onSend = ::send,
+                // 【方向 C · N1 上滑沉浸】滚动驱动的输入栏收窄:沉浸态 = 单行胶囊
+                // (正文获得全高);点胶囊手动展开属手动态,下滑/回底复原时一并清。
+                immersed = composerImmersed.value && !composerCapsuleTapped.value,
+                onExpandImmersed = {
+                    composerCapsuleTapped.value = true
+                    composerExpandTick++
+                },
+                expandFocusTick = composerExpandTick,
             )
             }
             content
@@ -3812,6 +3900,8 @@ fun ChatScreen(
                 slot
             }
             // 导航插槽:key = 各自捕获(onBack 参数 / showMore remember 态)。
+            // 【方向 C · N2】沉浸石墨头部:两个导航钮都取 onGraphite 形态(透明底 +
+            // OnGraphite 图 + OnGraphiteHairline 细边),与石墨头同材质家族。
             val chatLeading: @Composable () -> Unit = remember(onBack) {
                 val slot: @Composable () -> Unit = {
                     PaNavIconButton(
@@ -3819,6 +3909,7 @@ fun ChatScreen(
                         contentDescription = "返回",
                         iconRes = AppR.drawable.ic_lucide_chevron_left,
                         plain = true,
+                        onGraphite = true,
                     )
                 }
                 slot
@@ -3829,6 +3920,7 @@ fun ChatScreen(
                         onClick = { showMore.value = true },
                         contentDescription = "更多",
                         iconRes = AppR.drawable.ic_lucide_ellipsis,
+                        onGraphite = true,
                     )
                 }
                 slot
@@ -3857,6 +3949,12 @@ fun ChatScreen(
             PaScreenScaffold(
                 title = threadTitle.ifBlank { "会话" },
                 titleContent = chatTitleContent,
+                // 【方向 C · N2 沉浸石墨头部】头部(状态栏底+导航行+主机状态槽)整体
+                // Graphite 打底,与正文形成"台上/台下"两层世界;收放系数由滚动方向
+                // 观测驱动(见 headerCollapsed / headerExpandFraction),上滑卷收让位
+                // 正文、下滑复出,状态栏石墨边常驻。
+                immersiveHeader = true,
+                headerExpandFraction = headerExpandFraction,
                 modifier = Modifier
                     .fillMaxSize()
                     .paPushBack(drawerCtrl.visible)

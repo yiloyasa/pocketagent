@@ -45,6 +45,14 @@ import dev.pocketagent.app.R as AppR
  * 四词映射器);主色 [Primary] 只用于"当前操作"。11-12sp 小字用各语义的
  * *Text 档(对比度 ≥4.5:1),与 Pa.GreenText 同一套纪律。
  *
+ * 【方向 C 铁律(2026-10-09 沉浸改版落档;依据 docs/design/ui-language-research-20261009.md)】
+ *  1. **暗面=Graphite 家族专属**:沉浸面(会话页石墨沉浸头部/代码箱/mini 胶囊条)
+ *     只许用 [Graphite]/[GraphiteDrawer]/[GraphiteCode] 三档既有深面与 OnGraphite
+ *     文字档,禁止纯黑、禁止各屏自调深色 —— 防"第三种黑"漂移(调研 §3-C2)。
+ *  2. **运行态能量色=Running 系专用纪律**:运行中的呼吸点/能量细线/进度只允许
+ *     Running 槽位(含 [RunningText] 档),主色 [Primary] 仍只用于"当前操作",
+ *     两者不混用 —— 品牌记忆点=出现场合的纪律,不改任何色值(调研 §2.1-N3)。
+ *
  * 【消费方式】两种等价:
  *  1. 直取:`PaEditorial.Canvas`(适合组件内部);
  *  2. 组合局部:`MaterialTheme.editorial.xxx`。

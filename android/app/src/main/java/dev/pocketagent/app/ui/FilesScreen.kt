@@ -30,7 +30,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +57,7 @@ import dev.pocketagent.app.ui.anim.PaDuotoneMotif
 import dev.pocketagent.app.ui.anim.edgeSwipeToOpenDrawer
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.component.PaDownloader
+import dev.pocketagent.app.ui.component.PaErrorBar
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaSheet
@@ -69,10 +69,10 @@ import dev.pocketagent.app.ui.component.SwipeRevealRow
 import dev.pocketagent.app.ui.component.UndoBarHost
 import dev.pocketagent.app.ui.component.parentDirectoryOf
 import dev.pocketagent.app.ui.component.pathBreadcrumbs
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import dev.pocketagent.app.ui.component.rememberUndoState
 import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
-import dev.pocketagent.app.ui.theme.EditorialTone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -456,25 +456,20 @@ private fun FilesScreenBody(
                     }
                 }
             }
-            error?.let {
-                Row(
-                    Modifier
+            error?.let { raw ->
+                // 统一错误横幅(PaErrorBar):原文经映射表翻成人话(未配对 → 「还没和电脑配对
+                // · 去配对」;连通类 → 「连不上电脑」),原始错误点按横幅展开「详情」可查;
+                // 断线/目录打不开时给下一步:原地重试(顶层重拉盘符,目录层重进)。
+                PaErrorBar(
+                    view = paErrorViewOf(raw),
+                    onRetry = { if (showRoots) loadRoots() else loadDir(path) },
+                    // 配对页导航通道:复用既有 onOpenSettings(生产调用点已接 settings 路由;
+                    // 默认形参 {} 仅预览用)。MainActivity 后续可深链 settings?sub=userdata 直达。
+                    onGoPair = onOpenSettings,
+                    modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp)
-                        .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        it,
-                        Modifier.weight(1f),
-                        color = EditorialTone.DENIED.text, fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
-                    )
-                    // 断线/目录打不开时给下一步:原地重试(顶层重拉盘符,目录层重进)
-                    TextButton(onClick = { if (showRoots) loadRoots() else loadDir(path) }) {
-                        Text("重试", fontSize = PaEditorial.Type.Caption.fontSize, color = EditorialTone.DENIED.text)
-                    }
-                }
+                        .padding(horizontal = PaEditorial.Space.PageMargin, vertical = 6.dp),
+                )
             }
             // ---- 搜索框(仅非"此电脑"层显示:盘符列表没有搜索的意义) ----
             if (searchOpen && !showRoots) {
@@ -754,7 +749,7 @@ private fun FilesScreenBody(
                         },
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PaEditorial.Graphite),
                         shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
-                    ) { Text("确定", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold) }
+                    ) { Text("确定", color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold) }
                 }
             }
         }
@@ -905,7 +900,7 @@ private fun FilesScreenBody(
                         },
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PaEditorial.Graphite),
                         shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
-                    ) { Text("创建", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold) }
+                    ) { Text("创建", color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold) }
                 }
             }
         }
