@@ -665,11 +665,32 @@ object TurnSession {
         st.guardianOverridden = st.guardianOverridden + reviewId
     }
 
-    /** 用纯函数算出的新列表整体替换时间线内容(同一引用 = 没变化,免一次重组)。 */
+    /**
+     * 用纯函数算出的新列表整体替换时间线内容(同一引用 = 没变化,免一次重组)。
+     *
+     * 【C3 收敛后仅剩结构裁剪这一个调用方】clear+addAll 会让 SnapshotStateList
+     * 整表结构性失效(LazyColumn 全量 diff),只配"内容真的整表变了"的修剪
+     * ([enforceTimelineCap]);单条/少数条的标签更新一律走索引赋值
+     * (见 [writeBackChanged] 与 STEERED/QUEUED 分支的 `st.items[idx] = ...`),
+     * 只失效被改的那一条。
+     */
     private fun swapItems(st: State, replaced: List<ChatItem>) {
         if (replaced !== st.items) {
             st.items.clear()
             st.items.addAll(replaced)
+        }
+    }
+
+    /**
+     * 【C3】把纯函数算出的新列表**按变化槽位**写回时间线:纯函数(clearDeliveryTags/
+     * clearAllDeliveryTags)对未命中的槽位返回**同一实例**,引用比较即精确识别
+     * 被改的条目,逐个索引赋值 —— SnapshotStateList 只失效这几条,替代旧的
+     * clear+addAll 整表结构性失效。纯函数语义仍由 TurnDeliveryAndOfflineTest 钉住。
+     */
+    private fun writeBackChanged(st: State, fresh: List<ChatItem>) {
+        for (i in st.items.indices) {
+            val cur = st.items[i]
+            if (cur !== fresh[i]) st.items[i] = fresh[i]
         }
     }
 
@@ -843,7 +864,8 @@ object TurnSession {
                 } else if (!finished) {
                     // 队列链路被中途打断(用户取消丢队列后 daemon 关流 / daemon 崩溃):
                     // 统一结算 —— 清掉全部投递标签,不让「排队中」变成点不动的幽灵标签。
-                    clearAllDeliveryTags(st.items)?.let { swapItems(st, it) }
+                    // 【C3】只写回真正变化的槽位,不再整表 clear+addAll
+                    clearAllDeliveryTags(st.items)?.let { writeBackChanged(st, it) }
                     st.pendingApproval = null
                     TaskCenter.finishMessage(threadId, ok = st.errorMessage == null)
                 }
@@ -1033,23 +1055,37 @@ object TurnSession {
             // ---- P1-4:运行中发消息的回执帧 ----
             TurnServerMessage.MsgCase.STEERED -> {
                 // 该输入已插入运行中的轮次(codex turn/steer)
-                swapItems(st, applyDeliveryAckTo(st.items, DELIVERY_STEERED, 0))
+                // 【C3】单条定位更新:索引赋值只失效该条;找不到 pending 的兜底 = 空操作
+                // (与 applyDeliveryAckTo 返回原引用、swapItems 判同引用跳过等价)
+                val idx = firstPendingDeliveryIndex(st.items)
+                if (idx >= 0) {
+                    st.items[idx] = st.items[idx].copy(deliverState = DELIVERY_STEERED, queuePos = 0)
+                }
             }
             TurnServerMessage.MsgCase.QUEUED -> {
                 val q = ev.queued
                 if (queuedAckAccepted(q.position)) {
                     st.queuedCount += 1
-                    swapItems(st, applyDeliveryAckTo(st.items, DELIVERY_QUEUED, q.position))
+                    // 【C3】单条定位更新,同 STEERED
+                    val idx = firstPendingDeliveryIndex(st.items)
+                    if (idx >= 0) {
+                        st.items[idx] = st.items[idx].copy(deliverState = DELIVERY_QUEUED, queuePos = q.position)
+                    }
                 } else {
                     // 队列满被拒收:这条消息 daemon 没接收,必须让用户看见
-                    swapItems(st, applyDeliveryAckTo(st.items, DELIVERY_OVERFLOW, 0))
+                    // 【C3】单条定位更新,同 STEERED
+                    val idx = firstPendingDeliveryIndex(st.items)
+                    if (idx >= 0) {
+                        st.items[idx] = st.items[idx].copy(deliverState = DELIVERY_OVERFLOW, queuePos = 0)
+                    }
                 }
             }
             TurnServerMessage.MsgCase.QUEUE_FLUSHED -> {
                 // 排队的输入开始执行:所有「排队中」变回普通用户消息,
                 // 紧跟的 Started 帧继续流式渲染(保持 running 不收尾)
                 st.queuedCount = (st.queuedCount - 1).coerceAtLeast(0)
-                clearDeliveryTags(st.items, queuedOnly = true)?.let { swapItems(st, it) }
+                // 【C3】只写回真正变化的槽位,不再整表 clear+addAll
+                clearDeliveryTags(st.items, queuedOnly = true)?.let { writeBackChanged(st, it) }
             }
             TurnServerMessage.MsgCase.APPROVAL_RESOLVED -> {
                 // 【幽灵审批卡治理】该审批已在电脑端被处理(daemon 竞速
@@ -1097,7 +1133,8 @@ object TurnSession {
                 st.streaming = false
                 // 「已插入/发送中」的输入属于刚结束的这一轮:撤标签变回普通消息;
                 // 「排队中/未送达」保留 —— 排队的还没轮到,未送达必须继续可见。
-                clearDeliveryTags(st.items, queuedOnly = false)?.let { swapItems(st, it) }
+                // 【C3】只写回真正变化的槽位,不再整表 clear+addAll
+                clearDeliveryTags(st.items, queuedOnly = false)?.let { writeBackChanged(st, it) }
                 // The terminal result is authoritative. A recovered upstream
                 // retry must not turn a successfully completed task into failure.
                 st.errorMessage = null
@@ -1134,7 +1171,8 @@ object TurnSession {
                 }
                 clearStreamText(st)
                 st.streaming = false
-                clearDeliveryTags(st.items, queuedOnly = false)?.let { swapItems(st, it) }
+                // 【C3】只写回真正变化的槽位,不再整表 clear+addAll
+                clearDeliveryTags(st.items, queuedOnly = false)?.let { writeBackChanged(st, it) }
                 if (st.queuedCount > 0) {
                     // 本轮失败但队列还在:daemon 会继续执行下一条排队输入
                     // (一条失败不否决用户排队的其余消息)。保持 running /

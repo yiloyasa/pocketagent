@@ -115,6 +115,26 @@ class GitStatusLogicTest {
         assertEquals("确认", gitDangerConfirmLabel("anything-else"))
     }
 
+    // ---- 「新建分支」入口门控(盘点 45:未连接/未拉到 status 时不得摆可点入口) ----
+
+    @Test
+    fun `新建分支入口 仓库已解析且已拉到status才亮`() {
+        assertTrue(gitNewBranchEntryOn(repo = "/home/me/proj", notRepo = false, statusLoaded = true))
+    }
+
+    @Test
+    fun `新建分支入口 未拉到status一律不亮_不裸露RPC错误`() {
+        // 未连接/首拉中/上次刷新失败:status==null,建分支必败,入口整行不渲染
+        assertTrue(!gitNewBranchEntryOn(repo = "/home/me/proj", notRepo = false, statusLoaded = false))
+    }
+
+    @Test
+    fun `新建分支入口 未选仓库或非仓库目录不亮`() {
+        assertTrue(!gitNewBranchEntryOn(repo = "", notRepo = false, statusLoaded = true))
+        assertTrue(!gitNewBranchEntryOn(repo = "/home/me/docs", notRepo = true, statusLoaded = true))
+        assertTrue(!gitNewBranchEntryOn(repo = "", notRepo = true, statusLoaded = false))
+    }
+
     // ---- 既有单文件状态映射回归(与 GitScreen.kt 内的映射互补覆盖) ----
 
     @Test

@@ -479,6 +479,20 @@ internal fun matchRange(title: String, query: String): IntRange? {
 }
 
 /**
+ * 搜索命中行打开二级页时的返回层哨兵(不会与任何二级页 id 撞 —— 合法 id 全在
+ * [normalizeSettingsSub] 的白名单里,不含此值)。
+ */
+internal const val SETTINGS_RETURN_SEARCH = "search"
+
+/**
+ * 二级页返回落点(纯函数):普通记层回该层;[SETTINGS_RETURN_SEARCH] 哨兵与
+ * null(首页直接进入)都回一级页 —— 搜索态的还原靠 settingsQuery 仍在
+ * (进二级页不清查询词),回到一级页即回到搜索结果,不丢搜索上下文。
+ */
+internal fun settingsBackTargetOf(subPageReturn: String?): String? =
+    if (subPageReturn == null || subPageReturn == SETTINGS_RETURN_SEARCH) null else subPageReturn
+
+/**
  * 设置页(重做版:一级导航、二级编辑)。
  *
  * 【信息架构(F2 重排:入口 = 页名一一映射,"多入口落一页" 4→0)】
@@ -921,11 +935,12 @@ private fun SettingsScreenBody(
     // Agent 与模型页打开时置为 "agent",返回才能回到 Agent 与模型页而非设置首页。
     var subPageReturn by remember { mutableStateOf<String?>(null) }
 
-    // 从二级页返回:优先回到"打开它的那一层",否则回一级页。物理返回与二级页顶部返回箭头
-    // 共用同一逻辑,避免两条返回路径行为不一致。
+    // 从二级页返回:优先回到"打开它的那一层",否则回一级页(搜索命中打开的子页
+    // 记 [SETTINGS_RETURN_SEARCH] 哨兵,回一级页时查询词未清 = 回到搜索态)。
+    // 物理返回与二级页顶部返回箭头共用同一逻辑,避免两条返回路径行为不一致。
     val backFromSubPage: () -> Unit = {
-        if (subPageReturn != null) { subPage = subPageReturn; subPageReturn = null }
-        else subPage = null
+        subPage = settingsBackTargetOf(subPageReturn)
+        subPageReturn = null
     }
 
     // 返回层级:二级页 →(打开它的那一层)→ 一级页 → 退出设置(此前物理返回直接退出,层级断裂)
@@ -1741,7 +1756,13 @@ private fun SettingsScreenBody(
                                                 .fillMaxWidth()
                                                 .then(
                                                     if (entry.target != null) {
-                                                        Modifier.pressable(haptic = true) { subPage = entry.target!! }
+                                                        // 【G1 遗留】命中行打开的子页记搜索哨兵:
+                                                        // 返回回搜索态(查询词仍在的一级页),
+                                                        // 与"首页导航行打开"的子页(无记层)分口。
+                                                        Modifier.pressable(haptic = true) {
+                                                            subPageReturn = SETTINGS_RETURN_SEARCH
+                                                            subPage = entry.target!!
+                                                        }
                                                     } else Modifier
                                                 )
                                                 .padding(vertical = 11.dp),

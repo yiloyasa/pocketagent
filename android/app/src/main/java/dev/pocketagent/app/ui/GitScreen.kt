@@ -381,7 +381,9 @@ private fun GitScreenBody(
             Spacer(Modifier.width(8.dp))
             GitTab("分支", tab == 2) { tab = 2 }
             Spacer(Modifier.weight(1f))
-            if (repo.isNotEmpty() && !notRepo) {
+            if (gitNewBranchEntryOn(repo, notRepo, status != null)) {
+                // 【盘点 45】status 没拉到(未连接/首拉中/上次失败)时整行不渲染:
+                // 此时建分支必败,不摆"点了必错"的假入口(纯函数门控,GitStatusLogicTest 钉)。
                 Text(
                     "新建分支",
                     Modifier.pressable { newBranch = ""; showCreateBranch = true },

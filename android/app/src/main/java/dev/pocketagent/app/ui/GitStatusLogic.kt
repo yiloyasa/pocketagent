@@ -73,3 +73,18 @@ fun gitDangerConfirmLabel(actionId: String): String = when (actionId) {
     "discard" -> "丢弃"
     else -> "确认"
 }
+
+/**
+ * 「新建分支」入口的可见门控(纯函数,UI 据此渲染/隐藏)。
+ *
+ * 【为什么是隐藏而不是置灰】仓库状态(status)还没拉到 = 连不连得上都不知道,
+ * 此时建分支必败(RPC 打到空气上,再把原始 gRPC 错误甩用户脸上)。与页内既有
+ * 交互一致:入口是行尾小字按钮,条件不满足整行不渲染 —— 与「提交全部」只在
+ * 有变更时出现同一条"不摆假入口"纪律,不给"置灰但不知道为什么"的中间态。
+ *
+ * @param repo        已解析的仓库路径(空 = 用户还没选仓库)
+ * @param notRepo     daemon 已明确说"这不是 Git 仓库"
+ * @param statusLoaded 是否已成功拉到仓库状态(连接正常且确实是个仓库的最弱证据)
+ */
+fun gitNewBranchEntryOn(repo: String, notRepo: Boolean, statusLoaded: Boolean): Boolean =
+    repo.isNotEmpty() && !notRepo && statusLoaded

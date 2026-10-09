@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -315,6 +316,104 @@ func TestGetResourceUsageExposesLeaseLimits(t *testing.T) {
 	}
 	if resp.GetSampledAtUnixMs() == 0 {
 		t.Fatal("应带采样时刻(手机端要显示'多久前')")
+	}
+}
+
+// TestSetRuntimePolicyHotSwapsArchiveCap DiskConversationBytes 热替换(S3 遗留)
+// 端到端钉子:归档目录总量上限的唯一执行体在 store(SetArchiveMaxBytes →
+// evictArchiveLocked),启动装配期由 main 接线一次;本条钉住热替换路径也接线 ——
+//
+//	① 默认上限(32MB)下溢出归档写入后留存(上限内不滚除);
+//	② SetRuntimePolicy 把 disk_conversation 压到 1 字节后,**不重启**同一 store
+//	   立即按新上限执行:下一次溢出归档写入触发滚除,① 里留存的旧归档一并滚掉;
+//	③ 主文件语义不随之上限变化:内存裁剪照常、消息本体不丢(丢的只是溢出留档)。
+//
+// 溢出归档的写入/滚除机器是 store 的归档链路(自身有专测),这里只关心"策略一改、
+// 上限即变"。store 的 maxMessagesInMemory 不导出,溢出规模照其测试同款构法
+// (基线 + 50 条),内存保留数不断言具体值(那是 store 包测试的职责)。
+func TestSetRuntimePolicyHotSwapsArchiveCap(t *testing.T) {
+	srv, dir := newPolicyTestServer(t)
+	ctx := context.Background()
+	st := srv.cfg.Store
+
+	arcDir := filepath.Join(dir, "threads.archive") // 目录名口径:store/store_archive.go archiveDirName(未导出)
+	if err := os.MkdirAll(arcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// 预置一份"更早时代"留下的归档(301 字节,ModTime 早于后续一切写入):
+	// 上限调小后它是第一个该被滚除的对象。
+	oldLine := make([]byte, 300)
+	for i := range oldLine {
+		oldLine[i] = 'x'
+	}
+	oldPath := filepath.Join(arcDir, "th-old.jsonl")
+	if err := os.WriteFile(oldPath, append(oldLine, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(oldPath, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	archiveNames := func() map[string]bool {
+		t.Helper()
+		entries, err := os.ReadDir(arcDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, e := range entries {
+			out[e.Name()] = true
+		}
+		return out
+	}
+	// overflowSave 造一个超出内存保留数的线程并落库:溢出条目走旁车归档,
+	// 归档链路顺路触发总量守护。
+	overflowSave := func(threadID string) {
+		t.Helper()
+		th := &store.Thread{ID: threadID, Title: "热替换", Workspace: dir}
+		const total = 2050 // > store 的内存保留基线(2000):必然产生 50 条溢出
+		for i := 0; i < total; i++ {
+			th.Messages = append(th.Messages, store.StoredMessage{
+				Role:      "user",
+				Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: "凑溢出条目"}}}},
+				CreatedAt: time.Now().UnixMilli(),
+			})
+		}
+		if err := st.Create(th); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Update(th); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// ① 默认上限:归档写入后留存,预置旧归档也在(上限内不滚除)。
+	overflowSave("th-before")
+	if got := archiveNames(); !got["th-before.jsonl"] || !got["th-old.jsonl"] {
+		t.Fatalf("默认上限内归档应留存,现有: %v", got)
+	}
+
+	// ② 热替换:disk_conversation 压到 1 字节 → 下一次归档写入即触发滚除,
+	// 连 ① 里留存的旧归档一起滚掉(改完立即生效,不必重启 daemon)。
+	tiny := int64(1)
+	if _, err := srv.SetRuntimePolicy(ctx, &pb.SetRuntimePolicyRequest{
+		Policy: &pb.RuntimePolicy{Global: &pb.RuntimeLimits{DiskConversationBytes: &tiny}},
+	}); err != nil {
+		t.Fatalf("热替换策略失败: %v", err)
+	}
+	overflowSave("th-after")
+	if got := archiveNames(); len(got) != 0 {
+		t.Fatalf("热替换后的新上限未生效: 归档应被滚除,现有 %v", got)
+	}
+
+	// ③ 主文件语义不随上限变化:内存裁剪照常、消息本体不丢。
+	cur, ok := st.Get("th-after")
+	if !ok {
+		t.Fatal("线程丢失")
+	}
+	if len(cur.Messages) == 0 || len(cur.Messages) >= 2050 {
+		t.Fatalf("内存应保留最近一批消息(裁剪后),得到 %d 条", len(cur.Messages))
 	}
 }
 

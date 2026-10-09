@@ -316,6 +316,20 @@ func piUIRequestKnown(method string) bool {
 	return false
 }
 
+// piUIRequestKnownFrame 判定一帧 extension_ui_request 原文是否已知 method
+// (in-flight 闸前置判别用,与 consumePiUnknownUIRequest 的帧内判别同词表)。
+// 解析失败/缺 method = 未知 —— 坏帧不在此处猜,照旧走透传确认入口的既有
+// 处置(consume 里会再解一次并按未知静默),两处判据同源不分叉。
+func piUIRequestKnownFrame(raw json.RawMessage) bool {
+	var probe struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(raw, &probe) != nil {
+		return false
+	}
+	return piUIRequestKnown(probe.Method)
+}
+
 // piUIClient 未知请求回写面对 piapp.Client 的窄接口(单测打桩,不依赖子进程;
 // RespondUI 真客户端天然满足,生产零适配 —— 与 codexApprovalResponder 同款模式)。
 type piUIClient interface {

@@ -1,4 +1,4 @@
-// pi_zcode_snapshot_semantics_test.go —— S3 正名(2026-10-09):GlobalOverride
+// pi_zcode_global_override_semantics_test.go —— S3 正名(2026-10-09):GlobalOverride
 // Semantics 口径。原文件头/用例名 "SnapshotSemantics" 名不副实 —— pi/zcode 的
 // 实际口径是**全局优先(覆盖快照)**:
 //

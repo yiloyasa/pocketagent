@@ -162,4 +162,31 @@ class SettingsSearchFilterTest {
         assertNull(normalizeSettingsSub("appearance"))
         assertNull(normalizeSettingsSub("whatever"))
     }
+
+    // ---- 搜索命中子页的返回层(G1 遗留:返回回搜索态而非丢失上下文) ----
+
+    @Test
+    fun `返回落点_普通记层回该层`() {
+        // Agent 与模型页 →「查看全部技能与插件」:返回要回到 Agent 与模型页。
+        assertEquals("agent", settingsBackTargetOf("agent"))
+        assertEquals("connection", settingsBackTargetOf("connection"))
+    }
+
+    @Test
+    fun `返回落点_搜索哨兵与无记层都回一级页`() {
+        // 搜索命中打开的子页:回一级页(settingsQuery 未清 = 搜索态原样还原);
+        // 首页导航行打开的子页(无记层)行为不变。
+        assertNull(settingsBackTargetOf(SETTINGS_RETURN_SEARCH))
+        assertNull(settingsBackTargetOf(null))
+    }
+
+    @Test
+    fun `搜索哨兵不与合法二级页id相撞`() {
+        // 哨兵若混进深链 sub 参数,归一化必须按未知值处理(回一级页),不得误开新页。
+        assertNull(normalizeSettingsSub(SETTINGS_RETURN_SEARCH))
+        // 且它不在搜索索引的合法 target 集合里(索引条目永远不会记出这个歧义)。
+        val validTargets = setOf("connection", "downloads", "agent", "capabilities", "console")
+        assertTrue(index.all { it.target == null || it.target in validTargets })
+        assertTrue(SETTINGS_RETURN_SEARCH !in validTargets)
+    }
 }

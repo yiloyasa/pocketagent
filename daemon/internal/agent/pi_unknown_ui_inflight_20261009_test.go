@@ -5,15 +5,19 @@
 // 竞态),超限直接回"忙"拒绝(piRejectUnknownUIBusy:pi 协议原生兜底
 // {cancelled:true} + 台账 UNKNOWN_REQUEST,备注写明 daemon 容量拒绝、非用户决定)。
 //
-// 【为什么只钉闸与拒绝函数】Run 泵的闸接线依赖真子进程 harness,由既有 pi 契约
-// 套件覆盖挂载路径(pi_watchdog_test.go"只钉判定函数"同款取舍);这里钉决策面
-// (超限必拒、超限不占坑、释放后恢复)与副作用面(忙拒绝的回写形状 + 台账)。
+// 【S3 遗留追加】分派面收拢成 dispatchPiExtensionUIRequest 后,"已知 method 前置
+// 判别 → 闸只拦未知"的顺序不经真子进程 harness 即可直钉:满窗口下已知
+// fire-and-forget 必须走既有静默忽略(不回写、不占坑、不进未知台账),只有未知
+// method 才吃"忙"拒绝。决策面(超限必拒、超限不占坑、释放后恢复)与副作用面
+// (忙拒绝的回写形状 + 台账)照旧钉在本文件。
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/runtime"
 )
 
@@ -101,5 +105,102 @@ func TestPiRejectUnknownUIBusyCancelledAndLedger(t *testing.T) {
 	}
 	if !hit {
 		t.Fatal("忙拒绝必须落 UNKNOWN_REQUEST 台账(洪水要能事后查)")
+	}
+}
+
+// TestPiUIRequestKnownFrame 前置判别的词表钉子:与 consumePiUnknownUIRequest
+// 同一判据(piUIRequestKnown)—— dialog 四种、fire-and-forget 五种为已知;
+// 未知 method、缺 method、坏帧一律未知(坏帧不在此处猜,交透传确认入口静默)。
+func TestPiUIRequestKnownFrame(t *testing.T) {
+	known := []string{
+		`{"id":"1","method":"confirm"}`,
+		`{"id":"1","method":"set_editor_text"}`,
+	}
+	for _, raw := range known {
+		if !piUIRequestKnownFrame([]byte(raw)) {
+			t.Fatalf("已知 method 误判为未知: %s", raw)
+		}
+	}
+	unknown := []string{
+		`{"id":"1","method":"futureDialog"}`,
+		`{"id":"1"}`,        // 缺 method = 未知
+		`{"id":1 "method":`, // 坏帧 = 未知(不猜)
+	}
+	for _, raw := range unknown {
+		if piUIRequestKnownFrame([]byte(raw)) {
+			t.Fatalf("未知/坏帧误判为已知: %s", raw)
+		}
+	}
+}
+
+// TestPiDispatchKnownMethodSkipsGate 判别顺序钉子(S3 遗留反馈 2):已知 method
+// 的预判必须排在 in-flight 闸**之前**。占满窗口(模拟未知请求洪水在飞)后再来
+// 一条已知 fire-and-forget(setStatus):它必须走既有静默忽略 —— 不吃"忙"拒绝、
+// 不回写(对无应答通道回 cancelled 是协议噪声)、不占坑、不进未知台账。
+func TestPiDispatchKnownMethodSkipsGate(t *testing.T) {
+	old := piUnknownUIInFlightLimit
+	piUnknownUIInFlightLimit = 1
+	t.Cleanup(func() { piUnknownUIInFlightLimit = old })
+
+	p := NewPiProvider()
+	if !p.acquireUnknownUIInFlight() { // 占满窗口:1 条未知请求在飞
+		t.Fatal("应能占坑(窗口未满)")
+	}
+	t.Cleanup(func() { p.uiInFlight.Add(-1) })
+
+	rsp := &fakePiUIResponder{}
+	known := []byte(`{"type":"extension_ui_request","id":"u-known","method":"setStatus","args":{}}`)
+	p.dispatchPiExtensionUIRequest(func(*pb.TurnServerMessage) {}, rsp, known, "th-known", context.Background(), nil)
+
+	if n := rsp.count(); n != 0 {
+		t.Fatalf("已知 method 不得被闸拒绝回写(无应答通道,静默面),得到 %d 次回写", n)
+	}
+	if got := p.uiInFlight.Load(); got != 1 {
+		t.Fatalf("已知 method 不得占坑也不得退坑:在飞应保持 1(那条未知请求),得到 %d", got)
+	}
+	for _, e := range ledgerEntries(t, "pi", "setStatus") {
+		if e.NormalizedKind == runtime.KindUnknownRequest {
+			t.Fatalf("已知 method 静默面不得进未知台账: %+v", e)
+		}
+	}
+}
+
+// TestPiDispatchUnknownMethodBusyUnderFlood 同一满窗口的对照侧:未知 method 才
+// 吃"忙"拒绝 —— 回协议原生兜底 {cancelled:true} + 台账 UNKNOWN_REQUEST。
+// 与上一条共同钉住"已知前置静默、闸只拦未知"的完整契约。
+func TestPiDispatchUnknownMethodBusyUnderFlood(t *testing.T) {
+	old := piUnknownUIInFlightLimit
+	piUnknownUIInFlightLimit = 1
+	t.Cleanup(func() { piUnknownUIInFlightLimit = old })
+
+	p := NewPiProvider()
+	if !p.acquireUnknownUIInFlight() {
+		t.Fatal("应能占坑(窗口未满)")
+	}
+	t.Cleanup(func() { p.uiInFlight.Add(-1) })
+
+	rsp := &fakePiUIResponder{}
+	unknown := []byte(`{"type":"extension_ui_request","id":"u-flood","method":"futureFlood"}`)
+	p.dispatchPiExtensionUIRequest(func(*pb.TurnServerMessage) {}, rsp, unknown, "th-flood", context.Background(), nil)
+
+	if n := rsp.count(); n != 1 {
+		t.Fatalf("满窗口下未知 method 应恰被忙拒绝回写一次,得到 %d 次", n)
+	}
+	id, payload := rsp.last(t)
+	if id != "u-flood" {
+		t.Fatalf("忙拒绝回写 id 应为请求原 id,得到 %q", id)
+	}
+	if v, ok := payload["cancelled"]; !ok || v != true {
+		t.Fatalf("忙拒绝应回原生兜底 {cancelled:true},得到 %v", payload)
+	}
+	var hit bool
+	for _, e := range ledgerEntries(t, "pi", "futureFlood") {
+		hit = true
+		if e.NormalizedKind != runtime.KindUnknownRequest {
+			t.Fatalf("忙拒绝应记 UNKNOWN_REQUEST,得到 %q", e.NormalizedKind)
+		}
+	}
+	if !hit {
+		t.Fatal("满窗口下未知 method 必须落 UNKNOWN_REQUEST 台账")
 	}
 }

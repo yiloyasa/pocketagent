@@ -333,12 +333,36 @@ object TaskCenter {
         p.edit().putString("tasks", text).putInt("unread", _unreadCount.value).apply()
     }
 
+    /**
+     * 【E2 残留修复】恢复落盘的任务清单:磁盘读 + [parseTasks] 全量行解析挪到落盘
+     * 单线程([persistExecutor]),不再占 MainActivity.onCreate 的主线程 —— 这是启动
+     * 路径,此前 getString 与逐行解析都同步跑在首帧之前。
+     *
+     * 【异步播种与竞态】结果经 StateFlow([_tasks]/[_unreadCount])发布;消费方
+     * (抽屉角标/最近会话抽屉/任务中心页/设置页)全部 collectAsState 订阅,
+     * 异步播种无感。唯一同步读点是紧随 init 的 PaNotifications.init 种子:
+     * 它可能拿到播种前的空清单,但冷启动恢复出的消息任务已被 parseTasks 判为
+     * INTERRUPTED(非运行态),而通知监控范围每拍都并上
+     * TurnSession.runningThreadIds()+已监控集合,该种子无行为差异。
+     * 【竞态兜底】播种落地的极小窗口内若已有新登记(如自动重连即刻开轮),
+     * 以内存中的更新真相为准:同 id 去重保留内存版本,磁盘行只补缺 ——
+     * 该分支在旧同步实现里不可达;正常时序走 current 为空的快路径,结果与
+     * 旧实现逐字段一致。
+     */
     private fun restore() {
         val p = prefs ?: return
-        val raw = p.getString("tasks", "") ?: ""
-        _tasks.value = parseTasks(raw)
-        // 未读数以持久化值为准(任务清单可能被裁剪)
-        _unreadCount.value = maxOf(p.getInt("unread", 0), _tasks.value.count { !it.read })
+        persistExecutor.execute {
+            runCatching {
+                val raw = p.getString("tasks", "") ?: ""
+                val restored = parseTasks(raw)
+                val current = _tasks.value
+                val merged = if (current.isEmpty()) restored
+                else restored.filter { r -> current.none { it.id == r.id } } + current
+                _tasks.value = merged
+                // 未读数以持久化值为准(任务清单可能被裁剪)
+                _unreadCount.value = maxOf(p.getInt("unread", 0), merged.count { !it.read })
+            }
+        }
     }
 
     /**

@@ -2156,6 +2156,12 @@ fun ChatScreen(
     onBack: () -> Unit = {},
     onOpenThread: (String) -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    /**
+     * 【G1 遗留归位】时间线技能预算警告卡「查看技能与插件」的深链出口:直达设置
+     * 「技能与插件」页(settings?sub=capabilities,normalizeSettingsSub 已收录)。
+     * 与 [onOpenSettings](侧边栏 → 设置一级页)分口;未接线时回退一级页,不摆死按钮。
+     */
+    onOpenSkillsSettings: () -> Unit = onOpenSettings,
     onOpenTerminal: () -> Unit = {},
     onOpenTaskCenter: () -> Unit = {},
     onGoTab: (Int) -> Unit = {},
@@ -2962,7 +2968,7 @@ fun ChatScreen(
                 chatVm.send(ChatIntent.WorkspaceResolved(ws))
                 val uploaded = withContext(Dispatchers.IO) {
                     uris.mapIndexed { index, uri ->
-                        val (name, bytes) = ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                        val (name, originalBytes) = ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
                             val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                             val n = if (c.moveToFirst() && idx >= 0) c.getString(idx) else null
                             val data = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -2970,6 +2976,15 @@ fun ChatScreen(
                             n.orEmpty().ifBlank { "file" } to data
                         } ?: error("无法读取附件")
                         val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                        // 【发送原图下采样】超长边阈值(1600px)的 jpeg/png/webp 先转正+压缩
+                        // 再上传,TurnInput 的 ImageBlock 与 ChatItem 驻留的 previewData 用
+                        // 同一份缩后字节(手机/电脑预览一致);其余附件原样传输,失败兜底
+                        // 原字节绝不阻断上传(纯函数决策见 AttachmentPreview.kt)。
+                        val bytes = downscaleImageBytesForUpload(
+                            originalBytes,
+                            safe,
+                            ctx.contentResolver.getType(uri).orEmpty(),
+                        )
                         val pcPath = ws.trimEnd('/', '\\') + "\\.pocketagent-uploads\\" +
                             System.currentTimeMillis() + "_" + index + "_" + safe
                         AgentConnection.fileService().writeFile(
@@ -3696,7 +3711,10 @@ fun ChatScreen(
                 historyDayStarts = historyDayStarts,
                 onOpenThread = onOpenThread,
                 onOpenBrowser = onOpenBrowser,
-                onOpenSettings = onOpenSettings,
+                // 【G1 遗留归位】ChatTimelineArea.onOpenSettings 的唯一消费者是
+                // CodexEventCard 技能预算警告卡的「查看技能与插件」按钮 —— 这里接
+                // capabilities 深链(侧边栏的设置入口仍走 onOpenSettings 一级页)。
+                onOpenSettings = onOpenSkillsSettings,
                 onApproveGuardian = { approveGuardian(it) },
                 onRetryDelivery = { retryDelivery(it) },
                 onOpenAttachment = { openAttachment(it) },

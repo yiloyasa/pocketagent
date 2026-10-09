@@ -82,6 +82,7 @@ import dev.pocketagent.app.ui.component.HomeEmptyStateCopy
 import dev.pocketagent.app.ui.component.PaHaptics
 import dev.pocketagent.app.ui.component.PaHostChip
 import dev.pocketagent.app.ui.component.PaHostLink
+import dev.pocketagent.app.ui.component.PaErrorBar
 import dev.pocketagent.app.ui.component.PaNavIconButton
 import dev.pocketagent.app.ui.component.PaRunningEnergyLine
 import dev.pocketagent.app.ui.component.PaRunningSessionUi
@@ -97,6 +98,7 @@ import dev.pocketagent.app.ui.component.homeAgentTileState
 import dev.pocketagent.app.ui.component.homeDiscoveryEmptyCopy
 import dev.pocketagent.app.ui.component.homeRecentEmptyCopy
 import dev.pocketagent.app.ui.component.homeShowsRecentSkeleton
+import dev.pocketagent.app.ui.component.paErrorViewOf
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.editorial
 import dev.pocketagent.app.ui.theme.paPushBack
@@ -738,24 +740,14 @@ private fun LazyListScope.connectedHomeItems(
 
     loadError?.let { message ->
         item(key = "loadError") {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp)
-                    .pressable(haptic = true) { onRetry() }
-                    // 未完成语义:珊瑚浅底 + 加深珊瑚字(语义双通道:有词有色);
-                    // 底色即边界,不再叠同色描边(降噪)
-                    .background(PaEditorial.DeniedContainer, RoundedCornerShape(PaEditorial.Radius.IconButton))
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    message, Modifier.weight(1f),
-                    fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
-                    color = EditorialDeniedText, maxLines = 2,
-                )
-                Text("重试", fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold, color = MaterialTheme.editorial.Primary)
-            }
+            // 【错误态体系】headline 走 PaStateViews 映射表(未配对→「还没和电脑配对」/
+            // 连不上→「连不上电脑」/其余→「电脑端说：…」),原始错误不再作标题裸露 ——
+            // 整条原文保住:点按/长按横幅展开「详情」;重试动作原样(与设置页横幅同一套)。
+            PaErrorBar(
+                paErrorViewOf(message),
+                Modifier.padding(top = 12.dp),
+                onRetry = onRetry,
+            )
         }
     }
 

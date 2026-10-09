@@ -19,7 +19,8 @@
 // CollabSessionStore 接口不动(封装变化点,与 store.go 同一思路)。
 //
 // 【与 gen 包零依赖】wire 映射(domain ↔ pb.CollabSessionSnapshot 等)由 server
-// 层(波 2)负责;本文件只定义 store 自己的 Go domain 类型,不 import gen ——
+// 层负责(已接线,见 server/collab_session_events.go 的 collabSessionToPb 等);
+// 本文件只定义 store 自己的 Go domain 类型,不 import gen ——
 // proto 由 protocol steward 并行演进,store 层不跟着重新生成代码。
 package store
 

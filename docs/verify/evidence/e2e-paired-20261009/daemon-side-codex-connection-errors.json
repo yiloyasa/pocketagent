@@ -1,0 +1,126 @@
+{
+  "note": "codex 模型 API 连接失败证据(临时 daemon 记录),解释轮次无法自然收尾",
+  "error_events": [
+    {
+      "id": "ue-33-b1896c61",
+      "sequence": 33,
+      "timestamp_ms": 1791521420614,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-35-0fc12611",
+      "sequence": 35,
+      "timestamp_ms": 1791521438900,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-36-a30c1900",
+      "sequence": 36,
+      "timestamp_ms": 1791521462203,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-38-99fc28f1",
+      "sequence": 38,
+      "timestamp_ms": 1791521495642,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-39-c50cd020",
+      "sequence": 39,
+      "timestamp_ms": 1791521548983,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-42-25e80380",
+      "sequence": 42,
+      "timestamp_ms": 1791521622222,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-44-38fc0db2",
+      "sequence": 44,
+      "timestamp_ms": 1791521695420,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-46-5f91e7d7",
+      "sequence": 46,
+      "timestamp_ms": 1791521768542,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-48-0f58b643",
+      "sequence": 48,
+      "timestamp_ms": 1791521841780,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    },
+    {
+      "id": "ue-51-331c8bd2",
+      "sequence": 51,
+      "timestamp_ms": 1791521915300,
+      "thread_id": "01a11eff-269a-7591-92d9-e4f4678e1b79",
+      "source_agent": "codex",
+      "source_method": "error",
+      "normalized_kind": "KNOWN_PROJECTED",
+      "safety_class": "UNKNOWN",
+      "raw_payload": "{\"error\":{\"additionalDetails\":\"Connection failed: error sending request\",\"codexErrorInfo\":{\"responseStreamDisconnected\":{\"httpStatusCode\":null}},\"message\":\"Reconnecting... waiting for network\",\"misalignment\":null},\"threadId\":\"01a11eff-269a-7591-92d9-e4f4678e1b79\",\"turnId\":\"01a11eff-2848-74c0-960f-ccff67cdf826\",\"willRetry\":true}",
+      "processing_status": "NEW"
+    }
+  ],
+  "total_entries": 92
+}

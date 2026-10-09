@@ -296,6 +296,9 @@ private fun RootNav() {
                 onBack = { nav.popBackStack() }, // 修复返回键无效
                 onOpenThread = { id -> nav.navigate("chat/$id") { launchSingleTop = true } },
                 onOpenSettings = { nav.navigate("settings") },
+                // 技能预算警告卡「查看技能与插件」:直达「技能与插件」页(与侧边栏的
+                // 设置一级页分口;normalizeSettingsSub 收录 capabilities)
+                onOpenSkillsSettings = { nav.navigate("settings?sub=capabilities") },
                 onOpenTerminal = { nav.navigate("terminal") },
                 onOpenTaskCenter = {
                     tab = 4

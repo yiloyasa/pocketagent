@@ -867,6 +867,47 @@ func piRejectUnknownUIBusy(c piUIClient, raw json.RawMessage, threadID string) {
 	})
 }
 
+// dispatchPiExtensionUIRequest 事件泵对 extension_ui_request 的分派(原 Run 的
+// consume 分支原样收拢,判定顺序即行为契约):
+//
+//  1. notify 先行(1.0.2 审计 G3):扩展发给用户的即时通知(info/warning/error)
+//     不属于"机器交互",静默会吞掉用户可见内容 —— 映射成状态/警告卡上屏
+//     (不回写,fire-and-forget 无应答通道),不进下面的任何分派;
+//  2. 已知 method 前置判别(2026-10-09 S3 遗留):已知 dialog 由 UIRequestHandler
+//     专线处理、已知 fire-and-forget 无应答通道,两者维持既有静默忽略(实测
+//     26 次 setStatus 噪声)。判别必须排在 in-flight 闸**之前**:否则未知请求
+//     洪水时,已知高频面(setStatus 等)先被闸吃一次"忙"拒绝 —— 对无应答通道
+//     回写 cancelled 是协议噪声,台账也记进本该静默的已知面。已知路径不占坑、
+//     不起 goroutine、不回写,与 consumePiUnknownUIRequest 的已知出口同款
+//     (该出口保留作纵深防御与直调测试,生产分派到此已过滤);
+//  3. 未知 method 才过 in-flight 闸:超限回协议原生兜底拒绝 + 台账(见
+//     piRejectUnknownUIBusy),未超限起 goroutine 透传确认 —— 必须异步:
+//     consume 跑在事件泵上,同步等手机会把整条事件管道堵住(与 piapp dispatch
+//     对 dialog 的 go 出去同理);等手机确认期间登记在飞数,与 dialog 审批同
+//     口径、预算同为 piUIBudget,看门狗据此豁免。
+func (p *PiProvider) dispatchPiExtensionUIRequest(sink Sink, c piUIClient, raw json.RawMessage, threadID string, runCtx context.Context, approve ApprovalHook) {
+	if cev, ok := MapUINotify(raw); ok {
+		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
+		return
+	}
+	frame := append(json.RawMessage(nil), raw...)
+	if piUIRequestKnownFrame(frame) {
+		return // 已知 method:既有静默忽略路径 —— 不占坑、不起 goroutine、不回写
+	}
+	// 【in-flight 闸(2026-10-09)】此前这里无条件 go,上游扩展异常刷屏时
+	// 确认 goroutine 无上界(每条各自 piUIBudget=120s 为界,窗口内照样
+	// 堆积)。复用 uiInFlight 计数器补一道上限:同步先占坑(判定与占坑
+	// 是同一次 Add,无 check-then-act 竞态),超限直接回"忙"拒绝。
+	if !p.acquireUnknownUIInFlight() {
+		piRejectUnknownUIBusy(c, frame, threadID)
+		return
+	}
+	go func() {
+		defer p.uiInFlight.Add(-1)
+		p.consumePiUnknownUIRequest(c, frame, threadID, runCtx, approve)
+	}()
+}
+
 // Run 执行完整一轮:发 prompt → 消费事件流 → agent_settled 收尾。
 func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	t := req.Thread
@@ -1138,39 +1179,11 @@ func (p *PiProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approv
 			// piEventNoticeKind 仍归 KNOWN_PASSTHROUGH,只落台账、不推屏、
 			// 不淹诊断页(词表兜底见 runtime/knowledge_pi.go)。
 			if ev.Type == "extension_ui_request" {
-				// 【辅线 B】未知 method 的 UI 反向请求:开关 ON 时弹通用确认卡征求
-				// 用户(允许→回写 {};拒绝/超时→回写原生兜底拒绝 cancelled)。
-				// 必须异步:consume 跑在事件泵上,同步等手机会把整条事件管道堵住
-				// (与 piapp dispatch 对 dialog 的 go 出去同理);已知 dialog 由上方
-				// UIRequestHandler 专线处理、已知 fire-and-forget 无应答通道,两者
-				// 在 consumePiUnknownUIRequest 里原样放行,维持静默忽略
-				// (实测 26 次 setStatus 噪声)。
-				// 【notify 例外(1.0.2 审计 G3)】notify 是扩展发给用户的即时通知
-				// (info/warning/error),不属于"机器交互",静默会吞掉用户可见内容
-				// —— 先映射成状态/警告卡上屏(不回写,fire-and-forget 无应答通道),
-				// 其余 fire-and-forget(setStatus/setWidget/setTitle/set_editor_text
-				// 是桌面 TUI 专属面)与未知 method 照旧走下方管道。
-				if cev, ok := MapUINotify(ev.Raw); ok {
-					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: cev}})
-					return
-				}
-				frame := append(json.RawMessage(nil), ev.Raw...)
-				// 【看门狗豁免】等手机确认的这段时间同样登记在飞数(与 dialog
-				// 审批同口径,预算同为 piUIBudget)。
-				// 【in-flight 闸(2026-10-09)】此前这里无条件 go,上游扩展异常刷屏时
-				// 确认 goroutine 无上界(每条各自 piUIBudget=120s 为界,窗口内照样
-				// 堆积)。复用 uiInFlight 计数器补一道上限:同步先占坑(判定与占坑
-				// 是同一次 Add,无 check-then-act 竞态),超限直接回"忙"拒绝 ——
-				// pi 协议原生兜底 {cancelled:true}(失败安全形状,非用户决定)+ 台账
-				// 留痕,不起 goroutine、不问手机,见 piRejectUnknownUIBusy。
-				if !p.acquireUnknownUIInFlight() {
-					piRejectUnknownUIBusy(c, frame, t.ID)
-					return
-				}
-				go func() {
-					defer p.uiInFlight.Add(-1)
-					p.consumePiUnknownUIRequest(c, frame, t.ID, runCtx, approve)
-				}()
+				// 反向请求分派全貌(notify 例外 / 已知静默 / 未知透传确认 /
+				// in-flight 闸)收在 dispatchPiExtensionUIRequest 一处:判定
+				// 顺序(已知前置、闸只拦未知)是行为契约,收拢成方法才能不经
+				// 真子进程 harness 被单测直钉。
+				p.dispatchPiExtensionUIRequest(sink, c, ev.Raw, t.ID, runCtx, approve)
 				return
 			}
 			if piLedgerOnlyEvent(ev.Type) {

@@ -66,7 +66,6 @@ import dev.pocketagent.app.ui.EditorialDeliveryBadge
 import dev.pocketagent.app.ui.InAppMarkdown
 import dev.pocketagent.app.ui.MessageEnterAnimation
 import dev.pocketagent.app.ui.PlanPanel
-import dev.pocketagent.app.ui.STREAM_RENDER_THROTTLE_MS
 import dev.pocketagent.app.ui.SubAgentsLogic
 import dev.pocketagent.app.ui.SubAgentsState
 import dev.pocketagent.app.ui.SubAgentThreadMeta
@@ -123,7 +122,6 @@ import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import pocketagent.v1.CodexEvent
 
@@ -521,46 +519,44 @@ internal fun ColumnScope.ChatTimelineArea(
         )
     }
 
-    // ---- 流式正文节流快照(P1-22)----
-    // delta 帧高频直喂 InAppMarkdown,即便解析已异步化(MarkdownText 的 produceState),
-    // 高频重组 + 解析排队仍会让长流式累计 O(n²) 掉帧。这里把直喂改为 ~120ms 合并快照:
-    // 中间帧只写 displayedStream,间隔内到达的 delta 自然合并,流式视觉延迟无感。
-    // 【最终帧一致性兜底】两条路径不经 delay 立即追平:
+    // ---- 流式正文节流快照(P1-22;【S2 收敛】已改为源头直通)----
+    // 历史:delta 帧高频直喂 InAppMarkdown,即便解析已异步化(MarkdownText 的
+    // produceState),高频重组 + 解析排队仍会让长流式累计 O(n²) 掉帧,曾在本地
+    // 做 ~120ms 合并快照。P1-5 之后 TurnSession 侧已把 delta 收进 streamBuffer,
+    // 按 STREAM_RENDER_THROTTLE_MS 的 120ms 口径发布快照 —— st.streamText 本身
+    // 就是 120ms 一次的合并结果,本地再 delay 一拍成了最坏 240ms 的双重节流。
+    // 现改为**直通读 st.streamText**:保留派生结构(displayedStream 仍是
+    // remember(st) 的本地态,下游消费点全部不变),只去掉额外 delay。
+    // 【最终帧一致性语义保持】两条不经等待立即追平的路径照旧成立:
     //   1) 流结束(!streaming);
     //   2) 正文被整段转存进 items(TurnSession 在工具调用开始时把 streamText 清空 ——
     //      快照必须同步清空,否则该段会在气泡里残留成"既在历史又在气泡"的重复)。
-    // 且每次 delay 醒来都重读 st.streamText 的最新值(不沿用 collect 到的旧值),
-    // 任何时刻快照最终必等于 streamText,尾巴不丢。
+    // collect 每次发布都重读最新值,任何时刻快照最终必等于 streamText,尾巴不丢。
     var displayedStream by remember(st) { mutableStateOf("") }
     LaunchedEffect(st) {
         snapshotFlow { st.streaming to st.streamText }
             .collect { (running, text) ->
                 when {
                     !running || text.isEmpty() -> displayedStream = text
-                    text != displayedStream -> {
-                        delay(STREAM_RENDER_THROTTLE_MS)
-                        displayedStream = st.streamText
-                    }
+                    text != displayedStream -> displayedStream = text
                 }
             }
     }
 
-    // ---- 流式思考节流快照(P1-7,与上方 displayedStream 同款口径)----
-    // 旧实现 item 内容直读 st.thinkingText:每个思考 delta 全文重排版一次。这里
-    // 复制 120ms 合并快照:中间帧只写 displayedThinking;「文本清空(思考已落卡)
-    // 立即追平」的终局一致性语义与 displayedStream 相同 —— 落卡的瞬间快照同步清空,
-    // 卡片不会在时间线上残留或延迟出现超过一帧。可见性条件读快照(delta 只触发
-    // 本快照写入,不再逐帧重组整个时间线区)。
+    // ---- 流式思考节流快照(P1-7;【S2 收敛】与 displayedStream 同款直通)----
+    // 旧实现 item 内容直读 st.thinkingText,每个思考 delta 全文重排版一次;P1-5
+    // 之后 st.thinkingText 已是 TurnSession 侧 120ms 合并发布的快照,本地不再叠加
+    // delay(双重节流收敛同 displayedStream)。「文本清空(思考已落卡)立即追平」
+    // 的终局一致性语义保持 —— 落卡的瞬间快照同步清空,卡片不会在时间线上残留或
+    // 延迟出现超过一帧。可见性条件读快照(delta 只触发本快照写入,不逐帧重组
+    // 整个时间线区)。
     var displayedThinking by remember(st) { mutableStateOf("") }
     LaunchedEffect(st) {
         snapshotFlow { st.thinkingText }
             .collect { text ->
                 when {
                     text.isEmpty() -> displayedThinking = text
-                    text != displayedThinking -> {
-                        delay(STREAM_RENDER_THROTTLE_MS)
-                        displayedThinking = st.thinkingText
-                    }
+                    text != displayedThinking -> displayedThinking = text
                 }
             }
     }

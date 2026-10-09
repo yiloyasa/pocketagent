@@ -3,8 +3,9 @@
 //
 // 【它解决什么】台账里的 UNKNOWN_* 条目以前只有方法名与技术原文;本文件按
 // normalized_kind 套**固定文案**生成用户能读的标题/解释/影响,并给出 daemon 判定
-// 安全的动作按钮表,供 server 层(波 2)映射到 proto 的 UserActionDescriptor 与
-// UnknownEventSummary 12~17 / UnknownEventResponse 7。
+// 安全的动作按钮表,由 server 层映射到 proto 的 UserActionDescriptor 与
+// UnknownEventSummary 12~17 / UnknownEventResponse 7(已接线,见
+// server/unknown_events.go 的 unknownActionsToProto / PresentUnknownEvent 调用点)。
 //
 // 【红线,按方案原文钉在这里】
 //   - 确定性纯函数:按 NormalizedKind 查固定规则表,不经 LLM、不做载荷语义推断、
@@ -24,7 +25,8 @@ package runtime
 
 // UnknownUserAction 是 daemon 判定为**可以给用户看**的一个动作按钮。
 // 【与 wire 的关系】字段一一对应 proto UserActionDescriptor(action_id/label/description/
-// safe/requires_confirmation/destructive),映射归波 2;本层不 import gen 包。
+// safe/requires_confirmation/destructive),映射由 server 层完成
+// (server/unknown_events.go unknownActionsToProto);本层不 import gen 包。
 type UnknownUserAction struct {
 	// ID 是动作稳定键(inspect/copy/acknowledge/open_native/retry_later),客户端原样回传。
 	ID string

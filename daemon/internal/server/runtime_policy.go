@@ -79,13 +79,21 @@ func (s *Server) SetRuntimePolicy(_ context.Context, req *pb.SetRuntimePolicyReq
 		return nil, errInternal(err)
 	}
 	s.budgetPolicy = next
+	effective := next.Effective("", "", "", "")
+	// 【DiskConversationBytes 热替换】归档目录总量上限的唯一执行体在 store
+	// (SetArchiveMaxBytes → evictArchiveLocked),启动装配期由 main 接线一次;
+	// 热替换路径若不同步它,改预算后"内存策略已是新值、归档上限仍是旧值" ——
+	// 两份真值,与本控制面"改完立即生效"的承诺相反。nil store(测试极简构造)
+	// 由 SetArchiveMaxBytes 的 nil 守卫兜住;Effective 已打底内置基线,缺省即
+	// 回 32MB 默认,与装配期"未设置维持默认"同口径。
+	s.cfg.Store.SetArchiveMaxBytes(derefInt64(effective.DiskConversationBytes))
 	log.Printf("[budget] 策略已更新 revision=%d(已落盘 %s)",
 		next.Revision, runtime.BudgetPolicyPath(s.cfg.DataDir))
 	return &pb.RuntimePolicyResponse{
 		Policy:          policyToProto(next),
 		Revision:        next.Revision,
 		PolicyPath:      runtime.BudgetPolicyPath(s.cfg.DataDir),
-		EffectiveGlobal: limitsToProto(next.Effective("", "", "", "")),
+		EffectiveGlobal: limitsToProto(effective),
 	}, nil
 }
 
