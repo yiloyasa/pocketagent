@@ -22,6 +22,8 @@ import dev.pocketagent.app.ui.theme.PaEditorial
  * 方向 C(会话页当播放页做透)的沉浸层小件(2026-10-09):
  *  - [immersiveScrollDecision]:滚动方向 → 两层收放(石墨头部收起 + 输入栏胶囊化)
  *    的判定纯函数,阈值/节流/回顶回底特判全部在此,JVM 单测钉死;
+ *  - [followBottomDecision] / [immersiveResetOnSend]:e2e-paired-20261009 问题1
+ *    的语义重排件 —— 胶囊态抑制 followBottom 翻真、发消息复原,JVM 单测钉死;
  *  - [StreamingEnergyLine] / [RunningPulseDot]:运行态能量语言(A1)的两个落点,
  *    色只走 PaEditorial.Running(铁律见 PaEditorial 头注「方向 C 铁律」),循环
  *    节拍只走 PaMotion.pulse,减弱动效一律退静态。
@@ -80,6 +82,41 @@ internal fun immersiveScrollDecision(
         else -> null
     }
 }
+
+/**
+ * 距底观测 → followBottom 翻真裁定(e2e-paired-20261009 问题1,纯函数,JVM 单测钉死)。
+ *
+ * 【胶囊态抑制跟底的观测半边】流式长尾项"底缘在视口外按 0 计距底"会让用户明明
+ * 上滑了 192px+(胶囊态)仍被距底观测算成"贴底"→ followBottom 翻真 → 复原兜底
+ * 清胶囊 —— "活跃会话中几乎无法保持胶囊态"的主冲突点。胶囊态下本裁定恒不翻真
+ * (只解除跟随):回底复原收敛到用户明确动作(手动下滑 / 点「↓ N 条新内容」胶囊 /
+ * 发消息),不再由布局生长伪装成"用户回到贴底"。
+ *
+ * @param atFollowDistance 距底 ≤[dev.pocketagent.app.ui.SCROLL_FOLLOW_THRESHOLD_PX]px
+ *   (shouldFollowDistance 的结果,阈值口径不在这里重复)。
+ * @param composerImmersed 是否处于输入栏胶囊态。
+ * @return followBottom 的新值(true=跟随/贴底,false=离底)。
+ */
+internal fun followBottomDecision(
+    atFollowDistance: Boolean,
+    composerImmersed: Boolean,
+): Boolean = atFollowDistance && !composerImmersed
+
+/**
+ * 用户主动发消息 → 沉浸态是否复原(e2e-paired-20261009 问题1,纯函数,JVM 单测钉死)。
+ *
+ * 【复原只保留用户明确动作】胶囊态期间程序滚动(跟底/流式跟底/历史加载锚定)
+ * 一律不清胶囊;发消息是三条复原动作之一 —— 用户发话即明确回到对话末端,
+ * 石墨头部/输入胶囊/胶囊点开展开态一并复原,并回底跟随自己刚发的那条。
+ *
+ * @return true = 任一沉浸件还挂着(需要复原);false = 本来就没沉浸(非胶囊态
+ *   行为不变,调用方据此整段跳过,不额外动 followBottom/未读计数)。
+ */
+internal fun immersiveResetOnSend(
+    headerCollapsed: Boolean,
+    composerImmersed: Boolean,
+    composerCapsuleTapped: Boolean,
+): Boolean = headerCollapsed || composerImmersed || composerCapsuleTapped
 
 // ---- A1 流式能量语言(Running 系专用纪律的界面落点) ----
 

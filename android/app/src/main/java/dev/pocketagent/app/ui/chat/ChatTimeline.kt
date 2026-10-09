@@ -118,12 +118,38 @@ import dev.pocketagent.app.ui.component.formatTurnFootnote
 import dev.pocketagent.app.ui.component.longPressMenu
 import dev.pocketagent.app.ui.component.terminalBlockKind
 import dev.pocketagent.app.ui.component.terminalScanlines
+import dev.pocketagent.app.ui.isVerifyingRecoveryCopy
 import dev.pocketagent.app.ui.theme.PaEditorial
 import dev.pocketagent.app.ui.theme.PaGlassToken
 import dev.pocketagent.app.ui.theme.PaHacker
 import dev.pocketagent.app.ui.theme.paGlass
 import kotlinx.coroutines.launch
 import pocketagent.v1.CodexEvent
+
+/**
+ * 连接/加载/恢复提示条的文案装配(e2e-paired-20261009 问题2,纯函数,JVM 单测钉死)。
+ *
+ * 优先级原样保留:恢复失败 > 恢复中(等待)> 轮次错误 > 页面加载错误。
+ * 【核对看门狗收尾】[verifyingSettled]=true 时「正在核对…」这类中间态文案被吞掉
+ * (返回 null = 横幅消退)—— daemon 核对信号丢失/延迟时 UI 侧 10s 按本地真相收尾,
+ * 不再无限期声称"核对中";恢复失败的 [recoveryError] 与 FAILED 真错误是终局真相,
+ * 不参与收尾、照常展示。武装条件(ChatScreen 侧)保证 settled 只会在核对文案族上
+ * 置真,这里对 errorMessage 的吞掉再压一道 recovering 在挂的防御。
+ */
+internal fun recoveryNoticeCopy(
+    recoveryError: String?,
+    recovering: Boolean,
+    verifyingSettled: Boolean,
+    errorMessage: String?,
+    loadError: String?,
+): String? = when {
+    recoveryError != null -> recoveryError
+    recovering && !verifyingSettled -> errorMessage ?: "连接已断开，正在恢复电脑端任务结果"
+    verifyingSettled && isVerifyingRecoveryCopy(errorMessage) -> null
+    errorMessage != null -> errorMessage
+    loadError != null -> loadError
+    else -> null
+}
 
 /**
  * 会话中段(时间线区)子树(C1 拆分,2026-10-09):目标行/子代理入口/提示条/
@@ -143,6 +169,10 @@ internal fun ColumnScope.ChatTimelineArea(
     threadAgentId: String,
     session: TurnSessionUiState,
     st: TurnSession.State,
+    // 【e2e-paired-20261009 问题2】核对看门狗收尾位(ChatScreen 10s 兜底):
+    // true = 「正在核对…」中间态已按本地真相收尾 —— 琥珀提示条消退、不再声称
+    // 运行中;真失败(recoveryError/FAILED 文案)不受影响,照常展示。
+    verifyingSettled: Boolean,
     ctx: Context,
     hapticView: android.view.View,
     drawerCtrl: DrawerController,
@@ -380,15 +410,18 @@ internal fun ColumnScope.ChatTimelineArea(
     //
     // 现在按优先级合并成一条提示,并且等待态带进度指示:
     //   恢复失败 > 恢复中(等待) > 轮次错误 > 页面加载错误
+    // 【e2e-paired-20261009 问题2】核对看门狗收尾(verifyingSettled)后,「正在
+    // 核对…」中间态横幅在此消退(recoveryNoticeCopy 纯函数,单测钉死);恢复失败
+    // 的 recoveryError 与 FAILED 真错误不受影响。
     run {
-        val waiting = session.recovering
-        val noticeMsg = when {
-            session.recoveryError != null -> session.recoveryError
-            waiting -> session.errorMessage ?: "连接已断开，正在恢复电脑端任务结果"
-            session.errorMessage != null -> session.errorMessage
-            loadError != null -> loadError
-            else -> null
-        }
+        val waiting = session.recovering && !verifyingSettled
+        val noticeMsg = recoveryNoticeCopy(
+            recoveryError = session.recoveryError,
+            recovering = session.recovering,
+            verifyingSettled = verifyingSettled,
+            errorMessage = session.errorMessage,
+            loadError = loadError,
+        )
         if (noticeMsg != null) {
             // 等待态用琥珀(警示但非失败),彻底失败/加载失败用珊瑚红
             // (编辑式语义色档:ATTENTION / DENIED;黑客终端保持旧黄/红)

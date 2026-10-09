@@ -44,6 +44,45 @@ class ChatScrollAnchorTest {
         assertFalse(shouldAutoScroll(distanceFromBottomPx = Int.MAX_VALUE, wasFollowing = false))
     }
 
+    // ---- e2e-paired-20261009 问题1:胶囊态抑制跟底(判定矩阵) ----
+
+    @Test
+    fun immersed_capsule_never_auto_scrolls_on_new_content() {
+        // 胶囊态 + 新内容到达(流式 chunk/新消息)→ 保持胶囊不跟底:
+        // 未读交给「↓ N 条新内容」胶囊,点它才回底
+        assertFalse(
+            shouldAutoScroll(
+                distanceFromBottomPx = Int.MAX_VALUE, wasFollowing = false, composerImmersed = true,
+            ),
+        )
+        // 上一帧还在跟随(流式中进胶囊)也一样不拽 —— 跟随位可能滞后于用户手势
+        assertFalse(
+            shouldAutoScroll(
+                distanceFromBottomPx = 0, wasFollowing = true, composerImmersed = true,
+            ),
+        )
+        // 仍在距底阈值内(长尾项读数按 0 计的边角)同样不拽
+        assertFalse(
+            shouldAutoScroll(
+                distanceFromBottomPx = 0, wasFollowing = false, composerImmersed = true,
+            ),
+        )
+    }
+
+    @Test
+    fun non_immersed_auto_scroll_behavior_unchanged() {
+        // 非胶囊态行为逐字不变(默认参数 = 旧签名调用点/旧用例口径)
+        assertTrue(
+            shouldAutoScroll(distanceFromBottomPx = 40_000, wasFollowing = true, composerImmersed = false),
+        )
+        assertTrue(
+            shouldAutoScroll(distanceFromBottomPx = 40, wasFollowing = false, composerImmersed = false),
+        )
+        assertFalse(
+            shouldAutoScroll(distanceFromBottomPx = Int.MAX_VALUE, wasFollowing = false, composerImmersed = false),
+        )
+    }
+
     @Test
     fun distance_is_zero_for_empty_or_unmeasured_lists() {
         assertEquals(0, distanceFromBottomPx(totalItems = 0, lastVisibleIndex = -1, lastVisibleEnd = 0, viewportEndOffset = 0))

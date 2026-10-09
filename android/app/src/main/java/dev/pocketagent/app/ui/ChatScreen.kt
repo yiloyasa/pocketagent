@@ -233,6 +233,8 @@ import dev.pocketagent.app.ui.chat.ChatViewModel
 // 【方向 C · N1 上滑沉浸】滚动方向 → 两层收放的判定纯函数与累计夹逼档
 // (ui/chat/ChatImmersive.kt,JVM 单测 ChatImmersiveLogicTest 钉死)
 import dev.pocketagent.app.ui.chat.IMMERSIVE_ACC_CLAMP_PX
+import dev.pocketagent.app.ui.chat.followBottomDecision
+import dev.pocketagent.app.ui.chat.immersiveResetOnSend
 import dev.pocketagent.app.ui.chat.immersiveScrollDecision
 import dev.pocketagent.app.ui.history.HistoryLocatePlan
 import dev.pocketagent.app.ui.history.HistorySearchHit
@@ -1468,9 +1470,17 @@ internal fun shouldFollowDistance(distanceFromBottomPx: Int): Boolean =
  * 新内容到达时是否自动回底:本来就在跟随(流式中持续钉底),**或**用户其实仍在
  * 距底 100px 内(没真正离开,只是内容短、列表没滚动)。真离底(上滑阅读)→ 不拽,
  * 交给「↓ N 条新内容」胶囊。
+ *
+ * 【e2e-paired-20261009 问题1 · 胶囊态抑制跟底】输入栏胶囊态(composerImmersed)
+ * 期间一律 false —— 用户上滑进胶囊是要安心读正文,新内容到达不再强制滚底,
+ * 由既有「↓ N 条新内容」胶囊承接(点它才回底);非胶囊态行为逐字不变
+ * (默认参数保持旧签名调用点/单测不迁移)。
  */
-internal fun shouldAutoScroll(distanceFromBottomPx: Int, wasFollowing: Boolean): Boolean =
-    wasFollowing || shouldFollowDistance(distanceFromBottomPx)
+internal fun shouldAutoScroll(
+    distanceFromBottomPx: Int,
+    wasFollowing: Boolean,
+    composerImmersed: Boolean = false,
+): Boolean = !composerImmersed && (wasFollowing || shouldFollowDistance(distanceFromBottomPx))
 
 /** 流式文本长度 → 块序号(每 STREAM_BLOCK_CHARS 个字符 1 块;负数防御按 0)。 */
 internal fun streamBlockIndex(textLength: Int): Int =
@@ -1488,6 +1498,69 @@ internal fun accumulateUnreadBlocks(
 ): Int {
     if (wasFollowing) return 0
     return currentUnread + newItemBlocks.coerceAtLeast(0) + newStreamBlocks.coerceAtLeast(0)
+}
+
+// ---- e2e-paired-20261009 问题2:核对等待超时兜底(纯函数,JVM 单测钉死)----
+//
+// 【为什么在 UI 侧收尾】停止轮次后流取消走 TurnSession 兜底分支:recovering=true
+// + 「正在核对电脑端任务状态」文案,恢复轮询最长 ~15 分钟;daemon 侧核对完成信号
+// 丢失/延迟时,头部状态点长时间"正在执行"、琥珀横幅长期驻留(E1 实锤)。TurnSession
+// 状态机禁改,呈现层加 10s 看门狗:超时后按本地真相收尾 —— 只撤"运行中/核对中"
+// 的声称(状态点回 idle、横幅消退),不伪造成功:不写终局帧、不清 errorMessage,
+// 恢复链仍在后台跑,真恢复到帧时状态自然翻新。
+
+/** 核对等待超时兜底(ms):daemon 核对信号丢失时 UI 侧按本地真相收尾的等待上限。 */
+internal const val VERIFYING_WATCHDOG_TIMEOUT_MS = 10_000L
+
+/**
+ * TurnSession 产生的"核对等待"文案族标记:只有这类**中间态**文案参与超时收尾。
+ * 对齐 TurnSession 全部五种在产文案:
+ *  「结果流已结束，正在核对电脑端任务状态」/「结果流中断，正在核对电脑端任务状态」/
+ *  「连接暂不可用，正在等待恢复结果」/「正在重新获取电脑端任务结果」(手动重试)。
+ * FAILED 终局的真错误("context canceled"/"任务失败"/方法名报错)不含这些标记
+ * —— 真失败是终局真相,横幅与错误详情照常展示,绝不被看门狗吞掉。
+ */
+internal fun isVerifyingRecoveryCopy(message: String?): Boolean {
+    if (message.isNullOrBlank()) return false
+    return message.contains("正在核对") ||
+        message.contains("正在等待恢复") ||
+        message.contains("正在重新获取")
+}
+
+/**
+ * 核对看门狗是否应武装(纯函数):仅在"恢复中 + 文案属核对族"时进入 10s 观察窗。
+ * 真失败文案(recoveryError / FAILED 错误)不武装 —— 那些是终局,不是等待。
+ */
+internal fun verificationWatchdogArmed(recovering: Boolean, errorMessage: String?): Boolean =
+    recovering && isVerifyingRecoveryCopy(errorMessage)
+
+/**
+ * 会话四词状态视图的装配(纯函数,ChatScreen identityStatus 的判定矩阵)。
+ *
+ * 优先级:运行/恢复中(实时位,daemon 状态滞后一拍)> 待审批 > 已收尾且无错误
+ * (IDLE「已完成」)> daemon 回填状态。e2e-paired-20261009 问题2 的复位点在这里:
+ * 核对看门狗超时([verifyingSettled]=true)后**不再声称运行中** —— recovering 的
+ * RUNNING 映射被短路,状态点按本地真相回 idle;同时核对文案不再喂给错误详情
+ * (它已被收尾吞掉,不构成失败展示)。待审批优先于收尾:审批是更要紧的用户动作。
+ */
+internal fun editorialChatStatusView(
+    running: Boolean,
+    recovering: Boolean,
+    verifyingSettled: Boolean,
+    turnTerminal: Boolean,
+    errorMessage: String?,
+    pendingApprovals: Int,
+    daemonStatus: ThreadStatus,
+): EditorialStatusView {
+    val pending = if (pendingApprovals > 0) 1 else 0
+    val status = when {
+        running || (recovering && !verifyingSettled) -> ThreadStatus.THREAD_STATUS_RUNNING
+        pending > 0 -> ThreadStatus.THREAD_STATUS_WAITING_APPROVAL
+        verifyingSettled -> ThreadStatus.THREAD_STATUS_IDLE
+        turnTerminal && errorMessage == null -> ThreadStatus.THREAD_STATUS_IDLE
+        else -> daemonStatus
+    }
+    return editorialThreadStatusView(status, pending, if (verifyingSettled) "" else errorMessage.orEmpty())
 }
 
 /** LazyListState → 距底像素(组合层取数,判定交给纯函数 distanceFromBottomPx)。 */
@@ -2241,6 +2314,23 @@ fun ChatScreen(
         val now = session.pendingApproval != null
         if (now && !hadPendingApproval) PaHaptics.warning(hapticView)
         hadPendingApproval = now
+    }
+
+    // ---- 核对等待超时兜底(e2e-paired-20261009 问题2)----
+    // daemon 核对完成信号丢失/延迟时,recovering + 「正在核对…」文案会无限期挂住
+    // (TurnSession 恢复轮询最长 ~15 分钟,禁改状态机):UI 侧 10s 看门狗按本地真相
+    // 收尾 —— 状态点回 idle、琥珀横幅消退(identityStatus/hasFailure/提示条三处
+    // 消费 verifyingSettled)。不伪造成功:不写终局帧、不清 errorMessage,恢复链
+    // 仍在后台跑;状态键(recovering/errorMessage)任一变化即重置/重新武装,
+    // 真恢复到帧或手动重试时窗口自然翻新。
+    var verifyingSettled by remember(threadId) { mutableStateOf(false) }
+    LaunchedEffect(session.recovering, session.errorMessage) {
+        if (!verificationWatchdogArmed(session.recovering, session.errorMessage)) {
+            verifyingSettled = false
+            return@LaunchedEffect
+        }
+        delay(VERIFYING_WATCHDOG_TIMEOUT_MS)
+        verifyingSettled = true
     }
 
     // ---- 提示词优化(实验功能,开关在 设置-外观与阅读,默认关)----
@@ -3047,6 +3137,21 @@ fun ChatScreen(
         HistoryQuickNavLogic.dayStartFlags(historyEntries, System.currentTimeMillis())
     }
 
+    /**
+     * 程序回底锚定的统一入口(e2e-paired-20261009 问题1):一律带 programmaticScroll
+     * 标记 —— 距底/方向观测不参与裁定,followBottom 不被锚定翻真,沉浸态不被锚定
+     * 清掉("程序滚动一律不清胶囊"的硬保证)。历史尾部回填/离线快照两条调用方。
+     */
+    suspend fun programmaticScrollToBottom() {
+        if (st.items.isEmpty()) return
+        programmaticScroll.set(true)
+        try {
+            listState.scrollToItem(st.items.size - 1)
+        } finally {
+            programmaticScroll.set(false)
+        }
+    }
+
     /** 浮层点卡片:跳到那条消息并关浮层(浮层自己不持列表状态)。 */
     fun jumpToHistoryEntry(listIndex: Int) {
         showHistoryPanel.value = false
@@ -3200,8 +3305,21 @@ fun ChatScreen(
         }
     }
 
+    // 【方向 C · N1/N2 沉浸态三件套】声明前移到距底观测之前(问题1 的裁定要读):
+    // headerCollapsed = 石墨头部收起;composerImmersed = 输入栏收成单行胶囊;
+    // composerCapsuleTapped = 沉浸态下点胶囊手动展开(展开后保持全尺寸输入栏,
+    // 直到下滑/回底复原时一并清)。composerExpandTick 是胶囊点开次数(展开后
+    // 输入框聚焦钩子的触发器,消费在 ChatComposerArea)。
+    val headerCollapsed = remember(threadId) { mutableStateOf(false) }
+    val composerImmersed = remember(threadId) { mutableStateOf(false) }
+    val composerCapsuleTapped = remember(threadId) { mutableStateOf(false) }
+    var composerExpandTick by remember { mutableStateOf(0) }
     // 距底观测:跟随状态只由"当前列表位置"裁定 —— 用户上滑出 100px 即解除跟随;
     // 手动滚回距底 100px 内即恢复跟随并清未读。程序滚动(带标记)不参与裁定。
+    // 【e2e-paired-20261009 问题1】胶囊态(composerImmersed)下本观测只解除跟随、
+    // 绝不翻真(followBottomDecision):流式长尾项"底缘在视口外按 0 计距底"会让
+    // 明明上滑 192px+ 的用户仍被算成"贴底",followBottom 翻真即触发复原兜底清
+    // 胶囊 —— 胶囊态形同虚设的主冲突点之一。胶囊态的回底复原收敛到用户明确动作。
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -3214,7 +3332,10 @@ fun ChatScreen(
             )
         }.collect { distance ->
             if (programmaticScroll.get()) return@collect
-            val nowFollowing = shouldFollowDistance(distance)
+            val nowFollowing = followBottomDecision(
+                atFollowDistance = shouldFollowDistance(distance),
+                composerImmersed = composerImmersed.value,
+            )
             // 从"离底"被用户亲手滚回"贴底":一次轻触觉确认跟随已恢复(可选,跟减弱动效)
             if (nowFollowing && !followBottom.value && !reduceMotion) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -3234,12 +3355,7 @@ fun ChatScreen(
     //    流式自动跟底绝不把沉浸态当"用户滚走";
     //  · acc 有夹逼上限,方向抖动天然互相抵消(节流防抖);落值是布尔翻转,
     //    逐帧高频滚动也不会逐帧驱动动画。
-    val headerCollapsed = remember(threadId) { mutableStateOf(false) }
-    val composerImmersed = remember(threadId) { mutableStateOf(false) }
-    // 沉浸态下点胶囊手动展开:展开后保持全尺寸输入栏,直到下滑/回底复原时一并清。
-    val composerCapsuleTapped = remember(threadId) { mutableStateOf(false) }
-    // 胶囊点开次数(展开后输入框聚焦钩子的触发器,消费在 ChatComposerArea)。
-    var composerExpandTick by remember { mutableStateOf(0) }
+    //  · 三件套声明在本段之前(距底观测的胶囊态抑制要读 composerImmersed)。
     LaunchedEffect(listState) {
         var lastIndex = listState.firstVisibleItemIndex
         var lastOffset = listState.firstVisibleItemScrollOffset
@@ -3270,9 +3386,13 @@ fun ChatScreen(
                 }
             }
     }
-    // 「↓ N 条新内容」胶囊回底 / 程序回底恢复跟随时,沉浸态同步复原 —— 与方向
-    // 观测互补:直接跳底没有"下滑差分",靠 followBottom 翻转这条兜底
-    // ("下滑回到底部输入栏复原"的第二条硬保证)。
+    // 【e2e-paired-20261009 问题1 · 语义重排】复原兜底:followBottom 翻真**只在
+    // 用户明确动作**下发生 —— 手动滚回贴底(非胶囊态)/点「↓ N 条新内容」胶囊回底/
+    // 历史面板"回最新"。三类程序路径已分别堵死:胶囊态下距底观测不再翻真
+    // (followBottomDecision)、胶囊态下新内容到达不再程序回底(shouldAutoScroll)、
+    // 历史加载锚定/离线快照回底带 programmaticScroll 标记 —— 都到不了这里。
+    // 用户借道回底 = 明确要回对话末端,沉浸态一并复原(与"下滑展开"互补:直接
+    // 跳底没有下滑差分,靠这条兜底)。
     LaunchedEffect(followBottom.value) {
         if (followBottom.value &&
             (headerCollapsed.value || composerImmersed.value || composerCapsuleTapped.value)
@@ -3312,9 +3432,13 @@ fun ChatScreen(
             // 用户手势进行中(drag/fling,且非我们的程序滚动)绝不抢滚动:同一帧里
             // "上滑"与"新内容到达"撞车时,以用户为准 —— 下一帧距底观测会解除跟随,
             // 之后的新块进未读计数,交给胶囊。
+            // 【e2e-paired-20261009 问题1】胶囊态(composerImmersed)抑制跟底:
+            // shouldAutoScroll 恒 false —— 流式期间每个 chunk 都把人拽回底、再由
+            // followBottom 兜底复原胶囊的循环在这里掐断;新内容交给「↓ N 条新内容」
+            // 胶囊(点它才回底),非胶囊态判定逐字不变。
             val userScrolling = listState.isScrollInProgress && !programmaticScroll.get()
             if (total > 0 && !userScrolling &&
-                shouldAutoScroll(distanceFromBottomOfList(listState), wasFollowing)
+                shouldAutoScroll(distanceFromBottomOfList(listState), wasFollowing, composerImmersed.value)
             ) {
                 programmaticScroll.set(true)
                 try {
@@ -3351,7 +3475,10 @@ fun ChatScreen(
         // 重跑本效果,由在线分支把 offlineSnapshot 归位。
         if (st.items.isEmpty()) {
             if (chatVm.prefillOfflineSnapshot(threadId) && st.items.isNotEmpty()) {
-                listState.scrollToItem(st.items.size - 1)
+                // 【e2e-20261009 问题1】离线快照回底 = 程序滚动:统一带标记走
+                // programmaticScrollToBottom(距底观测不把锚定当用户手势翻 followBottom);
+                // 胶囊态阅读中(重载)跳过回底锚定,新到的尾部交给未读胶囊。
+                if (!composerImmersed.value) programmaticScrollToBottom()
             }
             // 无快照:不伪造内容,继续走在线加载(失败时按原有报错分支提示)
         }
@@ -3362,9 +3489,14 @@ fun ChatScreen(
             threadGoalLine.value = head.goalLine
         }
         // 阶段③历史尾部回填(含失败快照兜底;后台轮次进行中/已有实时列表时门控在 VM 内原式)
+        // 【e2e-20261009 问题1】历史加载锚定 = 程序滚动:带标记回底(followBottom 不被
+        // 翻真、沉浸态不被清);E1 实锤的"轮询持续程序回底→胶囊复原"主冲突路径在
+        // 这里掐断 —— 胶囊态阅读中跳过回底锚定,新到的尾部内容交给「↓ N 条新内容」
+        // 胶囊(点它才回底);非胶囊态行为不变(回底锚定照旧)。
         val tail = chatVm.loadHistoryTail(threadId, historyRoundsLoaded, connectionEpoch, reloadToken)
-        if (tail.backfilled) listState.scrollToItem(st.items.size - 1)
-        if (tail.snapshotFallback) listState.scrollToItem(st.items.size - 1)
+        if ((tail.backfilled || tail.snapshotFallback) && !composerImmersed.value) {
+            programmaticScrollToBottom()
+        }
     }
 
     /**
@@ -3397,7 +3529,14 @@ fun ChatScreen(
                 val r = chatVm.fetchEarlierHistory(threadId, next)
                 if (r.receivedCount > 0) {
                     val target = if (anchorIndex <= 0) 0 else (anchorIndex + r.appendedCount).coerceAtMost(st.items.size - 1)
-                    listState.scrollToItem(target, if (anchorIndex <= 0) 0 else anchorOffset)
+                    // 【e2e-20261009 问题1】加载更早的锚定滚动也是程序滚动:带标记,
+                    // 距底/方向观测不把锚定误判成用户手势(followBottom/沉浸态不动)。
+                    programmaticScroll.set(true)
+                    try {
+                        listState.scrollToItem(target, if (anchorIndex <= 0) 0 else anchorOffset)
+                    } finally {
+                        programmaticScroll.set(false)
+                    }
                 }
             } catch (e: Exception) {
                 Toast.makeText(ctx, "加载更早失败：${e.message ?: "连接失败"}", Toast.LENGTH_SHORT).show()
@@ -3417,6 +3556,18 @@ fun ChatScreen(
         val sent = attachments.value
         if (!TurnSession.send(threadId, text, sent)) return false
         attachments.value = emptyList()
+        // 【e2e-paired-20261009 问题1】用户主动发消息 = 沉浸态三复原动作之一:
+        // 石墨头部/输入胶囊/胶囊点开态一律展开复原,并回底跟随自己刚发的那条
+        // (未读计数归零,口径同「回底」;程序滚动带标记,不参与裁定)。
+        // 仅沉浸时走这条 —— 非胶囊态发送行为不变(跟不跟随仍由距底观测裁定)。
+        if (immersiveResetOnSend(headerCollapsed.value, composerImmersed.value, composerCapsuleTapped.value)) {
+            headerCollapsed.value = false
+            composerImmersed.value = false
+            composerCapsuleTapped.value = false
+            unreadBlocks.value = 0
+            followBottom.value = true
+            scope.launch { programmaticScrollToBottom() }
+        }
         if (wasRunning) {
             // 运行中提交的回执:发送语义随 daemon 的 steer:<agentId> 位如实二选一
             // (有位=真插话进当前轮次,缺位=daemon 排队兜底);最终落点以时间线
@@ -3595,10 +3746,12 @@ fun ChatScreen(
     val messageSelectArmed = remember(threadId) { mutableStateOf<ChatItem?>(null) }
 
     val connSt = AgentConnection.connState.collectAsState().value
+    // 【e2e-20261009 问题2】核对看门狗收尾后,「正在核对…」这类中间态不再计入
+    // 失败/等待呈现(verifyingSettled 只在核对文案族上置真,真失败照常计入)。
     val hasFailure = loadError != null ||
-        session.recovering ||
+        (session.recovering && !verifyingSettled) ||
         session.recoveryError != null ||
-        session.errorMessage != null ||
+        (session.errorMessage != null && !verifyingSettled) ||
         connSt == "down"
     // 呈现层断连横幅状态:推进逻辑全在 component/nextConnectionBannerState(纯函数,
     // ConnectionBannerStateTest 钉死),本屏编辑式横幅(ChatOfflineBanner)只读结果 ——
@@ -3623,16 +3776,19 @@ fun ChatScreen(
     // 实时性:运行中/恢复中以 st.running·st.recovering 覆盖(daemon 状态滞后一拍);
     // 待审批优先于一切(同一事实在首页/任务中心/会话长出同一种状态);本轮已收尾且
     // 无错误按 IDLE 归「已完成」;其余落到 getThread 回填的 daemon 状态。
-    val identityStatus = run {
-        val pending = if (session.pendingApproval != null) 1 else 0
-        val status = when {
-            session.running || session.recovering -> ThreadStatus.THREAD_STATUS_RUNNING
-            session.turnTerminal && session.errorMessage == null -> ThreadStatus.THREAD_STATUS_IDLE
-            pending > 0 -> ThreadStatus.THREAD_STATUS_WAITING_APPROVAL
-            else -> threadStatus
-        }
-        editorialThreadStatusView(status, pending, session.errorMessage ?: "")
-    }
+    // 【e2e-20261009 问题2】头部状态点的复位点:核对看门狗超时(verifyingSettled)
+    // 后 recovering 不再映射 RUNNING —— 停止轮次后即使 TurnSession 恢复链仍挂着
+    // 「正在核对」,状态点也按本地真相回 idle(判定矩阵收进纯函数
+    // editorialChatStatusView,ChatVerifyingWatchdogTest 钉死)。
+    val identityStatus = editorialChatStatusView(
+        running = session.running,
+        recovering = session.recovering,
+        verifyingSettled = verifyingSettled,
+        turnTerminal = session.turnTerminal,
+        errorMessage = session.errorMessage,
+        pendingApprovals = if (session.pendingApproval != null) 1 else 0,
+        daemonStatus = threadStatus,
+    )
 
     // 【C1 拆分】审批弹窗状态机整体迁至 ui/chat/ChatApproval.kt;弹窗开合旗标
     // approvalDialogOpen 留在本页(时间线入口卡/身份徽章也开它),随参数直传。
@@ -3681,6 +3837,8 @@ fun ChatScreen(
                 threadAgentId = threadAgentId,
                 session = session,
                 st = st,
+                // 【e2e-20261009 问题2】核对看门狗收尾位:琥珀提示条据此消退
+                verifyingSettled = verifyingSettled,
                 ctx = ctx,
                 hapticView = hapticView,
                 drawerCtrl = drawerCtrl,

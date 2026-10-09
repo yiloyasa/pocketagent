@@ -2,14 +2,20 @@ package dev.pocketagent.app.ui
 
 import dev.pocketagent.app.ui.chat.COMPOSER_IMMERSIVE_TRIGGER_PX
 import dev.pocketagent.app.ui.chat.HEADER_COLLAPSE_TRIGGER_PX
+import dev.pocketagent.app.ui.chat.followBottomDecision
+import dev.pocketagent.app.ui.chat.immersiveResetOnSend
 import dev.pocketagent.app.ui.chat.immersiveScrollDecision
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * 方向 C · N1 上滑沉浸判定(ui/chat/ChatImmersive.kt [immersiveScrollDecision])
  * 纯函数钉死:渐进两段式入场(头→胶囊)、一步退场、回顶/回底特判、小位移节流。
+ * 【e2e-paired-20261009 问题1】胶囊态抑制跟底(followBottomDecision)与
+ * 发消息复原(immersiveResetOnSend)的判定矩阵同文件钉死。
  */
 class ChatImmersiveLogicTest {
 
@@ -76,5 +82,40 @@ class ChatImmersiveLogicTest {
         // 贴底但只是头部收起:交给方向规则 —— 若贴底即复原,头部在列表底部
         // 附近(距底 100px 跟随阈值 > 头部阈值)将永远收不起来
         assertNull(decide(headerCollapsed = true, atBottom = true, acc = 50))
+    }
+
+    // ---- e2e-paired-20261009 问题1:胶囊态抑制 followBottom 翻真(判定矩阵) ----
+
+    @Test
+    fun follow_decision_never_flips_true_while_immersed() {
+        // 胶囊态 + 流式长尾项把距底读数算成"贴底" → 绝不翻真(胶囊态形同虚设的主冲突点)
+        assertFalse(followBottomDecision(atFollowDistance = true, composerImmersed = true))
+        // 胶囊态 + 远离底部 → 解除跟随(维持 false)
+        assertFalse(followBottomDecision(atFollowDistance = false, composerImmersed = true))
+    }
+
+    @Test
+    fun follow_decision_unchanged_when_not_immersed() {
+        // 非胶囊态行为不变:贴底恢复跟随、离底解除跟随
+        assertTrue(followBottomDecision(atFollowDistance = true, composerImmersed = false))
+        assertFalse(followBottomDecision(atFollowDistance = false, composerImmersed = false))
+    }
+
+    // ---- e2e-paired-20261009 问题1:用户主动发消息 → 沉浸态复原(判定矩阵) ----
+
+    @Test
+    fun send_resets_immersive_from_any_immersive_piece() {
+        // 胶囊态 + 用户发送 → 展开复原
+        assertTrue(immersiveResetOnSend(headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = false))
+        // 只收了石墨头(第一阶段)+ 用户发送 → 复原
+        assertTrue(immersiveResetOnSend(headerCollapsed = true, composerImmersed = false, composerCapsuleTapped = false))
+        // 点胶囊手动展开态 + 用户发送 → 复原
+        assertTrue(immersiveResetOnSend(headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = true))
+    }
+
+    @Test
+    fun send_is_noop_when_not_immersed() {
+        // 非胶囊态行为不变:false = 调用方整段跳过,不动 followBottom/未读计数
+        assertFalse(immersiveResetOnSend(headerCollapsed = false, composerImmersed = false, composerCapsuleTapped = false))
     }
 }
