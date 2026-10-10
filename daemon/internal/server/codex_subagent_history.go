@@ -14,6 +14,12 @@
 //  3. 子线程转 idle(thread/status/changed 经既有 SyncThreadEvent 命中存根):
 //     子代理跑完,全量已成定局,此时重拉一次刷新。
 //
+// 【F9 存量自愈扩容(2026-10-09)】接线点 1 的入口从"子代理存根"放宽到
+// "0 消息的普通 codex 线程":旧 rollout 解析器只认 event_msg,新格式
+// (codex 0.160.0)静默解析出 0 条,ImportCodexThread 落了 0 消息线程;
+// ReadThreadFull(thread/read 权威全量)天然兼容新格式,打开历史页即自愈,
+// 落库后与既有本地路径汇合。合并规则与守卫原样沿用。
+//
 // 【合并规则(宁可少显示,不覆盖/不回退用户看得见的历史)】
 // thread/read 拉回的条数 ≥ 本地条数 → 本地整体替换(rollout 是权威副本,
 // 包含用户在子对话页插的话 —— StartTurn 走 chat/{childThreadId} 真线程);
@@ -77,12 +83,22 @@ type subagentReadFuller interface {
 // maybePullCodexSubagentHistory 按文件头三处接线点调用:是 codex 子代理存根、
 // 没有在飞拉取、provider 可用时,拉 thread/read 全量并按合并规则落库。
 // 其余情况一律静默返回(存根是"有则显示"的增强,绝不打扰主流程)。
+//
+// 【F9 存量自愈(2026-10-09)】旧解析器只认 event_msg,新格式 rollout(codex
+// 0.160.0)静默解析出 0 条 → ImportCodexThread 落了 0 消息普通线程。放宽入口:
+// 普通 codex 线程(agent=codex、ParentThreadID 为空)且本地 0 消息时也走本函数
+// 懒拉 —— ReadThreadFull 是权威全量通道,天然兼容新格式;既有守卫全部保留
+// (在飞单飞闸、空结果不缓存、拉回少于本地不覆盖、本地轮次在飞不拉)。
 func (s *Server) maybePullCodexSubagentHistory(ctx context.Context, t *store.Thread) bool {
-	if t == nil || threadAgentID(t) != "codex" || t.CodexThreadID == "" || t.ParentThreadID == "" {
-		return false // 不是 codex 子代理存根:与既有路径无关
+	if t == nil || threadAgentID(t) != "codex" || t.CodexThreadID == "" {
+		return false // 不是 codex 线程:与既有路径无关
+	}
+	// 子代理存根(父链非空)无条件可拉;普通线程只做 0 消息自愈首拉。
+	if t.ParentThreadID == "" && len(t.Messages) > 0 {
+		return false
 	}
 	if s.activeTurns.Has(t.ID) {
-		return false // 本地轮次在飞(用户正在子对话页插话):不拉,防覆盖流式
+		return false // 本地轮次在飞(用户正在插话):不拉,防覆盖流式
 	}
 	if _, busy := subagentHistoryInflight.LoadOrStore(t.ID, struct{}{}); busy {
 		return false
@@ -95,16 +111,24 @@ func (s *Server) maybePullCodexSubagentHistory(ctx context.Context, t *store.Thr
 	}
 	// 双检:拿锁期间可能已被先到者拉完/被轮次更新。
 	cur, found := s.cfg.Store.Get(t.ID)
-	if !found || cur.ParentThreadID == "" || len(cur.Messages) > 0 && !s.subagentRefreshWanted(cur) {
-		// 首拉只认"空存根";非空存根只在线程转 idle 的刷新路径进来
+	if !found {
+		return false
+	}
+	if cur.ParentThreadID != "" {
+		// 子代理存根:首拉只认"空存根";非空存根只在线程转 idle 的刷新路径进来
 		// (subagentRefreshWanted 由调用方语境决定,这里保守不复拉)。
+		if len(cur.Messages) > 0 && !s.subagentRefreshWanted(cur) {
+			return false
+		}
+	} else if len(cur.Messages) > 0 {
+		// 普通 codex 线程:仅限 0 消息自愈;拉过一次(或有本地轮次)一律不进。
 		return false
 	}
 	hctx, cancel := context.WithTimeout(ctx, subagentHistoryBudget)
 	defer cancel()
 	snap, err := p.ReadThreadFull(hctx, cur.CodexThreadID)
 	if err != nil {
-		log.Printf("[subagent] 拉取子代理对话失败(降级为空存根)thread=%s codex=%s: %v",
+		log.Printf("[subagent] 拉取对话失败(降级为空)thread=%s codex=%s: %v",
 			cur.ID, cur.CodexThreadID, err)
 		return false
 	}
@@ -119,10 +143,14 @@ func (s *Server) maybePullCodexSubagentHistory(ctx context.Context, t *store.Thr
 	}
 	cur.Messages = msgs
 	if err := s.cfg.Store.Update(cur); err != nil {
-		log.Printf("[subagent] 子代理对话落盘失败(内存可见,重启重拉)thread=%s: %v", cur.ID, err)
+		log.Printf("[subagent] 对话落盘失败(内存可见,重启重拉)thread=%s: %v", cur.ID, err)
 		return false
 	}
-	log.Printf("[subagent] 子代理对话已回填 %d 条 thread=%s(codex=%s)", len(msgs), cur.ID, cur.CodexThreadID)
+	kind := "子代理对话"
+	if cur.ParentThreadID == "" {
+		kind = "普通线程历史(0 消息自愈)"
+	}
+	log.Printf("[subagent] %s已回填 %d 条 thread=%s(codex=%s)", kind, len(msgs), cur.ID, cur.CodexThreadID)
 	return true
 }
 

@@ -1,5 +1,7 @@
 package dev.pocketagent.app.ui
 
+import dev.pocketagent.app.ui.chat.CapsulePulseTier
+import dev.pocketagent.app.ui.chat.capsulePulseTier
 import dev.pocketagent.app.ui.chat.recoveryNoticeCopy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,6 +18,9 @@ import pocketagent.v1.ThreadStatus
  * 电脑端任务状态」文案,恢复轮询最长 ~15 分钟;daemon 核对信号丢失/延迟时头部
  * 状态点长期"正在执行"、琥珀横幅长期驻留。呈现层 10s 看门狗超时后按本地真相
  * 收尾:状态点回 idle、横幅消退 —— 只撤"运行中/核对中"的声称,不伪造成功。
+ *
+ * 【F8 遗留反馈 3】胶囊运行点与收尾位的联动(capsulePulseTier)同文件钉死:
+ * settled 后胶囊不再呼吸,退静态 Muted 档,与头部状态点回 idle 同拍。
  */
 class ChatVerifyingWatchdogTest {
 
@@ -201,6 +206,51 @@ class ChatVerifyingWatchdogTest {
                 recoveryError = null, recovering = false, verifyingSettled = false,
                 errorMessage = null, loadError = "加载失败",
             ),
+        )
+    }
+
+    // ---- F8 遗留反馈 3:胶囊运行点与看门狗收尾联动(capsulePulseTier 判定矩阵) ----
+
+    @Test
+    fun capsule_pulse_keeps_running_tier_while_claim_is_alive() {
+        // 真在跑 → 呼吸档(现状口径,不回归)
+        assertEquals(
+            CapsulePulseTier.PULSING,
+            capsulePulseTier(running = true, recovering = false, verifyingSettled = false),
+        )
+        // 恢复链挂着且看门狗未收尾 → 仍按"运行中"呼吸(现状口径,不回归)
+        assertEquals(
+            CapsulePulseTier.PULSING,
+            capsulePulseTier(running = false, recovering = true, verifyingSettled = false),
+        )
+    }
+
+    @Test
+    fun capsule_pulse_stops_breathing_after_watchdog_settles() {
+        // 收尾后恢复链仍在后台 → 静态 Muted 余辉档,不再呼吸
+        // (与头部状态点 status_dot_returns_to_idle_after_watchdog_settles 同拍)
+        assertEquals(
+            CapsulePulseTier.SETTLED,
+            capsulePulseTier(running = false, recovering = true, verifyingSettled = true),
+        )
+    }
+
+    @Test
+    fun capsule_pulse_hidden_when_idle_and_running_beats_stale_settle() {
+        // 既没跑也没挂着 → 不摆(宁缺勿滥)
+        assertEquals(
+            CapsulePulseTier.NONE,
+            capsulePulseTier(running = false, recovering = false, verifyingSettled = false),
+        )
+        // 防御:真在跑压过过期的收尾位 —— 运行中必须呼吸,绝不误静音
+        assertEquals(
+            CapsulePulseTier.PULSING,
+            capsulePulseTier(running = true, recovering = true, verifyingSettled = true),
+        )
+        // 无恢复链时 settled 不构成余辉 —— 即使收尾位误挂也不摆幽灵点
+        assertEquals(
+            CapsulePulseTier.NONE,
+            capsulePulseTier(running = false, recovering = false, verifyingSettled = true),
         )
     }
 }

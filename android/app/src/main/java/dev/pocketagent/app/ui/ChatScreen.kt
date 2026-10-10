@@ -234,6 +234,7 @@ import dev.pocketagent.app.ui.chat.ChatViewModel
 // (ui/chat/ChatImmersive.kt,JVM 单测 ChatImmersiveLogicTest 钉死)
 import dev.pocketagent.app.ui.chat.IMMERSIVE_ACC_CLAMP_PX
 import dev.pocketagent.app.ui.chat.followBottomDecision
+import dev.pocketagent.app.ui.chat.immersiveResetOnGestureReachBottom
 import dev.pocketagent.app.ui.chat.immersiveResetOnSend
 import dev.pocketagent.app.ui.chat.immersiveScrollDecision
 import dev.pocketagent.app.ui.history.HistoryLocatePlan
@@ -3320,6 +3321,13 @@ fun ChatScreen(
     // 绝不翻真(followBottomDecision):流式长尾项"底缘在视口外按 0 计距底"会让
     // 明明上滑 192px+ 的用户仍被算成"贴底",followBottom 翻真即触发复原兜底清
     // 胶囊 —— 胶囊态形同虚设的主冲突点之一。胶囊态的回底复原收敛到用户明确动作。
+    // 【F8 遗留反馈 2 · 第四复原动作】手势直达贴底(快 fling 跨 item 差分被跳过,
+    // 方向判定接不到"到达")在本观测里接住:非程序滚动 + 真贴底 → 只清沉浸三件,
+    // followBottom 维持 false。真贴底走双闸(距底阈值 + canScrollForward 翻假):
+    // 距底读数会被长尾项"底缘在视口外按 0 计"伪装成贴底、也会被 clamp 在 0 漏掉
+    // 长尾项内的回底 fling,canScrollForward 只在真到底一帧翻假 —— 双闸同时为真
+    // 才是到达帧,流式布局生长绝不触发复原(判定矩阵在
+    // immersiveResetOnGestureReachBottom,JVM 单测钉死)。
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -3329,12 +3337,32 @@ fun ChatScreen(
                 lastVisibleIndex = last?.index ?: -1,
                 lastVisibleEnd = (last?.offset ?: 0) + (last?.size ?: 0),
                 viewportEndOffset = info.viewportEndOffset,
-            )
-        }.collect { distance ->
-            if (programmaticScroll.get()) return@collect
+            ) to listState.canScrollForward
+        }.collect { (distance, canScrollForward) ->
+            val programmatic = programmaticScroll.get()
+            val atFollowDistance = shouldFollowDistance(distance)
+            // 胶囊态先取本帧快照:复原只清沉浸件,下面 follow 裁定仍按本帧胶囊态
+            // 算 —— 复原帧绝不借道把 followBottom 翻真(F8 抑制语义不被绕开)。
+            val immersedThisFrame = composerImmersed.value
+            // 【F8 遗留反馈 2 · 第四复原动作】用户手势(fling/拖拽)直达贴底 →
+            // 复原沉浸三件;程序滚动(跟底/锚定)与伪装贴底在纯函数里排除。
+            if (immersiveResetOnGestureReachBottom(
+                    atFollowDistance = atFollowDistance,
+                    canScrollForward = canScrollForward,
+                    programmaticScroll = programmatic,
+                    headerCollapsed = headerCollapsed.value,
+                    composerImmersed = immersedThisFrame,
+                    composerCapsuleTapped = composerCapsuleTapped.value,
+                )
+            ) {
+                headerCollapsed.value = false
+                composerImmersed.value = false
+                composerCapsuleTapped.value = false
+            }
+            if (programmatic) return@collect
             val nowFollowing = followBottomDecision(
-                atFollowDistance = shouldFollowDistance(distance),
-                composerImmersed = composerImmersed.value,
+                atFollowDistance = atFollowDistance,
+                composerImmersed = immersedThisFrame,
             )
             // 从"离底"被用户亲手滚回"贴底":一次轻触觉确认跟随已恢复(可选,跟减弱动效)
             if (nowFollowing && !followBottom.value && !reduceMotion) {
@@ -3941,9 +3969,9 @@ fun ChatScreen(
         // 【P2-9 同批(插槽稳定性)】本 lambda 也是 PaScreenScaffold bottomBar 插槽的
         // 内容体:照 chatMiddle 先例以捕获的裸值集为 key remember(计算体
         // DisallowComposableCalls,只构造 lambda;session/input/codexSettings/
-        // promptOptState/voiceLandedTick/modelFlashTick/voiceElapsedSec/voiceState
-        // 等状态委托的读取发生在执行时,归执行作用域订阅,不进 key)。捕获的局部
-        // 函数(setInput/doCompact/doStartReview/openAttachment/reportVoiceUnavailable/
+        // promptOptState/voiceLandedTick/modelFlashTick/voiceElapsedSec/voiceState/
+        // verifyingSettled 等状态委托的读取发生在执行时,归执行作用域订阅,不进 key)。
+        // 捕获的局部函数(setInput/doCompact/doStartReview/openAttachment/reportVoiceUnavailable/
         // setApproval/optimizeCurrentInput/send)只触键控值与状态委托,不依赖键外易变态。
         val chatComposerBody: @Composable ColumnScope.() -> Unit = remember(
             threadId, st, ctx, hapticView, scope, attachments, threadAgentId, slashCommands,
@@ -3956,6 +3984,10 @@ fun ChatScreen(
             ChatComposerArea(
                 threadId = threadId,
                 session = session,
+                // 【F8 遗留反馈 3】核对看门狗收尾位直传:胶囊运行点据此停呼吸退
+                // 静态 Muted 档,与头部状态点回 idle 同拍(状态委托:读取发生在
+                // 执行时,归执行作用域订阅,不进下方 remember key)。
+                verifyingSettled = verifyingSettled,
                 ctx = ctx,
                 hapticView = hapticView,
                 input = { input },

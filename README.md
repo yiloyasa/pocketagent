@@ -36,9 +36,9 @@
 |---|---|
 | Git | 分支 `main`，**代码基线** `316e6ac`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
 | 六家 agent 版本基线 | codex **0.160.0**、pi **1.0.2**、zcode（桌面当前版，fork 7 型 union 已适配）、dsh **0.2.0-rc.2**、hermes（定位修复后全接入）、Claude 会话只读导入（externalconv） |
-| 测试基线 | Android **1599 用例 / 0 失败 / 0 错误**（2026-10-09 实跑）；daemon 测试包**全绿 0 FAIL**（**2026-10-09 实测复跑**）；RPC **7 服务 / 93 RPC** |
+| 测试基线 | Android **1770 用例 / 0 失败 / 0 错误**（2026-10-09 实跑，`bed113c` 验收口径）；daemon **26 测试包全绿 0 FAIL**（**2026-10-09 实测复跑**，`go test ./internal/... -count=1` grep `^ok`=26；总 28 包含 2 个无测试文件包，勿按总包口径写 28）；RPC **7 服务 / 93 RPC** |
 | 真机 | 小米 13（`8e0e7bbe`）经 **USB `adb reverse`** 通道全自动化 L2 验收 **15 项 13 PASS**（2026-10-07，证据 `docs/verify/evidence/l2-20261007/`）：六家 agent 真轮全通、pi 用量链路直证（ctx_window=1M / 环 0.25% 数学正确）；1 BLOCKED=语音须真人手指；无线兜底走 Tailscale |
-| **下一刀（交接待办）★** | ① 语音 L2 真人手指补验（唯一 BLOCKED 项）② codex 自报 5 个废弃配置键清理 ③ pi thinking 权威全文替换（pb 受限）④ zcode fork 真机点选验证 ⑤ codex 轮询超时预算（writeStdin 卡）⑥ panel 浏览器直点开关（E2 被取消项，规格见 `docs/overnight-20261001.md`）⑦ bindSession 上收。明细与背景 → **`docs/verify/handoff-2026-10-08.md`（交接总档）** |
+| **下一刀（交接待办）★** | ① 语音 L2 真人手指补验（唯一 BLOCKED 项）② zcode fork 真机点选验证 ③ TurnSession.recoverOrphanTurn 总超时已落（见 2026-10-09 轮）④ 浏览器起始页已裁保留 WebView。原 ②③⑤⑥⑦ 已销案（详见 `docs/verify/handoff-2026-10-09.md` §8）。明细与背景 → **`docs/verify/handoff-2026-10-09.md`（交接总档）** |
 | 遗留小项（已核销或拍板） | ~~daemon `GetHistory` 填 `created_at_unix_ms`~~（已落地，`thread_history_id_test` 直证）~~巡检大表膨胀~~（2026-10-07 `ad15c5d` 按 id 首段过滤修复）~~dsh 凭据链~~（key 已落 daemon 数据目录，L2 真机全轮跑通）~~attachmentEntryHiddenFor 遗留壳~~（实为能力门控活代码）~~unknown_events.go 陈旧注释~~（诚实"预留档"说明）~~InvalidateVersionCache~~（2026-10-01 已删）~~dshModelsBudget const→var~~（拍板维持 const） |
 | 挂账未核实（10-01 清单残余） | ① FileKind 枚举快照 Mcp 色不随换盘（改组合期读取）② SettingsScreen statusLabel 收口四词口径 ③ BrowserScreen 离线快照 toast 带"截至 X" —— 三项未被后续轮次显式核销，接手后先核实再动 |
 
@@ -63,7 +63,7 @@
 - **`AGENTS.md`** = **AI 协作者（codex / claude 等）入口**：命令速查 + 本机环境事实 + 红线速查，新接手的 agent 先读它。
 - **本文件（README）** = 项目整体上下文（唯一）。
 - **`AUDIT.md`** = 唯一审核标准（甲乙丙丁分级 / L0–L2 三层 / 红线一票否决）。
-- **`docs/verify/handoff-2026-10-08.md`** = 交接总档（最近一次交接：现状全景 / 待办明细 / 验证基线复现 / 坑库）。
+- **`docs/verify/handoff-2026-10-09.md`** = 交接总档（最近一次交接：现状全景 / 同日五轮纪要 §8 / 待办明细 / 验证基线复现 / 坑库）。
 - 审核入口脚本 `tools/audit/pa_audit.py`（六条规则，`--json` 机器可读）；真机驱动 `tools/device/`。
 - 工作区根 `_archives/` = 冷数据归档（只搬不删）；`apk-analysis/` = MobileCodex 生态逆向对比（项目前身调研）。两者均在仓库外 `G:\项目1\` 下。
 

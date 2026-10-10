@@ -3,6 +3,7 @@ package dev.pocketagent.app.ui
 import dev.pocketagent.app.ui.chat.COMPOSER_IMMERSIVE_TRIGGER_PX
 import dev.pocketagent.app.ui.chat.HEADER_COLLAPSE_TRIGGER_PX
 import dev.pocketagent.app.ui.chat.followBottomDecision
+import dev.pocketagent.app.ui.chat.immersiveResetOnGestureReachBottom
 import dev.pocketagent.app.ui.chat.immersiveResetOnSend
 import dev.pocketagent.app.ui.chat.immersiveScrollDecision
 import org.junit.Assert.assertEquals
@@ -16,6 +17,8 @@ import org.junit.Test
  * 纯函数钉死:渐进两段式入场(头→胶囊)、一步退场、回顶/回底特判、小位移节流。
  * 【e2e-paired-20261009 问题1】胶囊态抑制跟底(followBottomDecision)与
  * 发消息复原(immersiveResetOnSend)的判定矩阵同文件钉死。
+ * 【F8 遗留反馈 2】用户手势直达贴底的第四复原动作
+ * (immersiveResetOnGestureReachBottom)判定矩阵同文件钉死。
  */
 class ChatImmersiveLogicTest {
 
@@ -117,5 +120,87 @@ class ChatImmersiveLogicTest {
     fun send_is_noop_when_not_immersed() {
         // 非胶囊态行为不变:false = 调用方整段跳过,不动 followBottom/未读计数
         assertFalse(immersiveResetOnSend(headerCollapsed = false, composerImmersed = false, composerCapsuleTapped = false))
+    }
+
+    // ---- F8 遗留反馈 2:用户手势直达贴底 → 沉浸态复原(第四复原动作,判定矩阵) ----
+
+    @Test
+    fun gesture_reach_bottom_resets_immersive_from_any_immersive_piece() {
+        // 快 fling 直落底(同 item 差分被跳过的到达):胶囊态 + 双闸贴底(距底阈值
+        // 内 + canScrollForward 翻假)→ 复原
+        assertTrue(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = false,
+                headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = false,
+            )
+        )
+        // 只收了石墨头(第一段沉浸)同样复原
+        assertTrue(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = false,
+                headerCollapsed = true, composerImmersed = false, composerCapsuleTapped = false,
+            )
+        )
+        // 胶囊点开态(手动展开旗标挂着)同样复原
+        assertTrue(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = false,
+                headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = true,
+            )
+        )
+    }
+
+    @Test
+    fun gesture_reach_bottom_never_fires_for_programmatic_or_fake_bottom() {
+        // 程序滚动(跟底/流式跟底/历史锚定)标记期间的到达 = 程序 → 绝不复原
+        assertFalse(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = true,
+                headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = false,
+            )
+        )
+        // 程序滚动压过一切沉浸件:即使三件全挂着也不复原
+        assertFalse(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = true,
+                headerCollapsed = true, composerImmersed = true, composerCapsuleTapped = true,
+            )
+        )
+        // 伪装贴底:距底读数被长尾项 clamp 在阈值内,但 canScrollForward 仍真
+        // (列表还能继续下滚 = 流式长尾项里阅读)→ 绝不复原
+        assertFalse(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = true, programmaticScroll = false,
+                headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = false,
+            )
+        )
+        // 未达贴底距离(还在半空)→ 不复原
+        assertFalse(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = false, canScrollForward = false, programmaticScroll = false,
+                headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = false,
+            )
+        )
+        // 非沉浸态到达 → false(调用方整段跳过,非胶囊态行为不变)
+        assertFalse(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = false,
+                headerCollapsed = false, composerImmersed = false, composerCapsuleTapped = false,
+            )
+        )
+    }
+
+    @Test
+    fun gesture_reach_bottom_restore_is_independent_of_follow_decision() {
+        // 复原 ≠ 翻 followBottom:胶囊态下距底观测的 follow 裁定仍恒 false(F8 抑制
+        // 语义原样)—— 复原帧两者同帧发生时,followBottom 维持 false,未读胶囊留着
+        // (直到点它或发消息才重申跟随),两个纯函数互不越界。
+        assertTrue(
+            immersiveResetOnGestureReachBottom(
+                atFollowDistance = true, canScrollForward = false, programmaticScroll = false,
+                headerCollapsed = false, composerImmersed = true, composerCapsuleTapped = false,
+            )
+        )
+        assertFalse(followBottomDecision(atFollowDistance = true, composerImmersed = true))
     }
 }

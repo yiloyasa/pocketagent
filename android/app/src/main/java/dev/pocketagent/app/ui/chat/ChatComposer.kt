@@ -156,6 +156,10 @@ import pocketagent.v1.CodexSettings
 internal fun ColumnScope.ChatComposerArea(
     threadId: String,
     session: TurnSessionUiState,
+    // 【F8 遗留反馈 3】核对看门狗收尾位(ChatScreen 的 verifyingSettled 直传):
+    // 胶囊运行点据此与头部状态点同拍 —— settled 后停呼吸退静态 Muted 档
+    // (档位判定走 capsulePulseTier 纯函数,JVM 单测钉死)。
+    verifyingSettled: Boolean,
     ctx: Context,
     hapticView: android.view.View,
     input: () -> String,
@@ -233,7 +237,10 @@ internal fun ColumnScope.ChatComposerArea(
             ChatComposerCapsule(
                 input = input,
                 threadAgentId = threadAgentId,
-                running = session.running || session.recovering,
+                // 【F8 遗留反馈 3】运行点档位:不再裸读 `running || recovering`
+                // (看门狗收尾后脉冲仍呼吸,与头部状态点回 idle 不一致)—— 收尾
+                // 后退静态 Muted 档,判定在 capsulePulseTier 纯函数。
+                pulse = capsulePulseTier(session.running, session.recovering, verifyingSettled),
                 onExpand = onExpandImmersed,
             )
         } else {
@@ -652,8 +659,14 @@ internal fun ColumnScope.ChatComposerArea(
                 when {
                     session.pendingApproval != null ->
                         PaStatusGlyphSlot(PaStatusGlyph.RING, PaEditorial.Attention)
-                    session.running || session.recovering ->
-                        RunningPulseDot()
+                    // 【F8 遗留反馈 3 同型统一】全尺寸输入区与胶囊共用 capsulePulseTier
+                    // 三档:核对看门狗收尾(settled)后不再呼吸 Running,改静态 Muted 点
+                    // (与头部状态点已回 idle 一致)。
+                    capsulePulseTier(session.running, session.recovering, verifyingSettled) ==
+                        CapsulePulseTier.PULSING -> RunningPulseDot()
+                    capsulePulseTier(session.running, session.recovering, verifyingSettled) ==
+                        CapsulePulseTier.SETTLED ->
+                        PaStatusGlyphSlot(PaStatusGlyph.DOT, PaEditorial.Muted)
                     else -> {}
                 }
                 Spacer(Modifier.width(6.dp))
@@ -1059,16 +1072,21 @@ internal fun ColumnScope.ChatComposerArea(
 
 /**
  * 沉浸态单行输入胶囊(方向 C · N1,播放页 mini 条语言):agent 图标 + 草稿预览
- * (或占位)+ 运行态能量点 + 展开指示。整枚胶囊是一个按钮(点击展开全尺寸输入
+ * (或占位)+ 运行态点 + 展开指示。整枚胶囊是一个按钮(点击展开全尺寸输入
  * 区),不是可编辑输入框 —— 编辑权在全尺寸态,胶囊只做"输入还挂着"的存在感与
  * 入口。海拔语言与全尺寸态同款(A2):浅盘 Alert 档投影 + 玻璃高光边,深盘细线,
  * 黑客终端玻璃。
+ *
+ * 【F8 遗留反馈 3】运行点走 [capsulePulseTier] 三档:PULSING = Running 呼吸点
+ * (现状口径);SETTLED = 核对看门狗收尾后的静态余辉 —— PaStatusGlyph 实心点
+ * 走 Muted 中性档,不呼吸、不占 Running 专用纪律槽位(与头部状态点回 idle
+ * 同拍);NONE = 不摆。
  */
 @Composable
 private fun ChatComposerCapsule(
     input: () -> String,
     threadAgentId: String,
-    running: Boolean,
+    pulse: CapsulePulseTier,
     onExpand: () -> Unit,
 ) {
     val capsuleShape = RoundedCornerShape(PaEditorial.Radius.Pill)
@@ -1108,10 +1126,20 @@ private fun ChatComposerCapsule(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (running) {
-            Spacer(Modifier.width(8.dp))
-            // 运行态能量点:Running 系呼吸点(铁律见 PaEditorial 头注;减弱动效静态)
-            RunningPulseDot()
+        when (pulse) {
+            CapsulePulseTier.PULSING -> {
+                Spacer(Modifier.width(8.dp))
+                // 运行态能量点:Running 系呼吸点(铁律见 PaEditorial 头注;减弱动效静态)
+                RunningPulseDot()
+            }
+            CapsulePulseTier.SETTLED -> {
+                Spacer(Modifier.width(8.dp))
+                // 【F8 遗留反馈 3】看门狗收尾后的静态余辉点:Muted 中性档实心点
+                // (形通道同 PaStatusGlyph 族语言,6dp 与呼吸点同径),不呼吸 ——
+                // 与头部状态点回 idle 同拍,恢复链没断的诚实余辉。
+                PaStatusGlyphSlot(PaStatusGlyph.DOT, PaEditorial.Muted)
+            }
+            CapsulePulseTier.NONE -> {}
         }
         Spacer(Modifier.width(8.dp))
         Icon(

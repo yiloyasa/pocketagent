@@ -1,7 +1,8 @@
 package agent
 
 // 电脑上 codex 已有会话的发现与导入:直接扫 ~/.codex/sessions 的 rollout 文件,
-// 不依赖 app-server 协议(格式 2026-09 实测,见 parse)。
+// 不依赖 app-server 协议(旧格式 2026-09 实测;新格式 response_item/message 为
+// codex 0.160.0 Desktop 2026-10 实测,见 LoadCodexSessionMessages)。
 // 这样"手机端能看到桌面 codex 已经存在的项目和会话",点开即续聊。
 
 import (
@@ -171,7 +172,39 @@ func FindCodexSession(id string) (string, error) {
 	return hit, nil
 }
 
+// codexInjectedUserPrefixes 是新格式 rollout(codex ≥0.16x)里 codex 自己注入到
+// 用户侧的条目前缀:环境上下文/用户指令/AGENTS.md/外部应用页/轮次中断标记。
+// 这些不是用户说的话,落库会把"手机端历史"污染成大段英文指令 —— 按条目跳过。
+var codexInjectedUserPrefixes = []string{
+	"<environment_context>",
+	"<user_instructions>",
+	"# AGENTS.md instructions",
+	"<external_codex_apps_open_page>",
+	"<turn_aborted>",
+}
+
+// isCodexInjectedUserEntry 判断一条 user 侧文本是否 codex 注入条目(按 trim 后
+// 前缀判定;真消息正文不会以这些标记开头,误杀面为零)。
+func isCodexInjectedUserEntry(text string) bool {
+	t := strings.TrimSpace(text)
+	for _, p := range codexInjectedUserPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // LoadCodexSessionMessages 读取 rollout 里的 user/assistant 对话(纯文本)。
+//
+// 【两种格式并存】
+//   - 旧格式:event_msg + payload.type=user_message|agent_message + payload.message;
+//   - 新格式(codex 0.160.0 Desktop 实测,2026-10 F9 诊断):response_item +
+//     payload.type="message" + payload.role=user|assistant(其余 developer 等不落),
+//     正文在 payload.content[] 里取 input_text|output_text 的 text 拼接;
+//     user 侧注入条目按条目跳过(全部条目都被跳过 ⇒ 该消息不落)。
+//
+// 逐行按行级 type 分流,两种格式同一文件混排也各自解析;旧格式行为逐字不变。
 func LoadCodexSessionMessages(path string) ([]CodexSessionMessage, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -184,26 +217,58 @@ func LoadCodexSessionMessages(path string) ([]CodexSessionMessage, error) {
 	for sc.Scan() {
 		var line struct {
 			Timestamp string `json:"timestamp"`
+			Type      string `json:"type"`
 			Payload   struct {
 				Type    string `json:"type"`
+				Role    string `json:"role"`
 				Message string `json:"message"`
+				Content []struct {
+					Type string `json:"type"` // input_text | output_text
+					Text string `json:"text"`
+				} `json:"content"`
 			} `json:"payload"`
 		}
 		if json.Unmarshal(sc.Bytes(), &line) != nil {
 			continue
 		}
-		if line.Payload.Type != "user_message" && line.Payload.Type != "agent_message" {
+		var role, text string
+		switch {
+		case line.Type == "response_item" && line.Payload.Type == "message":
+			// 新格式:只认 user/assistant 两个对话角色。
+			if line.Payload.Role != "user" && line.Payload.Role != "assistant" {
+				continue
+			}
+			role = line.Payload.Role
+			var parts []string
+			for _, c := range line.Payload.Content {
+				if c.Type != "input_text" && c.Type != "output_text" {
+					continue
+				}
+				t := strings.TrimSpace(c.Text)
+				if t == "" {
+					continue
+				}
+				if role == "user" && isCodexInjectedUserEntry(t) {
+					continue // 注入条目按条目跳过,不污染也不吞并真消息
+				}
+				parts = append(parts, t)
+			}
+			text = strings.Join(parts, "\n")
+		case line.Payload.Type == "user_message" || line.Payload.Type == "agent_message":
+			// 旧格式:解析保持不变。
+			role = "assistant"
+			if line.Payload.Type == "user_message" {
+				role = "user"
+			}
+			text = line.Payload.Message
+		default:
 			continue
 		}
-		text := strings.TrimSpace(line.Payload.Message)
+		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
 		}
 		at, _ := time.Parse(time.RFC3339Nano, line.Timestamp)
-		role := "assistant"
-		if line.Payload.Type == "user_message" {
-			role = "user"
-		}
 		out = append(out, CodexSessionMessage{Role: role, Text: text, At: at})
 	}
 	return out, nil

@@ -14,10 +14,10 @@
 
 | 项 | 值 |
 |---|---|
-| Git 基线 | `main` @ `784b473`（交接收尾档），上一代码基线 `316e6ac`（2026-10-07 L2 验收），工作树干净 |
+| Git 基线 | `main` 最新（2026-10-09 多轮后，见 `git log -1`），上一代码基线 `316e6ac`（2026-10-07 L2 验收），工作树干净 |
 | 版本 | daemon **0.3.0** / App **versionCode 6** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
-| 测试水位 | Android **1599 用例 0 失败**（2026-10-09 实跑）；daemon **24 测试包全绿 0 FAIL**（2026-10-09 实跑，rpcwire 新包入列） |
+| 测试水位 | Android **1770 用例 0 失败**（2026-10-09 实跑，`bed113c` 验收口径）；daemon **26 测试包全绿 0 FAIL**（2026-10-09 实测，`go test ./internal/... -count=1` grep `^ok`=26；总 28 包含 2 个无测试文件包） |
 | agent 版本 | codex 0.160.0 / pi 1.0.2 / dsh 0.2.0-rc.2 / zcode 桌面当前版 / hermes 全接入 |
 | 真机 | 小米 13 `8e0e7bbe`，USB `adb reverse` 通道 L2 验收 15 项 13 PASS（2026-10-07） |
 

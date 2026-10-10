@@ -1222,10 +1222,45 @@ object TurnSession {
     }
 
     /**
-     * 恢复轮询的总尝试次数。3 秒封顶 × 300 次 ≈ 15 分钟,与旧实现(5 秒 × 180 次
-     * ≈ 15 分钟)的最长覆盖一致 —— 把节奏改快不该顺手缩短覆盖时长。
+     * 恢复轮询的总尝试次数(防呆内界)。3 秒封顶 × 300 次 ≈ 15 分钟 —— 旧实现里
+     * 它是恢复循环的**唯一**边界;现在正常由更短的总预算 [recoveryTotalTimeoutMs]
+     * 先截住,这一行只在总预算被放大时兜底,防止次数失控。
      */
     private const val RECOVERY_ATTEMPTS = 300
+
+    /**
+     * 恢复失败(核对超时)的落地文案:总预算到期仍没核对到电脑端结果时,由
+     * [finishRecoveryTimedOut] 落进 errorMessage。
+     *
+     * 【为什么不是核对文案族】文案不含「正在核对/正在等待恢复/正在重新获取」
+     * (isVerifyingRecoveryCopy 的三个标记)—— 它是**终局失败**,呈现层按真失败
+     * 照常展示(横幅/失败入口),绝不被 10s 看门狗的视觉收尾吞掉;措辞照现有风格
+     * 给出与界面真实动作对齐的下一步(重试 / 新建会话),禁裸词、不责备。
+     */
+    internal const val RECOVERY_TIMEOUT_NOTICE = "电脑端核对超时，请重试或新建会话"
+
+    /**
+     * 恢复循环的总预算(毫秒)—— 真相层「核对等待」的墙钟上限。到点由
+     * [finishRecoveryTimedOut] 如实收尾:recovering=false(发送闸解封)、
+     * errorMessage 落 [RECOVERY_TIMEOUT_NOTICE]、恢复轮询停止。**不伪造成功**:
+     * 没有恢复到帧就是没恢复,只是不再无限挂住(旧实现无总超时,daemon 核对信号
+     * 丢失时 recovering 最长挂满 ~15 分钟,单次 RPC 悬死时更久)。
+     *
+     * 【与 F8 呈现层看门狗的分层裁决】ChatScreen 的 10s 看门狗(verifyingSettled)
+     * 是**视觉声称收尾**:只撤「运行中/核对中」的呈现,不碰数据。本轮裁决取
+     * **同值同源**:真相层总预算直接引用同一常量 VERIFYING_WATCHDOG_TIMEOUT_MS,
+     * 两层同刻收尾 —— 0~10s 显示「正在核对」且不可发送;10s 时视觉收尾、发送
+     * 解封、失败文案落地同刻发生。不做「10s 收视觉、120s 收数据」的旧分层:
+     * 中间那段时间用户看着 idle 却发不出消息,是无解释的体验割裂。恢复的真实
+     * 路径(连接恢复后的增量回放/全量回填)秒级完成,10s 预算覆盖充分;超时
+     * 未恢复即如实报告,内容仍可经任务中心重试 / 手动刷新 / 重开会话拉回
+     * (事件断点 lastSequence 随 State 与 checkpoint 保留,重试从新断点续传,
+     * 不丢内容)。
+     *
+     * var 仅为缩时测试缝(生产代码不得改写);单测另有参数级注入
+     * ([runRecoveryLoop] 的 totalTimeoutMs)。
+     */
+    @Volatile internal var recoveryTotalTimeoutMs: Long = VERIFYING_WATCHDOG_TIMEOUT_MS
 
     /**
      * 恢复轮询第 [attempt] 次之后该等多久(毫秒)。
@@ -1360,16 +1395,120 @@ object TurnSession {
     }
 
     /**
+     * 恢复总预算到期 / 次数耗尽的统一收尾(真相层,单测直测):如实报告失败并
+     * 解封发送闸,不伪造成功。
+     *
+     * 【分层位置】呈现层看门狗(verifyingSettled)只收视觉;这里收**数据** ——
+     * recovering 复位即 TurnSession.send 与 UI canSend 的闸条件(`st.recovering`)
+     * 解封,errorMessage 落 [RECOVERY_TIMEOUT_NOTICE] 让失败可见、可重试。
+     * 两层同刻(10s)触发,不存在"看着 idle 却发不出"的中间窗。
+     *
+     * 【不写 checkpoint、不清 recoveryError】与旧超时路径一致:磁盘上恢复期的
+     * checkpoint 保持 active=true,进程重启后 restoreRunningCheckpoints 还能再核对
+     * 一次;recoveryError 若有 cancelTurn 失败等真实错误驻留,横幅优先级照旧展示,
+     * 这里不覆盖、不清除。
+     */
+    internal fun finishRecoveryTimedOut(threadId: String, st: State) {
+        st.recovering = false
+        st.errorMessage = RECOVERY_TIMEOUT_NOTICE
+        TaskCenter.finishMessage(threadId, ok = false, detail = "电脑端核对超时")
+        maybeStopKeepAlive()
+    }
+
+    /** 恢复循环([runRecoveryLoop])的出口,真相层据此决定收尾方式。 */
+    internal enum class RecoveryExit {
+        /** attemptOnce 报告已补到终局/确认(收尾由 attemptOnce 体内的 finishRecovery 完成)。 */
+        RECOVERED,
+        /** 静默弃恢复:startTurn 换代重开 / 会话已删除(recoverySignal 关闭)。不收尾。 */
+        ABANDONED,
+        /** 总预算([recoveryTotalTimeoutMs])到期 → [finishRecoveryTimedOut] 收尾。 */
+        TIMED_OUT,
+        /** 尝试次数耗尽(防呆内界,正常被总预算先截住)→ 同超时收尾。 */
+        EXHAUSTED,
+    }
+
+    /**
+     * 恢复轮询的控制流骨架:退避唤醒 → 单次尝试,外罩总预算([withTimeout])。
+     *
+     * 【为什么抽出来】总超时是本轮根治的核心,而生产 attempt 体(增量续传/全量
+     * 回填)依赖 AgentConnection 真连接,JVM 单测无法驱动;把**控制流**(退避节奏、
+     * 唤醒信号、换代/删除退出、总预算裁定)收进可注入 attemptOnce 的骨架,
+     * 超时/接管/弃恢复的裁定就能缩时单测钉死,生产 attempt 体零改动。
+     *
+     * 【协作式取消的边界】withTimeout 在挂起点生效:预算到期时若正卡在一次
+     * attempt 的阻塞 RPC 里,要等它返回后的下一个挂起点(下一次退避唤醒)才
+     * 退出 —— 比旧的"无总超时"仍是数量级收窄,彻底解法需要给 RPC 加独立时限
+     * (AgentConnection 不在本轮文件范围)。
+     */
+    internal suspend fun runRecoveryLoop(
+        st: State,
+        generation: Long,
+        attempts: Int = RECOVERY_ATTEMPTS,
+        totalTimeoutMs: Long = recoveryTotalTimeoutMs,
+        backoffMs: (Int) -> Long = ::recoveryBackoffMs,
+        attemptOnce: suspend () -> Boolean,
+    ): RecoveryExit {
+        var exit = RecoveryExit.EXHAUSTED
+        try {
+            withTimeout(totalTimeoutMs) {
+                loop@ for (i in 0 until attempts) {
+                    if (st.generation != generation) { exit = RecoveryExit.ABANDONED; break@loop }
+                    // WatchEvents 到达时立即唤醒;没有通知时仍按原退避节奏轮询。
+                    // receiveCatching 而非 receive:release() 会 close 通道,让在等的循环
+                    // 立即醒来 —— closed 结果从超时包装里带出来,即为"会话已删除,别再
+                    // 为它补事件"(静默退出,不收尾)。
+                    val wake = withTimeoutOrNull(backoffMs(i)) {
+                        st.recoverySignal.receiveCatching()
+                    }
+                    if (wake != null && wake.isClosed) { exit = RecoveryExit.ABANDONED; break@loop }
+                    if (st.generation != generation) { exit = RecoveryExit.ABANDONED; break@loop }
+                    if (attemptOnce()) { exit = RecoveryExit.RECOVERED; break@loop }
+                }
+            }
+        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+            exit = RecoveryExit.TIMED_OUT
+        }
+        return exit
+    }
+
+    /**
      * 断流恢复:USB/WiFi 闪断会掐掉 gRPC 流,但 daemon 电脑上的轮次还在继续跑。
      *
-     * 【P1-5 升级:恢复降级链】每个恢复周期按优先级走:
+     * 【恢复链现状(进入本函数前的置位点)】recovering=true + 核对文案由调用方落:
+     *   - startTurn 正常路径流被静默关闭(无终局帧):「结果流已结束，正在核对电脑端任务状态」;
+     *   - startTurn 异常兜底:「结果流中断，正在核对电脑端任务状态」/ 连接 down 时
+     *     「连接暂不可用，正在等待恢复结果」;
+     *   - retryRecovery(任务中心重试/页面重载入口):「正在重新获取电脑端任务结果」;
+     *   - restoreRunningCheckpoints(进程重启找回在跑轮次)走 retryRecovery。
+     * 退出条件只有三类:恢复到终局/确认帧(增量回放 TERMINAL,或全量回填确认 IDLE
+     * +新内容/IDLE+lastTurnError)→ [finishRecovery];换代/会话删除 → 静默退出;
+     * 总预算/次数耗尽 → [finishRecoveryTimedOut] 如实收尾。
+     *
+     * 【每个周期的降级链】
      *   1. 事件增量续传(GetThreadEventsSince(thread, lastSequence)):
      *      daemon 支持 event_sequence 且本机有可信断点时,只补错过的帧 ——
      *      与实时帧同一状态机回放,时间线无缝接上,不整屏重画;
      *   2. 历史全量回填(GetThreadHistory 整屏回填,原有逻辑原样保留):
      *      无断点 / daemon 不支持 / 收到 ResyncRequired(轮转丢窗) /
      *      增量 RPC 失败 —— 任一情况都退回这条路,保证永不丢内容。
-     * 后台轮询至多 30 分钟(10s × 180),覆盖长任务。
+     * 退避节奏见 [recoveryBackoffMs](150ms 起步、3s 封顶,WatchEvents 信号即时唤醒)。
+     *
+     * 【真相层总超时(本轮根治)】循环跑在 [runRecoveryLoop] 的总预算
+     * ([recoveryTotalTimeoutMs],与呈现层核对看门狗同值同源的 10s)之内;超时后
+     * [finishRecoveryTimedOut] 本地收尾 —— recovering=false(发送闸解封)、
+     * errorMessage 落「电脑端核对超时，请重试或新建会话」、恢复轮询停止。
+     * **不伪造成功**:没有恢复到帧就是没恢复,只是不再无限挂住。旧实现的两个
+     * 挂点:300 次退避 ≈ 15 分钟才判超时;单次 RPC 悬死时更久甚至无限。
+     *
+     * 【与 F8 呈现层看门狗的分层(最终裁决:同值同源)】
+     *  - 真相层(本文件):事实裁决 —— 发送闸(recovering)、errorMessage、
+     *    恢复轮询的生命周期,总预算 [recoveryTotalTimeoutMs];
+     *  - 呈现层(ChatScreen 10s 看门狗,verifyingSettled):视觉声称收尾 —— 只撤
+     *    「运行中/核对中」的呈现(状态点回 idle、琥珀横幅消退),不碰数据;
+     *  - 两层引用同一常量,同刻收尾:超时前是自洽的「核对中+不可发送」;预算到点
+     *    视觉收尾、发送解封、失败文案落地同时发生。原提过的「10s 收视觉、120s
+     *    收数据」分层被否:中间 110s 用户看着 idle 却发不出,是无解释的割裂。
+     *    (呈现层看门狗改为读真相层超时状态的方案,需改 ChatScreen,留待后续。)
      */
     private fun recoverOrphanTurn(threadId: String, st: State) {
         val generation = st.generation
@@ -1380,33 +1519,22 @@ object TurnSession {
                         GetThreadHistoryRequest.newBuilder().setThreadId(threadId).build()).messagesList.size
                 }
             } catch (_: Exception) { -1 }
-            var recovered = false
-            for (i in 0 until RECOVERY_ATTEMPTS) {
-                if (recovered) break
-                if (st.generation != generation) return@launch
-                // WatchEvents 到达时立即唤醒；没有通知时仍按原退避节奏轮询。
-                // receiveCatching 而非 receive:release() 会 close 通道,让在等的循环
-                // 立即醒来 —— close 会使 receive 抛异常,而这里要的是"退出恢复"不是崩溃;
-                // closed 结果从超时包装里带出来,即为"会话已删除,别再为它补事件"。
-                val wake = withTimeoutOrNull(recoveryBackoffMs(i)) {
-                    st.recoverySignal.receiveCatching()
-                }
-                if (wake != null && wake.isClosed) return@launch
-                if (st.generation != generation) return@launch
+            val exit = runRecoveryLoop(st, generation) {
                 // ---- 优先:事件增量续传(P1-5) ----
                 val outcome = tryIncrementalRecovery(threadId, st)
                 if (outcome == ReplayOutcome.TERMINAL) {
                     // 补到终局帧:时间线已与电脑端一致,无缝恢复完成。
                     // ok 以 FAILED 帧设置的 errorMessage 为准(FAILED 分支已落)。
                     finishRecovery(threadId, st, ok = st.errorMessage == null)
-                    recovered = true
-                    break
+                    return@runRecoveryLoop true
                 }
                 // ---- 兜底:全量回填——**只在丢窗或没有断点时才走** ----
                 // 原实现每个周期都整屏重拉,而增量已经把缺口补上(CAUGHT_UP)时那一趟纯属
                 // 白跑,还会让时间线整体重画一遍。方案 §9.3 明确要求"只有事件丢窗时才调用
                 // 全量历史";增量路径本身已能检测终局(TERMINAL),所以这里判断足够。
-                if (!needFullHistoryFallback(outcome, hasResumePoint = st.lastSequence > 0)) continue
+                if (!needFullHistoryFallback(outcome, hasResumePoint = st.lastSequence > 0)) {
+                    return@runRecoveryLoop false
+                }
                 val snapshot = try {
                     withContext(Dispatchers.IO) {
                         if (AgentConnection.connectWithFallback() == null) null else {
@@ -1417,8 +1545,9 @@ object TurnSession {
                             history to thread
                         }
                     }
-                } catch (_: Exception) { null } ?: continue
-                if (st.generation != generation) return@launch
+                } catch (_: Exception) { null } ?: return@runRecoveryLoop false
+                // 全量 RPC 期间用户可能已重开轮次:返回 false,循环顶部会按换代静默退出
+                if (st.generation != generation) return@runRecoveryLoop false
                 val history = snapshot.first
                 val status = snapshot.second.status
                 st.pendingApproval=snapshot.second.pendingApprovalsList.firstOrNull()
@@ -1432,14 +1561,12 @@ object TurnSession {
                     st.lastSequence=0
                     st.errorMessage=snapshot.second.lastTurnError
                     finishRecovery(threadId,st,ok=false)
-                    recovered=true
-                    break
+                    return@runRecoveryLoop true
                 }
                 val completedAfterReconnect =
                     status == ThreadStatus.THREAD_STATUS_IDLE &&
                         history.lastOrNull()?.role == "assistant"
                 if (status == ThreadStatus.THREAD_STATUS_IDLE && (history.size > baseline || completedAfterReconnect)) {
-                    recovered = true
                     st.items.clear()
                     st.items.addAll(historyChatItemsWithIds(history))
                     enforceTimelineCap(st)
@@ -1448,13 +1575,15 @@ object TurnSession {
                     // 重放已回填过的帧,时间线出现重复。
                     st.lastSequence = 0
                     finishRecovery(threadId, st, ok = true)
+                    return@runRecoveryLoop true
                 }
+                false
             }
-            if (!recovered) {
-                st.recovering = false
-                st.recoveryError = "自动恢复超时，请手动刷新会话历史"
-                TaskCenter.finishMessage(threadId, ok = false, detail = "自动恢复超时")
-                maybeStopKeepAlive()
+            when (exit) {
+                RecoveryExit.RECOVERED, RecoveryExit.ABANDONED -> Unit
+                // 总预算到期 / 次数耗尽:同一份如实收尾(不再区分两套文案)。
+                RecoveryExit.TIMED_OUT, RecoveryExit.EXHAUSTED ->
+                    finishRecoveryTimedOut(threadId, st)
             }
         }
     }

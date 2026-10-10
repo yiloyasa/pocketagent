@@ -152,6 +152,21 @@ internal fun recoveryNoticeCopy(
 }
 
 /**
+ * 【P0 崩溃修复 2026-10-09】相邻用户消息分组判定(安全读纯函数,JVM 单测钉死)。
+ *
+ * 竞态背景:打开有历史的会话时 [TurnSession.State.items] 被整表换血
+ * (prefillOfflineSnapshot/loadHistoryTail 先 clear 再 addAll,State 也可能被
+ * 空闲回收后 getOrPut 重建),而 LazyColumn 可能仍按旧布局给 item 内容 lambda
+ * 调度陈旧 index —— P1-6 上提的 itemRolesNow 快照此刻可为空表,裸读
+ * `roles[index-1]`/`roles[index+1]` 抛 IndexOutOfBoundsException
+ * (真机实崩:Index 46 out of bounds for length 0)。
+ * 越界一律视为"无邻居"(false = 不分组),与竞态帧的降级视觉语义一致;
+ * 正常帧下标永远在界内,行为与原式逐位相同。
+ */
+internal fun userGroupNeighbors(roles: List<String>, index: Int): Pair<Boolean, Boolean> =
+    (roles.getOrNull(index - 1) == "user") to (roles.getOrNull(index + 1) == "user")
+
+/**
  * 会话中段(时间线区)子树(C1 拆分,2026-10-09):目标行/子代理入口/提示条/
  * 离线横幅/审批入口卡/计划面板/消息列表/流式气泡/骨架空态/历史刻度条/未读胶囊。
  *
@@ -667,7 +682,11 @@ internal fun ColumnScope.ChatTimelineArea(
         ) { index, item ->
             // 进入动画只武装"新消息追加"的那一帧(见上方 prevItemCount 注释)
             // 【P1-6】三个直读全部换用列表作用域快照(见 itemCountNow 注释)
+            // 【P0 修复 2026-10-09】items 为空(打开历史会话的整表换血/State 重建空窗)
+            // 时绝不武装进入动画 —— 此帧的 index 是旧布局残留,动画与新内容无关;
+            // 正常帧 itemCountNow>0 恒成立,行为零变化。
             val enterArm = prevItemCountNow != null &&
+                itemCountNow > 0 &&
                 index == lastItemIndexNow &&
                 itemCountNow > prevItemCountNow
             // R2-A:本条消息的「选择文本」模式。长按默认开菜单(见用户/回复气泡的
@@ -763,8 +782,11 @@ internal fun ColumnScope.ChatTimelineArea(
                     // 只动摆放位置,LazyColumn 的排列/锚定/回收行为零变化,黑客终端
                     // 块(22dp 大留白的终端语言)不参与分组。
                     // 【P1-6】邻居角色改读列表作用域快照(itemRolesNow),不再订阅整表
-                    val prevIsUser = index > 0 && itemRolesNow[index - 1] == "user"
-                    val nextIsUser = index < lastItemIndexNow && itemRolesNow[index + 1] == "user"
+                    // 【P0 崩溃修复 2026-10-09】原裸读 itemRolesNow[index±1] 在
+                    // "items 整表换血 × LazyColumn 旧布局调度陈旧 index"竞态下越界
+                    // (真机实崩:Index 46 out of bounds for length 0,见
+                    // userGroupNeighbors 注释)。改安全读:越界降级为"无邻居"。
+                    val (prevIsUser, nextIsUser) = userGroupNeighbors(itemRolesNow, index)
                     val bubbleShape = if (PaHacker.isHacker) {
                         RoundedCornerShape(PaEditorial.Radius.Terminal)
                     } else {
