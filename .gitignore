@@ -89,3 +89,11 @@ daemon/*.exe.bak-*
 
 # 保留名误建条目(空文件,重启后可删;2026-10-04 收官波遗留)
 NUL
+
+# AOCI-CODE: 宿主集成配置含本机绑定的绝对路径,不入库(认知资产 aoci*.txt 必须入库,勿加入忽略)
+.zcode/config.json
+AGENTS.md.bak-aoci-20261010
+.gitignore.bak-aoci-20261010
+
+# AOCI init 的自动备份(本机)
+AGENTS.md.backup.*
