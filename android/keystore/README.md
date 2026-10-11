@@ -25,12 +25,13 @@ keytool -genkeypair -v -keystore android/keystore/release.jks -alias pocketagent
   -dname "CN=PocketAgent Release, OU=PocketAgent, O=PocketAgent, L=Beijing, ST=Beijing, C=CN"
 ```
 
-## 口令（单机开发链路默认值）
+## 口令（不入仓库）
 
-| 项 | 值 |
-|---|---|
-| 密钥库口令（store password） | `***REDACTED-STORE-PASSWORD***` |
-| 密钥口令（key password） | `***REDACTED-KEY-PASSWORD***` |
+**本仓库不留存任何口令字面量**（2026-10-11 公开化清洗：历史版本中曾出现过的
+默认口令已随历史重写移除，且视为已泄露——**分发前必须用 `keytool -storepasswd`
+轮换**）。真实口令由维护者保存在密码管理器与本机 `~/.gradle/gradle.properties`
+（`PA_RELEASE_STORE_PASSWORD` / `PA_RELEASE_KEY_PASSWORD`，仓库外），构建按
+build.gradle.kts 的注入优先级读取，两者皆缺即 fail-fast。
 
 > PKCS12 格式下两个口令实际合一（keytool 生成时已提示"忽略 -keypass"），
 > 读取密钥库时用 **密钥库口令** 即可；两值仍分列于此，兼容 Gradle 配置的两处填法。
@@ -39,11 +40,11 @@ keytool -genkeypair -v -keystore android/keystore/release.jks -alias pocketagent
 
 1. `gradle.properties`：`PA_RELEASE_STORE_PASSWORD` / `PA_RELEASE_KEY_PASSWORD`
 2. 环境变量：`PA_RELEASE_STORE_PASSWORD` / `PA_RELEASE_KEY_PASSWORD`
-3. 都没有 → 回退本 README 记录的默认值（单机开发链路优先可用性）
+3. 都没有 → **fail-fast**（仓库不留任何口令字面量，见上节）
 
-**分发前应改密**：默认值已写进仓库 README，仅适合本机构建。正式对外分发时
-用 `keytool -storepasswd` / `keytool -keypasswd` 换掉口令，再经
-gradle.properties 或环境变量注入新值，并同步更新本地备份。
+**分发前必须轮换**：旧默认口令曾进入仓库历史（已随 2026-10-11 公开化历史
+重写移除），按已泄露处理——正式分发前用 `keytool -storepasswd` 换口令，
+经 `~/.gradle/gradle.properties` 或环境变量注入新值，并更新本地备份。
 
 ## 指纹核对（配对用）
 

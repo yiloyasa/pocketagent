@@ -58,29 +58,26 @@ android {
         }
     }
 
-    // ---- release 签名(2026-10-09 分发资格批)----
-    // 密钥库:android/keystore/release.jks(别名 pocketagent,见同目录 README.md,
-    // 含口令与"丢失后无法再分发升级"的备份警告——该文件不入 git,务必仓库外备份)。
-    // 口令注入优先级:gradle.properties(PA_RELEASE_STORE_PASSWORD /
-    // PA_RELEASE_KEY_PASSWORD)→ 同名环境变量 → 回退 README 记录的默认值。
-    // 【单机开发链路优先可用性】回退默认值让 assembleRelease 开箱即跑;
-    // 但默认值已随仓库 README 落盘,**正式对外分发前应改密**(keytool -storepasswd /
-    // -keypasswd 换口令后经 gradle.properties 或环境变量注入,并更新本地备份)。
+    // ---- release 签名(2026-10-09 分发资格批;2026-10-11 公开仓库安全化)----
+    // 密钥库:android/keystore/release.jks(别名 pocketagent,见同目录 README.md——
+    // 该文件不入 git,务必仓库外备份)。**仓库不留存任何口令字面量**:
+    // 口令只经 gradle.properties(仓库外,推荐 ~/.gradle/gradle.properties)或
+    // 同名环境变量注入;两者皆缺 → fail-fast,绝不回退到硬编码值。
     signingConfigs {
         create("release") {
             storeFile = rootProject.file("keystore/release.jks")
             storePassword = (project.findProperty("PA_RELEASE_STORE_PASSWORD") as String?)
                 ?: System.getenv("PA_RELEASE_STORE_PASSWORD")
-                ?: "***REDACTED-STORE-PASSWORD***"
+                ?: throw GradleException(
+                    "PA_RELEASE_STORE_PASSWORD 未注入:请把发布签名口令写入 " +
+                        "~/.gradle/gradle.properties(仓库外,口令不入库)或设为同名环境变量")
             keyAlias = "pocketagent"
             // PKCS12 实测:keytool 忽略独立 keypass,库/钥匙口令合一(首跑 packageRelease
             // 以"bad key"实锤)。keyPassword 缺省跟 store 口令;真需要分开时才注入
             // PA_RELEASE_KEY_PASSWORD。
             keyPassword = (project.findProperty("PA_RELEASE_KEY_PASSWORD") as String?)
                 ?: System.getenv("PA_RELEASE_KEY_PASSWORD")
-                ?: (project.findProperty("PA_RELEASE_STORE_PASSWORD") as String?)
-                    ?: System.getenv("PA_RELEASE_STORE_PASSWORD")
-                    ?: "***REDACTED-STORE-PASSWORD***"
+                ?: storePassword
         }
     }
 
