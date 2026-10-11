@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import dev.pocketagent.app.ui.theme.PaEditorial
+import dev.pocketagent.app.ui.anim.ProvideReduceMotion
 
 /**
  * PocketAgent 设计系统 —— 对标参考稿(深色:纯黑/深灰大圆角卡/蓝色点缀)。
@@ -133,7 +134,9 @@ fun PaTheme(content: @Composable () -> Unit) {
         onSurfaceVariant = Pa.TextSecondary, outline = Pa.Separator, error = Pa.Red,
         onError = PaEditorial.OnDenied,
     )
-    MaterialTheme(colorScheme = scheme, content = content)
+    ProvideReduceMotion {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
 }
 
 /** 显示模式状态("system"/"light"/"dark"/"hacker"),AgentConnection.init 时从偏好恢复。 */

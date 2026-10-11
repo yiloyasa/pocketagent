@@ -3,21 +3,22 @@ package dev.pocketagent.app.ui.component
 import android.graphics.Paint
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -31,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -207,6 +209,7 @@ private fun PaSheetCentered(
             usePlatformDefaultWidth = false,
             dismissOnBackPress = !interceptBackPress,
             dismissOnClickOutside = swipeDismissEnabled,
+            decorFitsSystemWindows = false,
         ),
     ) {
         val reduceMotion = rememberReduceMotion()
@@ -217,8 +220,8 @@ private fun PaSheetCentered(
             animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.sheet(),
             label = "paSheetCenteredEnter",
         )
-        val maxH = LocalConfiguration.current.screenHeightDp.dp * 0.82f
-        Box(
+        val currentOnDismiss by rememberUpdatedState(onDismissRequest)
+        BoxWithConstraints(
             modifier
                 .fillMaxSize()
                 .background(PaEditorial.Scrim)
@@ -227,14 +230,20 @@ private fun PaSheetCentered(
                 .then(
                     if (swipeDismissEnabled) {
                         Modifier.pointerInput(Unit) {
-                            detectTapGestures { onDismissRequest() }
+                            detectTapGestures { currentOnDismiss() }
                         }
                     } else {
                         Modifier
                     },
+                )
+                .then(
+                    if (fullBleed) Modifier else Modifier
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .imePadding(),
                 ),
             contentAlignment = Alignment.Center,
         ) {
+            val maxH = maxHeight * 0.82f
             // 满幅档:无卡可装——去宽度/高度帽与玻璃/海拔,内容自己铺;【N4】内容根
             // 在封装内强制 fillMaxSize(),不靠调用方自觉(旧实现给裸 Modifier,漏挂
             // fillMaxSize 的内容会塌成包裹尺寸,满幅档名不副实)。
@@ -262,10 +271,7 @@ private fun PaSheetCentered(
                     .then(if (fullBleed) Modifier else Modifier.paGlass(shape))
                     .then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                     // 卡片吃掉点击,不让冒泡到遮罩(点卡片不等于点窗外)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {},
+                    .pointerInput(Unit) { detectTapGestures(onTap = {}) },
                 content = content,
             )
         }

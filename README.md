@@ -30,15 +30,16 @@
 - 代码：android main **151** `.kt` / test **162** `.kt`；daemon Go **639** 文件（生成 pb.go **15**，手写 **624** 含测试）
 - 版本：**0.3.0 / versionCode 6**
 
-### 0.3 当前状态（真值锚点 · 2026-10-08 收尾轮）
+### 0.3 当前状态（真值锚点 · 2026-10-11 UI 收尾轮）
 
 | 项 | 值 |
 |---|---|
 | Git | 分支 `main`，**代码基线** `316e6ac`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
 | 六家 agent 版本基线 | codex **0.160.0**、pi **1.0.2**、zcode（桌面当前版，fork 7 型 union 已适配）、dsh **0.2.0-rc.2**、hermes（定位修复后全接入）、Claude 会话只读导入（externalconv） |
-| 测试基线 | Android **1770 用例 / 0 失败 / 0 错误**（2026-10-09 实跑，`bed113c` 验收口径）；daemon **26 测试包全绿 0 FAIL**（**2026-10-09 实测复跑**，`go test ./internal/... -count=1` grep `^ok`=26；总 28 包含 2 个无测试文件包，勿按总包口径写 28）；RPC **7 服务 / 93 RPC** |
-| 真机 | 小米 13（`8e0e7bbe`）经 **USB `adb reverse`** 通道全自动化 L2 验收 **15 项 13 PASS**（2026-10-07，证据 `docs/verify/evidence/l2-20261007/`）：六家 agent 真轮全通、pi 用量链路直证（ctx_window=1M / 环 0.25% 数学正确）；1 BLOCKED=语音须真人手指；无线兜底走 Tailscale |
-| **下一刀（交接待办）★** | ① 语音 L2 真人手指补验（唯一 BLOCKED 项）② zcode fork 真机点选验证 ③ TurnSession.recoverOrphanTurn 总超时已落（见 2026-10-09 轮）④ 浏览器起始页已裁保留 WebView。原 ②③⑤⑥⑦ 已销案（详见 `docs/verify/handoff-2026-10-09.md` §8）。明细与背景 → **`docs/verify/handoff-2026-10-09.md`（交接总档）** |
+| 测试基线 | Android **1799 用例 / 0 失败 / 0 错误**（2026-10-11，191 份 XML，`--rerun`，本轮新增 12 例）；daemon `go test ./... -count=1` **29 个有测试包通过**（其中 internal 26 包）；**12 包 race 全通过**；RPC **7 服务 / 93 RPC**。本轮记录：`docs/verify/ui-polish-2026-10-11.md` |
+| UI 收尾 | 2026-10-11：撤销操作互斥、共享触控区/动态减弱动画、键盘避让、Agent 网格及设置大字适配、主机状态可见性、底部运行条实测让位；模拟器 1080×2400 与 840×1600/1.5 倍字体复验。当日 21:51 已无窗热部署生产 daemon（含 oaHTTP 竞态修复）；本轮改动已入库 |
+| 真机 | 小米 13（`8e0e7bbe`）USB `adb reverse` 通道：**最终真机验收 2026-10-11（14 PASS）**，pi thinking 全链/dsh 写文件工具链/胶囊抑制跟底/zcode fork 点选 真机全通过（证据 `docs/verify/evidence/l2-final-20261011/`）；上一轮 L2 2026-10-07（15 项 13 PASS，`docs/verify/evidence/l2-20261007/`）。1 BLOCKED=语音须真人手指；codex 真实轮次待桌面 DEX Router 账号重同步后补考（App 侧错误链路已验） |
+| **下一刀（交接待办）★** | ① 语音 L2 真人手指补验 ② 桌面 DEX Router 账号重同步后补考 codex 真实轮次 ③ zcode fork 新会话落地形态桌面端复核（fork 已点通，见 L2-final F2）。原②(zcode fork)已销案 ④ 其余已销案（详见 `docs/verify/handoff-2026-10-09.md` §8）。明细与背景 → **`docs/verify/handoff-2026-10-09.md`（交接总档）** |
 | 遗留小项（已核销或拍板） | ~~daemon `GetHistory` 填 `created_at_unix_ms`~~（已落地，`thread_history_id_test` 直证）~~巡检大表膨胀~~（2026-10-07 `ad15c5d` 按 id 首段过滤修复）~~dsh 凭据链~~（key 已落 daemon 数据目录，L2 真机全轮跑通）~~attachmentEntryHiddenFor 遗留壳~~（实为能力门控活代码）~~unknown_events.go 陈旧注释~~（诚实"预留档"说明）~~InvalidateVersionCache~~（2026-10-01 已删）~~dshModelsBudget const→var~~（拍板维持 const） |
 | 挂账未核实（10-01 清单残余） | ① FileKind 枚举快照 Mcp 色不随换盘（改组合期读取）② SettingsScreen statusLabel 收口四词口径 ③ BrowserScreen 离线快照 toast 带"截至 X" —— 三项未被后续轮次显式核销，接手后先核实再动 |
 

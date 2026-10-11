@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,12 +41,16 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
-import dev.pocketagent.app.ui.theme.Pa
+import dev.pocketagent.app.ui.anim.pressable
+import dev.pocketagent.app.ui.anim.pressableLong
 import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.launch
 
@@ -117,10 +122,19 @@ fun SwipeRevealRow(
     content: @Composable () -> Unit,
 ) {
     if (actions.isEmpty()) {
-        Box(modifier) { content() }
+        val interaction = when {
+            onLongPress != null -> Modifier.pressableLong(
+                onClick = { onClick?.invoke() }, onLongPress = onLongPress,
+            )
+            onClick != null -> Modifier.pressable(onClick = onClick)
+            else -> Modifier
+        }
+        Box(modifier.then(interaction)) { content() }
         return
     }
 
+    val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
     val density = LocalDensity.current
     // 动作区最多占屏宽 72%:4 个动作 × 64dp 在窄屏上会顶到边界,露出没铺背景的黑块
     val maxReveal = with(density) { 0.72f * android.content.res.Resources.getSystem().displayMetrics.widthPixels }
@@ -143,9 +157,9 @@ fun SwipeRevealRow(
     )
 
     // 互斥:本行不是当前展开项时回弹归位(这是状态修正,不是动量落位,用标准 spring)
-    LaunchedEffect(isOpen) {
-        if (!isOpen && offset.value != 0f) offset.animateTo(0f, PaMotion.standard())
-        if (isOpen && offset.value != -revealPx) offset.animateTo(-revealPx, PaMotion.momentum())
+    LaunchedEffect(isOpen, revealPx, reduceMotion) {
+        if (!isOpen && offset.value != 0f) offset.animateTo(0f, if (reduceMotion) PaMotion.instant() else PaMotion.standard())
+        if (isOpen && offset.value != -revealPx) offset.animateTo(-revealPx, if (reduceMotion) PaMotion.instant() else PaMotion.momentum())
     }
 
     // ---- 松手速度采样:与 DrawerController 同一套 120ms 窗口 + 0.6/0.4 平滑 ----
@@ -171,7 +185,8 @@ fun SwipeRevealRow(
             Modifier
                 .matchParentSize()
                 .clip(shape)
-                .background(PaEditorial.Surface),
+                .background(PaEditorial.Surface)
+                .then(if (isOpen) Modifier else Modifier.clearAndSetSemantics {}),
         ) {
             Row(
                 Modifier
@@ -220,6 +235,21 @@ fun SwipeRevealRow(
                 .graphicsLayer { translationX = offset.value }
                 .clip(shape)
                 .background(rowBackground)
+                .semantics(mergeDescendants = true) {
+                    if (onClick != null || isOpen) {
+                        onClick {
+                            if (openKey.value == rowKey) openKey.value = null
+                            else currentOnClick?.invoke()
+                            true
+                        }
+                    }
+                    if (onLongPress != null) {
+                        onLongClick(label = "更多操作") {
+                            currentOnLongPress?.invoke()
+                            true
+                        }
+                    }
+                }
                 // 手势顺序很重要:先声明 tap,再声明 drag —— 后者在内层,
                 // PointerEventPass.Main 是「由内向外」派发,所以 drag 先拿到事件;
                 // 一旦拖动越过阈值它就 consume,内层的 tap 检测器随即自动取消。
@@ -236,12 +266,12 @@ fun SwipeRevealRow(
                         },
                         onTap = {
                             // 已展开时点内容 = 收起;未展开才真正触发 onClick
-                            if (openKey.value == rowKey) openKey.value = null else onClick?.invoke()
+                            if (openKey.value == rowKey) openKey.value = null else currentOnClick?.invoke()
                         },
-                        onLongPress = { onLongPress?.invoke() },
+                        onLongPress = { currentOnLongPress?.invoke() },
                     )
                 }
-                .pointerInput(rowKey, actions) {
+                .pointerInput(rowKey, actions, revealPx, reduceMotion) {
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             val target = if (-offset.value > thresholdPx) -revealPx else 0f
@@ -249,13 +279,13 @@ fun SwipeRevealRow(
                             val v = dragVelocityPx
                             dragVelocityPx = 0f
                             scope.launch {
-                                offset.animateTo(target, PaMotion.momentum(), initialVelocity = v)
+                                offset.animateTo(target, if (reduceMotion) PaMotion.instant() else PaMotion.momentum(), initialVelocity = v)
                             }
                         },
                         onDragCancel = {
                             dragVelocityPx = 0f
                             scope.launch {
-                                offset.animateTo(if (isOpen) -revealPx else 0f, PaMotion.standard())
+                                offset.animateTo(if (openKey.value == rowKey) -revealPx else 0f, if (reduceMotion) PaMotion.instant() else PaMotion.standard())
                             }
                         },
                         onHorizontalDrag = { change, dragAmount ->

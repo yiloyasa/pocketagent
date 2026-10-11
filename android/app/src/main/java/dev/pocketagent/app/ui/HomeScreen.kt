@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -57,7 +58,9 @@ import androidx.compose.ui.graphics.ColorMatrixColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -93,6 +96,7 @@ import dev.pocketagent.app.ui.component.PaSkeletonList
 import dev.pocketagent.app.ui.component.PaStatusBadge
 import dev.pocketagent.app.ui.component.SkeletonKind
 import dev.pocketagent.app.ui.component.homeAgentGridNote
+import dev.pocketagent.app.ui.component.homeAgentGridColumns
 import dev.pocketagent.app.ui.component.homeAgentTileLabel
 import dev.pocketagent.app.ui.component.homeAgentTileState
 import dev.pocketagent.app.ui.component.homeDiscoveryEmptyCopy
@@ -473,6 +477,9 @@ fun HomeScreen(
 
     // 系统导航栏 insets(手势条/三键):mini 条的贴底让位与列表尾部让位共用
     val bottomBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val density = LocalDensity.current
+    var sessionBarHeightPx by remember { mutableStateOf(0) }
+    val sessionBarSpace = with(density) { sessionBarHeightPx.toDp() }
 
     Box(Modifier.fillMaxSize()) {
         PaScreenScaffold(
@@ -518,7 +525,7 @@ fun HomeScreen(
                 // mini 条可见时给列表尾部让位(条高 ~58 + 间距 12 + 导航栏 insets),
                 // 最后一张卡不被悬浮条盖住;条退场后恢复原节奏
                 contentPadding = PaddingValues(
-                    bottom = if (barSessions.isNotEmpty()) 70.dp + bottomBarInset else 0.dp,
+                    bottom = if (barSessions.isNotEmpty()) maxOf(sessionBarSpace, 70.dp + bottomBarInset) else bottomBarInset,
                 ),
             ) {
                 if (connected) {
@@ -587,6 +594,7 @@ fun HomeScreen(
             onStopSession = { TurnSession.cancelTurn(it) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .onSizeChanged { sessionBarHeightPx = it.height }
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding()
                 .padding(bottom = 12.dp),
@@ -911,13 +919,20 @@ private fun LazyListScope.connectedHomeItems(
     }
     item(key = "agentsGrid") {
         Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-            visibleAgents.chunked(4).forEach { rowAgents ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    rowAgents.forEach { a ->
-                        AgentTile(a, runningBadge = a.id in runningAgentIds, onClick = { onAgentTap(a) })
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val columns = homeAgentGridColumns(maxWidth.value, LocalDensity.current.fontScale)
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    visibleAgents.chunked(columns).forEach { rowAgents ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            rowAgents.forEach { a ->
+                                AgentTile(
+                                    a, runningBadge = a.id in runningAgentIds,
+                                    modifier = Modifier.weight(1f), onClick = { onAgentTap(a) },
+                                )
+                            }
+                            repeat(columns - rowAgents.size) { Spacer(Modifier.weight(1f)) }
+                        }
                     }
-                    // 补位对齐 4 列
-                    repeat(4 - rowAgents.size) { Spacer(Modifier.width(72.dp)) }
                 }
             }
             // 空态注记:一个可用 agent 都没有时,给真实原因 + 去向(≥1 个可用不摆字)
@@ -1001,7 +1016,7 @@ private fun LazyListScope.connectedHomeItems(
             ) {
                 val shown = if (multiAgent) visibleAgents else visibleAgents.filter { it.id == AgentConnection.selectedAgent }
                 shown.forEach { a ->
-                    AgentTile(a, runningBadge = false, onClick = { onAgentTap(a) })
+                    AgentTile(a, runningBadge = false, modifier = Modifier.width(72.dp), onClick = { onAgentTap(a) })
                 }
                 if (multiAgent) {
                     // 添加位:与磁贴同语言的裸 + 号(占位直说,不假装能加)
@@ -1757,16 +1772,16 @@ private fun PairCodeSheet(
  * 区同源)。编辑式令牌:名称墨色/灰、副文字灰,不再用主题蓝做装饰。
  */
 @Composable
-fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) {
+fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val state = homeAgentTileState(a)
     Column(
-        Modifier.pressable(haptic = true) { onClick() }.width(72.dp),
+        modifier.pressable(haptic = true) { onClick() },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box {
             Image(
                 bitmap = agentBitmap(a.iconRes),
-                contentDescription = a.name,
+                contentDescription = null,
                 modifier = Modifier
                     .size(56.dp)
                     .then(
@@ -1788,7 +1803,9 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
             Modifier.padding(top = 6.dp),
             fontSize = PaEditorial.Type.Caption.fontSize,
             color = if (state == HomeAgentTileState.AVAILABLE) PaEditorial.Ink else PaEditorial.Muted,
-            maxLines = 1,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
         Text(
             // 灰显态给真实原因:能力驱动型="电脑端未安装";未接入型="接入中"
@@ -1796,7 +1813,9 @@ fun AgentTile(a: AgentInfo, runningBadge: Boolean = false, onClick: () -> Unit) 
             Modifier.padding(top = 2.dp),
             fontSize = PaEditorial.Type.Micro.fontSize,
             color = if (state == HomeAgentTileState.AVAILABLE) PaEditorial.Muted else PaEditorial.Subtle,
-            maxLines = 1,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
     }
 }

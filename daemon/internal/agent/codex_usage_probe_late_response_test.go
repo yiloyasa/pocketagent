@@ -24,12 +24,12 @@ import (
 	"github.com/pocketagent/daemon/internal/runtime"
 )
 
-// ledgerResponseCount 统计台账里所有 "response*" 登记名(含裸 response 与
-// response:前缀家族)的条数,作基线/对照计数。
-func ledgerResponseCount() int {
+// 只统计本夹具的孤儿对照帧。共享台账可能同时接到此前测试子进程的尾帧，
+// 不能把其他 provider 的合法登记误判为本探测泄漏；account/* 仍单独逐条断言。
+func ledgerProbeControlCount() int {
 	n := 0
-	for _, e := range sharedRuntimeBackend().UnknownEvents().List(runtime.ListFilter{}, 0) {
-		if strings.HasPrefix(e.SourceMethod, "response") {
+	for _, e := range sharedRuntimeBackend().UnknownEvents().List(runtime.ListFilter{AgentID: "codex"}, 0) {
+		if e.SourceMethod == "response" && strings.Contains(e.RawPayload, "orphan: never-requested frame for ledger pipeline control") {
 			n++
 		}
 	}
@@ -70,7 +70,7 @@ func TestCodexAbandonedProbeLateResponseSkipsLedger(t *testing.T) {
 	p, _ := newFakeCodexProvider(t, false)
 	p.usageProbeBudget = 150 * time.Millisecond // 生产恒为零值(= statusBudget 10s),此处仅钉时序
 
-	before := ledgerResponseCount()
+	before := ledgerProbeControlCount()
 	out := p.fetchUsageUncached()
 	if !strings.Contains(out.Error, "context deadline exceeded") {
 		t.Fatalf("探测应按预算放弃(而非收到上游错误),得到: %q", out.Error)
@@ -78,7 +78,7 @@ func TestCodexAbandonedProbeLateResponseSkipsLedger(t *testing.T) {
 
 	// 等孤儿对照入账(证明台账管道与 fake 帧都被真实处理,断言才有对照意义)。
 	deadline := time.Now().Add(5 * time.Second)
-	for ledgerResponseCount() <= before {
+	for ledgerProbeControlCount() <= before {
 		if time.Now().After(deadline) {
 			t.Fatal("孤儿对照帧未入账:台账管道未走通,本测试失去对照意义")
 		}
@@ -96,7 +96,7 @@ func TestCodexAbandonedProbeLateResponseSkipsLedger(t *testing.T) {
 				e.SourceMethod, e.NormalizedKind, e.CorrelationID)
 		}
 	}
-	if got := ledgerResponseCount(); got != before+1 {
+	if got := ledgerProbeControlCount(); got != before+1 {
 		t.Errorf("台账应恰好新增 1 条(孤儿对照),得到 before=%d after=%d", before, got)
 	}
 }

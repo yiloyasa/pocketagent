@@ -243,8 +243,14 @@ func (p *OpenAICompatible) streamOnce(ctx context.Context, model string, msgs []
 	var lastByte atomic.Int64 // 最近一次收到 SSE 字节的 UnixNano
 	lastByte.Store(time.Now().UnixNano())
 	watchDone := make(chan struct{})
-	defer close(watchDone)
+	watchExited := make(chan struct{})
+	// 本轮返回前收完看门狗，避免悬挂协程继续观察下一轮的配置或取消状态。
+	defer func() {
+		close(watchDone)
+		<-watchExited
+	}()
 	go func() {
+		defer close(watchExited)
 		tick := time.NewTicker(oaWatchdogTick)
 		defer tick.Stop()
 		for {

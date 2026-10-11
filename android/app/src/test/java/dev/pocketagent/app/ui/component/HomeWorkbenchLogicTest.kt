@@ -17,6 +17,26 @@ import org.junit.Test
  */
 class HomeWorkbenchLogicTest {
 
+    @Test fun `ordinary phone preserves four agent columns`() {
+        assertEquals(4, homeAgentGridColumns(360f, 1f))
+    }
+
+    @Test fun `narrow phone reduces columns instead of squeezing labels`() {
+        assertEquals(3, homeAgentGridColumns(288f, 1f))
+    }
+
+    @Test fun `large fonts get wider tiles`() {
+        assertEquals(2, homeAgentGridColumns(328f, 1.5f))
+        assertEquals(1, homeAgentGridColumns(288f, 2f))
+    }
+
+    @Test fun `wide layouts preserve visual grid and pathological inputs stay safe`() {
+        assertEquals(4, homeAgentGridColumns(1000f, 1f))
+        assertEquals(1, homeAgentGridColumns(0f, 1f))
+        assertEquals(1, homeAgentGridColumns(Float.NaN, 1f))
+        assertEquals(4, homeAgentGridColumns(360f, Float.NaN))
+    }
+
     // ---- homeShowsRecentSkeleton:骨架门控 ----
 
     @Test

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -28,22 +29,19 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +64,10 @@ internal data class UndoItem(
     val durationMs: Long,
     val onUndo: suspend () -> Unit,
     val onCommit: (suspend () -> Unit)?,
-)
+) {
+    // 用户选择撤销的瞬间即取得操作所有权，不能等协程完成后才阻止远端提交。
+    var resolved: Boolean = false
+}
 
 /**
  * 可撤销提示条的状态(设计规范 §2.4)。
@@ -85,7 +86,9 @@ internal data class UndoItem(
  * ```
  */
 @Stable
-class UndoState {
+class UndoState internal constructor(private val scope: CoroutineScope) {
+    constructor() : this(UndoScope)
+
     internal var current by mutableStateOf<UndoItem?>(null)
         private set
 
@@ -109,8 +112,8 @@ class UndoState {
     }
 
     /** 撤销失败后需要保持错误态,由宿主调用以清除。 */
-    internal fun clear() {
-        current = null
+    internal fun clear(item: UndoItem) {
+        if (current?.id == item.id) current = null
     }
 
     /** 计时结束,提交真删。 */
@@ -129,12 +132,17 @@ class UndoState {
     }
 
     private fun submit(item: UndoItem) {
+        if (item.resolved) return
+        item.resolved = true
         val job = item.onCommit ?: return
-        UndoScope.launch { runCatching { job() } }
+        scope.launch { runCatching { job() } }
     }
 
-    internal fun runUndo(item: UndoItem) {
-        UndoScope.launch { runCatching { item.onUndo() } }
+    internal fun runUndo(item: UndoItem, onResult: (Boolean) -> Unit): Boolean {
+        if (current?.id != item.id || item.resolved) return false
+        item.resolved = true
+        scope.launch { onResult(runCatching { item.onUndo() }.isSuccess) }
+        return true
     }
 }
 
@@ -168,7 +176,7 @@ fun UndoBarHost(
     applyStatusBarsPadding: Boolean = true,
 ) {
     val item = state.current
-    val density = LocalDensity.current
+    val accessibilityManager = LocalAccessibilityManager.current
     val reduceMotion = dev.pocketagent.app.ui.anim.rememberReduceMotion()
 
     // 撤销结果反馈:null=计时中 / "已恢复" / "撤销失败，请重试"
@@ -179,17 +187,22 @@ fun UndoBarHost(
     LaunchedEffect(item?.id, handled) {
         val it0 = item ?: return@LaunchedEffect
         if (handled) return@LaunchedEffect
+        val timeoutMs = accessibilityManager?.calculateRecommendedTimeoutMillis(
+            originalTimeoutMillis = it0.durationMs,
+            containsText = true,
+            containsControls = true,
+        ) ?: it0.durationMs
         progress.snapTo(1f)
         if (reduceMotion) {
-            delay(it0.durationMs)
+            delay(timeoutMs)
         } else {
-            progress.animateTo(0f, tween(it0.durationMs.toInt(), easing = LinearEasing))
+            progress.animateTo(0f, tween(timeoutMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), easing = LinearEasing))
         }
         state.timeout(it0)
     }
 
     // 页面离开时立即提交,避免悬挂的软删除
-    DisposableEffect(Unit) {
+    DisposableEffect(state) {
         onDispose { state.commitNow() }
     }
 
@@ -232,7 +245,7 @@ fun UndoBarHost(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(44.dp)
+                    .heightIn(min = 48.dp)
                     .padding(start = 14.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -241,39 +254,31 @@ fun UndoBarHost(
                     fontSize = PaEditorial.Type.BodySmall.fontSize,
                     // 错误条坐 Denied 实底,读 OnDenied 令牌(深/黑客盘=暗红棕 #3A1514)
                     color = if (isError) PaEditorial.OnDenied else PaEditorial.Ink,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
 
                 // 已经撤销成功后,"撤销"按钮与进度条都没有存在的意义(用户看到"已恢复"却还能点撤销会困惑),
                 // 所以 feedback != null 时立刻收起,只留结果文案 1.2 秒。
-                if (!isError && feedback == null) {
+                if (!handled && !isError && feedback == null) {
                     Spacer(Modifier.width(8.dp))
                     val hapticView = androidx.compose.ui.platform.LocalView.current
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(PaEditorial.Radius.Chip))
                             // 撤销是高频连点动作:按下瞬间给缩放反馈,不用裸 clickable
-                            .pressable(enabled = true) {
+                            .heightIn(min = 48.dp)
+                            .pressable(enabled = !handled) {
                                 // 【触感分级】撤销=确认级动作,统一走 PaHaptics.confirm
                                 // (中档轻击),与审批提交同强度 —— 同动作全局同强度。
                                 PaHaptics.confirm(hapticView)
-                                handled = true
-                                val scopeMarker = it0
-                                UndoScope.launch {
-                                    val ok = runCatching { scopeMarker.onUndo() }.isSuccess
+                                handled = state.runUndo(it0) { ok ->
                                     feedback = if (ok) "已恢复" else "撤销失败，请重试"
-                                    if (ok) {
-                                        delay(1200)
-                                        state.clear()
-                                    } else {
-                                        // 失败态也不能吊死在屏上:此时"撤销"按钮已收起,
-                                        // 提示条没有任何可点的东西,永久驻留只会变成关不掉的
-                                        // 摆设。错误文案停 3 秒自动收场(比成功态的 1.2s 长,
-                                        // 给足读清原因的时间);重试入口在宿主列表里重新操作。
-                                        delay(3000)
-                                        state.clear()
+                                    UndoScope.launch {
+                                        delay(if (ok) 1200 else 3000)
+                                        // 旧反馈的延时结束不应清掉后来另一条操作的撤销入口。
+                                        state.clear(it0)
                                     }
                                 }
                             }
@@ -291,7 +296,7 @@ fun UndoBarHost(
             }
 
             // 剩余时间进度线(错误态与已撤销后都不显示)
-            if (!isError && !reduceMotion && feedback == null) {
+            if (!handled && !isError && !reduceMotion && feedback == null) {
                 Box(
                     Modifier
                         .align(Alignment.BottomStart)

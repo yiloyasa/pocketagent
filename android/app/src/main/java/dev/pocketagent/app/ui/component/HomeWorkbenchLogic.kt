@@ -76,6 +76,14 @@ fun homeAgentGridNote(availableCount: Int): HomeEmptyStateCopy? =
         )
     }
 
+/** 保留普通屏四列节奏；窄屏或大字体按实际可用宽度减少列数，不裁掉状态文字。 */
+internal fun homeAgentGridColumns(availableWidthDp: Float, fontScale: Float): Int {
+    val scale = fontScale.takeIf { it.isFinite() && it > 0f }?.coerceAtLeast(1f) ?: 1f
+    val width = availableWidthDp.takeIf { it.isFinite() && it > 0f } ?: 0f
+    val tileWidth = 72f * scale
+    return ((width + 12f) / (tileWidth + 12f)).toInt().coerceIn(1, 4)
+}
+
 /**
  * 发现主机列表的空态(纯函数):搜索中不算空态(那是加载态,由骨架接管,返回 null);
  * 搜完没有 → 真实说明 + 去向(手动输入地址/配对码,不让人干等)。

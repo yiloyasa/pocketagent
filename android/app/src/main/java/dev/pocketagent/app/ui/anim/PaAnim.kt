@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,8 +25,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +52,9 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import dev.pocketagent.app.ui.theme.PaEditorial
 import androidx.compose.ui.unit.dp
@@ -68,9 +76,10 @@ fun Modifier.pressable(
 ): Modifier = composed {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val reduceMotion = rememberReduceMotion()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) scaleDown else 1f,
-        animationSpec = PaMotion.press(),
+        targetValue = if (pressed && enabled && !reduceMotion) scaleDown else 1f,
+        animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.press(),
         label = "press",
     )
     val hf = LocalHapticFeedback.current
@@ -90,9 +99,10 @@ fun Modifier.pressableLong(
 ): Modifier = composed {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val reduceMotion = rememberReduceMotion()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = PaMotion.press(),
+        targetValue = if (pressed && !reduceMotion) 0.97f else 1f,
+        animationSpec = if (reduceMotion) PaMotion.instant() else PaMotion.press(),
         label = "pressLong",
     )
     this
@@ -121,16 +131,18 @@ fun IconActionButton(
 ) {
     Box(
         modifier = modifier
-            .size(size)
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .pressable { onClick() }
-            .background(bg, shape),
+            .semantics { role = Role.Button },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painterResource(iconRes), contentDescription,
-            tint = tint ?: MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.size(iconSize),
-        )
+        Box(Modifier.size(size).background(bg, shape), contentAlignment = Alignment.Center) {
+            Icon(
+                painterResource(iconRes), contentDescription,
+                tint = tint ?: MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(iconSize),
+            )
+        }
     }
 }
 
@@ -147,7 +159,7 @@ fun SectionHeader(
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(title, fontSize = PaEditorial.Type.Heading.fontSize, color = MaterialTheme.colorScheme.onBackground)
             if (subtitle != null) {
                 Text(subtitle, fontSize = PaEditorial.Type.Caption.fontSize, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
@@ -407,15 +419,43 @@ fun Modifier.edgeSwipeToOpenDrawer(
  * 侧滑改为瞬时展开、抽屉取消滑入仅保留淡入。
  */
 @Composable
-fun rememberReduceMotion(): Boolean {
+fun rememberReduceMotion(): Boolean = LocalReduceMotion.current ?: rememberSystemReduceMotion()
+
+private val LocalReduceMotion = staticCompositionLocalOf<Boolean?> { null }
+
+/** 整棵 UI 共用一个系统监听，避免每个按钮都注册 ContentObserver。 */
+@Composable
+internal fun ProvideReduceMotion(content: @Composable () -> Unit) {
+    val reduced = rememberSystemReduceMotion()
+    CompositionLocalProvider(LocalReduceMotion provides reduced, content = content)
+}
+
+@Composable
+private fun rememberSystemReduceMotion(): Boolean {
     val ctx = LocalContext.current
-    return remember(ctx) {
-        runCatching {
-            android.provider.Settings.Global.getFloat(
-                ctx.contentResolver,
-                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-                1f,
-            ) == 0f
-        }.getOrDefault(false)
+    val resolver = ctx.contentResolver
+    fun readPreference(): Boolean = runCatching {
+        android.provider.Settings.Global.getFloat(
+            resolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }.getOrDefault(false)
+    var reduced by remember(ctx) { mutableStateOf(readPreference()) }
+    DisposableEffect(resolver) {
+        val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { reduced = readPreference() }
+        }
+        val registered = runCatching {
+            resolver.registerContentObserver(
+                android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ANIMATOR_DURATION_SCALE),
+                false,
+                observer,
+            )
+        }.isSuccess
+        // 注册之后重读，避免首次读取与开始监听之间漏掉系统变更。
+        reduced = readPreference()
+        onDispose { if (registered) resolver.unregisterContentObserver(observer) }
     }
+    return reduced
 }

@@ -27,8 +27,14 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,7 +44,6 @@ import androidx.compose.ui.window.PopupProperties
 import dev.pocketagent.app.R
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
-import dev.pocketagent.app.ui.theme.Pa
 import dev.pocketagent.app.ui.theme.PaEditorial
 
 /**
@@ -68,7 +73,7 @@ fun SplitButton(
     modifier: Modifier = Modifier,
     caption: String? = null,
     mainLabel: String? = null,
-    /** 紧凑模式:高度 34dp、宽度自适应 —— 用于弹窗右上角等"按钮不该占一行"的场景。 */
+    /** 紧凑模式:宽度自适应、字号更小；触控高度仍至少 48dp。 */
     compact: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -82,9 +87,10 @@ fun SplitButton(
         label = "chevron",
     )
     val density = LocalDensity.current
-    val buttonHeight = if (compact) 34.dp else 48.dp
+    val buttonHeight = 48.dp
     val corner = if (compact) RoundedCornerShape(PaEditorial.Radius.Chip) else RoundedCornerShape(PaEditorial.Radius.IconButton)
-    val menuTopPx = with(density) { (buttonHeight + 6.dp).roundToPx() }
+    var measuredHeightPx by remember { mutableStateOf(0) }
+    val menuTopPx = measuredHeightPx + with(density) { 6.dp.roundToPx() }
 
     Box(modifier) {
         Row(
@@ -93,6 +99,7 @@ fun SplitButton(
                 // 【heightIn 而不是 height】主按钮的 caption 要显示"当前生效值"(如模型名),
                 // 固定高度会让两行 caption 被裁掉。给最小高度、允许按需长高。
                 .heightIn(min = buttonHeight)
+                .onSizeChanged { measuredHeightPx = it.height }
                 .background(PaEditorial.Surface, corner)
                 .border(1.dp, PaEditorial.Hairline, corner),
             verticalAlignment = Alignment.CenterVertically,
@@ -101,10 +108,14 @@ fun SplitButton(
             Row(
                 Modifier
                     .then(if (compact) Modifier else Modifier.weight(1f))
+                    .heightIn(min = buttonHeight)
+                    .semantics { role = Role.Button }
                     .pressable(haptic = true) { onMainClick() }
                     .padding(
                         start = if (compact) 11.dp else 14.dp,
                         end = if (compact) 4.dp else 6.dp,
+                        top = 8.dp,
+                        bottom = 8.dp,
                     ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -112,7 +123,7 @@ fun SplitButton(
                     Text(
                         label,
                         // 【尺寸豁免】非 Type 令牌:标签字号与按钮几何联动(compact
-                        // 34dp 高→12.5sp;常规 48dp 高→15sp),取值介于 Body(14)与
+                        // 紧凑 12.5sp;常规 15sp),取值介于 Body(14)与
                         // Heading(16)之间;Type 档日后增设按钮标签档时可收编,
                         // 当前按组件尺寸语义豁免。
                         fontSize = if (compact) 12.5.sp else 15.sp,
@@ -135,7 +146,7 @@ fun SplitButton(
                     Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
                     Text(
                         mainLabel,
-                        // 【尺寸豁免】仅 compact 档非 Type 令牌:10.5sp 与 34dp 紧凑按钮
+                        // 【尺寸豁免】仅 compact 档非 Type 令牌:10.5sp 与紧凑按钮
                         // 几何联动,低于 Micro(11)档(当前生效值短词,紧凑弹窗场景);
                         // 常规档已收编 BodySmall(13/21)。(常规 15sp 标签档的豁免注释
                         // 见上方主标签 Text —— 同一裁决,几何联动语义一致。)
@@ -152,17 +163,20 @@ fun SplitButton(
                     .background(PaEditorial.Hairline),
             )
             // ---- 下拉触发区 ----
-            // 【主副动作分区 ≥44dp】主区与下拉区之间给足 44dp 宽的独立触控带,
-            // 手指不会一按跨两个动作(紧凑模式原 30dp 偏窄,统一抬到 44)。
+            // 主副动作各有独立的 48dp 触控带，紧凑模式也不压缩点击范围。
             Box(
                 Modifier
-                    .size(width = 44.dp, height = buttonHeight)
-                    .pressable(haptic = true) { open = !open },
+                    .size(width = 48.dp, height = buttonHeight)
+                    .semantics {
+                        role = Role.Button
+                        stateDescription = if (open) "已展开" else "已收起"
+                    }
+                    .pressable(haptic = true, enabled = options.isNotEmpty()) { open = !open },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painterResource(R.drawable.ic_lucide_chevron_right),
-                    contentDescription = "更多选项",
+                    contentDescription = "$label：更多选项",
                     tint = PaEditorial.Muted,
                     // 入口箭头放大一档:13/16dp 在深色底上偏小(用户反馈"图标过小")。
                     modifier = Modifier.size(if (compact) 15.dp else 18.dp).rotate(chevron),
@@ -200,6 +214,8 @@ fun SplitButton(
                         Row(
                             Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .semantics { selected = opt.selected }
                                 .pressable {
                                     open = false
                                     opt.onClick()

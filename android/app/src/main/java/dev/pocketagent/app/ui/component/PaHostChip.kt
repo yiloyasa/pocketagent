@@ -23,6 +23,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pocketagent.app.R
@@ -158,10 +159,12 @@ fun PaHostChip(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     hostName,
+                    modifier = Modifier.weight(1f, fill = false),
                     fontSize = PaEditorial.Type.Body.fontSize, lineHeight = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = PaEditorial.Ink,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text("·", fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.Subtle)
@@ -181,9 +184,11 @@ fun PaHostChip(
                 Spacer(Modifier.width(6.dp))
                 Text(
                     caption,
+                    modifier = Modifier.weight(1f),
                     fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                     color = tone.text,
-                    maxLines = 1,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -3251,6 +3252,8 @@ fun SettingRow(
      *  顶掉右侧 value 文字位,不会被 Compose 误判成两个挨着的内容。 */
     control: @Composable RowScope.() -> Unit = {},
 ) {
+    val stackValue = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 360 ||
+        androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.2f
 
     Column {
         Row(
@@ -3290,7 +3293,8 @@ fun SettingRow(
                     fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = PaEditorial.Ink,
-                    maxLines = 1,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (desc.isNotEmpty()) {
                     Text(
@@ -3299,16 +3303,29 @@ fun SettingRow(
                         fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 17.sp,
                         color = PaEditorial.Muted,
                         maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (value != null && stackValue) {
+                    Text(
+                        value,
+                        Modifier.padding(top = 4.dp),
+                        fontSize = PaEditorial.Type.BodySmall.fontSize,
+                        color = PaEditorial.Muted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            if (value != null) {
+            if (value != null && !stackValue) {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     value,
+                    Modifier.widthIn(max = 120.dp),
                     fontSize = PaEditorial.Type.BodySmall.fontSize,
                     color = PaEditorial.Muted,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             control()
