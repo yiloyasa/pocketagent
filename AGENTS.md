@@ -5,7 +5,7 @@
 ## 0. 阅读顺序（新会话开工前）
 
 1. **本文件** — 命令、环境、红线速查。
-2. **`README.md` §0** — 项目速览 + 真值锚点（当前基线 / 测试水位 / 待办）。
+2. **`DEVELOPING.md` §0** — 项目速览 + 真值锚点（当前基线 / 测试水位 / 待办）；面向使用者的介绍在 `README.md`。
 3. **`AUDIT.md`** — 改动合入前必读的审核标准（甲乙丙丁分级 / L0–L2 / 红线一票否决）。
 4. **`docs/verify/handoff-2026-10-09.md`** — 交接总档（2026-10-09 全面整改轮：架构根治+UI 升级；待办明细 / 实测定案 / 坑库）。
 5. 其余章节按需查阅，不必通读。
@@ -65,7 +65,7 @@ ls daemon/cmd/                             # chatprobe/modelprobe/smoketest 等�
 - **无窗口链**：需要后台进程/开机任务时用 pythonw / hidewin（daemon `internal/hidewin`）方案，勿用 vbs；**vbs 文件写中文注释会因编码炸**。
 - **真机通道**：USB 联调须先 `adb reverse tcp:7246 tcp:7246`；无线兜底 Tailscale（校园网 AP 隔离时 LAN/mDNS 不可达）。
 
-## 4. 红线速查（违反即打回，全文见 README §0.5 + AUDIT.md）
+## 4. 红线速查（违反即打回，全文见 DEVELOPING.md §0.5 + AUDIT.md）
 
 1. **绝不替用户做审批决定**；没能力的原生请求回 error，**绝不伪造**。
 2. **绝不改写用户桌面配置**：`~/.codex/`、`~/.dsh/`、`~/.pi/` 等一律只读。
@@ -78,10 +78,10 @@ ls daemon/cmd/                             # chatprobe/modelprobe/smoketest 等�
 ## 5. 工作流约定（本项目多轮迭代沉淀）
 
 - **改动分级自动定级**（AUDIT §1）：改 `proto/**` = 甲级（全量审）；`daemon/internal/agent|server`、`android/**/ui` = 乙级；其余小改 = 丙级；纯文档 = 丁级（查真值锚点漂移）。
-- **测试水位不许倒退**：合入前 daemon `go test ./internal/...` 全绿 + Android `test` 分支 0 失败；数字变化要同步更新 README §0.3。
+- **测试水位不许倒退**：合入前 daemon `go test ./internal/...` 全绿 + Android `test` 分支 0 失败；数字变化要同步更新 DEVELOPING.md §0.3。
 - **agent 版本升级**：先用探针（`daemon/cmd/chatprobe` 等）跑真轮对账通知面（参考 `docs/reviews/2026-10-07/field-coverage-*.md` 五家矩阵），新通知词条按「透传/收编」规则处理，禁静态名单。
 - **commit 信息**：中文一行式 `type: 主题——细节`（见 `git log` 风格），证据文件入库 `docs/verify/evidence/`。
-- **交接/里程碑**：写 handoff 文档入 `docs/verify/`，更新 README §0.3 真值锚点。
+- **交接/里程碑**：写 handoff 文档入 `docs/verify/`，更新 DEVELOPING.md §0.3 真值锚点。
 
 <!-- aoci:begin -->
 ## AOCI 仓库认知
