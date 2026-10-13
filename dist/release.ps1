@@ -108,8 +108,9 @@ Copy-Item -LiteralPath $ApkSource -Destination (Join-Path $ApkDir "app-release.a
 
 # SHA256SUMS.txt:sha256sum 兼容格式("<hash>  <相对路径>"),包内每个文件都对账。
 # 在压缩前生成,条目本身不进哈希清单(清单不给自己担保)。
+# 【5.1 兼容】不用 [IO.Path]::GetRelativePath(仅 .NET Core/PS7+),Substring 切片两边都认。
 $HashLines = Get-ChildItem -Path $StageDir -File -Recurse | Sort-Object FullName | ForEach-Object {
-    $rel = [System.IO.Path]::GetRelativePath($StageDir, $_.FullName).Replace('\', '/')
+    $rel = $_.FullName.Substring($StageDir.Length).TrimStart('\', '/').Replace('\', '/')
     $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $rel"
 }
@@ -118,7 +119,7 @@ Set-Content -Path (Join-Path $StageDir "SHA256SUMS.txt") -Value $HashLines -Enco
 
 # ---- 开发机痕迹扫描(与 build.ps1 同一份 needles;windows 包内文件 build.ps1 已扫过,
 #      此处重扫成本可忽略,重点覆盖新入包的 app-release.apk 与 SHA256SUMS.txt) ----
-$TraceNeedles = @('G:\项目1', 'yanzi', 'Claude Code', '100.92.193.109', 'G:\Hermes', '试验区')
+$TraceNeedles = @('G:\项目1', 'yanzi', 'G:\Claude Code', '100.92.193.109', 'G:\Hermes', '试验区')
 $Latin1       = [System.Text.Encoding]::GetEncoding(28591)
 $Utf8         = [System.Text.Encoding]::UTF8
 $StageFiles   = @(Get-ChildItem -Path $StageDir -File -Recurse)

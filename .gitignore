@@ -16,6 +16,11 @@ intermediates/
 # 发布 zip 由 dist/windows/build.ps1 重建(2026-10-04 裁决:可重建不入库,
 # 本地保留供分发;fresh clone 跑 build.ps1 即得)
 dist/windows/PocketAgent桌面端.zip
+# 总发行包与发布附件由 dist/release.ps1 重建 + GitHub Releases 托管(0.3.1):
+# PocketAgent-<ver>-<date>.zip / SHA256SUMS-<ver>.txt / RELEASE_NOTES-<ver>.md
+dist/PocketAgent-*.zip
+dist/SHA256SUMS-*.txt
+dist/RELEASE_NOTES-*.md
 
 # ---------- 编译出的可执行文件 ----------
 *.exe

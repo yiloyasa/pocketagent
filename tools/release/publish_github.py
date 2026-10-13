@@ -43,7 +43,17 @@ def changelog_section(version: str) -> str:
     return m.group(0).strip()
 
 
+def gh_bin() -> str:
+    # 文件夹内 portable gh 优先(与 git credential.helper 同一路径)，回退 PATH。
+    local = REPO.parent / ".tools" / "gh" / "bin" / "gh.exe"
+    if local.is_file():
+        return str(local)
+    return "gh"
+
+
 def run(cmd: list[str], dry: bool) -> None:
+    if cmd and cmd[0] == "gh":
+        cmd = [gh_bin()] + cmd[1:]
     print("$", " ".join(cmd))
     if not dry:
         subprocess.run(cmd, check=True, cwd=str(REPO))

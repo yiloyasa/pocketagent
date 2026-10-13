@@ -154,7 +154,7 @@ foreach ($f in $PackageFiles) {
 # 做法:遍历 $StageDir 下每个文件,读全部字节,分别用 Latin1(编码 28591)与 UTF8
 #   解码成字符串再查敏感串——Latin1 覆盖任意单字节序列,UTF8 覆盖中文路径字面量。
 #   命中任一即报错中止,(在 $ErrorActionPreference = "Stop" 下)绝不产出 zip。
-$TraceNeedles = @('G:\项目1', 'yanzi', 'Claude Code', '100.92.193.109', 'G:\Hermes', '试验区')
+$TraceNeedles = @('G:\项目1', 'yanzi', 'G:\Claude Code', '100.92.193.109', 'G:\Hermes', '试验区')
 $Latin1       = [System.Text.Encoding]::GetEncoding(28591)
 $Utf8         = [System.Text.Encoding]::UTF8
 $StageFiles   = @(Get-ChildItem -Path $StageDir -File -Recurse)
