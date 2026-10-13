@@ -1149,6 +1149,26 @@ private fun RecentEmptyState(copy: HomeEmptyStateCopy?, onAction: (() -> Unit)?)
 
 // ---------------------------------------------------------------- 发现主机态(01)
 
+/**
+ * 手动填地址入口的按钮规格(纯函数,单测覆盖 FirstTaskFunnelFixTest)。
+ *
+ * 【为什么是主按钮】首任务漏斗第一步就是"连上电脑":自动发现搜不到时
+ * (同网段搜不到、跨网络),这条手动入口是唯一出路;旧实现是次级文字链,
+ * 在首屏漏斗里看不见、点不中 —— 必须与主机卡同级(大触区 + 主色)才接得住。
+ * bottomNote(服务未启动/跨网络排查提示)保留:按钮是动作,注记是排查说明,
+ * 两者语义不重叠。
+ */
+internal data class ManualAddSpec(
+    val label: String,
+    /** 恒 true:主按钮规格(大触区 + 主色),与主机卡同级。 */
+    val primary: Boolean,
+    /** 最小触高 dp(≥48,贴近主机卡 75dp 一档)。 */
+    val minHeightDp: Int,
+)
+
+internal fun manualAddSpec(): ManualAddSpec =
+    ManualAddSpec(label = "+ 手动输入地址或配对码", primary = true, minHeightDp = 56)
+
 /** 发现主机态内容(screens/01-home-discovery.png)。 */
 private fun LazyListScope.discoveryItems(
     link: PaHostLink,
@@ -1313,15 +1333,36 @@ private fun LazyListScope.discoveryItems(
         }
     }
     item(key = "manualAdd") {
-        // 手动添加是次操作(premium.css .soft-link):去设置的连接页(既有手动流程)
-        Text(
-            "+ 手动输入地址或配对码",
+        // 为什么升为主操作:规格见 manualAddSpec —— 自动发现兜不住时它是唯一出路,
+        // 次级文字链在首屏漏斗里接不住人;bottomNote(下一项)原样保留。
+        val spec = manualAddSpec()
+        Row(
             Modifier
                 .fillMaxWidth()
+                .padding(top = 4.dp)
+                .heightIn(min = spec.minHeightDp.dp)
                 .pressable(haptic = true) { onManualAdd() }
-                .padding(vertical = 16.dp),
-            fontSize = PaEditorial.Type.Caption.fontSize, fontWeight = FontWeight.SemiBold, color = PaEditorial.AccentText,
-        )
+                .background(PaEditorial.Primary, RoundedCornerShape(PaEditorial.Radius.Card))
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .semantics { contentDescription = spec.label },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_lucide_monitor), null,
+                tint = PaEditorial.OnGraphite, modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                spec.label,
+                Modifier.weight(1f),
+                fontSize = PaEditorial.Type.Body.fontSize, fontWeight = FontWeight.SemiBold,
+                color = PaEditorial.OnGraphite,
+            )
+            Icon(
+                painterResource(R.drawable.ic_lucide_chevron_right), null,
+                tint = PaEditorial.OnGraphite, modifier = Modifier.size(18.dp),
+            )
+        }
     }
     item(key = "bottomNote") {
         Text(

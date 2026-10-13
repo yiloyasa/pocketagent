@@ -32,9 +32,11 @@ class HostEventTrackerTest {
     }
 
     @Test
-    fun legacyZeroSequenceIsAcceptedWithoutChangingCheckpoint() {
+    fun nonPositiveSequenceIsRejectedWithoutChangingCheckpoint() {
+        // 最新-only(0.3.1):daemon 恒发正数 sequence；0/负数是协议违规，直接丢弃。
         val tracker = HostEventTracker(12)
-        assertTrue(tracker.accept(HostEvent.getDefaultInstance()))
+        assertFalse(tracker.accept(HostEvent.getDefaultInstance()))
+        assertFalse(tracker.accept(HostEvent.newBuilder().setSequence(-3).build()))
         assertEquals(12L, tracker.lastSequence)
     }
 

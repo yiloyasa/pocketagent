@@ -174,6 +174,10 @@ func TestDevicesLegacyTokenFallback(t *testing.T) {
 	if id, isLegacy, ok := r.Validate(legacy); !ok || !isLegacy || id != "legacy" {
 		t.Fatalf("旧 token 应以 legacy 放行: id=%q legacy=%v ok=%v", id, isLegacy, ok)
 	}
+	// 最新-only 观测:legacy 命中必须计数(下版删逻辑的决策依据)。
+	if got := r.LegacyAuthCount(); got != 1 {
+		t.Fatalf("legacy 命中应计数 1 次,得到 %d", got)
+	}
 	// 设备 token 与旧 token 互不通用(两台"设备"token 隔离的逆向表述)
 	pub, _ := testKey(t)
 	tok, _ := r.RegisterByPairCode("123456", "dev-1", "Pixel 9", pub)

@@ -123,25 +123,25 @@
 
 ## 附录 A · 当前挂牌技术债（只减不增）
 
-| 位置 | 问题 | 状态 |
-|---|---|---|
-| `internal/server/thread.go` CreateThread（L99） | 未知 agent → 硬错误 | 已整改（2026-09-20, 批3）：在 `s.cfg.Providers` 注册表即接入，报错文案动态列举当前可用 agent |
-| `internal/server/model.go` order（L73） | agent 顺序写死 | 已整改（2026-09-20, 批3）：顺序从 `s.cfg.Providers` 动态派生（桌面桥接 PrefsAware 在前、echo 最后），新 provider 自动入列 |
-| `internal/server/model.go` defaultModelIDFor | 假设 `agent+"/default"` 存在 | 已整改（2026-09-20, 批3）：default 哨兵 → 模型列表首项 → 明确报错，不再伪造 ID |
-| `internal/agent/codex_requests.go` isLegacyApproval | 版本号二分判断 | 待协议演进时整改 |
-| `internal/server/agents_sessions.go` 导入名单 + `internal/server/thread.go` defaultProvider | 写死 `importAgentModels{pi,zcode}` 与 `[]string{"pi","zcode"}` 循环、`[]string{"codex","glm","deepseek"}` 优先级（体检 P1-4 / P1-5，原属未挂牌，登记在案） | 已整改（2026-09-20, 批3）：导入改为能力接口（`AgentSessionImporter`）动态发现、报错文案动态列举；defaultProvider 改为 store 默认模型前缀 → 字典序第一个非 echo → echo 兜底 |
+| 位置 | 问题 | 状态 | 删除条件/版本 |
+|---|---|---|---|
+| `internal/server/thread.go` CreateThread（L99） | 未知 agent → 硬错误 | 已整改（2026-09-20, 批3）：在 `s.cfg.Providers` 注册表即接入，报错文案动态列举当前可用 agent | 已整改，无残留 |
+| `internal/server/model.go` order（L73） | agent 顺序写死 | 已整改（2026-09-20, 批3）：顺序从 `s.cfg.Providers` 动态派生（桌面桥接 PrefsAware 在前、echo 最后），新 provider 自动入列 | 已整改，无残留 |
+| `internal/server/model.go` defaultModelIDFor | 假设 `agent+"/default"` 存在 | 已整改（2026-09-20, 批3）：default 哨兵 → 模型列表首项 → 明确报错，不再伪造 ID | 已整改，无残留 |
+| `internal/agent/codex_requests.go` isLegacyApproval | 版本号二分判断 | 待协议演进时整改 | 协议演进版（未定版本，演进即删） |
+| `internal/server/agents_sessions.go` 导入名单 + `internal/server/thread.go` defaultProvider | 写死 `importAgentModels{pi,zcode}` 与 `[]string{"pi","zcode"}` 循环、`[]string{"codex","glm","deepseek"}` 优先级（体检 P1-4 / P1-5，原属未挂牌，登记在案） | 已整改（2026-09-20, 批3）：导入改为能力接口（`AgentSessionImporter`）动态发现、报错文案动态列举；defaultProvider 改为 store 默认模型前缀 → 字典序第一个非 echo → echo 兜底 | 已整改，无残留 |
 
 ### 豁免登记（非技术债，防 linter 误报；只增不减，每条附裁定）
 
-| 位置 | 内容 | 豁免理由与裁定 |
-|---|---|---|
-| `android/.../ui/ChatScreen.kt` `systemVoiceRetireNeeded` | 系统 SR 错误码弃用名单（含增补 3=AUDIO_ERROR、9=INSUFFICIENT_PERMISSIONS，后者系 HyperOS fuxi 真机实证：App 权限已授时系统识别服务仍瞬间报 9 且永不可自愈） | Android SpeechRecognizer 公开错误码为封闭 SDK 契约（1..13 随 API 固定），非面向原生演化的开放名单；else 分支安全（未知码不弃用）。批1审核裁定不违规（2026-09-20）；9 的增补见 T-33（真机 L2 实证） |
-| `android/.../ui/HomeScreen.kt` `placeholderDisplayAgents` | opencode/claude-code/hermes/dsh 展示目录 | 仅决定灰显副文案，不参与能力判定（能力判定已全动态）；只随 agent 接入移除、不随新增增长。批3审核裁定合规（2026-09-20） |
-| `android/.../ui/SettingsScreen.kt` AgentDefaultsSection 按名特判 | `"pi","zcode" ->` 旧 daemon 兼容兜底 | else 分支的 `agent_settings:<id>` capability 动态判定已覆盖任意 agent；移除特判会让旧 daemon 用户丢失设置区。T-10 裁定维持现状（2026-09-20） |
-| `android/.../ui/HomeScreen.kt` `buildAgents` 基线目录（7 项 AgentInfo） | 展示名/图标/连接方式基线表（pa_audit roster 首轮命中） | available 字段仅为基线缺省，能力判定走 `resolveAgentAvailability`（capabilities 动态+extra 追加，新 agent 零改动进网格）；与豁免 #2 同精神。pa_audit 首轮裁定登记（2026-09-21） |
-| `android/.../ui/SettingsScreen.kt` optimizerAgents 回退 `setOf("codex","pi","zcode")` | 旧 daemon 无 text_generation capability 时的优化 agent 兜底 | 主路径 `"text_generation:$it" in capabilities` 动态判定在前，setOf 仅在 capabilities 全空时兜底（与豁免 #3 同款新旧兼容形态）。pa_audit 首轮裁定登记（2026-09-21） |
-| `daemon/internal/agent/codex.go` `isOpaqueItemType` 排除五类 | item/started/completed 已专案处理类型（contextCompaction/commandExecution/agentMessage/subAgentActivity/collabAgentToolCall）的排除清单 | 黑名单形态：默认值=主线 A 透传，新类型自动进透传，漏向安全；专案分支由 T-L1 建。批 9 审核裁定不构成名单债（2026-09-21） |
-| `android/.../ui/AgentScopeBadge.kt` `SESSION_DISPLAY_SCOPES`（声明现于 :47） | codex/pi/zcode/hermes 展示顺序名单（「会话与对话」组作用域徽章） | presentation-only：仅决定徽章展示顺序，不参与能力判定/会话路由；动态能力透传会把外部只读导入(opencode/claude-code)误纳入全局显示偏好作用域，故不能改动态源——与豁免 #2/#4 同精神。新增 agent 须同步本行+`AgentScopeBadgeTest` 防漂移用例。批次 0 裁定登记（2026-10-04） |
+| 位置 | 内容 | 豁免理由与裁定 | 删除条件/版本 |
+|---|---|---|---|
+| `android/.../ui/ChatScreen.kt` `systemVoiceRetireNeeded` | 系统 SR 错误码弃用名单（含增补 3=AUDIO_ERROR、9=INSUFFICIENT_PERMISSIONS，后者系 HyperOS fuxi 真机实证：App 权限已授时系统识别服务仍瞬间报 9 且永不可自愈） | Android SpeechRecognizer 公开错误码为封闭 SDK 契约（1..13 随 API 固定），非面向原生演化的开放名单；else 分支安全（未知码不弃用）。批1审核裁定不违规（2026-09-20）；9 的增补见 T-33（真机 L2 实证） | SDK 契约变更时复核（无删除计划） |
+| `android/.../ui/HomeScreen.kt` `placeholderDisplayAgents` | opencode/claude-code/hermes/dsh 展示目录 | 仅决定灰显副文案，不参与能力判定（能力判定已全动态）；只随 agent 接入移除、不随新增增长。批3审核裁定合规（2026-09-20） | 展示目录随 agent 接入移除时同步删（无版本号，随接入） |
+| `android/.../ui/SettingsScreen.kt` AgentDefaultsSection 按名特判 | `"pi","zcode" ->` 旧 daemon 兼容兜底 | else 分支的 `agent_settings:<id>` capability 动态判定已覆盖任意 agent；移除特判会让旧 daemon 用户丢失设置区。T-10 裁定维持现状（2026-09-20） | 已删除（0.3.1 最新-only，见附录 B 2026-10-13） |
+| `android/.../ui/HomeScreen.kt` `buildAgents` 基线目录（7 项 AgentInfo） | 展示名/图标/连接方式基线表（pa_audit roster 首轮命中） | available 字段仅为基线缺省，能力判定走 `resolveAgentAvailability`（capabilities 动态+extra 追加，新 agent 零改动进网格）；与豁免 #2 同精神。pa_audit 首轮裁定登记（2026-09-21） | 展示基线变更时复核（无删除计划） |
+| `android/.../ui/SettingsScreen.kt` optimizerAgents 回退 `setOf("codex","pi","zcode")` | 旧 daemon 无 text_generation capability 时的优化 agent 兜底 | 主路径 `"text_generation:$it" in capabilities` 动态判定在前，setOf 仅在 capabilities 全空时兜底（与豁免 #3 同款新旧兼容形态）。pa_audit 首轮裁定登记（2026-09-21） | 已删除（0.3.1 最新-only，见附录 B 2026-10-13） |
+| `daemon/internal/agent/codex.go` `isOpaqueItemType` 排除五类 | item/started/completed 已专案处理类型（contextCompaction/commandExecution/agentMessage/subAgentActivity/collabAgentToolCall）的排除清单 | 黑名单形态：默认值=主线 A 透传，新类型自动进透传，漏向安全；专案分支由 T-L1 建。批 9 审核裁定不构成名单债（2026-09-21） | 专案分支变更时复核（无删除计划） |
+| `android/.../ui/AgentScopeBadge.kt` `SESSION_DISPLAY_SCOPES`（声明现于 :47） | codex/pi/zcode/hermes 展示顺序名单（「会话与对话」组作用域徽章） | presentation-only：仅决定徽章展示顺序，不参与能力判定/会话路由；动态能力透传会把外部只读导入(opencode/claude-code)误纳入全局显示偏好作用域，故不能改动态源——与豁免 #2/#4 同精神。新增 agent 须同步本行+`AgentScopeBadgeTest` 防漂移用例。批次 0 裁定登记（2026-10-04） | 新增 agent 时同步（无删除计划） |
 
 ## 附录 B · 框架自审记录
 
@@ -160,3 +160,4 @@
 | 2026-09-25 | **弹窗修复补全（用户反馈不彻底）**：AP2 封掉 codex notify/apps 后仍有周期弹窗——事件日志实锤计划任务每分钟经 wscript 跑 watchdog_hidden.vbs（VBScriptDeprecationAlert 20:38/20:27/20:16 齿轮式命中）。修复：Set-ScheduledTask 把 action 改为直跑 paguard.exe（windowsgui 物理无窗口），绕开 wscript；验证 wscript 告警归零、看门狗 port up 每分钟正常、daemon 存活。教训：AP2 的「计划任务链干净」结论只核对了进程树没核对**事件日志的调度频率证据**——弹窗类排查必须看 Application/System 日志的周期性命中【口径勘误 2026-10-04（弹窗审计 G1）：当日「windowsgui 物理无窗口」仅属设计自述——build.ps1 的 paguard 构建行实际未带 -H=windowsgui；现已补上该 flag（tools/ops/_pa_deploy_night.py 同步），并以打包前 PE 子系统断言（subsystem==2，失败即中止打包）守护，该口径自此由产物自检断言守护而非自述】 |
 | 2026-09-26 | **退出零残留内核级兜底（Job Object，3ab41a6）+ 弹窗监控复核**：internal/jobobject 启动早期绑定 Kill-on-Close Job + UI 限制（x/sys 类型安全封装）；实测 taskkill /F 强杀 daemon 后 node/cmd 子进程零残留。热部署后 9 分钟窗口监控（2s 快照对比）零新窗口、daemon 日志零 error/fail、系统日志无窗口异常——「电脑不弹窗+结束零残留」两条红线由 hidewin(进程级)+UILIMIT(内核级)+优雅退出三层共同保证 |
 | 2026-10-07 | **弹窗红线监控工具固化**：一次性基线脚本（%TEMP%\pa_gate\winmon.py，EnumWindows+IsWindowVisible+PID+标题）升级为正式运维工具 `tools/ops/window_monitor.py`——纯 ctypes 无子进程（无 wmic 闪窗风险），pythonw 无控制台可跑、结论以退出码为准；快照 UTF-8 JSON（schema `window-monitor-snapshot/1`），diff 按 (PID,标题) 多重集相抵判新增（防同款第二只弹窗被基线首只抵消）；默认过滤空标题与系统壳窗口（Progman/WorkerW，`--all` 保留）。用例 `tools/ops/test_window_monitor.py`（注入窗口清单，不真 EnumWindows） | `--snapshot <file>` 写基线；`--diff <base> [--out <file>]` 报新增，退出码 0=无新增 / 1=有新增 / 2=参数或 IO 错误（判定看全量，不受 `--pid` 展示过滤影响）；`--pid` 仅按窗口属主 PID 过滤，不做子进程树归因（wmic 闪窗禁用、NtQueryInformationProcess 过深，退化路径=全量 diff+拿 PID 人工归因）；定位位=L2/日常「截图目检不弹窗」的机器辅助步骤——目检前后各一帧 snapshot/diff，新窗口 PID+标题给截图以机器证据锚点 |
+| 2026-10-13 | **最新-only 落地（0.3.1，不兼容旧格式）**：删 App 侧五处旧 daemon/旧 App 兼容兜底——HostEventTracker sequence≤0 旧分支（`HostEventTrackerTest.legacyZeroSequence…` 改钉拒收，旧行为无独立存在意义，等价性由单调去重用例佐证）；AgentConnection 旧 pair_code 降级分支（主链设备注册不动；Keystore 不可用改明确失败不断旧链）；SettingsScreen optimizerAgents setOf 回退 + AgentDefaults 按名特判（改纯 capability 动态判定；两处旧豁免同步退出 pa_audit roster 基线）；ModelSelectionReducer 旧 daemon 缺席兜底（缺席改抛错不伪造，`ModelSelectionReducerTest` 两旧例改钉缺席抛错、`ConversationUpgradeIntegrationTest` 旧断言段删除）。daemon legacy 单 token 只加观测（Validate 命中记 WARNING + LegacyAuthCount 计数，逻辑暂留，`TestDevicesLegacyTokenFallback` 加计数断言 +1）。附录 A 全表加“删除条件/版本”TTL 列（两处已删标 0.3.1，其余给复核/删除条件）。pa_audit 自测 `test_kotlin_when_branch_baseline_is_warn` 随基线同步改钉未登记即红线 | 本轮删旧兜底用例 4 处（HostEventTracker 1 改钉、ModelSelectionReducer 2 改钉、ConversationUpgrade 1 段删）、新增观测钉子 2 处（reducer 缺席抛错、legacy 计数）；回归用例净 0（改钉对冲）。pa_audit roster 基线 -2（SettingsScreen #3/#5 退出） |

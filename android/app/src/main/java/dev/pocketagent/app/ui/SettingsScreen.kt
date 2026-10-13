@@ -1552,10 +1552,10 @@ private fun SettingsScreenBody(
                             ),
                         )
                         // 优化用 Agent/模型的候选来自电脑端模型表(与原 Daemon 页同一过滤口径)。
+                        // 最新-only(0.3.1 起):纯 capability 动态判定，无旧 daemon 回退。
                         val optimizerCaps = host?.capabilitiesList.orEmpty()
                         val optimizerAgents = modelChoices.map { it.provider }.distinct().filter {
-                            "text_generation:$it" in optimizerCaps ||
-                                (optimizerCaps.none { c -> c.startsWith("text_generation:") } && it in setOf("codex", "pi", "zcode"))
+                            "text_generation:$it" in optimizerCaps
                         }
                         // 【R1-C 结论 5】优化按钮本体是本地开关,但"用哪个 Agent/模型"的候选来自
                         // 电脑端模型表 —— 断连时如实标注,不摆空下拉让人误以为没有可选。
@@ -2759,18 +2759,16 @@ private fun AgentPage(
             //  - Pi:模型清单 + 动态思考档位(ListModels 里 daemon 动态返回
             //    的 available_efforts)+ 全局默认模型/强度;
             //  - ZCode:模型清单 + 桌面默认强度 + 额度入口(本批占位)。
-            when (runningAgent) {
-                "pi", "zcode" -> AgentDefaultsSection(runningAgent, settings, modelChoices, writeCodex, onShowModelPicker)
-                else -> if (host?.capabilitiesList?.contains("agent_settings:$runningAgent") == true) {
-                    AgentDefaultsSection(runningAgent,settings,modelChoices,writeCodex,onShowModelPicker)
-                } else SectionBlock(icon = R.drawable.ic_lucide_info, title = agentDisplay(runningAgent)) {
-                    Text(
-                        "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
-                            "可先在上方「切换 Agent」里回到 Codex。",
-                        fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
-                        modifier = Modifier.padding(vertical = 12.dp),
-                    )
-                }
+            // 最新-only(0.3.1 起):纯 capability 动态判定，不再按名特判旧 daemon 兼容。
+            if (host?.capabilitiesList?.contains("agent_settings:$runningAgent") == true) {
+                AgentDefaultsSection(runningAgent,settings,modelChoices,writeCodex,onShowModelPicker)
+            } else SectionBlock(icon = R.drawable.ic_lucide_info, title = agentDisplay(runningAgent)) {
+                Text(
+                    "${agentDisplay(runningAgent)} 的模型、权限与工具设置将在接入完成后在此显示；" +
+                        "可先在上方「切换 Agent」里回到 Codex。",
+                    fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted,
+                    modifier = Modifier.padding(vertical = 12.dp),
+                )
             }
         }
 

@@ -33,7 +33,7 @@ object ModelSelectionReducer {
         else -> SelectionSource.UNKNOWN
     }
 
-    /** proto EffectiveModelSelection → 客户端投影(旧 daemon 缺省不走这里,走 from* 兜底)。 */
+    /** proto EffectiveModelSelection → 客户端投影(最新 daemon 恒带该字段)。 */
     fun mapSelection(sel: EffectiveModelSelection, fromCache: Boolean = false): EffectiveSelectionUi =
         EffectiveSelectionUi(
             agentId = sel.agentId,
@@ -50,54 +50,32 @@ object ModelSelectionReducer {
 
     /**
      * ListModelsResponse → 选择投影。
-     * 新 daemon:effective_selection(5) 直接映射;旧 daemon 缺席 → 按
-     * current_model_id(2)/current_effort(3) 兜底显示(proto 注释钉死的兼容口径,
-     * 来源记 NATIVE_CURRENT,不报错)。
+     * 最新-only(0.3.1 起):新 daemon 恒带 effective_selection(5)；缺席为协议
+     * 违规，直接抛错，绝不再按 current_model_id(2)/current_effort(3) 旧字段兜底。
      */
     fun fromListModelsResponse(
         resp: ListModelsResponse,
         agentId: String,
         fromCache: Boolean = false,
-    ): EffectiveSelectionUi =
-        if (resp.hasEffectiveSelection()) {
-            mapSelection(resp.effectiveSelection, fromCache)
-        } else {
-            EffectiveSelectionUi(
-                agentId = agentId,
-                modelId = resp.currentModelId,
-                effort = if (resp.hasCurrentEffort()) resp.currentEffort else "",
-                source = SelectionSource.NATIVE_CURRENT,
-                sourceRaw = SelectionSource.NATIVE_CURRENT.raw,
-                // 旧 daemon 没有生效时机结论:不编造"下一轮生效",如实 false
-                appliesToNextTurn = false,
-                explanation = "旧版电脑端未回传选择结论,按其上报的当前模型与强度显示。",
-                availableEfforts = emptyList(),
-                fromCache = fromCache,
-            )
+    ): EffectiveSelectionUi {
+        // agentId 仅供日志定位，投影以 daemon 真值为准。
+        require(resp.hasEffectiveSelection()) {
+            "电脑端未回传选择结论(agent=$agentId)，请确认电脑端为最新版 daemon"
         }
+        return mapSelection(resp.effectiveSelection, fromCache)
+    }
 
     /**
      * Thread → 选择投影。
-     * 新 daemon:effective_selection(24) 直接映射;旧 daemon 缺席 → 按
-     * model_id(5)/effort(19) 兜底显示(thread.proto 注释钉死的兼容口径,不报错)。
+     * 最新-only(0.3.1 起):新 daemon 恒带 effective_selection(24)；缺席为协议
+     * 违规，直接抛错，绝不再按 model_id(5)/effort(19) 旧字段兜底。
      */
-    fun fromThread(thread: pocketagent.v1.Thread, fromCache: Boolean = false): EffectiveSelectionUi =
-        if (thread.hasEffectiveSelection()) {
-            mapSelection(thread.effectiveSelection, fromCache)
-        } else {
-            EffectiveSelectionUi(
-                agentId = thread.agentId,
-                modelId = thread.modelId,
-                effort = thread.effort,
-                source = SelectionSource.NATIVE_CURRENT,
-                sourceRaw = SelectionSource.NATIVE_CURRENT.raw,
-                // 旧 daemon 没有生效时机结论:不编造"下一轮生效",如实 false
-                appliesToNextTurn = false,
-                explanation = "旧版电脑端未回传选择结论,按会话落库的模型与强度显示。",
-                availableEfforts = emptyList(),
-                fromCache = fromCache,
-            )
+    fun fromThread(thread: pocketagent.v1.Thread, fromCache: Boolean = false): EffectiveSelectionUi {
+        require(thread.hasEffectiveSelection()) {
+            "会话未回传选择结论(agent=${thread.agentId})，请确认电脑端为最新版 daemon"
         }
+        return mapSelection(thread.effectiveSelection, fromCache)
+    }
 
     /** 两路真值合并:[primary] 优先(通常为 ListModels 5,带 available_efforts);null 退 [secondary]。 */
     fun merge(primary: EffectiveSelectionUi?, secondary: EffectiveSelectionUi?): EffectiveSelectionUi? =

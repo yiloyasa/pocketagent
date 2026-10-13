@@ -20,7 +20,7 @@ import pocketagent.v1.ModelInfo
  *  4. 失效 effort 清理(切到无该档位的模型时不保留失效强度);
  *  5. 未知 effort 保留原 id 展示(daemon 未来新增取值不显示空白);
  *  6. SelectionSource 四值映射全对齐,词表外/空如实降级 UNKNOWN;
- *  7. 旧 daemon 缺席 effective_selection 时按 2/3、5/19 兜底,不报错。
+ *  7. 最新-only(0.3.1):effective_selection 缺席即协议违规抛错，不再兜底。
  */
 class ModelSelectionReducerTest {
 
@@ -270,37 +270,31 @@ class ModelSelectionReducerTest {
         assertEquals(listOf("low", "ultra"), s1.selection?.availableEfforts)
     }
 
-    // ---- 7) 旧 daemon 兜底(不报错) ----
+    // ---- 7) 最新-only:effective_selection 缺席即抛错(旧兜底已删) ----
 
     @Test
-    fun legacy_list_models_falls_back_to_current_model_and_effort() {
-        // 旧 daemon:effective_selection(5) 缺席 → 按 current_model_id(2)/current_effort(3) 兜底
-        val legacy = ListModelsResponse.newBuilder()
+    fun missing_effective_selection_is_rejected_not_fabricated() {
+        // 最新 daemon 恒带 effective_selection；缺席是协议违规，必须抛错而不是
+        // 按旧字段编造 NATIVE_CURRENT 投影(AUDIT §3.3：绝不伪造)。
+        val noSelection = ListModelsResponse.newBuilder()
             .setCurrentModelId("pi/zai-coding-cn/glm-5.3")
             .setCurrentEffort("high")
             .build()
-        val mapped = ModelSelectionReducer.fromListModelsResponse(legacy, "pi")
-        assertEquals("pi/zai-coding-cn/glm-5.3", mapped.modelId)
-        assertEquals("high", mapped.effort)
-        assertEquals(SelectionSource.NATIVE_CURRENT, mapped.source)
-        // current_effort 是 optional:显式缺席 = 空(跟随默认语义),不报错
-        val noEffort = ListModelsResponse.newBuilder().setCurrentModelId("codex/gpt-5.4").build()
-        assertEquals("", ModelSelectionReducer.fromListModelsResponse(noEffort, "codex").effort)
-    }
-
-    @Test
-    fun legacy_thread_falls_back_to_model_id_and_effort_fields() {
-        // 旧 daemon:effective_selection(24) 缺席 → 按 model_id(5)/effort(19) 兜底
-        val legacy = pocketagent.v1.Thread.newBuilder()
+        try {
+            ModelSelectionReducer.fromListModelsResponse(noSelection, "pi")
+            org.junit.Assert.fail("缺席 effective_selection 必须抛错")
+        } catch (_: IllegalArgumentException) {
+        }
+        val bareThread = pocketagent.v1.Thread.newBuilder()
             .setAgentId("pi")
             .setModelId("pi/zai-coding-cn/glm-5.3")
             .setEffort("max")
             .build()
-        val mapped = ModelSelectionReducer.fromThread(legacy)
-        assertEquals("pi/zai-coding-cn/glm-5.3", mapped.modelId)
-        assertEquals("max", mapped.effort)
-        assertEquals(SelectionSource.NATIVE_CURRENT, mapped.source)
-        assertEquals("pi", mapped.agentId)
+        try {
+            ModelSelectionReducer.fromThread(bareThread)
+            org.junit.Assert.fail("缺席 effective_selection 必须抛错")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     @Test

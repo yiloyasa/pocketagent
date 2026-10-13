@@ -369,3 +369,42 @@ fun approvalOptionEcho(
         button.id == submittedOption
     }
 }
+
+// ---------------------------------------------------------------- 敢点呈现(快赢版)
+
+// 【关闭 = 稍后再定】关闭(弹窗外点击/返回/「稍后再定」按钮)走的都是宿主的
+// onDismiss 通道(= 暂不处理,请求留在待审批),与 onDecide(false) 完全两条语义。
+// 这里只钉死文案(组件层的承诺行与按钮都读它),语义由宿主与 PaSheetConvergenceTest 钉住。
+internal const val APPROVAL_DISMISS_COPY = "稍后再定，任务先停着，关闭不会自动允许或拒绝。"
+
+/**
+ * 审批后果一句话(纯函数,单测钉死)。
+ *
+ * 只读已有字段,不编造:输入是 [actionKind]/[command](风险分级同一信号源);
+ * 输出只有两档 —— 高危档把 [approvalRiskOf] 的命中原因原样并列,
+ * 常规档只说"只查看"。**绝不出现具体文件名/路径之外的断言**,
+ * 绝不替用户判断"安不安全"(分级只决定这句话的措辞,不决定按钮可达性)。
+ */
+fun approvalConsequenceCopy(actionKind: String, command: String): String {
+    val signal = approvalRiskOf(actionKind, command)
+    return if (signal.risk == ApprovalRisk.HIGH) {
+        "点允许会继续执行(可能${signal.reasons.joinToString("、")})，点拒绝就停在这里，什么都不改。"
+    } else {
+        "这一步只查看，不会改动内容；点拒绝也是停在这里，什么都不改。"
+    }
+}
+
+/**
+ * 默认焦点落在哪颗按钮(纯函数,单测钉死)。
+ *
+ * 永远是最安全的那颗 = 拒绝:旧两按钮回固定 id "deny";三按钮回
+ * [approvalOptionButtonsOf] 里首个 DENY 色档按钮的原词 id。
+ * 返回值只决定初始焦点(呈现),**不决定任何语义** —— 焦点在哪颗,
+ * 决定仍要用户亲手点。
+ */
+fun approvalDefaultFocusButtonId(options: List<ApprovalOptionUi>): String? =
+    if (options.isEmpty()) {
+        "deny"
+    } else {
+        approvalOptionButtonsOf(options).firstOrNull { it.role == ApprovalOptionRole.DENY }?.id
+    }

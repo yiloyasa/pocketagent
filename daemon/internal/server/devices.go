@@ -8,6 +8,8 @@ package server
 // 私钥对挑战数签名续期;丢了/换机直接 Revoke 删条目。
 // 旧手机(只有单 token)继续兼容 —— validate 查不到设备时回退比对
 // 旧 token,命中即视为 legacy 设备,不强制迁移。
+// 【最新-only 0.3.1:只加观测不删除】legacy 回退命中记 WARNING 日志 +
+// LegacyAuthCount 计数,逻辑暂留,下版凭计数是否归零决策删除。
 
 import (
 	"crypto/ecdsa"
@@ -24,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,6 +66,9 @@ type deviceRegistry struct {
 	randomFunc   func([]byte) (int, error)
 	degraded     bool  // 【规格 §8.2】设备表损坏(JSON 非法/条目残缺)→ 降级态:暂停远程认证
 	degradedErr  error // 触发降级的原因,供日志与诊断
+	// legacyHits 是 legacy 单 token 兼容路径的命中计数(最新-only 政策 0.3.1:
+	// 逻辑暂留、只加观测,下版再删;计数供下版决策"是否还有旧手机在用")。
+	legacyHits atomic.Int64
 }
 
 func newDeviceRegistry(dataDir, pairCode string) *deviceRegistry {
@@ -189,6 +195,12 @@ func legacyTokenHash(pairCode string) string {
 	}
 	sum := sha256.Sum256([]byte("pair-code:" + pairCode))
 	return hex.EncodeToString(sum[:])
+}
+
+// LegacyAuthCount 返回 legacy 单 token 兼容路径的累计命中次数(只加观测的
+// 指标,供下版"旧手机是否已清零、可删逻辑"决策;重启归零,非持久化)。
+func (r *deviceRegistry) LegacyAuthCount() int64 {
+	return r.legacyHits.Load()
 }
 
 // LegacyTokenFor 返回配对码对应的 legacy 单 token 明文值(只读 helper,
@@ -427,7 +439,11 @@ func (r *deviceRegistry) Validate(token string) (deviceID string, legacy, ok boo
 	}
 	// legacy 回退:旧拦截器是拿 Bearer 原文直接比 sha256("pair-code:"+code)
 	// 的 hex 值,这里保持同一语义(不能对原文再哈希一次)。
+	// 【最新-only 0.3.1:只加观测不删除】命中即记 WARNING 日志 + 计数,逻辑暂留,
+	// 下版凭 LegacyAuthCount 是否归零决策删除。
 	if r.legacyToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(r.legacyToken)) == 1 {
+		r.legacyHits.Add(1)
+		log.Printf("[devices] WARNING: legacy 单 token 鉴权命中(累计 %d,旧版手机兼容路径,下版移除;请升级手机 App)", r.legacyHits.Load())
 		return "legacy", true, true
 	}
 	return "", false, false

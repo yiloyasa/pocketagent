@@ -19,8 +19,16 @@
 - GitHub Release 发布脚本 `tools/release/publish_github.py`（总 zip +
   `app-release.apk` + `SHA256SUMS` 三件一次上传，补上此前缺失的双端下载连接；
   备注取本文件对应版本节）。
+- 发版前预检门禁 `tools/release/check_release.py`（2026-10-13 三连坑收口：
+  签名口令 `keytool -list` 早验 / `release.ps1` 与 `build.ps1` 过 PS5.1
+  语法解析 / 痕迹针白名单复核误伤产品名即放行告警 / 总 zip+APK+SHA256
+  产物对账 `version.txt==仓库版本` / `check_version.py` 必过；退出码
+  0 可发版、1 阻断；`--dry-run` 夹具自测，release 阶段门禁
+  `pa_upgrade_gate.py` 直调此脚本 + `check_version.py`，总 zip 新鲜度
+  改指 `dist/*.zip`）。
 - 发版流程：`bump(version.go + gradle)` → `check_version.py` → 测试 →
-  `dist/release.ps1` → `publish_github.py --dry-run` 核对 → `git tag vX.Y.Z` →
+  `check_release.py` 预检（上条，不绿不进打包）→ `dist/release.ps1` →
+  `publish_github.py --dry-run` 核对 → `git tag vX.Y.Z` →
   `gh release create` + `git push origin vX.Y.Z`。
 - 设置 → 关于新增「桌面端」行（daemon 版本，断连时如实标「需连接主机」）。
 - 新手教程操作化：排障页地址示例补 `:7246`；收尾页加「去发第一条指令」直达；

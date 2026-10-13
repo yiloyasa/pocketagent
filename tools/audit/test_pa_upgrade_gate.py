@@ -56,7 +56,7 @@ def mkg(tmp: Path, **kw) -> gate.GateCtx:
         repo=tmp,
         stage="feature",
         test_results=tmp / "test-results",
-        dist_dir=tmp / "dist" / "windows",
+        dist_dir=tmp / "dist",
         go_cmd="",
         now=time.time(),
         cmd_runner=lambda args, cwd=None, timeout=None: (0, "", ""),
@@ -82,14 +82,18 @@ def write_suite(tmp: Path, name, tests=5, failures=0, errors=0, mtime=None) -> P
 
 
 def write_dist(tmp: Path, zip_age=None, script_age=None) -> Path:
-    d = tmp / "dist" / "windows"
+    # 新布局（0.3.1 起）：总 zip 在 dist 根（PocketAgent-<ver>-*.zip），
+    # release.ps1 在 dist 根，windows 三脚本在 dist/windows。
+    d = tmp / "dist"
     now = time.time()
+    write(d / "release.ps1", "rem stub\n")
     for s in gate.DIST_SCRIPTS:
-        write(d / s, "rem stub\n")
-    zp = write(d / "PocketAgent桌面端.zip", "PK\x03\x04stub")
+        write(d / "windows" / s, "rem stub\n")
+    zp = write(d / "PocketAgent-0.3.1-test.zip", "PK\x03\x04stub")
+    refs = [d / "release.ps1"] + [d / "windows" / s for s in gate.DIST_SCRIPTS]
     if script_age is not None:
-        for s in gate.DIST_SCRIPTS:
-            os.utime(d / s, (now - script_age, now - script_age))
+        for r in refs:
+            os.utime(r, (now - script_age, now - script_age))
     if zip_age is not None:
         os.utime(zp, (now - zip_age, now - zip_age))
     return d
@@ -405,7 +409,7 @@ class CheckDistReleaseTest(unittest.TestCase):
             write_dist(tmp, zip_age=30, script_age=600)
             c = gate.check_dist_release(mkg(tmp))
             self.assertEqual(c.status, gate.PASS)
-            self.assertIn("PocketAgent桌面端.zip", c.value)
+            self.assertIn("PocketAgent-", c.value)
 
     def test_stale_zip_is_fail(self):
         with tempfile.TemporaryDirectory() as td:
@@ -428,7 +432,7 @@ class CheckDistReleaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             write_dist(tmp, script_age=30)
-            (tmp / "dist" / "windows" / "PocketAgent桌面端.zip").unlink()
+            (tmp / "dist" / "PocketAgent-0.3.1-test.zip").unlink()
             c = gate.check_dist_release(mkg(tmp))
             self.assertEqual(c.status, gate.FAIL)
 
@@ -456,7 +460,10 @@ class StageDecisionTest(unittest.TestCase):
             write_dist(tmp, zip_age=30, script_age=600)
             g = mkg(tmp, stage="release", now=now, audit_json=green_audit(),
                     cmd_runner=git_stub())
-            rep = gate.build_report(g, gate.run_checks(g))
+            # 子进程门禁脚本在夹具仓内不存在，按注入桩放行（只验闸装配逻辑）。
+            stubs = {cid: green_check(cid) for cid in ("release_version", "release_preflight")}
+            with patch.dict(gate.CHECK_FUNCS, stubs):
+                rep = gate.build_report(g, gate.run_checks(g))
             self.assertEqual(rep["decision"], gate.ALLOW)
             self.assertIsNone(rep["next_stage"])
 
@@ -518,7 +525,9 @@ class StageDecisionTest(unittest.TestCase):
             write_dist(tmp, zip_age=600, script_age=30)
             g = mkg(tmp, stage="release", now=now, audit_json=green_audit(),
                     cmd_runner=git_stub())
-            rep = gate.build_report(g, gate.run_checks(g))
+            stubs = {cid: green_check(cid) for cid in ("release_version", "release_preflight")}
+            with patch.dict(gate.CHECK_FUNCS, stubs):
+                rep = gate.build_report(g, gate.run_checks(g))
             self.assertEqual(rep["decision"], gate.BLOCK)
             self.assertEqual(rep["required_failed"], ["dist_release"])
 

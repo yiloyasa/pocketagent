@@ -248,11 +248,6 @@ class ConversationUpgradeIntegrationTest {
         )
         val cacheOnly = ModelSelectionReducer.withCachedSelection(ModelSelectionReducer.initial(), cached)
         assertEquals(cached.copy(fromCache = true), ModelSelectionReducer.display(cacheOnly))
-
-        // 旧 daemon 兜底:没有生效时机结论就不编造(appliesToNextTurn=false)
-        val legacy = ListModelsResponse.newBuilder()
-            .setCurrentModelId("pi/glm-5.3").setCurrentEffort("high").build()
-        assertFalse(ModelSelectionReducer.fromListModelsResponse(legacy, "pi").appliesToNextTurn)
     }
 
     // ================================================================

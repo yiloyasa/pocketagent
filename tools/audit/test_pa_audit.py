@@ -225,14 +225,16 @@ class RosterTest(unittest.TestCase):
             self.assertEqual(len(warns), 1)
             self.assertIn("豁免", warns[0].message)
 
-    def test_kotlin_when_branch_baseline_is_warn(self):
+    def test_kotlin_when_branch_no_longer_exempt_is_redline(self):
+        # 2026-10-13 最新-only：SettingsScreen 按名特判已删（附录 A #3 标已删除，
+        # roster 基线同步退出），when 并列 agent 名单再出现即未登记红线。
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             write(kt_dir(tmp) / "SettingsScreen.kt",
                   'val section = when (agent) {\n    "pi", "zcode" -> AgentDefaultsSection(agent)\n    else -> null\n}\n')
             fs = self._run(tmp)
-            self.assertEqual(by_sev(fs, pa.RED), [])
-            self.assertEqual(len(by_sev(fs, pa.WARN)), 1)
+            self.assertEqual(len(by_sev(fs, pa.RED)), 1)
+            self.assertEqual(by_sev(fs, pa.WARN), [])
 
 
 # ── 规则 3：UI「未知」字符串 ──────────────────────────────────────────────────

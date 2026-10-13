@@ -11,13 +11,16 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
   git rev-parse/status   commit + 工作区干净度
   结果 XML 直读           tests/failures/errors + 最新 mtime 年龄
                          （fake_green 同口径：>10 分钟=陈旧=疑似 Gradle UP-TO-DATE 假绿）
-  dist/windows mtime     zip 是否晚于 build.ps1 / install.bat / uninstall.bat
+  dist 总 zip mtime      dist/PocketAgent-*.zip 是否晚于 release.ps1 / 打包脚本
+                         （2026-10-13 起改指总包，不再看 windows 中间 zip）
+  tools/release 门禁     check_version.py / check_release.py 子进程直调（只判退出码）
 
 阶段闸（表驱动，逐级收敛）：
   baseline = git 干净 + go build 绿
   contract = baseline + proto 两副本 MD5 一致
   feature  = contract + Android 测试新鲜 0 失败 + pa_audit redline=0
-  release  = feature + dist zip mtime 新于打包脚本
+  release  = feature + check_version 必过 + check_release 预检必过
+             + dist 总 zip mtime 新于打包脚本
 
 检查项状态：PASS / FAIL / WARN（有保留：go 环境异常等）/ SKIPPED（--skip 跳过）
             / NOT_IMPLEMENTED（无法验证——绝不假装通过）。
@@ -63,6 +66,10 @@ TEST_RESULTS_DEFAULT = r"G:\pa\android\app\build\test-results\testDebugUnitTest"
 ENV_ABNORMAL_MARK = "异常退出码"
 
 DIST_SCRIPTS = ("build.ps1", "install.bat", "uninstall.bat")
+# 总 zip 新鲜度比对基准（2026-10-13 起改指 dist/*.zip 总包）：
+#   总包 glob（dist 根下非递归）+ 参考脚本（dist 根相对路径）。
+TOTAL_ZIP_GLOB = "PocketAgent-*.zip"
+RELEASE_PS1_REF = "release.ps1"   # dist 根下总装配脚本
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -337,31 +344,89 @@ def check_audit_redline(g: GateCtx) -> Check:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 检查项 f：发布包新鲜度（dist zip mtime 新于打包脚本）
+# 检查项 g/h：发版门禁（tools/release 直调，只判退出码；release 阶段必须项）
+# ─────────────────────────────────────────────────────────────────────────────
+# 今日三连坑的收口：签名口令错到 packageRelease 才爆、PS5.1 无 GetRelativePath、
+# 痕迹针误伤产品名——check_release.py 在发版前全验一遍；check_version.py 守
+# 双副本同步。门禁脚本缺失 = 发版链缺件→FAIL（不降级，避免无声放行）。
+
+RELEASE_TOOL_TIMEOUT = 300  # check_release 含 keytool/PS 解析/zip 扫描，余量给足
+
+
+def _run_release_tool(g: GateCtx, script_name: str,
+                      timeout: int) -> Tuple[Optional[int], List[str]]:
+    """跑 tools/release 下门禁脚本；返回 (退出码, 输出尾行)。缺失返回 (None, 原因)。"""
+    script = g.repo / "tools" / "release" / script_name
+    if not script.is_file():
+        return None, [f"门禁脚本缺失：{script}（发版链缺件）"]
+    try:
+        rc, out, err = g.cmd_runner([sys.executable, str(script)],
+                                    cwd=str(g.repo), timeout=timeout)
+    except Exception as e:  # 单项故障不拖垮门禁 → 调用方按缺失降级为 FAIL
+        return None, [f"检查执行异常（需人工补查）：{e!r}"]
+    tail = [ln.rstrip()[:160] for ln in (out or "").splitlines() if ln.strip()][-8:]
+    if err and err.strip():
+        tail += ["[stderr] " + ln[:160]
+                 for ln in err.splitlines() if ln.strip()][-3:]
+    return rc, tail or ["（无输出）"]
+
+
+def _pick_value(tail: List[str], fallback: str) -> str:
+    """从门禁脚本输出尾行挑一句当 value：含 结论/可发版/阻断 的行优先，否则末行。"""
+    for ln in tail:
+        if "结论" in ln or "可发版" in ln or "阻断" in ln:
+            return ln[:160]
+    return tail[-1][:160] if tail else fallback
+
+
+def check_release_version(g: GateCtx) -> Check:
+    cid, title = "release_version", CHECK_TITLES["release_version"]
+    rc, tail = _run_release_tool(g, "check_version.py", timeout=120)
+    if rc is None:
+        return Check(cid, title, FAIL, "", tail)
+    if rc == 0:
+        return Check(cid, title, PASS, _pick_value(tail, "通过"), [])
+    return Check(cid, title, FAIL, f"check_version.py 退出码 {rc}", tail)
+
+
+def check_release_preflight(g: GateCtx) -> Check:
+    cid, title = "release_preflight", CHECK_TITLES["release_preflight"]
+    rc, tail = _run_release_tool(g, "check_release.py", timeout=RELEASE_TOOL_TIMEOUT)
+    if rc is None:
+        return Check(cid, title, FAIL, "", tail)
+    if rc == 0:
+        return Check(cid, title, PASS, _pick_value(tail, "通过"), tail[:-1])
+    return Check(cid, title, FAIL, f"check_release.py 退出码 {rc}（发版前预检未过）", tail)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 检查项 f：发布包新鲜度（dist 总 zip mtime 新于打包脚本）
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check_dist_release(g: GateCtx) -> Check:
     cid, title = "dist_release", CHECK_TITLES["dist_release"]
     d = g.dist_dir
-    missing = [s for s in DIST_SCRIPTS if not (d / s).exists()]
+    refs = [d / RELEASE_PS1_REF] + [d / "windows" / s for s in DIST_SCRIPTS]
+    missing = [str(r) for r in refs if not r.exists()]
     if missing:
         return Check(cid, title, FAIL, "",
-                     [f"缺少脚本：{', '.join(missing)}（{d}）——无法比对新鲜度"])
-    zips = [p for p in d.glob("*.zip") if p.is_file()]
+                     [f"缺少打包脚本：{'; '.join(missing)}——无法比对新鲜度"])
+    zips = [p for p in d.glob(TOTAL_ZIP_GLOB) if p.is_file()]
     if not zips:
-        return Check(cid, title, FAIL, "", [f"未找到 dist zip：{d}\\*.zip——需先打包"])
+        return Check(cid, title, FAIL, "",
+                     [f"未找到总 zip：{d}\\{TOTAL_ZIP_GLOB}——需先跑 dist/release.ps1"])
     zp = max(zips, key=lambda p: p.stat().st_mtime)
     zm = zp.stat().st_mtime
-    newest_script = max(DIST_SCRIPTS, key=lambda s: (d / s).stat().st_mtime)
-    max_script = (d / newest_script).stat().st_mtime
-    if zm > max_script:
+    newest_ref = max(refs, key=lambda r: r.stat().st_mtime)
+    max_ref = newest_ref.stat().st_mtime
+    if zm > max_ref:
         return Check(cid, title, PASS,
                      f"{zp.name}（{_fmt_ts(zm)}）晚于全部打包脚本", [])
     return Check(cid, title, FAIL,
-                 f"{zp.name}（{_fmt_ts(zm)}）不晚于 {newest_script}（{_fmt_ts(max_script)}）",
+                 f"{zp.name}（{_fmt_ts(zm)}）不晚于 {newest_ref.name}（{_fmt_ts(max_ref)}）",
                  [f"{zp.name} mtime={_fmt_ts(zm)}",
-                  f"{newest_script} mtime={_fmt_ts(max_script)}",
-                  "需重跑 build.ps1 重新打包"])
+                  f"{newest_ref.name} mtime={_fmt_ts(max_ref)}",
+                  "需重跑 dist/release.ps1 重新打包"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,11 +440,14 @@ CHECK_TITLES: Dict[str, str] = {
     "proto_sync": "契约同步（proto/v1 两副本 MD5 一致）",
     "android_tests": "Android 单测（新鲜 + 0 失败，fake_green 同口径）",
     "audit_redline": "pa_audit 红线（redline=0）",
-    "dist_release": "发布包新鲜度（dist zip 晚于打包脚本）",
+    "release_version": "版本双副本同步（check_version.py 必过）",
+    "release_preflight": "发版前预检（check_release.py 必过：签名早验/PS5.1/痕迹针白名单/产物对账）",
+    "dist_release": "发布包新鲜度（dist 总 zip 晚于打包脚本）",
 }
 
 CHECK_ORDER: List[str] = ["git_clean", "daemon_build", "daemon_vet", "proto_sync",
-                          "android_tests", "audit_redline", "dist_release"]
+                          "android_tests", "audit_redline",
+                          "release_version", "release_preflight", "dist_release"]
 
 # 检查项可注入 callable 表（单测用 patch.dict 替换任一项）
 CHECK_FUNCS: Dict[str, Callable[[GateCtx], Check]] = {
@@ -389,6 +457,8 @@ CHECK_FUNCS: Dict[str, Callable[[GateCtx], Check]] = {
     "proto_sync": check_proto_sync,
     "android_tests": check_android_tests,
     "audit_redline": check_audit_redline,
+    "release_version": check_release_version,
+    "release_preflight": check_release_preflight,
     "dist_release": check_dist_release,
 }
 
@@ -398,7 +468,8 @@ STAGE_REQUIRED: Dict[str, List[str]] = {
     "feature": ["git_clean", "daemon_build", "proto_sync",
                 "android_tests", "audit_redline"],
     "release": ["git_clean", "daemon_build", "proto_sync",
-                "android_tests", "audit_redline", "dist_release"],
+                "android_tests", "audit_redline",
+                "release_version", "release_preflight", "dist_release"],
 }
 
 STAGE_NEXT: Dict[str, Optional[str]] = {
@@ -502,7 +573,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--repo", help="仓库根目录（默认：脚本上两级）")
     ap.add_argument("--test-results",
                     help="testDebugUnitTest 结果 XML 目录（默认镜像盘 G:\\pa\\...）")
-    ap.add_argument("--dist", help="dist/windows 目录（默认 --repo/dist/windows）")
+    ap.add_argument("--dist", help="dist 目录（总 zip 所在，默认 --repo/dist）")
     return ap.parse_args(argv)
 
 
@@ -513,7 +584,7 @@ def build_gate_ctx(args: argparse.Namespace) -> GateCtx:
         stage=args.stage,
         test_results=Path(args.test_results) if args.test_results
         else Path(TEST_RESULTS_DEFAULT),
-        dist_dir=Path(args.dist) if args.dist else repo / "dist" / "windows",
+        dist_dir=Path(args.dist) if args.dist else repo / "dist",
         go_cmd=args.go or "",
     )
 

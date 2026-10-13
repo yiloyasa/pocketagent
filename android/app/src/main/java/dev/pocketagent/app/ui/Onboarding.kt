@@ -129,8 +129,26 @@ fun onboardSteps(connected: Boolean): List<OnboardStep> = listOf(
     ),
 )
 
-/** 步骤图标(细线 lucide;步骤 id → 图标)。 */
-private fun stepIcon(id: String): Int = when (id) {
+/**
+ * 前三步的页内直达按钮口径(纯函数,单测覆盖 FirstTaskFunnelFixTest)。
+ *
+ * 【为什么每步都给直达】首任务漏斗断在"看完教程但不知道去哪":教程讲完就散,
+ * 用户回主页还要自己找入口 —— 前三页各加一个真实按钮,复用既有
+ * OnboardPage.actionLabel/actionId 机制与 MainActivity 的 onOpenSettings/onGoHome
+ * 接线(不新增回调、不碰 MainActivity):连接页→首页发现列表、配对页→首页、
+ * 首任务页→发第一条指令。排障/收尾按钮原样保留。
+ *
+ * @return 文案 to 去向标识("settings" = 去设置页;"home" = 回主页),null = 无按钮。
+ */
+internal fun onboardActionFor(stepId: String): Pair<String, String>? = when (stepId) {
+    "connect" -> "去首页发现列表" to "home"
+    "pair" -> "去首页" to "home"
+    "first-task" -> "去发第一条指令" to "home"
+    "trouble" -> "去设置填写地址" to "settings"
+    else -> null
+}
+
+/** 步骤图标(细线 lucide;步骤 id → 图标)。 */private fun stepIcon(id: String): Int = when (id) {
     "connect" -> R.drawable.ic_lucide_monitor
     "pair" -> R.drawable.ic_lucide_shield
     "first-task" -> R.drawable.ic_lucide_send_horizontal
@@ -204,15 +222,17 @@ private fun onboardPages(connected: Boolean): List<OnboardPage> = buildList {
         ),
     )
     onboardSteps(connected).forEach { step ->
+        // 前三步 + 排障页直达按钮:口径见 onboardActionFor(复用 actionLabel/actionId
+        // 机制,调用方按标识接线,排障→设置、其余→主页)。
+        val onboardAction = onboardActionFor(step.id)
         add(
             OnboardPage(
                 icon = stepIcon(step.id),
                 title = stepTitle(step.id),
                 done = step.done,
                 motif = stepMotif(step.id),
-                // 排障页给直达按钮:点后去设置页手动填地址(调用方接线)。
-                actionLabel = if (step.id == "trouble") "去设置填写地址" else null,
-                actionId = if (step.id == "trouble") "settings" else null,
+                actionLabel = onboardAction?.first,
+                actionId = onboardAction?.second,
                 blocks = listOf(
                     // 已完成的步骤:一句话告知并请用户直接翻页,不重复展开讲
                     if (step.done && step.note.isNotEmpty()) OnboardBlock.Lead(step.note)

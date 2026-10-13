@@ -156,3 +156,32 @@ internal object SenseVoiceModelManager {
         }
     }
 }
+
+/**
+ * 模型下载进度百分比(纯函数,单测钉死):0..100 夹逼,超量按 100 收敛。
+ * 分母是烧录常量 [SenseVoiceModelManager.TOTAL_BYTES],与安装进度同源。
+ */
+internal fun senseVoiceDownloadPercent(preparedBytes: Long): Int {
+    val clamped = preparedBytes.coerceAtLeast(0L).coerceAtMost(SenseVoiceModelManager.TOTAL_BYTES)
+    return ((clamped * 100) / SenseVoiceModelManager.TOTAL_BYTES).toInt()
+}
+
+/**
+ * 会话页语音模型入口文案(纯函数,单测钉死)。
+ *
+ * 就绪返回 null(不摆入口);其余三态各一句人话,全部可行动:
+ *  · 下载中(含断点续传) → "语音模型下载中 X%，请保持网络连接";
+ *  · 下载失败 → "语音模型下载失败，点按重试";
+ *  · 从没下载过 → "语音模型未下载，点按下载"。
+ * 进度只读 [SenseVoiceModelState.preparedBytes],不编造;措辞避开「未知/错误」
+ * 与英文技术词,点按动作由调用方接 [SenseVoiceModelManager.prepareBundledModel]。
+ */
+internal fun senseVoiceDownloadCopy(state: SenseVoiceModelState): String? {
+    if (state.ready) return null
+    if (state.preparing) {
+        return "语音模型下载中 ${senseVoiceDownloadPercent(state.preparedBytes)}%，请保持网络连接"
+    }
+    if (state.downloadFailed) return "语音模型下载失败，点按重试"
+    if (state.needsDownload) return "语音模型未下载，点按下载"
+    return null
+}

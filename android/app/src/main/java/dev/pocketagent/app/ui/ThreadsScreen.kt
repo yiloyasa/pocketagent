@@ -2331,6 +2331,25 @@ private fun ThreadsSectionHeader(title: String, count: Int) {
 }
 
 /**
+ * 新建任务工作区口径(纯函数,单测覆盖 FirstTaskFunnelFixTest)。
+ *
+ * 【为什么空也放行】picked 为空 = 用户没选工作区,此时不传 workspace,走服务端
+ * 默认位置(三处 onCreate 均已 `if (ws.isNotBlank()) setWorkspace`,空串天然省略)——
+ * 旧实现按钮 `enabled = picked.isNotBlank()` 把没选的人卡死在面板里,首任务漏斗
+ * 第二步直接断掉。放行后"先用默认位置开始":创建成功率优先于位置精确性。
+ */
+
+/** 创建按钮是否可点(纯函数):恒放行,空串 = 用默认位置创建,不再卡空串。 */
+internal fun newThreadCreateEnabled(picked: String): Boolean = true
+
+/** 创建按钮文案(纯函数):没选讲清走默认位置,选了就是普通创建。 */
+internal fun newThreadCreateLabel(picked: String): String =
+    if (picked.isBlank()) "用默认位置创建" else "创建"
+
+/** recents 为空时的说明行:给"先用默认位置开始"一行,不晾着用户。 */
+internal const val NEW_THREAD_DEFAULT_HINT = "先用默认位置开始，不选也能直接创建"
+
+/**
  * 新建会话抽屉:先选"在哪个文件夹里工作"。
  * 工作区通过文件式目录选择器浏览电脑选定,真实传给 codex(rollout 的 cwd),
  * 桌面端在同项目下可见本会话。所有新建对话入口共用。
@@ -2402,8 +2421,10 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                 }
             }
             if (recents.isEmpty()) {
+                // 为什么给默认位置说明:见 NEW_THREAD_DEFAULT_HINT —— 没选也能建,
+                // 空面板只剩浏览入口等于把新人晾在原地,先给一行出路。
                 Text(
-                    "请从“浏览电脑文件夹”选择本次会话的工作区",
+                    NEW_THREAD_DEFAULT_HINT,
                     fontSize = PaEditorial.Type.Caption.fontSize,
                     color = ed.Subtle,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
@@ -2439,7 +2460,9 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                 TextButton(onClick = onDismiss) { Text("取消") }
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    enabled = picked.isNotBlank(),
+                    // 为什么恒可点:见 newThreadCreateEnabled —— 空串不传 workspace,
+                    // 走服务端默认位置;旧文案"先选工作区"是把空当错误的卡点,已退役。
+                    enabled = newThreadCreateEnabled(picked),
                     onClick = { onCreate(picked) },
                     // 主操作:石墨重点面白字(README:主按钮用石墨,主色只给当前操作)
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -2448,8 +2471,8 @@ fun NewThreadSheet(onDismiss: () -> Unit, onCreate: (workspace: String) -> Unit)
                     shape = RoundedCornerShape(PaEditorial.Radius.IconButton),
                 ) {
                     Text(
-                        if (picked.isBlank()) "先选工作区" else "创建",
-                        color = if (picked.isBlank()) ed.Subtle else PaEditorial.OnGraphite,
+                        newThreadCreateLabel(picked),
+                        color = PaEditorial.OnGraphite,
                     )
                 }
             }

@@ -139,10 +139,11 @@ class TurnDeliveryAndOfflineTest {
     fun `离线横幅文案_无快照时间戳不显示`() {
         assertNull(offlineSnapshotBanner(0L))
         assertNull(offlineSnapshotBanner(-1L))
-        val text = offlineSnapshotBanner(System.currentTimeMillis())
+        // 人话三段(快赢版):这是X小时前的旧对话+连上自动更新+只能看不能发;
+        // 时长只读 ThreadSnapshot 已有时间戳(注入假钟,不编造)
+        val now = 1_700_000_000_000L
+        val text = offlineSnapshotBanner(now - 3L * 3_600_000L, now)
         assertNotNull(text)
-        // 形如「离线快照 · HH:mm」
-        assertTrue(text!!.startsWith("离线快照 · "))
-        assertTrue(Regex("""离线快照 · \d{2}:\d{2}""").matches(text))
+        assertEquals("这是3小时前的旧对话，连上自动更新，现在只能看不能发", text)
     }
 }

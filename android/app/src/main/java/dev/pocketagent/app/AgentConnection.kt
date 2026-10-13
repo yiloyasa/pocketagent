@@ -121,10 +121,11 @@ object AgentConnection {
     // daemon 在 HostInfo.min_app_version 随探活报告它要求的最低 App 版本;这里
     // 与本机 versionName 分量比较后点亮提示位。**只提示不阻断**:探活/连接流程
     // 完全不受它影响,消费方(设置页连接信息卡,daemon_version 展示同区)订阅
-    // 本 StateFlow 加一行提示即可。旧 daemon 不带该字段(空)→ 恒 false。
+    // 本 StateFlow 加一行提示即可。最新-only(0.3.1 起):daemon 恒带该字段；
+    // 空仅为初始未就绪态，按不设限处理。
     val appVersionOutdated = kotlinx.coroutines.flow.MutableStateFlow(false)
 
-    /** daemon 报告的最低版本原文(空 = 对端未报告/旧 daemon),供提示位展开细节。 */
+    /** daemon 报告的最低版本原文(空 = 尚未收到对端报告的初始态),供提示位展开细节。 */
     val minAppVersionRequired = kotlinx.coroutines.flow.MutableStateFlow("")
 
     // 【文案收敛(2026-10-09 修复轮)】原 appVersionOutdatedMessage()(label + "要求 ≥ x"
@@ -477,9 +478,10 @@ object AgentConnection {
     }
 
     /**
-     * 配对:优先携设备身份(UUID + P-256 公钥)注册,领每设备独立 token;
-     * Keystore 不可用/签名失败/daemon 是旧版 → 自动降级旧 pair_code 流程
-     * (不带公钥,daemon 发 legacy 单 token)。返回是否拿到了 token。
+     * 配对:携设备身份(UUID + P-256 公钥)注册,领每设备独立 token。
+     * 最新-only 政策(0.3.1 起):只对最新版 daemon 配对,不再降级旧 pair_code
+     * 流程；Keystore 不可用导致拿不到设备公钥时直接失败，不发旧流程 RPC。
+     * 返回是否拿到了 token。
      */
     fun authorizeWithPairCode(pairCode: String): Boolean = authorizeWithPairCodeDetailed(pairCode).ok
 
@@ -502,43 +504,28 @@ object AgentConnection {
         } catch (_: Exception) {
             null
         }
-        var firstError: String? = null
-        if (!pub.isNullOrBlank()) {
-            val req = AuthorizeRequest.newBuilder()
-                .setPairCode(code)
-                .setDeviceId(ensureDeviceId())
-                .setDevicePubKey(pub)
-                .setDeviceName(android.os.Build.MODEL ?: "android")
-                .build()
-            try {
-                val resp = hostService().authorize(req)
-                if (resp.token.isNotBlank()) {
-                    saveToken(resp.token)
-                    android.util.Log.i(TAG, "设备配对成功(每设备独立 token)")
-                    return PairCodeResult(true)
-                }
-                firstError = "daemon 接受了配对但没有返回 token"
-            } catch (e: Exception) {
-                firstError = e.passThroughMessage()
-                android.util.Log.w(TAG, "设备配对失败,降级旧流程: ${e.message}")
-            }
+        // 最新-only:无设备公钥(Keystore 不可用)即失败，不再走旧 pair_code 降级。
+        if (pub.isNullOrBlank()) {
+            android.util.Log.w(TAG, "设备配对失败:本机 Keystore 不可用，无法提供设备身份")
+            return PairCodeResult(false, "本机 Keystore 不可用，无法发起配对；请检查系统 Keystore 后重试")
         }
-        // 降级:旧 pair_code 流程(不带公钥),与旧 daemon 也兼容
+        val req = AuthorizeRequest.newBuilder()
+            .setPairCode(code)
+            .setDeviceId(ensureDeviceId())
+            .setDevicePubKey(pub)
+            .setDeviceName(android.os.Build.MODEL ?: "android")
+            .build()
         return try {
-            val resp = hostService().authorize(
-                AuthorizeRequest.newBuilder()
-                    .setPairCode(code)
-                    .setDeviceName(android.os.Build.MODEL ?: "android")
-                    .build())
+            val resp = hostService().authorize(req)
             if (resp.token.isNotBlank()) {
                 saveToken(resp.token)
-                android.util.Log.i(TAG, "已用旧配对流程获取 token(legacy)")
+                android.util.Log.i(TAG, "设备配对成功(每设备独立 token)")
                 PairCodeResult(true)
             } else {
-                PairCodeResult(false, firstError ?: "daemon 接受了配对但没有返回 token")
+                PairCodeResult(false, "daemon 接受了配对但没有返回 token")
             }
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "旧配对流程也失败: ${e.message}")
+            android.util.Log.w(TAG, "设备配对失败: ${e.message}")
             PairCodeResult(false, e.passThroughMessage())
         }
     }

@@ -1597,13 +1597,37 @@ internal fun shouldRenderOfflineSnapshot(connState: String, itemsEmpty: Boolean)
     connState == "down" && itemsEmpty
 
 /**
- * 「离线快照 · HH:mm」横幅文案;无快照时间戳(<=0)返回 null(不显示横幅)。
+ * 快照相对时长(纯函数,单测钉死):[atMs] 是 ThreadSnapshot 落盘时间戳
+ * (messagesAt,已有字段,不编造),[nowMs] 默认当前墙钟(测试注入假钟)。
+ * 未来时间戳按"刚刚"收敛,绝不出现负数;无时间戳(<=0)返回 null。
  */
-internal fun offlineSnapshotBanner(atMs: Long): String? {
+internal fun offlineAgeCopy(atMs: Long, nowMs: Long = System.currentTimeMillis()): String? {
     if (atMs <= 0) return null
-    val hhmm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(atMs))
-    return "离线快照 · $hhmm"
+    val diffMin = ((nowMs - atMs) / 60_000L).coerceAtLeast(0L)
+    return when {
+        diffMin < 1L -> "刚刚"
+        diffMin < 60L -> "${diffMin}分钟前"
+        diffMin < 24L * 60L -> "${diffMin / 60L}小时前"
+        else -> "${diffMin / (24L * 60L)}天前"
+    }
 }
+
+/**
+ * 离线横幅文案(纯函数,单测钉死);无快照时间戳(<=0)返回 null(不显示横幅)。
+ *
+ * 人话三段:「这是X小时/天前的旧对话」+「连上自动更新」+「现在只能看不能发」。
+ * 时长只读 ThreadSnapshot 的已有时间戳(offlineAgeCopy),不断网编造。
+ */
+internal fun offlineSnapshotBanner(atMs: Long, nowMs: Long = System.currentTimeMillis()): String? {
+    val age = offlineAgeCopy(atMs, nowMs) ?: return null
+    return "这是${age}的旧对话，连上自动更新，现在只能看不能发"
+}
+
+/**
+ * 输入框离线门控(纯函数,单测钉死):离线快照态停用输入 —— 离线发不出去,
+ * 别让用户白打一段话。发送链(send/retryDelivery)照此返回不断言发送。
+ */
+internal fun offlineInputEnabled(offlineSnapshot: Boolean): Boolean = !offlineSnapshot
 
 // ---- 时间线首载骨架 / 空会话空态(R1 深接残项收口;纯函数,单测钉死)----
 // hermes 等会话首次进入时历史在途,旧实现整屏空白 —— 在途读作"卡死",空历史
@@ -1903,14 +1927,14 @@ internal fun ChatOfflineBanner(copy: String, onRetry: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(copy, fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp, color = OfflineBannerText)
             Text(
-                "草稿已保存在此设备，恢复连接后由你决定是否发送",
+                "草稿已保存在此设备，连上自动更新，现在只能看不能发",
                 fontSize = PaEditorial.Type.Caption.fontSize,
                 lineHeight = 16.sp,
                 color = OfflineBannerText.copy(alpha = 0.85f),
             )
         }
         Text(
-            "重试",
+            "重连",
             Modifier
                 .pressable { onRetry() }
                 .padding(horizontal = 8.dp, vertical = 8.dp),
@@ -2630,7 +2654,7 @@ fun ChatScreen(
     // 【P3 Task 8】离线快照标志已收进 ChatViewModel(ChatState)—— 此处为只读投影,
     // 写入走 chatVm.send(见离线横幅/错误条重试/getThread 效果各写点)。
     val offlineSnapshot = chatState.offlineSnapshot
-    // 离线快照的落盘时间(横幅「离线快照 · HH:mm」用;0 = 无)
+    // 离线快照的落盘时间(离线横幅相对时长用;0 = 无)
     val offlineSnapshotAt = chatState.offlineSnapshotAt
     var reloadToken by remember { mutableStateOf(0) }
     // 侧边栏品牌行的电脑名(与其他页面一致)
@@ -3579,7 +3603,13 @@ fun ChatScreen(
      * @return false = 未接收(空文本 / 离线 / 流断恢复中):调用方不清空输入框。
      */
     fun send(text: String): Boolean {
-        if (text.isBlank() || offlineSnapshot) return false
+        if (text.isBlank()) return false
+        // 【离线人话】离线快照态只能看不能发:输入门控见 offlineInputEnabled;
+        // 这里给一句人话回执(调用方不清空输入框,草稿不丢)。
+        if (!offlineInputEnabled(offlineSnapshot)) {
+            Toast.makeText(ctx, "现在只能看不能发，重连后发送", Toast.LENGTH_SHORT).show()
+            return false
+        }
         val wasRunning = st.running // 先取:TurnSession.send 里可能刚把轮次置为 running
         val sent = attachments.value
         if (!TurnSession.send(threadId, text, sent)) return false
@@ -3615,7 +3645,7 @@ fun ChatScreen(
      * 气泡和红!标留着,下次再点。判定可重试走纯函数 deliveryRetryable。
      */
     fun retryDelivery(item: ChatItem) {
-        if (!deliveryRetryable(item.deliverState) || offlineSnapshot) return
+        if (!deliveryRetryable(item.deliverState) || !offlineInputEnabled(offlineSnapshot)) return
         if (!TurnSession.send(threadId, item.text, item.attachments)) return
         // 按内容+状态定位失败气泡(TurnSession.send 刚追加的新气泡是 pending,不会误中)
         val idx = st.items.indexOfFirst {

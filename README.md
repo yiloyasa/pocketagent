@@ -7,7 +7,7 @@
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84)](#)
 [![daemon](https://img.shields.io/badge/daemon-Go%201.27-00ADD8)](#)
 [![契约](https://img.shields.io/badge/gRPC-7%20服务%20·%2093%20RPC-blue)](#)
-[![测试](https://img.shields.io/badge/测试-Android%201801%20例%20·%20daemon%2029%20包-green)](#)
+[![测试](https://img.shields.io/badge/测试-Android%201839%20例%20·%20daemon%2029%20包-green)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -51,7 +51,7 @@
 
 - **手机端**：Kotlin + Jetpack Compose，minSdk 26（Android 8.0+），单 Activity + Compose 导航
 - **daemon**：Go 单二进制（无框架、无 ORM），gRPC + TLS，7 服务 / 93 RPC 契约（`proto/v1/`）
-- **契约治理**：proto 双副本 MD5 校验、审计门禁（`tools/audit/pa_audit.py`）、Android 1801 例 + daemon 29 测试包全绿
+- **契约治理**：proto 双副本 MD5 校验、审计门禁（`tools/audit/pa_audit.py`）、Android 1839 例 + daemon 29 测试包全绿
 
 ## 快速开始
 

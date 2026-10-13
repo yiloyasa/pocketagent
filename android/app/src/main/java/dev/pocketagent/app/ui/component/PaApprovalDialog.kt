@@ -28,11 +28,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -48,6 +52,9 @@ import dev.pocketagent.app.ui.ApprovalOptionButton
 import dev.pocketagent.app.ui.ApprovalOptionRole
 import dev.pocketagent.app.ui.ApprovalPhase
 import dev.pocketagent.app.ui.ApprovalRequestUi
+import dev.pocketagent.app.ui.APPROVAL_DISMISS_COPY
+import dev.pocketagent.app.ui.approvalConsequenceCopy
+import dev.pocketagent.app.ui.approvalDefaultFocusButtonId
 import dev.pocketagent.app.ui.anim.PaMotion
 import dev.pocketagent.app.ui.anim.pressable
 import dev.pocketagent.app.ui.anim.rememberReduceMotion
@@ -146,7 +153,7 @@ fun PaApprovalDialog(
         scrollable = false,
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 18.dp)) {
-            ApprovalBody(request, onDecide, onRetry, onDecideOption, agentIcon)
+            ApprovalBody(request, onDecide, onRetry, onDecideOption, onDismiss, agentIcon)
         }
     }
 }
@@ -157,11 +164,27 @@ private fun ApprovalBody(
     onDecide: (allow: Boolean) -> Unit,
     onRetry: () -> Unit,
     onDecideOption: (optionId: String) -> Unit,
+    onDismiss: () -> Unit,
     agentIcon: (@Composable () -> Unit)?,
 ) {
     // 详情区/暂无法处理区的出入门动效令牌(见下方两处 AnimatedVisibility):
     // 减弱动效开启时直达,反馈仍在、位移消失。
     val reduceMotion = rememberReduceMotion()
+    // 【敢点:默认焦点给最安全的那颗】拒绝 = 什么都不改、任务停住,是全场
+    // 最安全的按钮。焦点只决定"回车/读屏先落在哪",决定仍要用户亲手点;
+    // 语义(点了才算数)一字不动。id 口径见 approvalDefaultFocusButtonId。
+    val safestFocus = remember { FocusRequester() }
+    LaunchedEffect(request.requestId) {
+        runCatching { safestFocus.requestFocus() }
+    }
+    // 【敢点:一句话后果】只读已有字段(actionKind/command 经风险分级同一信号源),
+    // 不编造文件名/路径之外的断言;措辞见 approvalConsequenceCopy。
+    val consequence = remember(request.actionKind, request.command) {
+        approvalConsequenceCopy(request.actionKind, request.command)
+    }
+    // 三按钮下默认焦点的目标 id(旧两按钮固定 "deny",见纯函数;本处仅用于
+    // 判定"哪颗挂 focusRequester",不参与应答语义)。
+    val defaultFocusId = remember(request.options) { approvalDefaultFocusButtonId(request.options) }
     Column(Modifier.verticalScroll(rememberScrollState())) {
         // 拖柄(premium.css .modal .handle)
         Box(
@@ -326,6 +349,14 @@ private fun ApprovalBody(
                 color = PaEditorial.Muted,
             )
         }
+        Spacer(Modifier.height(8.dp))
+        // 后果一句话(敢点):只读已有字段,不编造;高危档并列命中原因,常规档只说只查看。
+        Text(
+            consequence,
+            fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = PaEditorial.Ink,
+        )
         Spacer(Modifier.height(12.dp))
         // 详情(daemon 给的人话摘要:proposedExecpolicyAmendment / commandActions;
         // 有才渲染,不摆空壳;与风险条同属"影响范围"的补充说明,不抢决定的音量)。
@@ -434,7 +465,7 @@ private fun ApprovalBody(
                     tones = DenyButtonColors,
                     enabled = request.decideEnabled,
                     showSpinner = request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == false,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).focusRequester(safestFocus),
                 ) { onDecide(false) }
                 ApprovalButton(
                     text = if (request.phase == ApprovalPhase.SUBMITTING && request.submittedChoice == true) {
@@ -464,7 +495,11 @@ private fun ApprovalBody(
                         },
                         enabled = request.decideEnabled,
                         showSpinner = echo,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = if (button.id == defaultFocusId) {
+                            Modifier.fillMaxWidth().focusRequester(safestFocus)
+                        } else {
+                            Modifier.fillMaxWidth()
+                        },
                     ) {
                         when (button.role) {
                             // 主允许/拒绝走老通道(approved 布尔语义,不填 option);
@@ -478,9 +513,22 @@ private fun ApprovalBody(
             }
         }
         Spacer(Modifier.height(10.dp))
-        // 常驻承诺:关闭 ≠ 拒绝(README 红线的界面落点)
+        // 明确的"稍后再定"出口(关闭 = 暂不处理,走宿主 onDismiss 通道,与拒绝两条语义):
+        // 提交中/服务端确认中不给关 —— 决定已在途,关掉会让确认没有落点(与宿主守卫同口径)。
+        // 常驻承诺:关闭 ≠ 拒绝(README 红线的界面落点),文案见 APPROVAL_DISMISS_COPY。
+        TextButton(
+            onClick = onDismiss,
+            enabled = request.phase != ApprovalPhase.SUBMITTING && request.phase != ApprovalPhase.CONFIRMED,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+        ) {
+            Text(
+                "稍后再定",
+                fontSize = PaEditorial.Type.BodySmall.fontSize, lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold, color = PaEditorial.Primary,
+            )
+        }
         Text(
-            "关闭弹窗只会暂不处理，不会自动允许或拒绝。",
+            APPROVAL_DISMISS_COPY,
             Modifier.fillMaxWidth(),
             fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
             textAlign = TextAlign.Center,
