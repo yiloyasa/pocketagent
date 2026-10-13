@@ -7,7 +7,7 @@
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84)](#)
 [![daemon](https://img.shields.io/badge/daemon-Go%201.27-00ADD8)](#)
 [![契约](https://img.shields.io/badge/gRPC-7%20服务%20·%2093%20RPC-blue)](#)
-[![测试](https://img.shields.io/badge/测试-Android%201799%20例%20·%20daemon%2029%20包-green)](#)
+[![测试](https://img.shields.io/badge/测试-Android%201801%20例%20·%20daemon%2029%20包-green)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -51,7 +51,7 @@
 
 - **手机端**：Kotlin + Jetpack Compose，minSdk 26（Android 8.0+），单 Activity + Compose 导航
 - **daemon**：Go 单二进制（无框架、无 ORM），gRPC + TLS，7 服务 / 93 RPC 契约（`proto/v1/`）
-- **契约治理**：proto 双副本 MD5 校验、审计门禁（`tools/audit/pa_audit.py`）、Android 1799 例 + daemon 29 测试包全绿
+- **契约治理**：proto 双副本 MD5 校验、审计门禁（`tools/audit/pa_audit.py`）、Android 1801 例 + daemon 29 测试包全绿
 
 ## 快速开始
 
@@ -114,6 +114,8 @@ adb install -r build/app-debug.apk
 | 文档 | 内容 |
 |---|---|
 | [DEVELOPING.md](DEVELOPING.md) | 开发协作者上下文：模块地图、真值锚点、红线、坑库 |
+| [QUICKSTART.md](QUICKSTART.md) | 五分钟上手：装桌面端 → 记配对码 → 手机配对 → 发第一条消息 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本历史（双端同版，仅维护最新版）与发版流程 |
 | [AGENTS.md](AGENTS.md) | AI 协作者入口（命令/环境/红线速查） |
 | [AUDIT.md](AUDIT.md) | 改动合入审核标准（甲乙丙丁分级 / L0–L2 / 红线） |
 | `docs/verify/` | 每一轮真机验收与整改的证据档案（截图/日志/报告） |

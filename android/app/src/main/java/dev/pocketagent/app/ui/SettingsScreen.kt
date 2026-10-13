@@ -1715,6 +1715,13 @@ private fun SettingsScreenBody(
                             divider = true,
                         )
                         SettingRow(
+                            title = "桌面端",
+                            icon = R.drawable.ic_lucide_monitor,
+                            iconBox = true,
+                            value = daemonVersionSummary(host?.daemonVersion, connStateTop),
+                            divider = true,
+                        )
+                        SettingRow(
                             title = "电脑",
                             icon = R.drawable.ic_lucide_monitor,
                             iconBox = true,

@@ -97,6 +97,15 @@ class SettingsOverviewLogicTest {
     // ---- 主机信任摘要(「连接与配对」页内复用同一纯函数)--------------------------
 
     @Test
+    fun `桌面端版本摘要 有值给v号_缺席按连接状态如实说`() {
+        assertEquals("v0.3.1", daemonVersionSummary("0.3.1", "ok"))
+        assertEquals("读取中…", daemonVersionSummary(null, "ok"))
+        assertEquals("读取中…", daemonVersionSummary("", "ok"))
+        assertEquals("需连接主机", daemonVersionSummary(null, "down"))
+        assertEquals("检查中", daemonVersionSummary(null, "checking"))
+    }
+
+    @Test
     fun `主机信任摘要 未锁定陈述事实_已锁定给前16位`() {
         assertEquals("首连时自动锁定", hostTrustSummary(null))
         assertEquals("首连时自动锁定", hostTrustSummary(""))

@@ -302,6 +302,9 @@ for /f "delims=" %%t in ('powershell -NoProfile -Command "try{(Get-NetIPAddress 
 if defined TS (echo    %TS%) else (echo    (未检测到 Tailscale,异地连接请先安装 Tailscale 并登录))
 echo.
 echo 安装完成!现在可以在手机上配对连接了。
+echo   1^) 手机打开 App,在首页等约 1 分钟,电脑会自动出现(首次广播需预热);
+echo   2^) 没出现就去 App「设置 -^> 连接与配对」手动填上面任一 IP : %PORT%;
+echo   3^) 配对码即上方 8 位数字,滚屏不见就用记事本打开 %PAIRFILE%。
 echo 需要重装或卸载时,请运行 uninstall.bat。
 pause
 exit /b 0

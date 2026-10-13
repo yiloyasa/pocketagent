@@ -103,7 +103,7 @@ fun onboardSteps(connected: Boolean): List<OnboardStep> = listOf(
         done = connected,
         sentence = "手机和电脑连同一个 WiFi,电脑上装好桌面端,它就会出现在手机上。",
         action = "在电脑上运行桌面端安装包里的 install.bat,装完回到这里点「下一步」。" +
-            "没自动出现的话,到「设置 → 连接与配对」手动填电脑的地址。",
+            "没自动出现的话,到「设置 → 连接与配对」手动填电脑的地址(形如 192.168.1.20:7246,冒号后面是端口号)。",
         note = "电脑已经连上了,这一步直接跳过。",
     ),
     OnboardStep(
@@ -123,7 +123,7 @@ fun onboardSteps(connected: Boolean): List<OnboardStep> = listOf(
         id = "trouble",
         done = false,
         sentence = "电脑没出现在手机上?按顺序过这几件小事。",
-        action = "①电脑开着桌面端;②手机和电脑连同一个 WiFi(或插数据线);③还不行,到「设置 → 连接与配对」手动填地址;" +
+        action = "①电脑开着桌面端;②手机和电脑连同一个 WiFi(或插数据线);③还不行,到「设置 → 连接与配对」手动填地址(形如 192.168.1.20:7246);" +
             "④路由器开了 AP 隔离,或防火墙拦了自动发现,也会搜不到电脑,同样手填地址就能连;" +
             "⑤地址没错却连不上,多半是电脑上 7246 端口被别的程序占了,换个端口重新装桌面端。",
     ),
@@ -177,6 +177,10 @@ private data class OnboardPage(
     val done: Boolean = false,
     /** duotone 品牌母题槽位(D6):非 null 且未完成时替代单色 lucide 页首图标。 */
     val motif: PaDuotoneMotif? = null,
+    /** 主操作按钮文案(空 = 无按钮)。按钮只做页内直达,不承载业务逻辑。 */
+    val actionLabel: String? = null,
+    /** 按钮去向标识("settings" = 去设置页;"home" = 回主页)。调用方按标识接线。 */
+    val actionId: String? = null,
 )
 
 /**
@@ -206,6 +210,9 @@ private fun onboardPages(connected: Boolean): List<OnboardPage> = buildList {
                 title = stepTitle(step.id),
                 done = step.done,
                 motif = stepMotif(step.id),
+                // 排障页给直达按钮:点后去设置页手动填地址(调用方接线)。
+                actionLabel = if (step.id == "trouble") "去设置填写地址" else null,
+                actionId = if (step.id == "trouble") "settings" else null,
                 blocks = listOf(
                     // 已完成的步骤:一句话告知并请用户直接翻页,不重复展开讲
                     if (step.done && step.note.isNotEmpty()) OnboardBlock.Lead(step.note)
@@ -223,6 +230,9 @@ private fun onboardPages(connected: Boolean): List<OnboardPage> = buildList {
         OnboardPage(
             icon = R.drawable.ic_lucide_circle_check,
             title = "一切就绪",
+            // 收尾页给直达按钮:点后回主页发第一条指令(调用方接线)。
+            actionLabel = "去发第一条指令",
+            actionId = "home",
             blocks = listOf(
                 OnboardBlock.Lead("三步走完,去发第一条指令吧。"),
                 OnboardBlock.Note("以后想重看这份教程:侧边栏 →「新手教程」。"),
@@ -242,7 +252,13 @@ private fun onboardPages(connected: Boolean): List<OnboardPage> = buildList {
  * 直接下一步",不重复展开讲 —— 完成与否来自 connState 真实状态,不猜。
  */
 @Composable
-fun Onboarding(onDone: () -> Unit) {
+fun Onboarding(
+    onDone: () -> Unit,
+    /** 排障页「去设置填写地址」按钮去向(默认空实现,便于单测与预览直调)。 */
+    onOpenSettings: () -> Unit = {},
+    /** 收尾页「去发第一条指令」按钮去向(默认与 onDone 同路)。 */
+    onGoHome: () -> Unit = onDone,
+) {
     // 完成位的事实来源:连接状态(配对成功才有连接,两步同源,不另立标准)
     val connState by AgentConnection.connState.collectAsState()
     val connected = connState == "ok"
@@ -272,7 +288,15 @@ fun Onboarding(onDone: () -> Unit) {
                 state = pager,
                 modifier = Modifier.fillMaxWidth().weight(1f),
             ) { page ->
-                OnboardPageContent(pages[page])
+                OnboardPageContent(
+                    pages[page],
+                    onAction = { id ->
+                        when (id) {
+                            "settings" -> onOpenSettings()
+                            "home" -> onGoHome()
+                        }
+                    },
+                )
             }
 
             // 底部:上一步 / 指示点 / 下一步(或 开始使用)
@@ -354,9 +378,12 @@ fun Onboarding(onDone: () -> Unit) {
     }
 }
 
-/** 单页渲染:顶部图标 + 标题(+已完成标注)+ 内容块。 */
+/** 单页渲染:顶部图标 + 标题(+已完成标注)+ 内容块(+可选直达按钮)。 */
 @Composable
-private fun OnboardPageContent(page: OnboardPage) {
+private fun OnboardPageContent(
+    page: OnboardPage,
+    onAction: (String) -> Unit = {},
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -416,6 +443,24 @@ private fun OnboardPageContent(page: OnboardPage) {
                     )
                     is OnboardBlock.Bullet -> OnboardBullet(block)
                     is OnboardBlock.Note -> OnboardNote(block.text)
+                }
+            }
+            // 页内直达按钮(排障→设置、收尾→主页):主色块 + 48dp 触区,与底部 CTA 同语言。
+            if (page.actionLabel != null && page.actionId != null) {
+                val id = page.actionId
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(PaEditorial.Radius.IconButton))
+                        .pressable(haptic = true) { onAction(id) }
+                        .background(PaEditorial.Primary)
+                        .padding(vertical = 13.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        page.actionLabel,
+                        fontSize = PaEditorial.Type.Body.fontSize, color = PaEditorial.OnGraphite, fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
         }

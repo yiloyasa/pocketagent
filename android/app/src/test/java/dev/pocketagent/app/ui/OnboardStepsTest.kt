@@ -64,6 +64,15 @@ class OnboardStepsTest {
         assertFalse(steps.first { it.id == "first-task" }.note.isNotBlank())
     }
 
+    @Test
+    fun `手动填地址处必带端口示例_裸IP连不上`() {
+        val steps = onboardSteps(connected = false)
+        val connect = steps.first { it.id == "connect" }.action
+        val trouble = steps.first { it.id == "trouble" }.action
+        assertTrue("连接页缺 :7246 示例", connect.contains(":7246"))
+        assertTrue("排障页缺 :7246 示例", trouble.contains(":7246"))
+    }
+
     // ---- 不堆术语:禁词表扫描(面向通用用户) ----
 
     @Test

@@ -13,7 +13,7 @@ package version
 // Version is the daemon version. Default value stays in sync with the
 // repository; dist/windows/build.ps1 stamps the same value at build time
 // (and also drops it into version.txt inside the zip for reconciliation).
-var Version = "0.3.0"
+var Version = "0.3.1"
 
 // App is the historical name kept for existing callers (internal/server/host.go,
 // internal/agent/codex.go). It derives from Version, so a -ldflags stamp on
@@ -26,8 +26,7 @@ var App = Version
 // phone-side connection diagnostics can flag an outdated App ("App 版本过旧").
 // The comparison is advisory only: the App shows a hint, it never hard-blocks.
 //
-// 【升级纪律】抬升 Version 时同步评估本值:只有当新 daemon 依赖了旧 APK 解析
-// 不了的新契约字段(而非"只增不改"的向后兼容增量)时才抬高它 —— 该闸是给
-// "旧 APK + 新 daemon 会踩坑"的场景留的提示位,不是发版流水线的例行项。
-// App 侧比较函数:dev.pocketagent.app.ConnectionDiagnostics.isAppVersionTooOld。
-const MinAppVersion = "0.3.0"
+// 【升级纪律】本仓库只维护最新版，不兼容旧格式：每次发版 MinAppVersion
+// 与 Version 同步抬到当前版本号 —— 旧 APK / 旧 daemon 不再保证可连，
+// App 侧仅作提示不硬拦。比较函数见 ConnectionDiagnostics.isAppVersionTooOld。
+const MinAppVersion = "0.3.1"

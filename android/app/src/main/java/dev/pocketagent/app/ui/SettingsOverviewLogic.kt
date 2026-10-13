@@ -41,6 +41,19 @@ internal fun hostPlatformSummary(os: String?, arch: String?, connState: String):
     }
 }
 
+/**
+ * 桌面端版本行摘要(关于组):daemon_version 有值直接给 `vX`;缺席时按连接状态
+ * 如实说 —— 已连接=还在读取;未连接=需连接主机;检查中=检查中。不以"—"冒充事实。
+ */
+internal fun daemonVersionSummary(daemonVersion: String?, connState: String): String {
+    if (!daemonVersion.isNullOrBlank()) return "v$daemonVersion"
+    return when (connState) {
+        "ok" -> "读取中…"
+        "down" -> "需连接主机"
+        else -> "检查中"
+    }
+}
+
 /** 审批策略 → 中文短标签(与 Agent 与模型页候选同词表;空 = 跟随桌面;词表外显示原文)。 */
 internal fun approvalPolicyLabel(raw: String?): String = when (raw) {
     null, "" -> "跟随桌面"

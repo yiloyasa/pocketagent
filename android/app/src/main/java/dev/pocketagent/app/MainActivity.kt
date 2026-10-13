@@ -216,11 +216,28 @@ private fun RootNav() {
         popExitTransition = { fadeOut(PaMotion.nav(900f)) + slideOutHorizontally(PaMotion.nav(900f)) { it / 20 } },
     ) {
         composable("onboarding") {
-            // 新手教程:看完写标志并切回主页(无返回栈残留)
-            Onboarding(onDone = {
+            // 新手教程完成分流(点击时现判,不记 remember):
+            // 首启(onboarding 即栈底,无前一页)→新建 home 并弹掉教程;
+            // 重看(自主页进入,有前一页)→直接 popBackStack 回主页。
+            // 旧写法一律 navigate("home") 会在重看时叠出第二个 home,
+            // 系统返回还回到教程页(且未 markDone 下次冷启重进)。
+            // 注意:remember 记首启标记是错的 —— RootNav 的 remember 随
+            // NavHost 常驻,重看时仍是旧值,故每次点击现查 previousBackStackEntry。
+            val finishOnboarding: () -> Unit = {
                 OnboardingPrefs.markDone(context)
-                nav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
-            })
+                if (nav.previousBackStackEntry == null) {
+                    nav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
+                } else {
+                    nav.popBackStack()
+                }
+            }
+            Onboarding(
+                onDone = finishOnboarding,
+                // 排障页直达:设置 → 连接与配对(深链 sub=connection)。
+                onOpenSettings = { nav.navigate("settings?sub=connection") },
+                // 收尾页直达:与看完同路(首启去主页、重看回主页)。
+                onGoHome = finishOnboarding,
+            )
         }
         composable("home") {
             // 【无底栏】主导航全部收进左上角图标弹出的侧边栏
