@@ -25,6 +25,8 @@ class PAButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
   final PAButtonVariant variant;
+
+  /// 可选前置图标（如教程直达按钮的导航提示；无图标调用方可省）。
   final IconData? icon;
 
   /// 是否撑满父容器宽度（行内小按钮传 false）。
@@ -58,10 +60,7 @@ class PAButton extends StatelessWidget {
         ],
         Text(
           label,
-          style: PATypography.body.copyWith(
-            color: fg,
-            fontWeight: FontWeight.w600,
-          ),
+          style: PATypography.bodyEmphasis.copyWith(color: fg),
         ),
       ],
     );
@@ -84,9 +83,7 @@ class PAButton extends StatelessWidget {
       shape: const WidgetStatePropertyAll<OutlinedBorder>(
         RoundedRectangleBorder(borderRadius: PARadii.buttonBR),
       ),
-      textStyle: WidgetStatePropertyAll<TextStyle>(
-        PATypography.body.copyWith(fontWeight: FontWeight.w600),
-      ),
+      textStyle: WidgetStatePropertyAll<TextStyle>(PATypography.bodyEmphasis),
     );
 
     final Widget button = variant == PAButtonVariant.primary

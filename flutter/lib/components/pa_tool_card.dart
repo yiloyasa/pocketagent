@@ -5,6 +5,7 @@ import '../theme/pocket_theme.dart';
 import '../theme/radii.dart';
 import '../theme/typography.dart';
 import 'pa_card.dart';
+import 'pa_deco.dart';
 import 'pa_status_chip.dart';
 
 /// 折叠工具卡（方案 §二「工具卡」）：
@@ -59,8 +60,7 @@ class _PAToolCardState extends State<PAToolCard> {
         children: <Widget>[
           InkWell(
             onTap: hasOutput ? _toggle : null,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(PARadii.card)),
+            borderRadius: PARadii.cardTopBR,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
               child: Row(
@@ -85,9 +85,8 @@ class _PAToolCardState extends State<PAToolCard> {
                                 widget.toolName,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: PATypography.body.copyWith(
+                                style: PATypography.bodyEmphasis.copyWith(
                                   color: pa.fgPrimary,
-                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -129,11 +128,7 @@ class _PAToolCardState extends State<PAToolCard> {
               width: double.infinity,
               margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: pa.bgCode,
-                borderRadius: BorderRadius.circular(PARadii.button),
-                border: Border.all(color: pa.hairline, width: 1),
-              ),
+              decoration: PADeco.codeBlock(pa),
               child: Text(
                 widget.output,
                 maxLines: 12,
@@ -160,15 +155,9 @@ class _RepeatBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(
         color: pa.bgSurface2,
-        borderRadius: BorderRadius.circular(PARadii.button),
+        borderRadius: PARadii.buttonBR,
       ),
-      child: Text(
-        '×$count',
-        style: PATypography.caption.copyWith(
-          color: pa.fgSecondary,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
+      child: Text('×$count', style: PADeco.badgeLabel(pa.fgSecondary)),
     );
   }
 }

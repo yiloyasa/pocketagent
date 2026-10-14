@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/radii.dart';
+import 'pa_deco.dart';
 
 /// 飞书式大圆角卡片：`surface` 底 + 1px `hairline` 边 + 14 圆角。
 ///
@@ -15,7 +16,6 @@ class PACard extends StatelessWidget {
     this.color,
     this.borderColor,
     this.borderWidth = 1,
-    this.radius,
     this.onTap,
   });
 
@@ -30,23 +30,18 @@ class PACard extends StatelessWidget {
 
   final double borderWidth;
 
-  /// 覆盖圆角（默认 [PARadii.card]）。
-  final double? radius;
-
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final PAColors pa = context.pa;
-    final BorderRadius br =
-        BorderRadius.circular(radius ?? PARadii.card);
-    final BoxDecoration decoration = BoxDecoration(
-      color: color ?? pa.bgSurface,
-      borderRadius: br,
-      border: Border.all(
-        color: borderColor ?? pa.hairline,
-        width: borderWidth,
-      ),
+    final BorderRadius br = PARadii.cardBR;
+    final BoxDecoration decoration = PADeco.card(
+      pa: pa,
+      color: color,
+      borderColor: borderColor,
+      borderWidth: borderWidth,
+      radius: br,
     );
     final Widget content = Padding(padding: padding, child: child);
 

@@ -78,25 +78,9 @@ class PAColors {
   final Color warn;
   final Color onBrand;
 
-  /// 方案 §二 的 13 个核心 token（键名 = 文档 token 名）。
+  /// 方案 §二 的核心 token 键名全集（键名 = 文档 token 名）。
+  /// 键名只在这一处写字面量；[tokens] 按同序取值，不再重复键集。
   /// 不含 [onBrand]（按钮前景，随品牌色固定为白）。
-  Map<String, Color> get tokens => <String, Color>{
-        'bg.base': bgBase,
-        'bg.surface': bgSurface,
-        'bg.surface2': bgSurface2,
-        'bg.code': bgCode,
-        'border.hairline': hairline,
-        'fg.primary': fgPrimary,
-        'fg.secondary': fgSecondary,
-        'fg.tertiary': fgTertiary,
-        'brand.primary': brand,
-        'agent.accent': agentAccent,
-        'ok': ok,
-        'danger': danger,
-        'warn': warn,
-      };
-
-  /// 方案 §二 的核心 token 键名全集（测试用）。
   static const List<String> tokenKeys = <String>[
     'bg.base',
     'bg.surface',
@@ -112,6 +96,34 @@ class PAColors {
     'danger',
     'warn',
   ];
+
+  /// 与 [tokenKeys] **同序**的取值序列——键值对应由顺序保证，
+  /// `palette_test` 逐键钉死暗色映射，增删键/改序必被测试打断。
+  List<Color> get _values => <Color>[
+        bgBase,
+        bgSurface,
+        bgSurface2,
+        bgCode,
+        hairline,
+        fgPrimary,
+        fgSecondary,
+        fgTertiary,
+        brand,
+        agentAccent,
+        ok,
+        danger,
+        warn,
+      ];
+
+  /// 方案 §二 的 13 个核心 token（键名 → 值）。
+  Map<String, Color> get tokens {
+    final List<Color> values = _values;
+    assert(
+      values.length == tokenKeys.length,
+      'PAColors._values 与 tokenKeys 数量不一致：键或取值漏配',
+    );
+    return Map<String, Color>.fromIterables(tokenKeys, values);
+  }
 
   static PAColors of(PABrightness brightness) => switch (brightness) {
         PABrightness.dark => dark,

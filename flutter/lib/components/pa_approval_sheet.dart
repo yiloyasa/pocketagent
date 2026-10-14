@@ -5,6 +5,7 @@ import '../theme/pocket_theme.dart';
 import '../theme/radii.dart';
 import '../theme/typography.dart';
 import 'pa_button.dart';
+import 'pa_deco.dart';
 
 /// 底部弹层审批卡（方案 §二「审批卡」）。
 ///
@@ -64,14 +65,12 @@ class PAApprovalSheet extends StatelessWidget {
     final Color accent = destructive ? pa.danger : pa.brand;
 
     return Container(
-      decoration: BoxDecoration(
-        color: pa.bgSurface,
-        borderRadius: PARadii.sheetTopBR,
-        border: Border.all(
-          color: destructive ? pa.danger : pa.hairline,
-          // 破坏性变体 = 粗边框
-          width: destructive ? 2 : 1,
-        ),
+      decoration: PADeco.card(
+        pa: pa,
+        radius: PARadii.sheetTopBR,
+        borderColor: destructive ? pa.danger : pa.hairline,
+        // 破坏性变体 = 粗边框
+        borderWidth: destructive ? 2 : 1,
       ),
       child: SafeArea(
         top: false,
@@ -115,10 +114,7 @@ class PAApprovalSheet extends StatelessWidget {
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(PARadii.avatar),
-                ),
+                decoration: PADeco.pill(accent),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
@@ -130,13 +126,7 @@ class PAApprovalSheet extends StatelessWidget {
                       color: accent,
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                      riskLabel,
-                      style: PATypography.caption.copyWith(
-                        color: accent,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    Text(riskLabel, style: PADeco.badgeLabel(accent)),
                   ],
                 ),
               ),
@@ -153,11 +143,7 @@ class PAApprovalSheet extends StatelessWidget {
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: pa.bgCode,
-                    borderRadius: BorderRadius.circular(PARadii.button),
-                    border: Border.all(color: pa.hairline, width: 1),
-                  ),
+                  decoration: PADeco.codeBlock(pa),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: info.entries

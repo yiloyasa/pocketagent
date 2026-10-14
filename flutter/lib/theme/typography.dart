@@ -37,6 +37,11 @@ abstract final class PATypography {
     fontWeight: FontWeight.w400,
   );
 
+  /// 正文强调（按钮文字 / 卡头标题 / 列表项标题）：正文 15 + 半粗。
+  /// 主题按钮层与组件层共用同一出口，避免各处散写 `body + w600`。
+  static TextStyle get bodyEmphasis =>
+      body.copyWith(fontWeight: FontWeight.w600);
+
   /// 辅助信息 12。
   static const TextStyle caption = TextStyle(
     fontSize: 12,

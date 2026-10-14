@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
-import '../theme/radii.dart';
-import '../theme/typography.dart';
+import 'pa_deco.dart';
 
 /// 五态状态 chip（方案 §二）：
 /// running=brand · pending=grey · done=green ✓ · failed=red ✗ · warn=琥珀。
@@ -44,22 +43,13 @@ class PAStatusChip extends StatelessWidget {
     return Container(
       height: 24,
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(PARadii.avatar),
-      ),
+      decoration: PADeco.pill(color),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           _StatusGlyph(status: status, color: color),
           const SizedBox(width: 4),
-          Text(
-            text,
-            style: PATypography.caption.copyWith(
-              color: color,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          Text(text, style: PADeco.badgeLabel(color)),
         ],
       ),
     );

@@ -1,60 +1,112 @@
 import 'package:flutter/material.dart';
 
+import '../components/pa_button.dart';
 import '../components/pa_card.dart';
 import '../components/pa_status_chip.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
+import 'threads_data.dart';
 
 /// 会话列表：agent 圆角矩形头像 + 标题 + 摘要 + 状态 chip + 时间。
-/// 静态骨架，数据为示例，B3 阶段接真实会话流。
-class ThreadsPage extends StatelessWidget {
-  const ThreadsPage({super.key});
+///
+/// B3 第 2 步骨架：模型、三维筛选（agent × 状态 × 搜索）、加载/错误/空三态已按
+/// page-contracts §1.3 的 Threads 契约定形；**数据源仍是内存 fake**（见
+/// threads_data.dart，顶栏文案如实标注「静态示例数据」）——后续波次把 [source]
+/// 换成 ThreadService 实现即可，本页的状态机与筛选逻辑不用动。
+class ThreadsPage extends StatefulWidget {
+  const ThreadsPage({super.key, this.source});
 
-  static const List<_ThreadItem> _threads = <_ThreadItem>[
-    _ThreadItem(
-      tag: 'cx',
-      title: '修复登录页 token 过期跳转',
-      summary: '已改完 refresh 拦截器，正在跑单测',
-      status: PAStatusKind.running,
-      time: '14:02',
-    ),
-    _ThreadItem(
-      tag: 'pi',
-      title: '给 daemon 加配对码速率限制',
-      summary: '5 次失败后指数退避，proto 无需改动',
-      status: PAStatusKind.done,
-      time: '13:41',
-    ),
-    _ThreadItem(
-      tag: 'ds',
-      title: '重构文件树虚拟列表',
-      summary: '超出 5000 节点时首屏卡顿，需要分片加载',
-      status: PAStatusKind.warn,
-      time: '11:27',
-    ),
-    _ThreadItem(
-      tag: 'zc',
-      title: '同步 android 副本 proto',
-      summary: 'gen_proto.py --check 报 MD5 不一致',
-      status: PAStatusKind.failed,
-      time: '昨天',
-    ),
-    _ThreadItem(
-      tag: 'hm',
-      title: '写 0.4.0 发布说明',
-      summary: '等 daemon 侧文档定稿后合并',
-      status: PAStatusKind.pending,
-      time: '昨天',
-    ),
-    _ThreadItem(
-      tag: 'cx',
-      title: '终端页 ANSI 色彩还原',
-      summary: 'OSC 256 色已支持，真彩序列待补',
-      status: PAStatusKind.done,
-      time: '10-12',
-    ),
-  ];
+  /// 数据源注入点：测试传可控 fake；生产不传即用内存示例数据（B3 后续波次接
+  /// ThreadService）。
+  final ThreadsDataSource? source;
+
+  @override
+  State<ThreadsPage> createState() => _ThreadsPageState();
+}
+
+/// 三态：加载中 / 加载失败 / 已就绪（就绪后再分「空列表」与「被筛空」）。
+enum _ThreadsPhase { loading, error, ready }
+
+class _ThreadsPageState extends State<ThreadsPage> {
+  late ThreadsDataSource _source;
+  _ThreadsPhase _phase = _ThreadsPhase.loading;
+  String _errorMessage = '';
+  List<ThreadSummary> _threads = const <ThreadSummary>[];
+  ThreadFilter _filter = ThreadFilter.none;
+  late final TextEditingController _queryCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _source = widget.source ?? const FakeThreadsDataSource();
+    _queryCtrl = TextEditingController();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _queryCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    // 首次加载（initState 触发）时初值就是 loading/空错误文案，跳过 setState：
+    // 这一帧还没建完，重复标脏只是白跑一帧，语义上也没有状态要翻。
+    if (_phase != _ThreadsPhase.loading || _errorMessage.isNotEmpty) {
+      setState(() {
+        _phase = _ThreadsPhase.loading;
+        _errorMessage = '';
+      });
+    }
+    try {
+      final List<ThreadSummary> threads = await _source.load();
+      if (!mounted) return;
+      setState(() {
+        _threads = threads;
+        _phase = _ThreadsPhase.ready;
+      });
+    } on ThreadsLoadFailure catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _phase = _ThreadsPhase.error;
+        _errorMessage = e.message;
+      });
+    } catch (e) {
+      // 兜底：数据源的意外错误也要落进错误态，不许裸抛给框架。
+      if (!mounted) return;
+      setState(() {
+        _phase = _ThreadsPhase.error;
+        _errorMessage = '$e';
+      });
+    }
+  }
+
+  void _setFilter({
+    Object? agentId = _keep,
+    Object? status = _keep,
+    String? query,
+  }) {
+    setState(() {
+      _filter = ThreadFilter(
+        agentId: identical(agentId, _keep) ? _filter.agentId : agentId as String?,
+        status: identical(status, _keep) ? _filter.status : status as PAStatusKind?,
+        query: query ?? _filter.query,
+      );
+    });
+  }
+
+  static const Object _keep = Object();
+
+  /// 列表里出现过的 agent（首次出现序，去重）——筛选条从数据派生，
+  /// **不写死 agent 名单**；能力位 `agent:<id>` 门控等接上 capabilities 后再收。
+  List<String> get _agentIds {
+    final List<String> ids = <String>[];
+    for (final ThreadSummary t in _threads) {
+      if (!ids.contains(t.agentId)) ids.add(t.agentId);
+    }
+    return ids;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -69,97 +121,359 @@ class ThreadsPage extends StatelessWidget {
             style: PATypography.caption.copyWith(color: pa.fgTertiary),
           ),
         ),
-        for (final _ThreadItem t in _threads)
+        ..._buildPhaseBody(context, pa),
+      ],
+    );
+  }
+
+  List<Widget> _buildPhaseBody(BuildContext context, PAColors pa) {
+    switch (_phase) {
+      case _ThreadsPhase.loading:
+        return <Widget>[
+          // 用固定 padding 而不是全屏居中：ListView 内的居中要靠
+          // shrinkWrap/sliver 技巧，徒增复杂度，加载态只要「一眼可见在转」。
           Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: PACard(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-              onTap: () {},
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.only(top: 60),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Container(
-                    width: 40,
-                    height: 40,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: pa.agentAccent.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      t.tag,
-                      style: PATypography.bodySmall.copyWith(
-                        color: pa.agentAccent,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                  SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: CircularProgressIndicator(strokeWidth: 2.5, color: pa.brand),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: Text(
-                                t.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: PATypography.body.copyWith(
-                                  color: pa.fgPrimary,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              t.time,
-                              style: PATypography.caption
-                                  .copyWith(color: pa.fgTertiary),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: Text(
-                                t.summary,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: PATypography.bodySmall
-                                    .copyWith(color: pa.fgSecondary),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            PAStatusChip(status: t.status),
-                          ],
-                        ),
-                      ],
-                    ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '正在加载会话…',
+                    style: PATypography.caption.copyWith(color: pa.fgSecondary),
                   ),
                 ],
               ),
             ),
           ),
-      ],
+        ];
+      case _ThreadsPhase.error:
+        return <Widget>[
+          Padding(
+            padding: const EdgeInsets.only(top: 48),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.error_outline_rounded, size: 30, color: pa.danger),
+                  const SizedBox(height: 10),
+                  Text(
+                    '会话列表加载失败',
+                    style: PATypography.body.copyWith(
+                      color: pa.fgPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (_errorMessage.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 6),
+                    Text(
+                      _errorMessage,
+                      textAlign: TextAlign.center,
+                      style: PATypography.caption.copyWith(color: pa.fgTertiary),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  PAButton(
+                    label: '重试',
+                    expanded: false,
+                    onPressed: _load,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ];
+      case _ThreadsPhase.ready:
+        return _buildReadyBody(context, pa);
+    }
+  }
+
+  List<Widget> _buildReadyBody(BuildContext context, PAColors pa) {
+    if (_threads.isEmpty) {
+      return <Widget>[
+        _EmptyView(
+          title: '还没有会话',
+          hint: '数据源仍是内存示例（B3 后续波次接 ThreadService），当前为空列表',
+        ),
+      ];
+    }
+    final List<ThreadSummary> visible = applyThreadFilter(_threads, _filter);
+    if (visible.isEmpty) {
+      return <Widget>[
+        _EmptyView(
+          title: '没有匹配的会话',
+          hint: '当前筛选：${_filterLabel()}',
+          actionLabel: '清除筛选',
+          onAction: () {
+            _queryCtrl.clear();
+            _setFilter(agentId: null, status: null, query: '');
+          },
+        ),
+      ];
+    }
+    return <Widget>[
+      _buildFilterBar(pa),
+      const SizedBox(height: 4),
+      for (final ThreadSummary t in visible)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: _ThreadRow(thread: t, onTap: () {}),
+        ),
+    ];
+  }
+
+  String _filterLabel() {
+    final List<String> parts = <String>[
+      if (_filter.agentId != null) 'agent=${_filter.agentId}',
+      if (_filter.status != null) '状态=${PAStatusChip.labelOf(_filter.status!)}',
+      if (_filter.query.trim().isNotEmpty) '搜索=${_filter.query.trim()}',
+    ];
+    return parts.join(' · ');
+  }
+
+  Widget _buildFilterBar(PAColors pa) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          TextField(
+            key: const ValueKey<String>('threads-search'),
+            controller: _queryCtrl,
+            style: PATypography.body.copyWith(color: pa.fgPrimary),
+            onChanged: (String v) => _setFilter(query: v),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: '搜索会话（标题 / 摘要）',
+              hintStyle: PATypography.caption.copyWith(color: pa.fgTertiary),
+              prefixIcon: Icon(Icons.search_rounded, size: 18, color: pa.fgTertiary),
+              filled: true,
+              fillColor: pa.bgSurface,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: pa.hairline),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: pa.brand, width: 1.5),
+              ),
+            ),
+          ),
+          if (_agentIds.length > 1) ...<Widget>[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: <Widget>[
+                for (final String agentId in _agentIds)
+                  _agentChip(pa, agentId),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: <Widget>[
+              for (final PAStatusKind kind in PAStatusKind.values)
+                _statusChip(pa, kind),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _agentChip(PAColors pa, String agentId) {
+    final bool selected = _filter.agentId == agentId;
+    return FilterChip(
+      key: ValueKey<String>('threads-agent-$agentId'),
+      label: Text(agentId),
+      selected: selected,
+      showCheckmark: false,
+      onSelected: (bool v) =>
+          _setFilter(agentId: v ? agentId : null),
+      backgroundColor: pa.bgSurface2,
+      selectedColor: pa.agentAccent.withValues(alpha: 0.18),
+      side: BorderSide(
+        color: selected ? pa.agentAccent : pa.hairline,
+      ),
+      labelStyle: PATypography.caption.copyWith(
+        color: selected ? pa.agentAccent : pa.fgSecondary,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
+  Widget _statusChip(PAColors pa, PAStatusKind kind) {
+    final bool selected = _filter.status == kind;
+    final Color color = PAStatusChip.colorOf(kind, pa);
+    return FilterChip(
+      key: ValueKey<String>('threads-status-$kind'),
+      label: Text(PAStatusChip.labelOf(kind)),
+      selected: selected,
+      showCheckmark: false,
+      onSelected: (bool v) => _setFilter(status: v ? kind : null),
+      backgroundColor: pa.bgSurface2,
+      selectedColor: color.withValues(alpha: 0.16),
+      side: BorderSide(color: selected ? color : pa.hairline),
+      labelStyle: PATypography.caption.copyWith(
+        color: selected ? color : pa.fgSecondary,
+        fontWeight: FontWeight.w600,
+      ),
     );
   }
 }
 
-class _ThreadItem {
-  const _ThreadItem({
-    required this.tag,
+/// 单行卡片：头像 + 标题/时间 + 摘要/状态 chip（B1 版式的直译，数据换真模型）。
+class _ThreadRow extends StatelessWidget {
+  const _ThreadRow({required this.thread, required this.onTap});
+
+  final ThreadSummary thread;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final PAColors pa = context.pa;
+    final ThreadSummary t = thread;
+    return PACard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      onTap: onTap,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: pa.agentAccent.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            // agentId 原样进头像（不缩写成 cx/hm 这类自造缩写：缩写规则一旦
+            // 写死就成了第二份 agent 名单，新 agent 会撞车）。
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                t.agentId,
+                style: PATypography.bodySmall.copyWith(
+                  color: pa.agentAccent,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        t.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PATypography.body.copyWith(
+                          color: pa.fgPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      t.time,
+                      style:
+                          PATypography.caption.copyWith(color: pa.fgTertiary),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        t.summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PATypography.bodySmall
+                            .copyWith(color: pa.fgSecondary),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    PAStatusChip(status: t.status),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 空态：区分「本来就没有」与「被筛没了」（后者给清除筛选出口）。
+class _EmptyView extends StatelessWidget {
+  const _EmptyView({
     required this.title,
-    required this.summary,
-    required this.status,
-    required this.time,
+    required this.hint,
+    this.actionLabel,
+    this.onAction,
   });
 
-  final String tag;
   final String title;
-  final String summary;
-  final PAStatusKind status;
-  final String time;
+  final String hint;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final PAColors pa = context.pa;
+    return Padding(
+      padding: const EdgeInsets.only(top: 48),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              title,
+              style: PATypography.body.copyWith(
+                color: pa.fgPrimary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              hint,
+              textAlign: TextAlign.center,
+              style: PATypography.caption.copyWith(color: pa.fgTertiary),
+            ),
+            if (actionLabel != null) ...<Widget>[
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: onAction,
+                child: Text(
+                  actionLabel!,
+                  style: PATypography.caption.copyWith(
+                    color: pa.brand,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }

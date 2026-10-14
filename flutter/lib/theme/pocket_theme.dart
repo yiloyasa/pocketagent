@@ -115,8 +115,7 @@ abstract final class PocketTheme {
           foregroundColor: pa.onBrand,
           disabledBackgroundColor: pa.fgTertiary.withValues(alpha: 0.3),
           disabledForegroundColor: pa.fgTertiary,
-          textStyle: PATypography.body
-              .copyWith(fontWeight: FontWeight.w600),
+          textStyle: PATypography.bodyEmphasis,
           minimumSize: const Size(64, 44),
           padding: const EdgeInsets.symmetric(horizontal: 18),
           shape: const RoundedRectangleBorder(
@@ -128,8 +127,7 @@ abstract final class PocketTheme {
         style: OutlinedButton.styleFrom(
           foregroundColor: pa.fgPrimary,
           side: BorderSide(color: pa.hairline, width: 1),
-          textStyle: PATypography.body
-              .copyWith(fontWeight: FontWeight.w600),
+          textStyle: PATypography.bodyEmphasis,
           minimumSize: const Size(64, 44),
           padding: const EdgeInsets.symmetric(horizontal: 18),
           shape: const RoundedRectangleBorder(
@@ -140,8 +138,7 @@ abstract final class PocketTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: pa.brand,
-          textStyle: PATypography.body
-              .copyWith(fontWeight: FontWeight.w600),
+          textStyle: PATypography.bodyEmphasis,
         ),
       ),
       bottomSheetTheme: BottomSheetThemeData(

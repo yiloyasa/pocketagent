@@ -34,12 +34,12 @@ void main() {
       const BorderRadius.all(Radius.circular(14)),
     );
     expect(
-      PARadii.sheetBR,
-      const BorderRadius.all(Radius.circular(22)),
-    );
-    expect(
       PARadii.avatarBR,
       const BorderRadius.all(Radius.circular(10)),
+    );
+    expect(
+      PARadii.cardTopBR,
+      const BorderRadius.vertical(top: Radius.circular(14)),
     );
   });
 }

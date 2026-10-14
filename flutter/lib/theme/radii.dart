@@ -10,7 +10,11 @@ abstract final class PARadii {
 
   static const BorderRadius buttonBR = BorderRadius.all(Radius.circular(button));
   static const BorderRadius cardBR = BorderRadius.all(Radius.circular(card));
-  static const BorderRadius sheetBR = BorderRadius.all(Radius.circular(sheet));
+
+  /// 卡片只圆顶部（折叠卡头点击区水波纹裁到顶部圆角内）。
+  static const BorderRadius cardTopBR =
+      BorderRadius.vertical(top: Radius.circular(card));
+
   static const BorderRadius avatarBR = BorderRadius.all(Radius.circular(avatar));
 
   /// 弹层只圆顶部（底边贴屏，底部不圆角）。

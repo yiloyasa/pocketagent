@@ -4,19 +4,28 @@ import '../components/pa_card.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
+import '../transport/pa_bridge.dart';
 import 'onboarding.dart';
+import 'settings_connection.dart';
 
 /// 设置页：分组列表（连接与配对 / 外观 / 语音 / 关于），全部走 [PACard]。
-/// 静态骨架：除深浅色切换与跳转外不接任何网络/原生通道。
+///
+/// 「连接与配对」是 B3 第 2 步①：真消费 B2 [PaBridge]（快照 + 事件 + pairCode/
+/// connect，见 settings_connection.dart）；其余三分组仍是静态骨架，除深浅色切换
+/// 与跳转外不接任何通道。
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
     super.key,
     required this.brightness,
     required this.onBrightnessChanged,
+    this.bridge,
   });
 
   final PABrightness brightness;
   final ValueChanged<PABrightness> onBrightnessChanged;
+
+  /// 通道注入点（测试用）；不传即用生产默认通道 `dev.pocketagent/bridge`。
+  final PaBridge? bridge;
 
   @override
   Widget build(BuildContext context) {
@@ -27,27 +36,11 @@ class SettingsPage extends StatelessWidget {
       children: <Widget>[
         _Group(
           title: '连接与配对',
-          rows: <_SettingsRow>[
-            _SettingsRow(
-              icon: Icons.computer_rounded,
-              title: '已连接的电脑',
-              value: '局域网 · 7246',
-              onTap: () {},
-            ),
-            _SettingsRow(
-              icon: Icons.password_rounded,
-              title: '配对码与证书指纹',
-              value: '已信任',
-            ),
-            _SettingsRow(
-              icon: Icons.sync_alt_rounded,
-              title: '重新配对',
-            ),
-          ],
+          children: <Widget>[ConnectionSection(bridge: bridge)],
         ),
         _Group(
           title: '外观',
-          rows: <_SettingsRow>[
+          children: <Widget>[
             _SettingsRow(
               icon: Icons.dark_mode_rounded,
               title: '深色模式',
@@ -75,7 +68,7 @@ class SettingsPage extends StatelessWidget {
         ),
         _Group(
           title: '语音',
-          rows: <_SettingsRow>[
+          children: <Widget>[
             _SettingsRow(
               icon: Icons.mic_rounded,
               title: '语音输入',
@@ -95,7 +88,7 @@ class SettingsPage extends StatelessWidget {
         ),
         _Group(
           title: '关于',
-          rows: <_SettingsRow>[
+          children: <Widget>[
             _SettingsRow(
               icon: Icons.info_outline_rounded,
               title: '版本',
@@ -128,10 +121,12 @@ class SettingsPage extends StatelessWidget {
 }
 
 class _Group extends StatelessWidget {
-  const _Group({required this.title, required this.rows});
+  const _Group({required this.title, required this.children});
 
   final String title;
-  final List<_SettingsRow> rows;
+
+  /// 组内子块（行 / 自定义块，如 [ConnectionSection]），块间以左缩进分隔线隔开。
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
@@ -156,13 +151,13 @@ class _Group extends StatelessWidget {
             padding: EdgeInsets.zero,
             child: Column(
               children: <Widget>[
-                for (int i = 0; i < rows.length; i++) ...<Widget>[
+                for (int i = 0; i < children.length; i++) ...<Widget>[
                   if (i > 0)
                     const Padding(
                       padding: EdgeInsets.only(left: 58),
                       child: Divider(),
                     ),
-                  rows[i],
+                  children[i],
                 ],
               ],
             ),
