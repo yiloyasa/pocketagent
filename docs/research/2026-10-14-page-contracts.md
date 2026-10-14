@@ -83,7 +83,7 @@
   | `review:<id>` | `/计划` 伪命令（SlashCommandsLogic:126） |
   | `export_html:<id>` | HTML 导出按钮 `htmlExportGate`（:5632，UNSUPPORTED → 隐藏） |
   | `image_input:<id>` | **附件入口隐藏** `attachmentEntryHiddenFor`（:2108，取反） |
-  | `steer:<id>` | 发送时是"插队/排队"的 toast 文案分流（:3633 `steerSubmitNotice`） |
+  | `steer:<id>` | 提交瞬间仅「无位=已排队」诚实预判；**有位不预判**（:3659 `steerSubmitNotice` 有位返回 null），Toast 改由 Steered/Queued 回执帧驱动（:2357-2363 消费 `TurnSession.deliveryAckNotice`，与时间线徽标同源；hermes 带位但 Steer 恒 false → 落「已排队」） |
   | `queue_clear:pi` + agent==pi + queuedCount>0 | 「撤回排队」按钮（`queueClearVisible` :2048） |
   | `runtime.v1` | 未知事件相关卡片（经 RuntimeControlState） |
   - 另：`TurnSession.daemonSupportsEventSequence(caps)`（`event.sequence` 类位，TurnSession.kt:1203）→ 增量恢复 vs 全量回放 `resumePlan`

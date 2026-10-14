@@ -17,7 +17,7 @@
 | Git 基线 | `main` @ `8c29e7c`（2026-10-14：0.4.0 标准双资产分发——daemon 单文件自守护看门狗 + Release 双文件 + 文档整体重写；GitHub Release v0.4.0 已发） |
 | 版本 | daemon **0.4.0** / App **versionCode 8** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
-| 测试水位 | Android **1839 用例 0 失败 / 0 错误**（2026-10-13，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
+| 测试水位 | Android **1844 用例 0 失败 / 0 错误**（2026-10-14，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
 | agent 版本 | codex 0.160.0 / pi 1.0.2 / dsh 0.2.0-rc.2 / zcode 桌面当前版 / hermes 全接入 |
 | 真机 | 小米 13 `8e0e7bbe`，USB `adb reverse`：最终真机验收 14 PASS（2026-10-11，`docs/verify/evidence/l2-final-20261011/`）；上轮 15 项 13 PASS（2026-10-07）。语音需真人；codex 真实轮次待 DEX Router 账号重同步 |
 

@@ -10,7 +10,8 @@ package dev.pocketagent.app.ui
  *   - 当前轮终局        → Completed/Failed
  *   - 队首出队执行      → QueueFlushed → Started → 常规增量
  * 手机端据此把该条用户消息在「发送中 → 已插入 / 排队中(第N位) / 未送达」
- * 之间流转,QueueFlushed 后变回普通用户消息样式。
+ * 之间流转,QueueFlushed 后变回普通用户消息样式。回执 **Toast 文案同样只认
+ * 帧**(deliveryAckNotice:Steered/Queued →  Toast,不按能力位预判)。
  */
 
 /** 已发出,等 daemon 回执。 */
@@ -29,6 +30,25 @@ internal fun deliveryLabel(state: String, queuePos: Int): String = when (state) 
     DELIVERY_QUEUED -> if (queuePos > 1) "排队中 · 第${queuePos}位" else "排队中 · 下一条"
     DELIVERY_OVERFLOW -> "队列已满,未送达"
     else -> ""
+}
+
+/**
+ * 投递回执的 **Toast 文案**(帧驱动,与 [deliveryLabel] 徽标同源):
+ * Steered/Queued 帧到达时按 daemon 的实际回执展示,不按 steer 能力位预判。
+ *
+ * 【2026-10-14 修正:为什么提交瞬间不再预判】hermes 带 `steer:<id>` 位,但
+ * daemon 的 Steer 恒返回 steered=false(ACP 协议无运行中插话,输入落队列,
+ * 见 daemon/internal/agent/hermes.go)—— 按位预判"已插入"是不实文案。
+ * 现在文案只跟回执帧走:Steered 帧 = 真插话,Queued 帧 = 真排队。
+ *
+ * 其余状态返回 null = 不摆 Toast:pending 是等回执的中间态(时间线已有
+ * "发送中…"徽标);overflow(队列满拒收)由「队列已满,未送达」徽标 + 重试
+ * 入口如实呈现,Toast 不重复报。
+ */
+internal fun deliveryAckNotice(deliverState: String): String? = when (deliverState) {
+    DELIVERY_STEERED -> "已插入运行中任务"
+    DELIVERY_QUEUED -> "已排队，当前轮结束后执行"
+    else -> null
 }
 
 /** Queued 回执是否被 daemon 接受(position<=0 = 拒收,不得计入排队数)。 */

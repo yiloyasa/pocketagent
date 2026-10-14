@@ -39,6 +39,20 @@ class TurnDeliveryAndOfflineTest {
     }
 
     @Test
+    fun `回执Toast文案只认Steered与Queued帧_其余状态不摆`() {
+        // 【2026-10-14 帧驱动】Toast 只跟 daemon 实际回执走:Steered 帧 = 真插话,
+        // Queued 帧 = 真排队(hermes 带 steer 位但 Steer 恒 false、实际落这里);
+        // 提交瞬间不再按位预判(steerSubmitNotice 有位返回 null)。
+        assertEquals("已插入运行中任务", deliveryAckNotice(DELIVERY_STEERED))
+        assertEquals("已排队，当前轮结束后执行", deliveryAckNotice(DELIVERY_QUEUED))
+        // pending = 等回执的中间态(徽标已显示"发送中…");overflow = 队列满拒收,
+        // 由「队列已满,未送达」徽标 + 重试入口如实呈现;空串 = 普通消息。
+        assertNull(deliveryAckNotice(DELIVERY_PENDING))
+        assertNull(deliveryAckNotice(DELIVERY_OVERFLOW))
+        assertNull(deliveryAckNotice(""))
+    }
+
+    @Test
     fun `Steered回执落到最早一条发送中的消息`() {
         val items = listOf(
             ChatItem("user", "第一条"), // 早已入库的正常消息,不受影响

@@ -124,6 +124,16 @@ object TurnSession {
          */
         var queuedCount by mutableStateOf(0)
         /**
+         * 投递回执的 Toast 文案(帧驱动,2026-10-14;裁定纯函数 [deliveryAckNotice])。
+         *
+         * 【为什么不再按 steer 能力位预判】hermes 带 `steer:<id>` 位,但 daemon
+         * 的 Steer 恒返回 steered=false(ACP 协议无运行中插话,输入落队列)——
+         * 提交瞬间按位报"已插入"是不实文案。现在只由 **Steered/Queued 回执帧**
+         * 写入(与时间线投递徽标同源),UI 层消费后清 null。
+         * 只写实时流(`replay=false`):回放是补历史,不是用户本次提交的回执。
+         */
+        var deliveryAckNotice by mutableStateOf<String?>(null)
+        /**
          * 已应用的事件断点(P1-5):本会话收到的最大 TurnServerMessage.sequence。
          *
          * 【语义】它只有在"断点之后的每一帧都经本机按序应用过"时才可信 ——
@@ -1061,6 +1071,9 @@ object TurnSession {
                 if (idx >= 0) {
                     st.items[idx] = st.items[idx].copy(deliverState = DELIVERY_STEERED, queuePos = 0)
                 }
+                // 帧驱动回执 Toast(不回放):文案只报 daemon 实际回执,不按 steer 位预判
+                // (hermes 带位但 Steer 恒 false,实际落 Queued 帧,由 QUEUED 分支报"已排队")
+                if (!replay) st.deliveryAckNotice = deliveryAckNotice(DELIVERY_STEERED)
             }
             TurnServerMessage.MsgCase.QUEUED -> {
                 val q = ev.queued
@@ -1071,6 +1084,8 @@ object TurnSession {
                     if (idx >= 0) {
                         st.items[idx] = st.items[idx].copy(deliverState = DELIVERY_QUEUED, queuePos = q.position)
                     }
+                    // 帧驱动回执 Toast(不回放):排队即事实,文案与时间线徽标同源
+                    if (!replay) st.deliveryAckNotice = deliveryAckNotice(DELIVERY_QUEUED)
                 } else {
                     // 队列满被拒收:这条消息 daemon 没接收,必须让用户看见
                     // 【C3】单条定位更新,同 STEERED
@@ -1078,6 +1093,7 @@ object TurnSession {
                     if (idx >= 0) {
                         st.items[idx] = st.items[idx].copy(deliverState = DELIVERY_OVERFLOW, queuePos = 0)
                     }
+                    // overflow 不摆 Toast:时间线「队列已满,未送达」徽标 + 重试入口已如实呈现
                 }
             }
             TurnServerMessage.MsgCase.QUEUE_FLUSHED -> {

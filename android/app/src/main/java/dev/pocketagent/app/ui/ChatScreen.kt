@@ -2109,14 +2109,21 @@ internal fun attachmentEntryHiddenFor(agentId: String?, capabilities: List<Strin
     !agentCapableOf("image_input", agentId, capabilities)
 
 /**
- * 运行中发送的回执文案(纯函数,两态):`steer:<agentId>` 位在 = daemon 侧真插话
- * (codex 原生 turn/steer、pi 原生插队,本条会进当前轮次),报"已插入运行中任务";
- * 缺位 = daemon 按排队兜底(当前轮结束后自动续跑),报"已排队"。
- * 【为什么不报"将插入或排队"】能力位已经说清了发送语义,二选一如实报;
- * 最终落点仍以时间线的投递小标签为准(daemon 应答裁定),Toast 只报提交口径。
+ * 运行中发送的**提交瞬间**回执文案(纯函数,2026-10-14 帧驱动修正)。
+ *
+ * 旧实现按 `steer:<agentId>` 位二选一:有位=「已插入运行中任务」、缺位=
+ * 「已排队」。但 hermes 带位而 daemon 的 Steer 恒返回 steered=false
+ * (ACP 协议无运行中插话,输入落队列,见 daemon hermes.go)——提交瞬间的
+ * 「已插入」是不实文案,定案改为按 daemon **实际回执帧**裁定:
+ *  - Steered 帧到达 → 「已插入运行中任务」
+ *  - Queued  帧到达 → 「已排队，当前轮结束后执行」
+ * (deliveryAckNotice,与时间线投递徽标同源)
+ * 本函数只剩提交瞬间的**诚实预判**:缺位 = daemon 对无位 agent 一律排队
+ * 兜底,报「已排队」(文案即事实);有位 = 落点未知(codex/pi 真插话、
+ * hermes 恒排队),返回 **null 不预判**,等回执帧说话。
  */
-internal fun steerSubmitNotice(steerCapable: Boolean): String =
-    if (steerCapable) "已插入运行中任务" else "已排队"
+internal fun steerSubmitNotice(steerCapable: Boolean): String? =
+    if (steerCapable) null else "已排队"
 
 /** 思考强度选项(id 与 codex turn/start 的 effort 取值一致)。 */
 data class EffortOption(val id: String, val label: String)
@@ -2339,6 +2346,22 @@ fun ChatScreen(
         val now = session.pendingApproval != null
         if (now && !hadPendingApproval) PaHaptics.warning(hapticView)
         hadPendingApproval = now
+    }
+
+    // ---- 运行中提交的回执 Toast(帧驱动,2026-10-14)----
+    // 文案只报 daemon 的实际回执(Steered/Queued 帧),与时间线投递徽标同源:
+    // hermes 带 steer 位但 Steer 恒 false、输入落队列,提交瞬间按位预判
+    // 「已插入」是不实文案(steerSubmitNotice 有位返回 null 即因此);Queued
+    // 帧到达才说「已排队,当前轮结束后执行」。
+    // 回放帧不写 notice(状态机侧已按 replay 隔离);离开页面时未消费的残值
+    // 只会在下次进页面时补显示一次 —— 那仍是该次提交的真实回执,不是假文案。
+    LaunchedEffect(threadId) {
+        snapshotFlow { st.deliveryAckNotice }.collect { notice ->
+            if (notice != null) {
+                Toast.makeText(ctx, notice, Toast.LENGTH_SHORT).show()
+                st.deliveryAckNotice = null
+            }
+        }
     }
 
     // ---- 核对等待超时兜底(e2e-paired-20261009 问题2)----
@@ -3627,10 +3650,15 @@ fun ChatScreen(
             scope.launch { programmaticScrollToBottom() }
         }
         if (wasRunning) {
-            // 运行中提交的回执:发送语义随 daemon 的 steer:<agentId> 位如实二选一
-            // (有位=真插话进当前轮次,缺位=daemon 排队兜底);最终落点以时间线
-            // 投递小标签为准(daemon 应答裁定),这里只报提交口径,不猜结果。
-            Toast.makeText(ctx, steerSubmitNotice(agentCapableOf("steer", threadAgentId, hostCaps)), Toast.LENGTH_SHORT).show()
+            // 运行中提交的回执:【2026-10-14 帧驱动】带 steer 位**不再预判**
+            // 「已插入」—— hermes 有位但 daemon 的 Steer 恒 false(ACP 无运行中
+            // 插话,输入实际落队列),按位预判是不实文案;落点由 Steered/Queued
+            // 回执帧裁定(下方 snapshotFlow 消费 TurnSession.deliveryAckNotice,
+            // 与时间线投递徽标同源)。缺位分支维持「已排队」诚实预判:daemon
+            // 对无位 agent 就是排队兜底,文案即事实、一次到位。
+            steerSubmitNotice(agentCapableOf("steer", threadAgentId, hostCaps))?.let { notice ->
+                Toast.makeText(ctx, notice, Toast.LENGTH_SHORT).show()
+            }
         }
         return true
     }

@@ -11,6 +11,7 @@ package dev.pocketagent.app.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -123,11 +124,17 @@ class ThreadActionGateTest {
         assertTrue(attachmentEntryHiddenFor("pi", listOf("image_input:zcode")))
     }
 
-    // ---- 运行中发送回执(steer:<agentId> 两态文案)----
+    // ---- 运行中发送回执(steer:<agentId> 提交瞬间只留诚实预判)----
 
     @Test
-    fun `运行中发送回执_有steer位报已插入无位报已排队`() {
-        assertEquals("已插入运行中任务", steerSubmitNotice(true))
+    fun `运行中提交瞬间_有steer位不预判落点_无位诚实报已排队`() {
+        // 【2026-10-14 帧驱动修正】有位不预判:hermes 带 steer 位但 daemon 的
+        // Steer 恒返回 steered=false(ACP 协议无运行中插话,输入落队列,见
+        // daemon hermes.go)—— 按位报「已插入」是不实文案。落点改由
+        // Steered/Queued 回执帧裁定(deliveryAckNotice,见
+        // TurnSessionDeliveryInPlaceTest 的 hermes 恒排队用例)。
+        assertNull(steerSubmitNotice(true))
+        // 缺位 = daemon 排队兜底(当前轮结束后自动续跑),提交瞬间即可如实告知
         assertEquals("已排队", steerSubmitNotice(false))
     }
 
@@ -142,7 +149,15 @@ class ThreadActionGateTest {
 
     @Test
     fun `回执文案不带禁词`() {
-        for (s in listOf(steerSubmitNotice(true), steerSubmitNotice(false))) {
+        // 提交瞬间预判(无位)+ 帧驱动回执(Steered/Queued)全部在案:一句都不得带
+        // 「未知/错误」——不确定就中性化(有位即不预判),不摆吓人的假状态。
+        val copies = listOfNotNull(
+            steerSubmitNotice(false),
+            deliveryAckNotice(DELIVERY_STEERED),
+            deliveryAckNotice(DELIVERY_QUEUED),
+        )
+        assertEquals(3, copies.size)
+        for (s in copies) {
             assertFalse(s.contains("未知"))
             assertFalse(s.contains("错误"))
         }

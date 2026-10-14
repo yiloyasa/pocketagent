@@ -1,6 +1,7 @@
 package dev.pocketagent.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,7 +20,10 @@ import pocketagent.v1.TurnServerMessage
  *    整表替换后,内容语义必须与 TurnDelivery 纯函数逐字段一致(纯函数本体
  *    由 TurnDeliveryAndOfflineTest 钉住,这里钉的是调用点的等价性);
  *  - QUEUE_FLUSHED / 轮次终局:只收该收的标签,不该动的(排队/未送达)保留;
- *  - 找不到 pending 条目的兜底 = 空操作(等价旧实现 swapItems 判同引用跳过)。
+ *  - 找不到 pending 条目的兜底 = 空操作(等价旧实现 swapItems 判同引用跳过);
+ *  - 【2026-10-14】回执 Toast 帧驱动:Steered/Queued 帧(仅实时流,回放除外)
+ *    写 deliveryAckNotice,文案与时间线徽标同源、不按 steer 能力位预判
+ *    (hermes 带位但 Steer 恒 false、实际落 Queued,见主用例)。
  */
 class TurnSessionDeliveryInPlaceTest {
 
@@ -86,6 +90,67 @@ class TurnSessionDeliveryInPlaceTest {
         assertEquals(DELIVERY_OVERFLOW, s.items[0].deliverState)
         assertEquals(0, s.items[0].queuePos)
         assertEquals("队列已满,未送达", deliveryLabel(s.items[0].deliverState, s.items[0].queuePos))
+    }
+
+    // ------------------------------------------------------------ 回执 Toast(帧驱动)
+
+    @Test
+    fun `hermes有位但Steer恒false_Queued帧落排队徽标与已排队Toast`() {
+        // 【2026-10-14 文案定案主用例】daemon 侧 hermes.go:hermes 实现 agent.Steerer
+        // 接口、host.go 照常宣告 steer:hermes 位,但 Steer 恒返回 steered=false
+        // (ACP 协议无运行中插话),server 层转排队并发 Queued 帧(position 从 1 起)。
+        // 手机端按位预判"已插入"因此是不实文案 —— 回执文案必须按帧裁定:
+        // 时间线落「排队中」徽标,Toast 报「已排队,当前轮结束后执行」。
+        val pending = ChatItem("user", "运行中追加", deliverState = DELIVERY_PENDING, id = "c")
+        val s = newState(pending)
+
+        TurnSession.applyServerFrame("t-hermes-queued", s, queuedFrame(1), replay = false)
+
+        // 时间线:诚实徽标「排队中 · 下一条」(位次 1 = 队首下一条)
+        assertEquals(DELIVERY_QUEUED, s.items[0].deliverState)
+        assertEquals(1, s.items[0].queuePos)
+        assertEquals("排队中 · 下一条", deliveryLabel(s.items[0].deliverState, s.items[0].queuePos))
+        // Toast:与徽标同源的"已排队,当前轮结束后执行",绝不是按位预判的"已插入"
+        assertEquals("已排队，当前轮结束后执行", s.deliveryAckNotice)
+    }
+
+    @Test
+    fun `Steered帧Toast报已插入`() {
+        // codex turn/steer 真插话:帧到了才说"已插入",提交瞬间不预判
+        val pending = ChatItem("user", "运行中追加", deliverState = DELIVERY_PENDING, id = "c")
+        val s = newState(pending)
+
+        TurnSession.applyServerFrame("t-codex-steered", s, steeredFrame(), replay = false)
+
+        assertEquals(DELIVERY_STEERED, s.items[0].deliverState)
+        assertEquals("已插入运行中任务", s.deliveryAckNotice)
+    }
+
+    @Test
+    fun `回放帧不摆Toast`() {
+        // GetThreadEventsSince 回放是补历史,不是用户本次提交的回执:
+        // 徽标照常落,Toast 不弹(否则进会话/断流恢复会翻旧账刷屏)。
+        val pending = ChatItem("user", "x", deliverState = DELIVERY_PENDING, id = "c")
+        val s = newState(pending)
+
+        TurnSession.applyServerFrame("t-replay-queued", s, queuedFrame(1), replay = true)
+        TurnSession.applyServerFrame("t-replay-steered", s, steeredFrame(), replay = true)
+
+        assertEquals(1, s.queuedCount) // 回放仍如实恢复排队计数
+        assertNull(s.deliveryAckNotice)
+    }
+
+    @Test
+    fun `队列满拒收不摆Toast_未送达徽标已如实呈现`() {
+        // overflow(队列满)= daemon 没接收:只说一次,由时间线「未送达」徽标 +
+        // 重试入口呈现,Toast 不重复报、也不得报成"已排队"。
+        val pending = ChatItem("user", "x", deliverState = DELIVERY_PENDING, id = "c")
+        val s = newState(pending)
+
+        TurnSession.applyServerFrame("t-overflow-toast", s, queuedFrame(0), replay = false)
+
+        assertEquals(DELIVERY_OVERFLOW, s.items[0].deliverState)
+        assertNull(s.deliveryAckNotice)
     }
 
     // ------------------------------------------------------------ 兜底分支(找不到 pending)

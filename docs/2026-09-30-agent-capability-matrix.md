@@ -75,7 +75,7 @@ daemon 在 `GetHostInfo.capabilities` 里对**每个已注册 provider** 做接�
 
 | 位 | Android 门控函数 | 生效入口 | 出处（基线 a5f3f3e） |
 |---|---|---|---|
-| steer:<id> | `agentCapableOf("steer", …)` → `steerSubmitNotice` | 运行中发送回执两态文案（「已插入运行中任务」/「已排队」） | ChatScreen.kt:2238、1181-1185 |
+| steer:<id> | `agentCapableOf("steer", …)` → `steerSubmitNotice` | 提交瞬间仅无位报「已排队」；有位不预判，Toast 按 Steered/Queued 回执帧裁定（「已插入运行中任务」/「已排队，当前轮结束后执行」） | ChatScreen.kt:2125、3659；TurnDelivery.kt `deliveryAckNotice` |
 | queue_clear:pi | `queueClearVisible`（三重门控之一） | 撤回排队按钮（pi 会话+有排队+位在） | ChatScreen.kt:1114-1122、2767 |
 | compact:<id> | `compactActionOn` | 更多面板「压缩上下文」+ /压缩 伪命令可见性 | ChatScreen.kt:1156-1158；SlashCommandsLogic.kt:124 |
 | fork:<id> | `forkActionOn` | 更多面板「分叉会话」 | ChatScreen.kt:1160-1162 |
