@@ -25,6 +25,12 @@ package server
 //                     真实携带图片;hermes 是协商驱动动态位 —— 未经历
 //                     initialize 协商时位不亮,live 实证协商后为真;dsh 当前
 //                     路由不收图 → 缺位=手机端"发图片"入口隐藏);
+//   - slash:<id>     = 两形状任一在场(pi/zcode/hermes 的
+//                     SlashCommandsFor(threadID) 账本形 / codex 的
+//                     SlashCommands(cwd) 技能形;与 compact 多形状一位同纪律)
+//                     —— 位语义"ListSlashCommands 路由对该家有真数据源可调";
+//                     dsh 两形状皆无(ACP 桥不发 available_commands_update、
+//                     协议无命令清单 RPC)→ 缺位,断言不得虚报;
 //   - agent_settings / agent_native_settings / text_generation 既有位一并
 //     对表,防止将来接口增减时声明悄悄失真。
 
@@ -158,5 +164,23 @@ func TestGetHostInfoCapabilityBitsAlignedWithControllers(t *testing.T) {
 		if !caps["text_generation:"+id] {
 			t.Fatalf("%s 应声明 text_generation 位", id)
 		}
+	}
+	// slash:斜杠命令面板数据源,两形状任一在场即宣告(2026-10-14 slash 位化)。
+	// codex 形 SlashCommands(cwd)(skills 即命令)、pi/zcode/hermes 形
+	// SlashCommandsFor(threadID)(线程命令账本)——四家构造器在手即有方法,
+	// 位必须在场;dsh 两形状皆无,虚报即红。
+	for _, id := range []string{"codex", "pi", "zcode", "hermes"} {
+		if !caps["slash:"+id] {
+			t.Fatalf("%s 有斜杠命令数据源(两形状之一),应声明 slash 位, caps=%v", id, resp.Capabilities)
+		}
+	}
+	if caps["slash:dsh"] {
+		t.Fatal("dsh 无斜杠命令数据源(ACP 桥不发 available_commands_update、协议无命令清单 RPC),不得虚报 slash 位")
+	}
+	// hermes 是账本形(SlashCommandsFor):构造器在场即有方法 → 位在场;
+	// 账本内容由 agent 包单测(A/B 写入点)与 server/hermes_slash_route_test.go
+	// 钉死,位本身不承诺面板非空。
+	if !caps["slash:hermes"] {
+		t.Fatalf("hermes 实现其账本形状 SlashCommandsFor,应声明 slash 位, caps=%v", resp.Capabilities)
 	}
 }

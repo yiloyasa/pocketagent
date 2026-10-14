@@ -61,6 +61,17 @@ type (
 	piShapedExporter interface {
 		ExportHTML(t *store.Thread) (string, error)
 	}
+	// threadShapedSlashSource pi/zcode/hermes 形斜杠命令账本:按线程查已记账的
+	// 命令清单(见 host.go 位生成段 —— 与 codex 形任一在场即宣告 slash:<id> 位)。
+	// 与 slash_commands.go 的 zcodeSlashSource、agent_commands.go 的 codexSlashSource
+	// 同款最小形状探测,但这里按 host.go 独立命名纪律自带一份,不 import 路由文件符号。
+	threadShapedSlashSource interface {
+		SlashCommandsFor(threadID string) []*pb.SlashCommand
+	}
+	// cwdShapedSlashSource codex 形斜杠命令面:按工作区查技能命令(skills 即命令)。
+	cwdShapedSlashSource interface {
+		SlashCommands(cwd string) []*pb.SlashCommand
+	}
 )
 
 // GetPairingInfo 配对前置问询(2026-09-30 自动配对):返回当前配对码。
@@ -163,6 +174,19 @@ func (s *Server) GetHostInfo(ctx context.Context, _ *pb.GetHostInfoRequest) (*pb
 		}
 		if _, ok := provider.(piShapedExporter); ok {
 			caps = append(caps, "export_html:"+id)
+		}
+		// 【slash 位化 2026-10-14】斜杠命令面板:两形状任一在场即宣告该家 slash 位
+		// ——pi/zcode/hermes 形 SlashCommandsFor(threadID)与 codex 形
+		// SlashCommands(cwd),与 compact 的「多形状一位」先例同纪律。位语义 =
+		// "ListSlashCommands 路由对该家有真数据源可调",不保证面板非空(dsh 无任何
+		// 形状 → 缺位 = 手机端命令候选条入口隐藏,不摆假面板)。旧 daemon 不带这一
+		// 位,新 APK 以位为加项消费(capability_gate_test.go 与 host_capability_bits_test.go
+		// 双侧钉死,矩阵文档 §三 slash_commands 行逐格同步)。
+		if _, ok := provider.(threadShapedSlashSource); ok {
+			caps = append(caps, "slash:"+id)
+		}
+		if _, ok := provider.(cwdShapedSlashSource); ok {
+			caps = append(caps, "slash:"+id)
 		}
 		// 【能力对齐收尾 2026-09-27】图片附件输入:此前图片能力埋在各 provider 的
 		// Run 行为里无法接口断言(EB 审计遗留),手机端"发图片"入口无位可查,只能

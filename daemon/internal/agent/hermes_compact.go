@@ -96,9 +96,14 @@ func (p *HermesProvider) CompactThread(t *store.Thread) error {
 	// 当轮钩子:压缩轮的 session/update 只做回执留痕(不投影 sink —— 手机此刻
 	// 不在这条轮次流里),反向请求按失败安全回 error(见文件头)。钩子随本函数
 	// 卸载,与 Run 的 stopPump 同一口径。
+	// 【命令广告照常入账(2026-10-14 slash 位化)】ensureSession 重挂载路径的
+	// session/load 应答后 ~1ms 适配器会补发 available_commands_update(见
+	// hermes_slash.go 文件头);本钩子整面替换捕获器后仍要接住它 —— 命令帧走
+	// noteCommandsFromEvent 记账本,不混进压缩回执正文。
 	var reply strings.Builder
 	c.SetTurnHandlers(func(raw json.RawMessage) {
 		ev := hermesapp.ParseSessionUpdate(raw)
+		p.noteCommandsFromEvent(t.ID, sid, ev)
 		if ev.SessionID == sid && ev.MessageChunk != "" {
 			reply.WriteString(ev.MessageChunk)
 		}

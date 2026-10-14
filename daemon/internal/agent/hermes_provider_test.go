@@ -31,6 +31,7 @@ type fakeHermesClient struct {
 	closed  bool
 	sev     string // initialize 应答的 agentInfo.version
 	loadErr error  // LoadSession 的失败注入(默认 ErrSessionNotFound 由 loadMissing 决定)
+	newErr  error  // SessionNew 的失败注入(nil = 照常返回 "fresh-sess";slash 账本失败面钉子用)
 
 	newCalls, loadCalls, listCalls, modelCalls, promptCalls int
 	modelArgs                                               []hermesModelCall // session/set_model 实参(守卫钉子)
@@ -104,7 +105,11 @@ func (f *fakeHermesClient) Initialize(context.Context) (*hermesapp.InitializeRes
 func (f *fakeHermesClient) SessionNew(context.Context, string) (*hermesapp.SessionNewResult, error) {
 	f.mu.Lock()
 	f.newCalls++
+	newErr := f.newErr
 	f.mu.Unlock()
+	if newErr != nil {
+		return nil, newErr
+	}
 	return &hermesapp.SessionNewResult{SessionID: "fresh-sess"}, nil
 }
 
@@ -167,6 +172,14 @@ func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (*h
 		if strings.Contains(text, "tool-round") {
 			notif(json.RawMessage(`{"sessionId":"` + sessionID + `","update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"write_file","kind":"edit","status":"pending","content":[{"type":"diff","path":"a.txt","newText":"hi"}]}}`))
 			notif(json.RawMessage(`{"sessionId":"` + sessionID + `","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"completed"}}`))
+		}
+		// 命令广告帧(斜杠命令账本钉子):轮内重广告模拟 —— 适配器真实路径在
+		// session/new·load 应答后即发(建立窗口捕获器接住),这里模拟"会话内
+		// 再度广告"以钉住轮次泵消费侧写入点(hermes_slash.go 写入点 2)。
+		if strings.Contains(text, "commands-round") {
+			notif(json.RawMessage(`{"sessionId":"` + sessionID + `","update":{"sessionUpdate":"available_commands_update","availableCommands":[` +
+				`{"name":"help","description":"List available commands"},` +
+				`{"name":"model","description":"Show current model and provider, or switch models","input":{"hint":"model name to switch to"}}]}}`))
 		}
 		// 别的会话的帧:必须被 sessionId 分流,不进本轮投影。
 		notif(json.RawMessage(`{"sessionId":"other-sess","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"别人的帧"}}}`))

@@ -28,14 +28,15 @@ import (
 	"strings"
 	"testing"
 
+	pb "github.com/pocketagent/daemon/internal/gen/pocketagent/v1"
 	"github.com/pocketagent/daemon/internal/store"
 )
 
 // capabilityBitFamilies 期望的 agent 域位族全集(格式 `<族>:<agentId>`)。
 // "agent" 是成员位(注册即有,pi 追加版本号),由 agentCapability(id) 生成。
 // 期望表来源:docs/2026-09-30-agent-capability-matrix.md 第二节主矩阵 A(2026-09-30,
-// 基线 a5f3f3e)。host.go 位族增删时:先更新矩阵文档,再回这里改期望表 —— 两处
-// 不同步,本测试就用失败信息把人拽回来。
+// 基线 a5f3f3e;2026-10-14 slash 位化增列 slash)。host.go 位族增删时:先更新矩阵
+// 文档,再回这里改期望表 —— 两处不同步,本测试就用失败信息把人拽回来。
 var capabilityBitFamilies = []string{
 	"agent",
 	"agent_settings",
@@ -50,6 +51,7 @@ var capabilityBitFamilies = []string{
 	"review",
 	"export_html",
 	"image_input",
+	"slash",
 }
 
 // capabilityHostBits 期望的宿主级位(无 agentId 后缀,循环外固定追加)。
@@ -291,6 +293,31 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 			family: "image_input",
 			probe:  imageInputShaped,
 			want:   map[string]bool{"codex": true, "pi": true, "zcode": true, "dsh": false},
+		},
+		{
+			// slash(2026-10-14 slash 位化):两形状任一在场即声明该家 slash 位 ——
+			// pi/zcode/hermes 形 `SlashCommandsFor(threadID)`(账本)或 codex 形
+			// `SlashCommands(cwd)`(skills 即命令),与 compact 的「多形状一位」
+			// 先例同纪律(host.go 位生成段 threadShapedSlashSource /
+			// cwdShapedSlashSource)。本表四家:codex 形、pi/zcode 账本形在场 →
+			// true;dsh 两形状皆无(ACP 桥不发 available_commands_update、无命令
+			// 清单 RPC)→ false,虚报即红。hermes 是第五家(账本形,
+			// hermes_slash.go SlashCommandsFor),由 server 侧
+			// host_capability_bits_test.go 的真实五家构造器端到端钉住
+			// —— 与 hermes 其它格不进本四家表同口径。
+			family: "slash",
+			probe: func(p Provider) bool {
+				if _, ok := p.(interface {
+					SlashCommandsFor(string) []*pb.SlashCommand
+				}); ok {
+					return true
+				}
+				_, ok := p.(interface {
+					SlashCommands(string) []*pb.SlashCommand
+				})
+				return ok
+			},
+			want: map[string]bool{"codex": true, "pi": true, "zcode": true, "dsh": false},
 		},
 	}
 

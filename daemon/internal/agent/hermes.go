@@ -35,7 +35,9 @@ import (
 //	session_info_update(带标题) → STATUS 卡「hermes · 会话命名」+ 台账留痕
 //	user_message_chunk / 无标题 session_info / current_mode_update /
 //	available_commands_update → 台账 KNOWN_PASSTHROUGH 留痕(不重投影:手机已
-//	展示用户输入/暂无消费方,dsh 同口径)
+//	展示用户输入/暂无消费方,dsh 同口径);其中 available_commands_update 另
+//	入 provider 命令账本(slashByThread,2026-10-14 slash 位化;写入点在
+//	Run 泵消费侧与会话建立窗口的捕获器,见 hermes_slash.go 文件头)
 //	其他非 session/update 通知(传输层 default)→ hermesapp 未知通知钩子 →
 //	未知事件台账 UNKNOWN_NOTIFICATION
 //	认不出的 session/update 变体 → 台账 UNKNOWN_NOTIFICATION + 限频上屏
@@ -77,6 +79,11 @@ type HermesProvider struct {
 
 	threadMu  sync.Mutex
 	threadMap map[string]hermesThreadRef // threadID → ACP 会话引用(内存缓存)
+	// slashByThread 是「线程 → 斜杠命令账本」(available_commands_update 广告的
+	// 累积结果;与 threadMap 同锁纪律,见 hermes_slash.go 文件头)。写入点两处:
+	// 会话建立窗口的捕获器 + 轮次事件泵消费侧;纯内存,daemon 重启/会话重挂载
+	// 前为空(nil = 从未广告,面板空)。
+	slashByThread map[string][]*pb.SlashCommand
 }
 
 // hermesThreadRef 是 hermes 会话的内存引用(同代缓存;失效回落 ExternalSession
@@ -125,7 +132,8 @@ func NewHermesProvider() *HermesProvider {
 			recordProviderEvent("hermes", method, "", runtime.KindUnknownNotification, params)
 		})
 	})
-	return &HermesProvider{newClient: defaultNewHermesClient, threadMap: map[string]hermesThreadRef{}}
+	return &HermesProvider{newClient: defaultNewHermesClient, threadMap: map[string]hermesThreadRef{},
+		slashByThread: map[string][]*pb.SlashCommand{}}
 }
 
 func defaultNewHermesClient() (hermesClient, error) {
@@ -382,7 +390,11 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	toolIDs := map[string]int{} // ACP toolCallId → 序号(帧 Id 稳定;同 id start/update 配对;仅消费者访问)
 	var toolMu sync.Mutex
 	var notices nativeNoticeRecorder // 已知无投影变体的台账留痕口(KNOWN_PASSTHROUGH);未知变体走它的限频上屏
-	lastNotif := &atomic.Int64{}     // 看门狗活跃刻度:readLoop 收到任何一帧 = 适配器还活着
+	turnThreadID := ""               // 命令账本归属(available_commands_update → slashByThread,见 hermes_slash.go)
+	if req.Thread != nil {
+		turnThreadID = req.Thread.ID
+	}
+	lastNotif := &atomic.Int64{} // 看门狗活跃刻度:readLoop 收到任何一帧 = 适配器还活着
 	approvalWaiting := &atomic.Bool{}
 	type hermesNotifMsg struct {
 		ev  hermesapp.StreamEvent // 已解析的 session/update(生产者侧解析)
@@ -425,6 +437,9 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 		for {
 			select {
 			case nm := <-notifCh:
+				// 命令广告先入账本再投影:账本写入与 KNOWN_PASSTHROUGH 台账留痕
+				// 互不排斥(见 hermes_slash.go 文件头写入点 2)。
+				p.noteCommandsFromEvent(turnThreadID, sid, nm.ev)
 				p.projectSessionUpdate(nm.ev, sink, &final, toolIDs, &toolMu, &notices)
 				processed.Add(1)
 			case <-notifStop:
@@ -734,8 +749,10 @@ func (p *HermesProvider) projectSessionUpdate(ev hermesapp.StreamEvent, sink Sin
 		// 协议成员,台账留痕。
 		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
 	case ev.CommandsSeen > 0:
-		// 斜杠命令面广告(commands.py _send_available_commands_update):daemon 暂无
-		// 消费方,已知协议成员 → 台账留痕(dsh available_commands_update 同档)。
+		// 斜杠命令面广告(commands.py _send_available_commands_update):KNOWN_
+		// PASSTHROUGH 台账留痕保留(已知协议成员的处置事实,不因有账本消费方而
+		// 消失);命令条目另由泵消费侧 noteCommandsFromEvent 写入 provider 账本
+		// (slashByThread),供 ListSlashCommands 的 hermes 分支透出。
 		notices.recordLedgerOnly(runtime.KindKnownPassthrough, "hermes", hermesLedgerMethod(ev), ev.Raw)
 	default:
 		// 【default 兜底(2026-10-07 收口)】两种情形,分档不混:
@@ -804,10 +821,28 @@ func (p *HermesProvider) ensureSession(ctx context.Context, c hermesClient, req 
 
 // createSession session/new 新建并登记:threadMap 写入 + ExternalSession 写回
 // (server 层轮次后落库;zcode/dsh 同款机制)。th 为 nil(一次性轮次)不登记。
+//
+// 【斜杠命令捕获窗口(2026-10-14 slash 位化)】适配器在 session/new 应答后经
+// call_soon 立刻广告 available_commands_update(live 实测应答后 ~1ms 到达,见
+// hermes_slash.go 文件头),此刻 Run 的轮次泵还没装(泵在其后、还隔着一次
+// set_model 往返)。故这里装"只认命令帧"的捕获器接住该窗口:成功路径**不卸**
+// (留给 Run 的泵整面替换,零空窗);失败路径立刻闭窗卸载,不留半挂载账本。
 func (p *HermesProvider) createSession(ctx context.Context, c hermesClient, th *store.Thread, workspace string) (string, error) {
+	slashCap := p.beginSlashCapture(th)
+	if slashCap != nil {
+		c.SetTurnHandlers(slashCap.handler, nil)
+	}
 	st, err := c.SessionNew(ctx, workspace)
 	if err != nil {
+		if slashCap != nil {
+			slashCap.close()
+			c.SetTurnHandlers(nil, nil)
+		}
 		return "", fmt.Errorf("hermes session/new: %w", err)
+	}
+	if slashCap != nil {
+		slashCap.bind(st.SessionID)
+		slashCap.commit() // 建立成功:缓冲帧入账,窗口转直达;安装面留给 Run 的泵
 	}
 	if th != nil {
 		p.setThreadRef(th.ID, hermesThreadRef{sessionID: st.SessionID})
@@ -824,6 +859,13 @@ func (p *HermesProvider) createSession(ctx context.Context, c hermesClient, th *
 //     自动新建,掩盖数据错位,daemon 不用它做重挂载);
 //  3. 历史回放经通知钩子流出 —— 换弃帧收集器承接(手机端消息早已落库,回放
 //     只为对账/日志计数,重投影会在手机端重复出气泡)。
+//
+// 【斜杠命令捕获窗口(2026-10-14 slash 位化)】session/load 应答后 ~1ms 适配器
+// 还会补发一条 available_commands_update(server.py:596 call_soon 调度,与
+// session/new 同款;live 实测见 hermes_slash.go 文件头)。所以本路径的钩子不是
+// 一次性弃帧计数器,而是"命令入账 + 其余计数"的捕获器:会话号已知直接绑定;
+// 成功路径**不卸**(留给 Run 的泵整面替换——立刻卸载会与应答后 1ms 的广告
+// 竞速,输了就把命令面丢了);失败路径闭窗卸载,不留半挂载账本。
 func (p *HermesProvider) remountSession(ctx context.Context, c hermesClient, th *store.Thread, ext store.ExternalSessionRef, workspace string) (string, error) {
 	if !p.caps.CanLoadSession() {
 		return "", fmt.Errorf("hermes %s 不支持会话重挂载(agentCapabilities.loadSession 不在场),无法恢复会话 %s;请新建会话",
@@ -833,13 +875,26 @@ func (p *HermesProvider) remountSession(ctx context.Context, c hermesClient, th 
 	if cwd == "" {
 		cwd = workspace
 	}
-	// 弃帧收集器:load 的历史回放(user/assistant/thought chunk + tool_call 对)
-	// 在应答前流出,只计数不投影。
+	// 捕获器:建立 RPC 在途时命令帧先缓冲,成功提交后按会话号对表入账;其余帧
+	// 计数(弃帧收集器原口径:历史回放只计数不投影)。slashCap 为 nil(无归属
+	// 线程)时退回原弃帧计数器。
+	slashCap := p.beginSlashCapture(th)
 	var replayed int
-	c.SetTurnHandlers(func(json.RawMessage) { replayed++ }, nil)
+	if slashCap != nil {
+		slashCap.bind(ext.SessionID)
+		c.SetTurnHandlers(slashCap.handler, nil)
+	} else {
+		c.SetTurnHandlers(func(json.RawMessage) { replayed++ }, nil)
+	}
 	st, err := c.LoadSession(ctx, cwd, ext.SessionID)
-	c.SetTurnHandlers(nil, nil)
+	if slashCap != nil {
+		replayed = slashCap.replayedFrames()
+	}
 	if err != nil {
+		if slashCap != nil {
+			slashCap.close()
+		}
+		c.SetTurnHandlers(nil, nil)
 		if errors.Is(err, hermesapp.ErrSessionNotFound) {
 			return "", fmt.Errorf("hermes 会话 %s 不在持久库中(session/load 查无),不静默新开会话;如需继续请新建会话", ext.SessionID)
 		}
@@ -848,6 +903,12 @@ func (p *HermesProvider) remountSession(ctx context.Context, c hermesClient, th 
 	p.setThreadRef(th.ID, hermesThreadRef{sessionID: ext.SessionID})
 	if ext.Cwd == "" {
 		th.ExternalSession.Cwd = workspace // 补齐落库引用的 cwd(轮次后由 server 落库)
+	}
+	if slashCap != nil {
+		// load 成功才提交:应答期间到达的广告帧(适配器在 load 应答后 ~1ms 补发,
+		// 见 hermes_slash.go 文件头)按会话号对表入账;安装面留给 Run 的泵整面
+		// 替换 —— 立刻卸载会与那 ~1ms 的广告竞速,输了就把命令面丢了。
+		slashCap.commit()
 	}
 	log.Printf("[hermes] 已重挂载会话 %s(历史回放 %d 帧,当前模型 %q)", ext.SessionID, replayed, st.Models.CurrentModelID)
 	return ext.SessionID, nil
@@ -994,12 +1055,15 @@ func (p *HermesProvider) threadRefFor(id string) (hermesThreadRef, bool) {
 
 // dropThreadRef 删掉一条内存引用(一次性轮次收尸:提示词优化的 ephemeral 线程
 // 不落库,引用留在 threadMap 里只会逐条泄漏 —— 与 pi DropThread「回收不留残」
-// 同纪律)。只动 daemon 内存:hermes 协议面没有会话删除方法(无 session/close),
-// 远端会话记录的残留见 text_generator.go 的 GenerateText 注释。
+// 同纪律)。斜杠命令账本(slashByThread)同一收尸:ephemeral 线程的命令面随
+// 引用一起删,否则每优化一次泄漏一条命令清单。只动 daemon 内存:hermes 协议面
+// 没有会话删除方法(无 session/close),远端会话记录的残留见 text_generator.go
+// 的 GenerateText 注释。
 func (p *HermesProvider) dropThreadRef(id string) {
 	p.threadMu.Lock()
 	defer p.threadMu.Unlock()
 	delete(p.threadMap, id)
+	delete(p.slashByThread, id)
 }
 
 func planStatusWord(acpStatus string) string {

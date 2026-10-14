@@ -4,7 +4,9 @@
 // 智能体落库,本文件零改动它);这边只补 codex 路由:把该会话工作区可用的
 // codex skills 映射成同一形状的 SlashCommand(name/description,inputHint 留空),
 // 手机端候选条双源(zcode 快照 / codex skills)共用同一个 RPC、同一套 UI。
-// pi 等其它 agent 没有命令面,维持空列表不动。
+// 其余 agent 的命令面各自在场:pi 走 piapp get_commands、hermes 走 provider
+// 命令账本(2026-10-14 slash 位化),两者的分支都在 slash_commands.go 的
+// ListSlashCommands 入口内;dsh 无可透传命令面,维持空列表不动。
 //
 // 【失败哲学】provider 不在场 / 不支持 / 读取失败,一律安静返回 nil(空面板),
 // 与 slash_commands.go 文件头的约定一致:拉不到就让手机端安静地不显示,

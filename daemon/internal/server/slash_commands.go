@@ -1,12 +1,13 @@
 package server
 
-// slash_commands.go —— ThreadService.ListSlashCommands:zcode 会话的斜杠命令面板(只增)。
+// slash_commands.go —— ThreadService.ListSlashCommands:斜杠命令面板(RPC 入口 + 按 agent 路由)。
 //
-// 【链路】手机输入栏以 "/" 开头且会话是 zcode → 本 RPC → daemon 把该线程绑定的
-// zcode 会话快照里的 slashCommands[](name/description/inputHint,解析层在
-// zcodeapp/snapshot.go,审计 S-1)透给手机 → 输入框上方弹命令候选条。
+// 【链路】手机输入栏以 "/" 开头且会话归属的 agent 有命令面 → 本 RPC → daemon 按
+// 会话归属 agent 分派到各家数据源(codex skills / pi get_commands / zcode 快照 /
+// hermes 命令账本)→ 输入框上方弹命令候选条。zcode 那支的细节如下,四家通则见
+// 「面板现状」段。
 //
-// 【数据通路,三条按优先级】
+// 【数据通路,三条按优先级(以下针对 zcode 支路)】
 //  1. provider 账本:注册表里的 zcode provider 若实现了 zcodeSlashSource(持有
 //     "线程 → 会话快照"账本),直接内存取,零进程开销。*agent.ZcodeProvider 已
 //     实现(快照在 create/resume/subscribe 三路记账,见 agent/zcode.go
@@ -26,7 +27,8 @@ package server
 // 错误:命令面板是锦上添花的入口,拉不到就让手机端安静地不显示,绝不 Toast
 // 报错打断输入(与 ExportThreadHtml"可降级"的家训一致,只是这里连错误码都省)。
 //
-// 【四家面板现状(2026-09-30 全量实证)】用户反馈"面板内容不全"后逐家核验:
+// 【面板现状(2026-09-30 四家全量实证;2026-10-14 hermes 接入复核,共五家)】
+// 用户反馈"面板内容不全"后逐家核验:
 //   - codex 0.159.2:app-server 协议**没有**斜杠/prompt 命令概念(2026-09-30
 //     surface 探针拿到的全量方法面无 commands/slash RPC;rust-v0.159.2 源码里
 //     SlashCommand 只存在于 tui/,core/app-server/protocol 零引用、斜杠文本
@@ -49,6 +51,13 @@ package server
 //     available_commands_update、prompt 文本无斜杠展开(产品内的 /compact
 //     /goal /feedback 命令注册面 dsh-commands 只服务自家 tui/web,不经 ACP)
 //     —— 该家无可透传命令,维持空列表。
+//   - hermes 0.21.5(2026-10-14 slash 位化接入):适配器经
+//     available_commands_update 广告命令面(commands.py:79-95,live 实测
+//     session/new·load 应答后 ~1ms 到达),prompt 文本以 "/" 开头由适配器
+//     slash 分派原生触发(server.py:827-841,live 实证 /help /compress
+//     /context 均被拦截)。daemon 侧走 provider 命令账本(agent/hermes_slash.go,
+//     会话建立窗口捕获器 + 轮次泵消费侧双写入点),类型断言透出,不冷启、无
+//     兜底拉取(ACP 方法面无"取清单"请求,纯推送)。
 
 import (
 	"context"
@@ -75,7 +84,9 @@ type zcodeSlashSource interface {
 // zcodeStatusBudget 同口径,余量充足。
 const zcodeSlashBudget = 20 * time.Second
 
-// ListSlashCommands 返回 zcode 会话可用的斜杠命令(空列表 = 没有面板,不是错误)。
+// ListSlashCommands 返回该会话可用的斜杠命令(空列表 = 没有面板,不是错误)。
+// 按会话归属 agent 分流:codex(skills)/pi(get_commands,活客户端 + Refresh 兜底)
+// /hermes(命令账本)/zcode(快照账本 + 一次性重挂兜底),见各分支注释。
 func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommandsRequest) (*pb.ListSlashCommandsResponse, error) {
 	t, err := s.requireThread(req.GetThreadId())
 	if err != nil {
@@ -84,7 +95,9 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 	resp := &pb.ListSlashCommandsResponse{}
 	// 非 zcode 会话:codex 走"skills 即命令"(agent_commands.go,与 zcode 共用
 	// 本 RPC 与同一候选条);pi 走活客户端 get_commands(piapp/commands.go,
-	// 0.85.1 实测 56 条真命令,点选回填 "/名 " 原生触发);其余空列表。
+	// 0.85.1 实测 56 条真命令,点选回填 "/名 " 原生触发);hermes 走 provider
+	// 命令账本(available_commands_update 广告的累积,agent/hermes_slash.go);
+	// dsh 无可透传命令面,其余空列表。
 	if threadAgentID(t) != "zcode" {
 		if threadAgentID(t) == "codex" {
 			resp.Commands = append(resp.Commands, s.codexSlashCommands(t)...)
@@ -106,6 +119,19 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 						}
 					}
 				}
+			}
+		} else if threadAgentID(t) == "hermes" {
+			// hermes 斜杠命令:provider 账本(available_commands_update 广告的
+			// 累积)直透,零进程开销;比照 pi 分支的类型断言模式,不写死 provider
+			// 具体类型。未记账返回 nil(daemon 刚重启/会话未建立/还没收到广告)
+			// → 安静空面板。**没有兜底拉取**:ACP v0.11.2 方法面无"取命令清单"
+			// 的请求方法(纯推送,见 agent/hermes_slash.go 文件头),daemon 没有
+			// 第二条数据源 —— 绝不为看一眼清单冷启适配器(与 pi 的"不冷启"同哲学,
+			// 只是这里连可拉的口子都不存在)。
+			if p, ok := s.cfg.Providers["hermes"].(interface {
+				SlashCommandsFor(string) []*pb.SlashCommand
+			}); ok {
+				resp.Commands = append(resp.Commands, p.SlashCommandsFor(t.ID)...)
 			}
 		}
 		return resp, nil

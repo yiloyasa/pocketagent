@@ -70,6 +70,14 @@ func (c *pumpWiringProbe) Prompt(ctx context.Context, sessionID, text string) (*
 // 路径,复用 runHermes 夹具)中,事件泵必须在 Prompt 被调用前以非 nil 双钩子
 // 安装;轮次收尾统一卸载(SetTurnHandlers(nil,nil))。泵丢了,readLoop 的帧
 // 就没人承接 —— 流式正文/审批反向请求整条断线。
+//
+// 【2026-10-14 slash 位化后的安装史口径】会话建立窗口({notif, req=nil} 的
+// 命令捕获器,见 hermes.go createSession / hermes_slash.go)是**首次**安装,
+// 随后 Run 的泵({notif,req} 双非 nil)整面替换它,收尾卸载 —— 三段式的
+// 首段与末段不变,只多出中间那次替换。本用例断言:
+//   - Prompt 进入时刻双钩子非 nil(泵已装,原裂缝判据不动);
+//   - 安装史里存在一次双非 nil 安装(泵),且它在任意 {req=nil} 捕获器之后;
+//   - 末条是卸载。
 func TestHermesPumpWiringInstalledBeforePrompt(t *testing.T) {
 	probe := &pumpWiringProbe{fakeHermesClient: newFakeHermesClient(true)}
 	p := NewHermesProvider()
@@ -92,10 +100,25 @@ func TestHermesPumpWiringInstalledBeforePrompt(t *testing.T) {
 	if runErr != nil {
 		t.Fatalf("轮次应成功: %v", runErr)
 	}
-	// 安装史形状:新建会话路径(无重挂载弃帧收集器)应为 先一次非 nil 安装 →
-	// 收尾一次 SetTurnHandlers(nil,nil) 卸载(stopPump 幂等,只记一次)。
-	if len(installLog) < 2 || !installLog[0].notifNonNil || !installLog[0].reqNonNil {
-		t.Fatalf("SetTurnHandlers 历史应先有一次非 nil 安装, got %+v;见 docs/reviews/2026-10-04-full-code-review.md P0-2", installLog)
+	// 安装史形状:会话建立捕获器({notif, req=nil})→ 泵({notif, req} 双非 nil)
+	// → 收尾卸载。泵那次必须在捕获器之后(捕获器不许吃掉轮次钩子);新建会话
+	// 路径首条必须是捕获器 —— 它是 slash 位化的账本写入点 1(接住适配器在
+	// session/new 应答后 ~1ms 发的 available_commands_update,见
+	// agent/hermes_slash.go 文件头),缺了它命令面板在首轮永远是空的。
+	pumpAt := -1
+	for i, ins := range installLog {
+		if ins.notifNonNil && ins.reqNonNil {
+			pumpAt = i
+		}
+	}
+	if pumpAt < 0 {
+		t.Fatalf("SetTurnHandlers 历史里必须有一次双非 nil 的泵安装, got %+v;见 docs/reviews/2026-10-04-full-code-review.md P0-2", installLog)
+	}
+	if pumpAt == 0 {
+		t.Fatalf("新建会话路径应先装命令捕获器({notif, req=nil})再接泵:安装史 %+v(会话建立窗口无人接帧,slash 面板首轮必空)", installLog)
+	}
+	if first := installLog[0]; !first.notifNonNil || first.reqNonNil {
+		t.Fatalf("首条安装应为命令捕获器形状({notif 非 nil, req nil}), got %+v", installLog)
 	}
 	if last := installLog[len(installLog)-1]; last.notifNonNil || last.reqNonNil {
 		t.Fatalf("轮次收尾应卸载泵(SetTurnHandlers(nil,nil)), got %+v", installLog)
