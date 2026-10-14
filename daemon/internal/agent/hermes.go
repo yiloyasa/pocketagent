@@ -606,6 +606,22 @@ func (p *HermesProvider) cancelTurn(c hermesClient, sessionID string) {
 // 模拟),一律返回 steered=false,server 层按既有排队语义把输入留到当前轮
 // 终局后续跑(dsh 同款)。真正的"停止"不走这里:Run 的取消看门狗把 ctx 取消/
 // 静默超时翻译成 session/cancel(见 Run)。
+//
+// 【2026-10-14 位语义对核定案:保留本实现,不给 dsh 补同款】定案依据是先读
+// 手机端无位分支的回执文案再决定,不是拍脑袋:
+//   - 运行中发送的 Toast 按 steer:<id> 位**二选一**(ChatScreen.kt:2118-2119
+//     steerSubmitNotice:有位报"已插入运行中任务",缺位报"已排队"),不看 Steer
+//     的实际回执;
+//   - Steer 回 steered=false 时 server 不报错、转排队并发 Queued 帧,时间线
+//     徽标再如实改判"排队中 · 第N位"(turn_queue.go handleMidTurnInput 第 1 步
+//     落空 → 第 3 步排队,任何路径不丢输入)。
+// 所以缺位分支(dsh/zcode)**并非静默排队无提示**:它照样有"已排队"Toast +
+// 时间线"排队中"徽标,文案即事实、一次到位。给 dsh 补一个恒 false 的 Steer
+// 反而把它的 Toast 从正确的"已排队"翻成不实的"已插入",徒增一次误导 —— 故
+// 不补,hermes 保留实现(steer:hermes 位在场,与 codex/pi 同一提交路径,落点
+// 由 Queued 回执裁定)。已知代价(呈现侧,另案):hermes 的提交 Toast 会先报
+// "已插入",随后被 Queued 徽标纠正 —— 该文案归手机端所有,daemon 不动位、
+// steer 行为本身不改(红线)。
 func (p *HermesProvider) Steer(context.Context, string, []pb.ContentBlock) (bool, string, error) {
 	return false, "", nil
 }

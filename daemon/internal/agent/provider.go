@@ -103,12 +103,18 @@ type PrefsAware interface {
 	ApplyPrefs(DesktopPrefs)
 }
 
-// 编译期钉死:四个桌面 agent provider 都必须消费桌面偏好。
+// 编译期钉死:五个桌面 agent provider 都必须消费桌面偏好。
+//
+// 【2026-10-14 断言对账(P0-4)】hermes 入列 —— ApplyPrefs 早已在场
+// (hermes.go:147),只是没进这份名单:改坏它的签名编译期不红,属漂移风险面。
+// 补钉后 provider.go 的编译期断言名单与 host.go 位生成的五家注册面
+// (DetectProviders:codex/pi/zcode/dsh/hermes)对齐。
 var (
 	_ PrefsAware = (*CodexProvider)(nil)
 	_ PrefsAware = (*PiProvider)(nil)
 	_ PrefsAware = (*ZcodeProvider)(nil)
 	_ PrefsAware = (*DshProvider)(nil)
+	_ PrefsAware = (*HermesProvider)(nil)
 )
 
 // TestFakeSurface 是测试工厂 seam(2026-10-04 发布验证计划 Task 1;零业务逻辑):

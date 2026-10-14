@@ -233,13 +233,25 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		},
 		{
 			family: "fork",
+			// fork 的两种原生形状(host.go:152-157 同款:codex (string,string) 形
+			// 与 pi *store.Thread 形互斥、任一在场即声明同一位;与 compact 三形状
+			// 一位同一先例)。【2026-10-14 更正】此前只探 codex 形、期望 pi=false,
+			// 与 host.go 已生成 fork:pi(server/host_capability_bits_test.go:83-87
+			// 真实构造器钉死)及矩阵 pi 格✅ 相悖 —— 漏探形状属漂移,随矩阵 pi fork
+			// 格更正一并改(证据 pi.go:1878 ForkThread + host.go:155 piShapedForker
+			// + pi_fork_test.go)。
 			probe: func(p Provider) bool {
-				_, ok := p.(interface {
+				if _, ok := p.(interface {
 					ForkThread(string, string) (string, error)
+				}); ok {
+					return true
+				}
+				_, ok := p.(interface {
+					ForkThread(*store.Thread) (store.ExternalSessionRef, error)
 				})
 				return ok
 			},
-			want: map[string]bool{"codex": true, "pi": false, "zcode": false, "dsh": false},
+			want: map[string]bool{"codex": true, "pi": true, "zcode": false, "dsh": false},
 		},
 		{
 			family: "rollback",
