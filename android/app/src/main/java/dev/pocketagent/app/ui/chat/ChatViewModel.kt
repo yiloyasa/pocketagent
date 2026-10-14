@@ -12,7 +12,7 @@ import dev.pocketagent.app.ui.SlashCommandInfo
 import dev.pocketagent.app.ui.TurnSession
 import dev.pocketagent.app.ui.historyChatItemsWithIds
 import dev.pocketagent.app.ui.nextChatItemId
-import dev.pocketagent.app.ui.isSlashPanelAgent
+import dev.pocketagent.app.ui.slashPanelAgentOf
 import dev.pocketagent.app.ui.component.PaNotifications
 import dev.pocketagent.app.ui.component.ThreadSnapshot
 import dev.pocketagent.app.ui.history.MessageSpan
@@ -275,13 +275,15 @@ class ChatViewModel(stepRounds: Int = AgentConnection.historyRounds) {
     // ---- 【C1 第三步】RPC 直调收进意图层:composable 只调 vm 方法 ----
 
     /**
-     * 斜杠命令拉取(zcode/codex/pi 三源;迁自 ChatScreen 的 LaunchedEffect,
-     * RPC/缓存/意图落位三段语义逐字保留):非面板会话清空镜像(缓存残留不漏);
-     * 缓存命中先渲染;RPC 失败安静降级为空表照写,绝不 Toast 打断输入。
+     * 斜杠命令拉取(面板判定 = `slash:<agentId>` 位在,旧 daemon 无位回落
+     * zcode/codex/pi 三源名单,见 slashPanelAgentOf;迁自 ChatScreen 的
+     * LaunchedEffect,RPC/缓存/意图落位三段语义逐字保留):非面板会话清空镜像
+     * (缓存残留不漏);缓存命中先渲染;RPC 失败安静降级为空表照写,绝不 Toast
+     * 打断输入。
      */
-    suspend fun refreshSlashCommands(threadId: String, agentId: String) {
-        if (!isSlashPanelAgent(agentId)) {
-            // 非面板会话(zcode/codex/pi 之外)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
+    suspend fun refreshSlashCommands(threadId: String, agentId: String, capabilities: List<String>) {
+        if (!slashPanelAgentOf(agentId, capabilities)) {
+            // 非面板会话(位不在且不在回落名单)不显示卡面(即使缓存里有别的会话留下的命令也不漏)
             send(ChatIntent.SlashCommandsSettled(emptyList()))
             return
         }

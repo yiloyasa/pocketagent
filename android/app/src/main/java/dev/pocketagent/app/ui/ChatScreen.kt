@@ -2708,12 +2708,13 @@ fun ChatScreen(
         snapshotFlow { input }.collect { syncPromptOptState(it, offlineSnapshot) }
     }
 
-    // ---- 斜杠命令面板(zcode/codex/pi 三源)----
+    // ---- 斜杠命令面板(位优先:slash:<agentId>;旧 daemon 回落三源名单)----
     // threadAgentId 在下方 getThread 处赋值;命令列表按会话进程内缓存
     // (SlashCommandCache,见 SlashCommandsLogic.kt),进会话/重连/下拉刷新才重拉。
     // daemon 回空列表 / RPC 失败都安静降级,绝不 Toast 报错打断输入;在线时
-    // hostCapabilities 已就位,内置伪命令(随 compact/review 位点亮,见
-    // slashCandidatesFor)仍给三源会话兜出可用卡面。
+    // hostCapabilities 已就位,面板判定走 slashPanelAgentOf(`slash:<agentId>`
+    // 位在即面板可用,旧 daemon 无位回落 zcode/codex/pi),内置伪命令(随
+    // compact/review 位点亮,见 slashCandidatesFor)给面板会话兜出可用卡面。
     // 【P3 Task 8 第二层】会话归属 agent 已收进 ChatViewModel(ChatState)—— 只读
     // 投影;写点唯一(getThread 回填,ThreadHeaderLoaded),读点零改动。
     // 【PF4】换会话重置随 ViewModel 键控,理由同 threadWorkspace。
@@ -2736,11 +2737,14 @@ fun ChatScreen(
     // 重组合只为了重算这一个布尔。改 snapshotFlow 订阅(不进组合作用域):面板
     // 出现时机(布尔翻转沿 + 初值)与刷新语义逐字保留 —— collect 每个发射(初值/
     // 翻转)各调一次 refreshSlashCommands,与旧"键变化重启 effect"同拍。
-    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, session.running) {
+    LaunchedEffect(threadId, threadAgentId, connectionEpoch, reloadToken, session.running, hostCaps) {
         snapshotFlow { slashTokenOf(input) != null }.collect {
             // 【C1 RPC 入 VM】拉取/缓存/镜像落位三段整体收进 ChatViewModel.refreshSlashCommands
             // (语义逐字保留:非面板清空 → 缓存先渲染 → RPC 回包/失败降级空表)。
-            chatVm.refreshSlashCommands(threadId, threadAgentId)
+            // 【2026-10-14 位优先】拉取门控 = `slash:<agentId>` 位在(旧 daemon 回落
+            // 三源名单,见 slashPanelAgentOf)—— hostCaps 入 effect key:连新 daemon
+            // 拿到 `slash:hermes` 位后、或断线重连位集合变化时,重跑一次拉取。
+            chatVm.refreshSlashCommands(threadId, threadAgentId, hostCaps)
         }
     }
     // 「优化」点击(P4 Task 2):走仓库发 RPC,结果进预览弹层等用户确认,不再

@@ -2,7 +2,8 @@ package dev.pocketagent.app.ui
 
 // SlashCommandsLogic.kt —— 斜杠命令候选面板的纯逻辑(无 Android 依赖,可 JVM 单测)。
 //
-// 【链路】会话是面板 agent(zcode/codex/pi 三源)且输入框以 "/" 开头 → 输入胶囊
+// 【链路】会话是面板 agent(`slash:<agentId>` 能力位在,旧 daemon 回落
+// zcode/codex/pi 三源名单,见 slashPanelAgentOf)且输入框以 "/" 开头 → 输入胶囊
 // 上方弹**纵向可滑动**命令卡面(名称 + 一句话说明,完整不截断);普通命令点选
 // 把已敲的 "/前缀" 回填成 "/命令 "(保留后续文字),内置伪命令点选直接**执行
 // 动作**(见 SlashAction,不填输入框)。候选数据来自 daemon 的
@@ -62,16 +63,45 @@ internal fun isPiAgent(agentId: String?): Boolean =
     agentId.equals("pi", ignoreCase = true)
 
 /**
- * 会话归属 agent 是否有斜杠命令面板(三源,只增):
+ * 会话归属 agent 是否在**旧三源名单**里(zcode/codex/pi,只增):
  *   - zcode:app-server 会话快照的 slashCommands[](原有数据源);
  *   - codex:协议没有命令清单 RPC,**skills 即命令**(daemon 侧查证与映射见
  *     internal/agent/codex_commands.go,同一 ListSlashCommands RPC 按 agent_id 自动路由);
  *   - pi:RPC get_commands 真名映射(daemon 侧见 internal/agent/pi.go
  *     SlashCommandsFor;探针实证 extension/prompt/skill 三源都是 /<名> 可直接触发的真命令)。
  * 其余(未知/旧库空串)仍不算。
+ *
+ * 【2026-10-14 位优先化后本函数的地位】不再是门控唯一依据,只作**兼容垫**:
+ * 旧 daemon(未宣告 `slash:<agentId>` 位)不误伤既有三源;新 daemon 位在时以位
+ * 为准,位是"加项"不是"名单的否定项"(见 [slashPanelAgentOf])。
  */
 internal fun isSlashPanelAgent(agentId: String?): Boolean =
     isZcodeAgent(agentId) || isCodexAgent(agentId) || isPiAgent(agentId)
+
+/**
+ * 面板 agent 判定(门控统一入口,2026-10-14 从三源名单切换到位优先消费):
+ * `slash:<agentId>` 能力位在 → 真(位是新事实源,daemon 按"provider 有
+ * SlashCommandsFor/SlashCommands 形状方法"宣告,见 daemon internal/server/host.go);
+ * 位不在 → 回落 [isSlashPanelAgent] 旧三源名单(旧 daemon 兼容垫)。
+ *
+ * 【不对称取舍(位是加项,不是名单的否定项)】两个方向分开看,取的都是"宁多勿少、
+ * 但绝不为新家摆假入口"的合取:
+ *   - 名单外的 agent(如 hermes)位在 → **显示面板**。这正是本函数的存在理由:
+ *     第四家接入不必再改名单,daemon 宣告 `slash:hermes` 即点亮(对应空态注释里
+ *     "将来的第 4 个 agent"的预言)。
+ *   - 名单内的 agent 位不在(旧 daemon 未发位 / 位生成万一回归)→ **仍显示**。
+ *     旧 daemon 上三家命令面板本来工作正常,不能因为客户端升级就静默断掉;
+ *     这正是"名单作回落垫"的方向 —— 取向与 text_generation 位消费此前的
+ *     "无位时回落名单"垫同款,偏保守(该垫已在 69729cb「旧兼容 EOL」批中
+ *     随版本闸移除;slash 按本批冻结的跨线契约保留回落垫,不跟 EOL)。
+ *   - 名单外的 agent 位也不在(如 hermes 连旧 daemon)→ **不显示**,落
+ *     [slashUnknownAgentHintVisible] 空态分支,不误开空面板。
+ * 代价:位生成若对某名单内 agent 错误缺失,面板仍显示(可能点了 daemon 由
+ * ListSlashCommands 路由失败降级空表)。此为"宁可复现旧行为、不静默断供"的
+ * 取舍;位在时始终以位为准(名单不会把位关掉)。
+ */
+internal fun slashPanelAgentOf(agentId: String?, capabilities: List<String>): Boolean =
+    agentCapableOf("slash", agentId, capabilities) || isSlashPanelAgent(agentId)
 
 /**
  * 按 agent 绑定的能力位判定(纯函数,门控统一入口):
@@ -168,7 +198,7 @@ internal fun slashCandidatesFor(
     commands: List<SlashCommandInfo>,
     capabilities: List<String>,
 ): List<SlashCommandInfo> {
-    if (!isSlashPanelAgent(agentId)) return emptyList()
+    if (!slashPanelAgentOf(agentId, capabilities)) return emptyList()
     val names = commands.mapTo(HashSet()) { it.name.lowercase() }
     val builtins = builtinSlashCommandsFor(agentId, capabilities)
     val merged = ArrayList<SlashCommandInfo>(commands.size + builtins.size)
@@ -181,11 +211,12 @@ internal fun slashCandidatesFor(
 }
 
 /**
- * 面板可见性(单一入口,UI 与单测共用):会话是面板 agent(zcode/codex/pi,见
- * isSlashPanelAgent)且不处于离线快照态,且输入以 "/" 开头敲出了词元,且过滤
- * 结果非空。内置伪命令随能力位点亮(zcode/codex 至少有 /目标兜底;pi 需要
- * compact:<id> 位给 /压缩 —— hostCapabilities 连机即拉,先于进会话,正常在线
- * 时不缺位),所以在线的三源会话哪怕 daemon 命令还没到位也有卡面可弹。
+ * 面板可见性(单一入口,UI 与单测共用):会话是面板 agent(`slash:<agentId>` 位在;
+ * 旧 daemon 无位时回落三源名单,见 [slashPanelAgentOf])且不处于离线快照态,且
+ * 输入以 "/" 开头敲出了词元,且过滤结果非空。内置伪命令随能力位点亮
+ * (zcode/codex 至少有 /目标兜底;pi 需要 compact:<id> 位给 /压缩 ——
+ * hostCapabilities 连机即拉,先于进会话,正常在线时不缺位),所以在线的
+ * 面板会话哪怕 daemon 命令还没到位也有卡面可弹。
  */
 internal fun slashPanelVisible(
     agentId: String?,
@@ -194,7 +225,7 @@ internal fun slashPanelVisible(
     offline: Boolean,
     capabilities: List<String>,
 ): Boolean {
-    if (!isSlashPanelAgent(agentId) || offline) return false
+    if (!slashPanelAgentOf(agentId, capabilities) || offline) return false
     return filterSlashCandidates(slashCandidatesFor(agentId, commands, capabilities), input).isNotEmpty()
 }
 
@@ -203,20 +234,29 @@ internal const val SLASH_UNKNOWN_AGENT_HINT = "该助手暂无可用命令"
 
 /**
  * 未知助手的空态提示是否显示(纯函数,JVM 单测钉死):
- * 会话归属 agent 已知非空但不在三源面板名单里(zcode/codex/pi 之外,如旧库残值
- * 或将来的第 4 个 agent),用户又敲出了 "/" 词元 → 输入栏上方给人话空态,而不是
- * 面板静默不弹(用户敲了 "/" 却毫无反馈,会以为坏了)。
+ * 会话归属 agent 已知非空但**面板判定为否**(`slash:<agentId>` 位不在且不在旧
+ * 三源名单里,如 hermes 连旧 daemon / 旧库残值 / 未来的第 N 个 agent),用户又
+ * 敲出了 "/" 词元 → 输入栏上方给人话空态,而不是面板静默不弹(用户敲了 "/"
+ * 却毫无反馈,会以为坏了)。
+ * 【2026-10-14 位感知】判定复用 [slashPanelAgentOf](capabilities 需从调用点传入):
+ * 位在的 agent(如 hermes 连新 daemon)走正常面板,绝不给空态;位不在的
+ * 名单外 agent 才落本分支 —— 与面板可见性同一判据,两个分支永不重叠。
  *   - agentId 为空/空白 = 会话信息还没拉到(getThread 在路上):不提示,免得
  *     加载瞬间闪一条错误印象的文案;
  *   - 离线快照态:不提示(与面板同口径,离线横幅已另行说明);
- *   - 三源会话永远走正常面板(内置伪命令兜底,见 slashPanelVisible),不进本分支。
+ *   - 面板会话永远走正常面板(内置伪命令兜底,见 slashPanelVisible),不进本分支。
  */
-internal fun slashUnknownAgentHintVisible(agentId: String?, input: String, offline: Boolean): Boolean {
+internal fun slashUnknownAgentHintVisible(
+    agentId: String?,
+    input: String,
+    offline: Boolean,
+    capabilities: List<String>,
+): Boolean {
     if (offline) return false
     if (slashTokenOf(input) == null) return false
     val id = agentId?.trim() ?: return false
     if (id.isEmpty()) return false
-    return !isSlashPanelAgent(id)
+    return !slashPanelAgentOf(id, capabilities)
 }
 
 /**
@@ -233,7 +273,7 @@ internal fun applySlashSelection(input: String, commandName: String): String {
 }
 
 /**
- * 点选回填的三源入口(按会话归属 agent 与命令动作分流,只增):
+ * 点选回填入口(按会话归属 agent 与命令动作分流,只增):
  *   - 内置伪命令(action != FILL):no-op —— 点选语义是"执行动作",由 ChatScreen
  *     在调用本函数**之前**拦截(见 SlashAction);走到这里是防御,原样返回;
  *   - codex 技能:codex 没有 "/xxx" 语法,技能靠模型读 description 触发 ——
@@ -244,7 +284,11 @@ internal fun applySlashSelection(input: String, commandName: String): String {
  *     pi 的真命令(get_commands 三源)在 prompt 以 /<名> 开头时由 pi 原生展开
  *     (extension 命令直接执行、skill:/模板注入内容),回填真名即可触发,
  *     不需要自然语言转译。
- * 其余 agent(面板本就不显示)原样防御返回。
+ * 【位优先后的口径】本函数只在面板可见时被点到(可见性已按 slashPanelAgentOf
+ * 位感知判定);位点亮的新家(如将来的 hermes 若走 /<名> 语法)走兜底分支回填
+ * "/命令 " —— 与 zcode/pi 同款;若新家需要别的触发语法,届时按 agent 在这里
+ * 增一个分流分支即可(数据面不必动)。
+ * 其余 agent(面板判定为否,点不到)原样防御返回。
  */
 internal fun applySlashPick(input: String, command: SlashCommandInfo, agentId: String?): String {
     if (command.action != SlashAction.FILL) return input

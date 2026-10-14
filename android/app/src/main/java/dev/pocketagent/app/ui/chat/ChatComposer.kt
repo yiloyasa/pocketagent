@@ -374,7 +374,8 @@ internal fun ColumnScope.ChatComposerArea(
                 )
                 .animateContentSize(PaMotion.emphasized()),
         ) {
-            // [斜杠命令卡面(纵向)] 会话是面板 agent(zcode/codex/pi 三源)且输入以 "/"
+            // [斜杠命令卡面(纵向)] 会话是面板 agent(`slash:<agentId>` 能力位在,
+            // 旧 daemon 回落 zcode/codex/pi 三源名单,见 slashPanelAgentOf)且输入以 "/"
             // 开头时,列出该线程可用的命令 + 内置伪命令(zcode=会话快照 slashCommands[],
             // codex=skills 映射,pi=get_commands 真名映射,daemon 按 agent_id 路由同一
             // RPC;内置伪命令由 slashCandidatesFor 置顶合并,/压缩 认 compact:<id>、
@@ -457,12 +458,13 @@ internal fun ColumnScope.ChatComposerArea(
                     }
                 }
             }
-            // 【未知助手空态】会话归属 agent 已知但不在三源面板名单(zcode/codex/pi
-            // 之外,如旧库残值/将来的第 4 个 agent)且敲出了 "/" → 人话空态,不静默
-            // (AUDIT §3.3:遇未知值给人话,禁止"未知/错误"字样)。agentId 还没拉到
-            // (加载中)与离线态都不提示,避免闪错/与离线横幅重复;纯逻辑见
-            // slashUnknownAgentHintVisible(SlashCommandsLogic.kt)。
-            if (slashUnknownAgentHintVisible(threadAgentId, input(), offlineSnapshot)) {
+            // 【未知助手空态】会话归属 agent 已知但面板判定为否(`slash:<agentId>`
+            // 位不在且不在旧三源名单里,如 hermes 连旧 daemon/旧库残值/未来的第 N
+            // 个 agent)且敲出了 "/" → 人话空态,不静默(AUDIT §3.3:遇未知值给人话,
+            // 禁止"未知/错误"字样)。位在的 agent(hermes 连新 daemon)走正常面板,
+            // 绝不给空态;agentId 还没拉到(加载中)与离线态都不提示,避免闪错/与
+            // 离线横幅重复;纯逻辑见 slashUnknownAgentHintVisible(SlashCommandsLogic.kt)。
+            if (slashUnknownAgentHintVisible(threadAgentId, input(), offlineSnapshot, hostCaps)) {
                 Text(
                     SLASH_UNKNOWN_AGENT_HINT,
                     fontSize = PaEditorial.Type.Caption.fontSize,

@@ -1,7 +1,8 @@
 package dev.pocketagent.app.ui
 
 // SlashCommandsLogicTest —— 斜杠命令卡面纯逻辑的 JVM 单测:
-//   1) 可见性:只认面板会话(zcode/codex/pi 三源)、离线快照态不显示、输入须以 "/" 开头敲出词元;
+//   1) 可见性:只认面板会话(`slash:<agentId>` 能力位在;旧 daemon 无位回落
+//      zcode/codex/pi 三源名单,见 slashPanelAgentOf)、离线快照态不显示、输入须以 "/" 开头敲出词元;
 //   2) 过滤:前缀匹配大小写不敏感、裸 "/" 全量、无命中退全量、**不再截断条数**(纵向可滑);
 //   3) 内置伪命令层:置顶合并、与 daemon 重名让位、非面板会话没有伪命令、
 //      动作分流(FILL 回填 / GOAL、COMPACT 执行动作不填输入框);
@@ -13,7 +14,10 @@ package dev.pocketagent.app.ui
 //   7) "/计划" "/压缩" 随能力位增减:daemon 宣告 review/compact:<agentId>
 //      (2026-09-25 能力位对齐,基线 511269d)才出现在候选里,缺位绝不摆
 //      点了必败的假入口;失败文案按错误形状分流(daemon 业务错误透传 description,
-//      UNIMPLEMENTED/UNAVAILABLE 翻成人话,兜底永远有反馈)。
+//      UNIMPLEMENTED/UNAVAILABLE 翻成人话,兜底永远有反馈);
+//   8) 位优先(2026-10-14,矩阵 §三 slash 行"三源名单是债"清账):`slash:<agentId>`
+//      位在 = 面板可用(hermes 等新家靠位点亮,不必再改名单);位不在回落三源
+//      名单(旧 daemon 兼容垫);位与名单都不在才走未知空态,三分支互斥。
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,11 +33,12 @@ class SlashCommandsLogicTest {
         SlashCommandInfo("init", "生成项目说明", "/init"),
     )
 
-    /** 模拟 daemon 四家 agent 的能力位全集(按 host.go 的接口事实摆位)。 */
+    /** 模拟 daemon 四家 agent 的能力位全集(按 host.go 的接口事实摆位;slash 位为 2026-10-14 新位)。 */
     private val capsAll = listOf(
         "compact:codex", "compact:pi", "compact:zcode",
         "fork:codex", "rollback:codex", "review:codex",
         "export_html:pi", "steer:codex", "steer:pi", "queue_clear:pi", "runtime.v1",
+        "slash:codex", "slash:pi", "slash:zcode",
     )
 
     // ---- 词元识别 ----
@@ -73,6 +78,9 @@ class SlashCommandsLogicTest {
 
     @Test
     fun `三源判定只认 zcode codex 与 pi`() {
+        // 【2026-10-14 后语义】本用例钉的是**回落名单** isSlashPanelAgent(旧 daemon
+        // 无 slash 位时的兼容垫);位感知的门控是 slashPanelAgentOf,新用例见下方
+        // 「位优先」节。回落名单本身不删(既有行为语义原样)。
         assertTrue(isSlashPanelAgent("zcode"))
         assertTrue(isSlashPanelAgent("codex"))
         assertTrue(isSlashPanelAgent("pi"))
@@ -87,6 +95,71 @@ class SlashCommandsLogicTest {
         assertTrue(isPiAgent("pi") && !isZcodeAgent("pi") && !isCodexAgent("pi"))
     }
 
+    // ---- 位优先(2026-10-14,矩阵 §三 slash 行「三源名单是债」清账)----
+    //
+    // 契约:daemon GetHostInfo.capabilities 按「provider 有 SlashCommandsFor/
+    // SlashCommands 形状方法」宣告 `slash:<agentId>`(host.go)。位在 = 面板可用
+    // (命令数据仍走 ListSlashCommands,按 agent_id 自动路由,协议不变);
+    // 位不在回落三源名单(旧 daemon 兼容垫)。位是「加项」不是「名单的否定项」:
+    // 名单外新家靠位点亮,名单内玩家不因缺位被静默断供。
+
+    /** hermes(第 4 家,旧三源名单之外)+ slash:hermes 位:位集合的模拟。 */
+    private val capsWithSlashHermes = capsAll + listOf("slash:hermes")
+
+    @Test
+    fun `slash位在则面板可用_名单外新家靠位点亮`() {
+        // hermes 不在三源名单,但 daemon 宣告 slash:hermes → 面板可用
+        assertTrue(slashPanelAgentOf("hermes", capsWithSlashHermes))
+        assertTrue(slashPanelVisible("hermes", "/", emptyList(), offline = false, capabilities = capsWithSlashHermes))
+        // 候选有内置伪命令兜底(hermes 非 pi → /目标在;无 compact/review 位 → 无 /压缩 /计划)
+        assertEquals(listOf("目标"), slashCandidatesFor("hermes", emptyList(), capsWithSlashHermes).map { it.name })
+        // 位在 → 空态分支绝不给(与面板可见性互斥,同一判据 slashPanelAgentOf)
+        assertFalse(slashUnknownAgentHintVisible("hermes", "/", offline = false, capabilities = capsWithSlashHermes))
+        // daemon 真命令照常合并展示(位管「面板可不可开」,命令数据仍走 ListSlashCommands 路由)
+        val native = listOf(SlashCommandInfo("deploy", "部署", "/deploy"))
+        assertTrue(slashCandidatesFor("hermes", native, capsWithSlashHermes).any { it.name == "deploy" })
+    }
+
+    @Test
+    fun `slash位不在回落三源名单_旧daemon兼容垫`() {
+        // 旧 daemon 不发 slash 位:三家(名单内)仍显示面板 —— 客户端升级不静默断供
+        for (id in listOf("zcode", "codex", "pi")) {
+            assertTrue(slashPanelAgentOf(id, emptyList()))
+            assertTrue(slashPanelVisible(id, "/", cmds, offline = false, capabilities = emptyList()))
+            assertFalse(slashUnknownAgentHintVisible(id, "/", offline = false, capabilities = emptyList()))
+        }
+        // 名单外且无位(hermes 连旧 daemon):不误开面板,落空态分支
+        assertFalse(slashPanelAgentOf("hermes", emptyList()))
+        assertFalse(slashPanelVisible("hermes", "/", cmds, offline = false, capabilities = emptyList()))
+        assertTrue(slashUnknownAgentHintVisible("hermes", "/", offline = false, capabilities = emptyList()))
+        // 旧库残值与 dsh 同样:名单外无位就走空态,不摆假面板
+        assertFalse(slashPanelAgentOf("dsh", emptyList()))
+        assertTrue(slashUnknownAgentHintVisible("dsh", "/", offline = false, capabilities = emptyList()))
+    }
+
+    @Test
+    fun `slash位大小写与空白变体不敏感`() {
+        assertTrue(slashPanelAgentOf("hermes", listOf(" slash:hermes ")))
+        assertTrue(slashPanelAgentOf("Hermes", listOf("Slash:Hermes")))
+        assertTrue(slashPanelAgentOf(" hermes ", listOf("slash:hermes")))
+        // 形态不对的串不误命中(整串相等口径,同 agentCapableOf:防前缀/子串误命中)
+        assertFalse(slashPanelAgentOf("hermes", listOf("slash: hermes")))
+        assertFalse(slashPanelAgentOf("hermes", listOf("slash")))
+        assertFalse(slashPanelAgentOf("hermes", listOf("slash:hermes:v2")))
+    }
+
+    @Test
+    fun `slash位空agentId一律拒绝`() {
+        // agentId 没拉到(加载中)= 绑定不到会话,位再全也不放空(硬红线)
+        assertFalse(slashPanelAgentOf(null, capsAll))
+        assertFalse(slashPanelAgentOf("", capsAll))
+        assertFalse(slashPanelAgentOf("  ", capsAll))
+        // 也绝不认别家的位:slash:zcode 不开 hermes 的门(能力位按 agent 逐个宣告)
+        assertFalse(slashPanelAgentOf("hermes", listOf("slash:zcode")))
+        // 对照:同名 agent 的位命中(整串相等)
+        assertTrue(slashPanelAgentOf("zcode", listOf("slash:zcode")))
+    }
+
     // ---- 未知助手空态(AUDIT §3.3:不许静默) ----
 
     @Test
@@ -96,21 +169,21 @@ class SlashCommandsLogicTest {
         assertTrue(hint.isNotBlank())
         assertFalse(hint.contains("未知"))
         assertFalse(hint.contains("错误"))
-        // 未知 agent(非空、非三源)+ 斜杠词元 → 空态可见
-        assertTrue(slashUnknownAgentHintVisible("echo", "/", offline = false))
-        assertTrue(slashUnknownAgentHintVisible("echo", "/he", offline = false))
-        assertTrue(slashUnknownAgentHintVisible("legacy-agent", "/看", offline = false))
+        // 未知 agent(非空、非三源、也无 slash 位)+ 斜杠词元 → 空态可见
+        assertTrue(slashUnknownAgentHintVisible("echo", "/", offline = false, capabilities = capsAll))
+        assertTrue(slashUnknownAgentHintVisible("echo", "/he", offline = false, capabilities = capsAll))
+        assertTrue(slashUnknownAgentHintVisible("legacy-agent", "/看", offline = false, capabilities = capsAll))
         // 大小写变体的三源不算未知(正常面板接管,空态不出现)
-        assertFalse(slashUnknownAgentHintVisible("ZCode", "/", offline = false))
-        assertFalse(slashUnknownAgentHintVisible("Codex", "/", offline = false))
-        assertFalse(slashUnknownAgentHintVisible("PI", "/", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("ZCode", "/", offline = false, capabilities = capsAll))
+        assertFalse(slashUnknownAgentHintVisible("Codex", "/", offline = false, capabilities = capsAll))
+        assertFalse(slashUnknownAgentHintVisible("PI", "/", offline = false, capabilities = capsAll))
         // agentId 还没拉到(加载中,null/空/空白)→ 不提示,免得闪错
-        assertFalse(slashUnknownAgentHintVisible(null, "/", offline = false))
-        assertFalse(slashUnknownAgentHintVisible("", "/", offline = false))
-        assertFalse(slashUnknownAgentHintVisible("  ", "/", offline = false))
+        assertFalse(slashUnknownAgentHintVisible(null, "/", offline = false, capabilities = capsAll))
+        assertFalse(slashUnknownAgentHintVisible("", "/", offline = false, capabilities = capsAll))
+        assertFalse(slashUnknownAgentHintVisible("  ", "/", offline = false, capabilities = capsAll))
         // 非斜杠输入不提示;离线快照态不提示(离线横幅另行说明)
-        assertFalse(slashUnknownAgentHintVisible("echo", "普通输入", offline = false))
-        assertFalse(slashUnknownAgentHintVisible("echo", "/", offline = true))
+        assertFalse(slashUnknownAgentHintVisible("echo", "普通输入", offline = false, capabilities = capsAll))
+        assertFalse(slashUnknownAgentHintVisible("echo", "/", offline = true, capabilities = capsAll))
     }
 
     // ---- 过滤(纵向卡面:不截断条数)----
@@ -298,7 +371,7 @@ class SlashCommandsLogicTest {
         // " /go"(先敲了空格再敲斜杠)不是唤起面板的词元 —— takeWhile 首字符即断
         assertNull(slashTokenOf(" /go"))
         assertNull(slashTokenOf("\n/"))
-        assertFalse(slashUnknownAgentHintVisible("echo", " /", offline = false))
+        assertFalse(slashUnknownAgentHintVisible("echo", " /", offline = false, capabilities = capsAll))
     }
 
     @Test
@@ -314,7 +387,10 @@ class SlashCommandsLogicTest {
         assertEquals("/goal\t", applySlashSelection("/goal\t", "goal"))
     }
 
-    // ---- /计划 /压缩 随能力位增减(daemon 2026-09-25 能力位对齐)----    @Test
+    // ---- /计划 /压缩 随能力位增减(daemon 2026-09-25 能力位对齐)----
+    // (2026-10-14 修复:本行缘的 @Test 曾被粘进注释导致该用例静默不跑 —— 拆行恢复)
+
+    @Test
     fun `计划伪命令只随review能力位出现`() {
         // daemon 宣告 review:codex(现仅 codex 有 StartReview 真实现)→ codex 面板出现 /计划
         assertTrue(slashCandidatesFor("codex", emptyList(), capsAll).any { it.action == SlashAction.REVIEW })
