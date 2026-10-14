@@ -13,10 +13,15 @@
 //   - 审批策略/沙箱不映射:dsh ACP 固定一次性审批(allow/reject,无"始终允许"),
 //     与 zcode 固定 mode:"build" 同款边界;
 //   - AgentSessionImporter 不做:隔离 HOME 下没有"用户桌面 dsh 会话"可导;
-//   - TextGenerator 不实现:会话标题由 dsh 自带 session-title;
 //   - 流式粒度按"块级"预期实现:agent_message_chunk 是已提交消息的文本块,
 //     非逐字 delta(上游 discussion #594;探针受缺 key 阻塞未量化,跟踪上游);
 //   - 图片输入按能力协商:promptCapabilities.image=false 时如实报错,不静默丢。
+//
+// 【2026-10-14 补位】TextGenerator 已实现(提示词优化的一次性文本生成,落点
+// text_generator.go 的 (*DshProvider).GenerateText):复用共享适配器、model/effort
+// 经会话内 set_config_option 生效(探针实证不持久,零桌面配置写入)、挂
+// denyGenerationTool 拒工具、收尾 session/close —— 上面"不做的事"清单里原先的
+// "TextGenerator 不实现"条目随之作废移除。
 package agent
 
 import (
@@ -1187,6 +1192,14 @@ func (p *DshProvider) dshThreadRefFor(id string) (threadRef, bool) {
 	defer p.threadMu.Unlock()
 	ref, ok := p.threadMap[id]
 	return ref, ok
+}
+
+// dropDshThreadRef 删掉一条内存引用(一次性轮次收尸:提示词优化的 ephemeral
+// 线程会 session/close 真删,引用若留下就指向一个已销毁的会话 —— 泄漏 + 误导)。
+func (p *DshProvider) dropDshThreadRef(id string) {
+	p.threadMu.Lock()
+	defer p.threadMu.Unlock()
+	delete(p.threadMap, id)
 }
 
 // ---- PrefsAware 子集(编译期断言见 provider.go)----

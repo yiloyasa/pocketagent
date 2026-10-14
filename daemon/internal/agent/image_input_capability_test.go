@@ -1,10 +1,10 @@
-// image_input_capability_test.go —— ImageInputter 能力声明与四家 Run 图片路径的对表钉。
+// image_input_capability_test.go —— ImageInputter 能力声明与五家 Run 图片路径的对表钉。
 //
 // 【钉住什么】EB 审计遗留:图片输入能力此前埋在各 provider 的 Run 行为里,
 // 无法接口断言,能力位(host.go 的 image_input:<id>)无生成依据。本测试钉
-// "声明 = Run 代码路径事实":codex/pi/zcode 的 Run 真实携带图片附件(逐家
-// 证据见 image_input_capability.go 各实现注释),dsh 当前路由不收图 —— 哪家
-// 丢了实现、哪家虚报,在这里红。
+// "声明 = Run 代码路径事实":codex/pi/zcode 的 Run 真实携带图片附件、hermes 经
+// 多块 session/prompt 携带(逐家证据见 image_input_capability.go 各实现注释),
+// dsh 当前路由不收图 —— 哪家丢了实现、哪家虚报,在这里红。
 
 package agent
 
@@ -24,6 +24,9 @@ func TestImageInputterAlignedWithRunImagePaths(t *testing.T) {
 		{"zcode", NewZcodeProvider(), true},
 		// dsh:promptCapabilities.image 实测 false,Run 侧门控直接报错。
 		{"dsh", NewDshProvider(), false},
+		// hermes:表态读 initialize 协商事实 —— 新构造(未握手)为 false,
+		// 广播后翻真(翻转链路钉在 hermes_image_input_test.go)。
+		{"hermes(未握手)", NewHermesProvider(), false},
 	}
 	for _, c := range cases {
 		ii, ok := c.p.(ImageInputter)

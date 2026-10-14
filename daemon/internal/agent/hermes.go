@@ -68,6 +68,13 @@ type HermesProvider struct {
 	prefs        DesktopPrefs
 	turnActive   bool
 
+	// imageNegotiated 是 initialize 应答里 promptCapabilities.image 的**协商事实**
+	// (适配器 server.py:538 硬编码广播 image=true,live 探针实测在场)。atomic 而
+	// 非跟着 caps 走:GetHostInfo 轮询线程要在握手外读它(直接读 p.caps 是数据
+	// 竞争),且"未握手 = 不声明"必须是缺省真值 —— 能力位是已验证事实的声明,
+	// 不是意愿(与 dsh 常量 false 同纪律,只是这边有事实可读)。
+	imageNegotiated atomic.Bool
+
 	threadMu  sync.Mutex
 	threadMap map[string]hermesThreadRef // threadID → ACP 会话引用(内存缓存)
 }
@@ -88,6 +95,12 @@ type hermesClient interface {
 	ListSessions(ctx context.Context, cursor string) (*hermesapp.SessionListResult, error)
 	SetSessionModel(ctx context.Context, sessionID, modelID string) error
 	Prompt(ctx context.Context, sessionID, text string) (*hermesapp.PromptOutcome, error)
+	// CallTurnCtx 多块 prompt 通道(session/prompt 的完整形状)。纯文本轮继续走
+	// Prompt;带图片的轮次要发 {type:"text"}/{type:"image"} 混合块序列,而
+	// hermesapp.Client 的 Prompt 只拼单文本块(hermesapp/acp.go:500)—— hermesapp
+	// 属 agent 之外的包(本轮改动面只在 internal/agent),故在依赖面上加这条,
+	// 由 *hermesapp.Client 既有方法直接满足(零协议改动)。
+	CallTurnCtx(ctx context.Context, method string, params any) (json.RawMessage, error)
 	CancelSession(ctx context.Context, sessionID string) error
 	SetTurnHandlers(notif func(json.RawMessage), req func(id int64, method string, params json.RawMessage))
 	Respond(id int64, result any) error
@@ -221,6 +234,11 @@ func (p *HermesProvider) ensureClient(ctx context.Context) (hermesClient, error)
 	if init != nil {
 		p.caps = init.AgentCapabilities
 		p.agentVersion = init.AgentInfo.Version
+		// 图片能力协商事实(2026-10-14 接线):只认 initialize 应答,不写死。
+		// 适配器硬编码广播 PromptCapabilities(image=True)(server.py:538,live
+		// 探针 promptCapabilities.image=true),content.py 有 ImageContentBlock →
+		// image_url data URL 的完整转换链 —— 位亮不亮由这条事实说了算。
+		p.imageNegotiated.Store(p.caps != nil && p.caps.PromptCapabilities != nil && p.caps.PromptCapabilities.Image)
 	}
 	p.client = c
 	log.Printf("[hermes] ACP 适配器已就绪 caps(loadSession=%v list=%v resume=%v fork=%v)",
@@ -231,8 +249,10 @@ func (p *HermesProvider) ensureClient(ctx context.Context) (hermesClient, error)
 // Run 执行一轮。
 func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	turnStart := time.Now()
-	text := textInputText(req.InputBlocks)
-	if strings.TrimSpace(text) == "" {
+	// 输入收集(dsh Run「输入收集」同款):文本零裁剪(硬约定),图片单独收集 ——
+	// 收下但不发 = 静默丢图,所以要么协商通过真发,要么在门控处如实报错。
+	text, images := hermesInputBlocks(req.InputBlocks)
+	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return nil, nil, fmt.Errorf("hermes: 本轮没有文本输入")
 	}
 	p.mu.Lock()
@@ -265,6 +285,11 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	c, err := p.ensureClient(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+	// 图片按能力协商(门控必须在 ensureClient 之后:协商事实来自 initialize 应答)。
+	// 未广播时如实报错,绝不静默丢图;已广播 → sendHermesPrompt 构造 ACP 图片块。
+	if len(images) > 0 && !p.SupportsImageInput() {
+		return nil, nil, errors.New("hermes 当前未广播图片输入能力(promptCapabilities.image),请改用文本输入")
 	}
 
 	workspace := req.Workspace
@@ -445,9 +470,9 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	//   3. hermesTurnCap 单轮上限 → 发取消收场。
 	outCh := make(chan hermesPromptOutcome, 1)
 	lastNotif.Store(time.Since(turnStart).Milliseconds()) // 初喂:单调毫秒,免疫墙钟跳变
-	log.Printf("[hermes] session/prompt session=%s 输入=%d字", sid, len([]rune(text)))
+	log.Printf("[hermes] session/prompt session=%s 输入=%d字 图片%d张", sid, len([]rune(text)), len(images))
 	go func() {
-		out, err := c.Prompt(ctx, sid, text)
+		out, err := sendHermesPrompt(ctx, c, sid, text, images)
 		outCh <- hermesPromptOutcome{out: out, err: err}
 	}()
 
@@ -965,6 +990,16 @@ func (p *HermesProvider) threadRefFor(id string) (hermesThreadRef, bool) {
 	defer p.threadMu.Unlock()
 	ref, ok := p.threadMap[id]
 	return ref, ok
+}
+
+// dropThreadRef 删掉一条内存引用(一次性轮次收尸:提示词优化的 ephemeral 线程
+// 不落库,引用留在 threadMap 里只会逐条泄漏 —— 与 pi DropThread「回收不留残」
+// 同纪律)。只动 daemon 内存:hermes 协议面没有会话删除方法(无 session/close),
+// 远端会话记录的残留见 text_generator.go 的 GenerateText 注释。
+func (p *HermesProvider) dropThreadRef(id string) {
+	p.threadMu.Lock()
+	defer p.threadMu.Unlock()
+	delete(p.threadMap, id)
 }
 
 func planStatusWord(acpStatus string) string {

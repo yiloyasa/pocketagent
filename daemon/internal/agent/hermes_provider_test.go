@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +48,26 @@ type fakeHermesClient struct {
 	// promptUsage 是 Prompt 注入的轮次用量(默认 nil;用量映射钉子用,见
 	// hermes_field_coverage_20261007_test.go)。
 	promptUsage *hermesapp.TurnUsage
+	// promptErr 注入 Prompt 的传输失败(默认 nil;非 nil 时如实回 (nil, err))。
+	promptErr error
+	// promptOutcome 非 nil 时原样作为终局应答返回(可给零值 = 回执空、或
+	// refusal 等失败 stopReason;默认 nil = 走既有的 end_turn 脚本)。
+	promptOutcome *hermesapp.PromptOutcome
+	// promptQuiet 抑制回放的通知帧(默认 false = 照旧回放;压缩回执钉子等
+	// 只关心应答、不想被正文帧打扰的用例置 true)。
+	promptQuiet bool
+	// callTurns 记 CallTurnCtx 的 (方法, 实参) —— 多块 prompt 形状钉子直读。
+	callTurns []fakeCallTurn
+	// callTurnResp / callTurnErr 注入 CallTurnCtx 的应答/传输失败
+	// (默认 nil = 复用 Prompt 脚本并把终局应答编回 JSON)。
+	callTurnResp json.RawMessage
+	callTurnErr  error
+}
+
+// fakeCallTurn 记一次 CallTurnCtx 调用(方法 + 原样实参)。
+type fakeCallTurn struct {
+	method string
+	params any
 }
 
 type fakeRespond struct {
@@ -127,7 +148,8 @@ func (f *fakeHermesClient) SetSessionModel(_ context.Context, sessionID, modelID
 }
 
 // Prompt 脚本:回放工具帧;文本带 need-approval 时同步发审批反向请求。
-// 终局应答形状对 server.py _finish_turn(可经 promptUsage 注入 usage)。
+// 终局应答形状对 server.py _finish_turn(可经 promptUsage 注入 usage;
+// promptErr / promptOutcome / promptQuiet 见字段注释的失败·回执·静默注入)。
 func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (*hermesapp.PromptOutcome, error) {
 	f.mu.Lock()
 	f.promptCalls++
@@ -135,8 +157,12 @@ func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (*h
 	f.promptTexts = append(f.promptTexts, text)
 	notif, req := f.notifFn, f.reqFn
 	usage := f.promptUsage
+	injErr, injOutcome, quiet := f.promptErr, f.promptOutcome, f.promptQuiet
 	f.mu.Unlock()
-	if notif != nil {
+	if injErr != nil {
+		return nil, injErr
+	}
+	if !quiet && notif != nil {
 		notif(json.RawMessage(`{"sessionId":"` + sessionID + `","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"正文片段"}}}`))
 		if strings.Contains(text, "tool-round") {
 			notif(json.RawMessage(`{"sessionId":"` + sessionID + `","update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"write_file","kind":"edit","status":"pending","content":[{"type":"diff","path":"a.txt","newText":"hi"}]}}`))
@@ -148,7 +174,59 @@ func (f *fakeHermesClient) Prompt(_ context.Context, sessionID, text string) (*h
 	if req != nil && strings.Contains(text, "need-approval") {
 		req(9001, "session/request_permission", json.RawMessage(fakePermParams))
 	}
+	if injOutcome != nil {
+		return injOutcome, nil
+	}
 	return &hermesapp.PromptOutcome{StopReason: "end_turn", Usage: usage}, nil
+}
+
+// CallTurnCtx 多块 session/prompt 通道的假实现:记账实参(形状钉子直读后复用
+// Prompt 的同一套脚本 —— 回放帧/审批/回执注入都在那边),应答编回 JSON(与真实
+// *hermesapp.Client.CallTurnCtx 的 json.RawMessage 出参同形)。
+func (f *fakeHermesClient) CallTurnCtx(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	sid, text := fakePromptArgs(params)
+	f.mu.Lock()
+	f.callTurns = append(f.callTurns, fakeCallTurn{method: method, params: params})
+	resp, injErr := f.callTurnResp, f.callTurnErr
+	f.mu.Unlock()
+	if injErr != nil {
+		return nil, injErr
+	}
+	if resp != nil {
+		return resp, nil
+	}
+	if method != "session/prompt" {
+		return nil, fmt.Errorf("fake 未实现的方法 %s", method)
+	}
+	out, err := f.Prompt(ctx, sid, text)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// fakePromptArgs 从 session/prompt 实参里取会话 id 与文本块拼接(多块序列里
+// 只认 text 块;图片块的形状断言走 callTurns 直读,不在这里编码进文本)。
+func fakePromptArgs(params any) (string, string) {
+	m, _ := params.(map[string]any)
+	if m == nil {
+		return "", ""
+	}
+	sid, _ := m["sessionId"].(string)
+	blocks, _ := m["prompt"].([]map[string]any)
+	var b strings.Builder
+	for i := range blocks {
+		if blocks[i]["type"] != "text" {
+			continue
+		}
+		t, _ := blocks[i]["text"].(string)
+		b.WriteString(t)
+	}
+	return sid, b.String()
 }
 
 const fakePermParams = `{"sessionId":"cur","toolCall":{"toolCallId":"perm-check-1","title":"运行命令: mkdir x","kind":"execute","status":"pending","rawInput":{"command":"mkdir x"}},"options":[{"optionId":"allow_once","kind":"allow_once","name":"Allow once"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}`

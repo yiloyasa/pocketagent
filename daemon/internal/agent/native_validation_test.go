@@ -76,6 +76,12 @@ func TestNativeSelectedTextGenerator(t *testing.T) {
 		generator = NewZcodeProvider()
 	case "codex":
 		generator = NewCodexProvider()
+	// 【2026-10-14 补位】dsh/hermes 的 GenerateText 落地后纳入 live 验证面
+	// (PA_LIVE_GENERATE_AGENT=dsh|hermes;default 仍然拒掉未列的家,不放宽)。
+	case "dsh":
+		generator = NewDshProvider()
+	case "hermes":
+		generator = NewHermesProvider()
 	default:
 		t.Fatal("unsupported validation Agent")
 	}

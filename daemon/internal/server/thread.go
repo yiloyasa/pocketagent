@@ -648,6 +648,22 @@ func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest
 		}
 		return &pb.Empty{}, nil
 	}
+	// hermes 路径:与 pi 同形状(*store.Thread 形)——复用 piThreadCompactor 窄接口
+	// 断言(Go 结构化类型按形状满足),host.go 的 compact:hermes 位由同一形状的
+	// piShapedCompactor 断言生成,路由与位两侧自洽。三道闸(轮次在跑 TryLock 快拒 /
+	// 会话未落地拒 / 预算超时先 session/cancel)全部在 provider 侧(agent/
+	// hermes_compact.go,/compress slash 通道,live 实证),server 只转发结构化错误
+	// —— 错误包装口径与 pi 路径逐字一致(errInternal 消息透传)。
+	if threadAgentID(t) == "hermes" {
+		pc, ok := s.cfg.Providers["hermes"].(piThreadCompactor)
+		if !ok {
+			return nil, errUnavailable("电脑上没有可用的 hermes")
+		}
+		if err := pc.CompactThread(t); err != nil {
+			return nil, errInternal(err)
+		}
+		return &pb.Empty{}, nil
+	}
 	// zcode 路径:压缩落到桌面端 session/compact(2026-09-19 控制面探针实证
 	// {sessionId} → {response, snapshot};轮次进行中 zcode 以 -32010 拒绝,
 	// 错误原样转 gRPC 错误码)。

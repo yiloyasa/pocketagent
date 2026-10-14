@@ -203,7 +203,11 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		{
 			family: "text_generation",
 			probe:  func(p Provider) bool { _, ok := p.(TextGenerator); return ok },
-			want:   map[string]bool{"codex": true, "pi": true, "zcode": true, "dsh": false},
+			// 【2026-10-14 翻转】dsh 落地 (*DshProvider).GenerateText(text_generator.go,
+			// 共享适配器 + set_config_option 会话内带 model/effort + denyGenerationTool
+			// + 收尾 session/close)后,dsh 表态由 false 翻 true —— 期望表随实现走,
+			// 矩阵文档该格由主会话同步(本测试只钉 agent 包侧四家表态)。
+			want: map[string]bool{"codex": true, "pi": true, "zcode": true, "dsh": true},
 		},
 		{
 			family: "collab",
