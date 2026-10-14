@@ -27,10 +27,8 @@ import (
 
 func findLedgerEntry(t *testing.T, agentID, method string) runtime.EventEnvelope {
 	t.Helper()
-	for _, e := range sharedRuntimeBackend().UnknownEvents().List(runtime.ListFilter{AgentID: agentID}, 0) {
-		if e.SourceMethod == method {
-			return e
-		}
+	if e, ok := firstLedgerByMethod(agentID, method); ok {
+		return e
 	}
 	t.Fatalf("agent %s 的钩子必须把 method=%s 记进诊断台账(钩子体→汇点断链)", agentID, method)
 	return runtime.EventEnvelope{}

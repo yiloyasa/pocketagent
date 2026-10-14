@@ -26,10 +26,8 @@ import (
 // findHermesLedgerEntry 取台账里 agent=hermes 且 method 匹配的登记(没有则红)。
 func findHermesLedgerEntry(t *testing.T, method string) runtime.EventEnvelope {
 	t.Helper()
-	for _, e := range sharedRuntimeBackend().UnknownEvents().List(runtime.ListFilter{AgentID: "hermes"}, 0) {
-		if e.SourceMethod == method {
-			return e
-		}
+	if e, ok := firstLedgerByMethod("hermes", method); ok {
+		return e
 	}
 	t.Fatalf("hermes 的钩子必须把 method=%s 记进诊断台账(投影兜底断链)", method)
 	return runtime.EventEnvelope{}

@@ -294,22 +294,7 @@ func (p *DshProvider) withClient(fn func(context.Context, dshClient) error) erro
 // (持有方真卡死)才返回 false → dshBusy,保留 TryLock 模式"一个卡死的操作
 // 不拖住全线"的底线(codex/zcode 同款三点纪律的第 1 点由此弱化为"有界拖")。
 func (p *DshProvider) lockLife(wait time.Duration) bool {
-	if p.lifeMu.TryLock() {
-		return true
-	}
-	if wait <= 0 {
-		return false
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		time.Sleep(25 * time.Millisecond)
-		if p.lifeMu.TryLock() {
-			return true
-		}
-		if !time.Now().Before(deadline) {
-			return false
-		}
-	}
+	return lockLifeMu(&p.lifeMu, wait)
 }
 
 // withClientCtx 在保证子进程活着且已完成 initialize 的前提下执行 fn;
@@ -1211,15 +1196,11 @@ func (p *DshProvider) dshThreadRefFor(id string) (threadRef, bool) {
 // HideReasoning → 事件路径过滤 ThinkingDelta。审批策略/沙箱不映射
 // (dsh ACP 固定一次性审批,无策略面可配 —— 蓝本 §4.3 如实边界)。
 func (p *DshProvider) ApplyPrefs(pref DesktopPrefs) {
-	p.prefsMu.Lock()
-	defer p.prefsMu.Unlock()
-	p.prefs = pref
+	applyPrefsSnapshot(&p.prefsMu, &p.prefs, pref)
 }
 
 func (p *DshProvider) hideReasoning() bool {
-	p.prefsMu.Lock()
-	defer p.prefsMu.Unlock()
-	return p.prefs.HideReasoning
+	return hideReasoningFrom(&p.prefsMu, &p.prefs)
 }
 
 // applyConfigOptions 把"线程胶囊显式 > 线程设置快照 > 桌面默认"的模型/effort
@@ -1677,13 +1658,7 @@ func (p *DshProvider) handleDshRequest(rsp dshClient, id int64, method string, p
 		// 登记进诊断台账(规格 §9):回 error 只让对端知道"这次没做成",而"收到过一个
 		// 不认识的请求"需要能事后查。thread_id 留空 —— 本函数签名里没有会话上下文,
 		// 且它的调用点之一是握手路径(那里确实没有会话),拿别的 id 冒充会更糟。
-		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-			SourceAgent:    "dsh",
-			SourceMethod:   method,
-			NormalizedKind: runtime.KindUnknownRequest,
-			RawPayload:     redactNativePayload(params),
-			Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
-		})
+		recordUnknownRequestRejection("", "dsh", method, params)
 		_ = rsp.RespondError(id, -32601, "PocketAgent 未实现该反向请求: "+method)
 		return
 	}

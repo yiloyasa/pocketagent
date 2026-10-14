@@ -21,18 +21,18 @@ import (
 // 成功即表示 codex 已开审(review/start 发起即回),结果以事件形式
 // 流回原会话,手机端现有时间线直接展示。
 func (s *Server) StartReview(ctx context.Context, req *pb.StartReviewRequest) (*pb.StartReviewResponse, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	// 计划模式目前只有 codex 有对等能力(review/start);pi / zcode 显式拒绝,
 	// 让手机端 Toast 人话,而不是打到一个不相干的 provider 上。
 	if threadAgentID(t) != "codex" {
 		return nil, errFailedPrecondition("计划模式目前仅 Codex 会话支持")
 	}
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	out, err := p.StartReview(t, req.Focus)
 	if err != nil {

@@ -25,23 +25,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-// waitFile 轮询等 fake 子进程落盘:Start 返回只代表 CreateProcess 成功,子进程
-// (测试二进制冷启动)真正写出 argv 还要几百毫秒,父进程绝不能读完就断言。
-func waitFile(t *testing.T, path string, d time.Duration) ([]byte, error) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for {
-		if raw, err := os.ReadFile(path); err == nil {
-			return raw, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, os.ErrNotExist
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-}
+	"github.com/pocketagent/daemon/internal/testkit"
+)
 
 // TestMain 兼任 argv 捕获子进程入口:Start 以 PI_NODE=<测试二进制> 拉起时,
 // 本分流先于 m.Run() 执行,把 node 视角的 argv(os.Args[1:])原样落盘。
@@ -106,7 +92,7 @@ func TestStartPassesRPCArgs(t *testing.T) {
 	}
 	// fake 子进程落盘 argv 后自行退出(os.Exit(0));先等文件再收尸 —— Close 的
 	// Kill 会打断"还没来得及写"的子进程(测试二进制冷启动要几百毫秒)。
-	raw, err := waitFile(t, argvFile, 5*time.Second)
+	raw, err := testkit.WaitFile(t, argvFile, 5*time.Second)
 	c.Close()
 	if err != nil {
 		t.Fatalf("fake 子进程未写出 argv(Start 没按 PI_NODE 拉起?): %v", err)

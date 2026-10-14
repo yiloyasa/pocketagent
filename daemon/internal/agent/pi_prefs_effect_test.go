@@ -4,7 +4,7 @@
 //  1. HideReasoning 开关:emitThinking 在开关打开时 ThinkingDelta 一帧不出,
 //     关闭(显式 false 是真值)后恢复透出 —— 与 codex.go 的 daemon 侧过滤同语义;
 //  2. ApplyPrefs 完整快照覆盖语义 + 内存态读回(desktopDefaults);
-//  3. threadModelExplicit 的"跟随 vs 显式"判定(applyDesktopDefaults 的优先级依据)。
+//  3. threadModelExplicit 的"跟随 vs 显式"判定(桌面默认模型只认 pi/ 前缀的依据)。
 package agent
 
 import (

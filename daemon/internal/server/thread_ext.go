@@ -164,9 +164,9 @@ func (s *Server) ListThreadSections(ctx context.Context, _ *pb.ListThreadSection
 }
 
 func (s *Server) CreateThreadSection(ctx context.Context, req *pb.CreateThreadSectionRequest) (*pb.ThreadSection, error) {
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	sec, err := p.CreateThreadSection(req.Name)
 	if err != nil {
@@ -176,9 +176,9 @@ func (s *Server) CreateThreadSection(ctx context.Context, req *pb.CreateThreadSe
 }
 
 func (s *Server) RenameThreadSection(ctx context.Context, req *pb.RenameThreadSectionRequest) (*pb.ThreadSection, error) {
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	sec, err := p.RenameThreadSection(req.SectionId, req.Name)
 	if err != nil {
@@ -192,9 +192,9 @@ func (s *Server) RenameThreadSection(ctx context.Context, req *pb.RenameThreadSe
 // 【注意】codex 删分组只删"分组"本身,组里的会话会变成未分组 —— 不会连会话一起删。
 // 这一点要在手机端说清楚,否则用户不敢点。
 func (s *Server) DeleteThreadSection(ctx context.Context, req *pb.DeleteThreadSectionRequest) (*pb.Empty, error) {
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	if err := p.DeleteThreadSection(req.SectionId); err != nil {
 		return nil, errInternal(err)
@@ -241,14 +241,14 @@ func (s *Server) clearSectionLocalCache(sectionID string) error {
 //     codex_thread_id)被硬拒,报的还是"先发一条消息"这种牛头不对马嘴的话 ——
 //     与 UI 的覆盖说明自相矛盾(用户实锤待补项,2026-09-20 T-05)。
 func (s *Server) MoveThreadToSection(ctx context.Context, req *pb.MoveThreadToSectionRequest) (*pb.Thread, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	if threadAgentID(t) == "codex" {
-		p := s.codexProvider()
-		if p == nil {
-			return nil, errUnavailable("电脑上没有可用的 codex")
+		p, err := s.requireCodex()
+		if err != nil {
+			return nil, err
 		}
 		if t.CodexThreadID == "" {
 			return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法分组")
@@ -275,9 +275,9 @@ func (s *Server) MoveThreadToSection(ctx context.Context, req *pb.MoveThreadToSe
 // 原路留着"。手机上必须同时看得见两条,所以这里直接建一条本地线程指向新 codex 线程,
 // 用户点开就是分叉点的上下文。
 func (s *Server) ForkThread(ctx context.Context, req *pb.ForkThreadRequest) (*pb.Thread, error) {
-	src, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	src, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	// pi 路径:pi 0.99.1 的 clone 在"当前叶"分出新分支会话文件,与 server 语义
 	// ("分出一条新会话,原会话不动")直接对齐 —— pi_fork_plan.md §0 的语义裁决。
@@ -291,9 +291,9 @@ func (s *Server) ForkThread(ctx context.Context, req *pb.ForkThreadRequest) (*pb
 		}
 		return s.forkPiThread(src, pc)
 	}
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	if src.CodexThreadID == "" {
 		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法分叉")
@@ -423,16 +423,16 @@ func forkTitle(src string) string {
 //     得靠 git(这也是为什么这个入口应当和 git 面板一起用)。
 //  2. 被丢掉的回合找不回来。
 func (s *Server) RollbackThread(ctx context.Context, req *pb.RollbackThreadRequest) (*pb.Thread, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	if req.NumTurns <= 0 {
 		return nil, errInvalidArg("回滚回合数必须大于 0")
 	}
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	if t.CodexThreadID == "" {
 		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法回滚")
@@ -478,13 +478,13 @@ func lastTurnStart(msgs []store.StoredMessage) int {
 
 // ApproveGuardianDeniedAction 用户推翻自动审查的驳回结论,要求继续执行。
 func (s *Server) ApproveGuardianDeniedAction(ctx context.Context, req *pb.ApproveGuardianDeniedActionRequest) (*pb.Empty, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	if t.CodexThreadID == "" {
 		return nil, errFailedPrecondition("这个会话还没有在电脑上落地")

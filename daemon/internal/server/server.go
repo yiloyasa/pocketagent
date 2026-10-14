@@ -445,6 +445,35 @@ func platformInfo() (string, string, string) {
 	return runtime.GOOS, runtime.GOARCH, sh
 }
 
+// requireThread 取本地会话;不存在统一回 NotFound("会话不存在")。
+//
+// 【收敛理由】18 处 RPC 入口(GetThread/GetThreadHistory/CompactThread/
+// MoveThreadToSection/... )逐字重复同一段三行样板,错误文案与状态码是
+// 手机端已依赖的对外契约 —— 收口成一个 helper 后,文案改动也只有一处。
+// 语义逐字等价:同一 Store.Get 调用、同一 errNotFound("会话不存在")。
+func (s *Server) requireThread(id string) (*store.Thread, error) {
+	t, ok := s.cfg.Store.Get(id)
+	if !ok {
+		return nil, errNotFound("会话不存在")
+	}
+	return t, nil
+}
+
+// requireCodex 取 codex provider;缺席时统一回 Unavailable("电脑上没有可用的
+// codex")。手机端据此显示"去电脑上配置"而不是当故障重试(语义出处见 errUnavailable)。
+// 【收敛理由】9 处 RPC 入口(分组三件套 / Move / Fork / Rollback / 推翻驳回 /
+// StartReview / CompactThread)逐字重复同段三行样板,收敛后错误文案单点可改;
+// 语义逐字等价(同一 codexProvider() 调用、同一 errUnavailable 文案)。
+// 注意 model_ext.go 的同串站点**不在此列**:那几处把文案填进响应字段
+// (out.Error / SettingStatus),不是错误路径,形状不同,保持原样。
+func (s *Server) requireCodex() (*agent.CodexProvider, error) {
+	p := s.codexProvider()
+	if p == nil {
+		return nil, errUnavailable("电脑上没有可用的 codex")
+	}
+	return p, nil
+}
+
 var counter int64
 
 func hostCounter() int64 { counter++; return counter }

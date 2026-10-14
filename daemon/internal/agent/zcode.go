@@ -354,22 +354,7 @@ var zcodeLockWait = 15 * time.Second
 // wait <= 0 时退化为纯 TryLock 语义 —— 既有单测靠它保住"立即忙"的断言,
 // 不必为了一个生产优化去改测试的语义。
 func (p *ZcodeProvider) lockLife(wait time.Duration) bool {
-	if p.lifeMu.TryLock() {
-		return true
-	}
-	if wait <= 0 {
-		return false
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		time.Sleep(25 * time.Millisecond)
-		if p.lifeMu.TryLock() {
-			return true
-		}
-		if !time.Now().Before(deadline) {
-			return false
-		}
-	}
+	return lockLifeMu(&p.lifeMu, wait)
 }
 
 // withClientCtx 在保证子进程活着的前提下执行 fn;失败自动重启一次。
@@ -914,16 +899,12 @@ func (p *ZcodeProvider) applyPendingGoal(threadID, sessionID string) {
 // ReasoningSummary/DisablePasteBurst 协议同样无对应面。快照照单全收(完整覆盖),
 // 与 codex 的 ApplyPrefs 同纪律。
 func (p *ZcodeProvider) ApplyPrefs(pref DesktopPrefs) {
-	p.prefsMu.Lock()
-	defer p.prefsMu.Unlock()
-	p.prefs = pref
+	applyPrefsSnapshot(&p.prefsMu, &p.prefs, pref)
 }
 
 // hideReasoning 读"隐藏推理过程"开关。
 func (p *ZcodeProvider) hideReasoning() bool {
-	p.prefsMu.Lock()
-	defer p.prefsMu.Unlock()
-	return p.prefs.HideReasoning
+	return hideReasoningFrom(&p.prefsMu, &p.prefs)
 }
 
 // hideReasoningFor 是 hideReasoning 的线程感知版(P2-8,与 codex 的
@@ -961,20 +942,14 @@ func (p *ZcodeProvider) desktopEffortFor(t *store.Thread) string {
 // emitThinking 在"隐藏推理"关闭时把思考增量推给 sink(与 codex.go/pi.go 同款
 // daemon 侧强制过滤;ZCode 协议没有原生开关)。抽成方法便于单测钉死开关行为。
 func (p *ZcodeProvider) emitThinking(delta string, sink Sink) {
-	if p.hideReasoning() {
-		return
-	}
-	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+	emitThinkingDelta(p.hideReasoning(), delta, sink)
 }
 
 // emitThinkingFor 是 emitThinking 的线程感知版(P2-8):按 hideReasoningFor 的
 // 快照语义判定(有快照按快照,旧线程回全局),Run 的事件泵走这里;
 // emitThinking 保留给无线程上下文的调用与既有单测。
 func (p *ZcodeProvider) emitThinkingFor(t *store.Thread, delta string, sink Sink) {
-	if p.hideReasoningFor(t) {
-		return
-	}
-	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+	emitThinkingDelta(p.hideReasoningFor(t), delta, sink)
 }
 
 // zcodeReasoningLevel 计算 setModel 应携带的 reasoningLevel(纯函数,单测覆盖):
@@ -1952,14 +1927,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		// 同款登记;粒度差异如实声明:zcode 侧尚无 reqUnsupported/reqUnknown 分类器,
 		// auth headers 等**已知拒答**也会进台账 —— 宁可台账有噪声,不可漏掉真未知
 		// (上游发来全新 method 时,这里是唯一的痕迹)。
-		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-			ThreadID:       req.Thread.ID,
-			SourceAgent:    "zcode",
-			SourceMethod:   method,
-			NormalizedKind: runtime.KindUnknownRequest,
-			RawPayload:     redactNativePayload(params),
-			Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
-		})
+		recordUnknownRequestRejection(req.Thread.ID, "zcode", method, params)
 		return false
 	}
 	c.SetTurnHandlers(notifHandler, reqHandler)

@@ -72,9 +72,9 @@ const (
 // "在但为空"的异常会话 → Internal。三条失败路径一律 nil 响应 + 明确 status,
 // 绝不伪装成"空结果成功"(Global Constraints:搜索失败不静默表现为空结果)。
 func (s *Server) SearchThreadMessages(ctx context.Context, req *pb.SearchThreadMessagesRequest) (*pb.SearchThreadMessagesResponse, error) {
-	t, ok := s.cfg.Store.Get(req.GetThreadId())
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.GetThreadId())
+	if err != nil {
+		return nil, err
 	}
 	if t == nil {
 		// 防御:store 口径异常(报"在"却给空会话)。宁可如实报内部错误,也不

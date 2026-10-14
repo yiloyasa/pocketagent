@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/testkit"
 )
 
 // closeRecorder 记录 stdin 是否被 Close(测试观测用,代替真实管道)。
@@ -59,7 +61,7 @@ func TestCloseKillsProcessAndReaps(t *testing.T) {
 	if !stdin.wasClosed() {
 		t.Fatal("Close 必须关闭 stdin 管道")
 	}
-	if err := waitProcessGone(cmd.Process.Pid, 10*time.Second); err != nil {
+	if err := testkit.WaitProcessGone(cmd.Process.Pid, 10*time.Second); err != nil {
 		t.Fatalf("Close 后子进程应被 Kill 并收尸: %v", err)
 	}
 	// 重复 Close 不许 panic(waitOnce 兜底:第二次不会再 Wait)

@@ -1623,14 +1623,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 			// 关联会话)。只登记**真正未知**的 reqUnknown —— reqUnsupported 是我们
 			// 明确不承担的类别(如 token 刷新),它的"没做"是已知的设计选择,不是未知。
 			if kind == reqUnknown {
-				sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-					ThreadID:       req.Thread.ID,
-					SourceAgent:    "codex",
-					SourceMethod:   method,
-					NormalizedKind: runtime.KindUnknownRequest,
-					RawPayload:     redactNativePayload(params),
-					Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
-				})
+				recordUnknownRequestRejection(req.Thread.ID, "codex", method, params)
 			}
 			_ = c.RespondError(id, -32601, msg)
 			return
@@ -2129,19 +2122,10 @@ func (p *CodexProvider) callThreadResume(threadID string, cfgOverride map[string
 	return nil
 }
 
-// Ready 探测 app-server 是否真的可用(会按需拉起子进程并 initialize)。
-//
-// 【为什么要它】设置写入后必须能回答"到底打没打到 codex"。以前所有失败都只
-// log.Printf,App 侧一无所知。这里把"能不能连上 codex"变成一个可判断的错误,
-// 由 server 层转成 setting_status 里的 failed 状态回报给手机。
-func (p *CodexProvider) Ready() error {
-	return p.ReadyCtx(context.Background())
-}
-
 // ReadyCtx 是带 ctx 的探测。ProbeHook 非空时用它(测试注入"永远超时/立即报错"),
 // 否则走真实探测。
 //
-// 【为什么要有 ctx 版本】设置页探测整段(Ready + Account + Requirements)必须
+// 【为什么要有 ctx 版本】设置页探测整段(ReadyCtx + AccountCtx + Requirements)必须
 // 共用一个短上界;没有 ctx 出入口的话,每一小步各自等满默认上界,合计就失控。
 func (p *CodexProvider) ReadyCtx(ctx context.Context) error {
 	if p.ProbeHook != nil {
@@ -2154,11 +2138,6 @@ func (p *CodexProvider) ReadyCtx(ctx context.Context) error {
 // 而 authStatus / serverInfo / 错误原因全被丢掉了 —— 于是"某个 MCP 用不了"在手机上
 // 完全看不出来。它还被 McpStatusDetailed 完全覆盖(后者按 MCP 状态详情建模)。
 // 留着一份行为不同的同名旧实现,只会让下一个人改错那一个。
-
-// Account 从模型列表里取登录账号(形如 "Codex · xxx@qq.com" 的账号组条目)。
-func (p *CodexProvider) Account() string {
-	return p.AccountCtx(context.Background())
-}
 
 // AccountCtx 是带 ctx 的账号读取(设置页探测与它共用同一个短上界)。
 func (p *CodexProvider) AccountCtx(ctx context.Context) string {

@@ -577,22 +577,18 @@ func (p *PiProvider) applyModel(ctx context.Context, c *piapp.Client, t *store.T
 // ApplyPrefs 实现 agent.PrefsAware:接收桌面设置页七项偏好的完整快照。
 //
 // 【消费哪些】HideReasoning → 事件路径过滤 ThinkingDelta(emitThinking);
-// Model/Effort → 桌面默认模型/思考强度(applyDesktopDefaults,线程未显式指定
+// Model/Effort → 桌面默认模型/思考强度(configureSelection,线程未显式指定
 // 时每轮 Run 跟随)。【不映射哪些、为什么】审批策略/沙箱:Pi 的审批走守护扩展
 // (guard.ts)与 dialog 确认,没有 approvalPolicy/sandboxPolicy 对应面 —— 这两项
 // 仅对 codex 生效;Verbosity/ReasoningSummary/DisablePasteBurst 协议无对应面,
 // 同样收下不消费。完整快照覆盖(照单全收),与 codex 的 ApplyPrefs 同纪律。
 func (p *PiProvider) ApplyPrefs(pref DesktopPrefs) {
-	p.prefsMu.Lock()
-	defer p.prefsMu.Unlock()
-	p.prefs = pref
+	applyPrefsSnapshot(&p.prefsMu, &p.prefs, pref)
 }
 
 // hideReasoning 读"隐藏推理过程"开关。
 func (p *PiProvider) hideReasoning() bool {
-	p.prefsMu.Lock()
-	defer p.prefsMu.Unlock()
-	return p.prefs.HideReasoning
+	return hideReasoningFrom(&p.prefsMu, &p.prefs)
 }
 
 // desktopDefaults 读桌面默认(模型, 思考强度);空串 = 未设置 = 跟随 Pi 当前配置。
@@ -607,10 +603,7 @@ func (p *PiProvider) desktopDefaults() (model, effort string) {
 // 【为什么抽成方法】Run 的事件泵闭包不便直接单测,把开关判断收敛到这里,
 // 单测钉死"HideReasoning=true 时 ThinkingDelta 一帧不出"。
 func (p *PiProvider) emitThinking(delta string, sink Sink) {
-	if p.hideReasoning() {
-		return
-	}
-	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+	emitThinkingDelta(p.hideReasoning(), delta, sink)
 }
 
 // hideReasoningFor 是 hideReasoning 的线程感知版(P2-8,与 codex 的
@@ -628,8 +621,8 @@ func (p *PiProvider) hideReasoningFor(t *store.Thread) bool {
 
 // desktopEffortFor 是 desktopDefaults 的线程感知面(P2-8,与 codex 的三级
 // 优先级对齐):线程设置快照(SettingsSnapshot,新建对话那一刻的值)> 全局
-// 偏好(旧线程兜底)。线程显式 Effort 的第一级由 applyDesktopDefaults 的
-// level := t.Effort 处理;快照非 nil 时快照里的空串就是"当时未设置",保持
+// 偏好(旧线程兜底)。线程显式 Effort 的第一级由 applyModel(configureSelection
+// 的 t.Effort 覆盖同理)处理;快照非 nil 时快照里的空串就是"当时未设置",保持
 // 原值生效、不中途改抓新全局值。桌面默认模型不在此列(pi 消费的七项只有
 // effort/hideReasoning,模型走 Thread.ModelID)。
 func (p *PiProvider) desktopEffortFor(t *store.Thread) string {
@@ -644,10 +637,7 @@ func (p *PiProvider) desktopEffortFor(t *store.Thread) string {
 // 当前口径判定(全局优先,不读快照 —— 见上方 hideReasoningFor 注释),
 // Run 的事件泵走这里;emitThinking 保留给无线程上下文的调用与既有单测。
 func (p *PiProvider) emitThinkingFor(t *store.Thread, delta string, sink Sink) {
-	if p.hideReasoningFor(t) {
-		return
-	}
-	sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_ThinkingDelta{ThinkingDelta: &pb.ThinkingDelta{Delta: delta}}})
+	emitThinkingDelta(p.hideReasoningFor(t), delta, sink)
 }
 
 // emitThinkingSnapshotFor 是 snapshot 帧(权威全文)的线程感知出口(P1-3):
@@ -664,53 +654,6 @@ func (p *PiProvider) emitThinkingSnapshotFor(t *store.Thread, snapshot string, s
 func threadModelExplicit(t *store.Thread) bool {
 	spec := strings.TrimPrefix(t.ModelID, "pi/")
 	return spec != "" && spec != t.ModelID && spec != "default"
-}
-
-// applyDesktopDefaults 把桌面设置页的默认模型/思考强度下发到 Pi 会话。
-// 由 Run 在 applyModel 之后调用(每轮开始,会话级状态随之刷新)。
-//
-// 【最小方案取舍】codex 的桌面默认是"每轮 turn/start 都带参数"自然覆盖;Pi 的
-// set_model/set_thinking_level 是会话级状态、没有 per-turn 参数,所以选"每轮
-// Run 开始时下发"这条最短路径(不用在会话创建处再加挂载钩子)。优先级:
-// 线程显式指定 > 桌面默认 > 跟随 Pi 当前配置(不下发)。桌面默认模型只认
-// "pi/..." 前缀 —— 它是全局默认,可能指向其他 provider(glm/codex…),指向
-// 别家时 Pi 侧不下发、沿用 Pi 自己的当前模型。失败只记日志降级继续,与
-// applyModel 同语义。
-func (p *PiProvider) applyDesktopDefaults(ctx context.Context, c *piapp.Client, t *store.Thread) {
-	model, _ := p.desktopDefaults()
-	// 【P2-8】思考强度的"桌面默认"走线程快照语义:有快照的会话按快照装配,
-	// 老会话不再随设置页全局漂移;线程显式 Effort 的第一级优先保持不变。
-	effort := p.desktopEffortFor(t)
-	if threadModelExplicit(t) {
-		// 模型已被 applyModel 下发;线程没钉思考强度时由桌面默认兜底。
-		if t.Effort == "" && effort != "" {
-			p.setThinkingLevel(ctx, c, effort)
-		}
-		return
-	}
-	// 模型跟随:桌面默认是 pi 模型才下发,否则沿用 Pi 当前配置。
-	// 【1.0.2】走 SetModel(provider+modelId 二元组),与 applyModel 同理。
-	if ms := strings.TrimPrefix(model, "pi/"); ms != "" && ms != model && ms != "default" {
-		if err := c.SetModel(ctx, ms); err != nil {
-			log.Printf("[pi] 桌面默认 set_model %s 失败(沿用当前模型): %v", ms, err)
-		}
-	}
-	// 思考强度:线程显式 > 桌面默认。【顺带补漏】applyModel 只在线程显式指定
-	// pi 模型时才下发 t.Effort("跟随"分支提前 return),这里统一补上。
-	level := t.Effort
-	if level == "" {
-		level = effort
-	}
-	if level != "" {
-		p.setThinkingLevel(ctx, c, level)
-	}
-}
-
-// setThinkingLevel 下发 set_thinking_level(失败只记日志,降级继续)。
-func (p *PiProvider) setThinkingLevel(ctx context.Context, c *piapp.Client, level string) {
-	if _, err := c.CallCtx(ctx, "set_thinking_level", map[string]any{"level": level}, piCallBudget); err != nil {
-		log.Printf("[pi] set_thinking_level %s 失败: %v", level, err)
-	}
 }
 
 // piEventNoticeKind 是 pi 事件分档入口:0.86/0.87 新增事件在此补归

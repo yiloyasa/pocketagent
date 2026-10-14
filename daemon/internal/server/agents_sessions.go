@@ -112,19 +112,47 @@ func (piSessionImporter) ReadImportHistory(sessionID, sessionFile string) (strin
 		log.Printf("[sessions] 读取 Pi 会话历史失败(导入继续,无历史): %v", err)
 		return file, nil
 	}
-	msgs := make([]store.StoredMessage, 0, len(history))
-	for _, m := range history {
-		at := m.At.UnixMilli()
-		if at <= 0 {
-			at = time.Now().UnixMilli()
+	msgs := storedTextMessages(history, func(m agent.PiSessionMessage) (string, string, time.Time) {
+		return m.Role, m.Text, m.At
+	})
+	return file, msgs
+}
+
+// storedTextMessages 把外部会话的文本消息(角色/正文/时间戳)翻成本地 StoredMessage。
+//
+// 【收敛理由】pi / codex rollout / Claude 三条导入路径各有一段逐字相同的转换
+// 循环(agents_sessions.go / codexsessions.go / external_sessions.go),连
+// "时间戳缺失(at<=0)用导入时刻兜底"的行为都复制了三份。三家源消息类型分属
+// 不同包(agent.PiSessionMessage / agent.CodexSessionMessage /
+// externalconv.Message),字段同形但 Go 无法跨包按形状断言结构体 —— 用泛型 +
+// 三字段提取函数收口,兜底逻辑从此只有这一份。语义逐字等价:同一
+// Role/Blocks 构造、同一 at<=0 → time.Now().UnixMilli() 兜底、同样容量预分配。
+func storedTextMessages[M any](src []M, extract func(M) (role, text string, at time.Time)) []store.StoredMessage {
+	out := make([]store.StoredMessage, 0, len(src))
+	for _, m := range src {
+		role, text, at := extract(m)
+		ms := at.UnixMilli()
+		if ms <= 0 {
+			ms = time.Now().UnixMilli()
 		}
-		msgs = append(msgs, store.StoredMessage{
-			Role:      m.Role,
-			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: m.Text}}}},
-			CreatedAt: at,
+		out = append(out, store.StoredMessage{
+			Role:      role,
+			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: text}}}},
+			CreatedAt: ms,
 		})
 	}
-	return file, msgs
+	return out
+}
+
+// defaultWorkspaceCwd 导入路径的工作区兜底:本地默认工作区优先,再退 daemon
+// 启动工作区。ImportCodexThread / ImportAgentThread 两处同款三层兜底收口,
+// 语义逐字等价(同一 DefaultWorkspace()/cfg.Workspace 取值顺序)。
+// GetHostInfo 的同款两层取值(host.go)不在收敛之列:那是探活路径,保持零改动。
+func (s *Server) defaultWorkspaceCwd() string {
+	if ws := s.cfg.Store.DefaultWorkspace(); ws != "" {
+		return ws
+	}
+	return s.cfg.Workspace
 }
 
 // builtinSessionImporters 内置能力适配器:扫描机制长在 agent 包包级函数上的
@@ -303,10 +331,7 @@ func (s *Server) ImportAgentThread(ctx context.Context, req *pb.ImportAgentThrea
 	}
 	cwd := strings.TrimSpace(req.Cwd)
 	if cwd == "" {
-		cwd = s.cfg.Store.DefaultWorkspace()
-		if cwd == "" {
-			cwd = s.cfg.Workspace
-		}
+		cwd = s.defaultWorkspaceCwd()
 	}
 	t := &store.Thread{
 		ID:        randomID("th"),

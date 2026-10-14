@@ -111,17 +111,8 @@ func (imp claudeSessionImporter) ReadImportHistory(sessionID, sessionFile string
 		}
 		return file, nil
 	}
-	msgs := make([]store.StoredMessage, 0, len(sess.Messages))
-	for _, m := range sess.Messages {
-		at := m.At.UnixMilli()
-		if at <= 0 {
-			at = time.Now().UnixMilli()
-		}
-		msgs = append(msgs, store.StoredMessage{
-			Role:      m.Role,
-			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: m.Text}}}},
-			CreatedAt: at,
-		})
-	}
+	msgs := storedTextMessages(sess.Messages, func(m externalconv.Message) (string, string, time.Time) {
+		return m.Role, m.Text, m.At
+	})
 	return file, msgs
 }

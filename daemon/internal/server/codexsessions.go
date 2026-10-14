@@ -134,19 +134,9 @@ func codexRolloutMessages(codexThreadID string) ([]store.StoredMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]store.StoredMessage, 0, len(msgs))
-	for _, m := range msgs {
-		at := m.At.UnixMilli()
-		if at <= 0 {
-			at = time.Now().UnixMilli()
-		}
-		out = append(out, store.StoredMessage{
-			Role:      m.Role,
-			Blocks:    []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: m.Text}}}},
-			CreatedAt: at,
-		})
-	}
-	return out, nil
+	return storedTextMessages(msgs, func(m agent.CodexSessionMessage) (string, string, time.Time) {
+		return m.Role, m.Text, m.At
+	}), nil
 }
 
 func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThreadRequest) (*pb.ImportCodexThreadResponse, error) {
@@ -177,10 +167,7 @@ func (s *Server) ImportCodexThread(ctx context.Context, req *pb.ImportCodexThrea
 		}
 	}
 	if cwd == "" {
-		cwd = s.cfg.Store.DefaultWorkspace()
-		if cwd == "" {
-			cwd = s.cfg.Workspace
-		}
+		cwd = s.defaultWorkspaceCwd()
 	}
 	t := &store.Thread{
 		ID:            randomID("th"),

@@ -1,9 +1,6 @@
 //go:build !windows
 
-package zcodeapp
-
-// close_wait_other_test.go —— Close 收尸测试的平台辅助(非 Windows)。
-// 用 signal 0 探活:err != nil(ErrProcessDone/ESRCH)即进程已退出。
+package testkit
 
 import (
 	"fmt"
@@ -12,8 +9,12 @@ import (
 	"time"
 )
 
-// waitProcessGone 轮询等待进程退出,超时返回错误。
-func waitProcessGone(pid int, timeout time.Duration) error {
+// WaitProcessGone 轮询等待进程退出,超时返回错误。
+// 走 signal 0 探测:err != nil(ErrProcessDone/ESRCH)即视作已退出。
+//
+// 正文原样收编自 codexapp/close_wait_other_test.go 与
+// zcodeapp/close_wait_other_test.go(两份逐字同款)。
+func WaitProcessGone(pid int, timeout time.Duration) error {
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return nil // 进程已不存在

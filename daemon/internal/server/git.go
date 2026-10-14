@@ -145,13 +145,7 @@ func (s *Server) Diff(ctx context.Context, req *pb.GitDiffRequest) (*pb.GitDiffR
 }
 
 func (s *Server) Stage(ctx context.Context, req *pb.GitStageRequest) (*pb.Empty, error) {
-	args := []string{"add"}
-	if len(req.Paths) == 0 {
-		args = append(args, "-A")
-	} else {
-		args = append(args, "--")
-		args = append(args, req.Paths...)
-	}
+	args := appendGitPathArgs([]string{"add"}, req.Paths, "-A")
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
 		return nil, errInvalidArg(errText(out, err))
 	}
@@ -159,13 +153,7 @@ func (s *Server) Stage(ctx context.Context, req *pb.GitStageRequest) (*pb.Empty,
 }
 
 func (s *Server) Unstage(ctx context.Context, req *pb.GitUnstageRequest) (*pb.Empty, error) {
-	args := []string{"restore", "--staged"}
-	if len(req.Paths) == 0 {
-		args = append(args, ".")
-	} else {
-		args = append(args, "--")
-		args = append(args, req.Paths...)
-	}
+	args := appendGitPathArgs([]string{"restore", "--staged"}, req.Paths, ".")
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
 		return nil, errInvalidArg(errText(out, err))
 	}
@@ -261,17 +249,23 @@ func (s *Server) CreateBranch(ctx context.Context, req *pb.CreateBranchRequest) 
 
 func (s *Server) DiscardChanges(ctx context.Context, req *pb.DiscardChangesRequest) (*pb.Empty, error) {
 	// 手机端调用前必须二次确认;daemon 侧不再拦
-	args := []string{"restore"}
-	if len(req.Paths) == 0 {
-		args = append(args, ".")
-	} else {
-		args = append(args, "--")
-		args = append(args, req.Paths...)
-	}
+	args := appendGitPathArgs([]string{"restore"}, req.Paths, ".")
 	if out, err := gitOutput(ctx, req.Repo, args...); err != nil {
 		return nil, errInvalidArg(errText(out, err))
 	}
 	return &pb.Empty{}, nil
+}
+
+// appendGitPathArgs 给 git 命令追加"路径参数或空路径兜底":带路径时先加
+// "--" 分隔符(路径可能以 - 开头,不分隔会被 git 当旗标解析),空路径则用调用方
+// 给的兜底(add -A / restore .)。Stage / Unstage / DiscardChanges 三处同款
+// 五行样板收口;Commit 的"有路径才先 add"是条件执行语义(空路径不跑命令),
+// 形状不同,刻意不并入。纯函数,参数拼装逐字等价。
+func appendGitPathArgs(args []string, paths []string, emptyFallback string) []string {
+	if len(paths) == 0 {
+		return append(args, emptyFallback)
+	}
+	return append(append(args, "--"), paths...)
 }
 
 func firstLine(s string) string {

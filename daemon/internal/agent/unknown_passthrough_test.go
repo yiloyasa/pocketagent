@@ -31,16 +31,10 @@ func stubUnknownPassthrough(on bool) func() {
 	return func() { unknownPassthroughQuery = old }
 }
 
-// ledgerEntries 按 agent+method 过滤台账条目。
+// ledgerEntries 按 agent+method 过滤台账条目(循环体见 ledger_query_testkit)。
 func ledgerEntries(t *testing.T, agentID, method string) []runtime.EventEnvelope {
 	t.Helper()
-	var out []runtime.EventEnvelope
-	for _, e := range sharedRuntimeBackend().UnknownEvents().List(runtime.ListFilter{AgentID: agentID}, 0) {
-		if e.SourceMethod == method {
-			out = append(out, e)
-		}
-	}
-	return out
+	return ledgerByMethod(agentID, method)
 }
 
 // ---- dsh 三态 ------------------------------------------------------------------

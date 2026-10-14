@@ -280,9 +280,9 @@ func sortByCreated(threads []*store.Thread, asc bool) {
 }
 
 func (s *Server) GetThread(ctx context.Context, req *pb.GetThreadRequest) (*pb.Thread, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	t = s.recoverNativeResult(ctx, t)
 	// 【症状②③】会话存在,但它所依托的原生事实来源(电脑上的记录/文件)已经找不到了:
@@ -514,9 +514,9 @@ func (s *Server) deleteChildStubs(parentID string) {
 // codex 侧失败不影响本地结果(它可能是个还没在电脑上落地的新会话),
 // 但会记日志,不让"以为归档了其实没有"悄悄发生。
 func (s *Server) ArchiveThread(ctx context.Context, req *pb.ArchiveThreadRequest) (*pb.Thread, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	if req.Archived {
 		t.Status = pb.ThreadStatus_THREAD_STATUS_ARCHIVED
@@ -536,9 +536,9 @@ func (s *Server) ArchiveThread(ctx context.Context, req *pb.ArchiveThreadRequest
 }
 
 func (s *Server) SetThreadGoal(ctx context.Context, req *pb.SetThreadGoalRequest) (*pb.Thread, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	if threadAgentID(t) != "codex" && threadAgentID(t) != "zcode" {
 		return nil, errFailedPrecondition("该 Agent 未提供原生目标模式")
@@ -631,9 +631,9 @@ type nativeSessionDeleter interface {
 }
 
 func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest) (*pb.Empty, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	// pi 路径:落 pi 的 compact 命令(同步等真实压缩完成;运行中/未落地由
 	// provider 侧闸门拒绝并给结构化错误)。会话归属以 AgentID 为准(显式失败,
@@ -678,9 +678,9 @@ func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest
 	}
 	// codex 路径(原有):真实压缩落到 codex 的 thread/compact/start,由桌面端
 	// agent 真正执行。手动压缩入口(手机端可后续接),与自动压缩共用同一条 codex 通道。
-	p := s.codexProvider()
-	if p == nil {
-		return nil, errUnavailable("电脑上没有可用的 codex")
+	p, err := s.requireCodex()
+	if err != nil {
+		return nil, err
 	}
 	if t.CodexThreadID == "" {
 		return nil, errFailedPrecondition("这个会话还没有在电脑上落地(先发一条消息),暂时无法压缩")
@@ -692,8 +692,8 @@ func (s *Server) CompactThread(ctx context.Context, req *pb.CompactThreadRequest
 }
 
 func (s *Server) CancelTurn(ctx context.Context, req *pb.CancelTurnRequest) (*pb.Empty, error) {
-	if _, ok := s.cfg.Store.Get(req.ThreadId); !ok {
-		return nil, errNotFound("会话不存在")
+	if _, err := s.requireThread(req.ThreadId); err != nil {
+		return nil, err
 	}
 	// 手机端"终止任务":取到该线程在跑的轮次取消函数并触发。
 	// provider.Run 会因 ctx 取消而返回,轮次按 FAILED 收尾(带已产出的部分内容),
@@ -718,9 +718,9 @@ func (s *Server) CancelTurn(ctx context.Context, req *pb.CancelTurnRequest) (*pb
 // FailedPrecondition(它没有原生排队面),不静默换人、不假装成功。条数回给
 // 手机端做 Toast 确认;provider 失败(PI_QUEUE_CLEAR_FAILED 等)如实转 Internal。
 func (s *Server) ClearQueuedInputs(ctx context.Context, req *pb.ClearQueuedInputsRequest) (*pb.ClearQueuedInputsResponse, error) {
-	t, ok := s.cfg.Store.Get(req.GetThreadId())
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.GetThreadId())
+	if err != nil {
+		return nil, err
 	}
 	if threadAgentID(t) != "pi" {
 		return nil, errFailedPrecondition("该会话的 agent 没有可撤回的原生排队输入(仅 pi 会话支持)")
@@ -750,9 +750,9 @@ func (s *Server) ClearQueuedInputs(ctx context.Context, req *pb.ClearQueuedInput
 // 有下发能力的 agent 不钉(电脑端发起的改名照常同步回来),没有的钉,
 // 未来新 agent 接入自动获得合理默认(能透传就透传,不能就本地钉住)。
 func (s *Server) RenameThread(ctx context.Context, req *pb.RenameThreadRequest) (*pb.Thread, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	t.Title = req.Title
 	// codex 的下发通道在下方(SetCodexThreadName);其余 agent 有 titlePusher
@@ -795,9 +795,9 @@ func (s *Server) RenameThread(ctx context.Context, req *pb.RenameThreadRequest) 
 // messages[])把历史落库缓存,之后(以及打过一轮之后)一律走本地,不再在线。
 // 拉取失败降级返回已有内容+日志,绝不把历史页打挂;codex/pi 路径零改动。
 func (s *Server) GetThreadHistory(ctx context.Context, req *pb.GetThreadHistoryRequest) (*pb.GetThreadHistoryResponse, error) {
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	t = s.recoverNativeResult(ctx, t)
 	// 【症状②③】原生事实来源已找不到(文件被删/被移)时,不静默返回空历史假装成功,
@@ -1052,9 +1052,9 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 	if input == nil {
 		return errInvalidArg("第一帧必须是 TurnInput")
 	}
-	t, ok := s.cfg.Store.Get(input.ThreadId)
-	if !ok {
-		return errNotFound("会话不存在")
+	t, err := s.requireThread(input.ThreadId)
+	if err != nil {
+		return err
 	}
 	// Reserve the whole stream (including queued turns and final persistence).
 	// Cancellation is not completion: never overlap a replacement with an old
@@ -1068,9 +1068,9 @@ func (s *Server) StartTurn(stream pb.ThreadService_StartTurnServer) error {
 		return errFailedPrecondition("上一轮仍在收尾，请稍后重试")
 	}
 	defer s.activeTurns.Clear(t.ID, lease)
-	t, ok = s.cfg.Store.Get(input.ThreadId)
-	if !ok {
-		return errNotFound("会话不存在")
+	t, err = s.requireThread(input.ThreadId)
+	if err != nil {
+		return err
 	}
 
 	// 【会话内切换模型 / 思考强度 —— 2026-09-18 修复】
@@ -1881,9 +1881,9 @@ func (s *Server) ExportThreadHtml(ctx context.Context, req *pb.ExportThreadHtmlR
 	if strings.TrimSpace(req.GetThreadId()) == "" {
 		return nil, errInvalidArg("缺少会话 id")
 	}
-	t, ok := s.cfg.Store.Get(req.ThreadId)
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.ThreadId)
+	if err != nil {
+		return nil, err
 	}
 	if threadAgentID(t) != "pi" {
 		return nil, errFailedPrecondition("目前只有 Pi 会话支持导出 HTML 存档")

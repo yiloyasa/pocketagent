@@ -14,23 +14,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-// waitFile 轮询等 fake 子进程落盘(Start 返回 ≠ 子进程已跑完;测试二进制冷启动
-// 需要几百毫秒)。
-func waitFile(t *testing.T, path string, d time.Duration) ([]byte, error) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for {
-		if raw, err := os.ReadFile(path); err == nil {
-			return raw, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, os.ErrNotExist
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-}
+	"github.com/pocketagent/daemon/internal/testkit"
+)
 
 // TestMain 兼任 argv 捕获子进程入口:被 Start 以 CODEX_BIN 拉起时,
 // os.Args[1:] == ["app-server", "-c", "notify=[]", "--disable", "apps", ...]。
@@ -53,7 +39,7 @@ func TestStartPassesDaemonScopeArgs(t *testing.T) {
 	}
 	// fake 子进程落盘 argv 后自行退出;先等文件再收尸(Close 的 Kill 会打断
 	// 还没来得及写的子进程)。
-	raw, err := waitFile(t, argvFile, 5*time.Second)
+	raw, err := testkit.WaitFile(t, argvFile, 5*time.Second)
 	c.Close()
 	if err != nil {
 		t.Fatalf("fake 子进程未写出 argv(Start 没按 CODEX_BIN 拉起?): %v", err)
@@ -128,7 +114,7 @@ func TestStartAppendsCollabExtraArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start(fake CODEX_BIN): %v", err)
 	}
-	raw, err := waitFile(t, argvFile, 5*time.Second)
+	raw, err := testkit.WaitFile(t, argvFile, 5*time.Second)
 	c.Close()
 	if err != nil {
 		t.Fatalf("fake 子进程未写出 argv: %v", err)

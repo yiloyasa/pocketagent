@@ -145,9 +145,7 @@ func (p *HermesProvider) Models() []pb.ModelInfo {
 // ACP 的审批由适配器的 request_permission 反向请求驱动(手机审批卡裁决),
 // 编辑策略由 hermes 自己的会话模式管,daemon 不越权改写。
 func (p *HermesProvider) ApplyPrefs(prefs DesktopPrefs) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.prefs = prefs
+	applyPrefsSnapshot(&p.mu, &p.prefs, prefs)
 }
 
 // ---- 生命周期预算(R2:懒启动两道闸都对齐四家,消灭无界挂起/无界排队)----
@@ -171,22 +169,7 @@ var errHermesBusy = &busySentinelError{msg: "hermes 正忙(另一个操作正在
 // false → 调用方回忙哨兵,保留 TryLock 模式"一个卡死的操作不拖住全线"的底线。
 // wait <= 0 退化为纯 TryLock 语义(与 zcode 同款,给测试留"立即忙"断言口)。
 func (p *HermesProvider) lockLife(wait time.Duration) bool {
-	if p.lifeMu.TryLock() {
-		return true
-	}
-	if wait <= 0 {
-		return false
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		time.Sleep(25 * time.Millisecond)
-		if p.lifeMu.TryLock() {
-			return true
-		}
-		if !time.Now().Before(deadline) {
-			return false
-		}
-	}
+	return lockLifeMu(&p.lifeMu, wait)
 }
 
 // ensureClient 懒启动:定位运行时 → 拉适配器 → ACP initialize(能力快照)。
@@ -619,9 +602,10 @@ func (p *HermesProvider) cancelTurn(c hermesClient, sessionID string) {
 // 时间线"排队中"徽标,文案即事实、一次到位。给 dsh 补一个恒 false 的 Steer
 // 反而把它的 Toast 从正确的"已排队"翻成不实的"已插入",徒增一次误导 —— 故
 // 不补,hermes 保留实现(steer:hermes 位在场,与 codex/pi 同一提交路径,落点
-// 由 Queued 回执裁定)。已知代价(呈现侧,另案):hermes 的提交 Toast 会先报
-// "已插入",随后被 Queued 徽标纠正 —— 该文案归手机端所有,daemon 不动位、
-// steer 行为本身不改(红线)。
+// 由 Queued 回执裁定)。曾经的呈现侧代价(提交 Toast 先报"已插入"再被徽标
+// 纠正)已于 2026-10-14 修复:手机端 steerSubmitNotice 改为帧驱动,Toast 只认
+// Steered/Queued 实际回执(TurnDelivery.deliveryAckNotice),不再按位预判。
+// daemon 不动位、steer 行为本身不改(红线)。
 func (p *HermesProvider) Steer(context.Context, string, []pb.ContentBlock) (bool, string, error) {
 	return false, "", nil
 }
@@ -882,13 +866,7 @@ func (p *HermesProvider) handleRequestPermission(c hermesClient, id int64, metho
 		// "收到过一个不认识的请求"要能事后查 —— 与 codex/zcode/dsh 同位路径同款
 		// UNKNOWN_REQUEST 登记。thread_id 留空:本函数签名里没有会话上下文(dsh
 		// 同口径,拿别的 id 冒充更糟)。载荷脱敏,注记安全拒绝语义。
-		sharedRuntimeBackend().UnknownEvents().Record(runtime.EventEnvelope{
-			SourceAgent:    "hermes",
-			SourceMethod:   method,
-			NormalizedKind: runtime.KindUnknownRequest,
-			RawPayload:     redactNativePayload(params),
-			Note:           "已回协议错误 -32601(安全拒绝;未替用户做任何审批决定)",
-		})
+		recordUnknownRequestRejection("", "hermes", method, params)
 		_ = c.RespondError(id, -32601, "PocketAgent 未实现该反向请求: "+method)
 		return
 	}
@@ -970,9 +948,7 @@ func buildHermesPermissionCall(perm *hermesapp.RequestPermissionParams) *pb.Tool
 }
 
 func (p *HermesProvider) hideReasoning() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.prefs.HideReasoning
+	return hideReasoningFrom(&p.mu, &p.prefs)
 }
 
 func (p *HermesProvider) setThreadRef(id string, ref hermesThreadRef) {

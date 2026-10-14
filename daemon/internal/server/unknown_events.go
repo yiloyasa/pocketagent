@@ -25,6 +25,19 @@ func (s *Server) unknownLog() *runtime.UnknownEventLog {
 	return s.runtimeBackend.UnknownEvents()
 }
 
+// requireUnknownLog 取诊断台账;未启用(无运行时后端)统一回
+// NotFound("未知事件诊断台账未启用")。收口 Get/Acknowledge/Execute 三个入口
+// 逐字相同的三行样板,文案与状态码单点可改、语义逐字等价。
+// ListUnknownEvents 与 controlDomainDialysis 的 nil 分支是"空清单/降级展示"
+// 语义(不是错误路径),刻意不并入。
+func (s *Server) requireUnknownLog() (*runtime.UnknownEventLog, error) {
+	lg := s.unknownLog()
+	if lg == nil {
+		return nil, errNotFound("未知事件诊断台账未启用")
+	}
+	return lg, nil
+}
+
 // validUnknownKind 校验 normalized_kind 取值。
 // 【取值表统一从 runtime.KnownKinds() 取】两处各写一份字符串列表迟早对不上,
 // 那种"筛选项里有、校验却说非法"的自相矛盾最难查。
@@ -73,9 +86,9 @@ const unknownSupportBundleHint = "如需进一步处理，可联系维护者并�
 
 // GetUnknownEvent 取单条详情(含脱敏后的原始载荷)。
 func (s *Server) GetUnknownEvent(_ context.Context, req *pb.GetUnknownEventRequest) (*pb.UnknownEventResponse, error) {
-	log := s.unknownLog()
-	if log == nil {
-		return nil, errNotFound("未知事件诊断台账未启用")
+	log, err := s.requireUnknownLog()
+	if err != nil {
+		return nil, err
 	}
 	if req.GetEventId() == "" {
 		return nil, errInvalidArg("缺少 event_id")
@@ -119,9 +132,9 @@ func buildUnknownEventResponse(e runtime.EventEnvelope) *pb.UnknownEventResponse
 
 // AcknowledgeUnknownEvent 记录处置动作。
 func (s *Server) AcknowledgeUnknownEvent(_ context.Context, req *pb.AcknowledgeUnknownEventRequest) (*pb.AcknowledgeUnknownEventResponse, error) {
-	log := s.unknownLog()
-	if log == nil {
-		return nil, errNotFound("未知事件诊断台账未启用")
+	log, err := s.requireUnknownLog()
+	if err != nil {
+		return nil, err
 	}
 	if req.GetEventId() == "" {
 		return nil, errInvalidArg("缺少 event_id")

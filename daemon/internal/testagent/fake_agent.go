@@ -129,9 +129,6 @@ func ToolCall(id, name, jsonArgs string) AgentEvent {
 	return toolCallEvent{card: &pb.ToolCallBlock{Id: id, Name: name, JsonArgs: jsonArgs}}
 }
 
-// ToolCallCard 用现成卡回放工具调用开始(需要精细卡面时用)。
-func ToolCallCard(card *pb.ToolCallBlock) AgentEvent { return toolCallEvent{card: card} }
-
 type toolResultEvent struct {
 	callID string
 	ok     bool
@@ -230,9 +227,6 @@ func Completed(texts ...string) AgentEvent {
 	}
 	return completedEvent{blocks: blocks}
 }
-
-// CompletedBlocks 终局:Run 以现成块返回(图片等非文本终稿用)。
-func CompletedBlocks(blocks []pb.ContentBlock) AgentEvent { return completedEvent{blocks: blocks} }
 
 type failedEvent struct{ err error }
 

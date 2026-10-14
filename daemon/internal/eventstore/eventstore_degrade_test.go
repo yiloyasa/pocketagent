@@ -14,20 +14,14 @@ package eventstore
 
 import (
 	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-)
 
-// captureLog 截获标准 log 输出,返回读取函数与恢复函数。
-func captureLog() (read func() string, restore func()) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	return buf.String, func() { log.SetOutput(os.Stderr) }
-}
+	"github.com/pocketagent/daemon/internal/testkit"
+)
 
 // diskSeqs 直接读盘(两代文件)收集全部可解析行的 seq,验证真实落盘内容。
 func diskSeqs(t *testing.T, dir string) []int64 {
@@ -64,7 +58,7 @@ func seqsEqual(got []int64, want ...int64) bool {
 // 降级丢弃,降级窗口不再落盘)→ 过自愈节拍 → 重开成功恢复落盘,窗口内缺失
 // 的 seq 如实留缺(续传断点语义兜底)。
 func TestDegradeRecoversAfterWriteError(t *testing.T) {
-	readLog, restore := captureLog()
+	readLog, restore := testkit.CaptureLog()
 	defer restore()
 
 	dir := t.TempDir()
@@ -124,7 +118,7 @@ func TestDegradeRecoversAfterWriteError(t *testing.T) {
 // WARNING 醒目日志(含"事件落盘已暂停")→ 解除占用并过节拍 → 自愈重开,
 // 下一帧顺带补上此前失败的轮转(文件仍超限,轮转判断照常生效),落盘恢复。
 func TestRotateFailureDegradesWithWarningAndHeals(t *testing.T) {
-	readLog, restore := captureLog()
+	readLog, restore := testkit.CaptureLog()
 	defer restore()
 
 	dir := t.TempDir()
@@ -189,7 +183,7 @@ func TestRotateFailureDegradesWithWarningAndHeals(t *testing.T) {
 // 重开一次 —— 磁盘持续坏时,热路径不能被打成周期性 OpenFile 热点。
 // 注入:自愈目标路径指向不存在的子目录,OpenFile 必败(跨平台确定性)。
 func TestRecoverGatingThrottlesRetries(t *testing.T) {
-	readLog, restore := captureLog()
+	readLog, restore := testkit.CaptureLog()
 	defer restore()
 
 	s := &Store{dir: t.TempDir(), maxBytes: DefaultMaxBytes, recoverInterval: time.Hour}

@@ -141,13 +141,3 @@ func Compile(ctx context.Context, timeout time.Duration, sources ...Source) []Ca
 func isFollowDefault(c Candidate) bool {
 	return c.ID == "" || c.ID == "default"
 }
-
-// HasProvider 报告候选集中是否存在指定 provider(消费端能力门控辅助)。
-func HasProvider(cs []Candidate, provider string) bool {
-	for _, c := range cs {
-		if c.Provider == provider {
-			return true
-		}
-	}
-	return false
-}

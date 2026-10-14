@@ -77,9 +77,9 @@ const zcodeSlashBudget = 20 * time.Second
 
 // ListSlashCommands 返回 zcode 会话可用的斜杠命令(空列表 = 没有面板,不是错误)。
 func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommandsRequest) (*pb.ListSlashCommandsResponse, error) {
-	t, ok := s.cfg.Store.Get(req.GetThreadId())
-	if !ok {
-		return nil, errNotFound("会话不存在")
+	t, err := s.requireThread(req.GetThreadId())
+	if err != nil {
+		return nil, err
 	}
 	resp := &pb.ListSlashCommandsResponse{}
 	// 非 zcode 会话:codex 走"skills 即命令"(agent_commands.go,与 zcode 共用

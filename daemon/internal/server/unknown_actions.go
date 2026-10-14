@@ -125,9 +125,9 @@ var unknownActionMu sync.Mutex
 // ExecuteUnknownEventAction 执行一个未知事件用户动作(gRPC 方法体,语义见文件头)。
 // 与包内其余未用 context 的 RPC 同款,ctx 以 _ 占位。
 func (s *Server) ExecuteUnknownEventAction(_ context.Context, req *pb.UnknownEventActionRequest) (*pb.UnknownEventActionResult, error) {
-	log := s.unknownLog()
-	if log == nil {
-		return nil, errNotFound("未知事件诊断台账未启用")
+	log, err := s.requireUnknownLog()
+	if err != nil {
+		return nil, err
 	}
 	if req.GetEventId() == "" {
 		return nil, errInvalidArg("缺少 event_id")

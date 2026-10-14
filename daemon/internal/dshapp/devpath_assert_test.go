@@ -18,36 +18,15 @@ package dshapp
 
 import (
 	"os"
-	"strings"
 	"testing"
 
-	"github.com/pocketagent/daemon/internal/hostenv/goscan"
+	"github.com/pocketagent/daemon/internal/testkit"
 )
 
-// TestSourceHasNoDeveloperPaths 扫描本包全部**非测试** Go 源码的字符串字面量，
-// 断言不含开发机专有痕迹。
+// TestSourceHasNoDeveloperPaths 扫描本包全部**非测试** Go 源码的字符串字面量,
+// 断言不含开发机专属路径(实现收编到 testkit,与 piapp/dshapp 同款一份)。
 func TestSourceHasNoDeveloperPaths(t *testing.T) {
-	files, err := goscan.PackageGoFiles(".")
-	if err != nil {
-		t.Fatalf("枚举包内 Go 文件失败: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatal("未扫到任何源文件 —— 闸门静默空转就是假绿")
-	}
-	var offenders []string
-	for _, f := range files {
-		hits, err := goscan.DeveloperTracesInFile(f)
-		if err != nil {
-			t.Fatalf("解析 %s 失败: %v", f, err)
-		}
-		if len(hits) > 0 {
-			offenders = append(offenders, f+" → "+strings.Join(hits, ", "))
-		}
-	}
-	if len(offenders) > 0 {
-		t.Fatalf("源码字符串常量含开发机专有路径（会被编译进发布包，规格 §2 禁止）:\n  %s",
-			strings.Join(offenders, "\n  "))
-	}
+	testkit.AssertNoDeveloperPaths(t)
 }
 
 // TestLocateDshReturnsOnlyExistingPaths：未设 DSH_BIN / DSH_NODE 时，LocateDsh

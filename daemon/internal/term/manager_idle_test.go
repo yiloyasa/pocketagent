@@ -1,14 +1,13 @@
 package term
 
 import (
-	"bytes"
 	"context"
-	"log"
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/testkit"
 )
 
 // P1 会话生命周期回归:空闲回收 / 有 reader 不回收 / 重 Attach 已回收会话。
@@ -29,16 +28,9 @@ func waitCond(cond func() bool, timeout time.Duration) bool {
 	return cond()
 }
 
-// captureLog 截获标准 log 输出,返回读取函数与恢复函数。
-func captureLog() (read func() string, restore func()) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	return buf.String, func() { log.SetOutput(os.Stderr) }
-}
-
 // 回收触发:无 reader 且闲置超过 idle → 会话被关闭、移出表、打回收日志。
 func TestIdleReclaimWithoutReaders(t *testing.T) {
-	readLog, restore := captureLog()
+	readLog, restore := testkit.CaptureLog()
 	defer restore()
 
 	m := NewManager()
@@ -65,7 +57,7 @@ func TestIdleReclaimWithoutReaders(t *testing.T) {
 
 // 有 reader 绝不回收;reader 反注册后重新开始计时并可回收。
 func TestNoReclaimWhileReaderAttached(t *testing.T) {
-	readLog, restore := captureLog()
+	readLog, restore := testkit.CaptureLog()
 	defer restore()
 
 	m := NewManager()
@@ -170,7 +162,7 @@ func TestReaperLoopStopsOnContextCancel(t *testing.T) {
 
 // shell 已自行退出的死会话由回收器清出表,防 map 积压。
 func TestDeadSessionSweptFromTable(t *testing.T) {
-	readLog, restore := captureLog()
+	readLog, restore := testkit.CaptureLog()
 	defer restore()
 
 	m := NewManager()

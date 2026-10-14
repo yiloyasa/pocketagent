@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/pocketagent/daemon/internal/testkit"
 )
 
 // newTestClient 造一个手动的 Client:stdin 用内存缓冲代替管道,
@@ -255,7 +257,7 @@ func TestCloseKillsProcessAndClosesStdin(t *testing.T) {
 	if !stdin.wasClosed() {
 		t.Fatal("Close 必须关闭 stdin 管道")
 	}
-	if err := waitProcessGone(cmd.Process.Pid, 10*time.Second); err != nil {
+	if err := testkit.WaitProcessGone(cmd.Process.Pid, 10*time.Second); err != nil {
 		t.Fatalf("Close 后子进程应被 Kill 退出: %v", err)
 	}
 }
