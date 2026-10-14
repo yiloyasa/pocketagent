@@ -279,7 +279,8 @@ class PaBridge {
   final MethodChannel _methods;
   final EventChannel _events;
 
-  // ── 方法面（首批 6 条；宿主侧一律【Kotlin 宿主桥 B4 波次实现】）──────────
+  // ── 方法面（首批 6 条 + B3-3 追补 listThreads；宿主侧一律【Kotlin 宿主桥
+  // B4 波次实现】）────────────────────────────────────────────────────────
 
   /// 主机信息 —— proto `HostService.GetHostInfo`（proto/v1/host.proto）。
   ///
@@ -353,6 +354,25 @@ class PaBridge {
   /// 【Kotlin 宿主桥 B4 波次实现】
   Future<void> startTurn(TurnInput input) =>
       _invokeExpectNull('startTurn', input.writeToBuffer());
+
+  /// 会话列表 —— proto `ThreadService.ListThreads`（proto/v1/thread.proto:18）。
+  ///
+  /// arguments：`ListThreadsRequest` 的 wire 字节（空请求 = 空字节数组，编码总则
+  /// §2.1 同 getHostInfo）。返回：`ListThreadsResponse` 的 wire 字节 → gen stub
+  /// 反序列化（threads[] 逐条是 proto `Thread`）。
+  ///
+  /// 【为什么默认不带参】B3-3 只接列表首屏：搜索/分组/归档三维筛选仍是页面本地
+  /// 纯函数（applyThreadFilter），服务端过滤由调用方按需填 request 字段——
+  /// 方法面保持「请求消息原样编码」，不在这里写死任何筛选默认值。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。宿主缺席时如实抛
+  /// HOST_UNAVAILABLE——这就是 B4 前 Threads 页的诚实占位路径。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ListThreadsResponse> listThreads([ListThreadsRequest? request]) => _invoke(
+        'listThreads',
+        (request ?? ListThreadsRequest()).writeToBuffer(),
+        _decodeListThreads,
+      );
 
   // ── 事件面 ──────────────────────────────────────────────────────────────
 
@@ -441,6 +461,9 @@ class PaBridge {
   HostInfo _decodeHostInfo(Object? raw) =>
       _parseHostInfo('getHostInfo 返回值', _expectBytes('getHostInfo 返回值', raw));
 
+  ListThreadsResponse _decodeListThreads(Object? raw) => _parseListThreads(
+      'listThreads 返回值', _expectBytes('listThreads 返回值', raw));
+
   /// 判别 Envelope：`type` + 载荷字段（channel-contract.md §4 的 payload 表）。
   PaConnEvent _decodeEvent(Object? raw) {
     if (raw is! Map) {
@@ -493,6 +516,17 @@ HostInfo _parseHostInfo(String where, Uint8List bytes) {
     throw PaBridgeException(
       PaBridgeErrorCodes.decodeFailed,
       '$where 的 HostInfo 字节不可解析：$e',
+    );
+  }
+}
+
+ListThreadsResponse _parseListThreads(String where, Uint8List bytes) {
+  try {
+    return ListThreadsResponse.fromBuffer(bytes);
+  } on InvalidProtocolBufferException catch (e) {
+    throw PaBridgeException(
+      PaBridgeErrorCodes.decodeFailed,
+      '$where 的 ListThreadsResponse 字节不可解析：$e',
     );
   }
 }

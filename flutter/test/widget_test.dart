@@ -1,11 +1,46 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/main.dart';
 import 'package:pocketagent_ui/pages/onboarding_prefs.dart';
+import 'package:pocketagent_ui/transport/pa_bridge.dart';
 
 import 'support/pump_helpers.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  // HomeShell 用 IndexedStack 同时构建四个 Tab：ThreadsPage 的默认数据源
+  // （BridgeThreadsDataSource）会真发 `dev.pocketagent/bridge` 调用。宿主桥
+  // B4 波次前不存在——真实设备上如实得 HOST_UNAVAILABLE；而 flutter_tester
+  // 的**未 mock 通道**只在真实事件循环里送错（fake-async 下永不送达），
+  // 加载转圈会让 pumpAndSettle 超时。这里按生产路径伪造宿主 wire 行为：
+  //   - getConnectionState 正常应答（快照可读是「宿主在不在」的探针，本文件
+  //     不验这一面，让它以紧凑的「已断开」态呈现，避免错误文案把设置页的
+  //     首屏布局撑高）；
+  //   - 其余方法（含 listThreads）一律 MissingPluginException → 空应答 →
+  //     invokeMethod 抛 MissingPluginException：复刻宿主桥未注册，让线程页
+  //     走它自己的诚实路径（错误态「未就绪（B4 波次）」）。
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel(kPaBridgeMethodChannel),
+      (MethodCall call) async {
+        if (call.method == 'getConnectionState') {
+          return <Object?, Object?>{
+            'connState': 'down',
+            'connTransport': '',
+            'connAddress': '',
+            'connectionEpoch': 0,
+            'hostCapabilities': <Object?>[],
+          };
+        }
+        throw MissingPluginException(
+            'No implementation found for method ${call.method}');
+      },
+    );
+  });
+
   testWidgets('底部 4 Tab（会话/工具/文件/设置）默认暗色，深浅色可切', (tester) async {
     // 已看过教程的启动路径（本用例只验收 4 Tab 壳与深浅色， onboarding 见
     // main_routing_test.dart 的首启用例）
@@ -29,7 +64,12 @@ void main() {
       <String>['会话', '工具', '文件', '设置'],
     );
     expect(nav.selectedIndex, 0);
-    expect(find.text('静态示例数据 · B3 阶段接入真实会话'), findsOneWidget);
+    // 默认 Tab = 会话页，数据源走真通道：本测试环境宿主未注册（见 setUp 的
+    // 生产路径复刻），页面如实显示「未就绪（B4 波次）」错误态——不是空态、
+    // 更不是假列表（B3-3 接真后线程页的默认路径）。
+    expect(find.text('会话列表加载失败'), findsOneWidget);
+    expect(find.textContaining('未就绪（B4 波次）'), findsOneWidget);
+    expect(find.text('还没有会话'), findsNothing);
 
     // 默认暗色
     expect(

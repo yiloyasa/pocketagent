@@ -1,15 +1,36 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/main.dart';
 import 'package:pocketagent_ui/pages/onboarding.dart';
 import 'package:pocketagent_ui/pages/onboarding_prefs.dart';
 import 'package:pocketagent_ui/pages/splash.dart';
+import 'package:pocketagent_ui/transport/pa_bridge.dart';
 
 import 'support/pump_helpers.dart';
 
 /// 根装配测试：Splash 覆盖层 → Onboarding → 4 Tab HomeShell 的启动路由
 /// （Kotlin `MainActivity.kt:112-127` 覆盖层 + `RootNav` startDestination 语义）。
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  // HomeShell 用 IndexedStack 同时构建四个 Tab：ThreadsPage 的默认数据源
+  // （BridgeThreadsDataSource）会真发 `dev.pocketagent/bridge` 调用。宿主桥
+  // B4 波次前不存在——真实设备上如实得 HOST_UNAVAILABLE；而 flutter_tester
+  // 的**未 mock 通道**只在真实事件循环里送错（fake-async 下永不送达），
+  // 加载转圈会让 pumpAndSettle 超时。按生产路径伪造「宿主未注册」，让线程
+  // 页走它自己的诚实路径（错误态），本文件只管路由断言。
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel(kPaBridgeMethodChannel),
+      (MethodCall call) async {
+        throw MissingPluginException(
+            'No implementation found for method ${call.method}');
+      },
+    );
+  });
+
   testWidgets('首启:Splash 覆盖 Onboarding,播完摘层后才点得到教程', (tester) async {
     final InMemoryOnboardingPrefs prefs = InMemoryOnboardingPrefs();
     await tester.pumpWidget(PocketAgentApp(onboardingPrefs: prefs));

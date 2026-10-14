@@ -36,7 +36,7 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
    不静默吞。唯一例外见 §4（未知事件类型也是显式失败，不透传——双端同 APK
    同 versionCode，不存在"新宿主对旧 UI"单边演进）。
 
-## 3. 方法清单（首批 6 条；宿主侧全部【B4 待实现】）
+## 3. 方法清单（首批 6 条 + B3-3 追加 1 条；宿主侧全部【B4 待实现】）
 
 | # | 方法名（契约字符串） | Dart 签名 | arguments | 返回 |
 |---|---|---|---|---|
@@ -46,6 +46,7 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 | 4 | `getConnectionState` | `Future<PaConnState> getConnectionState()` | null | Map（五键，见下） |
 | 5 | `pairCode` | `Future<String> pairCode()` | null | 非空 String |
 | 6 | `startTurn` | `Future<void> startTurn(TurnInput input)` | `TurnInput` 字节 | null |
+| 7 | `listThreads` | `Future<ListThreadsResponse> listThreads([ListThreadsRequest?])` | `ListThreadsRequest` 字节（缺省 = 空消息） | `ListThreadsResponse` 字节 |
 
 ### 3.1 `getHostInfo` —— proto `HostService.GetHostInfo`（proto/v1/host.proto）
 
@@ -104,6 +105,18 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
   Turn 双向流的 Dart 形态，B3 波次另行接入（本波只有发起，没有消费面）。
 - 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）。
 
+### 3.7 `listThreads([request])` —— proto `ThreadService.ListThreads`（proto/v1/thread.proto:18，B3-3 追加）
+
+- 返回字节 → gen stub `ListThreadsResponse`（`threads[]` 即 proto `Thread`）。
+- 为什么默认不带参：B3-3 只吃列表面，置顶/归档/三维筛选都在页端版本化
+  （`applyThreadFilter`），请求面保持「空消息原文」——不在传参层写死任何筛选默认值。
+- 列表为空 = 真空态（手机端显示「还没有会话」）；**通道不可用是另一条路径**
+  （`HOST_UNAVAILABLE` →「桌面端会话通道未就绪（B4 波次）」），两者在 UI 与测试里
+  严格区分，不许用空列表冒充错误（防假空态）。
+- 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+- 宿主侧语义（B4）：转发 daemon `ListThreads` → `ListThreadsResponse` 字节回传。
+
 ## 4. 事件清单（EventChannel `dev.pocketagent/bridge/events`）
 
 payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
@@ -143,11 +156,13 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 ## 6. Kotlin 宿主侧待实现（B4 波次清单）
 
 - [ ] 在 FlutterEngine 挂载时注册 MethodChannel `dev.pocketagent/bridge`
-      handler：6 个方法按 §3 签名（method 名字符串逐字对齐）。
+      handler：7 个方法按 §3 签名（method 名字符串逐字对齐）。
 - [ ] 返回值一律走 proto `writeToBuffer()` 字节（与 gRPC 契约同源，复用
-      `HostInfo`/`HostEvent`/`TurnInput` 的既有 Kotlin 生成类）。
+      `HostInfo`/`HostEvent`/`TurnInput`/`ListThreadsResponse` 的既有 Kotlin 生成类）。
 - [ ] `getConnectionState`：直接取 `AgentConnection` 五条 StateFlow 当前值拼
       §3.4 五键 Map（键名 = 字段名）。
+- [ ] `listThreads`：转发 daemon `ThreadService.ListThreads`，`threads[]` 按
+      proto `Thread` 原样字节回传（不给手机端做投影/筛选，那是页端的事）。
 - [ ] 注册 EventChannel `dev.pocketagent/bridge/events` StreamHandler：
       五条 StateFlow 合流（任一变化 → `conn_state` 全量快照帧）、
       `hostEvents`（WatchEvents）逐帧 → `host_event`（字节直转）；

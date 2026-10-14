@@ -6,19 +6,21 @@ import '../components/pa_status_chip.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
+import 'threads_bridge.dart';
 import 'threads_data.dart';
 
 /// 会话列表：agent 圆角矩形头像 + 标题 + 摘要 + 状态 chip + 时间。
 ///
-/// B3 第 2 步骨架：模型、三维筛选（agent × 状态 × 搜索）、加载/错误/空三态已按
-/// page-contracts §1.3 的 Threads 契约定形；**数据源仍是内存 fake**（见
-/// threads_data.dart，顶栏文案如实标注「静态示例数据」）——后续波次把 [source]
-/// 换成 ThreadService 实现即可，本页的状态机与筛选逻辑不用动。
+/// B3 第 3 步：数据源默认走真通道 —— [BridgeThreadsDataSource]（PaBridge
+/// `listThreads` → proto `Thread` 六字段映射，见 threads_bridge.dart）。宿主桥
+/// 未注册（B4 波次前）时如实进错误态「桌面端会话通道未就绪（B4 波次）」，
+/// **不伪装成空列表**——空态「还没有会话」与错误态是两条路径（分别有测试钉死）。
+/// 内存 fake（[FakeThreadsDataSource]）保留给测试注入；三维筛选为本地纯函数。
 class ThreadsPage extends StatefulWidget {
   const ThreadsPage({super.key, this.source});
 
-  /// 数据源注入点：测试传可控 fake；生产不传即用内存示例数据（B3 后续波次接
-  /// ThreadService）。
+  /// 数据源注入点：测试传可控 fake / 带 mock 通道的桥数据源；生产不传即
+  /// [BridgeThreadsDataSource]（真走 `dev.pocketagent/bridge` 方法面）。
   final ThreadsDataSource? source;
 
   @override
@@ -39,7 +41,10 @@ class _ThreadsPageState extends State<ThreadsPage> {
   @override
   void initState() {
     super.initState();
-    _source = widget.source ?? const FakeThreadsDataSource();
+    // 默认数据源 = 真通道（B3-3）：走 `dev.pocketagent/bridge` 的 listThreads；
+    // 宿主桥未注册（B4 波次前）时如实进错误态，**不伪装成空列表**（见
+    // threads_bridge.dart 的诚实占位说明）。测试注入 [source] 即旁路真通道。
+    _source = widget.source ?? BridgeThreadsDataSource();
     _queryCtrl = TextEditingController();
     _load();
   }
@@ -114,13 +119,6 @@ class _ThreadsPageState extends State<ThreadsPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 10),
-          child: Text(
-            '静态示例数据 · B3 阶段接入真实会话',
-            style: PATypography.caption.copyWith(color: pa.fgTertiary),
-          ),
-        ),
         ..._buildPhaseBody(context, pa),
       ],
     );
@@ -198,8 +196,10 @@ class _ThreadsPageState extends State<ThreadsPage> {
     if (_threads.isEmpty) {
       return <Widget>[
         _EmptyView(
+          // 空态 = 通道真读了、daemon 真回了空列表（真「还没有会话」）；
+          // 通道没就绪/读失败走上面的错误态，绝不会落到这里（两条路径分家）。
           title: '还没有会话',
-          hint: '数据源仍是内存示例（B3 后续波次接 ThreadService），当前为空列表',
+          hint: '桌面端还没有会话记录，去电脑上开一个任务吧',
         ),
       ];
     }

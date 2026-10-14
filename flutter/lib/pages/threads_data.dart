@@ -4,11 +4,10 @@
 // 可被单测直接命中的纯逻辑；混进 widget 文件会让「筛选逻辑单测」被迫拖着
 // MaterialApp 跑，回归时分不清是逻辑错还是渲染错。
 //
-// 【为什么这一步用内存 fake】B3 第 2 步只验收「列表 + 三态 + 三维筛选」的界面
-// 形状，ThreadService（page-contracts §1.3 的 4 个列表源 + 11 个写 RPC + 离线
-// 快照）尚未接线。fake 就是 fake：顶栏文案如实写「静态示例数据」，不冒充真会话
-//（红线：不留假绿）。后续波次把 [ThreadsDataSource] 换成 ThreadService 实现即可，
-// 页面一行不用改 —— 这就是接口形状先按契约定死的意义。
+// 【数据源现状（B3-3）】生产默认已切到真通道 BridgeThreadsDataSource
+// （threads_bridge.dart：PaBridge listThreads → proto Thread 六字段映射）。
+// 本文件的 [FakeThreadsDataSource] 保留给测试注入与离线预览——fake 就是 fake：
+// 它从不冒充生产数据源，页面也只在被显式注入时才会用到它。
 
 import '../components/pa_status_chip.dart';
 
@@ -137,10 +136,10 @@ class ThreadsLoadFailure implements Exception {
   String toString() => 'ThreadsLoadFailure: $message';
 }
 
-/// 内存 fake 数据源 —— **不是真会话**，B3 第 2 步的界面形状验收用。
+/// 内存 fake 数据源 —— **不是真会话**，测试注入与离线预览用。
 ///
-/// 【为什么可 const 且零延迟】本波没有后台轮询/分页，加载即完成：立即完成的
-/// Future 让 `pumpAndSettle` 能收敛（引入假延时只会让既有 widget 测试多一个
+/// 【为什么可 const 且零延迟】没有后台轮询/分页，加载即完成：立即完成的
+/// Future 让 `pumpAndSettle` 能收敛（引入假延时只会让 widget 测试多一个
 /// 必须显式推进的时钟）。需要测加载态时，测试侧注入带 Completer 的源。
 ///
 /// 【失败注入】[failure] 非空时 `load()` 如实抛错，用来验证错误态与重试，
@@ -163,7 +162,7 @@ class FakeThreadsDataSource implements ThreadsDataSource {
   }
 }
 
-/// 示例数据：沿用 B1 静态骨架的六条内容（顶栏文案仍如实标「静态示例数据」）。
+/// 示例数据：B1 静态骨架的六条内容（测试与离线预览用；生产默认走真通道）。
 const List<ThreadSummary> kSampleThreads = <ThreadSummary>[
   ThreadSummary(
     id: 'thread-1',

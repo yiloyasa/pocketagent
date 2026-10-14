@@ -1,22 +1,32 @@
-// Threads 页骨架测试：ThreadSummary 渲染 + 加载/错误/空三态 + 筛选交互。
+// Threads 页骨架测试：ThreadSummary 渲染 + 加载/错误/空三态 + 筛选交互 + 真通道默认接线。
 //
 // 【三态怎么测】数据源是注入点（ThreadsDataSource），测试用可控 fake 把
 // 「还在加载」「拉失败了」「空列表」三种时序摆到台面上——不是靠 sleep 碰运气，
 // 加载态用 Completer 卡住，错误态用一次性失败的源，重试后要真变绿。
+//
+// 【默认接线怎么测】最后一组不注入 source（走生产默认 BridgeThreadsDataSource
+// + 真 `dev.pocketagent/bridge` 通道），用 setMockMethodCallHandler 复刻宿主 wire
+// 行为（模式同 settings 页测试）。**两条路径必须分家**：宿主未注册（B4 前）→
+// 错误态「未就绪（B4 波次）」；宿主正常回空响应 → 空态「还没有会话」——各钉一条，
+// 防「假空态」（红线：不留假绿）。
 //
 // 筛选的**逻辑**在 threads_data_test.dart 用纯函数钉死；这里只验筛选条的交互
 // 真的驱动了列表（点 chip / 输搜索框 → 行集合变化 → 筛空有出口）。
 
 import 'dart:async';
 
+import 'package:fixnum/fixnum.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/components/pa_card.dart';
 import 'package:pocketagent_ui/components/pa_status_chip.dart';
+import 'package:pocketagent_ui/gen/pocketagent/v1/thread.pb.dart';
 import 'package:pocketagent_ui/pages/threads.dart';
 import 'package:pocketagent_ui/pages/threads_data.dart';
 import 'package:pocketagent_ui/theme/palette.dart';
 import 'package:pocketagent_ui/theme/pocket_theme.dart';
+import 'package:pocketagent_ui/transport/pa_bridge.dart';
 
 /// 卡住不返回的源：用来把「加载中」钉在屏幕上。
 class _PendingSource implements ThreadsDataSource {
@@ -128,28 +138,18 @@ void main() {
       expect(find.text('修复登录页 token 过期跳转'), findsOneWidget);
     });
 
-    testWidgets('空列表 → 「还没有会话」，并如实说明数据源是示例', (tester) async {
+    testWidgets('空列表 → 「还没有会话」（真真空态，不是通道错误的伪装）', (tester) async {
       await pumpThreads(tester, source: const _StaticSource(<ThreadSummary>[]));
       await tester.pumpAndSettle();
 
       expect(find.text('还没有会话'), findsOneWidget);
-      expect(find.textContaining('ThreadService'), findsOneWidget);
+      expect(find.textContaining('B4 波次'), findsNothing,
+          reason: '空态不许出现「未就绪」字样——那是错误路径的词');
       expect(find.byType(PAStatusChip), findsNothing);
     });
   });
 
   group('行渲染', () {
-    testWidgets('默认数据源 = B1 六条示例；顶栏文案如实标注', (tester) async {
-      await pumpThreads(tester);
-      await tester.pumpAndSettle();
-
-      expect(find.text('静态示例数据 · B3 阶段接入真实会话'), findsOneWidget);
-      expect(find.text('修复登录页 token 过期跳转'), findsOneWidget);
-      // 六条示例都在首屏内（行较紧凑、不滚动也全可见）——
-      // 之前误判为 findsNothing 是因为默认 surface 偏矮，实际首屏就能看到。
-      expect(find.text('写 0.4.0 发布说明'), findsOneWidget);
-    });
-
     testWidgets('ThreadSummary 六字段落位：头像 agentId / 标题 / 摘要 / 时间 / 状态 chip',
         (tester) async {
       await pumpThreads(tester, source: const _StaticSource(demo));
@@ -241,6 +241,111 @@ void main() {
         isEmpty,
         reason: '清除筛选必须连搜索框一起复位，否则界面看着还在搜',
       );
+    });
+  });
+
+  group('默认接线：真通道（不注入 source）', () {
+    const MethodChannel methodChannel = MethodChannel(kPaBridgeMethodChannel);
+    late TestDefaultBinaryMessenger messenger;
+
+    setUp(() {
+      messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    });
+
+    /// 默认数据源 = BridgeThreadsDataSource（真 `dev.pocketagent/bridge`）：
+    /// 这些用例不传 source，验的就是生产构造出的那条链路。
+    Uint8List threadsBytes(List<Thread> threads) =>
+        ListThreadsResponse(threads: threads).writeToBuffer();
+
+    Thread protoThread({
+      required String id,
+      required String title,
+      String agentId = 'codex',
+      ThreadStatus status = ThreadStatus.THREAD_STATUS_IDLE,
+      int messageCount = 0,
+    }) =>
+        Thread(
+          id: id,
+          title: title,
+          agentId: agentId,
+          status: status,
+          messageCount: messageCount,
+          updatedAtUnixMs: Int64(DateTime.now().millisecondsSinceEpoch),
+        );
+
+    testWidgets('宿主未注册（B4 前）→ 错误态「未就绪（B4 波次）」，绝不是空态',
+        (tester) async {
+      // 复刻生产：宿主未注册 handler → MissingPluginException → HOST_UNAVAILABLE。
+      messenger.setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+        throw MissingPluginException(
+            'No implementation found for method ${call.method}');
+      });
+
+      await pumpThreads(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.text('会话列表加载失败'), findsOneWidget);
+      expect(find.textContaining('未就绪（B4 波次）'), findsOneWidget);
+      expect(find.text('还没有会话'), findsNothing,
+          reason: '通道没就绪不许走空态——那是「真没有会话」的伪装版（红线：不留假绿）');
+      expect(find.text('重试'), findsOneWidget, reason: '错误态给重试出口');
+
+      // 重试必须真的重新发真调用：把宿主「装上」后重试应转绿。
+      messenger.setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+        return threadsBytes(<Thread>[
+          protoThread(id: 't1', title: '修复登录页 token 过期跳转'),
+        ]);
+      });
+      await tester.tap(find.text('重试'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('会话列表加载失败'), findsNothing);
+      expect(find.text('修复登录页 token 过期跳转'), findsOneWidget);
+    });
+
+    testWidgets('宿主正常回空响应 → 空态「还没有会话」（与错误态分家的另一条）',
+        (tester) async {
+      messenger.setMockMethodCallHandler(
+        methodChannel,
+        (MethodCall call) async => ListThreadsResponse().writeToBuffer(),
+      );
+
+      await pumpThreads(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.text('还没有会话'), findsOneWidget);
+      expect(find.text('会话列表加载失败'), findsNothing);
+      expect(find.textContaining('未就绪'), findsNothing,
+          reason: '空态不许出现错误路径的词——两条路径断言必须互相排斥');
+      expect(find.byType(PAStatusChip), findsNothing);
+    });
+
+    testWidgets('宿主正常回列表 → 行渲染（标题/agent 头像/消息数摘要/状态）',
+        (tester) async {
+      messenger.setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+        return threadsBytes(<Thread>[
+          protoThread(
+            id: 't1',
+            title: '修复登录页 token 过期跳转',
+            agentId: 'pi',
+            status: ThreadStatus.THREAD_STATUS_RUNNING,
+            messageCount: 12,
+          ),
+        ]);
+      });
+
+      await pumpThreads(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.text('修复登录页 token 过期跳转'), findsOneWidget);
+      expect(find.text('12 条消息'), findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(PACard), matching: find.text('pi')),
+        findsOneWidget,
+        reason: 'agent_id 原样进头像',
+      );
+      expect(find.text('运行中'), findsWidgets);
     });
   });
 }
