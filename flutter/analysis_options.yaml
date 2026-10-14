@@ -1,0 +1,17 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+    # module 模板生成的宿主壳（无 Dart 源码，仅占位）
+    - .android/**
+    - .ios/**
+
+# 说明：本工程要求 `flutter analyze` 零 warning / 零 info。
+# 确有必要的抑制必须带注释写明理由，禁止无注释 ignore。
