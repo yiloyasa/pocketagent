@@ -29,6 +29,25 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # ── B2 通道契约：protobuf 编解码运行时 ──────────────────────────────
+  # 为什么必须显式声明：lib/gen/pocketagent/v1/ 下的 *.pb.dart 是 protoc
+  # (36.1) + protoc-gen-dart (protoc_plugin 25.1.0) 从 proto/v1/*.proto 直接
+  # 生成的产物，生成的 import 写死 `package:protobuf/protobuf.dart`；
+  # 版本 6.1.0 与 protoc_plugin 25.1.0 生成头声明的运行时一致（再生成方法见
+  # docs/channel-contract.md 附录）。约束用 ^6.1.0：protobuf 6.x 内线格式稳定。
+  protobuf: ^6.1.0
+  # fixnum：protobuf 的 Int64 运行时依赖（proto 的 int64 字段在 Dart 侧是
+  # Int64 不是 int，直接引用必须显式声明，否则 depend_on_referenced_packages
+  # lint 不过）。版本跟随 protobuf 6.1.0 的解析（^1.1.1）。
+  fixnum: ^1.1.1
+  # grpc：*.pbgrpc.dart（93 RPC / 7 服务的 client stub 类）编译依赖。
+  # B2 阶段通道契约先走 MethodChannel/EventChannel 手写封装
+  # (lib/transport/pa_bridge.dart)，pbgrpc 生成物与 proto 保持同源，
+  # 供 B3 起按既有契约逐 RPC 消费，不必重新手抄消息类。
+  # 版本下限 5.1.0 的原因：grpc <5 的 protobuf 约束 <5.0.0，与 protobuf 6.x
+  # 无解；grpc 5.x 起放开到 ^5.0.0+。
+  grpc: ^5.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

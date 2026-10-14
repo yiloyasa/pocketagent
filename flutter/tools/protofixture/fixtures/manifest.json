@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-10-14T04:40:32.445635+00:00",
+  "protoc": "libprotoc 36.1",
+  "python_protobuf": "7.36.1",
+  "python": "3.13.14",
+  "proto_files": [
+    "common.proto",
+    "fs.proto",
+    "git.proto",
+    "host.proto",
+    "model.proto",
+    "runtime.proto",
+    "terminal.proto",
+    "thread.proto"
+  ],
+  "fixtures": {
+    "turn_server_text": {
+      "proto_kind": "TurnServerMessage/text_delta",
+      "wire_bytes": 36,
+      "sentinel": {
+        "field_hints": [
+          "pocketagent.v1.TurnServerMessage.sequence",
+          "pocketagent.v1.TurnServerMessage.text_delta"
+        ]
+      }
+    },
+    "turn_server_approval": {
+      "proto_kind": "TurnServerMessage/approval_request",
+      "wire_bytes": 357,
+      "sentinel": {
+        "field_hints": [
+          "pocketagent.v1.TurnServerMessage.approval_request",
+          "pocketagent.v1.TurnServerMessage.sequence"
+        ]
+      }
+    },
+    "turn_server_completed": {
+      "proto_kind": "TurnServerMessage/completed",
+      "wire_bytes": 114,
+      "sentinel": {
+        "field_hints": [
+          "pocketagent.v1.TurnServerMessage.completed",
+          "pocketagent.v1.TurnServerMessage.sequence"
+        ]
+      }
+    },
+    "host_info": {
+      "proto_kind": "HostInfo",
+      "wire_bytes": 340,
+      "sentinel": {
+        "field_hints": [
+          "pocketagent.v1.HostInfo.arch",
+          "pocketagent.v1.HostInfo.auth_required",
+          "pocketagent.v1.HostInfo.capabilities",
+          "pocketagent.v1.HostInfo.daemon_version",
+          "pocketagent.v1.HostInfo.default_shell",
+          "pocketagent.v1.HostInfo.display_name",
+          "pocketagent.v1.HostInfo.host_id",
+          "pocketagent.v1.HostInfo.lan_ipv4",
+          "pocketagent.v1.HostInfo.min_app_version",
+          "pocketagent.v1.HostInfo.os",
+          "pocketagent.v1.HostInfo.recovery",
+          "pocketagent.v1.HostInfo.tailscale_ipv4",
+          "pocketagent.v1.HostInfo.workspaces"
+        ]
+      }
+    },
+    "thread": {
+      "proto_kind": "Thread",
+      "wire_bytes": 321,
+      "sentinel": {
+        "field_hints": [
+          "pocketagent.v1.Thread.agent_id",
+          "pocketagent.v1.Thread.created_at_unix_ms",
+          "pocketagent.v1.Thread.effective_selection",
+          "pocketagent.v1.Thread.effort",
+          "pocketagent.v1.Thread.goal",
+          "pocketagent.v1.Thread.id",
+          "pocketagent.v1.Thread.message_count",
+          "pocketagent.v1.Thread.model_id",
+          "pocketagent.v1.Thread.section_id",
+          "pocketagent.v1.Thread.status",
+          "pocketagent.v1.Thread.title",
+          "pocketagent.v1.Thread.turn_started_unix_ms",
+          "pocketagent.v1.Thread.updated_at_unix_ms",
+          "pocketagent.v1.Thread.workspace"
+        ]
+      }
+    },
+    "host_event": {
+      "proto_kind": "HostEvent/turn_finished",
+      "wire_bytes": 74,
+      "sentinel": {
+        "field_hints": [
+          "pocketagent.v1.HostEvent.sequence",
+          "pocketagent.v1.HostEvent.timestamp_unix_ms",
+          "pocketagent.v1.HostEvent.turn_finished"
+        ]
+      }
+    }
+  }
+}

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'pages/files.dart';
+import 'pages/onboarding.dart';
+import 'pages/onboarding_prefs.dart';
 import 'pages/settings.dart';
+import 'pages/splash.dart';
 import 'pages/threads.dart';
 import 'pages/tools.dart';
 import 'theme/palette.dart';
@@ -11,13 +14,29 @@ void main() => runApp(const PocketAgentApp());
 
 /// PocketAgent Flutter UI 根组件：暗色为默认，浅色可切。
 class PocketAgentApp extends StatefulWidget {
-  const PocketAgentApp({super.key});
+  const PocketAgentApp({super.key, this.onboardingPrefs});
+
+  /// 新手教程完成标志的持久化来源。
+  ///
+  /// 开放注入的原因：Kotlin 侧 `RootNav` 首启读 `OnboardingPrefs.isDone()`
+  /// （MainActivity.kt:167）决定 startDestination，Flutter 侧同语义；widget 测试要
+  /// 同时覆盖「首启未完成」与「已完成」两条路径，没有注入点就只能改全局状态。
+  final OnboardingPrefs? onboardingPrefs;
 
   @override
   State<PocketAgentApp> createState() => _PocketAgentAppState();
 }
 
 class _PocketAgentAppState extends State<PocketAgentApp> {
+  late final OnboardingPrefs _prefs =
+      widget.onboardingPrefs ?? InMemoryOnboardingPrefs();
+
+  /// 启动路由：未看过教程 → Onboarding，否则 4 Tab HomeShell（Kotlin startDestination）。
+  late bool _onboardingDone = _prefs.isDone;
+
+  /// Splash 覆盖层是否还在（Kotlin `var showSplash by remember { mutableStateOf(true) }`）。
+  bool _splashDone = false;
+
   PABrightness _brightness = PocketTheme.defaultBrightness;
 
   void _toggleBrightness() {
@@ -26,6 +45,19 @@ class _PocketAgentAppState extends State<PocketAgentApp> {
           ? PABrightness.light
           : PABrightness.dark;
     });
+  }
+
+  /// 教程完成分流（Kotlin `finishOnboarding`）。
+  ///
+  /// Kotlin 首启走 `navigate("home") + popUpTo(onboarding, inclusive)`、重看走
+  /// `popBackStack()`，靠 `previousBackStackEntry` 现查分流。Flutter 侧没有
+  /// NavController，用「当前展示的是不是 Onboarding」这一件事表达同一个分流：
+  /// 摘掉 Onboarding 即等于把主页露出来（首启），重看入口（设置页）本来就是
+  /// push 上来的，回落即 pop。
+  Future<void> _finishOnboarding() async {
+    await _prefs.markDone();
+    if (!mounted) return;
+    setState(() => _onboardingDone = true);
   }
 
   @override
@@ -38,10 +70,65 @@ class _PocketAgentAppState extends State<PocketAgentApp> {
       themeMode: _brightness == PABrightness.dark
           ? ThemeMode.dark
           : ThemeMode.light,
-      home: HomeShell(
+      // 【覆盖层不是串行闸】Kotlin 侧 RootNav 在 Splash 之下并行组合、Splash 只负责
+      // 摘层（MainActivity.kt:102-127）。Dart 侧同构：Stack 底层是真实内容
+      // （Onboarding 或 4 Tab HomeShell），Splash 以 Positioned.fill 覆盖其上，
+      // 播放期间 AbsorbPointer 吃掉点击，避免淡出中误触穿屏。
+      home: _AppRoot(
+        onboardingDone: _onboardingDone,
         brightness: _brightness,
         onToggleBrightness: _toggleBrightness,
+        onFinishOnboarding: _finishOnboarding,
+        splashDone: _splashDone,
+        onSplashDone: () => setState(() => _splashDone = true),
       ),
+    );
+  }
+}
+
+/// 根装配层：真实内容 + Splash 覆盖层。
+class _AppRoot extends StatelessWidget {
+  const _AppRoot({
+    required this.onboardingDone,
+    required this.brightness,
+    required this.onToggleBrightness,
+    required this.onFinishOnboarding,
+    required this.splashDone,
+    required this.onSplashDone,
+  });
+
+  final bool onboardingDone;
+  final PABrightness brightness;
+  final VoidCallback onToggleBrightness;
+  final VoidCallback onFinishOnboarding;
+  final bool splashDone;
+  final VoidCallback onSplashDone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: <Widget>[
+        if (onboardingDone)
+          HomeShell(
+            brightness: brightness,
+            onToggleBrightness: onToggleBrightness,
+          )
+        else
+          OnboardingPage(
+            // TODO(B3 后续波次 · B2 通道)：connected 由 connState 流注入，
+            // 当前低依赖波次不建通道，默认按「未连接」讲完整步骤。
+            connected: false,
+            onFinished: onFinishOnboarding,
+          ),
+        if (!splashDone)
+          Positioned.fill(
+            child: AbsorbPointer(
+              // 覆盖层吃点击：动画期间用户点不到尚未就绪的主页。
+              absorbing: true,
+              child: SplashOverlay(onDone: onSplashDone),
+            ),
+          ),
+      ],
     );
   }
 }

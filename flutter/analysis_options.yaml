@@ -12,6 +12,12 @@ analyzer:
     # module 模板生成的宿主壳（无 Dart 源码，仅占位）
     - .android/**
     - .ios/**
+    # B2：protoc 生成的契约代码（lib/gen/pocketagent/v1/*.pb*.dart）。
+    # 理由：生成文件自带 annotate_overrides/comment_references 等 ignore 头，
+    # 但仍会漏出 prefer_relative_imports、unused_import 之类生成器无法消除的
+    # lint 噪音；它们是 proto/v1/*.proto 的机械映射、人工不可维护，按
+    # google/flutter 惯例整目录除外，不按 case-by-case suppress。
+    - lib/gen/**
 
 # 说明：本工程要求 `flutter analyze` 零 warning / 零 info。
 # 确有必要的抑制必须带注释写明理由，禁止无注释 ignore。

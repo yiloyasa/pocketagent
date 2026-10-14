@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/main.dart';
+import 'package:pocketagent_ui/pages/onboarding_prefs.dart';
+
+import 'support/pump_helpers.dart';
 
 void main() {
   testWidgets('底部 4 Tab（会话/工具/文件/设置）默认暗色，深浅色可切', (tester) async {
-    await tester.pumpWidget(const PocketAgentApp());
+    // 已看过教程的启动路径（本用例只验收 4 Tab 壳与深浅色， onboarding 见
+    // main_routing_test.dart 的首启用例）
+    await tester.pumpWidget(
+      PocketAgentApp(
+        onboardingPrefs: InMemoryOnboardingPrefs(done: true),
+      ),
+    );
+    // Splash 覆盖层是定时链（Kotlin delay 直译），pumpAndSettle 会在两拍之间
+    // 提前返回，必须显式推进到摘层，否则后续 tap 被 AbsorbPointer 吃掉。
+    await pumpUntilSplashDone(tester);
     await tester.pumpAndSettle();
 
     final NavigationBar nav =
@@ -70,8 +82,13 @@ void main() {
     expect(find.text('新手引导'), findsOneWidget);
   });
 
-  testWidgets('设置页可进入 3 页引导并横滑', (tester) async {
-    await tester.pumpWidget(const PocketAgentApp());
+  testWidgets('设置页可进入新手教程并横滑', (tester) async {
+    await tester.pumpWidget(
+      PocketAgentApp(
+        onboardingPrefs: InMemoryOnboardingPrefs(done: true),
+      ),
+    );
+    await pumpUntilSplashDone(tester);
     await tester.pumpAndSettle();
 
     await tester.tap(find.byIcon(Icons.settings_outlined));
@@ -86,7 +103,8 @@ void main() {
     await tester.tap(find.text('新手引导'));
     await tester.pumpAndSettle();
 
-    expect(find.text('这台电脑是什么'), findsOneWidget);
+    // 教程页清单来自 Kotlin 单测钉死的 onboardPages：欢迎页 + 脊柱四步 + 收尾页
+    expect(find.text('欢迎使用 PocketAgent'), findsOneWidget);
     expect(find.text('跳过'), findsOneWidget);
     expect(find.text('下一步'), findsOneWidget);
 
@@ -96,6 +114,6 @@ void main() {
       800,
     );
     await tester.pumpAndSettle();
-    expect(find.text('怎么连'), findsOneWidget);
+    expect(find.text('第一步 · 让手机找到电脑'), findsOneWidget);
   });
 }
