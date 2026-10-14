@@ -14,7 +14,7 @@
 
 | 项 | 值 |
 |---|---|
-| Git 基线 | `main`（2026-10-11 收尾入库：UI 收尾轮 + L2 最终验收 + AOCI 索引资产；以 `git log -1` 为准） |
+| Git 基线 | `main` @ `8c29e7c`（2026-10-14：0.4.0 标准双资产分发——daemon 单文件自守护看门狗 + Release 双文件 + 文档整体重写；GitHub Release v0.4.0 已发） |
 | 版本 | daemon **0.4.0** / App **versionCode 8** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
 | 测试水位 | Android **1839 用例 0 失败 / 0 错误**（2026-10-13，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
