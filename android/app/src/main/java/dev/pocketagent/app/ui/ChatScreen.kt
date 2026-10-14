@@ -4479,25 +4479,8 @@ fun ChatScreen(
                 if (newThreadAgentAllowed(AgentConnection.selectedAgent, AgentConnection.disabledAgents)) {
                     scope.launch {
                         try {
-                            val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
-                            if (AgentConnection.selectedModel.isNotEmpty()) {
-                                builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
-                            }
-                            // P1 修复:带上当前选中的 agent(设置页/主页切换到 Pi 后,新建会话
-                            // 才真正走 pi 而不是仍默认 codex)。codex 或空保持不传 = 旧语义,
-                            // 由 server 端默认路由;daemon 侧 agent 不可用仍允许建会话,
-                            // 首条消息会得到 server 的人话错误。
-                            val agentId = createThreadAgentId(AgentConnection.selectedAgent)
-                            if (agentId.isNotEmpty()) {
-                                builder.setAgentId(agentId)
-                            }
-                            if (ws.isNotBlank()) {
-                                builder.setWorkspace(ws)
-                            }
-                            val t = withContext(Dispatchers.IO) {
-                                AgentConnection.threadService().createThread(builder.build())
-                            }
-                            onOpenThread(t.id)
+                            val t = createThreadRpc(ws, applyAgentSelection = true)
+                            onOpenThread(t)
                         } catch (e: Exception) {
                             Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
                         }
@@ -5176,24 +5159,6 @@ internal fun ApprovalSheet(
         }
     }
 }
-
-/** 相对时间:几分钟前/几小时前/昨天/M月d日。 */
-internal fun relativeTime(unixMs: Long): String {
-    if (unixMs <= 0) return ""
-    val diff = System.currentTimeMillis() - unixMs
-    val min = diff / 60000
-    return when {
-        min < 1 -> "刚刚"
-        min < 60 -> "${min}分钟前"
-        min < 60 * 24 -> "${min / 60}小时前"
-        min < 60 * 48 -> "昨天"
-        else -> {
-            val d = java.text.SimpleDateFormat("M月d日", java.util.Locale.CHINA)
-            d.format(java.util.Date(unixMs))
-        }
-    }
-}
-
 
 /**
  * 会话页右侧 Git 侧栏:该会话所在项目(daemon 工作区)的版本管理 ——
@@ -5964,19 +5929,6 @@ private fun ExportChatSheet(
                 )
             }
         }
-    }
-}
-
-/** 导出面板上的小胶囊按钮。 */
-@Composable
-private fun ExportChip(label: String, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .pressable(haptic = true) { onClick() }
-            .background(PaEditorial.Surface, RoundedCornerShape(50))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-    ) {
-        Text(label, fontSize = PaEditorial.Type.Caption.fontSize, color = PaEditorial.Muted)
     }
 }
 

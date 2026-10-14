@@ -50,24 +50,9 @@ class ChatInputTouchTargetTest {
 
     // ---- T-D2 收尾:逐控件源码结构钉(字符串锚点定位,行号漂移免疫) ----
 
-    /**
-     * 从模块目录或仓库根向上定位输入区源码文件(镜像/仓库两处布局都兼容)。
-     * 【C1 拆分(2026-10-09)】输入区整体迁至 ui/chat/ChatComposer.kt,钉子跟随。
-     */
-    private fun locateChatScreen(): File {
-        val rel = "src/main/java/dev/pocketagent/app/ui/chat/ChatComposer.kt"
-        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-        repeat(6) {
-            val cur = dir ?: return@repeat
-            listOf(File(cur, rel), File(cur, "android/app/$rel")).firstOrNull { it.isFile }?.let { return it }
-            dir = cur.parentFile
-        }
-        error("找不到 chat/ChatComposer.kt(从 ${System.getProperty("user.dir")} 向上查 6 层)")
-    }
-
     /** 截取 [from] 锚点到其后首个 [to] 锚点之间的源码片段(均须存在且有序)。 */
     private fun fragment(from: String, to: String): String {
-        val text = locateChatScreen().readText()
+        val text = locate("src/main/java/dev/pocketagent/app/ui/chat/ChatComposer.kt").readText()
         val start = text.indexOf(from)
         assertTrue("锚点缺失: $from", start >= 0)
         val end = text.indexOf(to, start + from.length)

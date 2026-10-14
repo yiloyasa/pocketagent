@@ -33,14 +33,6 @@ class ThreadSnapshotO1Test {
         ThreadSnapshot.initForTest(dir)
     }
 
-    /** 与 ThreadSnapshot.msgFileName 同算法:md5(threadId) + .json */
-    private fun msgFile(threadId: String): File {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        val name = md.digest(threadId.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) } + ".json"
-        return File(dir, name)
-    }
-
     // ---------------- 稳定 API(阶段 D 契约) ----------------
 
     @Test
@@ -83,10 +75,10 @@ class ThreadSnapshotO1Test {
         // 25 个 × ~200KB ≈ 5.0MB:低于总量上限,一个都不该被淘汰
         repeat(25) { i ->
             ThreadSnapshot.saveMessages("t$i", listOf(ThreadSnapshot.Msg("user", fat)))
-            msgFile("t$i").setLastModified(base + i * 1_000L)
+            msgFile(dir, "t$i").setLastModified(base + i * 1_000L)
         }
         val beforeTotal = ThreadSnapshot.usage()
-        assertEquals("低于上限时不得淘汰", 25, (0..24).count { msgFile("t$it").isFile })
+        assertEquals("低于上限时不得淘汰", 25, (0..24).count { msgFile(dir, "t$it").isFile })
         assertTrue("前置条件:应接近 5MB", beforeTotal in 4_900_000L..5_242_880L)
 
         // 再加 3 个 → 总量超 5MB → 按 LRU 淘汰最旧的,直到压回上限内
@@ -94,9 +86,9 @@ class ThreadSnapshotO1Test {
             ThreadSnapshot.saveMessages("t${25 + j}", listOf(ThreadSnapshot.Msg("user", fat)))
         }
 
-        assertFalse("最旧的 t0 应被总量淘汰", msgFile("t0").isFile)
-        assertFalse("次旧的 t1 应被总量淘汰", msgFile("t1").isFile)
-        assertTrue("较新的 t2 应保留", msgFile("t2").isFile)
+        assertFalse("最旧的 t0 应被总量淘汰", msgFile(dir, "t0").isFile)
+        assertFalse("次旧的 t1 应被总量淘汰", msgFile(dir, "t1").isFile)
+        assertTrue("较新的 t2 应保留", msgFile(dir, "t2").isFile)
         val total = dir.listFiles()?.filter { it.name.endsWith(".json") }?.sumOf { it.length() } ?: 0L
         assertTrue("淘汰后总量必须回到 5MB 内:$total", total <= 5L * 1024 * 1024)
     }
@@ -110,7 +102,7 @@ class ThreadSnapshotO1Test {
         assertTrue(ThreadSnapshot.readThreadsSnapshot().isEmpty())
 
         ThreadSnapshot.saveMessages("t1", listOf(ThreadSnapshot.Msg("user", "hi")))
-        val f = msgFile("t1")
+        val f = msgFile(dir, "t1")
         f.writeText("]]] broken")
         assertNull("坏消息文件应视为无快照", ThreadSnapshot.readThreadSnapshot("t1"))
 
@@ -147,10 +139,10 @@ class ThreadSnapshotO1Test {
         File(dir, "seen.json").writeText("{}")
         repeat(52) { i ->
             ThreadSnapshot.saveMessages("t$i", listOf(ThreadSnapshot.Msg("user", "hi")))
-            msgFile("t$i").setLastModified(base + i * 1_000L)
+            msgFile(dir, "t$i").setLastModified(base + i * 1_000L)
         }
         assertTrue("threads.json 不得被淘汰", File(dir, "threads.json").isFile)
         assertTrue("seen.json 不得被当快照淘汰", File(dir, "seen.json").isFile)
-        assertEquals("per-thread 快照仍应守 50 上限", 50, (0..51).count { msgFile("t$it").isFile })
+        assertEquals("per-thread 快照仍应守 50 上限", 50, (0..51).count { msgFile(dir, "t$it").isFile })
     }
 }

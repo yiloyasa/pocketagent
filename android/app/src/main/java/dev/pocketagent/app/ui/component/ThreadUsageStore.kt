@@ -36,29 +36,15 @@ object ThreadUsageStore {
         }
     }
 
-    private fun usageToJson(u: Usage?): String? = u?.let {
-        org.json.JSONObject()
-            .put("in", it.inputTokens)
-            .put("out", it.outputTokens)
-            .put("cr", it.cacheReadTokens)
-            .put("cw", it.cacheWriteTokens)
-            .put("cost", it.costUsd)
-            .put("reason", it.reasoningTokens)
-            .toString()
-    }
-
-    private fun jsonToUsage(raw: String?): Usage? {
+    /**
+     * 片段 -> Usage。**内层兜底**:坏片段只让该字段为 null,不拖垮整份 [load]
+     * (整份解析失败是另一层兜底,两层分工与原实现一致)。
+     * 字段映射复用同包 [usageFromJson],写入序列化复用 [usageToJson] —— 不再各写一份。
+     */
+    private fun parseUsage(raw: String?): Usage? {
         if (raw.isNullOrEmpty()) return null
         return try {
-            val o = org.json.JSONObject(raw)
-            Usage.newBuilder()
-                .setInputTokens(o.optLong("in"))
-                .setOutputTokens(o.optLong("out"))
-                .setCacheReadTokens(o.optLong("cr"))
-                .setCacheWriteTokens(o.optLong("cw"))
-                .setCostUsd(o.optDouble("cost", 0.0))
-                .setReasoningTokens(o.optLong("reason"))
-                .build()
+            usageFromJson(org.json.JSONObject(raw))
         } catch (_: Exception) {
             null
         }
@@ -76,8 +62,8 @@ object ThreadUsageStore {
         } catch (_: Exception) {
             org.json.JSONObject()
         }
-        usageToJson(turn)?.let { obj.put("turn", it) }
-        usageToJson(total)?.let { obj.put("total", it) }
+        usageToJson(turn)?.let { obj.put("turn", it.toString()) }
+        usageToJson(total)?.let { obj.put("total", it.toString()) }
         if (contextWindow > 0) {
             obj.put("cw", contextWindow)
             obj.put("cwKnown", true)
@@ -114,8 +100,8 @@ object ThreadUsageStore {
         return try {
             val o = org.json.JSONObject(raw)
             Snapshot(
-                turn = jsonToUsage(o.optString("turn")),
-                total = jsonToUsage(o.optString("total")),
+                turn = parseUsage(o.optString("turn")),
+                total = parseUsage(o.optString("total")),
                 // 旧版本没有真实性标记，不能把旧的默认值重新当作 Codex 实测窗口。
                 contextWindow = if (o.optBoolean("cwKnown", false)) o.optLong("cw") else 0L,
                 contextWindowKnown = o.optBoolean("cwKnown", false) && o.optLong("cw") > 0,

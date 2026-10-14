@@ -43,14 +43,6 @@ class CachePartitionsTest {
         )
     }
 
-    /** 与 ThreadSnapshot.msgFileName 同算法:md5(threadId) + .json */
-    private fun msgFile(threadId: String): File {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        val name = md.digest(threadId.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) } + ".json"
-        return File(snapDir, name)
-    }
-
     // ---- 注册表形状 ----
 
     @Test
@@ -143,7 +135,7 @@ class CachePartitionsTest {
         val stats = ThreadSnapshot.usageStats()
         // 条目 = 消息快照文件;threads.json 是列表级文件,不计入
         assertEquals(1, stats.entries)
-        assertEquals(msgFile("a").length(), stats.bytes)
+        assertEquals(msgFile(snapDir, "a").length(), stats.bytes)
         // 旧口径 usage()(含列表级文件)保持原语义
         assertTrue(ThreadSnapshot.usage() >= stats.bytes)
     }
@@ -157,7 +149,7 @@ class CachePartitionsTest {
         assertTrue("新写入的消息应带上落盘时间戳", fresh[0].savedAtMs > 0L)
 
         // 旧格式 JSON(只有 r/t,没有 at):读回 role/text 完整,savedAtMs = 0(向后兼容)
-        msgFile("legacy").writeText("""[{"r":"user","t":"旧消息"}]""")
+        msgFile(snapDir, "legacy").writeText("""[{"r":"user","t":"旧消息"}]""")
         val read = ThreadSnapshot.readThreadSnapshot("legacy")!!
         assertEquals(listOf(ThreadSnapshot.Msg("user", "旧消息", 0L)), read)
         assertEquals("旧消息", read[0].text)

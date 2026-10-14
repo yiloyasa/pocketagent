@@ -107,21 +107,9 @@ class FirstTaskFunnelFixTest {
 
     // ---- 源码结构钉子:渲染接线回退即红 ----
 
-    /** 从模块目录或仓库根向上定位源码文件(镜像/仓库两处布局都兼容)。 */
-    private fun locateSource(rel: String): String {
-        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-        repeat(6) {
-            val cur = dir ?: return@repeat
-            listOf(File(cur, rel), File(cur, "android/app/$rel")).firstOrNull { it.isFile }
-                ?.let { return it.readText() }
-            dir = cur.parentFile
-        }
-        error("找不到 $rel(从 ${System.getProperty("user.dir")} 向上查 6 层)")
-    }
-
     @Test
     fun `HomeScreen_手动入口用主色大按钮_bottomNote保留`() {
-        val src = locateSource("src/main/java/dev/pocketagent/app/ui/HomeScreen.kt")
+        val src = locate("src/main/java/dev/pocketagent/app/ui/HomeScreen.kt").readText()
         val manualStart = src.indexOf("item(key = \"manualAdd\")")
         assertTrue("discoveryItems 手动入口项必须存在", manualStart >= 0)
         val manualBlock = src.substring(manualStart, (src.indexOf("item(key = \"bottomNote\")", manualStart)
@@ -133,7 +121,7 @@ class FirstTaskFunnelFixTest {
 
     @Test
     fun `ThreadsScreen_新建面板放行空工作区_空态有默认位置说明`() {
-        val src = locateSource("src/main/java/dev/pocketagent/app/ui/ThreadsScreen.kt")
+        val src = locate("src/main/java/dev/pocketagent/app/ui/ThreadsScreen.kt").readText()
         val start = src.indexOf("fun NewThreadSheet(")
         assertTrue("NewThreadSheet 声明应存在", start >= 0)
         val end = src.indexOf("\n/**", start).let { if (it >= 0) it else src.length }
@@ -146,7 +134,7 @@ class FirstTaskFunnelFixTest {
 
     @Test
     fun `Onboarding_前三页经统一口径接直达按钮`() {
-        val src = locateSource("src/main/java/dev/pocketagent/app/ui/Onboarding.kt")
+        val src = locate("src/main/java/dev/pocketagent/app/ui/Onboarding.kt").readText()
         assertTrue("教程页必须经 onboardActionFor 统一接线", src.contains("onboardActionFor(step.id)"))
         assertTrue("直达按钮渲染机制必须保留", src.contains("page.actionLabel != null && page.actionId != null"))
     }

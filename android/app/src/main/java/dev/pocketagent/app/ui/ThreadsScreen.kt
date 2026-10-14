@@ -1691,17 +1691,8 @@ fun ThreadsScreen(
                 if (newThreadAgentAllowed(AgentConnection.selectedAgent, AgentConnection.disabledAgents)) {
                     scope.launch {
                         try {
-                            val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
-                            if (AgentConnection.selectedModel.isNotEmpty()) {
-                                builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
-                            }
-                            if (ws.isNotBlank()) {
-                                builder.setWorkspace(ws)
-                            }
-                            val t = withContext(Dispatchers.IO) {
-                                AgentConnection.threadService().createThread(builder.build())
-                            }
-                            onOpenThread(t.id)
+                            val t = createThreadRpc(ws, applyAgentSelection = false)
+                            onOpenThread(t)
                         } catch (e: Exception) {
                             Toast.makeText(
                                 ctx,
@@ -2072,10 +2063,14 @@ private fun ThreadCard(
     }
 }
 
-/** "电脑"标签里的 codex 历史会话行:点一下导入并打开,左滑可删除(含电脑上的 rollout)。 */
+/** 电脑历史会话行的共享骨架:codex 与 Pi/ZCode 仅头部身份图与第二行标签不同。 */
 @Composable
-private fun PcSessionCard(
-    info: CodexThreadInfo,
+private fun PcSessionRow(
+    badge: String,
+    metaLabel: String,
+    title: String,
+    updatedAtUnixMs: Long,
+    workspace: String,
     importing: Boolean,
 ) {
     val ed = MaterialTheme.editorial
@@ -2087,7 +2082,7 @@ private fun PcSessionCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
-            bitmap = agentBitmap(agentBadgeRes("")),
+            bitmap = agentBitmap(agentBadgeRes(badge)),
             contentDescription = null,
             modifier = Modifier
                 .size(PaEditorial.Space.IconBox)
@@ -2096,10 +2091,10 @@ private fun PcSessionCard(
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            // 第一行:标题 + 右对齐相对时间(与本地会话行同一口径 threadRowTime)
+            // 第一行:标题 + 右对齐相对时间(与本地/codex 行同一口径)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    info.title.ifEmpty { "(未命名会话)" },
+                    title.ifEmpty { "(未命名会话)" },
                     Modifier.weight(1f),
                     fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -2117,7 +2112,7 @@ private fun PcSessionCard(
                     )
                 } else {
                     Text(
-                        threadRowTime(info.updatedAtUnixMs),
+                        threadRowTime(updatedAtUnixMs),
                         fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
                         color = ed.Subtle,
                         maxLines = 1,
@@ -2126,8 +2121,8 @@ private fun PcSessionCard(
             }
             // 第二行:类型 · 工作区(时间已上移第一行,三行型同语言)
             val meta = buildList {
-                add("codex 会话")
-                if (info.cwd.isNotEmpty()) add(shortWorkspace(info.cwd))
+                add(metaLabel)
+                if (workspace.isNotEmpty()) add(shortWorkspace(workspace))
             }.joinToString("  ·  ")
             Text(
                 meta,
@@ -2141,6 +2136,20 @@ private fun PcSessionCard(
     }
 }
 
+/** "电脑"标签里的 codex 历史会话行:点一下导入并打开,左滑可删除(含电脑上的 rollout)。 */
+@Composable
+private fun PcSessionCard(
+    info: CodexThreadInfo,
+    importing: Boolean,
+) = PcSessionRow(
+    badge = "",
+    metaLabel = "codex 会话",
+    title = info.title,
+    updatedAtUnixMs = info.updatedAtUnixMs,
+    workspace = info.cwd,
+    importing = importing,
+)
+
 /**
  * "电脑"里的 Pi/ZCode 历史会话行:点一下导入并打开。与 codex 的 PcSessionCard
  * 同一骨架,差别只有两处:头部带 agent 身份图(与本地会话行同款图)、
@@ -2150,69 +2159,14 @@ private fun PcSessionCard(
 private fun PcAgentSessionCard(
     info: AgentThreadInfo,
     importing: Boolean,
-) {
-    val ed = MaterialTheme.editorial
-    Row(
-        Modifier
-            .fillMaxWidth()
-            // 手势由外层 SwipeRevealRow 独占,这里不再挂 clickable;矩形行(同 ThreadCard)
-            .padding(horizontal = 2.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            bitmap = agentBitmap(agentBadgeRes(info.agentId)),
-            contentDescription = null,
-            modifier = Modifier
-                .size(PaEditorial.Space.IconBox)
-                .clip(RoundedCornerShape(PaEditorial.Radius.IconButton)),
-            contentScale = ContentScale.Crop,
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            // 第一行:标题 + 右对齐相对时间(与本地/codex 行同一口径)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    info.title.ifEmpty { "(未命名会话)" },
-                    Modifier.weight(1f),
-                    fontSize = PaEditorial.Type.Heading.fontSize, lineHeight = 21.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = ed.Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.width(8.dp))
-                if (importing) {
-                    Text(
-                        "正在打开…",
-                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
-                        color = PaEditorial.Primary,
-                        maxLines = 1,
-                    )
-                } else {
-                    Text(
-                        threadRowTime(info.updatedAtUnixMs),
-                        fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
-                        color = ed.Subtle,
-                        maxLines = 1,
-                    )
-                }
-            }
-            // 第二行:类型 · 工作区(时间已上移第一行,三行型同语言)
-            val meta = buildList {
-                add(threadAgentIdOf(info.agentId) + " 会话")
-                if (info.cwd.isNotEmpty()) add(shortWorkspace(info.cwd))
-            }.joinToString("  ·  ")
-            Text(
-                meta,
-                Modifier.fillMaxWidth().padding(top = 3.dp),
-                fontSize = PaEditorial.Type.Caption.fontSize, lineHeight = 16.sp,
-                color = ed.Subtle,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
+) = PcSessionRow(
+    badge = info.agentId,
+    metaLabel = threadAgentIdOf(info.agentId) + " 会话",
+    title = info.title,
+    updatedAtUnixMs = info.updatedAtUnixMs,
+    workspace = info.cwd,
+    importing = importing,
+)
 
 /**
  * 会话列表骨架(R1-B 局部实现;PaSkeleton.kt 归 R1-A 所有,未改动)。

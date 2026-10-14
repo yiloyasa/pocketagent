@@ -24,14 +24,6 @@ class ThreadSnapshotTest {
         ThreadSnapshot.initForTest(dir)
     }
 
-    /** 与 ThreadSnapshot.msgFileName 同算法:md5(threadId) + .json */
-    private fun msgFile(threadId: String): File {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        val name = md.digest(threadId.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) } + ".json"
-        return File(dir, name)
-    }
-
     @Test
     fun keepsOnlyMostRecentMessages() {
         val msgs = (0 until 100).map { ThreadSnapshot.Msg("user", "m$it") }
@@ -109,13 +101,13 @@ class ThreadSnapshotTest {
         val base = System.currentTimeMillis() - 1_000_000
         repeat(50) { i ->
             ThreadSnapshot.saveMessages("t$i", listOf(ThreadSnapshot.Msg("user", "hi")))
-            msgFile("t$i").setLastModified(base + i * 1_000L)
+            msgFile(dir, "t$i").setLastModified(base + i * 1_000L)
         }
         repeat(5) { j ->
             ThreadSnapshot.saveMessages("t${50 + j}", listOf(ThreadSnapshot.Msg("user", "hi")))
         }
 
-        val kept = (0..54).filter { msgFile("t$it").isFile }
+        val kept = (0..54).filter { msgFile(dir, "t$it").isFile }
         assertEquals(50, kept.size)
         assertEquals((5..54).toList(), kept) // 最旧的 t0..t4 被淘汰
     }

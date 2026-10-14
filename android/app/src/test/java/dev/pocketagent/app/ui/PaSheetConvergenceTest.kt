@@ -22,20 +22,6 @@ import java.io.File
  */
 class PaSheetConvergenceTest {
 
-    /** 从模块目录或仓库根向上定位指定源码文件(镜像/仓库两处布局都兼容)。 */
-    private fun locate(vararg relCandidates: String): File {
-        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-        repeat(6) {
-            val cur = dir ?: return@repeat
-            relCandidates.forEach { rel ->
-                File(cur, rel).takeIf { it.isFile }?.let { return it }
-                File(cur, "android/app/$rel").takeIf { it.isFile }?.let { return it }
-            }
-            dir = cur.parentFile
-        }
-        error("找不到源码文件 $relCandidates(从 ${System.getProperty("user.dir")} 向上查 6 层)")
-    }
-
     private fun chatSource(): String =
         locate("src/main/java/dev/pocketagent/app/ui/ChatScreen.kt").readText()
 

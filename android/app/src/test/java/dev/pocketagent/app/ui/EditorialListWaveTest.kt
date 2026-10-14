@@ -99,14 +99,6 @@ class EditorialListWaveTest {
 
     // ---- 任务中心:四词状态 / 离线分支 / 三分区 ----
 
-    private fun task(
-        id: String,
-        kind: TaskCenter.Kind,
-        status: TaskCenter.Status,
-    ): TaskCenter.Task = TaskCenter.Task(
-        id = id, threadId = "thr-$id", kind = kind, title = "任务$id", status = status,
-    )
-
     @Test
     fun `任务状态走统一四词映射`() {
         assertEquals(

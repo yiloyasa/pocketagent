@@ -23,14 +23,6 @@ import pocketagent.v1.Thread as PThread
 
 class ChatViewModelHistoryLandingTest {
 
-    private fun msg(id: String, role: String = "user", text: String = "内容-$id"): ThreadMessage =
-        ThreadMessage.newBuilder()
-            .setMessageId(id)
-            .setTurnId("turn-$id")
-            .setRole(role)
-            .addBlocks(ContentBlock.newBuilder().setText(TextBlock.newBuilder().setText(text)))
-            .build()
-
     private class OneShotGateway(val response: GetThreadHistoryResponse) : ChatViewModelActionsTestGateway() {
         override suspend fun threadHistory(threadId: String, rounds: Int): GetThreadHistoryResponse = response
     }

@@ -626,25 +626,9 @@ fun HomeScreen(
                 if (newThreadAgentAllowed(AgentConnection.selectedAgent, disabledAgents)) {
                     scope.launch {
                         try {
-                            val builder = CreateThreadRequest.newBuilder().setAgentId(AgentConnection.selectedAgent)
-                            if (AgentConnection.selectedModel.isNotEmpty()) {
-                                builder.setModelId(AgentConnection.modelForAgent(AgentConnection.selectedAgent))
-                            }
-                            // P1 修复:带上当前选中的 agent(设置页/主页切换后新建才真正生效)。
-                            // codex 或空保持不传 = 旧语义,由 server 端默认路由到 codex。
-                            val agentId = createThreadAgentId(AgentConnection.selectedAgent)
-                            if (agentId.isNotEmpty()) {
-                                builder.setAgentId(agentId)
-                            }
-                            if (ws.isNotBlank()) {
-                                builder.setWorkspace(ws)
-                            }
-                            val t = withContext(Dispatchers.IO) {
-                                AgentConnection.threadService().createThread(builder.build())
-                            }
-                            // 创建成功 = 确认动作:语义触感(轻击),跟随系统触感开关
+                            val t = createThreadRpc(ws, applyAgentSelection = true)
                             PaHaptics.confirm(view)
-                            onOpenThread(t.id)
+                            onOpenThread(t)
                         } catch (e: Exception) {
                             Toast.makeText(ctx, "创建失败:${e.message}", Toast.LENGTH_SHORT).show()
                         }

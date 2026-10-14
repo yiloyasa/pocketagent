@@ -15,14 +15,6 @@ import org.junit.Test
  */
 class TaskPartitionOfflineTest {
 
-    private fun task(
-        id: String,
-        kind: TaskCenter.Kind,
-        status: TaskCenter.Status,
-    ): TaskCenter.Task = TaskCenter.Task(
-        id = id, threadId = "thr-$id", kind = kind, title = "任务$id", status = status,
-    )
-
     // ---- taskPartitionRows:断线分区 ----
 
     @Test

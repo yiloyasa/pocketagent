@@ -19,21 +19,9 @@ import java.io.File
  */
 class NewThreadSheetScrollRegressionTest {
 
-    /** 从模块目录或仓库根向上定位 ThreadsScreen.kt(镜像/仓库两处布局都兼容)。 */
-    private fun locateThreadsScreen(): File {
-        val rel = "src/main/java/dev/pocketagent/app/ui/ThreadsScreen.kt"
-        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-        repeat(6) {
-            val cur = dir ?: return@repeat
-            listOf(File(cur, rel), File(cur, "android/app/$rel")).firstOrNull { it.isFile }?.let { return it }
-            dir = cur.parentFile
-        }
-        error("找不到 ThreadsScreen.kt(从 ${System.getProperty("user.dir")} 向上查 6 层)")
-    }
-
     /** 截取 NewThreadSheet 函数体源码(从声明到下一个顶层 KDoc 注释之前)。 */
     private fun newThreadSheetSource(): String {
-        val text = locateThreadsScreen().readText()
+        val text = locate("src/main/java/dev/pocketagent/app/ui/ThreadsScreen.kt").readText()
         val start = text.indexOf("fun NewThreadSheet(")
         assertTrue("NewThreadSheet 声明应存在", start >= 0)
         val end = text.indexOf("\n/**", start).let { if (it >= 0) it else text.length }

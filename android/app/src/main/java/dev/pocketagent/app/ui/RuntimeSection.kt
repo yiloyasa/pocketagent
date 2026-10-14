@@ -1036,17 +1036,6 @@ private fun DetailLine(label: String, value: String, color: androidx.compose.ui.
 }
 
 @Composable
-private fun SubHeader(text: String) {
-    Text(
-        text,
-        Modifier.padding(start = 2.dp, top = 12.dp, bottom = 2.dp),
-        fontSize = PaEditorial.Type.Caption.fontSize,
-        color = PaEditorial.Muted,
-        fontWeight = FontWeight.Medium,
-    )
-}
-
-@Composable
 private fun SectionNote(text: String, color: androidx.compose.ui.graphics.Color) {
     Text(
         text,
@@ -1054,11 +1043,6 @@ private fun SectionNote(text: String, color: androidx.compose.ui.graphics.Color)
         fontSize = PaEditorial.Type.Caption.fontSize,
         color = color,
     )
-}
-
-/** 分块失败原因补记(写回数据层,与 load 的分块错误同一处呈现)。 */
-private fun sectionErrorPing(section: String, message: String) {
-    RuntimeControlState.noteSectionError(section, message)
 }
 
 internal fun sectionLabel(key: String): String = when (key) {
