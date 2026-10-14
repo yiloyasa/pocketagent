@@ -32,7 +32,7 @@
 - 契约：protobuf / gRPC `pocketagent.v1` —— **7 服务 / 93 RPC**，8 proto / 2588 行
   （`proto/v1/*` 与 `android/app/src/main/proto/v1/*` 是两副本，**MD5 必须一致**，2026-10-08 校验 8 文件全一致）
 - 代码：android main **151** `.kt` / test **162** `.kt`；daemon Go **639** 文件（生成 pb.go **15**，手写 **624** 含测试）
-- 版本：**0.3.1 / versionCode 7**
+- 版本：**0.4.0 / versionCode 8**
 
 ### 0.3 当前状态（真值锚点 · 2026-10-11 UI 收尾轮）
 
@@ -40,7 +40,7 @@
 |---|---|
 | Git | 分支 `main`，**代码基线** `316e6ac`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
 | 六家 agent 版本基线 | codex **0.160.0**、pi **1.0.2**、zcode（桌面当前版，fork 7 型 union 已适配）、dsh **0.2.0-rc.2**、hermes（定位修复后全接入）、Claude 会话只读导入（externalconv） |
-| 测试基线 | Android **1839 用例 / 0 失败 / 0 错误**（2026-10-13，196 份 XML，`--rerun`，本轮新增 12 例）；daemon `go test ./... -count=1` **29 个有测试包通过**（其中 internal 26 包）；**12 包 race 全通过**；RPC **7 服务 / 93 RPC**。本轮记录：`docs/verify/ui-polish-2026-10-11.md` |
+| 测试基线 | Android **1839 用例 / 0 失败 / 0 错误**（2026-10-13，196 份 XML，`--rerun`，本轮新增 12 例）；daemon `go test ./... -count=1` **30 个有测试包通过**（其中 internal 27 包，含新增 selfguard）；**12 包 race 全通过**；RPC **7 服务 / 93 RPC**。本轮记录：`docs/verify/ui-polish-2026-10-11.md` |
 | UI 收尾 | 2026-10-11：撤销操作互斥、共享触控区/动态减弱动画、键盘避让、Agent 网格及设置大字适配、主机状态可见性、底部运行条实测让位；模拟器 1080×2400 与 840×1600/1.5 倍字体复验。当日 21:51 已无窗热部署生产 daemon（含 oaHTTP 竞态修复）；本轮改动已入库 |
 | 真机 | 小米 13（`8e0e7bbe`）USB `adb reverse` 通道：**最终真机验收 2026-10-11（14 PASS）**，pi thinking 全链/dsh 写文件工具链/胶囊抑制跟底/zcode fork 点选 真机全通过（证据 `docs/verify/evidence/l2-final-20261011/`）；上一轮 L2 2026-10-07（15 项 13 PASS，`docs/verify/evidence/l2-20261007/`）。1 BLOCKED=语音须真人手指；codex 真实轮次待桌面 DEX Router 账号重同步后补考（App 侧错误链路已验） |
 | **下一刀（交接待办）★** | ① 语音 L2 真人手指补验 ② 桌面 DEX Router 账号重同步后补考 codex 真实轮次 ③ zcode fork 新会话落地形态桌面端复核（fork 已点通，见 L2-final F2）。原②(zcode fork)已销案 ④ 其余已销案（详见 `docs/verify/handoff-2026-10-09.md` §8）。明细与背景 → **`docs/verify/handoff-2026-10-09.md`（交接总档）** |
@@ -205,8 +205,8 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 | App 入口 | `MainActivity.kt` → NavHost | 冷启 Splash → onboarding(未配对)/home |
 | App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.3.0/6）；sherpa AAR 由构建脚本下载+哈希校验 |
 | 构建脚本 | `tools/device/_pa_gradle.py`、`android/build-ascii.ps1` | 中文路径 Gradle 处理不了 → robocopy 镜像到 `G:\pa\android` 再 gradlew |
-| 看门狗 | `daemon/cmd/paguard` | 计划任务 PocketAgentDaemonGuard 每分钟**直跑 paguard.exe**（windowsgui 子系统物理无窗口）→ 探测 7246 死了才以同参数拉起 daemon（4s 内拉起）。旧链「计划任务 → wscript → watchdog_hidden.vbs → WMI → paguard」已于 2026-09-25 弃用（`6077295`：wscript 每分钟调度触发 VBScript 弃用弹窗，事件日志实锤），`watchdog.bat`/`watchdog_hidden.vbs` 两脚本已随之删除。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
-| 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+version.txt+install/uninstall/使用说明 → `PocketAgent桌面端.zip`。2026-09-23 修：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe/paguard.exe（提交 `42813da` 引入的回归）；现顺序为 清理 → 创建 → 构建 → 痕迹扫描 → 压缩，扫描命中开发机痕迹即中止不出包 |
+| 看门狗 | `daemon/cmd/paguard` | 计划任务 PocketAgentDaemonGuard 每分钟**直跑 paguard.exe**（windowsgui 子系统物理无窗口）→ 探测 7246 死了才以同参数拉起 daemon（4s 内拉起）。旧链「计划任务 → wscript → watchdog_hidden.vbs → WMI → paguard」已于 2026-09-25 弃用（`6077295`：wscript 每分钟调度触发 VBScript 弃用弹窗，事件日志实锤），`watchdog.bat`/`watchdog_hidden.vbs` 两脚本已随之删除。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**。0.4.0 起标准分发只剩 daemon.exe 单文件，看门狗由 daemon 内建 selfguard 自己拉（-guard-child），paguard/计划任务退为高级路径；paguard 认 daemon.exe 优先。（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
+| 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+version.txt+install/uninstall/使用说明 → `PocketAgent桌面端.zip`。0.4.0 起 `dist/release.ps1` 另产标准双资产 `dist/daemon.exe` + `dist/apk/pocketagent.apk`，发 GitHub Releases（总 zip 退役）。。2026-09-23 修：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe/paguard.exe（提交 `42813da` 引入的回归）；现顺序为 清理 → 创建 → 构建 → 痕迹扫描 → 压缩，扫描命中开发机痕迹即中止不出包 |
 
 ---
 

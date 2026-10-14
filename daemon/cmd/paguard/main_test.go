@@ -13,6 +13,7 @@ import (
 )
 
 func writeConf(t *testing.T, dir, content string) {
+
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, confFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("写 %s 失败: %v", confFile, err)
@@ -177,5 +178,27 @@ func TestProcessAlive(t *testing.T) {
 	}
 	if processAlive(0) {
 		t.Fatal("pid 0 不是有效进程,应判死")
+	}
+}
+
+func TestDaemonExeNamePrefersNew(t *testing.T) {
+	dir := t.TempDir()
+	// Empty dir defaults to the new name so Start reports a clear missing-file error.
+	if got := daemonExe(dir); filepath.Base(got) != "daemon.exe" {
+		t.Fatalf("empty dir should default to daemon.exe, got %s", got)
+	}
+	// Only the legacy name present falls back (existing installs keep working).
+	if err := os.WriteFile(filepath.Join(dir, "pocketagentd.exe"), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := daemonExe(dir); filepath.Base(got) != "pocketagentd.exe" {
+		t.Fatalf("legacy-only should fall back to pocketagentd.exe, got %s", got)
+	}
+	// Both present prefers the new name.
+	if err := os.WriteFile(filepath.Join(dir, "daemon.exe"), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := daemonExe(dir); filepath.Base(got) != "daemon.exe" {
+		t.Fatalf("both present should prefer daemon.exe, got %s", got)
 	}
 }

@@ -362,6 +362,21 @@ func processAlive(pid int) bool {
 	return r != 0 && code == stillActive
 }
 
+// daemonExe 同目录 daemon 可执行文件名(0.4.0 起标准分发叫 daemon.exe)。
+//
+// 【为什么先找 daemon.exe】标准 Release 只剩 daemon.exe + pocketagent.apk
+// 两个文件；pocketagentd.exe 是旧包名，只在用户没更新时回退找它。
+// 不存在 → 返回 daemon.exe 路径（让 Start 报“找不到文件”的人话，而非静默）。
+func daemonExe(dir string) string {
+	if fi, err := os.Stat(filepath.Join(dir, "daemon.exe")); err == nil && !fi.IsDir() {
+		return filepath.Join(dir, "daemon.exe")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "pocketagentd.exe")); err == nil && !fi.IsDir() {
+		return filepath.Join(dir, "pocketagentd.exe")
+	}
+	return filepath.Join(dir, "daemon.exe")
+}
+
 func startDaemon(dir, addr, pairCode, confWorkspace string) (int, error) {
 	out, err := os.OpenFile(filepath.Join(dir, daemonLog), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -389,7 +404,7 @@ func startDaemon(dir, addr, pairCode, confWorkspace string) (int, error) {
 	if pairCode != "" {
 		args = append(args, "-pair-code", pairCode)
 	}
-	cmd := exec.Command(filepath.Join(dir, "pocketagentd.exe"), args...)
+	cmd := exec.Command(daemonExe(dir), args...)
 	cmd.Dir = dir
 	// 【为什么不再注入 CODEX_BIN 默认值】旧实现在环境未设 CODEX_BIN 时注入一条
 	// 写死的开发机 codex.cmd 绝对路径（已否决注入）：它作为字符串常量进 paguard.exe

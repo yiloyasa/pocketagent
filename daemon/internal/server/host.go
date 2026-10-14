@@ -278,6 +278,13 @@ func cachedPiVersion() string {
 // 供 cmd/pocketagentd 的 mDNS 广播取实例名/TXT name(P0-3)。
 func (s *Server) DisplayName() string { return hostDisplayName() }
 
+// LanIP 返回本机局域网 IPv4(供 daemon.exe 启动横幅展示，手机同 WiFi 直连用)。
+// 空 = 没找到(多网卡/纯公网)，调用方如实说“未检测到”，不编造。
+func LanIP() string { return detectLanIP() }
+
+// TailscaleIP 返回本机 Tailscale IPv4(异地直连用)。空 = 未安装/未登录。
+func TailscaleIP() string { return detectTailscaleIP() }
+
 // detectLanIP 找一个可用于局域网直连的本机 IPv4(192.168.x / 10.x / 172.16-31.x),
 // 跳过 Tailscale 虚拟网卡(100.x)和回环。同一 WiFi 下手机直连它最快。
 // 结果缓存 5 分钟:GetHostInfo 被手机每 8 秒探活一次,不缓存就会不停拉起子进程。

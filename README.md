@@ -7,14 +7,14 @@
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84)](#)
 [![daemon](https://img.shields.io/badge/daemon-Go%201.27-00ADD8)](#)
 [![契约](https://img.shields.io/badge/gRPC-7%20服务%20·%2093%20RPC-blue)](#)
-[![测试](https://img.shields.io/badge/测试-Android%201839%20例%20·%20daemon%2029%20包-green)](#)
+[![测试](https://img.shields.io/badge/测试-Android%201839%20例%20·%20daemon%2030%20包-green)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
 ## 这是什么
 
-**PocketAgent** 是一个"AI 编程代理遥控器"：电脑上跑着你已安装的原生 AI 编码 agent（OpenAI Codex CLI、Pi、ZCode/OpenCode、DSH、Hermes 等），手机 App 通过 gRPC/TLS 直连你电脑上的一个本地 daemon（`pocketagentd`），把它们的流式事件、工具调用、审批请求翻译成手机端体验，再把你的决定翻译回去。
+**PocketAgent** 是一个"AI 编程代理遥控器"：电脑上跑着你已安装的原生 AI 编码 agent（OpenAI Codex CLI、Pi、ZCode/OpenCode、DSH、Hermes 等），手机 App 通过 gRPC/TLS 直连你电脑上的一个本地 daemon，把它们的流式事件、工具调用、审批请求翻译成手机端体验，再把你的决定翻译回去。
 
 **daemon 只做翻译官，不重写 agent 的循环** —— 沙箱策略、审批策略、工具权限、MCP 配置全部仍是原生 agent 自己的。没有云中继、没有账号体系、你的代码和对话永远不出你自己的电脑和手机。
 
@@ -39,55 +39,58 @@
 |---|---|
 | ![会话列表](docs/media/threads.png) | ![设置](docs/media/settings.png) |
 
-## 架构
+## 下载（标准双文件，0.4.0 起）
 
-```
-手机 (Kotlin/Compose) ──gRPC/TLS──► 本机 daemon (Go) ──stdio JSON-RPC──► 原生 agent ──► 大模型
-   遥控 / 显示 / 审批              翻译事件·中继审批·托管子进程        codex/pi/zcode/dsh/hermes
-                                                                    (自有循环/沙箱/审批/MCP)
-```
+GitHub Releases 页只有两个文件，电脑端 + 手机端各一：
 
-连通三档降级：**USB `adb reverse` → 局域网（含 mDNS 自动发现）→ Tailscale**，无云中继。
+| 文件 | 哪一端 | 用法 |
+|---|---|---|
+| `daemon.exe` | 电脑（Windows） | 下载后双击运行，常驻当前窗口 |
+| `pocketagent.apk` | 手机（Android 8.0+） | 传到手机点开安装 |
 
-- **手机端**：Kotlin + Jetpack Compose，minSdk 26（Android 8.0+），单 Activity + Compose 导航
-- **daemon**：Go 单二进制（无框架、无 ORM），gRPC + TLS，7 服务 / 93 RPC 契约（`proto/v1/`）
-- **契约治理**：proto 双副本 MD5 校验、审计门禁（`tools/audit/pa_audit.py`）、Android 1839 例 + daemon 29 测试包全绿
+SHA256 对账见 Releases 备注。旧版总 zip（0.3.x）已退役，不再更新。
 
-## 快速开始
+## 快速开始（五分钟）
 
-> 前提：一台 **Windows 10/11** 电脑（已安装并登录你想用的 agent CLI，如 `codex`、`pi`…），一台 **Android 8.0+** 手机，同一局域网（或 USB 线，或两端装 Tailscale）。
+> 前提：一台 **Windows 10/11** 电脑（装好并登录任意一家 agent CLI，如 `codex`、`pi`…），一台 **Android 8.0+** 手机。
 
-### ① 电脑：装桌面端 daemon
+### ① 电脑：双击 `daemon.exe`
 
-```bat
-:: 源码构建（需 Go 1.27+）
-cd daemon
-go build -o pocketagentd.exe .\cmd\pocketagentd
-```
+窗口里会直接打印：**8 位配对码**、监听地址、局域网 IP、本机配对码文件位置、手机下一步。看门狗已自动开启——daemon 崩溃后 1 分钟内自己拉起来，不用再装计划任务。
 
-然后以**管理员身份**运行 `dist/windows/install.bat`——它会注册看门狗计划任务（进程被杀自动拉起）、生成 **8 位配对码**（打印在日志里，重启复用不换码）。
+- 开机自启：给 `daemon.exe` 建个快捷方式，丢进启动文件夹（`Win+R` → `shell:startup` 回车）。
+- 彻底退出：先在数据目录建一个空文件 `noguard`（路径看窗口打印的配对码文件同目录），再关掉两个进程；删掉 `noguard` 即恢复看门狗。
+- 卸载：删 `daemon.exe` + 数据目录（`%LOCALAPPDATA%\PocketAgent\data`，配对码/证书/会话都在这）即干净。
 
 ### ② 手机：装 App 并配对
 
-```bash
-:: 源码构建 APK（需 Android SDK；中文路径请走镜像包装器）
-python tools/device/_pa_gradle.py apk
-adb install -r build/app-debug.apk
-```
-
-打开 App → 新建连接 → 填 `电脑IP:7246` + 8 位配对码 → 完成（TLS 证书指纹锁定，防中间人）。
+打开 App → 新手教程跟着走（可跳过）→ 首页选你的电脑 → 输入窗口里的 8 位配对码 →「配对并连接」。配对一次，以后打开即连（TLS 证书指纹锁定，防中间人）。
 
 ### ③ 发第一条消息
 
-工作台 → **开始新任务** → 选 agent 与工作文件夹 → 输入任务。agent 在你指定的文件夹里干活，工具调用与审批卡片实时到达手机，你点「允许 / 拒绝」。
+首页 **开始新任务** → 直接说（工作区不选也行，走默认位置）→ 发送。agent 要在电脑上执行命令前，会先弹「审批卡」问你，你点头才执行。
 
 ### 日常使用
 
 | 场景 | 做法 |
 |---|---|
-| 同一 WiFi | 自动 mDNS 发现，或手填 `局域网IP:7246` |
+| 同一 WiFi | 自动 mDNS 发现，或手填 `局域网IP:7246`（如 `192.168.1.20:7246`） |
 | 外网 | 两端装 [Tailscale](https://tailscale.com)，填 `100.x.x.x:7246` |
-| USB 调试 | `adb reverse tcp:7246 tcp:7246`，App 填 `127.0.0.1:7246`（最快最稳） |
+| USB 调试 | `adb reverse tcp:7246 tcp:7246`，App 填 `127.0.0.1:7246`（最快最稳，插线可自动配对） |
+
+## 架构
+
+```
+手机 (Kotlin/Compose) ──gRPC/TLS──► 本机 daemon (Go) ──stdio JSON-RPC──► 原生 agent ──► 大模型
+   遥控 / 显示 / 审批              翻译事件·中继审批·托管子进程        codex/pi/zcode/dsh/hermes
+                                 自守护看门狗（单文件，崩溃自拉起）   (自有循环/沙箱/审批/MCP)
+```
+
+连通三档降级：**USB `adb reverse` → 局域网（含 mDNS 自动发现）→ Tailscale**，无云中继。
+
+- **手机端**：Kotlin + Jetpack Compose，minSdk 26（Android 8.0+），单 Activity + Compose 导航
+- **daemon**：Go 单二进制（无框架、无 ORM），gRPC + TLS，7 服务 / 93 RPC 契约（`proto/v1/`），自守护看门狗内建
+- **契约治理**：proto 双副本 MD5 校验、审计门禁（`tools/audit/pa_audit.py`）、发版预检（`tools/release/check_release.py`）、Android 1839 例 + daemon 30 测试包全绿
 
 ## 安全模型
 
@@ -104,6 +107,9 @@ adb install -r build/app-debug.apk
 | daemon 运行 | `go run ./cmd/pocketagentd -addr 0.0.0.0:7246 -workspace "你的项目目录"` |
 | App APK | `python tools/device/_pa_gradle.py apk`（中文路径机器必须走此镜像包装器） |
 | App 测试 | `python tools/device/_pa_gradle.py test` |
+| 发版预检 | `python tools/release/check_version.py && python tools/release/check_release.py` |
+| 发版打包 | `powershell -File dist/release.ps1`（产出 `dist/daemon.exe` + `dist/apk/pocketagent.apk`） |
+| 发版发布 | `python tools/release/publish_github.py`（传双资产到 GitHub Releases） |
 | release 签名 | 口令经 `PA_RELEASE_STORE_PASSWORD` / `PA_RELEASE_KEY_PASSWORD` 注入（`~/.gradle/gradle.properties` 或环境变量），**仓库不含任何口令** |
 | 契约变更 | 改 `proto/v1/*` 后 `python tools/proto/gen_proto.py`（双副本 MD5 校验是审计红线） |
 
@@ -113,17 +119,17 @@ adb install -r build/app-debug.apk
 
 | 文档 | 内容 |
 |---|---|
-| [DEVELOPING.md](DEVELOPING.md) | 开发协作者上下文：模块地图、真值锚点、红线、坑库 |
-| [QUICKSTART.md](QUICKSTART.md) | 五分钟上手：装桌面端 → 记配对码 → 手机配对 → 发第一条消息 |
+| [QUICKSTART.md](QUICKSTART.md) | 五分钟上手：双击 daemon → 装 App 配对 → 发第一条消息 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本历史（双端同版，仅维护最新版）与发版流程 |
+| [DEVELOPING.md](DEVELOPING.md) | 开发协作者上下文：模块地图、真值锚点、红线、坑库 |
 | [AGENTS.md](AGENTS.md) | AI 协作者入口（命令/环境/红线速查） |
 | [AUDIT.md](AUDIT.md) | 改动合入审核标准（甲乙丙丁分级 / L0–L2 / 红线） |
 | `docs/verify/` | 每一轮真机验收与整改的证据档案（截图/日志/报告） |
 
 ## 状态与路线图
 
-- ✅ 已达成：五家 agent 真轮真机验收、pi 思考链真机验证、离线快照与事件续传、分发级 release 签名、仓库认知索引（AOCI）1400+ 条
-- 🚧 进行中：语音输入真机补验、codex 桌面账号态适配收尾
+- ✅ 已达成：单文件 daemon（自守护看门狗）+ 双资产标准分发、五家 agent 真轮真机验收、pi 思考链真机验证、离线快照与事件续传、分发级 release 签名、仓库认知索引（AOCI）1400+ 条
+- 🚧 进行中：声明式适配器重构（P0 影子，见设计文档）、语音输入真机补验
 - 💡 设想中：iOS 端、桌面端 macOS/Linux、插件化 agent 适配器
 
 ## License

@@ -13,7 +13,7 @@ package version
 // Version is the daemon version. Default value stays in sync with the
 // repository; dist/windows/build.ps1 stamps the same value at build time
 // (and also drops it into version.txt inside the zip for reconciliation).
-var Version = "0.3.1"
+var Version = "0.4.0"
 
 // App is the historical name kept for existing callers (internal/server/host.go,
 // internal/agent/codex.go). It derives from Version, so a -ldflags stamp on
@@ -29,4 +29,4 @@ var App = Version
 // 【升级纪律】本仓库只维护最新版，不兼容旧格式：每次发版 MinAppVersion
 // 与 Version 同步抬到当前版本号 —— 旧 APK / 旧 daemon 不再保证可连，
 // App 侧仅作提示不硬拦。比较函数见 ConnectionDiagnostics.isAppVersionTooOld。
-const MinAppVersion = "0.3.1"
+const MinAppVersion = "0.4.0"

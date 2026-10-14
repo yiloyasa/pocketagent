@@ -3,6 +3,36 @@
 格式：`Keep a Changelog` 简化版。`[App vX / daemon vX / versionCode N]` 头注明双端版本。
 `MinApp` = 该 daemon 要求的最低 App 版本（`HostInfo.min_app_version`）。
 
+## [0.4.0] — 2026-10-13
+
+`[App v0.4.0 / daemon v0.4.0 / versionCode 8 / MinApp 0.4.0]`
+
+标准分发版：Release 附件只剩两个文件（电脑端 `daemon.exe` + 手机端
+`pocketagent.apk`），总 zip 退役；daemon 单文件自带看门狗。
+
+### 新增
+
+- 单文件自守护（`daemon/internal/selfguard`）：双击运行即自动拉起
+  `-guard-child` 看门狗子进程，回环探活、连续失败按原参数重拉父进程；
+  父子靠数据目录 `guard.lock` 独占文件锁互斥；`noguard` 空文件永久停用、
+  `-no-guard` 关一次。E2E 实证：kill 父进程 55 秒后拉起，零残留。
+- 桌面端人性化：控制台启动横幅（版本/8 位配对码/监听地址/局域网与
+  Tailscale IP/手机下一步/未装 agent 指引）；端口被占给精确自查命令；
+  无 agent 时给六家安装指引。日志仍进 `daemon.log`。
+- paguard 认新名：同目录优先 `daemon.exe`，旧 `pocketagentd.exe` 回退。
+
+### 变更
+
+- 发版链双资产化：`release.ps1` 产出 `dist/daemon.exe` +
+  `dist/apk/pocketagent.apk`；`publish_github.py` 只传两附件，SHA256 写进
+  Release 备注；`check_release.py`/`pa_upgrade_gate` 同步改双资产口径。
+- install.bat 全家桶退为高级路径（仍在仓库），标准路径不再需要它；
+  开机自启改为启动文件夹快捷方式（见 README）。
+
+### 兼容矩阵
+
+见 `docs/verify/compat-matrix-0.4.0.md`（只维护最新版）。
+
 ## [0.3.1] — 2026-10-13
 
 `[App v0.3.1 / daemon v0.3.1 / versionCode 7 / MinApp 0.3.1]`

@@ -32,6 +32,7 @@ import (
 	"github.com/pocketagent/daemon/internal/piapp"
 	"github.com/pocketagent/daemon/internal/rotatelog"
 	"github.com/pocketagent/daemon/internal/runtime"
+	"github.com/pocketagent/daemon/internal/selfguard"
 	"github.com/pocketagent/daemon/internal/server"
 	"github.com/pocketagent/daemon/internal/store"
 	"github.com/pocketagent/daemon/internal/term"
@@ -120,6 +121,12 @@ func main() {
 	// 与手机控制中心走同一批 server 方法(同源 RPC);非回环地址 panel.Start
 	// 直接拒绝启动。
 	panelAddr := flag.String("panel", "", "本地管理面板(默认关):仅回环地址,如 -panel 127.0.0.1:7455")
+	// 单文件自守护(0.4.0):默认开。父进程启动时拉起同文件的 -guard-child
+	// 子进程看门狗（回环探活，连续失败即按原参数重拉父进程）；-no-guard 关一次，
+	// <数据目录>/noguard 空文件关永久（删掉即恢复）。paguard/计划任务是旧链，
+	// 单文件分发不再需要它们。
+	noGuard := flag.Bool("no-guard", false, "本次不拉看门狗（单文件自守护默认开；永久停用建 <数据目录>/noguard 空文件）")
+	guardChild := flag.Bool("guard-child", false, "子模式:看门狗（探活回环端口，父进程死了按原参数重拉；用户不要直接跑）")
 	flag.Parse()
 
 	resolvedData, resolveErr := hostenv.ResolveDataDir(*dataDir)
@@ -139,6 +146,16 @@ func main() {
 	piapp.SetDataDir(*dataDir)
 	dshapp.SetDataDir(*dataDir)
 	zcodeapp.SetDataDir(*dataDir)
+
+	// -guard-child 子模式:命中即进看门狗主循环，永不往下走（不监听/不预热/
+	// 不碰业务）。放在数据目录落定后、一切重活之前。
+	if *guardChild {
+		exe, _ := os.Executable()
+		selfguard.RunChild(selfguard.Config{
+			Exe: exe, Addr: *addr, DataDir: *dataDir, Workspace: *workspace,
+		})
+		return
+	}
 
 	// 并行委派上限(有界并发,不排队):把 -collab-max-parallel 传导进引擎。
 	// SetCollabMaxParallel 统一归一化(<=0 → 默认 3),整进程只此一处写入。
@@ -172,6 +189,22 @@ func main() {
 
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
 		log.Fatalf("创建数据目录失败: %v", err)
+	}
+
+	// 单文件自守护:默认拉看门狗子进程（-no-guard 关一次，noguard 文件关永久）。
+	// fail open：拉不起只记一行，daemon 照常跑——看门狗缺位不能成为拒绝服务。
+	if !*noGuard {
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			log.Printf("WARNING: 定位自身可执行文件失败，看门狗跳过（daemon 照常跑）: %v", exeErr)
+		} else {
+			_, reason := selfguard.Ensure(selfguard.Config{
+				Exe: exe, Addr: *addr, DataDir: *dataDir, Workspace: *workspace,
+			})
+			log.Printf("看门狗: %s", reason)
+		}
+	} else {
+		log.Printf("看门狗: 本次 -no-guard，不拉（崩溃后需手动重跑）")
 	}
 
 	// ---- 鉴权模式解析(PA-REAL-0001 修复:默认鉴权开启)----
@@ -403,7 +436,7 @@ func main() {
 
 	lis, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		log.Fatalf("监听 %s 失败: %v", listenAddr, err)
+		log.Fatalf("监听失败\n%s", selfguard.PortBusyText(listenAddr, err))
 	}
 
 	gs := grpc.NewServer(append([]grpc.ServerOption{
@@ -508,6 +541,9 @@ func main() {
 	// 确认"跑着的是新的"不再只靠 pid。
 	log.Printf("pocketagentd 已启动: %s | 工作区: %s | 模型: %v | 鉴权: %s | 版本: %s",
 		*addr, *workspace, names, authMode, version.Version)
+	// 控制台横幅（单文件人性化）:日志进了 daemon.log，双击运行的用户看不见——
+	// 配对码/地址/下一步必须打屏。fmt 直走 stdout，不进日志文件。
+	printConsoleBanner(*addr, *dataDir, pairCodeValue, *insecureNoAuth, names)
 	if err := gs.Serve(lis); err != nil {
 		log.Fatalf("gRPC 服务退出: %v", err)
 	}
@@ -518,6 +554,41 @@ func main() {
 func cwd() string {
 	d, _ := os.Getwd()
 	return d
+}
+
+// printConsoleBanner 双击运行的人话屏显：配对码、地址、下一步。
+// 只读快照、不写任何东西；缺什么说什么（没检到 LAN IP 就直说，别编）。
+func printConsoleBanner(addr, dataDir, pairCode string, noAuth bool, agentNames []string) {
+	fmt.Println("============================================")
+	fmt.Printf(" PocketAgent 桌面端 v%s 已启动\n", version.Version)
+	fmt.Println("============================================")
+	if noAuth {
+		fmt.Println(" 无鉴权模式（仅本机回环可连，手机局域网连不上是正常的）")
+	} else {
+		fmt.Printf(" 配对码（8 位，手机首次连接输入）: %s\n", pairCode)
+	}
+	fmt.Printf(" 监听地址: %s\n", addr)
+	if lan := server.LanIP(); lan != "" {
+		fmt.Printf(" 局域网 IP（同 WiFi 手机填这个）: %s\n", lan)
+	} else {
+		fmt.Println(" 局域网 IP：未检测到（手机用 USB 线连最稳）")
+	}
+	if ts := server.TailscaleIP(); ts != "" {
+		fmt.Printf(" Tailscale IP（异地时填这个）: %s\n", ts)
+	}
+	fmt.Printf(" 配对码文件: %s\n", pairCodePath(dataDir))
+	fmt.Println(" 手机下一步：装 pocketagent.apk → 打开 App → 选这台电脑 → 输配对码")
+	if len(agentNames) == 1 && agentNames[0] == "echo" {
+		fmt.Println(" 提醒：本机还没装任何 AI agent（codex/pi/zcode/dsh/hermes 任选一家）")
+		fmt.Println("   codex:  npm install -g @openai/codex")
+		fmt.Println("   pi:     先装 Node.js，再 npm install -g @earendil-works/pi-coding-agent")
+		fmt.Println("   dsh:    先装 Node.js，再 npm install -g @deepseek-ai/dsh")
+		fmt.Println(" 装好并登录后再回来，手机上就能用；不装也不影响配对。")
+	} else {
+		fmt.Printf(" 已接 agent: %v\n", agentNames)
+	}
+	fmt.Println(" 看门狗：已自动开启（崩溃 1 分钟内自己拉起来；停用见 README）")
+	fmt.Println("============================================")
 }
 
 // collabDaemonAddrDefault 子模式回环拨号的主 daemon 默认地址(T-L2fix:委派

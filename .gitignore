@@ -18,9 +18,11 @@ intermediates/
 dist/windows/PocketAgent桌面端.zip
 # 总发行包与发布附件由 dist/release.ps1 重建 + GitHub Releases 托管(0.3.1):
 # PocketAgent-<ver>-<date>.zip / SHA256SUMS-<ver>.txt / RELEASE_NOTES-<ver>.md
+# 【0.4.0 起退役】标准格式只剩双资产：dist/daemon.exe + dist/apk/pocketagent.apk
 dist/PocketAgent-*.zip
 dist/SHA256SUMS-*.txt
 dist/RELEASE_NOTES-*.md
+dist/daemon.exe
 
 # ---------- 编译出的可执行文件 ----------
 *.exe

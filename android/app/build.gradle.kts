@@ -44,8 +44,8 @@ android {
         targetSdk = 35
         // P0 安全轮(daemon TLS 自签+指纹锁定、每设备 token+挑战应答认证)。
         // versionName 与 daemon internal/version 保持同步。
-        versionCode = 7
-        versionName = "0.3.1"
+        versionCode = 8
+        versionName = "0.4.0"
         // OBS-03 体检:sherpa-onnx AAR 自带 4 套 ABI(arm64-v8a/armeabi-v7a/x86/x86_64,
         // 无 mips/mips64),全量打进 universal APK 白耗体积。收窄为
         // arm64-v8a(主力/小米13)+ armeabi-v7a(32 位老机),剔掉 x86 与 x86_64。

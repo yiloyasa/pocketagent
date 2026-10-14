@@ -11,7 +11,7 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
   git rev-parse/status   commit + 工作区干净度
   结果 XML 直读           tests/failures/errors + 最新 mtime 年龄
                          （fake_green 同口径：>10 分钟=陈旧=疑似 Gradle UP-TO-DATE 假绿）
-  dist 总 zip mtime      dist/PocketAgent-*.zip 是否晚于 release.ps1 / 打包脚本
+  dist 双资产 mtime      daemon.exe + pocketagent.apk 是否晚于 release.ps1 / 打包脚本
                          （2026-10-13 起改指总包，不再看 windows 中间 zip）
   tools/release 门禁     check_version.py / check_release.py 子进程直调（只判退出码）
 
@@ -20,7 +20,7 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
   contract = baseline + proto 两副本 MD5 一致
   feature  = contract + Android 测试新鲜 0 失败 + pa_audit redline=0
   release  = feature + check_version 必过 + check_release 预检必过
-             + dist 总 zip mtime 新于打包脚本
+             + dist 双资产 mtime 新于打包脚本
 
 检查项状态：PASS / FAIL / WARN（有保留：go 环境异常等）/ SKIPPED（--skip 跳过）
             / NOT_IMPLEMENTED（无法验证——绝不假装通过）。
@@ -66,9 +66,10 @@ TEST_RESULTS_DEFAULT = r"G:\pa\android\app\build\test-results\testDebugUnitTest"
 ENV_ABNORMAL_MARK = "异常退出码"
 
 DIST_SCRIPTS = ("build.ps1", "install.bat", "uninstall.bat")
-# 总 zip 新鲜度比对基准（2026-10-13 起改指 dist/*.zip 总包）：
-#   总包 glob（dist 根下非递归）+ 参考脚本（dist 根相对路径）。
-TOTAL_ZIP_GLOB = "PocketAgent-*.zip"
+# 标准双资产新鲜度比对基准（0.4.0 起改指双资产，不再产总 zip）：
+#   dist/daemon.exe + dist/apk/pocketagent.apk 双双晚于打包脚本才算新鲜；
+#   参考脚本（dist 根相对路径）。
+DUAL_ASSETS = ("daemon.exe", "apk/pocketagent.apk")
 RELEASE_PS1_REF = "release.ps1"   # dist 根下总装配脚本
 
 
@@ -400,7 +401,7 @@ def check_release_preflight(g: GateCtx) -> Check:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 检查项 f：发布包新鲜度（dist 总 zip mtime 新于打包脚本）
+# 检查项 f：双资产新鲜度（daemon.exe + pocketagent.apk 新于打包脚本）
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check_dist_release(g: GateCtx) -> Check:
@@ -411,22 +412,25 @@ def check_dist_release(g: GateCtx) -> Check:
     if missing:
         return Check(cid, title, FAIL, "",
                      [f"缺少打包脚本：{'; '.join(missing)}——无法比对新鲜度"])
-    zips = [p for p in d.glob(TOTAL_ZIP_GLOB) if p.is_file()]
-    if not zips:
+    assets = [d / a for a in DUAL_ASSETS]
+    gone = [str(a) for a in assets if not a.is_file()]
+    if gone:
         return Check(cid, title, FAIL, "",
-                     [f"未找到总 zip：{d}\\{TOTAL_ZIP_GLOB}——需先跑 dist/release.ps1"])
-    zp = max(zips, key=lambda p: p.stat().st_mtime)
-    zm = zp.stat().st_mtime
+                     [f"双资产缺失：{'; '.join(gone)}——需先跑 dist/release.ps1"])
     newest_ref = max(refs, key=lambda r: r.stat().st_mtime)
     max_ref = newest_ref.stat().st_mtime
-    if zm > max_ref:
+    stale = [a for a in assets if a.stat().st_mtime <= max_ref]
+    if not stale:
+        oldest = min(assets, key=lambda a: a.stat().st_mtime)
         return Check(cid, title, PASS,
-                     f"{zp.name}（{_fmt_ts(zm)}）晚于全部打包脚本", [])
+                     f"双资产（{', '.join(a.name for a in assets)}）均晚于全部打包脚本"
+                     f"（最老 {oldest.name} {_fmt_ts(oldest.stat().st_mtime)}）", [])
+    det = [f"{a.name} mtime={_fmt_ts(a.stat().st_mtime)}" for a in assets]
+    det += [f"{newest_ref.name} mtime={_fmt_ts(max_ref)}",
+            "需重跑 dist/release.ps1 重新打包"]
     return Check(cid, title, FAIL,
-                 f"{zp.name}（{_fmt_ts(zm)}）不晚于 {newest_ref.name}（{_fmt_ts(max_ref)}）",
-                 [f"{zp.name} mtime={_fmt_ts(zm)}",
-                  f"{newest_ref.name} mtime={_fmt_ts(max_ref)}",
-                  "需重跑 dist/release.ps1 重新打包"])
+                 f"双资产不新鲜（{', '.join(a.name for a in stale)} 不晚于"
+                 f" {newest_ref.name}）", det)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,7 +446,7 @@ CHECK_TITLES: Dict[str, str] = {
     "audit_redline": "pa_audit 红线（redline=0）",
     "release_version": "版本双副本同步（check_version.py 必过）",
     "release_preflight": "发版前预检（check_release.py 必过：签名早验/PS5.1/痕迹针白名单/产物对账）",
-    "dist_release": "发布包新鲜度（dist 总 zip 晚于打包脚本）",
+    "dist_release": "双资产新鲜度（daemon.exe + pocketagent.apk 晚于打包脚本）",
 }
 
 CHECK_ORDER: List[str] = ["git_clean", "daemon_build", "daemon_vet", "proto_sync",
@@ -573,7 +577,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--repo", help="仓库根目录（默认：脚本上两级）")
     ap.add_argument("--test-results",
                     help="testDebugUnitTest 结果 XML 目录（默认镜像盘 G:\\pa\\...）")
-    ap.add_argument("--dist", help="dist 目录（总 zip 所在，默认 --repo/dist）")
+    ap.add_argument("--dist", help="dist 目录（双资产所在，默认 --repo/dist）")
     return ap.parse_args(argv)
 
 

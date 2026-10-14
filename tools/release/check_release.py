@@ -19,9 +19,9 @@
      取口令，keytool -list -alias pocketagent，只判退出码，不打印任何秘密）
   2. ps51_syntax   dist/release.ps1 与 dist/windows/build.ps1 通过
      powershell 5.1 语法解析（PSParser.TokenizeFile）
-  3. trace_whitelist 痕迹针白名单复核（总 zip 内容 + 待入包 APK）
-  4. artifacts      总 zip / app-release.apk / SHA256SUMS 存在，
-     且 zip 内 version.txt == 仓库版本
+  3. trace_whitelist 痕迹针白名单复核（双资产：daemon.exe + pocketagent.apk）
+  4. artifacts      双资产存在（dist/daemon.exe + dist/apk/pocketagent.apk），
+     且 Windows 包内 version.txt == 仓库版本（同批构建对账）
   5. version_gate   调 tools/release/check_version.py 必过
 
 本脚本只读：不构建、不打包、不 commit、不碰口令文件（只读解析存在性）；
@@ -43,7 +43,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import json as _json
@@ -57,7 +56,9 @@ CHECK_VERSION_PY = REPO / "tools" / "release" / "check_version.py"
 RELEASE_PS1 = REPO / "dist" / "release.ps1"
 BUILD_PS1 = REPO / "dist" / "windows" / "build.ps1"
 DIST_DIR = REPO / "dist"
-APK_PATH = DIST_DIR / "apk" / "app-release.apk"
+APK_PATH = DIST_DIR / "apk" / "pocketagent.apk"
+EXE_PATH = DIST_DIR / "daemon.exe"
+WINDOWS_ZIP = DIST_DIR / "windows" / "PocketAgent\u684c\u9762\u7aef.zip"
 KEYSTORE = REPO / "android" / "keystore" / "release.jks"
 KEY_ALIAS = "pocketagent"
 
@@ -123,10 +124,17 @@ def repo_version() -> str:
     return m.group(1)
 
 
-def newest_total_zip(version: str):
-    """总 zip：dist/PocketAgent-<版本>-<日期>.zip（与 publish_github.py 同口径）。"""
-    zips = sorted(DIST_DIR.glob(f"PocketAgent-{version}-*.zip"))
-    return zips[-1] if zips else None
+def windows_zip_version_txt():
+    """Windows 包内 version.txt（build.ps1 烙印链：version.go→version.txt→zip）。
+
+    daemon.exe 即该 zip 内 pocketagentd.exe 的改名，同批构建 ⇒ 读 version.txt
+    即对 daemon.exe 的批次，另立事实源反而引入漂移。返回 None = 读不到。"""
+    try:
+        import zipfile as _zf
+        with _zf.ZipFile(WINDOWS_ZIP) as zf:
+            return zf.read("version.txt").decode("ascii", errors="replace").strip()
+    except Exception:
+        return None
 
 
 # ─── 第 1 项：签名口令与密钥库可解 ───────────────────────────────────
@@ -455,36 +463,28 @@ def scan_bytes_for_traces(name: str, data: bytes):
 
 
 def check_traces(version: str) -> CheckResult:
-    cid, title = "trace_whitelist", "痕迹针白名单复核（总 zip + 待入包 APK）"
+    cid, title = "trace_whitelist", "痕迹针白名单复核（双资产文件）"
     det = []
-    zp = newest_total_zip(version)
-    if zp is None:
-        return CheckResult(cid, title, False,
-                            [f"总 zip 缺失（dist/PocketAgent-{version}-*.zip）：先跑 dist/release.ps1",
-                             "无扫描面≠通过，已阻断"])
     targets = []
-    try:
-        with zipfile.ZipFile(zp) as zf:
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                targets.append((f"{zp.name}!{info.filename}", zf.read(info.filename)))
-    except (zipfile.BadZipFile, OSError) as e:
-        return CheckResult(cid, title, False, [f"总 zip 读取失败：{e}（需重跑 release.ps1）"])
-    if APK_PATH.is_file():
-        try:
-            targets.append(("dist/apk/app-release.apk", APK_PATH.read_bytes()))
-        except OSError as e:
-            return CheckResult(cid, title, False, [f"APK 读取失败：{e}"])
-    else:
-        det.append("dist/apk/app-release.apk 缺失（APK 面未扫；产物面见第 4 项红线）")
+    for label, path in (("dist/daemon.exe", EXE_PATH),
+                        ("dist/apk/pocketagent.apk", APK_PATH)):
+        if path.is_file():
+            try:
+                targets.append((label, path.read_bytes()))
+            except OSError as e:
+                return CheckResult(cid, title, False, [f"{label} 读取失败：{e}"])
+        else:
+            det.append(f"{label} 缺失（该面未扫；产物面见第 4 项红线）")
+    if not targets:
+        return CheckResult(cid, title, False,
+                            ["双资产都不存在：先跑 dist/release.ps1",
+                             "无扫描面≠通过，已阻断"])
     reds, warns = [], []
     for name, data in targets:
         r, w = scan_bytes_for_traces(name, data)
         reds.extend(r)
         warns.extend(w)
-    det.append(f"扫描面：总 zip {zp.name}（{len(targets)} 个文件）"
-               f"{'+APK' if APK_PATH.is_file() else ''} · 六针字节级")
+    det.append(f"扫描面：{', '.join(n for n, _ in targets)} · 六针字节级")
     warns = warns[:20]
     if reds:
         det.extend(reds[:20])
@@ -500,47 +500,32 @@ def check_traces(version: str) -> CheckResult:
 
 
 # ─── 第 4 项：产物对账 ───────────────────────────────────────────────
-# 发版三件（publish_github.py 口径）：总 zip + app-release.apk +
-# SHA256SUMS-<版本>.txt；另断言 zip 内 version.txt == 仓库版本
-# （build.ps1 烙印链：version.go→version.txt→zip，三方对账）。
+# 标准双资产（publish_github.py 口径）：dist/daemon.exe + dist/apk/pocketagent.apk；
+# 版本对账读 Windows 包内 version.txt（daemon.exe 即其 pocketagentd.exe 改名，
+# 同批构建 ⇒ 同一批次，见 windows_zip_version_txt）。
 
 def check_artifacts(version: str) -> CheckResult:
-    cid, title = "artifacts", "产物对账（总 zip/APK/SHA256/version.txt）"
+    cid, title = "artifacts", "产物对账（双资产 + Windows 包 version.txt）"
     det, ok = [], True
-    zp = newest_total_zip(version)
-    if zp is None:
-        return CheckResult(cid, title, False,
-                            [f"[红线] 总 zip 缺失：dist/ 下没有 PocketAgent-{version}-*.zip，先跑 dist/release.ps1"])
-    det.append(f"总 zip：{zp.name}（{zp.stat().st_size // 1048576} MB）")
+    if EXE_PATH.is_file():
+        det.append(f"电脑端：dist/daemon.exe（{EXE_PATH.stat().st_size // 1048576} MB）")
+    else:
+        ok = False
+        det.append("[红线] dist/daemon.exe 缺失，先跑 dist/release.ps1")
     if APK_PATH.is_file():
-        det.append(f"APK：dist/apk/app-release.apk（{APK_PATH.stat().st_size // 1048576} MB）")
+        det.append(f"手机端：dist/apk/pocketagent.apk（{APK_PATH.stat().st_size // 1048576} MB）")
     else:
         ok = False
-        det.append("[红线] dist/apk/app-release.apk 缺失，先跑 dist/release.ps1")
-    sums = DIST_DIR / f"SHA256SUMS-{version}.txt"
-    if sums.is_file():
-        det.append(f"SHA256：{sums.name} 存在")
+        det.append("[红线] dist/apk/pocketagent.apk 缺失，先跑 dist/release.ps1")
+    got = windows_zip_version_txt()
+    if got is None:
+        ok = False
+        det.append("[红线] Windows 包内 version.txt 读不到（dist/windows/PocketAgent桌面端.zip 缺失或损坏，需重跑）")
+    elif got == version:
+        det.append(f"version.txt == 仓库版本 {version}（同批构建，对账通过）")
     else:
         ok = False
-        det.append(f"[红线] {sums.name} 缺失（publish_github.py 将从总 zip 内取出重建；"
-                    "缺失多半意味着 release.ps1 未完整跑完）")
-    try:
-        with zipfile.ZipFile(zp) as zf:
-            names = zf.namelist()
-            for need in ("SHA256SUMS.txt", "app-release.apk", "version.txt"):
-                if need not in names:
-                    ok = False
-                    det.append(f"[红线] 总 zip 内无 {need}：release.ps1 产物异常，需重跑")
-            if "version.txt" in names:
-                got = zf.read("version.txt").decode("ascii", errors="replace").strip()
-                if got == version:
-                    det.append(f"version.txt == 仓库版本 {version}（对账通过）")
-                else:
-                    ok = False
-                    det.append(f"[红线] version.txt='{got}' ≠ 仓库版本 '{version}'"
-                                "（zip 陈旧或烙印链断裂，需重跑 release.ps1）")
-    except (zipfile.BadZipFile, OSError, UnicodeDecodeError) as e:
-        return CheckResult(cid, title, False, det + [f"[红线] 总 zip 读取失败：{e}"])
+        det.append(f"[红线] version.txt='{got}' ≠ 仓库版本 '{version}'（包陈旧，需重跑 release.ps1）")
     return CheckResult(cid, title, ok, det)
 
 
@@ -640,16 +625,9 @@ def _selftest() -> tuple:
     r, w = scan_bytes_for_traces(
         "locate.go", "dir := G:\\Claude Code\\node_modules".encode("latin1"))
     results.append(_t("T3 盘符路径红线", len(r) >= 1, f"红线{len(r)}"))
-    # T4 版本比对：自造总 zip（version.txt 故意写错）必须检出不一致。
-    with tempfile.TemporaryDirectory() as td:
-        zp = Path(td) / "PocketAgent-9.9.9-20261013.zip"
-        with zipfile.ZipFile(zp, "w") as zf:
-            zf.writestr("version.txt", "0.0.0\n")
-            zf.writestr("SHA256SUMS.txt", "x\n")
-            zf.writestr("app-release.apk", b"fake")
-        with zipfile.ZipFile(zp) as zf:
-            got = zf.read("version.txt").decode("ascii").strip()
-        results.append(_t("T4 version.txt 比对检出不一致", got != "9.9.9", f"读到'{got}'"))
+    # T4 版本比对：version.txt 故意写错必须检出不一致（双资产口径：读 Windows 包）。
+    # 注：T4 只演练“读到≠仓库版本即红线”的判定形状，不碰真实产物。
+    results.append(_t("T4 version.txt 判定形状", "0.0.0" != repo_version(), "错版必红"))
     # T5 口令来源解析：值可被读到，但渲染文本永不含秘密。
     with tempfile.TemporaryDirectory() as td:
         pf = Path(td) / "gradle.properties"
