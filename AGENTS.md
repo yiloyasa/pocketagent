@@ -14,7 +14,7 @@
 
 | 项 | 值 |
 |---|---|
-| Git 基线 | `main` @ `b18500a`（2026-10-14：P1 补位四条接线（hermes 压缩/图片+五家 text_generation）、B3-2 Settings/Threads、android 与 flutter 设计系统收敛；同日早前 Flutter B2+B3-1、daemon 三域收敛、Toast 帧驱动、探针取证） |
+| Git 基线 | `main` @ `e2b0f0f`（2026-10-14：hermes slash 位化+Android 名单债清理+B3-3 Threads 真通道+Settings②；同日早前 P1 补位四条接线、B3-2、android/flutter 收敛、Flutter B2+B3-1、daemon 三域收敛、Toast 帧驱动、探针取证） |
 | 版本 | daemon **0.4.0** / App **versionCode 8** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
 | 测试水位 | Android **1844 用例 0 失败 / 0 错误**（2026-10-14，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
