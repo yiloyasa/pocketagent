@@ -36,7 +36,7 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
    不静默吞。唯一例外见 §4（未知事件类型也是显式失败，不透传——双端同 APK
    同 versionCode，不存在"新宿主对旧 UI"单边演进）。
 
-## 3. 方法清单（首批 6 条 + B3-3 追加 1 条；宿主侧全部【B4 待实现】）
+## 3. 方法清单（首批 6 条 + B3-3 追加 1 条 + B3-4 追加 3 条；宿主侧全部【B4 待实现】）
 
 | # | 方法名（契约字符串） | Dart 签名 | arguments | 返回 |
 |---|---|---|---|---|
@@ -47,6 +47,9 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 | 5 | `pairCode` | `Future<String> pairCode()` | null | 非空 String |
 | 6 | `startTurn` | `Future<void> startTurn(TurnInput input)` | `TurnInput` 字节 | null |
 | 7 | `listThreads` | `Future<ListThreadsResponse> listThreads([ListThreadsRequest?])` | `ListThreadsRequest` 字节（缺省 = 空消息） | `ListThreadsResponse` 字节 |
+| 8 | `listDirectory` | `Future<ListDirectoryResponse> listDirectory([ListDirectoryRequest?])` | `ListDirectoryRequest` 字节（缺省 = 空消息） | `ListDirectoryResponse` 字节 |
+| 9 | `readFile` | `Future<FileChunk> readFile([ReadFileRequest?])` | `ReadFileRequest` 字节（缺省 = 空消息） | `FileChunk` 字节（**首块**，见 §3.9） |
+| 10 | `listBranches` | `Future<ListBranchesResponse> listBranches([ListBranchesRequest?])` | `ListBranchesRequest` 字节（缺省 = 空消息） | `ListBranchesResponse` 字节 |
 
 ### 3.1 `getHostInfo` —— proto `HostService.GetHostInfo`（proto/v1/host.proto）
 
@@ -117,6 +120,37 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
   `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
 - 宿主侧语义（B4）：转发 daemon `ListThreads` → `ListThreadsResponse` 字节回传。
 
+### 3.8 `listDirectory([request])` —— proto `FileService.ListDirectory`（B3-4 追加）
+
+- 返回字节 → gen stub `ListDirectoryResponse`（目录/文件两型条目）。
+- 为什么默认不带参：路径在 `ListDirectoryRequest.path`（空 = daemon 默认工作区），
+  面包屑导航是页端纯函数（`breadcrumbSegmentsOf`），传参层不写死任何路径默认值。
+- 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+- 宿主侧语义（B4）：转发 daemon `ListDirectory` → `ListDirectoryResponse` 字节回传。
+
+### 3.9 `readFile([request])` —— proto `FileService.ReadFile`（B3-4 追加；**服务器流收成首块**）
+
+- proto 侧 `ReadFile` 是 server stream（分块回传大文件）。Dart 面**只取首块**：
+  `FileChunk` 的 `data` / `total_size` / `text` / `modified_unix_ms`。
+- **256 KB 预览帽在 Dart 侧调用前判定**：请求体超过即本地拒绝，不产生跨端调用；
+  `total_size > data.length` 时页面诚实标注「已截断」（不假装看完全文）。
+- 二进制/超大文件 → 页面诚实提示「不支持预览」，不用错误码代替能力声明。
+- 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+- 【为什么流收成首块还留在方法面】B2 契约只到「方法 + 三类事件」，Turn 双向流
+  与文件分块流的 Dart 消费面留 B5；本波 readFile 只解决「文本文件点开看一眼」，
+  首块语义与 256KB 帽组合已覆盖该场景，完整流式读取不摆假入口。
+
+### 3.10 `listBranches([request])` —— proto `GitService.ListBranches`（B3-4 追加）
+
+- 返回字节 → gen stub `ListBranchesResponse`（分支列表 + 当前分支标识）。
+- 工作区选择：`ListBranchesRequest` 的路径字段（空 = daemon 默认）；页端 roots 列表
+  来自 `getHostInfo` 的 workspaces + 手输路径二选一。
+- **只读**：切分支/新建分支不摆入口（写操作留后续波次拍板）。
+- 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+
 ## 4. 事件清单（EventChannel `dev.pocketagent/bridge/events`）
 
 payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
@@ -156,13 +190,15 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 ## 6. Kotlin 宿主侧待实现（B4 波次清单）
 
 - [ ] 在 FlutterEngine 挂载时注册 MethodChannel `dev.pocketagent/bridge`
-      handler：7 个方法按 §3 签名（method 名字符串逐字对齐）。
+      handler：10 个方法按 §3 签名（method 名字符串逐字对齐）。
 - [ ] 返回值一律走 proto `writeToBuffer()` 字节（与 gRPC 契约同源，复用
       `HostInfo`/`HostEvent`/`TurnInput`/`ListThreadsResponse` 的既有 Kotlin 生成类）。
 - [ ] `getConnectionState`：直接取 `AgentConnection` 五条 StateFlow 当前值拼
       §3.4 五键 Map（键名 = 字段名）。
-- [ ] `listThreads`：转发 daemon `ThreadService.ListThreads`，`threads[]` 按
-      proto `Thread` 原样字节回传（不给手机端做投影/筛选，那是页端的事）。
+- [ ] `listThreads` / `listDirectory` / `listBranches`：转发对应 daemon RPC，
+      `repeated` 字段按 proto 原样字节回传（不给手机端做投影/筛选，那是页端的事）。
+- [ ] `readFile`：proto 是 server stream，宿主只回**首块** `FileChunk`（§3.9）；
+      分块流的完整消费面留 B5，本波不实现。
 - [ ] 注册 EventChannel `dev.pocketagent/bridge/events` StreamHandler：
       五条 StateFlow 合流（任一变化 → `conn_state` 全量快照帧）、
       `hostEvents`（WatchEvents）逐帧 → `host_event`（字节直转）；

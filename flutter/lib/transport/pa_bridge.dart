@@ -14,11 +14,14 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
-import 'package:protobuf/protobuf.dart' show InvalidProtocolBufferException;
+import 'package:protobuf/protobuf.dart'
+    show GeneratedMessage, InvalidProtocolBufferException;
 
 import '../gen/pocketagent/v1/fs.pb.dart';
 import '../gen/pocketagent/v1/git.pb.dart';
 import '../gen/pocketagent/v1/host.pb.dart';
+import '../gen/pocketagent/v1/runtime.pb.dart'
+    show CollabPolicyResponse, GetCollabPolicyRequest;
 import '../gen/pocketagent/v1/thread.pb.dart';
 
 /// MethodChannel：宿主方法面（Dart → Kotlin，请求应答）。
@@ -282,7 +285,8 @@ class PaBridge {
   final EventChannel _events;
 
   // ── 方法面（首批 6 条 + B3-3 追补 listThreads + B3 第 3 波追补 listDirectory /
-  // readFile / listBranches；宿主侧一律【Kotlin 宿主桥 B4 波次实现】）─────────
+  // readFile / listBranches + B4 追补协同 10 条 unary；宿主侧一律【Kotlin
+  // 宿主桥 B4 波次实现】）─────────────────────────────────────────────
 
   /// 主机信息 —— proto `HostService.GetHostInfo`（proto/v1/host.proto）。
   ///
@@ -441,6 +445,224 @@ class PaBridge {
         _decodeListBranches,
       );
 
+  // ── 协同（B4 第 4 波；proto `ThreadService` 的 12 个 Collab RPC 中选 10 条
+  // unary；WatchCollabSession 是服务器流，本波**不做**——见方法清单末的交接说明）
+
+  /// 派发一条共同指令 —— proto `ThreadService.DispatchCollab`
+  /// （proto/v1/thread.proto:154）。
+  ///
+  /// arguments：`DispatchCollabRequest` 的 wire 字节（instruction + members；
+  /// members 至少一个，role_id 空 = 未配置）。返回：`DispatchCollabResponse`
+  /// 的 wire 字节（session_id + items，items 与请求 members 一一对应、顺序一致）。
+  ///
+  /// 【受理 ≠ 执行成功】response 只回答「受理了没有」：每位成员的 ack/error 在
+  /// items 里，结果看各自子线程的状态（GetCollabSession / 成员会话页）。一位
+  /// 受理失败不影响其余（并行扇出的应有语义），页面据此逐位如实呈现。
+  /// 【为什么不是流】本 RPC 本身是 unary；「派发后跟进」由 getCollabSession
+  /// 快照承担，WatchCollabSession 事件流留 B5（transport 无 stream 面）。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。宿主缺席时如实抛
+  /// HOST_UNAVAILABLE——这就是 B4 前 Collab 页派发路径的诚实占位。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<DispatchCollabResponse> dispatchCollab(
+          [DispatchCollabRequest? request]) =>
+      _invoke(
+        'dispatchCollab',
+        (request ?? DispatchCollabRequest()).writeToBuffer(),
+        _decodeDispatchCollab,
+      );
+
+  /// 单个协同会话快照 —— proto `ThreadService.GetCollabSession`
+  /// （proto/v1/thread.proto:166）。
+  ///
+  /// arguments：`GetCollabSessionRequest` 的 wire 字节（session_id；daemon 对
+  /// 不存在的 id 走 gRPC NotFound，人话原因由宿主 message 透传）。返回：
+  /// `CollabSessionSnapshot` 的 wire 字节（会话级状态 + 全体成员卡片）。
+  ///
+  /// 【为什么先要这个方法】协同状态的唯一事实来源是 daemon：进页面/派发后/写
+  /// 动作应答后都靠它恢复整屏。Kotlin 侧的恢复链是「快照先行 + 事件流跟随」
+  /// （CollabSessionRepository.openLatest），本波只有快照这一半。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<CollabSessionSnapshot> getCollabSession(
+          [GetCollabSessionRequest? request]) =>
+      _invoke(
+        'getCollabSession',
+        (request ?? GetCollabSessionRequest()).writeToBuffer(),
+        _decodeGetCollabSession,
+      );
+
+  /// 协同会话列表 —— proto `ThreadService.ListCollabSessions`
+  /// （proto/v1/thread.proto:168）。
+  ///
+  /// arguments：`ListCollabSessionsRequest` 的 wire 字节（include_finished；
+  /// false = 只看进行中的）。返回：`ListCollabSessionsResponse` 的 wire 字节
+  /// （sessions[] 按创建时间倒序，客户端不重排）。
+  /// 【为什么默认不带参】与 listThreads 同纪律：方法面保持「请求消息原样编码」，
+  /// 不在这里写死任何筛选默认值；include_finished 由调用方按页面语义给。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ListCollabSessionsResponse> listCollabSessions(
+          [ListCollabSessionsRequest? request]) =>
+      _invoke(
+        'listCollabSessions',
+        (request ?? ListCollabSessionsRequest()).writeToBuffer(),
+        _decodeListCollabSessions,
+      );
+
+  /// 取消整个协同 —— proto `ThreadService.CancelCollabSession`
+  /// （proto/v1/thread.proto:174）。
+  ///
+  /// arguments：`CancelCollabSessionRequest` 的 wire 字节（session_id）。返回：
+  /// `CollabSessionSnapshot` 的 wire 字节 —— **收敛后的会话快照**（daemon 逐
+  /// 成员发起取消后回整屏真值，客户端整屏换真，不自己拼状态）。
+  /// 【甲级写操作】页面执行前有显式确认流；防重复提交由页面的在飞闸承担。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<CollabSessionSnapshot> cancelCollabSession(
+          [CancelCollabSessionRequest? request]) =>
+      _invoke(
+        'cancelCollabSession',
+        (request ?? CancelCollabSessionRequest()).writeToBuffer(),
+        _decodeCancelCollabSession,
+      );
+
+  /// 取消一个成员 —— proto `ThreadService.CancelCollabMember`
+  /// （proto/v1/thread.proto:176）。
+  ///
+  /// arguments：`CancelCollabMemberRequest` 的 wire 字节（session_id +
+  /// thread_id；thread_id 是该成员的子线程 id，取消/重试/审批都按它定位）。
+  /// 返回：`CollabMemberSnapshot` 的 wire 字节（该成员的新卡；daemon 对已终局
+  /// 成员幂等返回原卡，客户端如实呈现「无需取消」而不重试调用）。
+  /// 【甲级写操作】同 cancelCollabSession：确认流 + 在飞闸。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<CollabMemberSnapshot> cancelCollabMember(
+          [CancelCollabMemberRequest? request]) =>
+      _invoke(
+        'cancelCollabMember',
+        (request ?? CancelCollabMemberRequest()).writeToBuffer(),
+        _decodeCancelCollabMember,
+      );
+
+  /// 重试一个成员 —— proto `ThreadService.RetryCollabMember`
+  /// （proto/v1/thread.proto:178）。
+  ///
+  /// arguments：`RetryCollabMemberRequest` 的 wire 字节（session_id +
+  /// thread_id）。返回：`CollabMemberSnapshot` 的 wire 字节（该成员的新卡；
+  /// daemon 以新代籍重建轮次，**不覆盖旧结果**）。
+  /// 【daemon 前置条件】只允许对终局成员重试；对未收尾成员调用会得人话拒绝
+  /// （客户端按钮态同源禁用，见 collab_session_data.dart 的 memberActions）。
+  /// 【甲级写操作】同 cancelCollabSession：确认流 + 在飞闸。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<CollabMemberSnapshot> retryCollabMember(
+          [RetryCollabMemberRequest? request]) =>
+      _invoke(
+        'retryCollabMember',
+        (request ?? RetryCollabMemberRequest()).writeToBuffer(),
+        _decodeRetryCollabMember,
+      );
+
+  /// 协同策略快照（只读）—— proto `RuntimeService.GetCollabPolicy`
+  /// （proto/v1/runtime.proto:39）。
+  ///
+  /// arguments：null（`GetCollabPolicyRequest` 是空消息——按编码总则 §2.1 仍走
+  /// 「空请求 = 空字节数组」的 wire 形态，与 getHostInfo 同款，不做 null/bytes
+  /// 两种形态的版本二分）。返回：`CollabPolicyResponse` 的 wire 字节
+  /// （policy = 用户配置 / effective = 打底默认后的实际生效值 / revision /
+  /// policy_path）。
+  ///
+  /// 【为什么本波只读】`SetCollabPolicy` 是甲级写操作，且 proto 钉死「提交的是
+  /// 完整策略不是补丁」：改单项必须先 Get、在完整对象上改、再 Set（带 revision
+  /// 做 CAS）——只提交一个字段会把其余项重置回默认（daemon 侧实测踩过）。写入
+  /// 面留 B5，本波只读呈现。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<CollabPolicyResponse> getCollabPolicy() => _invoke(
+        'getCollabPolicy',
+        GetCollabPolicyRequest().writeToBuffer(),
+        _decodeGetCollabPolicy,
+      );
+
+  /// 协同角色列表 —— proto `ThreadService.ListCollabRoles`
+  /// （proto/v1/thread.proto:143）。
+  ///
+  /// arguments：null（`ListCollabRolesRequest` 是空消息——按编码总则 §2.1 仍走
+  /// 「空请求 = 空字节数组」的 wire 形态，与 getHostInfo / getCollabPolicy 同款，
+  /// 不做 null/bytes 两种形态的版本二分）。返回：`ListCollabRolesResponse`
+  /// 的 wire 字节（roles[] 逐条是 proto `CollabRole`：id/name/agent_id/
+  /// description/instructions/model/effort/workspace 八字段；daemon 按 id
+  /// 升序返回，客户端不重排）。
+  ///
+  /// 【空列表 = 真空态】用户还没配过任何角色（daemon collab_roles.go:71-73
+  /// 的注释明说：空表返回空数组而不是错误，让手机端区分「还没配」与「取不到」）；
+  /// **通道不可用是另一条路径**（HOST_UNAVAILABLE → 页面错误态），两者在 UI 与
+  /// 测试里严格区分，不许用空列表冒充错误（防假空态，同 listThreads 纪律）。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。宿主缺席时如实抛
+  /// HOST_UNAVAILABLE——这就是 B4 前 CollabRoles 页的诚实占位路径。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ListCollabRolesResponse> listCollabRoles() => _invoke(
+        'listCollabRoles',
+        ListCollabRolesRequest().writeToBuffer(),
+        _decodeListCollabRoles,
+      );
+
+  /// 保存协同角色（新增/编辑共用的幂等 upsert）—— proto
+  /// `ThreadService.SetCollabRole`（proto/v1/thread.proto:145）。
+  ///
+  /// arguments：`SetCollabRoleRequest` 的 wire 字节（role = 完整八字段角色；
+  /// id 是幂等键——同 id 覆盖，异 id 新增）。返回：`SetCollabRoleResponse`
+  /// 的 wire 字节（role = **落库后读回来的真值**，daemon collab_roles.go:88-91
+  /// 刻意不用入参原样回：id 可能被 trim 过，手机端拿到什么就显示什么，
+  /// 不会「看起来存进去了但引用时又说没有」）。
+  ///
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）；daemon 侧的 InvalidArgument
+  /// （id 空/含空格/超长 64，collab_roles.go:111-124）以宿主 message 原样透传，
+  /// Dart 不改写——页面把它如实显示（客户端前置校验只是第一道闸门，不是吞掉
+  /// 后端错误的借口）。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<SetCollabRoleResponse> setCollabRole(CollabRole role) => _invoke(
+        'setCollabRole',
+        SetCollabRoleRequest(role: role).writeToBuffer(),
+        _decodeSetCollabRole,
+      );
+
+  /// 删除协同角色 —— proto `ThreadService.DeleteCollabRole`
+  /// （proto/v1/thread.proto:146）。
+  ///
+  /// arguments：`DeleteCollabRoleRequest` 的 wire 字节（id；daemon 先 trim 再删，
+  /// collab_roles.go:96）。返回：`DeleteCollabRoleResponse` 的 wire 字节
+  /// （空消息——本 RPC 无回显字段，成功与否看有没有抛错）。
+  ///
+  /// 【幂等语义】删不存在的 id，daemon 不报错（collab_roles.go:94-95「视为已
+  /// 达成目标」）；本地照常移除该行。**破坏性写操作**：页面执行前有显式二次
+  /// 确认流（引用它的委派会报「未定义的协同角色」，确认弹层把这句话写明白）。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）；daemon 对空 id 回
+  /// InvalidArgument，message 原样透传。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<DeleteCollabRoleResponse> deleteCollabRole(String id) => _invoke(
+        'deleteCollabRole',
+        DeleteCollabRoleRequest(id: id).writeToBuffer(),
+        _decodeDeleteCollabRole,
+      );
+
+  // ── 协同 RPC 全集与本波取舍（12 选 10）───────────────────────────────────
+  //
+  // 已接（10，全部 unary）：dispatchCollab / getCollabSession /
+  // listCollabSessions / cancelCollabSession / cancelCollabMember /
+  // retryCollabMember / getCollabPolicy / listCollabRoles / setCollabRole /
+  // deleteCollabRole。
+  //
+  // 未接（2，留 B5，注释交接）：
+  //  1. `WatchCollabSession`（thread.proto:172，**服务器流**）——B2 契约事件面
+  //     只到 conn_state/host_info/host_event（channel-contract.md §4），stream
+  //     消费留 B5；本波用一次性快照（List/Get）+ 写动作应答闭环，不假装有实时
+  //     跟进。
+  //  2. `SetCollabPolicy`（runtime.proto:40，甲级写操作 + 整包 CAS 语义）——见
+  //     getCollabPolicy 的「为什么本波只读」。
+  //
+  // 角色三条（listCollabRoles / setCollabRole / deleteCollabRole）由「协同角色」
+  // 两页（collab_roles.dart / collab_role_editor.dart）经
+  // collab_roles_state.dart 的 store 消费；Collab 主面板只读该 store 的投影。
+
   // ── 事件面 ──────────────────────────────────────────────────────────────
 
   /// 宿主事件流（EventChannel `dev.pocketagent/bridge/events`）。
@@ -525,20 +747,105 @@ class PaBridge {
     }
   }
 
-  HostInfo _decodeHostInfo(Object? raw) =>
-      _parseHostInfo('getHostInfo 返回值', _expectBytes('getHostInfo 返回值', raw));
+  HostInfo _decodeHostInfo(Object? raw) => bytesOrThrow(
+        'getHostInfo 返回值', raw, 'HostInfo', HostInfo.fromBuffer);
 
-  ListThreadsResponse _decodeListThreads(Object? raw) => _parseListThreads(
-      'listThreads 返回值', _expectBytes('listThreads 返回值', raw));
+  ListThreadsResponse _decodeListThreads(Object? raw) => bytesOrThrow(
+        'listThreads 返回值',
+        raw,
+        'ListThreadsResponse',
+        ListThreadsResponse.fromBuffer,
+      );
 
-  ListDirectoryResponse _decodeListDirectory(Object? raw) => _parseListDirectory(
-      'listDirectory 返回值', _expectBytes('listDirectory 返回值', raw));
+  ListDirectoryResponse _decodeListDirectory(Object? raw) => bytesOrThrow(
+        'listDirectory 返回值',
+        raw,
+        'ListDirectoryResponse',
+        ListDirectoryResponse.fromBuffer,
+      );
 
-  FileChunk _decodeReadFile(Object? raw) =>
-      _parseFileChunk('readFile 返回值', _expectBytes('readFile 返回值', raw));
+  FileChunk _decodeReadFile(Object? raw) => bytesOrThrow(
+        'readFile 返回值', raw, 'FileChunk', FileChunk.fromBuffer);
 
-  ListBranchesResponse _decodeListBranches(Object? raw) => _parseListBranches(
-      'listBranches 返回值', _expectBytes('listBranches 返回值', raw));
+  ListBranchesResponse _decodeListBranches(Object? raw) => bytesOrThrow(
+        'listBranches 返回值',
+        raw,
+        'ListBranchesResponse',
+        ListBranchesResponse.fromBuffer,
+      );
+
+  DispatchCollabResponse _decodeDispatchCollab(Object? raw) => bytesOrThrow(
+        'dispatchCollab 返回值',
+        raw,
+        'DispatchCollabResponse',
+        DispatchCollabResponse.fromBuffer,
+      );
+
+  CollabSessionSnapshot _decodeGetCollabSession(Object? raw) => bytesOrThrow(
+        'getCollabSession 返回值',
+        raw,
+        'CollabSessionSnapshot',
+        CollabSessionSnapshot.fromBuffer,
+      );
+
+  ListCollabSessionsResponse _decodeListCollabSessions(Object? raw) =>
+      bytesOrThrow(
+        'listCollabSessions 返回值',
+        raw,
+        'ListCollabSessionsResponse',
+        ListCollabSessionsResponse.fromBuffer,
+      );
+
+  CollabSessionSnapshot _decodeCancelCollabSession(Object? raw) =>
+      bytesOrThrow(
+        'cancelCollabSession 返回值',
+        raw,
+        'CollabSessionSnapshot',
+        CollabSessionSnapshot.fromBuffer,
+      );
+
+  CollabMemberSnapshot _decodeCancelCollabMember(Object? raw) => bytesOrThrow(
+        'cancelCollabMember 返回值',
+        raw,
+        'CollabMemberSnapshot',
+        CollabMemberSnapshot.fromBuffer,
+      );
+
+  CollabMemberSnapshot _decodeRetryCollabMember(Object? raw) => bytesOrThrow(
+        'retryCollabMember 返回值',
+        raw,
+        'CollabMemberSnapshot',
+        CollabMemberSnapshot.fromBuffer,
+      );
+
+  CollabPolicyResponse _decodeGetCollabPolicy(Object? raw) => bytesOrThrow(
+        'getCollabPolicy 返回值',
+        raw,
+        'CollabPolicyResponse',
+        CollabPolicyResponse.fromBuffer,
+      );
+
+  ListCollabRolesResponse _decodeListCollabRoles(Object? raw) => bytesOrThrow(
+        'listCollabRoles 返回值',
+        raw,
+        'ListCollabRolesResponse',
+        ListCollabRolesResponse.fromBuffer,
+      );
+
+  SetCollabRoleResponse _decodeSetCollabRole(Object? raw) => bytesOrThrow(
+        'setCollabRole 返回值',
+        raw,
+        'SetCollabRoleResponse',
+        SetCollabRoleResponse.fromBuffer,
+      );
+
+  DeleteCollabRoleResponse _decodeDeleteCollabRole(Object? raw) =>
+      bytesOrThrow(
+        'deleteCollabRole 返回值',
+        raw,
+        'DeleteCollabRoleResponse',
+        DeleteCollabRoleResponse.fromBuffer,
+      );
 
   /// 判别 Envelope：`type` + 载荷字段（channel-contract.md §4 的 payload 表）。
   PaConnEvent _decodeEvent(Object? raw) {
@@ -555,12 +862,12 @@ class PaBridge {
       case 'host_info':
         final String where = '事件 host_info.info';
         return PaConnEvent.hostInfo(
-          _parseHostInfo(where, _expectBytes(where, raw['info'])),
+          bytesOrThrow(where, raw['info'], 'HostInfo', HostInfo.fromBuffer),
         );
       case 'host_event':
         final String where = '事件 host_event.event';
         return PaConnEvent.hostEvent(
-          _parseHostEvent(where, _expectBytes(where, raw['event'])),
+          bytesOrThrow(where, raw['event'], 'HostEvent', HostEvent.fromBuffer),
         );
       default:
         throw PaBridgeException(
@@ -572,7 +879,7 @@ class PaBridge {
   }
 }
 
-/// proto 返回值必须是 wire 字节；宿主回了别的类型即契约违约。
+/// 宿主返回值必须是 proto wire 字节；回了别的类型即契约违约。
 Uint8List _expectBytes(String where, Object? raw) {
   if (raw is Uint8List) {
     return raw;
@@ -583,70 +890,28 @@ Uint8List _expectBytes(String where, Object? raw) {
   );
 }
 
-/// 坏字节不裸抛 protobuf 异常：上层 UI 只认 [PaBridgeException]，
-/// 异常类型混两种会逼每个调用方各写一遍兜底（迟早漏一个）。
-HostInfo _parseHostInfo(String where, Uint8List bytes) {
+/// 十份同型解码的唯一收口：验形（[_expectBytes]）→ 反序列化（[parse]）→
+/// 坏字节统一成 [PaBridgeException]（DECODE_FAILED）。
+///
+/// 【为什么收敛在这里】getHostInfo / listThreads / listDirectory / readFile /
+/// listBranches 与七个 proto 事件/协同载荷，十处的差别只是 `where` 定位串与
+/// `parse` 构造器，try/catch 形状逐字相同。泛型化后消息文本按调用点原样
+/// 传入（[typeName] 进消息），逐字不变——测试钉的就是这两段文本。
+/// 【为什么不表驱动方法面】每条方法的 Dart 文档注释是契约文档的一部分
+/// （channel-contract.md 的人读镜像），表驱动会把注释冲散；这里只收内部
+/// 解码路径，方法面声明保持逐条手写。
+T bytesOrThrow<T extends GeneratedMessage>(
+  String where,
+  Object? raw,
+  String typeName,
+  T Function(List<int>) parse,
+) {  final Uint8List bytes = _expectBytes(where, raw);
   try {
-    return HostInfo.fromBuffer(bytes);
+    return parse(bytes);
   } on InvalidProtocolBufferException catch (e) {
     throw PaBridgeException(
       PaBridgeErrorCodes.decodeFailed,
-      '$where 的 HostInfo 字节不可解析：$e',
-    );
-  }
-}
-
-ListThreadsResponse _parseListThreads(String where, Uint8List bytes) {
-  try {
-    return ListThreadsResponse.fromBuffer(bytes);
-  } on InvalidProtocolBufferException catch (e) {
-    throw PaBridgeException(
-      PaBridgeErrorCodes.decodeFailed,
-      '$where 的 ListThreadsResponse 字节不可解析：$e',
-    );
-  }
-}
-
-ListDirectoryResponse _parseListDirectory(String where, Uint8List bytes) {
-  try {
-    return ListDirectoryResponse.fromBuffer(bytes);
-  } on InvalidProtocolBufferException catch (e) {
-    throw PaBridgeException(
-      PaBridgeErrorCodes.decodeFailed,
-      '$where 的 ListDirectoryResponse 字节不可解析：$e',
-    );
-  }
-}
-
-FileChunk _parseFileChunk(String where, Uint8List bytes) {
-  try {
-    return FileChunk.fromBuffer(bytes);
-  } on InvalidProtocolBufferException catch (e) {
-    throw PaBridgeException(
-      PaBridgeErrorCodes.decodeFailed,
-      '$where 的 FileChunk 字节不可解析：$e',
-    );
-  }
-}
-
-ListBranchesResponse _parseListBranches(String where, Uint8List bytes) {
-  try {
-    return ListBranchesResponse.fromBuffer(bytes);
-  } on InvalidProtocolBufferException catch (e) {
-    throw PaBridgeException(
-      PaBridgeErrorCodes.decodeFailed,
-      '$where 的 ListBranchesResponse 字节不可解析：$e',
-    );
-  }
-}
-
-HostEvent _parseHostEvent(String where, Uint8List bytes) {
-  try {
-    return HostEvent.fromBuffer(bytes);
-  } on InvalidProtocolBufferException catch (e) {
-    throw PaBridgeException(
-      PaBridgeErrorCodes.decodeFailed,
-      '$where 的 HostEvent 字节不可解析：$e',
+      '$where 的 $typeName 字节不可解析：$e',
     );
   }
 }

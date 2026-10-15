@@ -9,13 +9,15 @@
 // （等价 Kotlin 宿主 `ListThreadsResponse.newBuilder().addThreads(...)` 的写法）。
 // 空响应用 `ListThreadsResponse().writeToBuffer()` —— 0 字节也是合法 proto。
 
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/gen/pocketagent/v1/thread.pb.dart';
 import 'package:pocketagent_ui/transport/pa_bridge.dart';
+
+import 'fixture_support.dart' show fixtureBytes;
+
+/// fixture 原始字节：两条候选路径 + 失败语义见 [fixtureBytes]。
+Uint8List fixture(String name) => fixtureBytes(name);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -30,23 +32,6 @@ void main() {
     bridge = PaBridge();
     // mock handler 由 TestDefaultBinaryMessenger 在每个测试后自动清空。
   });
-
-  /// 读 fixture 原始字节（与 pa_bridge_test.dart 同款：两条候选路径都不中即
-  /// fail，绝不静默跳过）。
-  Uint8List fixture(String name) {
-    final candidates = <String>[
-      '${Directory.current.path}/tools/protofixture/fixtures/$name.b64',
-      '${Directory.current.path}/flutter/tools/protofixture/fixtures/$name.b64',
-    ];
-    for (final c in candidates) {
-      final f = File(c);
-      if (f.existsSync()) {
-        return base64.decode(f.readAsStringSync().trim());
-      }
-    }
-    fail('找不到 fixture $name（试过：${candidates.join(', ')}；'
-        'cwd=${Directory.current.path}）');
-  }
 
   /// 宿主形态的 ListThreadsResponse 字节：python 现生成的 Thread 字节包进
   /// repeated 字段 1（见文件头「字节来源」）。

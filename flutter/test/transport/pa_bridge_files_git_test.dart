@@ -10,7 +10,7 @@
 // 也是合法 proto。
 //
 // 【流式怎么测】proto 的 ReadFile 是服务器流；Dart 方法面按契约收成「首块」
-// 单份 FileChunk（channel-contract.md §3.8），所以这里按单份字节断言，不假装
+// 单份 FileChunk（channel-contract.md §3.9），所以这里按单份字节断言，不假装
 // 测多块汇聚（那是 B4 宿主的实现，Dart 侧只验首块的字段解码）。
 
 import 'dart:convert';

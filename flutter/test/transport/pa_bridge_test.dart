@@ -10,9 +10,6 @@
 // python protobuf（第三方编码器）现生成的真 wire 字节，与 test/gen/wire_fixture_test.dart
 // 同一套账本——通道层的反序列化必须与 wire 层对得上，不能自己手搓字节自说自话。
 
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +17,11 @@ import 'package:pocketagent_ui/gen/pocketagent/v1/common.pb.dart';
 import 'package:pocketagent_ui/gen/pocketagent/v1/host.pb.dart';
 import 'package:pocketagent_ui/gen/pocketagent/v1/thread.pb.dart';
 import 'package:pocketagent_ui/transport/pa_bridge.dart';
+
+import 'fixture_support.dart' show fixtureBytes;
+
+/// fixture 原始字节：两条候选路径 + 失败语义见 [fixtureBytes]。
+Uint8List fixture(String name) => fixtureBytes(name);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -36,23 +38,6 @@ void main() {
     // mock handler 由 TestDefaultBinaryMessenger 在每个测试后自动清空，
     // 所以"无 handler"测试天然拿到干净环境，不存在状态串场。
   });
-
-  /// 读 fixture 原始字节（与 wire_fixture_test.dart 同款：b64 包裹防 git autocrlf
-  /// 改坏；两条候选路径都不中即 fail，绝不静默跳过）。
-  Uint8List fixture(String name) {
-    final candidates = <String>[
-      '${Directory.current.path}/tools/protofixture/fixtures/$name.b64',
-      '${Directory.current.path}/flutter/tools/protofixture/fixtures/$name.b64',
-    ];
-    for (final c in candidates) {
-      final f = File(c);
-      if (f.existsSync()) {
-        return base64.decode(f.readAsStringSync().trim());
-      }
-    }
-    fail('找不到 fixture $name（试过：${candidates.join(', ')}；'
-        'cwd=${Directory.current.path}）');
-  }
 
   group('方法面：参数编码与返回解码', () {
     test('getHostInfo：空 GetHostInfoRequest 字节入参 → HostInfo 反序列化', () async {

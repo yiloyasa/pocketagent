@@ -88,6 +88,8 @@ class PAButton extends StatelessWidget {
 
     final Widget button = variant == PAButtonVariant.primary
         ? FilledButton(
+            // 不转发 key：键只落在调用方放置的 PAButton 节点上，
+            // 转发会让 find.byKey 同键命中两个元素（见文件头注释）。
             style: style,
             onPressed: onPressed,
             child: labelWidget,
