@@ -14,7 +14,7 @@
 
 | 项 | 值 |
 |---|---|
-| Git 基线 | `main` @ `4722722`（2026-10-15：B3 第 4 波 Collab 三页（Roles/Editor/主面板）+ transport 收敛 + daemon 净增零收敛债盘点；同日早前 B3 第 3 波 Files/Git/TaskCenter、P1/slash 新码收敛、pages 域收敛、hermes slash 位化、Android 名单债清理、B3-3 Threads 真通道、Settings②、P1 补位、Flutter B2+B3-1、daemon 三域收敛、Toast 帧驱动、探针取证） |
+| Git 基线 | `main` @ `6a4aa21`（2026-10-15：B3 全波次完成——Chat 四件套（TurnSession/历史快照/输入区/周边组装）+ Terminal/Browser + Collab 三页 + main.dart 五路由接线，flutter 898 测试全绿；B3 第 3/4 波、daemon 净增零收敛债盘点、hermes slash 位化、Android 名单债清理、P1 补位、Flutter B2、daemon 三域收敛、Toast 帧驱动、探针取证） |
 | 版本 | daemon **0.4.0** / App **versionCode 8** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
 | 测试水位 | Android **1844 用例 0 失败 / 0 错误**（2026-10-14，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
