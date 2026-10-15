@@ -6,6 +6,7 @@ import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
 import '../transport/pa_bridge.dart';
 import 'onboarding.dart';
+import 'pa_page_kit.dart';
 import 'settings_agent.dart';
 import 'settings_capabilities.dart';
 import 'settings_connection.dart';
@@ -111,11 +112,11 @@ class _SettingsPageState extends State<SettingsPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: <Widget>[
-        _Group(
+        PaPageSection(
           title: '连接与配对',
           children: <Widget>[ConnectionSection(bridge: widget.bridge)],
         ),
-        _Group(
+        PaPageSection(
           title: '外观',
           children: <Widget>[
             _SettingsRow(
@@ -143,7 +144,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
-        _Group(
+        PaPageSection(
           // 组名取「Agent」而不是与入口行同名：组标题与行标题同名会让
           // 「点哪一行」在文本层面产生两个同名命中（Android 一级页同款命名）。
           title: 'Agent',
@@ -162,7 +163,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
-        _Group(
+        PaPageSection(
           title: '语音',
           children: <Widget>[
             _SettingsRow(
@@ -182,7 +183,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
-        _Group(
+        PaPageSection(
           title: '关于',
           children: <Widget>[
             _SettingsRow(
@@ -216,54 +217,6 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-class _Group extends StatelessWidget {
-  const _Group({required this.title, required this.children});
-
-  final String title;
-
-  /// 组内子块（行 / 自定义块，如 [ConnectionSection]），块间以左缩进分隔线隔开。
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final PAColors pa = context.pa;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 22),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 8),
-            child: Text(
-              title,
-              style: PATypography.caption.copyWith(
-                color: pa.fgTertiary,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.4,
-              ),
-            ),
-          ),
-          PACard(
-            padding: EdgeInsets.zero,
-            child: Column(
-              children: <Widget>[
-                for (int i = 0; i < children.length; i++) ...<Widget>[
-                  if (i > 0)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 58),
-                      child: Divider(),
-                    ),
-                  children[i],
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SettingsRow extends StatelessWidget {
   const _SettingsRow({
     required this.icon,
@@ -293,16 +246,9 @@ class _SettingsRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: <Widget>[
-            Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: pa.bgSurface2,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, size: 17, color: pa.fgSecondary),
-            ),
+            // 与 settings_connection / settings_agent 两页的 32×32 圆角图标块
+            // 同款 —— 共享件见 pa_page_kit.dart（[PaIconBox]）。
+            PaIconBox(icon: icon),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -349,25 +295,10 @@ class _PendingSubPage extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: Row(
-            children: <Widget>[
-              IconButton(
-                key: const ValueKey<String>('pa-pending-back'),
-                onPressed: onBack,
-                tooltip: '返回',
-                icon: Icon(Icons.arrow_back_rounded, color: pa.fgSecondary),
-              ),
-              const SizedBox(width: 2),
-              Expanded(
-                child: Text(
-                  title,
-                  style: PATypography.titleM.copyWith(color: pa.fgPrimary),
-                ),
-              ),
-            ],
-          ),
+        PaSubPageHeader(
+          title: title,
+          backKey: 'pa-pending-back',
+          onBack: onBack,
         ),
         PACard(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),

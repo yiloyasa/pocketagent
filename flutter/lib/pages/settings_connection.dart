@@ -20,6 +20,7 @@ import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
 import '../transport/pa_bridge.dart';
+import 'pa_page_kit.dart';
 
 /// 连接态三态文案：宿主 `connState` 的 `checking`/`ok`/`down` → 用户可读中文。
 ///
@@ -68,10 +69,29 @@ String paBridgeErrorText(PaBridgeException e) {
   return '$code：${e.message}';
 }
 
+/// 页面级错误文案：HOST_UNAVAILABLE 的收尾按页面语境改词，其余码**原样委托**
+/// [paBridgeErrorText]（单一语义表，不为每个子页复制一份七码映射）。
+///
+/// 【为什么只覆盖 HOST_UNAVAILABLE】该码点名的是整条 Kotlin 宿主桥未就绪，
+/// 不只是某一个功能：连接/能力位/模型三个页面都要说清「自己这一面暂不可用」，
+/// 但错误码表只有一份（channel-contract.md §5）。收尾句子由调用方按语境给，
+/// 前缀与其余分支永远与 [paBridgeErrorText] 逐字节相同 —— 收敛前后文案零变化
+/// （settings_agent.dart / settings_capabilities.dart 各自的原实现即此形态）。
+String paPageErrorText(
+  PaBridgeException e, {
+  required String hostUnavailableTail,
+}) {
+  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
+    return '桌面端桥接未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
+        '$hostUnavailableTail';
+  }
+  return paBridgeErrorText(e);
+}
+
 /// 连接与配对分组的三块内容：状态条 / 配对码 / 手动连接表单。
 ///
-/// 渲染成一列（块间用与 [_Group] 同款的左缩进分隔线），外层仍由 settings.dart
-/// 的 `_Group` 包 PACard —— 保证与其余三分组同一张卡片质感。
+/// 渲染成一列（块间用与 [PaPageSection] 同款的左缩进分隔线），外层仍由
+/// settings.dart 的分组块包 PACard —— 保证与其余三分组同一张卡片质感。
 class ConnectionSection extends StatefulWidget {
   const ConnectionSection({super.key, this.bridge});
 
@@ -245,10 +265,17 @@ class _ConnectionSectionState extends State<ConnectionSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         _buildStatusRow(context),
-        const _InsetDivider(),
+        const PaInsetDivider(),
         _buildPairRow(context),
-        if (_pairErrorText != null) _caption(context, _pairErrorText!, danger: true),
-        const _InsetDivider(),
+        if (_pairErrorText != null)
+          PaCardCaption(
+            text: _pairErrorText!,
+            textKey: 'pa-pair-error',
+            // 58 缩进 = 与配对码行内容左对齐（原 _caption(danger: true) 原值）。
+            padding: const EdgeInsets.fromLTRB(58, 0, 14, 8),
+            danger: true,
+          ),
+        const PaInsetDivider(),
         _buildConnectForm(context),
       ],
     );
@@ -284,7 +311,7 @@ class _ConnectionSectionState extends State<ConnectionSection> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              const _IconBox(icon: Icons.swap_horiz_rounded),
+              const PaIconBox(icon: Icons.swap_horiz_rounded),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -327,22 +354,15 @@ class _ConnectionSectionState extends State<ConnectionSection> {
             ],
           ),
           if (_connErrorText != null)
-            _caption(context, _connErrorText!, danger: true),
-          if (_connErrorText != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                key: const ValueKey<String>('pa-conn-retry'),
-                onPressed: _loadConnState,
-                child: Text(
-                  '重试',
-                  style: PATypography.caption.copyWith(
-                    color: context.pa.brand,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+            PaCardCaption(
+              text: _connErrorText!,
+              textKey: 'pa-conn-error',
+              // 58 缩进 = 与状态条内容左对齐（原 _caption(danger: true) 原值）。
+              padding: const EdgeInsets.fromLTRB(58, 0, 14, 8),
+              danger: true,
             ),
+          if (_connErrorText != null)
+            PaRetryButton(onPressed: _loadConnState, retryKey: 'pa-conn-retry'),
         ],
       ),
     );
@@ -364,7 +384,7 @@ class _ConnectionSectionState extends State<ConnectionSection> {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: <Widget>[
-          const _IconBox(icon: Icons.password_rounded),
+          const PaIconBox(icon: Icons.password_rounded),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -498,49 +518,5 @@ class _ConnectionSectionState extends State<ConnectionSection> {
           borderSide: BorderSide(color: pa.brand, width: 1.5),
         ),
       );
-
-  Widget _caption(BuildContext context, String text, {required bool danger}) {
-    final PAColors pa = context.pa;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(58, 0, 14, 8),
-      child: Text(
-        text,
-        style: PATypography.caption
-            .copyWith(color: danger ? pa.danger : pa.fgTertiary),
-      ),
-    );
-  }
 }
 
-/// 与 settings.dart `_Group` 同款的左缩进分隔线（58 = 图标列宽 + 间距）。
-class _InsetDivider extends StatelessWidget {
-  const _InsetDivider();
-
-  @override
-  Widget build(BuildContext context) => const Padding(
-        padding: EdgeInsets.only(left: 58),
-        child: Divider(),
-      );
-}
-
-/// 与 `_SettingsRow` 同款的 32×32 圆角图标块。
-class _IconBox extends StatelessWidget {
-  const _IconBox({required this.icon});
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final PAColors pa = context.pa;
-    return Container(
-      width: 32,
-      height: 32,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: pa.bgSurface2,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Icon(icon, size: 17, color: pa.fgSecondary),
-    );
-  }
-}

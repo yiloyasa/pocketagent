@@ -6,6 +6,7 @@ import '../components/pa_status_chip.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
+import 'pa_page_kit.dart';
 import 'threads_bridge.dart';
 import 'threads_data.dart';
 
@@ -28,7 +29,12 @@ class ThreadsPage extends StatefulWidget {
 }
 
 /// 三态：加载中 / 加载失败 / 已就绪（就绪后再分「空列表」与「被筛空」）。
-enum _ThreadsPhase { loading, error, ready }
+///
+/// 与 settings_capabilities.dart 的 `_ModelsPhase` 同名同义同序 —— 收敛为
+/// pa_page_kit.dart 的共享词汇 [PaAsyncPhase]（typedef 零运行时开销、零渲染，
+/// 改名不碰像素；switch 仍是穷尽匹配）。两页的字段名/方法名保持原样，页面
+/// 其余代码一行不动。
+typedef _ThreadsPhase = PaAsyncPhase;
 
 class _ThreadsPageState extends State<ThreadsPage> {
   late ThreadsDataSource _source;

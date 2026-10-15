@@ -18,12 +18,12 @@
 
 import 'package:flutter/material.dart';
 
-import '../components/pa_card.dart';
 import '../gen/pocketagent/v1/host.pb.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
 import '../transport/pa_bridge.dart';
+import 'pa_page_kit.dart';
 import 'settings_connection.dart';
 
 /// 一个能力位族：`prefix` = 位在首个 `:` 之前的前缀（无 `:` = 宿主级，`''`）。
@@ -82,13 +82,14 @@ List<String> nativeSettingsAgentIds(List<String> capabilities) {
 /// Agent 子页错误文案：与 connection 子页同一套 code→文案映射
 /// （[paBridgeErrorText]，settings_connection.dart），只把 HOST_UNAVAILABLE 的
 /// 收尾按本页语境改词 —— 该码点名的是整条 Kotlin 宿主桥未就绪，不只是连接功能。
-String agentPageErrorText(PaBridgeException e) {
-  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
-    return '桌面端桥接未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
-        '能力位读取暂不可用。';
-  }
-  return paBridgeErrorText(e);
-}
+///
+/// 【收敛来历】原实现自己写了一份 `if hostUnavailable … else paBridgeErrorText`
+/// 的委托（settings_capabilities.dart 同样一份）。收责任一为
+/// [paPageErrorText]：其余码的文案永远走同一张表，页面间不会漂移。
+String agentPageErrorText(PaBridgeException e) => paPageErrorText(
+      e,
+      hostUnavailableTail: '能力位读取暂不可用。',
+    );
 
 /// 「Agent 与能力」子页：能力位总览（按前缀自然分组）+ 原生设置门控入口。
 ///
@@ -164,19 +165,19 @@ class _SettingsAgentPageState extends State<SettingsAgentPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: <Widget>[
-        _SubHeader(
+        PaSubPageHeader(
           title: 'Agent 与能力',
           backKey: 'pa-agent-back',
           onBack: widget.onBack,
         ),
-        _Section(
+        PaPageSection(
           title: '能力位总览',
           children: <Widget>[_buildCapsBody(context, caps)],
         ),
         // 原生设置分组：位不在 = 整组隐藏（Android NativeConfigOptionsSection
         // 同款纪律：缺位入口隐藏，不摆假开关）；宿主未就绪也从缺。
         if (nativeIds.isNotEmpty)
-          _Section(
+          PaPageSection(
             title: '原生设置',
             children: <Widget>[
               for (final String id in nativeIds) _nativeEntryRow(context, id),
@@ -191,60 +192,38 @@ class _SettingsAgentPageState extends State<SettingsAgentPage> {
   Widget _buildCapsBody(BuildContext context, List<String> caps) {
     final PAColors pa = context.pa;
     if (_loading) {
-      return _caption(
-        context,
-        '正在读取主机能力…',
-        key: const ValueKey<String>('pa-agent-loading'),
+      return PaCardCaption(
+        text: '正在读取主机能力…',
+        textKey: 'pa-agent-loading',
+        padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
       );
     }
     if (_errorText != null) {
-      // 诚实错误态 + 重试，与 connection 子页同款。
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              _errorText!,
-              key: const ValueKey<String>('pa-agent-error'),
-              style: PATypography.caption.copyWith(color: pa.danger),
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                key: const ValueKey<String>('pa-agent-retry'),
-                onPressed: _load,
-                child: Text(
-                  '重试',
-                  style: PATypography.caption.copyWith(
-                    color: pa.brand,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+      // 诚实错误态 + 重试，与 connection / models 子页同款装配（共享件
+      // [PaErrorRetry]，三处的键与文案各自传入，不互相污染）。
+      return PaErrorRetry(
+        errorText: _errorText!,
+        errorKey: 'pa-agent-error',
+        onRetry: _load,
+        retryKey: 'pa-agent-retry',
       );
     }
     final HostInfo info = _host!;
     final String hostLine = _hostLine(info);
     final List<Widget> blocks = <Widget>[
       if (hostLine.isNotEmpty)
-        _caption(
-          context,
-          hostLine,
-          key: const ValueKey<String>('pa-agent-host-line'),
+        PaCardCaption(
+          text: hostLine,
+          textKey: 'pa-agent-host-line',
         ),
     ];
     if (caps.isEmpty) {
       // 读成功但确实一个位都没有（旧 daemon / 空注册面）：如实说"未报告"，
       // 不冒充"没有能力"。
       blocks.add(
-        _caption(
-          context,
-          '电脑端未报告任何能力位。',
-          key: const ValueKey<String>('pa-agent-empty'),
+        PaCardCaption(
+          text: '电脑端未报告任何能力位。',
+          textKey: 'pa-agent-empty',
         ),
       );
     } else {
@@ -308,7 +287,7 @@ class _SettingsAgentPageState extends State<SettingsAgentPage> {
           children: <Widget>[
             Row(
               children: <Widget>[
-                const _IconBox(icon: Icons.tune_rounded),
+                const PaIconBox(icon: Icons.tune_rounded),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -347,133 +326,6 @@ class _SettingsAgentPageState extends State<SettingsAgentPage> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _caption(
-    BuildContext context,
-    String text, {
-    Key? key,
-  }) {
-    final PAColors pa = context.pa;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
-      child: Text(
-        text,
-        key: key,
-        style: PATypography.caption.copyWith(color: pa.fgTertiary),
-      ),
-    );
-  }
-}
-
-/// 二级页头部：返回箭头 + 标题（Android SubPageScaffold 的最小对应物）。
-///
-/// 【为什么在文件内私有复制而非抽公共件】与 settings_connection.dart 的
-/// `_InsetDivider`/`_IconBox` 同一先例：本波约束下不动 components/ 层，同为
-/// 「与 settings.dart `_Group` 同款」的局部样式副本。
-class _SubHeader extends StatelessWidget {
-  const _SubHeader({
-    required this.title,
-    required this.backKey,
-    required this.onBack,
-  });
-
-  final String title;
-  final String backKey;
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    final PAColors pa = context.pa;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        children: <Widget>[
-          IconButton(
-            key: ValueKey<String>(backKey),
-            onPressed: onBack,
-            tooltip: '返回',
-            icon: Icon(Icons.arrow_back_rounded, color: pa.fgSecondary),
-          ),
-          const SizedBox(width: 2),
-          Expanded(
-            child: Text(
-              title,
-              style: PATypography.titleM.copyWith(color: pa.fgPrimary),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 与 settings.dart `_Group` 同款的分组块（标题 + PACard + 左缩进分隔线）。
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
-
-  final String title;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final PAColors pa = context.pa;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 22),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 8),
-            child: Text(
-              title,
-              style: PATypography.caption.copyWith(
-                color: pa.fgTertiary,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.4,
-              ),
-            ),
-          ),
-          PACard(
-            padding: EdgeInsets.zero,
-            child: Column(
-              children: <Widget>[
-                for (int i = 0; i < children.length; i++) ...<Widget>[
-                  if (i > 0)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 58),
-                      child: Divider(),
-                    ),
-                  children[i],
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 与 settings.dart `_SettingsRow` 同款的 32×32 圆角图标块。
-class _IconBox extends StatelessWidget {
-  const _IconBox({required this.icon});
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final PAColors pa = context.pa;
-    return Container(
-      width: 32,
-      height: 32,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: pa.bgSurface2,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Icon(icon, size: 17, color: pa.fgSecondary),
     );
   }
 }

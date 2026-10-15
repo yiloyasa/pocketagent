@@ -16,6 +16,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:protobuf/protobuf.dart' show InvalidProtocolBufferException;
 
+import '../gen/pocketagent/v1/fs.pb.dart';
+import '../gen/pocketagent/v1/git.pb.dart';
 import '../gen/pocketagent/v1/host.pb.dart';
 import '../gen/pocketagent/v1/thread.pb.dart';
 
@@ -279,8 +281,8 @@ class PaBridge {
   final MethodChannel _methods;
   final EventChannel _events;
 
-  // ── 方法面（首批 6 条 + B3-3 追补 listThreads；宿主侧一律【Kotlin 宿主桥
-  // B4 波次实现】）────────────────────────────────────────────────────────
+  // ── 方法面（首批 6 条 + B3-3 追补 listThreads + B3 第 3 波追补 listDirectory /
+  // readFile / listBranches；宿主侧一律【Kotlin 宿主桥 B4 波次实现】）─────────
 
   /// 主机信息 —— proto `HostService.GetHostInfo`（proto/v1/host.proto）。
   ///
@@ -374,6 +376,71 @@ class PaBridge {
         _decodeListThreads,
       );
 
+  /// 目录列表 —— proto `FileSystemService.ListDirectory`（proto/v1/fs.proto:14）。
+  ///
+  /// arguments：`ListDirectoryRequest` 的 wire 字节（path 空 = 服务端回落
+  /// workspace，见 fs.proto 与 daemon fs.go:40-43；include_hidden 原样过桥，
+  /// Dart 侧不写死默认值）。返回：`ListDirectoryResponse` 的 wire 字节 → gen
+  /// stub 反序列化（entries[] 逐条是 proto `DirectoryEntry`：name/path/is_dir/
+  /// size_bytes/modified_unix_ms）。
+  ///
+  /// 【为什么不是流式】daemon 侧 ListDirectory 是一次性应答（os.ReadDir 全量），
+  /// 只有 ReadFile 才是分块流（见 [readFile]）；把非流 RPC 硬做成流只会多一层
+  /// 假契约。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。宿主缺席时如实抛
+  /// HOST_UNAVAILABLE——这就是 B4 前 Files 页的诚实占位路径。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ListDirectoryResponse> listDirectory([ListDirectoryRequest? request]) =>
+      _invoke(
+        'listDirectory',
+        (request ?? ListDirectoryRequest()).writeToBuffer(),
+        _decodeListDirectory,
+      );
+
+  /// 读文件预览 —— proto `FileSystemService.ReadFile`（proto/v1/fs.proto:18，
+  /// **服务器流** `FileChunk`）。
+  ///
+  /// 【流怎么收成方法】daemon 的 ReadFile 按 64KB 分块推流（fs.go:93-117）：
+  /// 首块带 total_size 与 text 标记，其余块只带 data。本波只做「文本文件预览」，
+  /// 消费面只需要第一块 + 是否还有后续（超出 max_bytes 的诚实提示），因此宿主侧
+  /// 把流汇聚成**首块**回传（B4 实现约定，见 channel-contract.md），Dart 侧拿到的
+  /// 是单份 `FileChunk` wire 字节；下载/分块消费是另一条链路（PaDownloader），
+  /// 不在本方法面里假装支持。
+  ///
+  /// arguments：`ReadFileRequest` 的 wire 字节（path + max_bytes；0 = 服务端
+  /// 默认上限）。返回：`FileChunk` 的 wire 字节 → gen stub 反序列化
+  /// （data / total_size / text / modified_unix_ms）。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。宿主缺席时如实抛
+  /// HOST_UNAVAILABLE——B4 前 Files 页预览的诚实占位路径。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<FileChunk> readFile([ReadFileRequest? request]) => _invoke(
+        'readFile',
+        (request ?? ReadFileRequest()).writeToBuffer(),
+        _decodeReadFile,
+      );
+
+  /// 分支列表 —— proto `GitService.ListBranches`（proto/v1/git.proto:20）。
+  ///
+  /// arguments：`ListBranchesRequest` 的 wire 字节（repo = 仓库绝对路径）。
+  /// 返回：`ListBranchesResponse` 的 wire 字节 → gen stub 反序列化
+  /// （branches[] 逐条是 proto `GitBranch`：name/is_current/is_remote；
+  /// daemon git.go:213-229 由 `git branch -a` 产出，is_remote 按名字含 "/" 判定）。
+  ///
+  /// 【本波只读】checkoutBranch / createBranch 等写操作方法面本波不接——
+  /// 红线「手机端写电脑文件/仓库」待拍板；页面因此不摆切换/新建入口。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。宿主缺席时如实抛
+  /// HOST_UNAVAILABLE——B4 前 Git 页的诚实占位路径。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ListBranchesResponse> listBranches([ListBranchesRequest? request]) =>
+      _invoke(
+        'listBranches',
+        (request ?? ListBranchesRequest()).writeToBuffer(),
+        _decodeListBranches,
+      );
+
   // ── 事件面 ──────────────────────────────────────────────────────────────
 
   /// 宿主事件流（EventChannel `dev.pocketagent/bridge/events`）。
@@ -464,6 +531,15 @@ class PaBridge {
   ListThreadsResponse _decodeListThreads(Object? raw) => _parseListThreads(
       'listThreads 返回值', _expectBytes('listThreads 返回值', raw));
 
+  ListDirectoryResponse _decodeListDirectory(Object? raw) => _parseListDirectory(
+      'listDirectory 返回值', _expectBytes('listDirectory 返回值', raw));
+
+  FileChunk _decodeReadFile(Object? raw) =>
+      _parseFileChunk('readFile 返回值', _expectBytes('readFile 返回值', raw));
+
+  ListBranchesResponse _decodeListBranches(Object? raw) => _parseListBranches(
+      'listBranches 返回值', _expectBytes('listBranches 返回值', raw));
+
   /// 判别 Envelope：`type` + 载荷字段（channel-contract.md §4 的 payload 表）。
   PaConnEvent _decodeEvent(Object? raw) {
     if (raw is! Map) {
@@ -527,6 +603,39 @@ ListThreadsResponse _parseListThreads(String where, Uint8List bytes) {
     throw PaBridgeException(
       PaBridgeErrorCodes.decodeFailed,
       '$where 的 ListThreadsResponse 字节不可解析：$e',
+    );
+  }
+}
+
+ListDirectoryResponse _parseListDirectory(String where, Uint8List bytes) {
+  try {
+    return ListDirectoryResponse.fromBuffer(bytes);
+  } on InvalidProtocolBufferException catch (e) {
+    throw PaBridgeException(
+      PaBridgeErrorCodes.decodeFailed,
+      '$where 的 ListDirectoryResponse 字节不可解析：$e',
+    );
+  }
+}
+
+FileChunk _parseFileChunk(String where, Uint8List bytes) {
+  try {
+    return FileChunk.fromBuffer(bytes);
+  } on InvalidProtocolBufferException catch (e) {
+    throw PaBridgeException(
+      PaBridgeErrorCodes.decodeFailed,
+      '$where 的 FileChunk 字节不可解析：$e',
+    );
+  }
+}
+
+ListBranchesResponse _parseListBranches(String where, Uint8List bytes) {
+  try {
+    return ListBranchesResponse.fromBuffer(bytes);
+  } on InvalidProtocolBufferException catch (e) {
+    throw PaBridgeException(
+      PaBridgeErrorCodes.decodeFailed,
+      '$where 的 ListBranchesResponse 字节不可解析：$e',
     );
   }
 }

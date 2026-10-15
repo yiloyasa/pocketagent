@@ -34,6 +34,7 @@ import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
 import '../transport/pa_bridge.dart';
+import 'pa_page_kit.dart';
 import 'settings_connection.dart';
 
 /// 一行模型选项 —— 本页的消费面（proto `ModelInfo` 的展示投影 + 是否当前使用）。
@@ -201,16 +202,20 @@ class BridgeModelsDataSource implements ModelsDataSource {
 
 /// 模型页错误文案：与 connection 子页同一套 code→文案映射
 /// （[paBridgeErrorText]），只把 HOST_UNAVAILABLE 的收尾按本页语境改词。
-String capabilitiesPageErrorText(PaBridgeException e) {
-  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
-    return '桌面端桥接未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
-        '模型列表暂不可用。';
-  }
-  return paBridgeErrorText(e);
-}
+///
+/// 【收敛来历】原实现自己写了一份 `if hostUnavailable … else paBridgeErrorText`
+/// 的委托（settings_agent.dart 同样一份）。收责任一为 [paPageErrorText]。
+String capabilitiesPageErrorText(PaBridgeException e) => paPageErrorText(
+      e,
+      hostUnavailableTail: '模型列表暂不可用。',
+    );
 
 /// 三态：加载中 / 读失败 / 已就绪（就绪后再分「空列表」与「有模型」）。
-enum _ModelsPhase { loading, error, ready }
+///
+/// 与 threads.dart 的 `_ThreadsPhase` 同名同义同序 —— 收敛为 pa_page_kit.dart
+/// 的共享词汇 [PaAsyncPhase]（typedef 零运行时开销、零渲染，改名不碰像素；
+/// 本页 switch/if 比较照旧）。页面其余代码一行不动。
+typedef _ModelsPhase = PaAsyncPhase;
 
 /// 「模型」子页：模型列表骨架（名称 / 来源 / 可用态三列）。
 ///
@@ -289,12 +294,15 @@ class _SettingsCapabilitiesPageState extends State<SettingsCapabilitiesPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: <Widget>[
-        _SubHeader(
+        PaSubPageHeader(
           title: '模型',
           backKey: 'pa-models-back',
           onBack: widget.onBack,
           // 刷新 = 手动重拉（轮询随真桥接波次接入）——这是本页唯一的动作。
           onRefresh: _load,
+          // 模型页原间距 10（agent 页 14）：收敛后由共享件的参数各自保持原值，
+          // 不统一成新数值（等价优先）。
+          bottomPadding: 10,
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
@@ -315,54 +323,29 @@ class _SettingsCapabilitiesPageState extends State<SettingsCapabilitiesPage> {
   // ── 三态 + 空态 ─────────────────────────────────────────────────────────
 
   Widget _buildBody(BuildContext context) {
-    final PAColors pa = context.pa;
     if (_phase == _ModelsPhase.loading) {
-      return _padded(
-        Text(
-          '正在读取模型列表…',
-          key: const ValueKey<String>('pa-models-loading'),
-          style: PATypography.caption.copyWith(color: pa.fgTertiary),
-        ),
+      return PaCardCaption(
+        text: '正在读取模型列表…',
+        textKey: 'pa-models-loading',
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       );
     }
     if (_phase == _ModelsPhase.error) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              _errorText,
-              key: const ValueKey<String>('pa-models-error'),
-              style: PATypography.caption.copyWith(color: pa.danger),
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                key: const ValueKey<String>('pa-models-retry'),
-                onPressed: _load,
-                child: Text(
-                  '重试',
-                  style: PATypography.caption.copyWith(
-                    color: pa.brand,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+      // 诚实错误态 + 重试，与 agent 子页同款装配（共享件 [PaErrorRetry]）。
+      return PaErrorRetry(
+        errorText: _errorText,
+        errorKey: 'pa-models-error',
+        onRetry: _load,
+        retryKey: 'pa-models-retry',
       );
     }
     if (_models.isEmpty) {
       // 读成功但一个模型都没有（旧 daemon / 空注册面）：如实说「未报告」，
       // 不冒充读失败。
-      return _padded(
-        Text(
-          '电脑端未报告任何模型。',
-          key: const ValueKey<String>('pa-models-empty'),
-          style: PATypography.caption.copyWith(color: pa.fgTertiary),
-        ),
+      return PaCardCaption(
+        text: '电脑端未报告任何模型。',
+        textKey: 'pa-models-empty',
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       );
     }
     return Column(
@@ -434,63 +417,6 @@ class _SettingsCapabilitiesPageState extends State<SettingsCapabilitiesPage> {
                 const PAStatusChip(status: PAStatusKind.pending, label: '暂不可用'),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _padded(Widget child) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Align(alignment: Alignment.centerLeft, child: child),
-      );
-}
-
-/// 二级页头部：返回箭头 + 标题（+ 可选刷新键）。
-///
-/// 【为什么在文件内私有复制而非抽公共件】与 settings_connection.dart 的
-/// `_InsetDivider`/`_IconBox` 同一先例：本波约束下不动 components/ 层，为
-/// 「与 settings.dart `_Group` 同款」的局部样式副本；agent 子页有同名私有件，
-/// 两份各自独立（Dart 下划线私有，不跨 library 共享）。
-class _SubHeader extends StatelessWidget {
-  const _SubHeader({
-    required this.title,
-    required this.backKey,
-    required this.onBack,
-    this.onRefresh,
-  });
-
-  final String title;
-  final String backKey;
-  final VoidCallback onBack;
-  final VoidCallback? onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final PAColors pa = context.pa;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: <Widget>[
-          IconButton(
-            key: ValueKey<String>(backKey),
-            onPressed: onBack,
-            tooltip: '返回',
-            icon: Icon(Icons.arrow_back_rounded, color: pa.fgSecondary),
-          ),
-          const SizedBox(width: 2),
-          Expanded(
-            child: Text(
-              title,
-              style: PATypography.titleM.copyWith(color: pa.fgPrimary),
-            ),
-          ),
-          if (onRefresh != null)
-            IconButton(
-              key: const ValueKey<String>('pa-models-refresh'),
-              onPressed: onRefresh,
-              tooltip: '刷新',
-              icon: Icon(Icons.refresh_rounded, color: pa.fgSecondary),
-            ),
         ],
       ),
     );

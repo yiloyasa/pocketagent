@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/main.dart';
+import 'package:pocketagent_ui/pages/git.dart';
 import 'package:pocketagent_ui/pages/onboarding.dart';
 import 'package:pocketagent_ui/pages/onboarding_prefs.dart';
 import 'package:pocketagent_ui/pages/splash.dart';
@@ -127,5 +128,30 @@ void main() {
     await pumpUntilSplashDone(tester);
     await tester.pumpAndSettle();
     expect(find.byType(SplashOverlay), findsNothing);
+  });
+
+  testWidgets('AppBar Git 入口 → 全屏 Git 路由页；返回即 pop 回 4 Tab 壳',
+      (tester) async {
+    await tester.pumpWidget(
+      PocketAgentApp(onboardingPrefs: InMemoryOnboardingPrefs(done: true)),
+    );
+    await pumpUntilSplashDone(tester);
+    await tester.pumpAndSettle();
+
+    // 4 Tab 位不动（契约的 tab3 在 Flutter 侧是独立路由页，见 main.dart 入口注释）
+    final NavigationBar nav = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(nav.destinations, hasLength(4));
+
+    await tester.tap(find.byKey(const ValueKey<String>('pa-open-git')));
+    await tester.pumpAndSettle();
+
+    // Git 页进了路由栈：全屏页 + 仓库选择卡（候选/手输入口都在）
+    expect(find.byType(GitPage), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('git-repo-input')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey<String>('pa-git-back')));
+    await tester.pumpAndSettle();
+    expect(find.byType(GitPage), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
   });
 }

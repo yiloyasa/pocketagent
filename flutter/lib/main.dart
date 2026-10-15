@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'pages/files.dart';
+import 'pages/git.dart';
 import 'pages/onboarding.dart';
 import 'pages/onboarding_prefs.dart';
 import 'pages/settings.dart';
@@ -160,6 +161,23 @@ class _HomeShellState extends State<HomeShell> {
       appBar: AppBar(
         title: Text(_titles[_tab]),
         actions: <Widget>[
+          // Git 页导航入口（page-contracts §1.5：入 = home tab3「或带
+          // workspacePath」）。【为什么不是第 5 个 Tab】契约的 tab3 在 Android
+          // 是底部导航的一员，但 Flutter 壳的四个 Tab 位（会话/工具/文件/设置）
+          // 已被 B1 版式与 widget_test/main_routing_test 钉死（hasLength(4)），
+          // 且「工具」位目前是静态演示页——把 Git 塞进去要么挤掉设置位、要么改动
+          // 两份既有测试的目的。故按「独立路由页」落：AppBar 一个入口 push 全屏
+          // Git 页（Kotlin 侧 Git 在侧边栏同样是一级入口，不是 tab 内嵌页）。
+          IconButton(
+            key: const ValueKey<String>('pa-open-git'),
+            tooltip: 'Git 仓库',
+            icon: const Icon(Icons.account_tree_rounded),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (BuildContext context) => const _GitRoutePage(),
+              ),
+            ),
+          ),
           IconButton(
             key: const ValueKey<String>('pa-brightness-toggle'),
             tooltip: isDark ? '切换到浅色' : '切换到深色',
@@ -210,6 +228,32 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Git 页的路由外衣：全屏 Scaffold + 返回箭头（独立路由页的最小形态）。
+///
+/// 【为什么不内嵌进 IndexedStack】IndexedStack 的非选中子树不进组件树
+/// （flutter_test 实测：hidden children 不可 find）——把 Git 页塞进第 5 位会
+/// 让它在测试里「时有时无」，而且 tab 位已被既有测试钉死（见入口处注释）。
+/// 独立 push 路由的语义与 Kotlin 侧一致：Git 是侧边栏一级入口，返回即 pop。
+class _GitRoutePage extends StatelessWidget {
+  const _GitRoutePage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Git'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-git-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: const GitPage(),
     );
   }
 }
