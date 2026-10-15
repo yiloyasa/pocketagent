@@ -32,6 +32,62 @@ void main() {
     );
   });
 
+  // ── B3 第 5/6 波 + 第 4 波路由外衣（AppBar 溢出菜单 → push → 返回 pop） ──
+  // 只钉「入口点得动、页面出得来、返回回得去」；各页内部行为归各页测试。
+  for (final (String title, String backKey) in const <(String, String)>[
+    ('终端', 'pa-terminal-back'),
+    ('任务中心', 'pa-taskcenter-back'),
+    ('协同', 'pa-collab-back'),
+    ('协同角色', 'pa-collabroles-back'),
+    ('浏览器', 'pa-browser-back'),
+  ]) {
+    testWidgets('AppBar 溢出菜单 → $title 路由页；返回 → pop 回 4 Tab', (tester) async {
+      await tester.pumpWidget(
+        PocketAgentApp(onboardingPrefs: InMemoryOnboardingPrefs(done: true)),
+      );
+      await pumpUntilSplashDone(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey<String>('pa-more-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(title));
+      await tester.pumpAndSettle();
+
+      expect(find.text(title), findsWidgets);
+      expect(find.byKey(ValueKey<String>(backKey)), findsOneWidget);
+
+      await tester.tap(find.byKey(ValueKey<String>(backKey)));
+      await tester.pumpAndSettle();
+      // 返回后 4 Tab 壳回来（会话 Tab 标题可见，且菜单按钮仍在）。
+      // 回壳判据：4 Tab 导航栅与溢出菜单都回来了。
+      // “会话”在 AppBar 标题与 Nav 标签各一份，因此用 findsWidgets。
+      expect(find.byKey(const ValueKey<String>('pa-more-menu')), findsOneWidget);
+    });
+  }
+
+  // 协同角色路由只针「入口点得动、页面出得来、返回回得去」。
+  // 角色行点指→编辑器子路由（onOpenEditor）由 collab_roles_page_test
+  // 用注入 store 覆盖（真实路由下 host 未就续时角色页是错误态、无行可点）。
+  testWidgets('协同角色路由页：入口→页面→返回 pop', (tester) async {
+    await tester.pumpWidget(
+      PocketAgentApp(onboardingPrefs: InMemoryOnboardingPrefs(done: true)),
+    );
+    await pumpUntilSplashDone(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey<String>('pa-more-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('协同角色'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey<String>('pa-collabroles-back')),
+        findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey<String>('pa-collabroles-back')));
+    await tester.pumpAndSettle();
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('pa-more-menu')), findsOneWidget);
+  });
   testWidgets('首启:Splash 覆盖 Onboarding,播完摘层后才点得到教程', (tester) async {
     final InMemoryOnboardingPrefs prefs = InMemoryOnboardingPrefs();
     await tester.pumpWidget(PocketAgentApp(onboardingPrefs: prefs));

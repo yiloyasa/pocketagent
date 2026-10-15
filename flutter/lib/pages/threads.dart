@@ -18,11 +18,15 @@ import 'threads_data.dart';
 /// **不伪装成空列表**——空态「还没有会话」与错误态是两条路径（分别有测试钉死）。
 /// 内存 fake（[FakeThreadsDataSource]）保留给测试注入；三维筛选为本地纯函数。
 class ThreadsPage extends StatefulWidget {
-  const ThreadsPage({super.key, this.source});
+  const ThreadsPage({super.key, this.source, this.onOpenThread});
 
   /// 数据源注入点：测试传可控 fake / 带 mock 通道的桥数据源；生产不传即
   /// [BridgeThreadsDataSource]（真走 `dev.pocketagent/bridge` 方法面）。
   final ThreadsDataSource? source;
+
+  /// 行点按出口：进 Chat 页（main.dart 接线 push 路由；测试可注入）。
+  /// null = 调用方没给（如 B1 演示态），行点按无动作——不摆假入口。
+  final ValueChanged<String>? onOpenThread;
 
   @override
   State<ThreadsPage> createState() => _ThreadsPageState();
@@ -229,7 +233,10 @@ class _ThreadsPageState extends State<ThreadsPage> {
       for (final ThreadSummary t in visible)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
-          child: _ThreadRow(thread: t, onTap: () {}),
+          child: _ThreadRow(
+          thread: t,
+          onTap: () => widget.onOpenThread?.call(t.id),
+        ),
         ),
     ];
   }

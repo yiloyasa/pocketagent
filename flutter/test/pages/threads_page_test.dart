@@ -94,14 +94,32 @@ void main() {
   Future<void> pumpThreads(
     WidgetTester tester, {
     ThreadsDataSource? source,
+    ValueChanged<String>? onOpenThread,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: PocketTheme.fromBrightness(PABrightness.dark),
-        home: Scaffold(body: ThreadsPage(source: source)),
+        home: Scaffold(
+          body: ThreadsPage(source: source, onOpenThread: onOpenThread),
+        ),
       ),
     );
   }
+
+  // 行点按出口：onOpenThread 收到该行 threadId（Chat 路由入口，main.dart 接线）。
+  testWidgets('行点按 → onOpenThread(threadId)', (WidgetTester tester) async {
+    final List<String> opened = <String>[];
+    await pumpThreads(
+      tester,
+      source: FakeThreadsDataSource(threads: kSampleThreads),
+      onOpenThread: opened.add,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(kSampleThreads.first.title));
+    await tester.pumpAndSettle();
+    expect(opened, <String>[kSampleThreads.first.id]);
+  });
 
   group('三态', () {
     testWidgets('加载中 → 「正在加载会话…」，数据到了切换成列表', (tester) async {

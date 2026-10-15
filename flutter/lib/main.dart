@@ -1,11 +1,19 @@
 import 'package:flutter/material.dart';
 
+import 'pages/browser.dart';
+import 'pages/chat_page.dart';
+import 'pages/collab.dart';
+import 'pages/collab_role_editor.dart';
+import 'pages/collab_roles.dart';
+import 'pages/collab_roles_state.dart';
 import 'pages/files.dart';
 import 'pages/git.dart';
 import 'pages/onboarding.dart';
 import 'pages/onboarding_prefs.dart';
 import 'pages/settings.dart';
 import 'pages/splash.dart';
+import 'pages/task_center.dart';
+import 'pages/terminal.dart';
 import 'pages/threads.dart';
 import 'pages/tools.dart';
 import 'theme/palette.dart';
@@ -154,6 +162,34 @@ class _HomeShellState extends State<HomeShell> {
 
   int _tab = 0;
 
+  /// 协同角色共享态（Kotlin `CollabRolesState` 是 app 级 object；Dart 侧由壳持有
+  /// 一个实例，Roles 列表页与 Editor 注入同一个——跨页共享同款语义）。
+  final CollabRolesStore _collabRolesStore = CollabRolesStore();
+
+  // ── 路由外衣（B3 第 5/6 波接线：Chat/Terminal/Browser/TaskCenter/Collab） ──
+
+  void _openChat(BuildContext context, String threadId) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => _ChatRoutePage(threadId: threadId),
+      ),
+    );
+  }
+
+  void _openRoute(BuildContext context, String route) {
+    final Widget page = switch (route) {
+      'terminal' => const _TerminalRoutePage(),
+      'taskCenter' => const _TaskCenterRoutePage(),
+      'collab' => const _CollabRoutePage(),
+      'collabRoles' => _CollabRolesRoutePage(store: _collabRolesStore),
+      'browser' => const _BrowserRoutePage(),
+      _ => const _BrowserRoutePage(),
+    };
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (BuildContext context) => page),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isDark = widget.brightness == PABrightness.dark;
@@ -178,6 +214,22 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
           ),
+          PopupMenuButton<String>(
+            key: const ValueKey<String>('pa-more-menu'),
+            tooltip: '更多页面',
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (String route) => _openRoute(context, route),
+            itemBuilder: (BuildContext context) =>
+                const <PopupMenuEntry<String>>[
+                  PopupMenuItem<String>(value: 'terminal', child: Text('终端')),
+                  PopupMenuItem<String>(
+                      value: 'taskCenter', child: Text('任务中心')),
+                  PopupMenuItem<String>(value: 'collab', child: Text('协同')),
+                  PopupMenuItem<String>(
+                      value: 'collabRoles', child: Text('协同角色')),
+                  PopupMenuItem<String>(value: 'browser', child: Text('浏览器')),
+                ],
+          ),
           IconButton(
             key: const ValueKey<String>('pa-brightness-toggle'),
             tooltip: isDark ? '切换到浅色' : '切换到深色',
@@ -190,7 +242,9 @@ class _HomeShellState extends State<HomeShell> {
       body: IndexedStack(
         index: _tab,
         children: <Widget>[
-          const ThreadsPage(),
+          ThreadsPage(
+            onOpenThread: (String threadId) => _openChat(context, threadId),
+          ),
           const ToolsPage(),
           const FilesPage(),
           // 设置页直连根组件的深浅色状态
@@ -254,6 +308,175 @@ class _GitRoutePage extends StatelessWidget {
         ),
       ),
       body: const GitPage(),
+    );
+  }
+}
+
+/// 以下五件是 B3 第 5/6 波 + 第 4 波页面的路由外衣（与 _GitRoutePage 同款最小
+/// 形态：全屏 Scaffold + 返回箭头）。各页的注入点（session/gateway/store/source）
+/// 一律走页构造默认值 = 生产真通道；测试不经过这里。
+class _ChatRoutePage extends StatelessWidget {
+  const _ChatRoutePage({required this.threadId});
+
+  final String threadId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('会话'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-chat-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: ChatPage(threadId: threadId),
+    );
+  }
+}
+
+class _TerminalRoutePage extends StatelessWidget {
+  const _TerminalRoutePage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('终端'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-terminal-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: TerminalPage(onBack: () => Navigator.of(context).pop()),
+    );
+  }
+}
+
+class _BrowserRoutePage extends StatelessWidget {
+  const _BrowserRoutePage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('浏览器'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-browser-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: BrowserPage(onBack: () => Navigator.of(context).pop()),
+    );
+  }
+}
+
+class _TaskCenterRoutePage extends StatelessWidget {
+  const _TaskCenterRoutePage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('任务中心'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-taskcenter-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: TaskCenterPage(
+        onOpenThread: (String threadId) => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (BuildContext context) => _ChatRoutePage(threadId: threadId),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CollabRoutePage extends StatelessWidget {
+  const _CollabRoutePage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('协同'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-collab-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: const CollabPage(),
+    );
+  }
+}
+
+class _CollabRolesRoutePage extends StatelessWidget {
+  const _CollabRolesRoutePage({required this.store});
+
+  final CollabRolesStore store;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('协同角色'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-collabroles-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: CollabRolesPage(
+        store: store,
+        onOpenEditor: (String roleId) => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (BuildContext context) =>
+                _CollabRoleEditorRoutePage(roleId: roleId, store: store),
+          ),
+        ),
+        onBack: () => Navigator.of(context).pop(),
+      ),
+    );
+  }
+}
+
+class _CollabRoleEditorRoutePage extends StatelessWidget {
+  const _CollabRoleEditorRoutePage({required this.roleId, required this.store});
+
+  final String roleId;
+  final CollabRolesStore store;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('协同角色'),
+        leading: IconButton(
+          key: const ValueKey<String>('pa-collabroleeditor-back'),
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: CollabRoleEditorPage(
+        roleId: roleId,
+        store: store,
+        onBack: () => Navigator.of(context).pop(),
+      ),
     );
   }
 }
