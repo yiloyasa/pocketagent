@@ -254,8 +254,9 @@ func (p *HermesProvider) noteCommandsFromEvent(threadID, expectSID string, ev he
 	p.setSlashCommands(threadID, cmds)
 }
 
-// 编译期钉死:hermes 命令面与 pi/zcode 同形状(host.go 的 piShapedSlashSource
-// 位断言与 server ListSlashCommands 路由都按形状走,不按 agent 名分支)。
+// 编译期钉死:hermes 命令面与 pi/zcode 同形状(host.go 的
+// threadShapedSlashSource 位断言与 server ListSlashCommands 路由都按形状走,
+// 不按 agent 名分支)。
 var _ interface {
 	SlashCommandsFor(string) []*pb.SlashCommand
 } = (*HermesProvider)(nil)

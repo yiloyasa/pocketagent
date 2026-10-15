@@ -26,13 +26,17 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// slashFakeProvider 实现 agent.Provider + zcodeSlashSource(账本通路用)。
+// slashFakeProvider 实现 agent.Provider + 账本形状 SlashCommandsFor(账本通路用)。
+// queryCalls 记录每次查询的线程 id —— zcode 分支不读它,hermes 分支靠它钉
+// "查询按线程 id 透传"(两个路由分支共用这一个 fake,不为一条断言各养一个)。
 type slashFakeProvider struct {
 	seqProvider
-	commands []*pb.SlashCommand
+	commands   []*pb.SlashCommand
+	queryCalls []string
 }
 
 func (p *slashFakeProvider) SlashCommandsFor(threadID string) []*pb.SlashCommand {
+	p.queryCalls = append(p.queryCalls, threadID)
 	return p.commands
 }
 

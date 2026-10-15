@@ -3,7 +3,7 @@ package agent
 // capability_gate_test.go —— 能力位全集守护测试(与 docs/2026-09-30-agent-capability-matrix.md 对表)。
 //
 // 【钉住什么】daemon 侧能力位一律在 internal/server/host.go 的 GetHostInfo
-// capabilities 段按接口断言生成(host.go:75-155),位名是**字面量**、无常量可用;
+// capabilities 段按接口断言生成(host.go:110-204),位名是**字面量**、无常量可用;
 // agent 包被 server 依赖,反向 import 会成环 —— 于是本测试用两条腿把「能力位全集
 // 与文档矩阵一致」钉死:
 //
@@ -163,7 +163,7 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		"dsh":   NewDshProvider(),
 	}
 
-	// compact 的三种原生形状(host.go:121-129 同款,参数类型互斥、一家只命中一种)。
+	// compact 的三种原生形状(host.go:155-161 同款,参数类型互斥、一家只命中一种)。
 	compactShaped := func(p Provider) bool {
 		if _, ok := p.(interface{ CompactThread(string) error }); ok {
 			return true
@@ -174,7 +174,7 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		_, ok := p.(interface{ CompactSession(string) error })
 		return ok
 	}
-	// image_input:断言通过还要调方法(host.go:150 同款 —— 表态值是实现自己声明的)。
+	// image_input:断言通过还要调方法(host.go:200 同款 —— 表态值是实现自己声明的)。
 	imageInputShaped := func(p Provider) bool {
 		ii, ok := p.(ImageInputter)
 		return ok && ii.SupportsImageInput()
@@ -213,7 +213,7 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		},
 		{
 			family: "collab",
-			// 只钉接口归属(host.go:93 的位生成 = CollabAware 断言 **且** CollabReady()
+			// 只钉接口归属(host.go:127 的位生成 = CollabAware 断言 **且** CollabReady()
 			// 真值;真值依赖运行时接线 —— pi 看 daemon 自有目录、dsh 看部署级补丁层、
 			// codex/zcode/hermes 看 collab_inject.go 的注入要素 —— hermetic 环境会漂,
 			// 由 collab_ready_test.go / collab_inject_test.go 单独钉)。X2 收口后五家
@@ -239,12 +239,12 @@ func TestCapabilityStanceTableMatchesMatrix(t *testing.T) {
 		},
 		{
 			family: "fork",
-			// fork 的两种原生形状(host.go:152-157 同款:codex (string,string) 形
+			// fork 的两种原生形状(host.go:164-167 同款:codex (string,string) 形
 			// 与 pi *store.Thread 形互斥、任一在场即声明同一位;与 compact 三形状
 			// 一位同一先例)。【2026-10-14 更正】此前只探 codex 形、期望 pi=false,
 			// 与 host.go 已生成 fork:pi(server/host_capability_bits_test.go:83-87
 			// 真实构造器钉死)及矩阵 pi 格✅ 相悖 —— 漏探形状属漂移,随矩阵 pi fork
-			// 格更正一并改(证据 pi.go:1878 ForkThread + host.go:155 piShapedForker
+			// 格更正一并改(证据 pi.go:1878 ForkThread + host.go:167 piShapedForker
 			// + pi_fork_test.go)。
 			probe: func(p Provider) bool {
 				if _, ok := p.(interface {

@@ -102,11 +102,7 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 		if threadAgentID(t) == "codex" {
 			resp.Commands = append(resp.Commands, s.codexSlashCommands(t)...)
 		} else if threadAgentID(t) == "pi" {
-			if p, ok := s.cfg.Providers["pi"].(interface {
-				SlashCommandsFor(string) []*pb.SlashCommand
-			}); ok {
-				resp.Commands = append(resp.Commands, p.SlashCommandsFor(t.ID)...)
-			}
+			resp.Commands = append(resp.Commands, s.providerSlashCommands("pi", t.ID)...)
 			if len(resp.Commands) == 0 && req.Refresh && t.Workspace != "" {
 				// Read native extension/template/skill commands in this workspace
 				// without creating a persistent session or sending a prompt.
@@ -122,17 +118,14 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 			}
 		} else if threadAgentID(t) == "hermes" {
 			// hermes 斜杠命令:provider 账本(available_commands_update 广告的
-			// 累积)直透,零进程开销;比照 pi 分支的类型断言模式,不写死 provider
-			// 具体类型。未记账返回 nil(daemon 刚重启/会话未建立/还没收到广告)
-			// → 安静空面板。**没有兜底拉取**:ACP v0.11.2 方法面无"取命令清单"
-			// 的请求方法(纯推送,见 agent/hermes_slash.go 文件头),daemon 没有
-			// 第二条数据源 —— 绝不为看一眼清单冷启适配器(与 pi 的"不冷启"同哲学,
-			// 只是这里连可拉的口子都不存在)。
-			if p, ok := s.cfg.Providers["hermes"].(interface {
-				SlashCommandsFor(string) []*pb.SlashCommand
-			}); ok {
-				resp.Commands = append(resp.Commands, p.SlashCommandsFor(t.ID)...)
-			}
+			// 累积)直透,零进程开销;与 pi 分支共用 providerSlashCommands 的
+			// 最小形状断言,不写死 provider 具体类型。未记账返回 nil(daemon 刚
+			// 重启/会话未建立/还没收到广告)→ 安静空面板。**没有兜底拉取**:
+			// ACP v0.11.2 方法面无"取命令清单"的请求方法(纯推送,见
+			// agent/hermes_slash.go 文件头),daemon 没有第二条数据源 —— 绝不
+			// 为看一眼清单冷启适配器(与 pi 的"不冷启"同哲学,只是这里连可拉的
+			// 口子都不存在)。
+			resp.Commands = append(resp.Commands, s.providerSlashCommands("hermes", t.ID)...)
 		}
 		return resp, nil
 	}
@@ -176,6 +169,29 @@ func (s *Server) ListSlashCommands(ctx context.Context, req *pb.ListSlashCommand
 	}
 	resp.Commands = append(resp.Commands, cmds...)
 	return resp, nil
+}
+
+// providerSlashCommands 取注册表里指定 agent 的 provider 账本命令(线程账本形
+// SlashCommandsFor;host.go 的 threadShapedSlashSource 位断言同款最小形状)。
+// pi(活客户端 get_commands 账本)与 hermes(available_commands_update 广告账本)
+// 两个分支的取数姿势逐字节相同 —— 收敛到这一个 helper,两家语义各自不同
+// (pi 另走 Refresh 兜底拉取、hermes 没有第二条数据源)不受影响:helper 只做
+// "按 agent 取 provider + 形状断言 + 按线程 id 查询"这一段共有骨架。
+//
+// provider 不在场 / 不实现账本形状(未记账)一律安静返回 nil:命令面板是锦上添花
+// 的入口,拉不到就让手机端安静地不显示(与文件头的失败哲学一致,绝不 Toast 报错)。
+func (s *Server) providerSlashCommands(agentID, threadID string) []*pb.SlashCommand {
+	p, ok := s.cfg.Providers[agentID]
+	if !ok {
+		return nil
+	}
+	src, ok := p.(interface {
+		SlashCommandsFor(string) []*pb.SlashCommand
+	})
+	if !ok {
+		return nil
+	}
+	return src.SlashCommandsFor(threadID)
 }
 
 // zcodePromptCommandSupplement zcode 快照协议清单的漏报补充(bundle 实证可执行

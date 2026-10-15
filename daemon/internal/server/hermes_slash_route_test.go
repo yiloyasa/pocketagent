@@ -22,23 +22,14 @@ import (
 	"github.com/pocketagent/daemon/internal/store"
 )
 
-// hermesSlashFakeProvider 实现 agent.Provider + 账本形状 SlashCommandsFor
-// (只挂账本,不实现别的能力 —— 路由分支只认形状,不认 agent 名字)。
-type hermesSlashFakeProvider struct {
-	seqProvider
-	commands   []*pb.SlashCommand
-	queryCalls []string // SlashCommandsFor 的实参记账(线程 id 透传钉子)
-}
-
-func (p *hermesSlashFakeProvider) SlashCommandsFor(threadID string) []*pb.SlashCommand {
-	p.queryCalls = append(p.queryCalls, threadID)
-	return p.commands
-}
+// hermes 分支的 provider fake 复用 slash_commands_test.go 的 slashFakeProvider
+// (agent.Provider + 账本形状 SlashCommandsFor;queryCalls 记查询实参):路由只认
+// 形状不认 agent 名字,zcode 分支与本分支的取数姿势相同,fake 没有分叉的理由。
 
 // TestListSlashCommandsHermesLedgerWins 账本命中:字段按序透出,查询用线程 id。
 func TestListSlashCommandsHermesLedgerWins(t *testing.T) {
 	slashCacheFlush()
-	ledger := &hermesSlashFakeProvider{
+	ledger := &slashFakeProvider{
 		seqProvider: seqProvider{id: "hermes"},
 		commands: []*pb.SlashCommand{
 			{Name: "help", Description: "List available commands"},
@@ -73,7 +64,7 @@ func TestListSlashCommandsHermesLedgerWins(t *testing.T) {
 func TestListSlashCommandsHermesLedgerMissReturnsEmpty(t *testing.T) {
 	slashCacheFlush()
 	// 未记账的账本形状:SlashCommandsFor 回 nil(daemon 刚重启/会话未建立)。
-	ledger := &hermesSlashFakeProvider{seqProvider: seqProvider{id: "hermes"}}
+	ledger := &slashFakeProvider{seqProvider: seqProvider{id: "hermes"}}
 	srv := newSlashServer(t, map[string]agent.Provider{"hermes": ledger},
 		&store.Thread{ID: "th-h2", Title: "hermes 未记账", AgentID: "hermes",
 			ExternalSession: store.ExternalSessionRef{SessionID: "sess_h2"}})
@@ -102,7 +93,7 @@ func TestListSlashCommandsHermesRouteIsolatedByAgentID(t *testing.T) {
 	}
 	defer func() { zcodeSlashFetch = restore }()
 
-	hermesLedger := &hermesSlashFakeProvider{seqProvider: seqProvider{id: "hermes"},
+	hermesLedger := &slashFakeProvider{seqProvider: seqProvider{id: "hermes"},
 		commands: []*pb.SlashCommand{{Name: "help"}}}
 	zcodeLedger := &slashFakeProvider{seqProvider: seqProvider{id: "zcode"},
 		commands: []*pb.SlashCommand{{Name: "goal"}}}
