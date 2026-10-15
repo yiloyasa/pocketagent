@@ -155,10 +155,12 @@ class _CollabRoleEditorPageState extends State<CollabRoleEditorPage> {
     return caps;
   }
 
-  /// 通道注入点（默认生产通道；测试传可控 fake）。
-  PaBridgeForEditor get _bridge => _bridgeOverride ?? const _RealPaBridge();
-
-  PaBridgeForEditor? _bridgeOverride;
+  /// 通道注入点（默认生产通道；测试经 capabilities/store 注入，不走本通道）。
+  ///
+  /// 【收敛注】曾有 `_bridgeOverride` 字段式覆写口，但它私有、无 setter、
+  /// 全域零写入（grep 全域只有声明与本处一读，测试类跨库根本不可见）——恒为
+  /// null 的分支，移除后行为零差。
+  PaBridgeForEditor get _bridge => const _RealPaBridge();
 
   void _applyCapabilities(List<String> caps) {
     if (_agentId.isEmpty) {

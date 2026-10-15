@@ -22,6 +22,7 @@
 // 后端错误」的借口（Android CollabRolesLogic.kt:10-16 的设计照搬）。
 
 import '../gen/pocketagent/v1/thread.pb.dart';
+import 'collab_session_data.dart' as session_data;
 
 /// role.id 长度上限，与 daemon 契约一致（`maxCollabRoleIDLen`，
 /// daemon collab_roles.go:32；超过返回人话错误，不截断、不静默）。
@@ -53,8 +54,12 @@ String? validateCollabRoleId(String id) {
 ///
 /// 列表/卡片靠它「一眼看到对应关系」；两者都空（理论不发生，daemon 要求 id
 /// 必填）回落 id 原文（Android `collabRoleDisplayName` 同款）。
+///
+/// 【实现唯一出处在 collab_session_data.dart】字符串版
+/// `collabRoleDisplayName(name, id)` 与本函数逻辑逐字同义（非空判 trim、
+/// 返回用原文），本函数直接委托，调用方与单测零改动。
 String collabRoleDisplayName(CollabRole role) =>
-    role.name.trim().isNotEmpty ? role.name : role.id;
+    session_data.collabRoleDisplayName(role.name, role.id);
 
 /// 角色摘要行（纯函数）：列表项第二行要的「agent + model/effort」对应关系。
 /// - agent 名优先走既有展示名映射（与全 App 命名一致），未知原样显示；
@@ -99,20 +104,11 @@ String selectedAgentLabel(String agentId) => switch (agentId) {
 /// 口径对位 Android `resolveCollabAgentIds`（HomeScreen.kt:2216）：去空、去重、
 /// 排序（同数据两次渲染同序，不跳动）。
 ///
-/// 【为什么与 collab_session_data.dart 的同名函数重复】该文件归 Collab 主面板
-/// 波次（并行子代理的领地，本波不碰）；角色编辑页只读这一个函数，为它去改
-/// 别人的文件不在授权内。两份实现已逐条对位（同一口径注释），双端同源。
-List<String> resolveCollabAgentIds(List<String> capabilities) {
-  const String family = 'collab:';
-  final Set<String> ids = <String>{};
-  for (final String bit in capabilities) {
-    if (!bit.toLowerCase().startsWith(family)) continue;
-    final String id = bit.substring(family.length).trim();
-    if (id.isNotEmpty) ids.add(id);
-  }
-  final List<String> out = ids.toList()..sort();
-  return out;
-}
+/// 【实现唯一出处在 collab_session_data.dart】两份循环体曾逐行相同（收敛前已
+/// Compare-Object 证实 11 行逐字节一致），现本函数直接委托正典实现；同名保留
+/// 只为调用方零改动（编辑器候选/默认值 + 两份单测各钉各的 import）。
+List<String> resolveCollabAgentIds(List<String> capabilities) =>
+    session_data.resolveCollabAgentIds(capabilities);
 
 /// 编辑页的目标 agent 下拉候选（纯函数）：已接入协同的优先，其后是能力位里
 /// 报过的其余 agent（`agent:<id>` 族），去空去重排序。

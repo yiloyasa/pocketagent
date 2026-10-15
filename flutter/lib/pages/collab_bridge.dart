@@ -423,8 +423,6 @@ abstract class CollabRolesSource {
   Future<List<CollabRole>> load();
 }
 
-/// 真通道角色源：`CollabRolesStore.load()`（Android CollabScreen.kt:124 进页
-/// `LaunchedEffect { CollabRolesState.load() }` 同语义）+ 其 `roles` 投影。
 /// 真通道角色源：[CollabRolesStore]（B4 第 4 波成品，对位 Kotlin object
 /// `CollabRolesState`）+ 其 `roles` 只读投影。
 ///
