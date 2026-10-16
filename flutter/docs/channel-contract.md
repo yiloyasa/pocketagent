@@ -36,7 +36,7 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
    不静默吞。唯一例外见 §4（未知事件类型也是显式失败，不透传——双端同 APK
    同 versionCode，不存在"新宿主对旧 UI"单边演进）。
 
-## 3. 方法清单（首批 6 条 + B3-3 追加 1 条 + B3-4 追加 3 条；宿主侧全部【B4 待实现】）
+## 3. 方法清单（B3 全波次后共 30 条；宿主侧全部【B4 待实现】——`BridgeMethods.kt` 落盘中）
 
 | # | 方法名（契约字符串） | Dart 签名 | arguments | 返回 |
 |---|---|---|---|---|
@@ -50,6 +50,26 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 | 8 | `listDirectory` | `Future<ListDirectoryResponse> listDirectory([ListDirectoryRequest?])` | `ListDirectoryRequest` 字节（缺省 = 空消息） | `ListDirectoryResponse` 字节 |
 | 9 | `readFile` | `Future<FileChunk> readFile([ReadFileRequest?])` | `ReadFileRequest` 字节（缺省 = 空消息） | `FileChunk` 字节（**首块**，见 §3.9） |
 | 10 | `listBranches` | `Future<ListBranchesResponse> listBranches([ListBranchesRequest?])` | `ListBranchesRequest` 字节（缺省 = 空消息） | `ListBranchesResponse` 字节 |
+| 11 | `listCollabRoles` | `Future<ListCollabRolesResponse> listCollabRoles()` | null | `ListCollabRolesResponse` 字节 |
+| 12 | `setCollabRole` | `Future<SetCollabRoleResponse> setCollabRole(CollabRole role)` | `CollabRole` 字节 | `SetCollabRoleResponse` 字节 |
+| 13 | `deleteCollabRole` | `Future<DeleteCollabRoleResponse> deleteCollabRole(String id)` | `{'id': String}` | `DeleteCollabRoleResponse` 字节 |
+| 14 | `dispatchCollab` | `Future<DispatchCollabResponse> dispatchCollab(DispatchCollabRequest req)` | 请求字节 | `DispatchCollabResponse` 字节 |
+| 15 | `getCollabSession` | `Future<CollabSessionSnapshot> getCollabSession(String sessionId)` | `{'sessionId': String}` | `CollabSessionSnapshot` 字节 |
+| 16 | `listCollabSessions` | `Future<ListCollabSessionsResponse> listCollabSessions()` | null | `ListCollabSessionsResponse` 字节 |
+| 17 | `cancelCollabSession` | `Future<CollabSessionSnapshot> cancelCollabSession(String sessionId)` | `{'sessionId': String}` | 快照字节 |
+| 18 | `cancelCollabMember` | `Future<CollabMemberSnapshot> cancelCollabMember(...)` | 请求字节 | 快照字节 |
+| 19 | `retryCollabMember` | `Future<CollabMemberSnapshot> retryCollabMember(...)` | 请求字节 | 快照字节 |
+| 20 | `getCollabPolicy` | `Future<CollabPolicyResponse> getCollabPolicy()` | null | `CollabPolicyResponse` 字节 |
+| 21 | `listTerminals` | `Future<ListTerminalsResponse> listTerminals()` | null | `ListTerminalsResponse` 字节 |
+| 22 | `terminalAttach` | `Future<void> terminalAttach(String terminalId)` | `{'terminalId': String}` | null |
+| 23 | `terminalWrite` | `Future<void> terminalWrite(Uint8List frameBytes)` | `TerminalClientMessage` 字节 | null |
+| 24 | `terminalClose` | `Future<void> terminalClose(String terminalId)` | `{'terminalId': String}` | null |
+| 25 | `turnStreamStart` | `Future<void> turnStreamStart(String threadId)` | `{'threadId': String}` | null |
+| 26 | `turnStreamSend` | `Future<void> turnStreamSend(Uint8List frameBytes)` | `TurnClientMessage` 字节 | null |
+| 27 | `turnStreamCancel` | `Future<void> turnStreamCancel()` | null | null |
+| 28 | `turnResync` | `Future<List<TurnServerMessage>> turnResync(String threadId, int sinceSequence)` | `{'threadId': String, 'afterSequence': int}` | `List<Uint8List>`（快照帧数组） |
+| 29 | `getThreadHistory` | `Future<GetThreadHistoryResponse> getThreadHistory(String threadId)` | 请求字节 | 响应字节 |
+| 30 | `listSlashCommands` | `Future<ListSlashCommandsResponse> listSlashCommands(String threadId, {bool refresh})` | 请求字节 | 响应字节 |
 
 ### 3.1 `getHostInfo` —— proto `HostService.GetHostInfo`（proto/v1/host.proto）
 

@@ -14,7 +14,9 @@ import subprocess, sys, io, os, time, hashlib
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 SRC = r'G:\项目1\pocketagent\android'
-DST = r'G:\pa\android'
+# PA_MIRROR 允许并行线用隔离镜像（多 android 子代理并发时避免 robocopy/gradle 互踩）；
+# 未设置时保持原路径（既有行为零变化）。
+DST = os.environ.get('PA_MIRROR') or r'G:\pa\android'
 PROJ_BUILD_APK = r'G:\项目1\pocketagent\build\app-debug.apk'
 
 JDK = r'C:\Program Files\Android\Android Studio\jbr'
