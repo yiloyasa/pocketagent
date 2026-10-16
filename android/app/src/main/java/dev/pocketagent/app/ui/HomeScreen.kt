@@ -332,6 +332,12 @@ fun HomeScreen(
     onOpenCollabRoles: () -> Unit = {},
     /** 协同扇出主页入口:一条指令派给多个对等 agent(同样只在下述 multiAgent 分支里露出)。 */
     onOpenCollab: () -> Unit = {},
+    /**
+     * Flutter UI 入口(B4e):打开 Flutter module 承载的新 UI(FlutterHostActivity)。
+     * 可空 = 调用方没接(条目不渲染,「未接 = 不摆假入口」纪律);非空 = 真入口。
+     * MainActivity 接线经 FlutterHostEntry.open(activity)。
+     */
+    onOpenFlutter: (() -> Unit)? = null,
     onGoTab: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -670,6 +676,14 @@ fun HomeScreen(
             onOpenOnboarding = onOpenOnboarding,
             onOpenBrowser = { onOpenBrowser() },
             onOpenCollab = if (multiAgent) { { onOpenCollab() } } else null,
+            // Flutter UI 入口:可空即门控——非 null(AppDrawer 侧 flutterWired=true)
+            // 才渲染条目。MainActivity 接线经 FlutterHostEntry.open(activity);
+            // 没接的装配点(测试/预览)不传,条目不出现(不摆假入口纪律)。
+            // 【为什么不像 attention 恒接线】Flutter 侧方法面/事件面刚接上
+            // (B4b/B4d)、真机冷启未验;置灰项等于宣告「有个新 UI 但用不了」,
+            // 不如等接线后随回调一起出现——与 onOpenCollab 的 multiAgent 分支
+            // 同一纪律:入口随真实能力到来,不随版本宣传到来。
+            onOpenFlutter = onOpenFlutter,
             // 消息中心入口(抽屉恒定修复 2026-10-09):Home 恒接线 —— 中心自会如实
             // 呈现"这一档暂时没有内容",入口不再随注意项有无闪烁式增减;条目集合
             // 恒定的判定在 AppDrawer.buildDrawerNavEntries(单测钉死)。

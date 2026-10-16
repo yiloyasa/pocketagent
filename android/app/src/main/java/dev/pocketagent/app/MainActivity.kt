@@ -254,6 +254,20 @@ private fun RootNav() {
                         onOpenBrowser = { nav.navigate("browser") },
                         onOpenCollabRoles = { nav.navigate("collabRoles") },
                         onOpenCollab = { nav.navigate("collab") },
+                        // Flutter UI(B4e):Flutter module 承载的新 UI 入口。真实
+                        // 打开语义(预热+启动+兜底)收口在 FlutterHostEntry(B4a),
+                        // 这里只做「用户够得着的入口」。startActivity 要 Activity
+                        // context(LocalContext 在 NavHost 里就是 Activity),真机
+                        // 冷启未验(adb 无设备),文案侧已如实标注「开发中」。
+                        onOpenFlutter = {
+                            // context 是 RootNav 顶层的 LocalContext.current(NavHost
+                            // 内就是宿主 Activity);lambda 只做转跳,不做 @Composable
+                            // 调用(LocalContext.current 在事件 lambda 体内层会破编译)。
+                            val act = context as? android.app.Activity
+                            if (act != null) {
+                                dev.pocketagent.app.flutterhost.FlutterHostEntry.open(act)
+                            }
+                        },
                         onGoTab = { tab = it },
                         onBackToHome = backToHome,
                         onOpenOnboarding = { nav.navigate("onboarding") },

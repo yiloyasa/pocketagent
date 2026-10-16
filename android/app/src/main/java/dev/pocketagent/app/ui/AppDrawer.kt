@@ -113,6 +113,16 @@ internal const val DRAWER_HINT_ATTENTION_OFF = "在主页查看"
 internal const val DRAWER_HINT_COLLAB_OFF = "未接入"
 
 /**
+ * Flutter UI 入口的导航 id(动作项,tab=-1,无选中态)。
+ *
+ * B4e 接线:[FlutterHostEntry] 的完整语义(预热 + 启动 + 兜底)在 B4a 已收口,
+ * 本波只补「用户够得着的入口」。文案经 [FlutterHostEntry.LABEL] 收口
+ * (「Flutter UI(开发中)」,单测钉死含「开发中」、不含「已上线/新版/全新」)——
+ * Flutter 侧方法面/事件面尚未接通(B4b),如实标注,不制造错误预期。
+ */
+internal const val DRAWER_ID_FLUTTER = "flutter"
+
+/**
  * 抽屉导航项的稳定规格(纯数据,id/图标/标题/归属 tab 全部静态)。
  * [tab] ≥0 = 主导航 tab 项;-1 = 动作项(无选中态,如消息中心/协同)。
  */
@@ -140,6 +150,7 @@ internal fun drawerNavEntrySpecs(): List<DrawerNavEntrySpec> = listOf(
     DrawerNavEntrySpec("git", R.drawable.ic_lucide_git_branch, "Git", 3),
     DrawerNavEntrySpec("attention", R.drawable.ic_lucide_info, "消息中心", -1),
     DrawerNavEntrySpec("collab", R.drawable.ic_lucide_share_2, "多 Agent 协同", -1),
+    DrawerNavEntrySpec(DRAWER_ID_FLUTTER, R.drawable.ic_lucide_smartphone, "Flutter UI（开发中）", -1),
 )
 
 /**
@@ -155,16 +166,23 @@ internal fun drawerNavEntrySpecs(): List<DrawerNavEntrySpec> = listOf(
  *
  * @param attentionWired 调用方是否接了消息中心回调
  * @param collabWired    调用方是否接了协同回调(首页在 daemon 报 collab:<id> 时才接)
+ * @param flutterWired   调用方是否接了 Flutter UI 回调(B4e:接了才渲染入口,
+ *   未接 = 条目不渲染 —— 与 attention/collab 的「恒渲染置灰」不同:Flutter UI
+ *   的方法面尚未接通(B4b),摆一个置灰项等于告诉用户「有个新 UI 但用不了」,
+ *   不如等接线后随回调一起出现。回调传了就是真入口,不是假按钮)
  */
 internal fun buildDrawerNavEntries(
     attentionWired: Boolean,
     collabWired: Boolean,
+    flutterWired: Boolean = false,
 ): List<DrawerNavEntry> = drawerNavEntrySpecs().map { spec ->
     when (spec.id) {
         "attention" -> DrawerNavEntry(spec, attentionWired, DRAWER_HINT_ATTENTION_OFF.takeIf { !attentionWired })
         "collab" -> DrawerNavEntry(spec, collabWired, DRAWER_HINT_COLLAB_OFF.takeIf { !collabWired })
         else -> DrawerNavEntry(spec, enabled = true, disabledHint = null)
     }
+}.let { entries ->
+    if (flutterWired) entries else entries.filterNot { it.spec.id == DRAWER_ID_FLUTTER }
 }
 
 /**
@@ -203,6 +221,14 @@ fun AppDrawer(
     onOpenBrowser: (() -> Unit)? = null,
     /** 传了就可用"多 Agent 协同"导航项(首页在 daemon 报 collab:<id> 时才传)。未传 = 条目置灰「未接入」,不再消失(抽屉恒定修复)。 */
     onOpenCollab: (() -> Unit)? = null,
+    /**
+     * 传了就显示「Flutter UI（开发中）」入口(B4e 接线 B4a 的替代方案:
+     * [FlutterHostEntry] 已收口「预热 + 启动 + 兜底」完整语义,只差这个入口)。
+     * 未传 = 条目不渲染(不是置灰):Flutter 侧方法面还没接(B4b),置灰项是在
+     * 摆「用不了的新 UI」,不如等接线后随回调一起出现 —— 与 onOpenCollab
+     * 同一纪律,不摆点了没反应的假入口。
+     */
+    onOpenFlutter: (() -> Unit)? = null,
     /**
      * 传了就可用"消息中心"入口(2026-10-04 用户处理中心计划 Task 5)。
      * 未传 = 条目置灰「在主页查看」,不再消失(抽屉恒定修复:条目集合恒定,
@@ -326,6 +352,7 @@ fun AppDrawer(
                 onOpenTaskCenter = { requestClose { onOpenTaskCenter() } },
                 onOpenOnboarding = onOpenOnboarding?.let { cb -> { requestClose { cb() } } },
                 onOpenCollab = onOpenCollab?.let { cb -> { requestClose { cb() } } },
+                onOpenFlutter = onOpenFlutter?.let { cb -> { requestClose { cb() } } },
                 onOpenAttention = onOpenAttention?.let { cb -> { requestClose { cb() } } },
                 attentionBadge = attentionBadge,
                 onToggleCollapsed = { AgentConnection.drawerCollapsed = !AgentConnection.drawerCollapsed },
@@ -360,6 +387,7 @@ private fun DrawerPanel(
     onOpenTaskCenter: () -> Unit,
     onOpenOnboarding: (() -> Unit)? = null,
     onOpenCollab: (() -> Unit)? = null,
+    onOpenFlutter: (() -> Unit)? = null,
     onOpenAttention: (() -> Unit)? = null,
     attentionBadge: Int = 0,
     onToggleCollapsed: () -> Unit,
@@ -370,9 +398,12 @@ private fun DrawerPanel(
     // 主导航(恒定集合,2026-10-09 抽屉恒定修复):设计 06 的顺序,任务中心带
     // 未读角标;消息中心/多 Agent 协同**恒渲染**,未接线置灰而非消失(见
     // buildDrawerNavEntries 的 KDoc —— 修"同一分钟内协同条目时有时无"的实锤)。
+    // flutter 项是例外:未接回调时整条不渲染(理由见 onOpenFlutter 的 KDoc),
+    // 接线集合本身在同一会话内仍恒定(不会时有时无地闪)。
     val navEntries = buildDrawerNavEntries(
         attentionWired = onOpenAttention != null,
         collabWired = onOpenCollab != null,
+        flutterWired = onOpenFlutter != null,
     )
     val connLink = homeHostLink(AgentConnection.connState.value)
 
@@ -404,6 +435,7 @@ private fun DrawerPanel(
                     onOpenTaskCenter = onOpenTaskCenter,
                     onOpenOnboarding = onOpenOnboarding,
                     onOpenCollab = onOpenCollab,
+                    onOpenFlutter = onOpenFlutter,
                     onOpenAttention = onOpenAttention,
                     attentionBadge = attentionBadge,
                     onToggleCollapsed = onToggleCollapsed,
@@ -541,6 +573,7 @@ private fun DrawerPanel(
                                 when (e.spec.id) {
                                     "attention" -> onOpenAttention?.invoke()
                                     "collab" -> onOpenCollab?.invoke()
+                                    DRAWER_ID_FLUTTER -> onOpenFlutter?.invoke()
                                     else -> onGoTab(e.spec.tab)
                                 }
                             },
@@ -650,6 +683,7 @@ private fun RailContent(
     onOpenTaskCenter: () -> Unit,
     onOpenOnboarding: (() -> Unit)?,
     onOpenCollab: (() -> Unit)?,
+    onOpenFlutter: (() -> Unit)?,
     onOpenAttention: (() -> Unit)?,
     attentionBadge: Int,
     onToggleCollapsed: () -> Unit,
@@ -701,6 +735,7 @@ private fun RailContent(
                 when (e.spec.id) {
                     "attention" -> onOpenAttention?.invoke()
                     "collab" -> onOpenCollab?.invoke()
+                    DRAWER_ID_FLUTTER -> onOpenFlutter?.invoke()
                     else -> onGoTab(e.spec.tab)
                 }
             }
