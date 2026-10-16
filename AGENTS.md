@@ -14,7 +14,7 @@
 
 | 项 | 值 |
 |---|---|
-| Git 基线 | `main` @ `9fd8eae`（2026-10-15/16：B4 宿主桥第一步——Flutter module 集成 Android 宿主（APK 构建通过，libflutter.so 三 ABI）+ bridge 30 方法面（24 已接/6 双向流诚实缺席）+ B5 Settings 三子步收官；Android 1950 用例、flutter 949 测试全绿；同日早前 B3 全波次、daemon 收敛、hermes slash 位化、P1 补位等） |
+| Git 基线 | `main` @ `3de26bf`（2026-10-16/17：B4 宿主桥全链路打通——Flutter module 集成+30 方法面全接（24 unary+6 双向流）+三条事件通道实时推流+installBridge 三件套装配+Flutter UI 导航入口；Android 2002 用例、flutter 949 测试全绿，APK dex 五符号自证；真机冷启待设备。同日早前 B3 全波次、daemon 收敛、hermes slash 位化、P1 补位等） |
 | 版本 | daemon **0.4.0** / App **versionCode 8** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
 | 测试水位 | Android **1844 用例 0 失败 / 0 错误**（2026-10-14，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
