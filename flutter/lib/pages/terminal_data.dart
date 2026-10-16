@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import '../gen/pocketagent/v1/terminal.pb.dart';
 import '../transport/pa_bridge.dart';
 import '../transport/terminal_stream.dart';
+import 'pa_page_kit.dart';
 
 // ── 会话抽象 ──────────────────────────────────────────────────────────────
 // （从 terminal.dart 迁入：页面与数据源共用同一形状，避免 pages ↔ data
@@ -233,22 +234,31 @@ String terminalSessionSubtitleOf(TerminalSessionRow row) {
 /// （B4 波次）」。其余码原样透传宿主 message（不改写、不吞 —— 与
 /// settings/threads/files/git/collab 页同一套透传纪律）；宿主没给 message
 /// 时退 code，宁可难看也不吞。
-String terminalLoadErrorText(PaBridgeException e) {
-  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
-    return '桌面端终端通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
-        '终端会话列表暂不可用。';
-  }
-  return e.message.isNotEmpty ? e.message : e.code;
-}
+///
+/// 【收敛来历】与 threads/files/git/collab/chat_history 六页共 8 个同型函数
+/// 的控制流逐字节相同，差异只在通道名与冒号后的全文；收责任一为
+/// [paChannelErrorText]（见该函数注释的等价论证）。本函数保留原签名与原名，
+/// 调用点与单测零改动。tail 整句（含中段「Kotlin 宿主尚未注册 bridge
+/// 通道，」）按原实现传入。
+String terminalLoadErrorText(PaBridgeException e) => paChannelErrorText(
+      e,
+      channel: '终端',
+      tail: 'Kotlin 宿主尚未注册 bridge 通道，终端会话列表暂不可用。',
+    );
 
 /// attach/write 路径失败文案：与列表同款的 HOST_UNAVAILABLE 定制 + 透传，
 /// 收尾按连接语境改词。
-String terminalAttachErrorText(PaBridgeException e) {
-  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
-    return '桌面端终端通道未就绪（B4 波次）：终端连接暂不可用。';
-  }
-  return e.message.isNotEmpty ? e.message : e.code;
-}
+///
+/// 【为什么没有「Kotlin 宿主尚未注册 bridge 通道，」中段】原实现的完整串就是
+/// 「桌面端终端通道未就绪（B4 波次）：终端连接暂不可用。」——中段只在列表路径
+/// 出现（files 的 filePreviewErrorText 同样没有中段）。这是本族「同型不同词」
+/// 的一处真实差异，故 [paChannelErrorText] 把冒号后的全文整个交给调用方。
+/// 两端都由 terminal_data_test 的全串 expect 钉死（列表带中段、attach 不带）。
+String terminalAttachErrorText(PaBridgeException e) => paChannelErrorText(
+      e,
+      channel: '终端',
+      tail: '终端连接暂不可用。',
+    );
 
 // ── 失败类型（页面据此进各自的错误态）──────────────────────────────────────
 

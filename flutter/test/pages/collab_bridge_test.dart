@@ -258,8 +258,14 @@ void main() {
         PaBridgeErrorCodes.hostUnavailable,
         '宿主桥未注册',
       );
-      expect(collabLoadErrorText(e), contains('桌面端协同通道未就绪（B4 波次）'));
-      expect(collabLoadErrorText(e), contains('协同数据暂不可用。'));
+      // 【H5 收敛后收紧为全串相等】理由同 terminal_data_test：返回值改由
+      // pa_page_kit.dart 的 [paChannelErrorText] 拼装后，contains 不足以
+      // 证明「前缀 + 通道名 + 收尾句」三段拼接结果逐字节未变。
+      expect(
+        collabLoadErrorText(e),
+        '桌面端协同通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
+            '协同数据暂不可用。',
+      );
     });
 
     test('宿主其他码 → 原样透传 message（不改写、不吞）', () {
@@ -277,8 +283,16 @@ void main() {
         PaBridgeErrorCodes.hostUnavailable,
         'x',
       );
-      expect(collabDispatchErrorText(e), contains('本次派发没有发出去'));
-      expect(collabActionErrorText(e), contains('这个操作没有生效'));
+      expect(
+        collabDispatchErrorText(e),
+        '桌面端协同通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
+            '本次派发没有发出去，请稍后重试。',
+      );
+      expect(
+        collabActionErrorText(e),
+        '桌面端协同通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
+            '这个操作没有生效，请稍后重试。',
+      );
     });
   });
 

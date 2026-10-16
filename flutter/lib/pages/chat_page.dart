@@ -167,18 +167,25 @@ class _ChatPageState extends State<ChatPage> {
         _runGuarded(() => _runner.compact());
         break;
       case SlashPickAction.review:
-        showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          builder: (BuildContext context) => ChatReviewSheet(
-            onStart: (String focus) {
-              Navigator.of(context).pop();
-              _runGuarded(() => _runner.startReview(focus: focus));
-            },
-          ),
-        );
+        _openReviewSheet();
         break;
     }
+  }
+
+  /// 打开计划审查表（slash `/计划` 与「更多」面板的 review 项共用同一装配：
+  /// 收敛前两处各写一份 8 行 showModalBottomSheet + ChatReviewSheet，逐字节相同）。
+  void _openReviewSheet() {
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext context) => ChatReviewSheet(
+        onStart: (String focus) {
+          Navigator.of(context).pop();
+          _runGuarded(() => _runner.startReview(focus: focus));
+        },
+      ),
+    );
   }
 
   Future<void> _runGuarded(Future<Object?> Function() fn) async {
@@ -190,6 +197,20 @@ class _ChatPageState extends State<ChatPage> {
       _actionBusy = false;
     }
   }
+
+  /// 清排队（运行条与「更多」面板的 clearQueue 项共用同一装配）。
+  ///
+  /// 【收敛前】两处各写一份 8 行 `_runGuarded(() async { notice → 判定 → 收敛 })`，
+  /// 逐字节相同（仅 `_dispatchAction` 那份多一行注释）。daemon 真清除成功后收敛
+  /// 本地态（transport 注释的分工）；失败串里带「失败」二字时不收敛——
+  /// 没清掉就别假装清掉了。
+  Future<void> _clearQueueGuarded() => _runGuarded(() async {
+        final String notice = await _runner.clearQueue();
+        if (!notice.contains('失败') && !notice.contains('未就绪')) {
+          _session.clearQueue();
+        }
+        return notice;
+      });
 
   // ── 历史入口 ──
 
@@ -242,15 +263,7 @@ class _ChatPageState extends State<ChatPage> {
         await _runGuarded(() => _runner.cancelTurn());
         break;
       case ChatActionId.clearQueue:
-        await _runGuarded(() async {
-          final String notice = await _runner.clearQueue();
-          // daemon 真清除成功后收敛本地态（transport 注释的分工）；失败串里
-          // 带「失败」二字时不收敛——没清掉就别假装清掉了。
-          if (!notice.contains('失败') && !notice.contains('未就绪')) {
-            _session.clearQueue();
-          }
-          return notice;
-        });
+        await _clearQueueGuarded();
         break;
       case ChatActionId.compact:
         if (_session.isRunning) {
@@ -270,17 +283,7 @@ class _ChatPageState extends State<ChatPage> {
           _notify('轮次运行中，等完成后再发起审查');
           return;
         }
-        if (!mounted) return;
-        await showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          builder: (BuildContext context) => ChatReviewSheet(
-            onStart: (String focus) {
-              Navigator.of(context).pop();
-              _runGuarded(() => _runner.startReview(focus: focus));
-            },
-          ),
-        );
+        _openReviewSheet();
         break;
       case ChatActionId.goal:
         if (!mounted) return;
@@ -482,13 +485,7 @@ class _ChatPageState extends State<ChatPage> {
             queuedCount: _session.queuedCount,
             busy: _actionBusy,
             onCancel: () => _runGuarded(() => _runner.cancelTurn()),
-            onClearQueue: () => _runGuarded(() async {
-              final String notice = await _runner.clearQueue();
-              if (!notice.contains('失败') && !notice.contains('未就绪')) {
-                _session.clearQueue();
-              }
-              return notice;
-            }),
+            onClearQueue: _clearQueueGuarded,
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 4, 14, 12),

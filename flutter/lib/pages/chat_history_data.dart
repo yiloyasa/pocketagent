@@ -17,9 +17,9 @@
 
 import '../gen/pocketagent/v1/common.pb.dart';
 import '../gen/pocketagent/v1/thread.pb.dart';
-import '../transport/pa_bridge.dart'
-    show PaBridgeErrorCodes, PaBridgeException;
+import '../transport/pa_bridge.dart' show PaBridgeException;
 import 'chat_history_transport.dart';
+import 'pa_page_kit.dart';
 
 // ── 历史 → 回放帧 ──────────────────────────────────────────────────────
 
@@ -236,13 +236,16 @@ class ChatHistoryLoadFailure implements Exception {
 /// 【只在 HOST_UNAVAILABLE 定制】B4 前这是常态：点名「历史通道未就绪
 /// （B4 波次）」，让用户知道不是自己操作错了，也不是「没有历史」。其余码
 /// 原样透传宿主 message（不改写、不吞）；宿主没给 message 时退 code。
-String chatHistoryErrorText(PaBridgeException e) {
-  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
-    return '桌面端会话历史通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
-        '会话历史暂不可用。';
-  }
-  return e.message.isNotEmpty ? e.message : e.code;
-}
+///
+/// 【收敛来历】与 threads/files/git/collab/terminal 五页共 8 个同型函数的
+/// 控制流逐字节相同，差异只在通道名与收尾句；收责任一为
+/// [paChannelErrorText]（等价论证见该函数注释）。本函数保留原签名与原名，
+/// 调用点与单测零改动。
+String chatHistoryErrorText(PaBridgeException e) => paChannelErrorText(
+      e,
+      channel: '会话历史',
+      tail: 'Kotlin 宿主尚未注册 bridge 通道，会话历史暂不可用。',
+    );
 
 /// 历史数据源抽象 —— 「数据从哪来」只有这一个口子（页面只认它，不认通道）。
 abstract class ChatHistorySource {

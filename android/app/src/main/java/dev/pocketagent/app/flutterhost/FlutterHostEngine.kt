@@ -2,13 +2,13 @@ package dev.pocketagent.app.flutterhost
 
 import android.content.Context
 import dev.pocketagent.app.bridge.AgentConnectionBridge
-import dev.pocketagent.app.bridge.BridgeMethods
-import dev.pocketagent.app.bridge.install
+import dev.pocketagent.app.bridge.BridgeEventChannels
+import dev.pocketagent.app.bridge.EventFeedingConnection
+import dev.pocketagent.app.bridge.installBridge
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.BinaryMessenger
-import io.flutter.plugin.common.EventChannel
 
 /**
  * Flutter UI 宿主的引擎持有者：一个进程只热一份 [FlutterEngine]。
@@ -28,11 +28,15 @@ import io.flutter.plugin.common.EventChannel
  *    进程级缓存意味着「回到宿主 Compose UI 时 Dart 侧状态仍在」——
  *    这是 add-to-app 的正常语义，不是泄漏。
  *
- * 【B4 波次接线状态】B4c 已把方法面接上真桥：通道装配（[installChannelShell]）
- * 调用 `BridgeMethods.install(messenger, AgentConnectionBridge())`（B4b 落盘的
- * 生产实现）——契约内 24 条方法走真 gRPC 派发，6 条双向流方法由桥自己如实回
- * HOST_UNAVAILABLE。事件面（三条 EventChannel）仍是静默壳：帧的合流消费面属
- * B4d，挂静默壳而不是假推流。
+ * 【B4 波次接线状态】B4c 已把方法面接上真桥，B4d 已把事件面接上推流：
+ * 通道装配（[installChannelShell]）调用
+ * `BridgeMethods.install(messenger, connection)`（B4b 落盘的生产实现）+
+ * `installEventChannels(messenger, connection)`（B4d 落盘的帧消费面）——契约内
+ * 24 条方法走真 gRPC 派发，6 条双向流方法由桥自己如实回 HOST_UNAVAILABLE；
+ * 事件面三类帧（conn_state / host_info / host_event）自本波起实时推送。
+ * **turn / terminal 两条事件面仍静默**：请求帧入口（方法面 6 条双向流生命周期
+ * 方法）未接，此刻建流 = 建一条永远收不到请求帧的流（比静默更糟的假象）——
+ * 属下一波接线点，[BridgeEventChannels] 的 machinery 已就位等入口。
  */
 object FlutterHostEngine {
     /** 缓存键。[FlutterHostActivity] 用同一键取引擎,两处必须一致。 */
@@ -44,10 +48,10 @@ object FlutterHostEngine {
     /** 契约字符串:事件面(连接态/host_info/host_event),与 Dart `kPaBridgeEventChannel` 一致。 */
     const val BRIDGE_EVENT_CHANNEL: String = "dev.pocketagent/bridge/events"
 
-    /** 契约字符串:Turn 双向流事件面(chat_turn_stream.dart)。本波无推流。 */
+    /** 契约字符串:Turn 双向流事件面(chat_turn_stream.dart)。请求帧入口未接,本波静默。 */
     const val BRIDGE_TURN_EVENT_CHANNEL: String = "dev.pocketagent/bridge/turn_events"
 
-    /** 契约字符串:Terminal 事件面(terminal_stream.dart)。本波无推流。 */
+    /** 契约字符串:Terminal 事件面(terminal_stream.dart)。请求帧入口未接,本波静默。 */
     const val BRIDGE_TERMINAL_EVENT_CHANNEL: String = "dev.pocketagent/bridge/terminal_events"
 
     /**
@@ -71,6 +75,18 @@ object FlutterHostEngine {
     /** 进程级引擎缓存。@Volatile: 预热线程与 Activity 主线程可能并发读写。 */
     @Volatile
     private var engine: FlutterEngine? = null
+
+    /**
+     * 事件面帧消费面实例（B4d 的 [BridgeEventChannels]，由 [installChannelShell]
+     * 建立，随引擎走）。
+     *
+     * 【为什么持有它】B4d 的帧消费面自带协程 scope 与三条流的收集 job；
+     * [shutdown] 要能把它一并停掉（scope.cancel + 摘流），否则引擎 destroy 之后
+     * 协程仍在跑（防泄漏判决点，见 FlutterHostEventChannelsInstallTest）。
+     * null = 尚未装配或已 shutdown。
+     */
+    @Volatile
+    private var eventChannels: BridgeEventChannels? = null
 
     /**
      * 取（没有则热）进程级引擎。
@@ -115,6 +131,11 @@ object FlutterHostEngine {
      */
     fun shutdown() {
         synchronized(this) {
+            // 事件面先停：帧消费面的协程 scope 与三条流的收集 job 必须随引擎一起
+            // 收（引擎已 destroy 而协程还在推流 = 泄漏，且 sink 指向已死的 messenger）。
+            // shutdown 是幂等的（重复调安全，见 FlutterHostEngineTest）。
+            eventChannels?.shutdown()
+            eventChannels = null
             engine?.let { FlutterEngineCache.getInstance().remove(ENGINE_ID) }
             engine?.destroy()
             engine = null
@@ -122,7 +143,7 @@ object FlutterHostEngine {
     }
 
     /**
-     * 在引擎的 messenger 上挂通道：**方法面接真桥**（B4c），事件面仍静默。
+     * 在引擎的 messenger 上挂通道：**方法面接真桥**（B4c）+ **事件面接推流**（B4d）。
      *
      * 【方法面为什么不再自己回 HOST_UNAVAILABLE】B4b 已把 `BridgeMethods` 落盘
      * （契约 §3 的 30 条方法：24 条走真 gRPC 派发，6 条双向流方法由桥自己如实回
@@ -131,7 +152,7 @@ object FlutterHostEngine {
      * 连着。故方法面改由生产装配入口 [BridgeMethods.install] 接上：
      *
      * ```
-     * BridgeMethods.install(messenger, AgentConnectionBridge())
+     * BridgeMethods.install(messenger, connection)
      * ```
      *
      * [AgentConnectionBridge] 是薄适配（B4b，bridge/BridgeConnection.kt）：把
@@ -141,10 +162,27 @@ object FlutterHostEngine {
      * 建连/探活，因此在 engine 创建路径同步执行无初始化顺序问题：messenger 挂
      * handler 只是注册，Dart 侧何时 invoke 才会真正走到连接层。
      *
-     * 【为什么事件面仍是静默壳】三条 EventChannel 的帧合流消费面（`conn_state` /
-     * `host_info` / `host_event` 三源，channel-contract.md §4/§6）属 B4d。本波
-     * 挂静默壳而不是假推流：listen 收下、不发一帧、cancel 干净退出——「没有流」
-     * 比「推假帧」诚实（红线：不伪造）。判定宿主在不在仍走方法面探针（§2.5）。
+     * 【事件面（B4d 接线）】三类帧自本波起实时推：
+     *
+     * ```
+     * installEventChannels(messenger, connection)   // BridgeEventChannels 实例
+     * ```
+     *
+     *  - `conn_state`：五键 StateFlow 任一变化 → 全量快照一帧（`combine` +
+     *    `drop(1)`：首帧是订阅瞬间现值，契约 §4 说初值由 `getConnectionState()`
+     *    补、事件只承担增量，故丢首发射）；
+     *  - `host_info`：`getHostInfo` 成功路径记录的 HostInfo → wire 字节一帧
+     *    （AgentConnection 不留 HostInfo 快照，唯一诚实来源是经**同一个连接实例**
+     *    的 `updateHostInfo` 成功路径——故方法面与事件面共享同一个
+     *    [EventFeedingConnection] 实例，见 B4d `installEventChannels` KDoc）；
+     *  - `host_event`：WatchEvents 全局流逐帧直转 wire 字节。
+     *
+     * **turn / terminal 两条事件面仍静默**：请求帧入口（方法面 6 条双向流生命
+     * 周期方法：turnStreamStart/Send/Cancel、terminalAttach/Write/Close）本波未
+     * 接（B4b 定案的留后项），此刻建流 = 建一条永远收不到请求帧的流——daemon
+     * 侧挂着空 bidi 流、Dart 侧看着「通道接上了」却一帧不回，那是比静默更糟的
+     * 假象（红线：不伪造）。[BridgeEventChannels] 的 machinery
+     * （startTurnStream 等）已就位，等下一波方法面入口接上即有调用方。
      *
      * 【未安装时的兜底语义（诚实缺席链不依赖本壳）】若本方法因故未执行，
      * Flutter 侧该通道无 handler → invokeMethod 得 MissingPluginException →
@@ -153,38 +191,28 @@ object FlutterHostEngine {
      *
      * 【为什么入参仍是 BinaryMessenger 而不是 FlutterEngine】[BinaryMessenger]
      * 是接口，测试可用 fake 驱动同一段注册逻辑（见 FlutterHostChannelShellTest /
-     * FlutterHostBridgeInstallTest）；FlutterEngine 是具体类、需要 libflutter.so，
-     * JVM 单测造不出来。
+     * FlutterHostBridgeInstallTest / FlutterHostEventChannelsInstallTest）；
+     * FlutterEngine 是具体类、需要 libflutter.so，JVM 单测造不出来。
      */
     fun installChannelShell(messenger: BinaryMessenger) {
-        // 方法面：B4b 的成品桥。通道名由 BridgeChannel.BRIDGE_CHANNEL_NAME 给出，
-        // 与本类的 BRIDGE_METHOD_CHANNEL 同值（双端都从契约来，不构成第二份名单）。
-        BridgeMethods.install(messenger, AgentConnectionBridge())
-
-        // 事件面：静默壳——不推流，也不 error。
+        // 三件套一次装好（B4g 协调项 C1 落地，installBridge 在 bridge 包内）：
+        // 方法面 + 事件面 + 双向流 wiring 一把装。**只调这一个入口**——它内部
+        // 已含 BridgeMethods.install，外面再调就是双注册（两个 handler 抢同一
+        // 通道，B4g 报告 C1 明示二选一）。
         //
-        // 【为什么不 error】channel-contract.md §2.5：宿主缺席时事件面握手错不进流
-        // (Flutter 把 'listen' 的异常转投 FlutterError.reportError)，判定宿主在不在
-        // 必须走方法面探针。事件面若 error，Dart 侧 receiveBroadcastStream 会以
-        // FlutterError 冒泡——那是「假装有流却坏了」，比「没流」更误导。
-        // 故：listen 收下、不发一帧、cancel 干净退出。真实推流（B4d）按 §4 接。
-        for (channelName in listOf(
-            BRIDGE_EVENT_CHANNEL,
-            BRIDGE_TURN_EVENT_CHANNEL,
-            BRIDGE_TERMINAL_EVENT_CHANNEL,
-        )) {
-            EventChannel(messenger, channelName).setStreamHandler(
-                object : EventChannel.StreamHandler {
-                    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                        // B4d 才接线：本波不推流，上面 KDoc 说明为什么静默而不是报错。
-                    }
-
-                    override fun onCancel(arguments: Any?) {
-                        // 无订阅态要清理。
-                    }
-                },
-            )
-        }
+        // 共享同一个 EventFeedingConnection 实例——host_info 帧的唯一来源是
+        // 「经本实例的 updateHostInfo 成功路径」（B4d 装饰），两个连接各走各
+        // 的话 host_info 帧将永远静默（B4f 报告 §接线）。
+        //
+        // 重挂壳（测试/配置变更路径）先把前一个实例停掉：两个 BridgeEventChannels
+        // 各带一个 IO scope，不停就是「一份推流源变两份」——且旧 scope 的收集 job
+        // 仍在跑（协程泄漏）。warmup 的双检锁保证生产路径只挂一次，这里防的是
+        // 重挂路径（FlutterHostChannelShellTest 的幂等用例）。
+        eventChannels?.shutdown()
+        eventChannels = installBridge(
+            messenger,
+            EventFeedingConnection(AgentConnectionBridge()),
+        )
     }
 
     /**
@@ -193,8 +221,9 @@ object FlutterHostEngine {
      * 【为什么还留着】B4c 之后方法面的错误码全部由桥（[BridgeMethods] →
      * [dev.pocketagent.app.bridge.BridgeErrorCodes]）产出，本常量已无生产调用点；
      * 保留是为了让 flutterhost 测试能继续钉「壳与契约 §5 同值」这条事实，并给
-     * 事件面（B4d 若需要在静默期发错误码）留一个同包锚点。它不是第二份名单——
-     * 只是单个 wire 字符串的镜像，与 bridge 包的同名常量同值、同源（契约文档）。
+     * 事件面（数据源失败时 `sink.error` 发的就是桥的码表）留一个同包锚点。它不
+     * 是第二份名单——只是单个 wire 字符串的镜像，与 bridge 包的同名常量同值、
+     * 同源（契约文档）。
      */
     const val HOST_UNAVAILABLE: String = "HOST_UNAVAILABLE"
 }

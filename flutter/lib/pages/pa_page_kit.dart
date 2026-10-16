@@ -1,4 +1,5 @@
-// Settings / Threads 页族的**共享内部件**（B3-1/B3-2/F5/B3-3 迁移波次收敛产物）。
+// Settings / Threads 页族的**共享内部件**（B3-1/B3-2/F5/B3-3 迁移波次收敛产物
+// + B4/H5 通道错误文案族的收敛产物）。
 //
 // 【为什么落在 pages/ 而不是 components/】收敛任务书只授权改 pages/ 域（theme/
 // components 已由 H2 单独收敛，见 docs/reviews/2026-10-14/convergence-flutter-theme.md）。
@@ -18,6 +19,7 @@ import '../components/pa_card.dart';
 import '../theme/palette.dart';
 import '../theme/pocket_theme.dart';
 import '../theme/typography.dart';
+import '../transport/pa_bridge.dart';
 
 // ── 分组块族 ────────────────────────────────────────────────────────────────
 
@@ -310,4 +312,57 @@ class PaRetryButton extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── 通道错误文案（HOST_UNAVAILABLE 定制 + 透传）────────────────────────────
+//
+// 【这一族为什么收在这里】threads / files（两处）/ git / collab（三处）/
+// terminal（两处）/ chat_history 六个文件写了 8 个「同型不同词」的页面错误文案
+// 函数：都是「HOST_UNAVAILABLE → 点名本通道未就绪（B4 波次）+ 本页收尾句；
+// 其余码原样透传宿主 message，message 空退 code」。收敛前已逐行比对：
+// 8 份的控制流**逐字节相同**，差异只在「通道名前缀」与「收尾句」两处字符串
+// —— 正是 [paChannelErrorText] 的两个参数。
+//
+// 【为什么放 pa_page_kit.dart 而不是 settings_connection.dart】settings 族的
+// [paPageErrorText] 委托的是**七码正典表** [paBridgeErrorText]（code → 人话的
+// 完整映射，表外码也走 '$code：$message' 拼装），语义是「错误码表」。本族不
+// 做码表：非 HOST_UNAVAILABLE 码一律原样透传 message（连 '$code：' 前缀都不
+// 加，host 的人话原因可能是本地化的）。两套语义不同型，混在一个文件里会让
+// 「到底哪份是错误码表」重新变糊。pa_page_kit.dart 是 pages 私域件的共享家，
+// 放这里不新增跨域 API。
+
+/// 页面错误文案的单一收口（本族）：HOST_UNAVAILABLE → 「桌面端`<channel>`
+/// 通道未就绪（B4 波次）：` + [tail]；其余码**原样透传**宿主 message，message
+/// 空退 code（宁可难看也不吞 —— 吞掉就是把「宿主给了原因」伪装成「没原因」）。
+///
+/// [channel] = 通道名（如「会话」/「文件」/「Git」/「协同」/「终端」/
+/// 「会话历史」）。
+/// [tail] = 冒号之后的全部内容：**中段「Kotlin 宿主尚未注册 bridge 通道，」
+/// 的有无由调用方决定** —— 列表/读路径的原实现都带中段（要并进 tail 开头），
+/// 两条 attach/preview 路径的原实现不带（files 的 filePreviewErrorText、
+/// terminal 的 terminalAttachErrorText，测试全串钉死）。共享函数不替调用方
+/// 猜这句，否则那两条路径的文案会多出一整句（H5 第一版就是这么错的，被
+/// 收紧后的全串 expect 抓到）。
+///
+/// 【等价性】调用点原先各写一份
+/// ```dart
+/// if (e.code == hostUnavailable) return '桌面端<channel>通道未就绪（B4 波次）：<tail 全文>';
+/// return e.message.isNotEmpty ? e.message : e.code;
+/// ```
+/// 收敛后改为 `paChannelErrorText(e, channel: '…', tail: '<原 tail 全文>')`：
+/// 返回值 = `'桌面端${channel}通道未就绪（B4 波次）：$tail'`，与上式的
+/// 「通道名段 + 固定段 + tail」拼接**逐字节相同**（tail 整句原值传入，中段的
+/// 有无随原实现）；非 HOST_UNAVAILABLE 分支的控制流未动（同一句三元表达式），
+/// 返回值相等。测试已收紧为全串 expect 钉死（terminal_data_test /
+/// collab_bridge_test / chat_history_data_test，H5 收敛时由 contains 改为
+/// 全串相等）。
+String paChannelErrorText(
+  PaBridgeException e, {
+  required String channel,
+  required String tail,
+}) {
+  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
+    return '桌面端$channel通道未就绪（B4 波次）：$tail';
+  }
+  return e.message.isNotEmpty ? e.message : e.code;
 }

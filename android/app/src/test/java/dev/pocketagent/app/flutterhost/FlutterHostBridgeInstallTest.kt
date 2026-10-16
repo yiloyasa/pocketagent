@@ -23,10 +23,10 @@ import pocketagent.v1.GetHostInfoRequest
 import pocketagent.v1.ListThreadsRequest
 
 /**
- * 「壳真换了」的判决测试（B4c 的核心证据）。
+ * 「壳真换了」的判决测试（B4c 的核心证据，B4d 后事件面另有专测）。
  *
  * 【为什么需要这一份】B4a 的壳把方法面一律回 HOST_UNAVAILABLE；B4c 把它换成
- * `BridgeMethods.install(messenger, AgentConnectionBridge())`。危险在于「换了但没
+ * `BridgeMethods.install(messenger, connection)`。危险在于「换了但没
  * 真换」——例如 install 调用写错、被 try/catch 吞掉、或壳里残留旧 handler 覆盖
  * 了新 handler。这类回归的表现是**静默的**：Flutter UI 一切正常，只是所有调用
  * 仍然得 HOST_UNAVAILABLE，用户以为「还没接线」。所以必须有判决级断言：
@@ -39,6 +39,10 @@ import pocketagent.v1.ListThreadsRequest
  *
  * ①②同时成立才叫「壳真换了」：只验 ① 会漏掉「桥没接上」；只验 ② 会漏掉
  * 「桥接了但错误码表坏了」。
+ *
+ * 【B4d 之后本文件与 FlutterHostEventChannelsInstallTest 的分工】事件面的推流
+ * 判决（帧形状/协程收停/实例形态）迁到那份新文件；本文件只保留**方法面**判决 +
+ * 事件面的握手面（listen ACK 是成功包）。两份合起来才是「壳全接了」的完整证据。
  *
  * 【怎么驱动】installChannelShell 的入参是 [BinaryMessenger] 接口，故用
  * [ShellMessenger] 驱动**真的** MethodChannel 编解码（StandardMethodCodec 是纯
@@ -232,39 +236,29 @@ class FlutterHostBridgeInstallTest {
     }
 
     /**
-     * 契约内、本波不实现的 6 条双向流方法同样如实回 HOST_UNAVAILABLE。
+     * `startTurn`（§3.6 的 unary 首帧入口）仍如实回 HOST_UNAVAILABLE。
      *
-     * 【为什么这是判决点的一部分】「壳真换了」不等于「所有方法都通了」。这 6 条
-     * 依赖双向流生命周期管理,过程帧消费面属 B4d;桥选择整族留后并如实回
-     * HOST_UNAVAILABLE(不建流不收帧 = 不伪造)。本测试把「换了壳之后这 6 条
-     * 仍诚实缺席」钉死——若将来有人为了「看起来全通了」把它们改成 success(null),
-     * 这里会失败。
+     * 【为什么这是判决点的一部分】「壳真换了」不等于「所有方法都通了」。`startTurn`
+     * 是无消费面的 unary 首帧入口（Dart 的 PaBridge.startTurn 仍在用），轮次的完整
+     * 形态是双向流；桥选择让它继续诚实缺席并如实回 HOST_UNAVAILABLE（不建流不收帧
+     * = 不伪造）。本测试把这件事钉死——若将来有人为了「看起来全通了」把它改成
+     * success(null)，这里会失败。
      *
-     * 这 6 条的分支在派发前返回(不碰连接层),故同样可纯 JVM 驱动。
+     * 【为什么不断言消息措辞】桥的留后人话措辞属 `bridge/` 的演进面（并发线改它
+     * 不该把 flutterhost 的判决拖红）；这里只断**契约级硬事实**：错误码是
+     * HOST_UNAVAILABLE、消息非空且点名本方法。消息内容由 bridge 包自己的测试看。
+     *
+     * 该分支在派发前返回(不碰连接层),故同样可纯 JVM 驱动。
      */
     @Test
-    fun `the six unimplemented bidirectional methods stay honestly HOST_UNAVAILABLE`() {
+    fun `startTurn stays honestly HOST_UNAVAILABLE instead of faking a first frame`() {
         val messenger = ShellMessenger()
         FlutterHostEngine.installChannelShell(messenger)
 
-        val six = listOf(
-            "startTurn",
-            "turnStreamStart",
-            "turnStreamSend",
-            "turnStreamCancel",
-            "terminalAttach",
-            "terminalWrite",
-        )
-        for (method in six) {
-            val reply = awaitReply(messenger, method, ByteArray(0))
-            val (code, message) = errorPartsOf(reply)
-            assertEquals("$method 必须仍回 HOST_UNAVAILABLE(不伪造)", "HOST_UNAVAILABLE", code)
-            // 桥的留后消息点名事件面未接线(B4d),排查时一眼可辨。
-            assertTrue(
-                "$method 的留后消息须说明双向流消费面未接线: $message",
-                message!!.contains("未接线") || message.contains("事件面") || message.contains("EventChannel"),
-            )
-        }
+        val reply = awaitReply(messenger, "startTurn", ByteArray(0))
+        val (code, message) = errorPartsOf(reply)
+        assertEquals("startTurn 必须仍回 HOST_UNAVAILABLE(不伪造)", "HOST_UNAVAILABLE", code)
+        assertTrue("留后消息须点名方法名: $message", message!!.contains("startTurn"))
     }
 
     // ---------------- 判决点②:契约内已接方法 → 走真 handler 链 ----------------
@@ -404,14 +398,17 @@ class FlutterHostBridgeInstallTest {
     }
 
     /**
-     * 事件面仍是静默壳:三条 EventChannel 无推流也不 error(本波没顺手接事件面)。
+     * 三条事件通道 listen ACK 都是空成功包(不是 error envelope)。
      *
-     * 【为什么放在这份判决测试里】「壳真换了」的完整语义是「方法面换了、事件面
-     * 没换」。若将来有人把事件面也接上(或更糟:推假帧),这条会失败——把「事件面
-     * 仍静默」与「方法面已接」这对事实钉在同一份文件里,报告里才好一起引用。
+     * 【B4d 之后这条断言什么】事件面已接真推流(见
+     * FlutterHostEventChannelsInstallTest),本条的断言点从「静默」收窄为
+     * **握手面**：listen 的 ACK 必须是 `encodeSuccessEnvelope(null)`,不能是
+     * error envelope。握手错不进流(契约 §2.5：Flutter 把 'listen' 的异常转投
+     * FlutterError.reportError),Dart 侧会静默收不到任何帧——所以「ACK 是空成功
+     * 包」是事件面可用的最低硬事实,与推流内容正交(推流内容由那份判决测试覆盖)。
      */
     @Test
-    fun `event channels stay silent after the method face is wired`() {
+    fun `event channels accept listen with a success envelope after the wiring`() {
         val messenger = ShellMessenger()
         FlutterHostEngine.installChannelShell(messenger)
 
@@ -424,9 +421,9 @@ class FlutterHostBridgeInstallTest {
             val listenAck = messenger.invoke(channel, "listen", null)
             assertNotNull("$channel 的 listen 必须 ACK", listenAck)
             val ack: Any? = StandardMethodCodec.INSTANCE.decodeEnvelope(listenAck!!)
-            assertNull("$channel 的 listen ACK 应为空成功包(静默),实际: $ack", ack)
+            assertNull("$channel 的 listen ACK 应为空成功包,实际: $ack", ack)
         }
-        // 方法面那条是桥的 handler;事件面三条是壳的静默 handler —— 合 4 个。
+        // 方法面那条是桥的 handler;事件面三条由 BridgeEventChannels 注册 —— 合 4 个。
         assertEquals(4, messenger.handlers.size)
     }
 

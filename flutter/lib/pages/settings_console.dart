@@ -212,6 +212,54 @@ class _SettingsConsolePageState extends State<SettingsConsolePage> {
   UnknownEventResponse? _detail;
   String _detailErrorText = '';
 
+  /// 一块只读数据的「加载 → 落值 / 报错」骨架（三块 + 详情块共四份同型收敛）。
+  ///
+  /// 【收敛前】[_loadState] / [_loadPolicy] / [_loadEvents] / [_openDetail] 四份
+  /// 逐字节同型（差异只在拉取调用、落值的字段、非 PaBridgeException 的兜底文案）：
+  /// ```dart
+  /// setState(() { phase = loading; errorText = ''; });
+  /// try {
+  ///   final X v = await fetch();
+  ///   if (!mounted) return;
+  ///   setState(() { value = v; phase = ready; });
+  /// } on PaBridgeException catch (e) {
+  ///   if (!mounted) return;
+  ///   setState(() { value = null; phase = error; errorText = consolePageErrorText(e); });
+  /// } catch (e) {
+  ///   if (!mounted) return;
+  ///   setState(() { value = null; phase = error; errorText = '<本块兜底>：$e'; });
+  /// }
+  /// ```
+  /// 收进本函数后四处调用点各传三个闭包（置相位 / 落值 / 报错文案）与两个文案
+  /// 参数。**行为逐条等价**：`if (!mounted) return` 的位置、setState 的合并
+  /// 粒度、异常分支的先后顺序（`on PaBridgeException` 必须在 `catch` 之前，
+  /// 这是 Dart 的语义，抽函数不改变）、成功路径的「先判 mounted 再 setState」
+  /// 全部原样；四处的兜底文案由 [genericFailurePrefix] 参数原值传入。
+  ///
+  /// 【为什么不连带把 _loadCaps 也收】它成功路径后面多一段「位门控通过才拉三块」
+  /// 的连带副作用，且失败时清的是 `_capabilities`（不是 null）—— 与其余四份
+  /// 不同型，收了要把差异藏进条件分支，反而不等价。保持原样。
+  Future<void> _loadBlock<T>({
+    required Future<T> Function() fetch,
+    required void Function(T value) onValue,
+    required void Function() onLoading,
+    required void Function(String errorText) onError,
+    required String genericFailurePrefix,
+  }) async {
+    onLoading();
+    try {
+      final T value = await fetch();
+      if (!mounted) return;
+      setState(() => onValue(value));
+    } on PaBridgeException catch (e) {
+      if (!mounted) return;
+      setState(() => onError(consolePageErrorText(e)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => onError('$genericFailurePrefix：$e'));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -254,125 +302,85 @@ class _SettingsConsolePageState extends State<SettingsConsolePage> {
     }
   }
 
-  Future<void> _loadState() async {
-    setState(() {
-      _statePhase = PaAsyncPhase.loading;
-      _stateErrorText = '';
-    });
-    try {
-      final RuntimeStateResponse state = await _bridge.getRuntimeState();
-      if (!mounted) return;
-      setState(() {
-        _runtimeState = state;
-        _statePhase = PaAsyncPhase.ready;
-      });
-    } on PaBridgeException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _runtimeState = null;
-        _statePhase = PaAsyncPhase.error;
-        _stateErrorText = consolePageErrorText(e);
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _runtimeState = null;
-        _statePhase = PaAsyncPhase.error;
-        _stateErrorText = '读取运行时状态失败：$e';
-      });
-    }
-  }
+  Future<void> _loadState() => _loadBlock<RuntimeStateResponse>(
+        fetch: _bridge.getRuntimeState,
+        onValue: (RuntimeStateResponse v) {
+          _runtimeState = v;
+          _statePhase = PaAsyncPhase.ready;
+        },
+        onLoading: () {
+          _statePhase = PaAsyncPhase.loading;
+          _stateErrorText = '';
+        },
+        onError: (String text) {
+          _runtimeState = null;
+          _statePhase = PaAsyncPhase.error;
+          _stateErrorText = text;
+        },
+        genericFailurePrefix: '读取运行时状态失败',
+      );
 
-  Future<void> _loadPolicy() async {
-    setState(() {
-      _policyPhase = PaAsyncPhase.loading;
-      _policyErrorText = '';
-    });
-    try {
-      final RuntimePolicyResponse policy = await _bridge.getRuntimePolicy();
-      if (!mounted) return;
-      setState(() {
-        _runtimePolicy = policy;
-        _policyPhase = PaAsyncPhase.ready;
-      });
-    } on PaBridgeException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _runtimePolicy = null;
-        _policyPhase = PaAsyncPhase.error;
-        _policyErrorText = consolePageErrorText(e);
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _runtimePolicy = null;
-        _policyPhase = PaAsyncPhase.error;
-        _policyErrorText = '读取运行时策略失败：$e';
-      });
-    }
-  }
+  Future<void> _loadPolicy() => _loadBlock<RuntimePolicyResponse>(
+        fetch: _bridge.getRuntimePolicy,
+        onValue: (RuntimePolicyResponse v) {
+          _runtimePolicy = v;
+          _policyPhase = PaAsyncPhase.ready;
+        },
+        onLoading: () {
+          _policyPhase = PaAsyncPhase.loading;
+          _policyErrorText = '';
+        },
+        onError: (String text) {
+          _runtimePolicy = null;
+          _policyPhase = PaAsyncPhase.error;
+          _policyErrorText = text;
+        },
+        genericFailurePrefix: '读取运行时策略失败',
+      );
 
-  Future<void> _loadEvents() async {
-    setState(() {
-      _eventsPhase = PaAsyncPhase.loading;
-      _eventsErrorText = '';
-    });
-    try {
-      final ListUnknownEventsResponse events =
-          await _bridge.listUnknownEvents();
-      if (!mounted) return;
-      setState(() {
-        _unknownEvents = events;
-        _eventsPhase = PaAsyncPhase.ready;
-      });
-    } on PaBridgeException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _unknownEvents = null;
-        _eventsPhase = PaAsyncPhase.error;
-        _eventsErrorText = consolePageErrorText(e);
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _unknownEvents = null;
-        _eventsPhase = PaAsyncPhase.error;
-        _eventsErrorText = '读取未知事件台账失败：$e';
-      });
-    }
-  }
+  Future<void> _loadEvents() => _loadBlock<ListUnknownEventsResponse>(
+        fetch: _bridge.listUnknownEvents,
+        onValue: (ListUnknownEventsResponse v) {
+          _unknownEvents = v;
+          _eventsPhase = PaAsyncPhase.ready;
+        },
+        onLoading: () {
+          _eventsPhase = PaAsyncPhase.loading;
+          _eventsErrorText = '';
+        },
+        onError: (String text) {
+          _unknownEvents = null;
+          _eventsPhase = PaAsyncPhase.error;
+          _eventsErrorText = text;
+        },
+        genericFailurePrefix: '读取未知事件台账失败',
+      );
 
   /// 点一条未知事件 → 拉详情（只读；动作按钮本波不做，见文件头）。
-  Future<void> _openDetail(String eventId) async {
+  Future<void> _openDetail(String eventId) {
     setState(() {
       _detailEventId = eventId;
       _detailPhase = PaAsyncPhase.loading;
       _detailErrorText = '';
       _detail = null;
     });
-    try {
-      final UnknownEventResponse detail =
-          await _bridge.getUnknownEvent(GetUnknownEventRequest(eventId: eventId));
-      if (!mounted) return;
-      setState(() {
-        _detail = detail;
+    return _loadBlock<UnknownEventResponse>(
+      fetch: () =>
+          _bridge.getUnknownEvent(GetUnknownEventRequest(eventId: eventId)),
+      onValue: (UnknownEventResponse v) {
+        _detail = v;
         _detailPhase = PaAsyncPhase.ready;
-      });
-    } on PaBridgeException catch (e) {
-      if (!mounted) return;
-      setState(() {
+      },
+      // 首屏相位/错误文案已在进本函数前由 setState 置好（_detailEventId 也要
+      // 一并落，那是 _loadBlock 不知道的页面状态）——这里不再重复置。
+      onLoading: () {},
+      onError: (String text) {
         _detail = null;
         _detailPhase = PaAsyncPhase.error;
-        _detailErrorText = consolePageErrorText(e);
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _detail = null;
-        _detailPhase = PaAsyncPhase.error;
-        _detailErrorText = '读取未知事件详情失败：$e';
-      });
-    }
+        _detailErrorText = text;
+      },
+      genericFailurePrefix: '读取未知事件详情失败',
+    );
   }
 
   void _closeDetail() {

@@ -22,6 +22,7 @@ import '../gen/pocketagent/v1/thread.pb.dart';
 import '../transport/pa_bridge.dart';
 import 'collab_roles_state.dart' show CollabRolesStore;
 import 'collab_session_data.dart';
+import 'pa_page_kit.dart';
 import 'threads_bridge.dart' show threadRowTimeLabel;
 
 // ── 行/卡映射（wire → 页面模型）─────────────────────────────────────────────
@@ -167,12 +168,17 @@ CollabPolicyUi collabPolicyUiOf(CollabPolicyResponse r) {
 /// 让用户知道不是自己操作错了，也不是「没有协同会话」。其余码原样透传宿主
 /// message（不改写、不吞——与 settings/threads/files/git 页同一套透传纪律）；
 /// 宿主没给 message 时退 code，宁可难看也不吞。
-String collabLoadErrorText(PaBridgeException e, {String tail = '协同数据暂不可用。'}) {
-  if (e.code == PaBridgeErrorCodes.hostUnavailable) {
-    return '桌面端协同通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，$tail';
-  }
-  return e.message.isNotEmpty ? e.message : e.code;
-}
+///
+/// 【收敛来历】本函数与 threads/files/git/terminal/chat_history 五页的同型函数
+/// 控制流逐字节相同（差异只在通道名与收尾句），收责任一为
+/// [paChannelErrorText]（等价论证见该函数注释）。[tail] 默认值保持原值
+/// '协同数据暂不可用。'，三个派生文案的 tail 也未动。
+String collabLoadErrorText(PaBridgeException e, {String tail = '协同数据暂不可用。'}) =>
+    paChannelErrorText(
+      e,
+      channel: '协同',
+      tail: 'Kotlin 宿主尚未注册 bridge 通道，$tail',
+    );
 
 /// 派发失败文案（dispatch 路径）：与 [collabLoadErrorText] 同款透传纪律，
 /// 收尾按派发语境改词。

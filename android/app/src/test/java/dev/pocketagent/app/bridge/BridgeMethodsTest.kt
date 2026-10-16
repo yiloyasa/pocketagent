@@ -12,6 +12,7 @@ import pocketagent.v1.CancelCollabMemberRequest
 import pocketagent.v1.CancelCollabSessionRequest
 import pocketagent.v1.CollabMember
 import pocketagent.v1.CollabRole
+import pocketagent.v1.ContentBlock
 import pocketagent.v1.DeleteCollabRoleRequest
 import pocketagent.v1.DispatchCollabRequest
 import pocketagent.v1.GetCollabSessionRequest
@@ -25,10 +26,18 @@ import pocketagent.v1.ListCollabSessionsRequest
 import pocketagent.v1.ListDirectoryRequest
 import pocketagent.v1.ListSlashCommandsRequest
 import pocketagent.v1.ListThreadsRequest
+import pocketagent.v1.OpenTerminal
 import pocketagent.v1.ReadFileRequest
 import pocketagent.v1.RetryCollabMemberRequest
 import pocketagent.v1.SetCollabRoleRequest
+import pocketagent.v1.TerminalClientMessage
+import pocketagent.v1.TerminalInput
+import pocketagent.v1.TerminalResize
+import pocketagent.v1.TextBlock
 import pocketagent.v1.ThreadMessage
+import pocketagent.v1.TurnClientMessage
+import pocketagent.v1.TurnInput
+import pocketagent.v1.TurnSupplement
 
 /**
  * `BridgeMethods` 方法面对账测试：请求解析 → stub 调用 → 响应**字节级**断言。
@@ -674,42 +683,539 @@ class BridgeMethodsTest {
         assertEquals(listOf("goal", "compact", "review"), pocketagent.v1.ListSlashCommandsResponse.parseFrom(bytes).commandsList.map { it.name })
     }
 
-    // ── 契约内、本波不实现的六条：如实 HOST_UNAVAILABLE ────────────────────
+    // ── 双向流六方法：turn 三条 + terminal 三条（§3.22~§3.27）────────────
 
-    @Test
-    fun `startTurn 回 HOST_UNAVAILABLE_不建只有首帧的假流`() = runBlocking {
-        // 过程帧消费面（EventChannel）未接；建了流却收不到增量/审批/完成帧
-        // 比"通道未就绪"更糟（用户以为在跑，其实瞎了）。
-        val (methods, result, _) = harness()
-        methods.handle(BridgeMethodCall("startTurn", ByteArray(0)), result)
-        result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
-        assertTrue(result.errorMessage!!.contains("startTurn"))
-        assertTrue(result.errorMessage!!.contains("turn_events"))
+    /**
+     * 双向流装配：真 B4d machinery + 可编程 fake async stub + 可写 sink feed。
+     *
+     * 【为什么不 stub 自己写的假实现】`BridgeEventChannels` 是真类（B4d 成品），
+     * 经其公开构造器装配；`BridgeThreadStreamService` / `BridgeTerminalStreamService`
+     * 是 B4d 定义的窄接口（protoc stub 是 final class，只能假实现——与 B4b/B4d
+     * 测试同纪律）。桥的 dispatch → 入参解析 → machinery → observer 全链被真实
+     * 执行，唯一假点是「daemon 回什么」。
+     *
+     * 【为什么每个用例一份】`BridgeEventChannels` 自带 IO scope 与收集 job，
+     * 用后必须 shutdown（防协程泄漏）；共享一份会让用例间通过 turnSession 串味。
+     */
+    private inner class StreamFixture {
+        val feed = MutableStreamSinkFeed()
+        val innerMessenger = RecordingEventMessenger()
+        /**
+         * 经 [SinkObservingMessenger] 注册：Dart 订阅 turn/terminal 事件面时那个
+         * 真 sink 被记进 [feed]——与生产同一条路径（B4d 的 handler 私有，sink
+         * 只能在这一层观察到，见 [SinkObservingMessenger] KDoc）。
+         */
+        val eventMessenger: BridgeEventMessenger = SinkObservingMessenger(innerMessenger, feed)
+        val sources = FakeEventSourcesForStreams()
+        val channels = BridgeEventChannels(eventMessenger, sources, FakeLogForStreams())
+        val turnStub = TurnStreamFakeStub()
+        val terminalStub = TerminalStreamFakeStub()
+        val wiring = BridgeEventChannelsWiring(
+            channels = channels,
+            threadStub = turnStub,
+            terminalStub = terminalStub,
+            sinkFeeder = feed,
+        )
+        val conn = FakeConnection()
+
+        val methods: BridgeMethods = BridgeMethods(RecordingMessenger(), conn, wiring)
+
+        /**
+         * 每个方法调用一份**新的**结果接收者。
+         *
+         * 【为什么每次新建】`RecordingResult` 是终态记录器（success/error 只记一次），
+         * 复用会让第二次调用的断言读到第一次的终态（"应走 error，实际 success=null"）。
+         * 与既有用例 `harness()` 每次返回新 RecordingResult 同纪律。
+         */
+        fun invoke(method: String, arguments: Any?): RecordingResult {
+            val r = RecordingResult()
+            methods.handle(BridgeMethodCall(method, arguments), r)
+            return r
+        }
+
+        /** 模拟 Dart 订阅 turn_events（chat_session.dart 的 _subscribe）。 */
+        fun subscribeTurn(sink: BridgeEventSink = FakeStreamSink()) {
+            innerMessenger.handlers[BRIDGE_TURN_EVENT_CHANNEL_NAME]!!.onListen(null, sink)
+        }
+
+        /** 模拟 Dart 订阅 terminal_events（terminal_data.dart 的 open 前置订阅）。 */
+        fun subscribeTerminal(sink: BridgeEventSink = FakeStreamSink()) {
+            innerMessenger.handlers[BRIDGE_TERMINAL_EVENT_CHANNEL_NAME]!!.onListen(null, sink)
+        }
+
+        fun shutdown() = channels.shutdown()
     }
 
-    @Test
-    fun `turnStreamStart 与 turnStreamSend 与 turnStreamCancel 都回 HOST_UNAVAILABLE`() = runBlocking {
-        for (m in listOf("turnStreamStart", "turnStreamSend", "turnStreamCancel")) {
-            val (methods, result, _) = harness()
-            val args: Any? = when (m) {
-                "turnStreamStart" -> mapOf("threadId" to "t1")
-                "turnStreamSend" -> ByteArray(0)
-                else -> null
+    /**
+     * 等 [condition] 为真或超时（协程在 IO 上跑，固定睡眠要么不够要么浪费）。
+     *
+     * B4d 的 `TurnStreamSession` 建流在它自己的 IO scope 的协程里：`turnStreamStart`
+     * 方法调用返回时，那个协程可能还没走到 `stub.startTurn`——故双向流用例用本函数
+     * 等 machinery 落地，而不是假设同步。
+     *
+     * 【为什么睡而不是 yield】runBlocking 的调用线程是 main；`Thread.yield()` 在
+     * main 上不保证让 IO 线程的协程前进（JVM 调度不承诺跨线程让渡）。
+     */
+    private fun awaitUntil(what: String, timeoutMs: Long = 5_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw AssertionError("等待 $what ${timeoutMs}ms 未满足（协程卡死或推流路径没走通）")
             }
-            methods.handle(BridgeMethodCall(m, args), result)
-            result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+            Thread.sleep(5)
         }
     }
 
     @Test
-    fun `terminalAttach 与 terminalWrite 回 HOST_UNAVAILABLE_输出帧归事件面`() = runBlocking {
-        for (m in listOf("terminalAttach", "terminalWrite")) {
-            val (methods, result, _) = harness()
-            val args: Any? = if (m == "terminalAttach") mapOf("terminalId" to "term-1") else ByteArray(0)
-            methods.handle(BridgeMethodCall(m, args), result)
-            result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
-            assertTrue(result.errorMessage!!.contains("terminal_events"))
+    fun `turnStreamStart 建流并受理_首帧另由 turnStreamSend 发`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+
+        val result = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        result.awaitSettled()
+
+        // §3.25：返回 null = 建流受理（不是"轮次已开始"——首帧还没发）。
+        assertTrue("turnStreamStart 应走 success", result.successCalled)
+        assertNull(result.success)
+        // B4d 的 TurnStreamSession 协程里调 stub.startTurn：真 machinery 跑通
+        // （threadId 由 B4d 绑进会话，startCalls 即"流真建了"的判决点）。
+        assertEquals(1, f.turnStub.startCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamSend 字节经 observer 进流_input 与 supplement 两形态`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        // Dart 按 proto 封帧：input 首帧 / supplement 追问都走这里
+        // （chat_session.dart 的 startTurn 与 steer 两处）。
+        val inputFrame = TurnClientMessage.newBuilder()
+            .setInput(
+                TurnInput.newBuilder()
+                    .setThreadId("t-1")
+                    .addBlocks(ContentBlock.newBuilder().setText(TextBlock.newBuilder().setText("你好"))),
+            )
+            .build()
+        val r1 = f.invoke("turnStreamSend", inputFrame.toByteArray())
+        r1.awaitSettled()
+        assertTrue("turnStreamSend 应走 success", r1.successCalled)
+        assertNull(r1.success)
+
+        // 帧原样进流：observer 收到的就是桥 parseFrom 出来的那条（字段级对账）。
+        awaitUntil("observer 应收到帧") { f.turnStub.requestObserver.seen.isNotEmpty() }
+        val seen = f.turnStub.requestObserver.seen.single()
+        assertEquals("t-1", seen.input.threadId)
+        assertEquals("你好", seen.input.getBlocks(0).text.text)
+
+        // supplement 追问帧：同一条 observer，不另建流。
+        val supplementFrame = TurnClientMessage.newBuilder()
+            .setSupplement(
+                TurnSupplement.newBuilder()
+                    .addBlocks(ContentBlock.newBuilder().setText(TextBlock.newBuilder().setText("补充"))),
+            )
+            .build()
+        val r2 = f.invoke("turnStreamSend", supplementFrame.toByteArray())
+        awaitUntil("observer 应收到第二帧") { f.turnStub.requestObserver.seen.size == 2 }
+        assertEquals("补充", f.turnStub.requestObserver.seen[1].supplement.getBlocks(0).text.text)
+        r2.awaitSettled()
+        assertEquals("追问不得另建流", 1, f.turnStub.startCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamSend 坏字节回 DECODE_FAILED_不补默认值也不进流`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        // 合法 varint 后接非法 wire type 的残字节，parseFrom 必炸（同 getHostInfo 用例）。
+        val result = f.invoke(
+            "turnStreamSend",
+            byteArrayOf(0x0A, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+        )
+        result.assertError(BridgeErrorCodes.DECODE_FAILED)
+        assertTrue(result.errorMessage!!.contains("turnStreamSend"))
+        // 坏帧不毒化流：宿主侧先拦，一帧坏不影响后续帧（契约 §4 同纪律）。
+        assertTrue("坏字节不得进流", f.turnStub.requestObserver.seen.isEmpty())
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamSend 入参不是字节时回 DECODE_FAILED_不做双形态二分`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        // Dart 侧若误发 Map 形态（契约漂移）：显式失败，不补默认值。
+        val result = f.invoke("turnStreamSend", mapOf("input" to "x"))
+        result.assertError(BridgeErrorCodes.DECODE_FAILED)
+        assertTrue("坏字节不得进流", f.turnStub.requestObserver.seen.isEmpty())
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamSend 未 start 就发回结构化错误_不许 panic`() = runBlocking {
+        val f = StreamFixture()
+        // 不 turnStreamStart 直接 send：宿主侧没有流，如实报"无处可发"。
+        val result = f.invoke("turnStreamSend", TurnClientMessage.getDefaultInstance().toByteArray())
+        result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        assertTrue(result.errorMessage!!.contains("无处可发"))
+        // 关键：走的是结构化错误分支，不是 handle 的 INTERNAL 兜底（panic 会被收敛）。
+        assertEquals("时序问题不是宿主内部错误", null, result.errorDetails)
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamCancel 摘掉宿主侧流_之后 send 无处可发`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        // §3.27：arguments = null → null。只摘宿主侧资源，不发 cancel 帧
+        // （Dart 侧显式取消走 turnStreamSend(cancel 帧)，见 chat_session.cancel()）。
+        val cancel = f.invoke("turnStreamCancel", null)
+        cancel.awaitSettled()
+        assertTrue("turnStreamCancel 应走 success", cancel.successCalled)
+        assertNull(cancel.success)
+        assertTrue("gRPC 流应被 cancel", f.turnStub.requestObserver.cancelled)
+
+        // 摘了再 send = 无处可发（不是打到已断的流上）。
+        val after = f.invoke("turnStreamSend", TurnClientMessage.getDefaultInstance().toByteArray())
+        after.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        assertTrue(after.errorMessage!!.contains("无处可发"))
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamCancel 收到非 null 入参时回 DECODE_FAILED`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val result = f.invoke("turnStreamCancel", mapOf("x" to 1))
+        result.assertError(BridgeErrorCodes.DECODE_FAILED)
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamStart 缺 threadId 键时回 DECODE_FAILED_不补空串也不建流`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val result = f.invoke("turnStreamStart", mapOf("threadID" to "t-1"))
+        result.assertError(BridgeErrorCodes.DECODE_FAILED)
+        assertTrue(result.errorMessage!!.contains("threadId"))
+        // 键名错 = 契约漂移，不得建流。
+        assertEquals("缺键不得建流", 0, f.turnStub.startCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `turnStreamStart 在 Dart 未订阅事件面时回 HOST_UNAVAILABLE_不建假流`() = runBlocking {
+        val f = StreamFixture()
+        // 不 subscribeTurn：sink 不在。此刻建流 = 建一条永远收不到过程帧的流
+        // （比"通道未就绪"更糟的假象），故如实回错且不调 startTurn。
+        val result = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        assertTrue(result.errorMessage!!.contains("sink"))
+        assertEquals("无 sink 不得建流", 0, f.turnStub.startCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalAttach 建流并受理_open 帧另由 terminalWrite 发`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTerminal()
+
+        val result = f.invoke("terminalAttach", mapOf("terminalId" to "sess-1"))
+        awaitUntil("attach 应被调") { f.terminalStub.attachCalls == 1 }
+        result.awaitSettled()
+
+        assertTrue("terminalAttach 应走 success", result.successCalled)
+        assertNull(result.success)
+        assertEquals(1, f.terminalStub.attachCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalWrite 字节经 observer 进流_open 与 input 与 resize 三形态`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTerminal()
+        val attach = f.invoke("terminalAttach", mapOf("terminalId" to "sess-1"))
+        awaitUntil("attach 应被调") { f.terminalStub.attachCalls == 1 }
+        attach.awaitSettled()
+
+        // terminal_data.dart 的 open()：attach → write(open 帧)。
+        val openFrame = TerminalClientMessage.newBuilder()
+            .setOpen(
+                OpenTerminal.newBuilder()
+                    .setSessionId("sess-1")
+                    .setCwd("/ws")
+                    .setCols(80)
+                    .setRows(24),
+            )
+            .build()
+        val r1 = f.invoke("terminalWrite", openFrame.toByteArray())
+        r1.awaitSettled()
+        assertTrue("terminalWrite 应走 success", r1.successCalled)
+        assertNull(r1.success)
+        awaitUntil("observer 应收到 open 帧") { f.terminalStub.requestObserver.seen.isNotEmpty() }
+        val seenOpen = f.terminalStub.requestObserver.seen.single()
+        assertEquals("sess-1", seenOpen.open.sessionId)
+        assertEquals("/ws", seenOpen.open.cwd)
+        assertEquals(80, seenOpen.open.cols)
+        assertEquals(24, seenOpen.open.rows)
+
+        // input 帧（terminal_data.dart 的 sendInput）与 resize 帧：同一条 observer。
+        val inputFrame = TerminalClientMessage.newBuilder()
+            .setInput(TerminalInput.newBuilder().setData(com.google.protobuf.ByteString.copyFromUtf8("ls\r")))
+            .build()
+        val r2 = f.invoke("terminalWrite", inputFrame.toByteArray())
+        awaitUntil("observer 应收到 input 帧") { f.terminalStub.requestObserver.seen.size == 2 }
+        assertEquals("ls\r", f.terminalStub.requestObserver.seen[1].input.data.toStringUtf8())
+        r2.awaitSettled()
+
+        val resizeFrame = TerminalClientMessage.newBuilder()
+            .setResize(TerminalResize.newBuilder().setCols(120).setRows(40))
+            .build()
+        val r3 = f.invoke("terminalWrite", resizeFrame.toByteArray())
+        awaitUntil("observer 应收到 resize 帧") { f.terminalStub.requestObserver.seen.size == 3 }
+        assertEquals(120, f.terminalStub.requestObserver.seen[2].resize.cols)
+        assertEquals(40, f.terminalStub.requestObserver.seen[2].resize.rows)
+        r3.awaitSettled()
+        assertEquals("input/resize 不得另建流", 1, f.terminalStub.attachCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalWrite 坏字节回 DECODE_FAILED_且不进流`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTerminal()
+        val attach = f.invoke("terminalAttach", mapOf("terminalId" to "sess-1"))
+        awaitUntil("attach 应被调") { f.terminalStub.attachCalls == 1 }
+        attach.awaitSettled()
+
+        val result = f.invoke(
+            "terminalWrite",
+            byteArrayOf(0x0A, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+        )
+        result.assertError(BridgeErrorCodes.DECODE_FAILED)
+        assertTrue("坏字节不得进流", f.terminalStub.requestObserver.seen.isEmpty())
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalWrite 未 attach 就写回结构化错误_不许 panic`() = runBlocking {
+        val f = StreamFixture()
+        val result = f.invoke("terminalWrite", TerminalClientMessage.getDefaultInstance().toByteArray())
+        result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        assertTrue(result.errorMessage!!.contains("无处可发"))
+        assertEquals("时序问题不是宿主内部错误", null, result.errorDetails)
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalAttach 在 Dart 未订阅事件面时回 HOST_UNAVAILABLE_不建假流`() = runBlocking {
+        val f = StreamFixture()
+        val result = f.invoke("terminalAttach", mapOf("terminalId" to "sess-1"))
+        result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        assertTrue(result.errorMessage!!.contains("sink"))
+        assertEquals("无 sink 不得建流", 0, f.terminalStub.attachCalls)
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalClose 关 daemon 会话并摘掉宿主侧 attach 流`() = runBlocking {
+        val f = StreamFixture()
+        f.subscribeTerminal()
+        val attach = f.invoke("terminalAttach", mapOf("terminalId" to "sess-1"))
+        awaitUntil("attach 应被调") { f.terminalStub.attachCalls == 1 }
+        attach.awaitSettled()
+
+        // §3.24：{'terminalId': String} → null。unary CloseTerminal + 摘本地流
+        // （unary 只让 daemon 关 PTY，本地 bidi 流不摘会继续推幽灵帧）。
+        val close = f.invoke("terminalClose", mapOf("terminalId" to "sess-1"))
+        close.awaitSettled()
+        assertTrue("terminalClose 应走 success", close.successCalled)
+        assertNull(close.success)
+        assertEquals("sess-1", f.conn.terminal.lastCloseTerminalRequest!!.sessionId)
+        assertTrue("宿主侧 attach 流应被摘", f.terminalStub.requestObserver.cancelled)
+
+        // 摘了再写 = 无处可发。
+        val after = f.invoke("terminalWrite", TerminalClientMessage.getDefaultInstance().toByteArray())
+        after.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        f.shutdown()
+    }
+
+    @Test
+    fun `terminalClose 的 unary RPC 失败照旧映射契约码_本地摘流不受影响`() = runBlocking {
+        val f = StreamFixture()
+        f.conn.terminal.failure = grpcError(io.grpc.Status.Code.UNAVAILABLE, "通道半死")
+        f.subscribeTerminal()
+        val attach = f.invoke("terminalAttach", mapOf("terminalId" to "sess-1"))
+        awaitUntil("attach 应被调") { f.terminalStub.attachCalls == 1 }
+        attach.awaitSettled()
+
+        val close = f.invoke("terminalClose", mapOf("terminalId" to "sess-1"))
+        // daemon 关了但本地还挂着流 = 幽灵帧源；unary 失败也要摘（防泄漏优先于报错）。
+        close.assertError(BridgeErrorCodes.NOT_CONNECTED)
+        assertTrue("unary 失败也要摘本地流", f.terminalStub.requestObserver.cancelled)
+        f.shutdown()
+    }
+
+    @Test
+    fun `未注入装配 seam 时三条建流方法如实回 HOST_UNAVAILABLE_点名缺什么`() = runBlocking {
+        // 生产默认（streams = null）：不建假流，消息点名缺的是装配 seam。
+        val cases = listOf(
+            "turnStreamStart" to mapOf("threadId" to "t1"),
+            "terminalAttach" to mapOf("terminalId" to "term-1"),
+        )
+        for ((m, args) in cases) {
+            val (methods, r, _) = harness()
+            methods.handle(BridgeMethodCall(m, args), r)
+            r.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+            assertTrue("$m 的消息应点名未接线", r.errorMessage!!.contains("未接线"))
         }
+        // terminalClose 的 unary 面本来就已实现（缺 seam 只影响摘流，不影响受理）。
+        val (m2, r2, conn2) = harness()
+        m2.handle(BridgeMethodCall("terminalClose", mapOf("terminalId" to "term-1")), r2)
+        r2.awaitSettled()
+        assertTrue("terminalClose 的 unary 面不依赖 seam", r2.successCalled)
+        assertNull(r2.success)
+        assertEquals("term-1", conn2.terminal.lastCloseTerminalRequest!!.sessionId)
+    }
+
+    @Test
+    fun `send 与 write 在未注入 seam 时回 HOST_UNAVAILABLE_不 panic`() = runBlocking {
+        val cases = listOf(
+            "turnStreamSend" to TurnClientMessage.getDefaultInstance().toByteArray(),
+            "terminalWrite" to TerminalClientMessage.getDefaultInstance().toByteArray(),
+        )
+        for ((m, args) in cases) {
+            val (methods, r, _) = harness()
+            methods.handle(BridgeMethodCall(m, args), r)
+            r.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+            assertTrue("$m 的消息应点名无处可发", r.errorMessage!!.contains("无处可发"))
+        }
+        // turnStreamCancel 只摘资源：无 seam 时是干净的 no-op（回 null，不报错）。
+        val (m3, r3, _) = harness()
+        m3.handle(BridgeMethodCall("turnStreamCancel", null), r3)
+        r3.awaitSettled()
+        assertTrue("无 seam 时 cancel 是 no-op", r3.successCalled)
+        assertNull(r3.success)
+    }
+
+    @Test
+    fun `observer onNext 抛 gRPC 失败照旧映射契约码_不裸抛到Flutter侧`() = runBlocking {
+        // 线程纪律（BridgeMethods KDoc）：dispatch 整体在 withContext(IO) 里，
+        // observer.onNext 经 rpc{} 收口——gRPC 失败映射成契约码而不是裸异常。
+        val f = StreamFixture()
+        f.subscribeTurn()
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        f.turnStub.requestObserver.failOnNext =
+            grpcError(io.grpc.Status.Code.UNAVAILABLE, "transport 半死")
+        val result = f.invoke("turnStreamSend", TurnClientMessage.getDefaultInstance().toByteArray())
+        result.assertError(BridgeErrorCodes.NOT_CONNECTED)
+        assertEquals("transport 半死", result.errorMessage)
+        // details 带 gRPC 状态码名（UI 上层可展开诊断，与 24 个已实现方法同口径）。
+        assertEquals("UNAVAILABLE", result.errorDetails)
+        f.shutdown()
+    }
+
+    @Test
+    fun `过程帧经 Dart 订阅的 sink 推回来_B4d machinery 真跑`() = runBlocking {
+        // 联动判决点：turnStreamStart 之后，B4d 的 TurnStreamSession 把 daemon
+        // 推来的 TurnServerMessage 逐帧转成 wire 字节，经**同一个 sink** 出去。
+        val f = StreamFixture()
+        val sink = FakeStreamSink()
+        f.subscribeTurn(sink)
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        // daemon 侧回一帧（responseObserver.onNext 由 B4d 转给 sink）。
+        f.turnStub.responseObserver.onNext(turnServerFrame(7))
+        awaitUntil("sink 应收到一帧") { sink.frames.isNotEmpty() }
+        val bytes = sink.frames.single() as ByteArray
+        assertEquals(7L, pocketagent.v1.TurnServerMessage.parseFrom(bytes).sequence)
+        f.shutdown()
+    }
+
+    @Test
+    fun `daemon 侧流错误经 sink 报出来_方法面不吞`() = runBlocking {
+        val f = StreamFixture()
+        val sink = FakeStreamSink()
+        f.subscribeTurn(sink)
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        awaitUntil("startTurn 应被调") { f.turnStub.startCalls == 1 }
+        start.awaitSettled()
+
+        // 流错误走 sink.error（契约 §4「宿主 EventSink.error → 流错误，code 原样」），
+        // 不经方法面 success/error——方法调用早已回 null（受理语义）。
+        f.turnStub.responseObserver.onError(
+            grpcError(io.grpc.Status.Code.INTERNAL, "daemon 侧炸了"),
+        )
+        awaitUntil("sink 应报流错误") { sink.errors.isNotEmpty() }
+        val (code, message, _) = sink.errors.single()
+        assertEquals(BridgeErrorCodes.INTERNAL, code)
+        assertTrue(message!!.contains("daemon 侧炸了"))
+        f.shutdown()
+    }
+
+    @Test
+    fun `建流时 daemon 迟迟不交 observer_有界等待后回结构化错误_不无限挂住`() = runBlocking {
+        // B4d 的会话协程跑在它自己的 IO scope 上：正常一次线程跳转就把 observer
+        // 交出来，但 daemon 半死态下可能迟迟不交。方法面有界等待（5s）后如实回错，
+        // 而不是把调用无限期挂在 IO 上（红线：不留假受理）。
+        val f = StreamFixture()
+        f.subscribeTurn()
+        // 让 stub 的 startTurn 挂住 12s（> 5s 上界）：模拟"daemon 不应答"。
+        // 【为什么是 12s】方法面的有界等待上界是 5s；这里必须显著大于它，否则
+        // observer 在等待窗口内就交了、测不到超时路径。
+        f.turnStub.startTurnDelayMs = 12_000
+
+        val result = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        // 本用例的等待上界要宽于方法面的 5s（否则测试自己的轮询先超时，
+        // 把"方法面如实回错"误判成"协程卡死"）。
+        awaitUntil("方法面应回超时错误", 15_000) { result.errorCalled || result.successCalled }
+        result.assertError(BridgeErrorCodes.HOST_UNAVAILABLE)
+        assertTrue(result.errorMessage!!.contains("未就绪"))
+        // 关键：是结构化错误而不是 handle 的 INTERNAL 兜底（panic 收敛）。
+        assertEquals("有界等待超时不是宿主内部错误", null, result.errorDetails)
+        f.shutdown()
+    }
+
+    @Test
+    fun `建流成功后紧随的首帧有落点_不因协程竞态打空 observer`() = runBlocking {
+        // 竞态判决点：turnStreamStart 返回时 observer 必须已就绪——否则 Dart 的
+        // `await turnStreamStart(...)` 紧接 `await turnStreamSend(首帧)` 会打到
+        // 空 observer 上，报一个"无处可发"的假错误（chat_session.dart:152-153）。
+        // 让 stub 的 startTurn 故意慢 80ms（拉宽竞态窗口），方法面仍须等它就绪。
+        val f = StreamFixture()
+        f.subscribeTurn()
+        f.turnStub.startTurnDelayMs = 80
+
+        val start = f.invoke("turnStreamStart", mapOf("threadId" to "t-1"))
+        start.awaitSettled()
+        assertTrue("建流应受理", start.successCalled)
+
+        // 紧随的首帧（不再 awaitUntil——竞态窗口已被方法面的等待收窄）。
+        val send = f.invoke("turnStreamSend", TurnClientMessage.getDefaultInstance().toByteArray())
+        send.awaitSettled()
+        assertTrue("首帧应成功进流", send.successCalled)
+        awaitUntil("observer 应收到帧") { f.turnStub.requestObserver.seen.isNotEmpty() }
+        f.shutdown()
     }
 
     // ── 未知方法：契约漂移，同样 HOST_UNAVAILABLE ──────────────────────────
@@ -775,4 +1281,143 @@ class BridgeMethodsTest {
         result.assertError(BridgeErrorCodes.INTERNAL)
         assertTrue(result.errorMessage!!.contains("IllegalStateException"))
     }
+}
+
+// ── 双向流六方法的假实现（B4d 窄接口 + seam 级 machinery）─────────────────
+//
+// 命名带 StreamFake 前缀：B4d 的 BridgeEventChannelsTest 在**同一包**里已有
+// 同名 top-level fake（FakeThreadStreamStub），Kotlin 不允许同包同名顶层声明
+// （Redeclaration）——前缀区分是唯一解（不共享 fixture：两边断言的面不同）。
+
+/** 记录型 [BridgeEventMessenger]：capture 三个 handler 供测试直接驱动 onListen/onCancel。 */
+internal class RecordingEventMessenger : BridgeEventMessenger {
+    val handlers = HashMap<String, BridgeEventStreamHandler>()
+    override fun setStreamHandler(channelName: String, handler: BridgeEventStreamHandler) {
+        handlers[channelName] = handler
+    }
+}
+
+/**
+ * 双向流用例的 [BridgeEventSources]：五个 StateFlow + 两条 SharedFlow 测试可推。
+ *
+ * 与 B4d 测试的 FakeSources 同结构（[BridgeConnection] 的 20+ 快照成员委托
+ * [FakeConnection]）——双向流用例不读快照，委托即零成本。
+ */
+internal class FakeEventSourcesForStreams(
+    private val delegate: BridgeConnection = FakeConnection(),
+) : BridgeEventSources, BridgeConnection by delegate {
+    override val connStateFlow = kotlinx.coroutines.flow.MutableStateFlow("checking")
+    override val connTransportFlow = kotlinx.coroutines.flow.MutableStateFlow("")
+    override val connAddressFlow = kotlinx.coroutines.flow.MutableStateFlow("")
+    override val connectionEpochFlow = kotlinx.coroutines.flow.MutableStateFlow(0)
+    override val hostCapabilitiesFlow = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
+    override val hostEventsFlow =
+        kotlinx.coroutines.flow.MutableSharedFlow<pocketagent.v1.HostEvent>(extraBufferCapacity = 8)
+    override val hostInfoFlow =
+        kotlinx.coroutines.flow.MutableSharedFlow<pocketagent.v1.HostInfo>(extraBufferCapacity = 8)
+}
+
+/** 记录型 [BridgeLog]：不落 Android 框架（JVM 单测零 Robolectric）。 */
+internal class FakeLogForStreams : BridgeLog {
+    val lines = ArrayList<String>()
+    override fun w(tag: String, message: String) { lines.add("$tag: $message") }
+}
+
+/** 记录型 [BridgeEventSink]：帧/错误/关流三语义各自记录。 */
+internal class FakeStreamSink : BridgeEventSink {
+    val frames = ArrayList<Any?>()
+    val errors = ArrayList<Triple<String, String?, Any?>>()
+    var ended = false
+    override fun success(event: Any?) { frames.add(event) }
+    override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+        errors.add(Triple(errorCode, errorMessage, errorDetails))
+    }
+    override fun endOfStream() { ended = true }
+}
+
+/**
+ * 假 StartTurn stub（B4d 的 [BridgeThreadStreamService]）：
+ *  - `startTurn` 返回**可编程的请求 observer**（onNext 留痕 + 可摆失败 + 记 cancel）；
+ *  - `responseObserver` 暴露给测试，模拟 daemon 推帧/报错。
+ */
+internal class TurnStreamFakeStub : BridgeThreadStreamService {
+    var startCalls = 0
+
+    /**
+     * `startTurn` 的故意延迟（毫秒）：拉宽「B4d 协程还没交出 observer」的竞态窗口。
+     *
+     * 用来验两件事：① 方法面的有界等待真的在等（竞态窗口内首帧仍有落点）；
+     * ② 超过上界时回结构化错误而不是无限挂住。
+     */
+    var startTurnDelayMs: Long = 0
+
+    lateinit var responseObserver: io.grpc.stub.StreamObserver<pocketagent.v1.TurnServerMessage>
+    val requestObserver = FakeRequestObserver<TurnClientMessage>()
+
+    override fun startTurn(
+        responseObserver: io.grpc.stub.StreamObserver<pocketagent.v1.TurnServerMessage>,
+    ): io.grpc.stub.StreamObserver<TurnClientMessage> {
+        startCalls += 1
+        if (startTurnDelayMs > 0) Thread.sleep(startTurnDelayMs)
+        this.responseObserver = responseObserver
+        return requestObserver
+    }
+}
+
+/** 假 Attach stub（B4d 的 [BridgeTerminalStreamService]）：同 [TurnStreamFakeStub]。 */
+internal class TerminalStreamFakeStub : BridgeTerminalStreamService {
+    var attachCalls = 0
+    lateinit var responseObserver: io.grpc.stub.StreamObserver<pocketagent.v1.TerminalServerMessage>
+    val requestObserver = FakeRequestObserver<TerminalClientMessage>()
+
+    override fun attach(
+        responseObserver: io.grpc.stub.StreamObserver<pocketagent.v1.TerminalServerMessage>,
+    ): io.grpc.stub.StreamObserver<TerminalClientMessage> {
+        attachCalls += 1
+        this.responseObserver = responseObserver
+        return requestObserver
+    }
+}
+
+/**
+ * 可编程的请求 observer：留痕 onNext 收到的帧 + 可摆 onNext 失败 + 记录 cancel。
+ *
+ * 【为什么实现 ClientCallStreamObserver】B4d 的 `TurnStreamSession.cancel()` 摘流时
+ * 调的是 `(requestObserver as? ClientCallStreamObserver<*>)?.cancel(...)`——不实现
+ * 这个抽象类，摘流路径（turnStreamCancel / terminalClose）就只是取消协程而没取消
+ * gRPC 流（泄漏）。实现后「摘流真的取消了 gRPC 调用」可被断言。
+ *
+ * 【为什么要可摆失败】`turnStreamSend` 的 `observer.onNext` 真会抛（流已断/
+ * cancelled），桥必须经 `rpc{}` 收口成契约码——这条路径只有真抛一次才测得出来。
+ *
+ * 【流控方法为什么全部空转】本 fake 只被单线程驱动（测试线程 → 桥 → observer），
+ * 没有真实传输层的背压/就绪语义；`isReady` 恒 true + 其余 no-op 是最小可信集。
+ */
+internal class FakeRequestObserver<T> : io.grpc.stub.ClientCallStreamObserver<T>() {
+    val seen = ArrayList<T>()
+    var failOnNext: Throwable? = null
+    var cancelled = false
+
+    override fun onNext(value: T) {
+        failOnNext?.let { throw it }
+        seen.add(value)
+    }
+
+    override fun onError(t: Throwable) = Unit
+
+    override fun onCompleted() = Unit
+
+    override fun cancel(message: String?, cause: Throwable?) {
+        cancelled = true
+    }
+
+    override fun isReady(): Boolean = true
+
+    override fun setOnReadyHandler(handler: Runnable?): Unit = Unit
+
+    override fun disableAutoInboundFlowControl(): Unit = Unit
+
+    override fun request(count: Int) = Unit
+
+    override fun setMessageCompression(enable: Boolean): Unit = Unit
 }

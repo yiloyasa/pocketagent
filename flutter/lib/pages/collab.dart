@@ -47,6 +47,7 @@ import '../theme/typography.dart';
 import '../transport/pa_bridge.dart';
 import 'collab_bridge.dart';
 import 'collab_session_data.dart';
+import 'pa_page_kit.dart';
 
 /// 协同主面板。
 ///
@@ -76,16 +77,29 @@ class CollabPage extends StatefulWidget {
 }
 
 /// 会话列表三态：加载中 / 加载失败 / 已就绪（就绪后再分「空列表」与「有会话」）。
-enum _SessionsPhase { loading, error, ready }
+///
+/// 与 threads/collab_roles/settings_* 各页的同名同义同序枚举收敛为
+/// pa_page_kit.dart 的共享词汇 [PaAsyncPhase]（typedef 零运行时开销、零渲染，
+/// 改名不碰像素；本页 switch/if 比较照旧）。
+typedef _SessionsPhase = PaAsyncPhase;
 
 /// 会话详情三态（与列表分开：列表读到了不代表详情读到了）。
+///
+/// 【为什么不并入 [PaAsyncPhase]】本枚举多一个 [idle] 初态（未选中会话时整个
+/// 详情区收起，见 `_buildDetailSection` 的首行判断）——四态与共享词汇的三态
+/// 不同型，硬并要么给 PaAsyncPhase 加一个没人用的 idle，要么把 idle 塞进
+/// loading（那会让「没选中」和「正在拉」在 UI 上分不开）。保留独立枚举。
 enum _DetailPhase { idle, loading, error, ready }
 
 /// 策略区三态（与上面两个都分开：策略读失败不影响会话呈现）。
-enum _PolicyPhase { loading, error, ready }
+typedef _PolicyPhase = PaAsyncPhase;
 
 /// 角色区三态（进页 load()；失败不阻塞派发区——角色只是可选项）。
-enum _RolesPhase { loading, error, ready }
+///
+/// 【与 collab_roles.dart 的 _RolesPhase 是同一个 typedef】两边都指向
+/// [PaAsyncPhase]，各自文件内私有、互不可见，但值域同源——将来若有一处要加
+/// 第四态，两处会同时被 analyze 的穷尽匹配抓到，不会只改一处。
+typedef _RolesPhase = PaAsyncPhase;
 
 /// 待确认的写操作（确认流的唯一状态：弹层开着的时候只有一个待确认项）。
 class _PendingWrite {

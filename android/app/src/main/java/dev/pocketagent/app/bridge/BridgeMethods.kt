@@ -1,6 +1,9 @@
 package dev.pocketagent.app.bridge
 
+import io.flutter.plugin.common.BinaryMessenger
 import io.grpc.StatusRuntimeException
+import io.grpc.stub.ClientCallStreamObserver
+import io.grpc.stub.StreamObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +31,8 @@ import pocketagent.v1.ListThreadsRequest
 import pocketagent.v1.ReadFileRequest
 import pocketagent.v1.RetryCollabMemberRequest
 import pocketagent.v1.SetCollabRoleRequest
+import pocketagent.v1.TerminalClientMessage
+import pocketagent.v1.TurnClientMessage
 
 /**
  * `dev.pocketagent/bridge` 方法面处理器：method → gRPC 派发 + proto 编解码 + 错误码映射。
@@ -48,11 +53,27 @@ import pocketagent.v1.SetCollabRoleRequest
  * 【线程纪律】gRPC blocking stub 不许上平台线程：handler 里 `launch` +
  * `withContext(Dispatchers.IO)`（见 [handle]）。StateFlow 取值是内存读，无需切线程。
  *
+ * 【双向流六方法（turnStreamStart/Send/Cancel + terminalAttach/Write）】
+ * 建流/摘流走 B4d 的 `BridgeEventChannels` 预留 machinery（startTurnStream 等），
+ * 本文件只负责：入参解析（Map/字节/null 三形态）→ 取 stub 与 sink → 调 machinery →
+ * 错误码收口。**sink 与 stub 的获取经 [BridgeStreamWiring] seam 注入**：B4d 的
+ * `turnHandler.onListen` 才持有 Flutter 框架传来的那个 sink，且它不对外暴露；
+ * 由装配侧（installEventChannels 的调用方）把实例接进来。未注入时六方法如实回
+ * HOST_UNAVAILABLE 并点名缺什么（不建「建了流却收不到帧」的假流）。
+ *
  * 【未实现的方法】如实回 HOST_UNAVAILABLE + 注释留后（红线：不伪造返回）。
  */
 class BridgeMethods(
     private val messenger: BridgeBinaryMessenger,
     private val connection: BridgeConnection,
+    /**
+     * 双向流六方法的装配 seam（turn/terminal 的 stub 取数 + sink 来源）。
+     *
+     * null = 未装配：六方法如实回 HOST_UNAVAILABLE 点名缺什么。生产由
+     * `installEventChannels` 的调用方经 [BridgeStreamWiring] 接进来；测试注入
+     * fake 驱动真 machinery。
+     */
+    private val streams: BridgeStreamWiring? = null,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     init {
@@ -263,12 +284,23 @@ class BridgeMethods(
 
                 "terminalClose" -> {
                     val args = stringMap(method, call.arguments, "terminalId")
-                    rpc(method) {
-                        connection.terminalService().closeTerminal(
-                            CloseTerminalRequest.newBuilder()
-                                .setSessionId(args.getValue("terminalId"))
-                                .build(),
-                        )
+                    // 同时摘掉宿主侧的 Attach 双向流：unary CloseTerminal 只让 daemon
+                    // 关 PTY，本地那条 bidi 流不摘就会继续往 Dart 推帧（订阅方可能
+                    // 已取消订阅 → sink 指向已死的 messenger）。防泄漏 + 不推幽灵帧。
+                    //
+                    // 【为什么在 finally】unary 失败（daemon 不可达/已关）时本地那条
+                    // 流**更需要**摘——daemon 明明已经回应不了，本地还挂着它推帧就是
+                    // 幽灵帧源。故报错照旧报，摘流照旧摘，两者不互相取消。
+                    try {
+                        rpc(method) {
+                            connection.terminalService().closeTerminal(
+                                CloseTerminalRequest.newBuilder()
+                                    .setSessionId(args.getValue("terminalId"))
+                                    .build(),
+                            )
+                        }
+                    } finally {
+                        streams?.cancelTerminalStream()
                     }
                     null
                 }
@@ -309,25 +341,109 @@ class BridgeMethods(
                     rpc(method) { connection.threadService().listSlashCommands(req) }.toByteArray()
                 }
 
-                // ── 契约内、本波不实现（如实缺席，不伪造返回）────────────────
+                // ── 双向流：turn 三条（§3.25~§3.27）──────────────────────
                 //
-                // startTurn / turnStreamStart / turnStreamSend / turnStreamCancel /
-                // terminalAttach / terminalWrite 全部依赖**双向流的生命周期管理**，
-                // 而过程帧的消费面在事件通道（`bridge/turn_events`、
-                // `bridge/terminal_events`，B4 事件面子任务）。本波只建流不收帧 =
-                // 用户发了指令却永远看不到增量/审批/退出帧 —— 那是比"通道未就绪"
-                // 更糟的假象（看起来连着，其实瞎了）。故整族留后，页面走
-                // HOST_UNAVAILABLE 诚实占位（"轮次通道未就绪（B4 波次）"）。
+                // 时序（Dart chat_session.dart：_subscribe() 先订阅 turn_events，
+                // 再 turnStreamStart → turnStreamSend 首帧）：sink 由 B4d 的
+                // turnHandler.onListen 持有并经 [BridgeStreamWiring] 交进来；
+                // stub 由 seam 取（AgentConnection.threadServiceAsync()）。
+                // 任一项缺失即 HOST_UNAVAILABLE 点名——不建收不到帧的假流。
 
-                "startTurn", "turnStreamStart", "turnStreamSend", "turnStreamCancel",
-                "terminalAttach", "terminalWrite" ->
+                "turnStreamStart" -> {
+                    // §3.25：{'threadId': String} → null（建流受理，首帧另发）。
+                    val args = stringMap(method, call.arguments, "threadId")
+                    val wiring = streams ?: throw streamsNotWired(method, "turn")
+                    val sink = wiring.turnSink()
+                        ?: throw BridgePlatformException(
+                            BridgeErrorCodes.HOST_UNAVAILABLE,
+                            "$method 无法建流：Dart 尚未订阅 bridge/turn_events（sink 不在）。" +
+                                "订阅时序见 chat_session.dart 的 _subscribe() —— 先订阅再建流。",
+                        )
+                    wiring.startTurnStream(args.getValue("threadId"), sink)
+                    // 等请求 observer 就绪再回「受理」：Dart 紧随其后的
+                    // turnStreamSend(首帧) 要有落点，否则首帧会打到空 observer 上
+                    // （假错误）。B4d 的会话协程跑在它自己的 IO scope 上。
+                    wiring.awaitTurnRequestObserver(STREAM_READY_TIMEOUT_MS)
+                    null
+                }
+
+                "turnStreamSend" -> {
+                    // §3.26：TurnClientMessage wire 字节 → null。
+                    // 字节由 Dart 按 proto 封（input/supplement/approval/cancel
+                    // 四形态统一入口），宿主只验形透传，不拆 oneof。
+                    val req = parseProto(method, call.arguments) { TurnClientMessage.parseFrom(it) }
+                    val observer = streams?.turnRequestObserver()
+                        ?: throw BridgePlatformException(
+                            BridgeErrorCodes.HOST_UNAVAILABLE,
+                            "$method 无处可发：宿主侧没有已建的 StartTurn 流（未 turnStreamStart，" +
+                                "或流已摘/建流失败）。这是调用时序问题，不是连接问题。",
+                        )
+                    // observer.onNext 可能抛（流已断/cancelled）——按 gRPC 失败收口，
+                    // 不裸抛到 Flutter 侧。
+                    rpc(method) { observer.onNext(req) }
+                    null
+                }
+
+                "turnStreamCancel" -> {
+                    // §3.27：null → null。只摘宿主侧流资源，不发 cancel 帧
+                    // （ Dart 侧显式取消走 turnStreamSend(cancel 帧)，见 chat_session.cancel()）。
+                    expectNull(method, call.arguments)
+                    streams?.cancelTurnStream()
+                    null
+                }
+
+                // ── 双向流：terminal 三条（§3.22~§3.24）───────────────────
+                //
+                // 时序（Dart terminal_data.dart 的 open()：先 _dropSubscription +
+                // 订阅 terminal_events，再 terminalAttach → terminalWrite(open 帧)）。
+
+                "terminalAttach" -> {
+                    // §3.22：{'terminalId': String} → null（订阅受理）。
+                    val args = stringMap(method, call.arguments, "terminalId")
+                    val wiring = streams ?: throw streamsNotWired(method, "terminal")
+                    val sink = wiring.terminalSink()
+                        ?: throw BridgePlatformException(
+                            BridgeErrorCodes.HOST_UNAVAILABLE,
+                            "$method 无法建流：Dart 尚未订阅 bridge/terminal_events（sink 不在）。" +
+                                "订阅时序见 terminal_data.dart 的 open() —— 先订阅再 attach。",
+                        )
+                    wiring.startTerminalStream(args.getValue("terminalId"), sink)
+                    // 等请求 observer 就绪再回「受理」：Dart 紧随其后的
+                    // terminalWrite(open 帧) 要有落点（terminal_data.dart:377-386）。
+                    wiring.awaitTerminalRequestObserver(STREAM_READY_TIMEOUT_MS)
+                    null
+                }
+
+                "terminalWrite" -> {
+                    // §3.23：TerminalClientMessage wire 字节 → null。
+                    val req = parseProto(method, call.arguments) { TerminalClientMessage.parseFrom(it) }
+                    val observer = streams?.terminalRequestObserver()
+                        ?: throw BridgePlatformException(
+                            BridgeErrorCodes.HOST_UNAVAILABLE,
+                            "$method 无处可发：宿主侧没有已建的 Attach 流（未 terminalAttach，" +
+                                "或流已摘/建流失败）。这是调用时序问题，不是连接问题。",
+                        )
+                    rpc(method) { observer.onNext(req) }
+                    null
+                }
+
+                "startTurn" ->
+                    // §3.6 unary 首帧方法：Dart 的 PaBridge.startTurn 仍在用
+                    // （pa_bridge.dart:373），但它只发首帧、无消费面，与双向流
+                    // 六方法是两套入口。本波只接双向流六条；unary 首帧的"发了
+                    // 首帧却看不到过程帧"比不接更糟（假象），继续诚实缺席。
                     throw BridgePlatformException(
                         BridgeErrorCodes.HOST_UNAVAILABLE,
-                        "方法 $method 本波未实现：双向流的建流/发帧面已就绪，但过程帧" +
-                            "消费面（EventChannel bridge/turn_events、bridge/terminal_events）" +
-                            "尚未接线；为避免'建了流却收不到任何帧'的假象，整族留待事件面" +
-                            "一波实现（B4 后续）",
+                        "方法 startTurn 本波未实现：它是无消费面的 unary 首帧入口，" +
+                            "轮次的完整形态是双向流（turnStreamStart/Send/Cancel，" +
+                            "见 chat_session.dart）；为避免'发了首帧却看不到任何过程帧'的" +
+                            "假象，unary 入口继续留待双向流面稳定后一并取舍",
                     )
+
+                // ── 契约内、本波不实现（如实缺席，不伪造返回）────────────────
+                //
+                // terminalClose 已实现（见上「终端」节：Map → CloseTerminal
+                // unary RPC）。双向流六条已接（见上）。此处仅剩未知方法名。
 
                 // 双端同版政策：未知方法名只能是契约漂移（一端改了另一端没改）。
                 else -> throw BridgePlatformException(
@@ -436,5 +552,409 @@ class BridgeMethods(
         )
 
     /** 生产装配入口（[install] 的接收者）；真 Flutter 侧适配见 BridgeFlutterWiring.kt。 */
+    companion object {
+        /**
+         * 等双向流请求 observer 就绪的上界（毫秒）。
+         *
+         * 【为什么是 5s】B4d 的会话协程跑在 IO 上，正常一次线程跳转就到了；5s 覆盖
+         * daemon 半死态下 `stub.startTurn` 的挂住，同时不让方法调用无限期占着 IO。
+         * 超时走结构化 HOST_UNAVAILABLE（见 [BridgeEventChannelsWiring.awaitObserver]）。
+         */
+        internal const val STREAM_READY_TIMEOUT_MS: Long = 5_000
+    }
+}
+
+/**
+ * 双向流六方法（turnStreamStart/Send/Cancel + terminalAttach/Write/Close）的
+ * 装配 seam：stub 取数 + sink 来源 + 请求 observer 出口。
+ *
+ * 【为什么需要这一层，而不是 BridgeMethods 直接调 BridgeEventChannels】
+ *  B4d 的 `BridgeEventChannels` 把三件关键东西都收在私有字段里：
+ *   - **sink**：`turnHandler.onListen(arguments, events)` 收到的那个 Flutter
+ *     `EventSink`——框架传入、只活在 handler 里，且 B4d 不对外暴露；
+ *   - **请求 observer**：`TurnStreamSession` 协程里 `stub.startTurn(observer)`
+ *     的返回值，同样私有；
+ *   - **建流/摘流**：`startTurnStream` / `cancelTurnStream` 是 `internal`
+ *     （同模块可调，但拿不到实例）。
+ *  `BridgeMethods` 的构造只收到 `BridgeBinaryMessenger`（方法面注册面），拿不到
+ * 事件面的 `BridgeEventMessenger`，也没有 `BridgeEventChannels` 实例。故收成
+ * 可注入 seam：装配侧（installEventChannels 的调用方）实现它并接进来。
+ *
+ * 【为什么不改 B4d 加 getter】B4d 是已落盘成品（只读纪律）。且加了 getter 也
+ * 只解决一半：`BridgeMethods` 仍需一个 `BridgeEventChannels` 实例才能调
+ * machinery —— 那个实例的创建点在装配侧（`installEventChannels`），本来就得
+ * 经一道注入。seam 把「取 sink / 取 stub / 取 observer / 建摘流」四件事一次
+ * 收口，装配侧只需一行 `BridgeStreamWiring.from(channels, stubs, feeder)`。
+ *
+ * 【为什么是 public 接口】它是 [BridgeMethods] 公开构造器的形参类型（生产装配点
+ * 在另一个包：`dev.pocketagent.app.flutterhost`），Kotlin 不允许 public 签名露出
+ * internal 类型。实现类 [BridgeEventChannelsWiring] 仍是 internal（只有桥内部与
+ * 测试用得到）。
+ */
+interface BridgeStreamWiring {
+    /** 当前 turn 事件面的 sink（Dart 已订阅 bridge/turn_events）；null = 未订阅。 */
+    fun turnSink(): BridgeEventSink?
+
+    /** 当前 terminal 事件面的 sink；null = 未订阅。 */
+    fun terminalSink(): BridgeEventSink?
+
+    /** 为 [threadId] 建 StartTurn 双向流（内部调 B4d 的 startTurnStream）。 */
+    fun startTurnStream(threadId: String, sink: BridgeEventSink)
+
+    /** 摘掉当前 turn 流。 */
+    fun cancelTurnStream()
+
+    /** 为 [terminalId] 建 Attach 双向流。 */
+    fun startTerminalStream(terminalId: String, sink: BridgeEventSink)
+
+    /** 摘掉当前 terminal 流。 */
+    fun cancelTerminalStream()
+
+    /** StartTurn 的请求侧 observer（turnStreamSend 的发帧落点）；null = 无流。 */
+    fun turnRequestObserver(): StreamObserver<TurnClientMessage>?
+
+    /** Attach 的请求侧 observer（terminalWrite 的发帧落点）；null = 无流。 */
+    fun terminalRequestObserver(): StreamObserver<TerminalClientMessage>?
+
+    /**
+     * 等 StartTurn 的请求 observer 就绪（有界，见 [BridgeEventChannelsWiring] 的
+     * 「为什么必须等」）。建流方法返回前调用，保证紧随的首帧有落点。
+     */
+    fun awaitTurnRequestObserver(timeoutMs: Long)
+
+    /** 等 Attach 的请求 observer 就绪（同上）。 */
+    fun awaitTerminalRequestObserver(timeoutMs: Long)
+}
+
+/**
+ * [BridgeStreamWiring] 的生产/测试通用实现：把 `BridgeEventChannels` 实例、
+ * daemon async stub、Dart 订阅时收到的 sink 三者接起来。
+ *
+ * 【请求 observer 为什么拿得到】B4d 的 `startTurnStream(threadId, stub, sink)`
+ * 的 `stub` 形参由**调用方**提供（[BridgeThreadStreamService] 是接口，可假
+ * 实现），其协程内部 `stub.startTurn(responseObserver)` 的返回值就是请求
+ * observer。本类传入记录型装饰器 [RecordingThreadStreamStub]：真 stub 被调，
+ * 返回值被留在这里，`turnRequestObserver()` 即可取到——**不改 B4d 一行**。
+ *
+ * 【生产 stubs 从哪来】`AgentConnection.threadServiceAsync()` /
+ * `terminalServiceAsync()`（B4b 已有的 async stub 取数面）。由装配侧包成
+ * [BridgeThreadStreamService] / [BridgeTerminalStreamService] 传进来——与
+ * `AgentConnectionBridge` 同纪律（薄包转发，不引入第二份 RPC 实现）。
+ */
+internal class BridgeEventChannelsWiring(
+    private val channels: BridgeEventChannels,
+    threadStub: BridgeThreadStreamService,
+    terminalStub: BridgeTerminalStreamService,
+    private val sinkFeeder: StreamSinkFeeder,
+) : BridgeStreamWiring {
+
+    private val turnStub = RecordingThreadStreamStub(threadStub)
+    private val terminalStubRecording = RecordingTerminalStreamStub(terminalStub)
+
+    override fun turnSink(): BridgeEventSink? = sinkFeeder.turnSink()
+    override fun terminalSink(): BridgeEventSink? = sinkFeeder.terminalSink()
+
+    override fun startTurnStream(threadId: String, sink: BridgeEventSink) {
+        channels.startTurnStream(threadId, turnStub, sink)
+    }
+
+    override fun cancelTurnStream() {
+        // 先摘 B4d 的会话（它会 cancel 掉 gRPC 流），再清本地 observer 引用：
+        // 顺序反了会让「已摘的流」仍能被 turnStreamSend 打到。
+        channels.cancelTurnStream()
+        turnStub.requestObserver = null
+    }
+
+    override fun startTerminalStream(terminalId: String, sink: BridgeEventSink) {
+        channels.startTerminalStream(terminalId, terminalStubRecording, sink)
+    }
+
+    override fun cancelTerminalStream() {
+        channels.cancelTerminalStream()
+        terminalStubRecording.requestObserver = null
+    }
+
+    override fun turnRequestObserver(): StreamObserver<TurnClientMessage>? =
+        turnStub.requestObserver
+
+    override fun terminalRequestObserver(): StreamObserver<TerminalClientMessage>? =
+        terminalStubRecording.requestObserver
+
+    /**
+     * 等 B4d 的会话协程把 StartTurn 的请求 observer 交出来（有界）。
+     *
+     * 【为什么必须等】Dart 的时序是 `await turnStreamStart(...)` 紧接
+     * `await turnStreamSend(首帧)`（chat_session.dart:152-153）。而 B4d 的
+     * `TurnStreamSession` 是在自己的 IO scope 里 `launch` 后调
+     * `stub.startTurn(...)`——建流方法返回时那个协程未必已跑到。不等待就回
+     * 「受理」，紧随的首帧会打到空 observer 上（"无处可发"的假错误）。
+     *
+     * 【为什么有界】`stub.startTurn` 理论上可挂住（daemon 半死态）；无界等待会
+     * 把方法调用挂在 IO 线程上。超时即抛结构化错误，由 Dart 侧的错误分支处置。
+     */
+    override fun awaitTurnRequestObserver(timeoutMs: Long) {
+        awaitObserver({ turnStub.ready() }, timeoutMs, "turnStreamStart")
+    }
+
+    override fun awaitTerminalRequestObserver(timeoutMs: Long) {
+        awaitObserver({ terminalStubRecording.ready() }, timeoutMs, "terminalAttach")
+    }
+
+    /**
+     * 轮询等 observer 就绪。
+     *
+     * 【为什么睡而不是 yield】调用线程是 `Dispatchers.IO`（dispatch 的
+     * withContext），`Thread.yield()` 不承诺让**另一个** IO 线程的协程前进。
+     */
+    private fun awaitObserver(ready: () -> Boolean, timeoutMs: Long, what: String) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!ready()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw BridgePlatformException(
+                    BridgeErrorCodes.HOST_UNAVAILABLE,
+                    "$what 的请求流未就绪：daemon 侧 ${timeoutMs}ms 内没有把流交出来" +
+                        "（通道未建/半死/daemon 无应答）。",
+                )
+            }
+            Thread.sleep(5)
+        }
+    }
+
     companion object
+}
+
+/** 记录型 StartTurn stub：转调真 stub，留痕返回的请求 observer。 */
+private class RecordingThreadStreamStub(
+    private val delegate: BridgeThreadStreamService,
+) : BridgeThreadStreamService {
+    @Volatile var requestObserver: StreamObserver<TurnClientMessage>? = null
+
+    /**
+     * observer 是否已就绪（B4d 的协程已调过 [startTurn]）。
+     *
+     * 【为什么要这个信号】建流方法返回时 B4d 的会话协程可能还没跑到
+     * `stub.startTurn`——方法面据此等待，保证紧随的首帧有落点。
+     */
+    fun ready(): Boolean = requestObserver != null
+
+    override fun startTurn(
+        responseObserver: StreamObserver<pocketagent.v1.TurnServerMessage>,
+    ): StreamObserver<TurnClientMessage> {
+        val observer = delegate.startTurn(responseObserver)
+        requestObserver = observer
+        return observer
+    }
+}
+
+/** 记录型 Attach stub：同上（terminal 侧）。 */
+private class RecordingTerminalStreamStub(
+    private val delegate: BridgeTerminalStreamService,
+) : BridgeTerminalStreamService {
+    @Volatile var requestObserver: StreamObserver<TerminalClientMessage>? = null
+
+    /** observer 是否已就绪（见 [RecordingThreadStreamStub.ready]）。 */
+    fun ready(): Boolean = requestObserver != null
+
+    override fun attach(
+        responseObserver: StreamObserver<pocketagent.v1.TerminalServerMessage>,
+    ): StreamObserver<TerminalClientMessage> {
+        val observer = delegate.attach(responseObserver)
+        requestObserver = observer
+        return observer
+    }
+}
+
+/**
+ * 「Dart 订阅时收到的 sink」的喂入面（[BridgeEventChannelsWiring] 的协作方）。
+ *
+ * 生产由装配侧实现：`installEventChannels` 建出 `BridgeEventChannels` 后，把
+ * `turnHandler.onListen(arguments, events)` 的 `events` 交到这里。B4d 的 handler
+ * 是私有匿名对象、没有出口，装配侧要观察 listen 动作只能经自己包的那层
+ * messenger——接线图与协调项登记见
+ * `docs/reviews/2026-10-16/b4g-bidi-methods.md`。
+ *
+ * 测试直接摆值（fake feeder）。
+ *
+ * 【为什么不是 fun interface】两个查询方法（turn/terminal）语义成对但返回不同类型
+ * 的 seam，合成一个 SAM 会逼其中一方返回 `Any?`——那是把类型安全换成 convenience。
+ */
+internal interface StreamSinkFeeder {
+    fun turnSink(): BridgeEventSink?
+    fun terminalSink(): BridgeEventSink?
+}
+
+/** [BridgeStreamWiring] 缺失时的统一错误（六方法共用：点名缺什么，不模糊）。 */
+private fun streamsNotWired(method: String, kind: String): BridgePlatformException =
+    BridgePlatformException(
+        BridgeErrorCodes.HOST_UNAVAILABLE,
+        "方法 $method 本波未接线：${kind}双向流的装配 seam（BridgeStreamWiring）" +
+            "未注入 BridgeMethods。建流需要两样东西——daemon 的 async stub 与" +
+            "Dart 订阅事件面时收到的 sink；后者只活在 B4d 的 handler 里，" +
+            "需由装配侧接进来（见 b4g-bidi-methods.md 协调项登记）",
+    )
+
+// ── 生产装配：BridgeStreamWiring 的一行接法 ────────────────────────────────
+
+/**
+ * 生产 stub：`AgentConnection.threadServiceAsync()` → [BridgeThreadStreamService]。
+ *
+ * 【为什么不走 BridgeConnection】B4b 的窄接口只覆盖 24 个已实现方法用到的
+ * blocking RPC；两个 async stub 是双向流才有的取数需求，而 BridgeConnection.kt
+ * 本波只读不改（文件清单纪律）。与 `AgentConnectionBridge` 同纪律：在此薄包
+ * 转发，不引入第二份 RPC 实现、不新增缓存。
+ *
+ * 【async stub 为什么不设 deadline】双向流按事件长期存活，整条流设 deadline
+ * 会把它定时杀死（AgentConnection.watchCollabSession 的同款注释）。断线退避
+ * 重订由 Dart 侧重订阅触发（契约 §4）。
+ */
+internal fun agentThreadStreamStub(): BridgeThreadStreamService =
+    object : BridgeThreadStreamService {
+        override fun startTurn(
+            responseObserver: StreamObserver<pocketagent.v1.TurnServerMessage>,
+        ): StreamObserver<TurnClientMessage> =
+            dev.pocketagent.app.AgentConnection.threadServiceAsync()
+                .startTurn(responseObserver)
+    }
+
+/** 生产 stub：`AgentConnection.terminalServiceAsync()` → [BridgeTerminalStreamService]。 */
+internal fun agentTerminalStreamStub(): BridgeTerminalStreamService =
+    object : BridgeTerminalStreamService {
+        override fun attach(
+            responseObserver: StreamObserver<pocketagent.v1.TerminalServerMessage>,
+        ): StreamObserver<TerminalClientMessage> =
+            dev.pocketagent.app.AgentConnection.terminalServiceAsync()
+                .attach(responseObserver)
+    }
+
+/**
+ * 观察「Dart 订阅 turn_events / terminal_events」的 messenger 装饰器。
+ *
+ * 【它解决什么】B4d 的 `turnHandler.onListen(arguments, events)` 是私有匿名
+ * 对象，装配侧拿不到那个 `events`（真 sink）。而 `BridgeEventChannels` 的
+ * handler 是经 `messenger.setStreamHandler(name, handler)` 注册的——装饰这层
+ * messenger 即可在注册时把 B4d 的 handler 包一层：Dart 订阅进来时，本装饰器
+ * 先收到 `onListen(arguments, events)`，把 `events` 记进 [feed]，再转调 B4d
+ * 的原 handler。**不改 B4d 一行**，sink 就交了出来的。
+ *
+ * 【为什么不两个都包】turn 与 terminal 两条通道的 handler 都要包（各记各的
+ * sink）；主事件面（bridge/events）不包（它与双向流无关，原样转发）。
+ *
+ * 【线程】onListen/onCancel 由 Flutter 框架在平台线程调用；[feed] 的写入用
+ * @Volatile + 同步块，读取在 IO 上跑（dispatch 里）——无锁竞争。
+ */
+internal class SinkObservingMessenger(
+    private val delegate: BridgeEventMessenger,
+    private val feed: MutableStreamSinkFeed,
+) : BridgeEventMessenger {
+    override fun setStreamHandler(channelName: String, handler: BridgeEventStreamHandler) {
+        val wrapped: BridgeEventStreamHandler = when (channelName) {
+            BRIDGE_TURN_EVENT_CHANNEL_NAME -> object : BridgeEventStreamHandler {
+                override fun onListen(arguments: Any?, events: BridgeEventSink) {
+                    feed.turnSink = events
+                    handler.onListen(arguments, events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    feed.turnSink = null
+                    handler.onCancel(arguments)
+                }
+            }
+
+            BRIDGE_TERMINAL_EVENT_CHANNEL_NAME -> object : BridgeEventStreamHandler {
+                override fun onListen(arguments: Any?, events: BridgeEventSink) {
+                    feed.terminalSink = events
+                    handler.onListen(arguments, events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    feed.terminalSink = null
+                    handler.onCancel(arguments)
+                }
+            }
+
+            else -> handler
+        }
+        delegate.setStreamHandler(channelName, wrapped)
+    }
+}
+
+/** [StreamSinkFeeder] 的可写实现（[SinkObservingMessenger] 写、wiring 读）。 */
+internal class MutableStreamSinkFeed : StreamSinkFeeder {
+    @Volatile var turnSink: BridgeEventSink? = null
+    @Volatile var terminalSink: BridgeEventSink? = null
+
+    override fun turnSink(): BridgeEventSink? = turnSink
+    override fun terminalSink(): BridgeEventSink? = terminalSink
+}
+
+/**
+ * 生产装配入口：把 `BridgeEventChannels` 实例接成 [BridgeStreamWiring]。
+ *
+ * ```
+ * val feed = MutableStreamSinkFeed()
+ * val channels = BridgeEventChannels(SinkObservingMessenger(inner, feed), sources, log)
+ * val wiring = BridgeEventChannelsWiring(
+ *     channels, agentThreadStreamStub(), agentTerminalStreamStub(), feed,
+ * )
+ * BridgeMethods(FlutterBinaryMessengerAdapter(messenger), connection, wiring)
+ * ```
+ *
+ * 【为什么装配侧要包 messenger】见 [SinkObservingMessenger]：B4d 的 handler 私有，
+ * sink 只能在这一层观察。`installEventChannels` 目前自己建
+ * `FlutterEventMessengerAdapter`，故这一步要由它的调用方（flutterhost 的
+ * installChannelShell）做——**协调项登记**见
+ * `docs/reviews/2026-10-16/b4g-bidi-methods.md`。
+ */
+
+/**
+ * 生产装配入口：方法面 + 事件面 + 双向流 wiring 三件套一次装好（B4g 协调项 C1 的落点）。
+ *
+ * 【为什么需要它】[BridgeEventChannelsWiring] 与内部版 [installEventChannels] 都是
+ * internal（只 bridge 包内可见），而调用方 `dev.pocketagent.app.flutterhost` 在另一
+ * 个包——装配逻辑（internal 件的组合）必须留在本包，对外只露这一个 public 函数。
+ * B4g 报告把这称为「协调项 C1：需装配侧落地」；本函数即其落地。
+ *
+ * 【装配顺序（鸡生蛋的解法）】wiring 持 channels（startTurnStream 要调它的
+ * machinery），methods 持 wiring（六方法的 dispatch 要经它）——顺序只能是
+ * channels → wiring → methods。故不用封装版 [installEventChannels]（它内部
+ * 自建 channels 并返回，wiring 无从插入），直接用 internal 两段版先建 channels，
+ * 再建 wiring，最后建 methods。
+ *
+ * 【三件套的共享纪律】方法面与事件面**共享同一个 connection 实例**：B4f 的
+ * host_info 帧只能来自「经本实例的 updateHostInfo 成功路径」
+ * （[EventFeedingConnection] 装饰），两个连接各走各的话 host_info 帧将永远静默。
+ * 调用方（flutterhost）传进来的 connection 会被原样用于两路，本函数不另建。
+ *
+ * 【sink 从哪来】[SinkObservingMessenger] 装饰事件面的 messenger：Dart 订阅
+ * turn_events / terminal_events 时，onListen 收到的真 sink 记进 [MutableStreamSinkFeed]，
+ * wiring 经它取——不改 B4d 一行（其 handler 私有，见 B4g 报告 §核心设计）。
+ *
+ * @return 装配出的 [BridgeEventChannels]（调用方持有供 shutdown 时停协程防泄漏）。
+ */
+fun installBridge(
+    messenger: BinaryMessenger,
+    connection: BridgeConnection = AgentConnectionBridge(),
+    log: BridgeLog = AndroidLog,
+): BridgeEventChannels {
+    // ① 事件面 channels（internal 两段版：messenger seam + sources）
+    val sources: BridgeEventSources = when (connection) {
+        is BridgeEventSources -> connection
+        else -> AgentEventSources(connection)
+    }
+    val feed = MutableStreamSinkFeed()
+    val channels = BridgeEventChannels(
+        SinkObservingMessenger(FlutterEventMessengerAdapter(messenger), feed),
+        sources,
+        log,
+    )
+    // ② 双向流 wiring（持 channels 与两个生产 async stub）
+    val wiring = BridgeEventChannelsWiring(
+        channels = channels,
+        threadStub = agentThreadStreamStub(),
+        terminalStub = agentTerminalStreamStub(),
+        sinkFeeder = feed,
+    )
+    // ③ 方法面（持 wiring：六条双向流方法的 dispatch 经它走真 gRPC）
+    BridgeMethods(FlutterBinaryMessengerAdapter(messenger), connection, wiring)
+    return channels
 }

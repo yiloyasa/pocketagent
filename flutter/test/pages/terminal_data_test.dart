@@ -204,10 +204,26 @@ void main() {
       const PaBridgeException e = PaBridgeException(
           PaBridgeErrorCodes.hostUnavailable, 'no host');
 
-      expect(terminalLoadErrorText(e),
-          allOf(contains('桌面端终端通道未就绪'), contains('B4 波次')));
-      expect(terminalAttachErrorText(e),
-          allOf(contains('桌面端终端通道未就绪'), contains('B4 波次')));
+      // 【H5 收敛后收紧为全串相等】原断言是 contains 两条（只钉「点名」与
+      // 「B4 波次」两个片段）。本批把六个页面 8 个同型函数收进
+      // pa_page_kit.dart 的 [paChannelErrorText] 后，返回值由「页面自己的
+      // 字面量拼接」变成「共享函数 + 两参数」——contains 断言不足以证明
+      // 拼接结果逐字节未变（前缀、通道名、收尾句任何一处漂移都能过），
+      // 故收紧为全串 expect。收敛前的完整串由 git show 取回原实现比对。
+      expect(
+        terminalLoadErrorText(e),
+        '桌面端终端通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
+            '终端会话列表暂不可用。',
+      );
+      expect(
+        terminalAttachErrorText(e),
+        // 【原实现没有中段】attach 路径的原文是「…（B4 波次）：终端连接暂不可用。」
+        // ——**不含**「Kotlin 宿主尚未注册 bridge 通道，」中段（列表路径才有）。
+        // 这正是本族「同型不同词」的一处真实差异：中段的有无由调用点决定，
+        // 共享函数只负责「首段 + tail」的拼接，中段在 tail 里由页面自带。
+        // 故此处 expect 按原实现的完整串钉死。
+        '桌面端终端通道未就绪（B4 波次）：终端连接暂不可用。',
+      );
     });
 
     test('其余码 message 原样透传；空 message 退 code', () {

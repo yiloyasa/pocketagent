@@ -379,7 +379,11 @@ void main() {
         throwsA(isA<ChatHistoryLoadFailure>().having(
             (ChatHistoryLoadFailure e) => e.message,
             'message',
-            allOf(contains('未就绪'), contains('B4 波次')))),
+            // 【H5 收敛后收紧为全串相等】chatHistoryErrorText 的返回值改由
+            // pa_page_kit.dart 的 [paChannelErrorText] 拼装，contains 不足以
+            // 证明「前缀 + 通道名 + 收尾句」三段拼接逐字节未变。
+            '桌面端会话历史通道未就绪（B4 波次）：Kotlin 宿主尚未注册 bridge 通道，'
+                '会话历史暂不可用。')),
         reason: '宿主没就绪必须走错误路径——返回空响应就是把错误粉饰成「没有历史」',
       );
       final GetThreadHistoryRequest wire =
