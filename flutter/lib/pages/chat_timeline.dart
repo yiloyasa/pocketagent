@@ -289,7 +289,7 @@ class ChatTimelineAccumulator {
       case TurnServerMessage_Msg.completed:
         _flushThinking();
         final String body = _takeDraft();
-        final String finalText = _finalText(frame.completed.finalBlocks);
+        final String finalText = finalBlocksText(frame.completed.finalBlocks);
         if (body.isNotEmpty) {
           _tiles.add(ChatTile(kind: ChatTileKind.text, text: body, sequence: seq));
         } else if (finalText.isNotEmpty) {
@@ -434,14 +434,6 @@ class ChatTimelineAccumulator {
         return;
       }
     }
-  }
-
-  String _finalText(Iterable<ContentBlock> blocks) {
-    final StringBuffer sb = StringBuffer();
-    for (final ContentBlock b in blocks) {
-      if (b.hasText() && b.text.text.isNotEmpty) sb.write(b.text.text);
-    }
-    return sb.toString();
   }
 }
 
@@ -595,4 +587,20 @@ class ChatTimeline extends StatelessWidget {
       ),
     );
   }
+}
+
+
+/// `completed.final_blocks` 的正文拼接（纯函数）：只拼 text 块、跳过空块
+/// （与 Kotlin `finalText` 同口径）。
+///
+/// 【为什么是公开函数】`chat_session.dart`（会话状态机）与
+/// [ChatTimelineAccumulator]（投影层）原先各写了一份私有 `_finalText`，
+/// 收敛前已逐行比对证实 7 行字节一致。终局正文的拼接口径只留这一处，两处
+/// 都委托它 —— 断线兜底改口径时不会出现「一处改一处不改」。
+String finalBlocksText(Iterable<ContentBlock> blocks) {
+  final StringBuffer sb = StringBuffer();
+  for (final ContentBlock b in blocks) {
+    if (b.hasText() && b.text.text.isNotEmpty) sb.write(b.text.text);
+  }
+  return sb.toString();
 }

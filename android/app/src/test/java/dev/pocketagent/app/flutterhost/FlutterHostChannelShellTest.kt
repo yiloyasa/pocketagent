@@ -1,7 +1,7 @@
 package dev.pocketagent.app.flutterhost
 
+import dev.pocketagent.app.bridge.BridgeErrorCodes
 import io.flutter.plugin.common.BinaryMessenger
-import io.flutter.plugin.common.FlutterException
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMethodCodec
@@ -13,21 +13,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 通道壳的 JVM 单测:方法面一律 HOST_UNAVAILABLE、事件面静默。
+ * 通道壳的 JVM 单测：方法面已接真桥（B4c），事件面仍静默。
  *
  * 【为什么这段能在纯 JVM 跑】[FlutterHostEngine.installChannelShell] 的入参是
  * [BinaryMessenger](接口)而非 FlutterEngine(具体类),故本测试用 [FakeMessenger]
  * 驱动**真的** MethodChannel/EventChannel 编解码(StandardMethodCodec 是纯 Java,
  * 不碰原生库)。测的是壳的行为契约,不是引擎。
  *
+ * 【B4c 之后本文件测什么】方法面不再由壳自己回 HOST_UNAVAILABLE——壳调用
+ * `BridgeMethods.install(messenger, AgentConnectionBridge())`（B4b 成品），
+ * 因此「壳真换了」的判决证据在 `FlutterHostBridgeInstallTest`（契约外方法名仍
+ * HOST_UNAVAILABLE、契约内方法名走真 handler 链）。本文件退守壳**仍然负责**的
+ * 两件事：事件面静默、注册面（只注册 4 个通道、不挂通配、可重入）。
+ *
  * 【为什么值得单测而不是留给真机】这三件事的真机表现是「Dart 侧收到什么」,
  * 中间隔着 Dart 代码、引擎、平台线程;而它们全部由 Kotlin 侧几行决定:
- *  ① 方法面必须回 **error(HOST_UNAVAILABLE)**,不能 success(null)、不能
- *     notImplemented——后两者在 Dart 侧分别是「假成功」与「另一种
- *     HOST_UNAVAILABLE 路径」,语义不同(契约 §2.5);
- *  ② 事件面 listen/cancel 必须**不推流也不 error**,否则 Dart 的
+ *  ① 事件面 listen/cancel 必须**不推流也不 error**,否则 Dart 的
  *     receiveBroadcastStream 会以 FlutterError 冒泡,把「没流」伪装成「流坏了」;
- *  ③ 三个事件通道都要挂上——漏一个,Dart 侧那条流静默无源且无任何报错。
+ *  ② 三个事件通道都要挂上——漏一个,Dart 侧那条流静默无源且无任何报错;
+ *  ③ 未注册的通道名不得被顺手挂上(防壳「图省事」挂通配,把未接线面伪装成已接线)。
  * 这三条在 JVM 里全可判定,没有理由推到真机。
  */
 class FlutterHostChannelShellTest {
@@ -65,7 +69,30 @@ class FlutterHostChannelShellTest {
             return reply?.apply { flip() }
         }
 
-        /** 以 Dart 侧 EventChannel 订阅的等价物驱动('listen' / 'cancel')。 */
+        /**
+         * 驱动一次调用并把回包交给 [onReply](桥的 handle 是异步的,回包来自 IO 线程)。
+         *
+         * 【为什么需要这条】B4c 起方法面 handler 由桥注册,而桥的 handle 是
+         * `launch { … result.success/error(…) }`——同步 invoke 拿到的是 null
+         * (Result 还没被回调)。故这条把回包通过 BinaryReply 交出来,由调用方 latch 等。
+         */
+        fun invokeAsync(
+            channel: String,
+            method: String,
+            arguments: Any?,
+            onReply: (ByteBuffer) -> Unit,
+        ) {
+            val handler = handlers[channel] ?: error("通道未注册: $channel")
+            handler.onMessage(encoded(MethodCall(method, arguments))) { r ->
+                r?.let { onReply(it.apply { flip() }) }
+            }
+        }
+
+        /**
+         * 以 Dart 侧 EventChannel 订阅的等价物驱动('listen' / 'cancel')。
+         *
+         * 事件面是壳的静默 handler(同步 ACK),与桥的异步方法面不同,直接取回包。
+         */
         fun stream(channel: String, action: String, arguments: Any?): ByteBuffer? {
             val handler = handlers[channel] ?: return null
             var reply: ByteBuffer? = null
@@ -95,7 +122,7 @@ class FlutterHostChannelShellTest {
         val ex = try {
             StandardMethodCodec.INSTANCE.decodeEnvelope(nonNull)
             return error("decodeEnvelope 对 error envelope 应抛 FlutterException,却正常返回了: $nonNull")
-        } catch (e: FlutterException) {
+        } catch (e: io.flutter.plugin.common.FlutterException) {
             e
         }
         return Triple(ex.code, ex.message, ex.details)
@@ -105,71 +132,6 @@ class FlutterHostChannelShellTest {
     private fun assertNotNullAndReturn(value: ByteBuffer?): ByteBuffer {
         assertNotNull("必须应答(不答 = Dart 侧挂起)", value)
         return value!!
-    }
-
-    // ---------------- 方法面:一律 HOST_UNAVAILABLE ----------------
-
-    /**
-     * 任意 method（故意挑一个**契约里根本不存在**的名字）都必须回
-     * error(HOST_UNAVAILABLE),不得 success/notImplemented。
-     *
-     * 【为什么用不存在的方法名】壳不写死方法名单(红线),所以它的行为必须对
-     * 「任何字符串」一致。挑契约外的名字测,才能证明「没有暗藏名单」——
-     * 若壳里其实按名单分支,未知方法会走另一条路(通常 notImplemented)。
-     */
-    @Test
-    fun `any method name gets HOST_UNAVAILABLE error`() {
-        val messenger = FakeMessenger()
-        FlutterHostEngine.installChannelShell(messenger)
-
-        val reply = messenger.invoke(
-            FlutterHostEngine.BRIDGE_METHOD_CHANNEL,
-            "aMethodThatIsNotInTheContract",
-            null,
-        )
-        val parts = errorPartsOf(reply)
-        assertEquals("HOST_UNAVAILABLE", parts.first)
-        assertNotNull(parts.second)
-        // details 恒 null:壳没有可附的上下文(不编造)。
-        assertNull(parts.third)
-    }
-
-    /**
-     * 契约内的真实方法名同样回 HOST_UNAVAILABLE。
-     *
-     * 【为什么两个方法名分别测】上一条证明「未知方法不回退到 notImplemented」,
-     * 这一条证明「已知方法也不会被伪装成已实现」。两条合起来才覆盖
-     * 「一律占位」的两种可能漏洞。
-     */
-    @Test
-    fun `contract method names also get HOST_UNAVAILABLE error`() {
-        val messenger = FakeMessenger()
-        FlutterHostEngine.installChannelShell(messenger)
-
-        for (method in listOf("getHostInfo", "getConnectionState", "listThreads", "pairCode")) {
-            val reply = messenger.invoke(FlutterHostEngine.BRIDGE_METHOD_CHANNEL, method, ByteArray(0))
-            val parts = errorPartsOf(reply)
-            assertEquals("$method 必须回 HOST_UNAVAILABLE", "HOST_UNAVAILABLE", parts.first)
-        }
-    }
-
-    /**
-     * 错误 message 必须点名「本波未接线」+ 交接波次。
-     *
-     * 【为什么断言 message 内容而不是只断言 code】Dart 侧 UI 按 code 分支
-     * (重试/去配对/仅展示),但用户看到的字来自 message。message 说「未接线」
-     * 用户知道等下一波;message 说「连接失败」用户会去查网线——那是误导。
-     */
-    @Test
-    fun `host unavailable message names the batch and the handoff`() {
-        val messenger = FakeMessenger()
-        FlutterHostEngine.installChannelShell(messenger)
-
-        val reply = messenger.invoke(FlutterHostEngine.BRIDGE_METHOD_CHANNEL, "getHostInfo", null)
-        val parts = errorPartsOf(reply)
-        val message = parts.second
-        assertTrue("message 须说明本波未接线: $message", message!!.contains("未接线"))
-        assertTrue("message 须点名交接波次 B4b: $message", message.contains("B4b"))
     }
 
     // ---------------- 事件面:静默 ----------------
@@ -188,6 +150,10 @@ class FlutterHostChannelShellTest {
      * 由源码结构保证(壳不持有 sink 引用)。直接可断言的硬事实是:handler 在、
      * listen/cancel 不抛、ACK 不是 error envelope(回 error = Dart 侧
      * receiveBroadcastStream 报握手错)。
+     *
+     * 【B4c 之后这条为什么还在】方法面已接桥,事件面仍是静默壳(B4d 才接线)。
+     * 这条把「本波没顺手把事件面也接上/推假帧」钉住:壳若哪天提前推帧,
+     * 本测试与 FlutterHostBridgeInstallTest 的推流断言会一起失败。
      */
     @Test
     fun `all three event channels accept listen and cancel without pushing`() {
@@ -225,6 +191,10 @@ class FlutterHostChannelShellTest {
      *
      * 挂通配会让 Dart 侧任何 EventChannel 都「有 handler」,把未接线面伪装成
      * 已接线面——与「诚实缺席」直接冲突。
+     *
+     * 【B4c 之后这条为什么还在】方法面接了桥(注册 1 个方法通道),事件面三条
+     * 仍是壳自己挂的静默 handler;合起来 4 个,一个不多。这条同时钉住
+     * 「壳没有替 B4d 预挂别的通道名」。
      */
     @Test
     fun `shell does not register handlers on unrelated channels`() {
@@ -274,15 +244,69 @@ class FlutterHostChannelShellTest {
         val messenger = FakeMessenger()
         FlutterHostEngine.installChannelShell(messenger)
 
-        val methodReply = messenger.invoke(FlutterHostEngine.BRIDGE_METHOD_CHANNEL, "ping", null)
-        assertNotNull("方法通道必须应答", methodReply)
-
         // 未知 action:EventChannel 回 null(上面 KDoc 说明为什么这是「已注册」的证据)。
         val bogus = messenger.stream(FlutterHostEngine.BRIDGE_EVENT_CHANNEL, "notListenOrCancel", null)
         assertTrue(
             "EventChannel 对未知 action 应回 null 而非空 envelope(回空 envelope 说明" +
                 "handler 不是 EventChannel 自己的)",
             bogus == null,
+        )
+    }
+
+    /**
+     * 方法面应答由桥的 handler 给出,壳不再自己回 HOST_UNAVAILABLE。
+     *
+     * 【为什么这条在这里而不只在 FlutterHostBridgeInstallTest】那条测「桥真接了」
+     * (用 fake connection 走真 handler 链);这条从**壳的注册面**钉死同一件事:
+     * 注册进 MethodChannel 的 handler 回的错误码来自桥的契约码集合
+     * ([dev.pocketagent.app.bridge.BridgeErrorCodes]),而不是壳写死的字面量——
+     * B4a 时代壳回的消息是「本波(B4a)未接线」,那种措辞如今必须绝迹。
+     *
+     * 【为什么不断具体码值】壳内那一行用生产连接 [dev.pocketagent.app.bridge.
+     * AgentConnectionBridge],JVM 下 stub 取不到真通道(AgentConnection.channel()
+     * 碰 OkHttp/TLS),回的是桥的兜底码 INTERNAL——这是**环境**决定的,不是接线
+     * 对错的判据(故那条判决放在注入 fake connection 的 FlutterHostBridgeInstallTest
+     * 里)。这里只断言两件与具体码无关的事实:
+     *  ① 应答来自契约码表(七码之一,而非壳时代的 HOST_UNAVAILABLE);
+     *  ② 消息不再是壳时代的占位措辞「未接线 / B4a」。
+     */
+    @Test
+    fun `method face replies come from the bridge not from a shell placeholder`() {
+        val messenger = FakeMessenger()
+        FlutterHostEngine.installChannelShell(messenger)
+
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var reply: ByteBuffer? = null
+        messenger.invokeAsync(
+            FlutterHostEngine.BRIDGE_METHOD_CHANNEL,
+            "getHostInfo",
+            ByteArray(0),
+        ) { r ->
+            reply = r
+            latch.countDown()
+        }
+        assertTrue("桥必须在 5s 内回结果", latch.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+        val parts = errorPartsOf(reply)
+        val code = parts.first
+        assertTrue(
+            "方法面应答码必须出自契约 §5 七码表(桥的产物),实际: $code",
+            code in setOf(
+                "HOST_UNAVAILABLE", "DECODE_FAILED", "NOT_CONNECTED", "AUTH_REQUIRED",
+                "INVALID_ADDR", "PAIR_DISABLED", "INTERNAL",
+            ),
+        )
+        assertTrue("桥必须应答(error 形态),不得静默", code != null)
+        // 壳时代的占位消息(「本波(B4a)未接线」)必须绝迹。
+        val message = parts.second
+        assertTrue("桥的人话 message 须非空: $message", !message.isNullOrBlank())
+        assertTrue(
+            "不得再出现壳时代的占位措辞「未接线」: $message",
+            !message!!.contains("未接线"),
+        )
+        assertTrue(
+            "不得再出现壳时代的波次署名「B4a」: $message",
+            !message.contains("B4a"),
         )
     }
 }

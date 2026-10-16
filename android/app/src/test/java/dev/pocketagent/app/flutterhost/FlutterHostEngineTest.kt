@@ -143,10 +143,37 @@ class FlutterHostEngineTest {
      *
      * Dart 侧 `PaBridgeErrorCodes.HOST_UNAVAILABLE` 判的就是这个字符串;
      * 改一个字符,UI 的分支(「重试」vs「仅展示」)会静默走错支。
+     *
+     * 【B4c 之后这条为什么还在】方法面的错误码已全部由桥产出(见
+     * FlutterHostBridgeInstallTest),本常量在本包已无生产调用点;这条与 bridge 包的
+     * `BridgeErrorCodes.HOST_UNAVAILABLE` 互为镜像,钉的是「同包锚点没漂移」——
+     * B4d 若要在事件面发错误码,写的就是这个字符串。
      */
     @Test
     fun `host unavailable code matches the contract literal`() {
         assertEquals("HOST_UNAVAILABLE", FlutterHostEngine.HOST_UNAVAILABLE)
+        assertEquals(
+            "flutterhost 的 HOST_UNAVAILABLE 必须与 bridge 包的契约码同值(不构成第二份名单)",
+            dev.pocketagent.app.bridge.BridgeErrorCodes.HOST_UNAVAILABLE,
+            FlutterHostEngine.HOST_UNAVAILABLE,
+        )
+    }
+
+    /**
+     * 方法面通道名与 bridge 包的通道名同值。
+     *
+     * 【为什么这是接线后的新硬约束】B4c 起方法面的 handler 由
+     * `BridgeMethods.install` 注册,它用的通道名是 `BridgeChannel.BRIDGE_CHANNEL_NAME`
+     * (bridge 包内)。两处若漂移,Dart 侧 invoke 会打到没有 handler 的通道上——
+     * 表现是「桥明明接着 daemon,Flutter UI 却说未接线」,且无任何报错。
+     * 本测试把这条跨包一致性钉死(与 bridge 的 BridgeFlutterWiringTest 同源)。
+     */
+    @Test
+    fun `method channel name matches the bridge package channel name`() {
+        assertEquals(
+            dev.pocketagent.app.bridge.BRIDGE_CHANNEL_NAME,
+            FlutterHostEngine.BRIDGE_METHOD_CHANNEL,
+        )
     }
 
     /**
