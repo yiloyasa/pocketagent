@@ -152,6 +152,14 @@ dependencies {
     implementation("io.grpc:grpc-stub:1.66.0")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
 
+    // ---- Flutter UI 宿主(add-to-app,B4 波次)----
+    // :flutter 子工程即 `flutter/`(带 module: 段的 Flutter module),它在
+    // settings.gradle.kts 里被 include。挂它 = 拿到 io.flutter 的 embedding
+    // 类(FlutterEngine/FlutterActivity/MethodChannel/EventChannel)与 libapp.so
+    // (Dart 编译产物)。**不 apply** flutter 的 app 插件(那是 `flutter build apk`
+    // 的路径):本工程仍是 com.android.application 自己当家,Flutter 只作为库被编。
+    implementation(project(":flutter"))
+
     // ---- 端侧离线语音识别(SenseVoice)----
     // 【2026-10-09 分发资格批】模型不再打进 APK(原 239MB ONNX 是 APK 220MB 的绝对
     // 大头):改为首用触发按需下载/断点续传(SenseVoiceModelFiles,下载源与 SHA-256

@@ -46,6 +46,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- B4 波次:Flutter UI 宿主(add-to-app)。exported=false —— 只有宿主 app
+             自己(设置页「Flutter UI(开发中)」入口)经显式 Intent 拉起,不做深链、
+             不响应外部 action。configChanges 与 MainActivity 同口径:Flutter 自己
+             管重显,系统不该为此重建 Activity(重建 = Dart 侧状态丢)。 -->
+        <activity
+            android:name=".flutterhost.FlutterHostActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PocketAgent"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode|fontScale|locale" />
         <service
             android:name=".TurnKeepAliveService"
             android:exported="false"

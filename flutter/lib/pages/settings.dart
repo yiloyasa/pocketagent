@@ -10,6 +10,9 @@ import 'pa_page_kit.dart';
 import 'settings_agent.dart';
 import 'settings_capabilities.dart';
 import 'settings_connection.dart';
+import 'settings_console.dart';
+import 'settings_downloads.dart';
+import 'task_center_data.dart';
 
 /// 深链/路由的 sub 参数归一化（纯函数，与 Android `normalizeSettingsSub`
 /// SettingsScreen.kt:449 同语义）：合法二级页 id 原样返回；`userdata` 是拆页前的
@@ -26,13 +29,17 @@ String? normalizeSettingsSub(String? sub) => switch (sub) {
       _ => null,
     };
 
-/// 设置页：分组列表（连接与配对 / 外观 / Agent / 语音 / 关于），全部走 [PACard]。
+/// 设置页：分组列表（连接与配对 / 外观 / Agent / 语音 / 运行时 / 关于），全部走
+/// [PACard]。
 ///
 /// 「连接与配对」是 B3 第 2 步①：真消费 B2 [PaBridge]（快照 + 事件 + pairCode/
 /// connect，见 settings_connection.dart）；第②子步补齐 `sub=agent` /
 /// `sub=capabilities` 两个二级页（settings_agent.dart / settings_capabilities.dart，
-/// 与 Kotlin 相同：sub 是**页面内状态**，不走独立路由）。其余分组仍是静态骨架，
-/// 除深浅色切换与跳转外不接任何通道。
+/// 与 Kotlin 相同：sub 是**页面内状态**，不走独立路由）；第③子步补齐
+/// `sub=downloads` / `sub=console`（settings_downloads.dart /
+/// settings_console.dart）——五个二级页自此全有真页，[_PendingSubPage] 退化为
+/// 「将来新增 sub 忘接线」的兜底分支。其余分组仍是静态骨架，除深浅色切换与跳转外
+/// 不接任何通道。
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
@@ -40,6 +47,7 @@ class SettingsPage extends StatefulWidget {
     required this.onBrightnessChanged,
     this.bridge,
     this.sub,
+    this.store,
   });
 
   final PABrightness brightness;
@@ -54,6 +62,10 @@ class SettingsPage extends StatefulWidget {
   /// 未知 → 一级页（[normalizeSettingsSub]）。
   final String? sub;
 
+  /// 本地任务清单注入点（downloads 子页消费；与 TaskCenter 页共用同一个 app 级
+  /// store 的等价物，测试传可控 store）。
+  final TaskCenterStore? store;
+
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -62,10 +74,31 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 当前二级页（null = 一级页）——与 Kotlin `subPage` 同语义的页面内状态。
   String? _sub;
 
+  /// 能力位快照（`getConnectionState` 的 `hostCapabilities`，Kotlin
+  /// `AgentConnection.hostCapabilities` 的 Dart 形态）——只驱动一级页「运行时」
+  /// 分组的可见性（`runtime.v1` 门控）。读失败/宿主缺席 = 无从判断 → 整组不出现
+  /// （无位不显示，也不把「读不到」渲染成「没有这个功能」的错误横幅）。
+  List<String> _capabilities = const <String>[];
+
   @override
   void initState() {
     super.initState();
     _sub = normalizeSettingsSub(widget.sub);
+    _loadCapabilities();
+  }
+
+  Future<void> _loadCapabilities() async {
+    try {
+      final PaConnState conn =
+          await (widget.bridge ?? PaBridge()).getConnectionState();
+      if (!mounted) return;
+      setState(() => _capabilities = conn.capabilities);
+    } on PaBridgeException {
+      // 门控读不到：保持空位清单 = 运行时组不出现。一级页其余分组不依赖它，
+      // 不为此把整页拖进错误态（诚实：这一组现在不可判定，而不是「坏了」）。
+    } catch (_) {
+      // 兜底：页面任何路径都不许把未捕获异常甩给框架。
+    }
   }
 
   @override
@@ -97,12 +130,26 @@ class _SettingsPageState extends State<SettingsPage> {
         onBack: () => setState(() => _sub = null),
       );
     }
-    if (sub == 'downloads' || sub == 'console') {
-      // 诚实占位：两个子页在后续波次实现（downloads 是任务中心深链的历史落点，
-      // console 依赖 RuntimeControlState）。路由解析先全集收下，页面如实说
-      // 「尚未实现」，不假装已开通也不把深链静默吞回一级页。
+    if (sub == 'downloads') {
+      return SettingsDownloadsPage(
+        store: widget.store,
+        bridge: widget.bridge,
+        onBack: () => setState(() => _sub = null),
+      );
+    }
+    if (sub == 'console') {
+      return SettingsConsolePage(
+        bridge: widget.bridge,
+        onBack: () => setState(() => _sub = null),
+      );
+    }
+    if (sub != null && sub != 'connection') {
+      // 兜底：normalizeSettingsSub 白名单里 connection 由一级页承接（见下），
+      // 其余四个已知 sub 上面都已分派；这条分支只为「白名单加了新值却忘了在
+      // 上面加分派」而存在 —— 静默落回一级页会让用户以为入口坏了，占位页把
+      // 那条路变成一句明话。
       return _PendingSubPage(
-        title: sub == 'downloads' ? '下载与存储' : '电脑控制台',
+        title: sub,
         onBack: () => setState(() => _sub = null),
       );
     }
@@ -183,6 +230,20 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
+        // 运行时分组：`runtime.v1` 位门控（Kotlin SettingsScreen.kt:1648-1670
+        // 同款纪律——位不点亮照旧不出现，无能力不显示假入口）。
+        if (runtimeControlCapable(_capabilities))
+          PaPageSection(
+            title: '运行时',
+            children: <Widget>[
+              _SettingsRow(
+                icon: Icons.dns_outlined,
+                title: '电脑控制台',
+                value: '只读 · 预算与运行时',
+                onTap: () => setState(() => _sub = 'console'),
+              ),
+            ],
+          ),
         PaPageSection(
           title: '关于',
           children: <Widget>[
@@ -278,11 +339,13 @@ class _SettingsRow extends StatelessWidget {
   }
 }
 
-/// 尚未实现的二级页占位（downloads / console）：如实说「本波未实现」+ 返回。
+/// 兜底占位二级页：五个已知 sub（connection/downloads/agent/capabilities/console）
+/// 在第③子步后全有真页，本类只剩「白名单加了新值却忘了分派」这一条路径
+/// （见 build 末尾的兜底分支）。
 ///
-/// 【为什么不做成空壳列表冒充已开通】深链 `settings?sub=downloads` 是任务中心
-/// 下载卡的历史落点（MainActivity.kt:286）：静默吞回一级页会让用户以为入口坏了；
-/// 如实占位则明确告知「路由通了、页面还没搬」——诚实占位不假装（红线：不留假绿）。
+/// 【为什么不做成空壳列表冒充已开通】诚实占位不假装（红线：不留假绿）——
+/// 路由通了就说路由通了，内容没搬就说内容没搬。静默吞回一级页会让用户以为
+/// 入口坏了；如实占位则明确告知「本波未实现」。
 class _PendingSubPage extends StatelessWidget {
   const _PendingSubPage({required this.title, required this.onBack});
 

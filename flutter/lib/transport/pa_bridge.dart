@@ -21,7 +21,19 @@ import '../gen/pocketagent/v1/fs.pb.dart';
 import '../gen/pocketagent/v1/git.pb.dart';
 import '../gen/pocketagent/v1/host.pb.dart';
 import '../gen/pocketagent/v1/runtime.pb.dart'
-    show CollabPolicyResponse, GetCollabPolicyRequest;
+    show
+        CollabPolicyResponse,
+        ControlPlane,
+        GetCollabPolicyRequest,
+        GetControlPlaneRequest,
+        GetRuntimePolicyRequest,
+        GetRuntimeStateRequest,
+        GetUnknownEventRequest,
+        ListUnknownEventsRequest,
+        ListUnknownEventsResponse,
+        RuntimePolicyResponse,
+        RuntimeStateResponse,
+        UnknownEventResponse;
 import '../gen/pocketagent/v1/thread.pb.dart';
 
 /// MethodChannel：宿主方法面（Dart → Kotlin，请求应答）。
@@ -285,8 +297,8 @@ class PaBridge {
   final EventChannel _events;
 
   // ── 方法面（首批 6 条 + B3-3 追补 listThreads + B3 第 3 波追补 listDirectory /
-  // readFile / listBranches + B4 追补协同 10 条 unary；宿主侧一律【Kotlin
-  // 宿主桥 B4 波次实现】）─────────────────────────────────────────────
+  // readFile / listBranches + B4 追补协同 10 条 unary + B5 Settings ③追补
+  // runtime 域 5 条只读；宿主侧一律【Kotlin 宿主桥 B4 波次实现】）─────────
 
   /// 主机信息 —— proto `HostService.GetHostInfo`（proto/v1/host.proto）。
   ///
@@ -579,6 +591,139 @@ class PaBridge {
         _decodeGetCollabPolicy,
       );
 
+  // ── 运行时控制台（B5 Settings ③；proto `RuntimeService` 的 6 条**只读** RPC，
+  // 全部由 settings_console.dart 消费）───────────────────────────────────────
+  //
+  // 【为什么只接只读面】console 页的写操作（SetRuntimePolicy / SetCollabPolicy /
+  // AcknowledgeUnknownEvent / ExecuteUnknownEventAction）全是甲级写操作，且
+  // SetRuntimePolicy 的 proto 明文「提交完整策略 + CAS」语义要求 Get→改→Set 的
+  // 完整链路，本波只做只读呈现，写面留后续波次拍板（注释交接见方法清单末）。
+  // 已接的 getCollabPolicy（协同策略只读）在协同波次先落了，本段是同一纪律在
+  // runtime 域的延续。
+
+  /// 运行时总览快照 —— proto `RuntimeService.GetRuntimeState`
+  /// （proto/v1/runtime.proto:360）。
+  ///
+  /// arguments：`GetRuntimeStateRequest` 的 wire 字节（空消息 → 空字节数组，
+  /// 编码总则 §2.1 同 getHostInfo）。返回：`RuntimeStateResponse` 的 wire 字节
+  /// （安装身份 / 主机 / daemon 版本 / 两级策略 revision / runtime_state /
+  /// contracts[] 形态申报 / data_dir）。
+  ///
+  /// 【空字段 = daemon 未报告】各字段是普通 proto3 string：空串 = 这一项没报，
+  /// 页面据此说「未报告」，不补零值不猜（与空态/错误态三分同一纪律）。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<RuntimeStateResponse> getRuntimeState() => _invoke(
+        'getRuntimeState',
+        GetRuntimeStateRequest().writeToBuffer(),
+        _decodeGetRuntimeState,
+      );
+
+  /// 运行时预算策略快照（只读）—— proto `RuntimeService.GetRuntimePolicy`
+  /// （proto/v1/runtime.proto:39 邻近，:81 请求消息）。
+  ///
+  /// arguments：null（`GetRuntimePolicyRequest` 是空消息——同 getCollabPolicy，
+  /// 空请求仍走「空字节数组」形态，不做 null/bytes 版本二分）。返回：
+  /// `RuntimePolicyResponse` 的 wire 字节（policy = 用户配置 / revision /
+  /// policy_path / effective_global = 打底默认后的实际生效额度）。
+  ///
+  /// 【effective 与 policy 为什么必须分开显示】policy 是带缺席字段的部分对象：
+  /// 用户只改一项时其余项线上就是 0，客户端没有「内置基线」这份数据，把 0 显示成
+  /// 「封禁」就是编造。页面只渲染 effective_global 里 `has*` 为真的项。
+  /// 【为什么本波只读】`SetRuntimePolicy` 是甲级写操作（完整策略 + CAS），写入面
+  /// 留后续波次，与 getCollabPolicy 同款交接。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<RuntimePolicyResponse> getRuntimePolicy() => _invoke(
+        'getRuntimePolicy',
+        GetRuntimePolicyRequest().writeToBuffer(),
+        _decodeGetRuntimePolicy,
+      );
+
+  /// 控制面总览快照（只读）—— proto `RuntimeService.GetControlPlane`
+  /// （proto/v1/runtime.proto:507）。
+  ///
+  /// arguments：null（`GetControlPlaneRequest` 是空消息，同上）。返回：
+  /// `ControlPlane` 的 wire 字节（daemon 版本 / 主机名 / 系统 / 启动时刻 /
+  /// domains[] 各功能域状态与可控点 / data_dir_label）。
+  ///
+  /// 【为什么只给标签不给路径】proto 明示绝对路径里的用户名属敏感信息；
+  /// data_dir_label 只是标准位置标签，落盘全路径在各策略响应的 policy_path。
+  /// 页面照此渲染，不自行拼路径。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ControlPlane> getControlPlane() => _invoke(
+        'getControlPlane',
+        GetControlPlaneRequest().writeToBuffer(),
+        _decodeGetControlPlane,
+      );
+
+  /// 未知事件台账列表（只读）—— proto `RuntimeService.ListUnknownEvents`
+  /// （proto/v1/runtime.proto:171 请求 / :240 响应）。
+  ///
+  /// arguments：`ListUnknownEventsRequest` 的 wire 字节（kind/agent_id/
+  /// thread_id/processing_status/limit 五筛选项；空 = 全部）。返回：
+  /// `ListUnknownEventsResponse` 的 wire 字节（items[] 摘要 + total + dropped）。
+  ///
+  /// 【空列表 = 真空态】daemon 台账没登记过未知事件时回空数组；**通道不可用是
+  /// 另一条路径**（HOST_UNAVAILABLE → 页面错误态），两者严格区分，不许用空列表
+  /// 冒充错误（防假空态，同 listThreads / listTerminals 纪律）。
+  /// 【total/dropped 必须呈现】只回最近 N 条而不说，用户会以为「就这么几条」；
+  /// 台账脚注把「更早的已丢弃」变成明面事实。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<ListUnknownEventsResponse> listUnknownEvents([
+    ListUnknownEventsRequest? request,
+  ]) =>
+      _invoke(
+        'listUnknownEvents',
+        (request ?? ListUnknownEventsRequest()).writeToBuffer(),
+        _decodeListUnknownEvents,
+      );
+
+  /// 单个未知事件详情（只读）—— proto `RuntimeService.GetUnknownEvent`
+  /// （proto/v1/runtime.proto:249）。
+  ///
+  /// arguments：`GetUnknownEventRequest` 的 wire 字节（event_id）。返回：
+  /// `UnknownEventResponse` 的 wire 字节（summary + raw_json 脱敏原文 +
+  /// decoded_fields_json + digest[] 字段透析表 + translation 人话解读 +
+  /// recommended_next_step / support_bundle_hint）。
+  ///
+  /// 【原文永远可查】summary 的翻译是摘要不是裁决，冲突以 raw_json 为准 ——
+  /// 详情页因此必须能把原文呈现出来（本波只读展示，不做动作）。
+  /// 【错误码】`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  /// `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+  /// 【Kotlin 宿主桥 B4 波次实现】
+  Future<UnknownEventResponse> getUnknownEvent([
+    GetUnknownEventRequest? request,
+  ]) =>
+      _invoke(
+        'getUnknownEvent',
+        (request ?? GetUnknownEventRequest()).writeToBuffer(),
+        _decodeGetUnknownEvent,
+      );
+
+  // ── runtime 域 RPC 全集与本波取舍 ────────────────────────────────────────
+  //
+  // 只读已接（6）：getRuntimeState / getRuntimePolicy / getControlPlane /
+  // listUnknownEvents / getUnknownEvent（本段）+ getCollabPolicy（协同波次，
+  // 同域只读面）。
+  // 只读未接（3，留后续波次，注释交接）：
+  //  1. `GetAgentRuntime`（runtime.proto:409，每 agent 的资源/记忆/检查点/
+  //     恢复四项）——按 agent_id 逐个查，属 console 的「逐家深查」面，本波
+  //     只做总览三块，深查面留 B5。
+  //  2. `GetResourceUsage`（:140）——资源租约观察值，同上属深查面。
+  //  3. `ListThreadMemories` / `ClearThreadMemory`（:467/:493）——记忆清单是
+  //     只读可接，但它的消费面（记忆透析弹层）与 ClearThreadMemory 写操作同在
+  //     Kotlin 同一个弹层里，拆开接会让 Dart 侧只剩半个功能，留 B5 整块接。
+  // 写操作未接（4，甲级，留后续波次拍板）：
+  //  4. `SetRuntimePolicy`（:83，完整策略 + revision CAS）
+  //  5. `SetCollabPolicy`（:342，同款完整策略 + CAS）
+  //  6. `AcknowledgeUnknownEvent`（:272）
+  //  7. `ExecuteUnknownEventAction`（:78，白名单动作 + 乐观并发）
+  // console 页因此**没有任何写通道**：不摆开关、不摆确认/执行按钮，只读呈现
+  // 三块 + 未知事件详情。
+
   /// 协同角色列表 —— proto `ThreadService.ListCollabRoles`
   /// （proto/v1/thread.proto:143）。
   ///
@@ -847,6 +992,42 @@ class PaBridge {
         DeleteCollabRoleResponse.fromBuffer,
       );
 
+  RuntimeStateResponse _decodeGetRuntimeState(Object? raw) => bytesOrThrow(
+        'getRuntimeState 返回值',
+        raw,
+        'RuntimeStateResponse',
+        RuntimeStateResponse.fromBuffer,
+      );
+
+  RuntimePolicyResponse _decodeGetRuntimePolicy(Object? raw) => bytesOrThrow(
+        'getRuntimePolicy 返回值',
+        raw,
+        'RuntimePolicyResponse',
+        RuntimePolicyResponse.fromBuffer,
+      );
+
+  ControlPlane _decodeGetControlPlane(Object? raw) => bytesOrThrow(
+        'getControlPlane 返回值',
+        raw,
+        'ControlPlane',
+        ControlPlane.fromBuffer,
+      );
+
+  ListUnknownEventsResponse _decodeListUnknownEvents(Object? raw) =>
+      bytesOrThrow(
+        'listUnknownEvents 返回值',
+        raw,
+        'ListUnknownEventsResponse',
+        ListUnknownEventsResponse.fromBuffer,
+      );
+
+  UnknownEventResponse _decodeGetUnknownEvent(Object? raw) => bytesOrThrow(
+        'getUnknownEvent 返回值',
+        raw,
+        'UnknownEventResponse',
+        UnknownEventResponse.fromBuffer,
+      );
+
   /// 判别 Envelope：`type` + 载荷字段（channel-contract.md §4 的 payload 表）。
   PaConnEvent _decodeEvent(Object? raw) {
     if (raw is! Map) {
@@ -890,13 +1071,15 @@ Uint8List _expectBytes(String where, Object? raw) {
   );
 }
 
-/// 十份同型解码的唯一收口：验形（[_expectBytes]）→ 反序列化（[parse]）→
+/// 全工程同型解码的唯一收口：验形（[_expectBytes]）→ 反序列化（[parse]）→
 /// 坏字节统一成 [PaBridgeException]（DECODE_FAILED）。
 ///
 /// 【为什么收敛在这里】getHostInfo / listThreads / listDirectory / readFile /
-/// listBranches 与七个 proto 事件/协同载荷，十处的差别只是 `where` 定位串与
-/// `parse` 构造器，try/catch 形状逐字相同。泛型化后消息文本按调用点原样
-/// 传入（[typeName] 进消息），逐字不变——测试钉的就是这两段文本。
+/// listBranches / 协同 10 条 / runtime 域 5 条（pa_bridge.dart），以及
+/// terminal_stream / chat_history / chat_input 三个 transport 的同型解码，
+/// 各处差别只是 `where` 定位串与 `parse` 构造器，try/catch 形状逐字相同。
+/// 泛型化后消息文本按调用点原样传入（[typeName] 进消息），逐字不变——
+/// 测试钉的就是这两段文本。
 /// 【为什么不表驱动方法面】每条方法的 Dart 文档注释是契约文档的一部分
 /// （channel-contract.md 的人读镜像），表驱动会把注释冲散；这里只收内部
 /// 解码路径，方法面声明保持逐条手写。

@@ -36,7 +36,7 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
    不静默吞。唯一例外见 §4（未知事件类型也是显式失败，不透传——双端同 APK
    同 versionCode，不存在"新宿主对旧 UI"单边演进）。
 
-## 3. 方法清单（B3 全波次后共 30 条；宿主侧全部【B4 待实现】——`BridgeMethods.kt` 落盘中）
+## 3. 方法清单（B3 全波次 + B5 Settings ③后共 35 条；宿主侧全部【B4 待实现】——`BridgeMethods.kt` 落盘中）
 
 | # | 方法名（契约字符串） | Dart 签名 | arguments | 返回 |
 |---|---|---|---|---|
@@ -50,15 +50,15 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 | 8 | `listDirectory` | `Future<ListDirectoryResponse> listDirectory([ListDirectoryRequest?])` | `ListDirectoryRequest` 字节（缺省 = 空消息） | `ListDirectoryResponse` 字节 |
 | 9 | `readFile` | `Future<FileChunk> readFile([ReadFileRequest?])` | `ReadFileRequest` 字节（缺省 = 空消息） | `FileChunk` 字节（**首块**，见 §3.9） |
 | 10 | `listBranches` | `Future<ListBranchesResponse> listBranches([ListBranchesRequest?])` | `ListBranchesRequest` 字节（缺省 = 空消息） | `ListBranchesResponse` 字节 |
-| 11 | `listCollabRoles` | `Future<ListCollabRolesResponse> listCollabRoles()` | null | `ListCollabRolesResponse` 字节 |
+| 11 | `listCollabRoles` | `Future<ListCollabRolesResponse> listCollabRoles()` | `ListCollabRolesRequest` 字节（空消息） | `ListCollabRolesResponse` 字节 |
 | 12 | `setCollabRole` | `Future<SetCollabRoleResponse> setCollabRole(CollabRole role)` | `CollabRole` 字节 | `SetCollabRoleResponse` 字节 |
-| 13 | `deleteCollabRole` | `Future<DeleteCollabRoleResponse> deleteCollabRole(String id)` | `{'id': String}` | `DeleteCollabRoleResponse` 字节 |
+| 13 | `deleteCollabRole` | `Future<DeleteCollabRoleResponse> deleteCollabRole(String id)` | `DeleteCollabRoleRequest` 字节（字段按 proto，非 Map） | `DeleteCollabRoleResponse` 字节 |
 | 14 | `dispatchCollab` | `Future<DispatchCollabResponse> dispatchCollab(DispatchCollabRequest req)` | 请求字节 | `DispatchCollabResponse` 字节 |
-| 15 | `getCollabSession` | `Future<CollabSessionSnapshot> getCollabSession(String sessionId)` | `{'sessionId': String}` | `CollabSessionSnapshot` 字节 |
+| 15 | `getCollabSession` | `Future<CollabSessionSnapshot> getCollabSession(String sessionId)` | `GetCollabSessionRequest` 字节 | `CollabSessionSnapshot` 字节 |
 | 16 | `listCollabSessions` | `Future<ListCollabSessionsResponse> listCollabSessions()` | null | `ListCollabSessionsResponse` 字节 |
-| 17 | `cancelCollabSession` | `Future<CollabSessionSnapshot> cancelCollabSession(String sessionId)` | `{'sessionId': String}` | 快照字节 |
-| 18 | `cancelCollabMember` | `Future<CollabMemberSnapshot> cancelCollabMember(...)` | 请求字节 | 快照字节 |
-| 19 | `retryCollabMember` | `Future<CollabMemberSnapshot> retryCollabMember(...)` | 请求字节 | 快照字节 |
+| 17 | `cancelCollabSession` | `Future<CollabSessionSnapshot> cancelCollabSession(String sessionId)` | `CancelCollabSessionRequest` 字节 | 快照字节 |
+| 18 | `cancelCollabMember` | `Future<CollabMemberSnapshot> cancelCollabMember(...)` | `CancelCollabMemberRequest` 字节 | 快照字节 |
+| 19 | `retryCollabMember` | `Future<CollabMemberSnapshot> retryCollabMember(...)` | `RetryCollabMemberRequest` 字节 | 快照字节 |
 | 20 | `getCollabPolicy` | `Future<CollabPolicyResponse> getCollabPolicy()` | null | `CollabPolicyResponse` 字节 |
 | 21 | `listTerminals` | `Future<ListTerminalsResponse> listTerminals()` | null | `ListTerminalsResponse` 字节 |
 | 22 | `terminalAttach` | `Future<void> terminalAttach(String terminalId)` | `{'terminalId': String}` | null |
@@ -70,6 +70,11 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 | 28 | `turnResync` | `Future<List<TurnServerMessage>> turnResync(String threadId, int sinceSequence)` | `{'threadId': String, 'afterSequence': int}` | `List<Uint8List>`（快照帧数组） |
 | 29 | `getThreadHistory` | `Future<GetThreadHistoryResponse> getThreadHistory(String threadId)` | 请求字节 | 响应字节 |
 | 30 | `listSlashCommands` | `Future<ListSlashCommandsResponse> listSlashCommands(String threadId, {bool refresh})` | 请求字节 | 响应字节 |
+| 31 | `getRuntimeState` | `Future<RuntimeStateResponse> getRuntimeState()` | `GetRuntimeStateRequest` 字节（空） | `RuntimeStateResponse` 字节 |
+| 32 | `getRuntimePolicy` | `Future<RuntimePolicyResponse> getRuntimePolicy()` | `GetRuntimePolicyRequest` 字节（空） | `RuntimePolicyResponse` 字节 |
+| 33 | `getControlPlane` | `Future<ControlPlane> getControlPlane()` | `GetControlPlaneRequest` 字节（空） | `ControlPlane` 字节 |
+| 34 | `listUnknownEvents` | `Future<ListUnknownEventsResponse> listUnknownEvents([ListUnknownEventsRequest?])` | `ListUnknownEventsRequest` 字节（缺省 = 空消息） | `ListUnknownEventsResponse` 字节 |
+| 35 | `getUnknownEvent` | `Future<UnknownEventResponse> getUnknownEvent([GetUnknownEventRequest?])` | `GetUnknownEventRequest` 字节（缺省 = 空消息） | `UnknownEventResponse` 字节 |
 
 ### 3.1 `getHostInfo` —— proto `HostService.GetHostInfo`（proto/v1/host.proto）
 
@@ -171,6 +176,92 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 - 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
   `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
 
+### 3.11 `getRuntimeState()` —— proto `RuntimeService.GetRuntimeState`（B5 Settings ③ 追加）
+
+- 返回字节 → gen stub `RuntimeStateResponse`（安装身份 / 主机 / daemon 版本 /
+  两级策略 revision / `runtime_state` / `contracts[]` / `data_dir`）。
+- **空字段 = daemon 未报告**：各字段是普通 proto3 string，空串 = 这一项没报，
+  页面据此说「未报告」，不补零值不猜（与空态/错误态三分同一纪律）。
+- `runtime_state` 是 String 不是 enum：值域由 daemon 单方面定义（ready/degraded），
+  Dart 枚举会变成第二份写死名单，未知值透传（未知输入透传红线）。
+- `contracts[]` 六个 model 字段（session/resume/approval/subagent/memory/cache）
+  是 daemon 给的机器可读答案，客户端据此排版，**不按 agent 名分支**。
+- 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）+
+  `HOST_UNAVAILABLE` / `DECODE_FAILED`（Dart）。
+
+### 3.12 `getRuntimePolicy()` —— proto `RuntimeService.GetRuntimePolicy`（B5 Settings ③ 追加）
+
+- 返回字节 → gen stub `RuntimePolicyResponse`（`policy` = 用户配置 / `revision` /
+  `policy_path` / `effective_global` = 打底默认后的实际生效额度）。
+- **effective 与 policy 必须分开显示**：policy 是带缺席字段的部分对象，用户只改
+  一项时其余项线上就是 0；客户端没有「内置基线」这份数据，把 0 显示成「封禁」
+  就是编造。页面只渲染 `effective_global` 里 `has*` 为真的项。
+- `revision` 0 = 从未落盘（仍在内置基线），不是「版本号坏了」。
+- **本波只读**：`SetRuntimePolicy` 是甲级写操作（完整策略 + revision CAS），
+  写入面留后续波次（见 §3 末的 runtime 域取舍清单）。
+- 错误码：同上（`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL` +
+  `HOST_UNAVAILABLE` / `DECODE_FAILED`）。
+
+### 3.13 `getControlPlane()` —— proto `RuntimeService.GetControlPlane`（B5 Settings ③ 追加）
+
+- 返回字节 → gen stub `ControlPlane`（daemon 版本 / 主机名 / 系统 / 启动时刻 /
+  `domains[]` 各功能域状态与可控点 / `data_dir_label`）。
+- **人话全部由 daemon 给**：`title` / `summary` / `label` / `hint` 客户端不翻译，
+  只按 `id` 匹配与排版；新域上线只是多一个条目，客户端不改版面。
+- `status_code` 如实映射：2 可能只是「未装配/取不到」，客户端把 `summary` 原文
+  显示出来即可，**不自行把 2 渲染成「故障」**。
+- **只给标签不给绝对路径**：proto 明示路径里的用户名属敏感信息；落盘全路径在
+  各策略响应的 `policy_path`。
+- 错误码：同上。
+
+### 3.14 `listUnknownEvents([request])` —— proto `RuntimeService.ListUnknownEvents`（B5 Settings ③ 追加）
+
+- 返回字节 → gen stub `ListUnknownEventsResponse`（`items[]` 摘要 + `total` +
+  `dropped`）。
+- **空列表 = 真空态**（daemon 台账没登记过未知事件）；**通道不可用是另一条路径**
+  （`HOST_UNAVAILABLE` → 页面错误态），两者严格区分，不许用空列表冒充错误
+  （防假空态，同 listThreads / listTerminals 纪律）。
+- **`total`/`dropped` 必须呈现**：只回最近 N 条而不说，用户会以为「就这么几条」；
+  台账脚注把「更早的已丢弃」变成明面事实。
+- 请求五筛选项（kind/agent_id/thread_id/processing_status/limit）原样过桥，
+  Dart 侧不写死任何筛选默认值（方法面保持「请求消息原文编码」）。
+- 错误码：同上。
+
+### 3.15 `getUnknownEvent([request])` —— proto `RuntimeService.GetUnknownEvent`（B5 Settings ③ 追加）
+
+- 返回字节 → gen stub `UnknownEventResponse`（`summary` + `raw_json` 脱敏原文 +
+  `decoded_fields_json` + `digest[]` 字段透析表 + `translation` 人话解读 +
+  `recommended_next_step` / `support_bundle_hint`）。
+- **原文永远可查**：`summary` 的翻译是摘要不是裁决，冲突以 `raw_json` 为准 ——
+  详情页必须能把原文呈现出来（密钥类字段已由 daemon 打码）。
+- `digest[]` 旧 daemon 为空：整块不出现，不占位不编造。
+- **只读**：本方法只拉详情；`AcknowledgeUnknownEvent` /
+  `ExecuteUnknownEventAction` 是甲级写操作，本波不接（见 §3 末取舍清单）。
+- 错误码：同上。
+
+### 3.16 runtime 域 RPC 全集与本波取舍（B5 Settings ③ 记账）
+
+已接只读（6）：`getRuntimeState`（§3.11）/ `getRuntimePolicy`（§3.12）/
+`getControlPlane`（§3.13）/ `listUnknownEvents`（§3.14）/ `getUnknownEvent`
+（§3.15）+ `getCollabPolicy`（§3.20 协同波次，同域只读面）。
+
+未接（7，留后续波次，注释交接）：
+
+| RPC | 类别 | 为什么本波不接 |
+|---|---|---|
+| `SetRuntimePolicy` | 甲级写 | proto 明文「提交完整策略不是补丁 + revision CAS」；只提交一个字段会把其余项重置回默认（daemon 侧实测踩过） |
+| `SetCollabPolicy` | 甲级写 | 同款完整策略 + CAS 语义 |
+| `AcknowledgeUnknownEvent` | 甲级写 | 改台账处置状态，需确认流 |
+| `ExecuteUnknownEventAction` | 甲级写 | 白名单动作 + 乐观并发（conflict 是结构化结果不是 error） |
+| `GetAgentRuntime` | 只读深查 | 按 agent_id 逐个查资源/记忆/检查点/恢复四项，属 console「逐家深查」面，本波只做总览三块 |
+| `GetResourceUsage` | 只读深查 | 资源租约观察值，同上属深查面 |
+| `ListThreadMemories` / `ClearThreadMemory` | 只读 + 写 | Kotlin 侧清单与清除在同一个弹层里，拆开接只剩半个功能 |
+
+console 页（`flutter/lib/pages/settings_console.dart`）因此**没有任何写通道**：
+不摆开关、不摆确认/执行按钮，只读呈现三块 + 未知事件详情。门控纪律：
+`runtime.v1` 位不在 → 三块内容整块不渲染、只给一句明话，且不产生任何 runtime
+域调用（旧 daemon 上这些 RPC 必然 UNIMPLEMENTED）。
+
 ## 4. 事件清单（EventChannel `dev.pocketagent/bridge/events`）
 
 payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
@@ -210,13 +301,18 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 ## 6. Kotlin 宿主侧待实现（B4 波次清单）
 
 - [ ] 在 FlutterEngine 挂载时注册 MethodChannel `dev.pocketagent/bridge`
-      handler：10 个方法按 §3 签名（method 名字符串逐字对齐）。
+      handler：35 个方法按 §3 签名（method 名字符串逐字对齐）。
 - [ ] 返回值一律走 proto `writeToBuffer()` 字节（与 gRPC 契约同源，复用
       `HostInfo`/`HostEvent`/`TurnInput`/`ListThreadsResponse` 的既有 Kotlin 生成类）。
 - [ ] `getConnectionState`：直接取 `AgentConnection` 五条 StateFlow 当前值拼
       §3.4 五键 Map（键名 = 字段名）。
 - [ ] `listThreads` / `listDirectory` / `listBranches`：转发对应 daemon RPC，
       `repeated` 字段按 proto 原样字节回传（不给手机端做投影/筛选，那是页端的事）。
+- [ ] runtime 域 5 条只读（§3.11–§3.15）：转发 `RuntimeService.GetRuntimeState` /
+      `GetRuntimePolicy` / `GetControlPlane` / `ListUnknownEvents` /
+      `GetUnknownEvent`，字节原样回传。**写操作四件套本波不注册**
+      （SetRuntimePolicy / SetCollabPolicy / AcknowledgeUnknownEvent /
+      ExecuteUnknownEventAction，见 §3.16）。
 - [ ] `readFile`：proto 是 server stream，宿主只回**首块** `FileChunk`（§3.9）；
       分块流的完整消费面留 B5，本波不实现。
 - [ ] 注册 EventChannel `dev.pocketagent/bridge/events` StreamHandler：
@@ -235,6 +331,7 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 | `PaConnState` | 本契约小类 | 连接态五键（proto/v1 无对应消息——宿主进程内部态不经过 daemon，不造假同源） |
 | `PaConnEvent` | 本契约小类 | 事件 Envelope（`type` + 三种载荷） |
 | `PaBridgeException` / `PaBridgeErrorCodes` | 本契约小类 | 错误模型（§5） |
+| `RuntimeStateResponse` / `RuntimePolicyResponse` / `ControlPlane` / `ListUnknownEventsResponse` / `UnknownEventResponse` / 五条请求消息 | gen stub（`lib/gen/pocketagent/v1/runtime.pb.dart`） | runtime 域 5 条只读方法（§3.11–§3.15）的返回/入参；**零小类包装**——这些消息就是契约本身，页面侧的展示投影（额度行/标签词表）是页端纯函数，不进通道层 |
 
 ## 附录 A：Dart gen stub 重生成（2026-10-14 本机实测）
 

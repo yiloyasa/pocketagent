@@ -18,6 +18,11 @@ SRC = r'G:\项目1\pocketagent\android'
 # 未设置时保持原路径（既有行为零变化）。
 DST = os.environ.get('PA_MIRROR') or r'G:\pa\android'
 PROJ_BUILD_APK = r'G:\项目1\pocketagent\build\app-debug.apk'
+# B4a 集成后 android 构建要求 flutter module 在镜像内（settings.gradle.kts
+# 在 <镜像>/flutter 找 module: 段）；仅隔离镜像需要补这一步——主镜像 G:\pa\
+# 时代 flutter 经 FLUTTER_ROOT/相对路径在主仓里找得到，行为不变。
+FLUTTER_SRC = r'G:\项目1\pocketagent\flutter'
+MIRRORED = DST != r'G:\pa\android'
 
 JDK = r'C:\Program Files\Android\Android Studio\jbr'
 SDK = r'C:\Android'
@@ -51,6 +56,22 @@ if r.returncode >= 8:
     # T-WRAP: 同步不完整就继续构建 = 对旧镜像构建,产物必错(AUDIT 红线4"产物不对")
     print('  !!! robocopy 硬失败(rc>=8),拒绝对不完整镜像构建')
     sys.exit(4)
+
+if MIRRORED:
+    print('=== 1b. robocopy flutter module -> 隔离镜像 ===')
+    rf = subprocess.run(
+        ['robocopy', FLUTTER_SRC, DST + r'\flutter', '/E', '/NFL', '/NDL',
+         '/NJH', '/NJS', '/NP',
+         # .dart_tool 不排：package_config.json（pub get 产物）是 flutter 模块
+         # 编译的必需输入（apk 任务 compileFlutterBuildDebug 会失败）。
+         '/XD', 'build', '.gradle', '.idea', '.kotlin',
+         'ephemeral'],
+        capture_output=True, text=True, errors='replace',
+    )
+    print('  flutter robocopy rc =', rf.returncode, '(0/1/2/3 均为成功)')
+    if rf.returncode >= 8:
+        print('  !!! flutter 镜像同步失败,拒绝构建（flutter module 缺失必红）')
+        sys.exit(4)
 
 print('=== 2. gradle %s ===' % ' '.join(gradle_args))
 env = dict(os.environ)
