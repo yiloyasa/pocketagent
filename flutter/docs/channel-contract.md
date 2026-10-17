@@ -4,18 +4,31 @@
 > 本文档同步。** 方法名、事件 `type`、错误码、Map 键名都是契约字符串，双端同改。
 >
 > - Dart 侧实现：`flutter/lib/transport/pa_bridge.dart`（代码即契约），
->   测试 `flutter/test/transport/pa_bridge_test.dart` 逐条钉死（mock 宿主 wire 行为）。
-> - Kotlin 宿主侧：**B4 波次待实现**（清单见 §6）。宿主缺席时 Dart 如实抛
->   `HOST_UNAVAILABLE`，不伪造任何返回（红线：不留假绿）。
+>   测试 `flutter/test/transport/pa_bridge_test.dart` 逐条钉死（mock 宿主 wire 行为）；
+>   同一条方法通道上的其余五个 transport 面见 §1 末段。
+> - Kotlin 宿主侧：**B4 波次已落地**——`installBridge`（方法面 + 三条事件面 +
+>   双向流 wiring 三件套）由 `flutterhost/FlutterHostEngine.installChannelShell`
+>   在 FlutterEngine 挂载时装配，dispatch 分支 30 条，接线状态见 §6。
+>   §3 表末列「宿主桥」逐行给出状态，**15 条「有意未接」的清单与理由见 §8**。
+>   未接的方法名仍会收到 `HOST_UNAVAILABLE`（不伪造任何返回，红线：不留假绿）。
 
 ## 1. 通道
 
-| 通道 | 类型 | 名称 | 方向 |
-|---|---|---|---|
-| 方法面 | MethodChannel | `dev.pocketagent/bridge` | Dart → Kotlin，请求应答 |
-| 事件面 | EventChannel | `dev.pocketagent/bridge/events` | Kotlin → Dart，推流 |
+| 通道 | 类型 | 名称 | 方向 | Dart 常量 | Kotlin 常量 |
+|---|---|---|---|---|---|
+| 方法面 | MethodChannel | `dev.pocketagent/bridge` | Dart → Kotlin，请求应答 | `kPaBridgeMethodChannel`（pa_bridge.dart:43） | `BRIDGE_CHANNEL_NAME`（BridgeChannel.kt:60） |
+| 事件面 | EventChannel | `dev.pocketagent/bridge/events` | Kotlin → Dart，推 Envelope Map | `kPaBridgeEventChannel`（pa_bridge.dart:46） | `BRIDGE_EVENT_CHANNEL_NAME`（BridgeEventChannel.kt:16） |
+| Turn 事件面 | EventChannel | `dev.pocketagent/bridge/turn_events` | Kotlin → Dart，推裸 wire 字节 | `kTurnStreamEventChannel`（chat_turn_stream.dart:49） | `BRIDGE_TURN_EVENT_CHANNEL_NAME`（BridgeEventChannel.kt:19） |
+| Terminal 事件面 | EventChannel | `dev.pocketagent/bridge/terminal_events` | Kotlin → Dart，推裸 wire 字节 | `kTerminalEventChannel`（terminal_stream.dart:37） | `BRIDGE_TERMINAL_EVENT_CHANNEL_NAME`（BridgeEventChannel.kt:22） |
 
-Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge.dart`）。
+四条通道名逐字一致由 `pa_audit` 的 `channel_contract_sync` 规则逐轮对账
+（本表 ↔ Dart 常量 ↔ Kotlin 常量，三方集合相等才放行）。
+
+方法面**一条通道**上分装 §3 表的全部方法名，由六个 Dart transport 面共用同一
+通道（宿主在同一 handler 表里注册全部方法名）：`transport/pa_bridge.dart`、
+`transport/terminal_stream.dart`、`transport/chat_turn_stream.dart`、
+`pages/chat_history_transport.dart`、`pages/chat_input_transport.dart`、
+`pages/chat_actions_transport.dart`。新增方法面**不需要**新通道，也不要新通道。
 
 ## 2. 编码总则
 
@@ -36,45 +49,66 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
    不静默吞。唯一例外见 §4（未知事件类型也是显式失败，不透传——双端同 APK
    同 versionCode，不存在"新宿主对旧 UI"单边演进）。
 
-## 3. 方法清单（B3 全波次 + B5 Settings ③后共 35 条；宿主侧全部【B4 待实现】——`BridgeMethods.kt` 落盘中）
+## 3. 方法清单（45 条 = B3 全波次 + B5 Settings ③ + B3 第 5 波④ Chat 动作；宿主桥接线状态见末列）
 
-| # | 方法名（契约字符串） | Dart 签名 | arguments | 返回 |
-|---|---|---|---|---|
-| 1 | `getHostInfo` | `Future<HostInfo> getHostInfo()` | `GetHostInfoRequest` 字节（空） | `HostInfo` 字节 |
-| 2 | `connect` | `Future<void> connect(String addr, String token)` | `{'addr': String, 'token': String}` | null |
-| 3 | `disconnect` | `Future<void> disconnect()` | null | null |
-| 4 | `getConnectionState` | `Future<PaConnState> getConnectionState()` | null | Map（五键，见下） |
-| 5 | `pairCode` | `Future<String> pairCode()` | null | 非空 String |
-| 6 | `startTurn` | `Future<void> startTurn(TurnInput input)` | `TurnInput` 字节 | null |
-| 7 | `listThreads` | `Future<ListThreadsResponse> listThreads([ListThreadsRequest?])` | `ListThreadsRequest` 字节（缺省 = 空消息） | `ListThreadsResponse` 字节 |
-| 8 | `listDirectory` | `Future<ListDirectoryResponse> listDirectory([ListDirectoryRequest?])` | `ListDirectoryRequest` 字节（缺省 = 空消息） | `ListDirectoryResponse` 字节 |
-| 9 | `readFile` | `Future<FileChunk> readFile([ReadFileRequest?])` | `ReadFileRequest` 字节（缺省 = 空消息） | `FileChunk` 字节（**首块**，见 §3.9） |
-| 10 | `listBranches` | `Future<ListBranchesResponse> listBranches([ListBranchesRequest?])` | `ListBranchesRequest` 字节（缺省 = 空消息） | `ListBranchesResponse` 字节 |
-| 11 | `listCollabRoles` | `Future<ListCollabRolesResponse> listCollabRoles()` | `ListCollabRolesRequest` 字节（空消息） | `ListCollabRolesResponse` 字节 |
-| 12 | `setCollabRole` | `Future<SetCollabRoleResponse> setCollabRole(CollabRole role)` | `CollabRole` 字节 | `SetCollabRoleResponse` 字节 |
-| 13 | `deleteCollabRole` | `Future<DeleteCollabRoleResponse> deleteCollabRole(String id)` | `DeleteCollabRoleRequest` 字节（字段按 proto，非 Map） | `DeleteCollabRoleResponse` 字节 |
-| 14 | `dispatchCollab` | `Future<DispatchCollabResponse> dispatchCollab(DispatchCollabRequest req)` | 请求字节 | `DispatchCollabResponse` 字节 |
-| 15 | `getCollabSession` | `Future<CollabSessionSnapshot> getCollabSession(String sessionId)` | `GetCollabSessionRequest` 字节 | `CollabSessionSnapshot` 字节 |
-| 16 | `listCollabSessions` | `Future<ListCollabSessionsResponse> listCollabSessions()` | null | `ListCollabSessionsResponse` 字节 |
-| 17 | `cancelCollabSession` | `Future<CollabSessionSnapshot> cancelCollabSession(String sessionId)` | `CancelCollabSessionRequest` 字节 | 快照字节 |
-| 18 | `cancelCollabMember` | `Future<CollabMemberSnapshot> cancelCollabMember(...)` | `CancelCollabMemberRequest` 字节 | 快照字节 |
-| 19 | `retryCollabMember` | `Future<CollabMemberSnapshot> retryCollabMember(...)` | `RetryCollabMemberRequest` 字节 | 快照字节 |
-| 20 | `getCollabPolicy` | `Future<CollabPolicyResponse> getCollabPolicy()` | null | `CollabPolicyResponse` 字节 |
-| 21 | `listTerminals` | `Future<ListTerminalsResponse> listTerminals()` | null | `ListTerminalsResponse` 字节 |
-| 22 | `terminalAttach` | `Future<void> terminalAttach(String terminalId)` | `{'terminalId': String}` | null |
-| 23 | `terminalWrite` | `Future<void> terminalWrite(Uint8List frameBytes)` | `TerminalClientMessage` 字节 | null |
-| 24 | `terminalClose` | `Future<void> terminalClose(String terminalId)` | `{'terminalId': String}` | null |
-| 25 | `turnStreamStart` | `Future<void> turnStreamStart(String threadId)` | `{'threadId': String}` | null |
-| 26 | `turnStreamSend` | `Future<void> turnStreamSend(Uint8List frameBytes)` | `TurnClientMessage` 字节 | null |
-| 27 | `turnStreamCancel` | `Future<void> turnStreamCancel()` | null | null |
-| 28 | `turnResync` | `Future<List<TurnServerMessage>> turnResync(String threadId, int sinceSequence)` | `{'threadId': String, 'afterSequence': int}` | `List<Uint8List>`（快照帧数组） |
-| 29 | `getThreadHistory` | `Future<GetThreadHistoryResponse> getThreadHistory(String threadId)` | 请求字节 | 响应字节 |
-| 30 | `listSlashCommands` | `Future<ListSlashCommandsResponse> listSlashCommands(String threadId, {bool refresh})` | 请求字节 | 响应字节 |
-| 31 | `getRuntimeState` | `Future<RuntimeStateResponse> getRuntimeState()` | `GetRuntimeStateRequest` 字节（空） | `RuntimeStateResponse` 字节 |
-| 32 | `getRuntimePolicy` | `Future<RuntimePolicyResponse> getRuntimePolicy()` | `GetRuntimePolicyRequest` 字节（空） | `RuntimePolicyResponse` 字节 |
-| 33 | `getControlPlane` | `Future<ControlPlane> getControlPlane()` | `GetControlPlaneRequest` 字节（空） | `ControlPlane` 字节 |
-| 34 | `listUnknownEvents` | `Future<ListUnknownEventsResponse> listUnknownEvents([ListUnknownEventsRequest?])` | `ListUnknownEventsRequest` 字节（缺省 = 空消息） | `ListUnknownEventsResponse` 字节 |
-| 35 | `getUnknownEvent` | `Future<UnknownEventResponse> getUnknownEvent([GetUnknownEventRequest?])` | `GetUnknownEventRequest` 字节（缺省 = 空消息） | `UnknownEventResponse` 字节 |
+| # | 方法名（契约字符串） | Dart 签名 | arguments | 返回 | 宿主桥 |
+|---|---|---|---|---|---|
+| 1 | `getHostInfo` | `Future<HostInfo> getHostInfo()` | `GetHostInfoRequest` 字节（空） | `HostInfo` 字节 | 已接 |
+| 2 | `connect` | `Future<void> connect(String addr, String token)` | `{'addr': String, 'token': String}` | null | 已接 |
+| 3 | `disconnect` | `Future<void> disconnect()` | null | null | 已接 |
+| 4 | `getConnectionState` | `Future<PaConnState> getConnectionState()` | null | Map（五键，见下） | 已接 |
+| 5 | `pairCode` | `Future<String> pairCode()` | null | 非空 String | 已接 |
+| 6 | `startTurn` | `Future<void> startTurn(TurnInput input)` | `TurnInput` 字节 | null | 已接（故意拒，见 §3.6） |
+| 7 | `listThreads` | `Future<ListThreadsResponse> listThreads([ListThreadsRequest?])` | `ListThreadsRequest` 字节（缺省 = 空消息） | `ListThreadsResponse` 字节 | 已接 |
+| 8 | `listDirectory` | `Future<ListDirectoryResponse> listDirectory([ListDirectoryRequest?])` | `ListDirectoryRequest` 字节（缺省 = 空消息） | `ListDirectoryResponse` 字节 | 已接 |
+| 9 | `readFile` | `Future<FileChunk> readFile([ReadFileRequest?])` | `ReadFileRequest` 字节（缺省 = 空消息） | `FileChunk` 字节（**首块**，见 §3.9） | 已接 |
+| 10 | `listBranches` | `Future<ListBranchesResponse> listBranches([ListBranchesRequest?])` | `ListBranchesRequest` 字节（缺省 = 空消息） | `ListBranchesResponse` 字节 | 已接 |
+| 11 | `listCollabRoles` | `Future<ListCollabRolesResponse> listCollabRoles()` | `ListCollabRolesRequest` 字节（空消息） | `ListCollabRolesResponse` 字节 | 已接 |
+| 12 | `setCollabRole` | `Future<SetCollabRoleResponse> setCollabRole(CollabRole role)` | `SetCollabRoleRequest` 字节（**外面包一层**：`role` 字段承载 `CollabRole`） | `SetCollabRoleResponse` 字节 | 已接 |
+| 13 | `deleteCollabRole` | `Future<DeleteCollabRoleResponse> deleteCollabRole(String id)` | `DeleteCollabRoleRequest` 字节（字段按 proto，非 Map） | `DeleteCollabRoleResponse` 字节 | 已接 |
+| 14 | `dispatchCollab` | `Future<DispatchCollabResponse> dispatchCollab(DispatchCollabRequest req)` | 请求字节 | `DispatchCollabResponse` 字节 | 已接 |
+| 15 | `getCollabSession` | `Future<CollabSessionSnapshot> getCollabSession([GetCollabSessionRequest?])` | `GetCollabSessionRequest` 字节（缺省 = 空消息） | `CollabSessionSnapshot` 字节 | 已接 |
+| 16 | `listCollabSessions` | `Future<ListCollabSessionsResponse> listCollabSessions([ListCollabSessionsRequest?])` | `ListCollabSessionsRequest` 字节（缺省 = 空消息） | `ListCollabSessionsResponse` 字节 | 已接 |
+| 17 | `cancelCollabSession` | `Future<CollabSessionSnapshot> cancelCollabSession([CancelCollabSessionRequest?])` | `CancelCollabSessionRequest` 字节（session_id） | 快照字节 | 已接 |
+| 18 | `cancelCollabMember` | `Future<CollabMemberSnapshot> cancelCollabMember([CancelCollabMemberRequest?])` | `CancelCollabMemberRequest` 字节 | 快照字节 | 已接 |
+| 19 | `retryCollabMember` | `Future<CollabMemberSnapshot> retryCollabMember([RetryCollabMemberRequest?])` | `RetryCollabMemberRequest` 字节 | 快照字节 | 已接 |
+| 20 | `getCollabPolicy` | `Future<CollabPolicyResponse> getCollabPolicy()` | `GetCollabPolicyRequest` 字节（空消息） | `CollabPolicyResponse` 字节 | 已接 |
+| 21 | `listTerminals` | `Future<ListTerminalsResponse> listTerminals([ListTerminalsRequest?])` | `ListTerminalsRequest` 字节（缺省 = 空消息） | `ListTerminalsResponse` 字节 | 已接 |
+| 22 | `terminalAttach` | `Future<void> terminalAttach(String terminalId)` | `{'terminalId': String}` | null | 已接 |
+| 23 | `terminalWrite` | `Future<void> terminalWrite(Uint8List frameBytes)` | `TerminalClientMessage` 字节 | null | 已接 |
+| 24 | `terminalClose` | `Future<void> terminalClose(String terminalId)` | `{'terminalId': String}` | null | 已接 |
+| 25 | `turnStreamStart` | `Future<void> turnStreamStart(String threadId)` | `{'threadId': String}` | null | 已接 |
+| 26 | `turnStreamSend` | `Future<void> turnStreamSend(Uint8List frameBytes)` | `TurnClientMessage` 字节 | null | 已接 |
+| 27 | `turnStreamCancel` | `Future<void> turnStreamCancel()` | null | null | 已接 |
+| 28 | `turnResync` | `Future<List<TurnServerMessage>> turnResync(String threadId, int sinceSequence)` | `{'threadId': String, 'afterSequence': int}` | `List<Uint8List>`（快照帧数组） | 已接 |
+| 29 | `getThreadHistory` | `Future<GetThreadHistoryResponse> getThreadHistory(String threadId)` | 请求字节 | 响应字节 | 已接 |
+| 30 | `listSlashCommands` | `Future<ListSlashCommandsResponse> listSlashCommands(String threadId, {bool refresh})` | 请求字节 | 响应字节 | 已接 |
+| 31 | `getRuntimeState` | `Future<RuntimeStateResponse> getRuntimeState()` | `GetRuntimeStateRequest` 字节（空） | `RuntimeStateResponse` 字节 | 有意未接（见 §8） |
+| 32 | `getRuntimePolicy` | `Future<RuntimePolicyResponse> getRuntimePolicy()` | `GetRuntimePolicyRequest` 字节（空） | `RuntimePolicyResponse` 字节 | 有意未接（见 §8） |
+| 33 | `getControlPlane` | `Future<ControlPlane> getControlPlane()` | `GetControlPlaneRequest` 字节（空） | `ControlPlane` 字节 | 有意未接（见 §8） |
+| 34 | `listUnknownEvents` | `Future<ListUnknownEventsResponse> listUnknownEvents([ListUnknownEventsRequest?])` | `ListUnknownEventsRequest` 字节（缺省 = 空消息） | `ListUnknownEventsResponse` 字节 | 有意未接（见 §8） |
+| 35 | `getUnknownEvent` | `Future<UnknownEventResponse> getUnknownEvent([GetUnknownEventRequest?])` | `GetUnknownEventRequest` 字节（缺省 = 空消息） | `UnknownEventResponse` 字节 | 有意未接（见 §8） |
+| 36 | `submitApproval` | `Future<void> submitApproval(SubmitApprovalRequest request)` | `SubmitApprovalRequest` 字节（thread_id + decision） | null | 有意未接（见 §8） |
+| 37 | `cancelTurn` | `Future<void> cancelTurn(String threadId)` | `CancelTurnRequest` 字节（thread_id） | null | 有意未接（见 §8） |
+| 38 | `clearQueuedInputs` | `Future<ClearQueuedInputsResponse> clearQueuedInputs(String threadId)` | `ClearQueuedInputsRequest` 字节（thread_id） | `ClearQueuedInputsResponse` 字节 | 有意未接（见 §8） |
+| 39 | `compactThread` | `Future<void> compactThread(String threadId)` | `CompactThreadRequest` 字节（thread_id） | null | 有意未接（见 §8） |
+| 40 | `forkThread` | `Future<Thread> forkThread(String threadId, {String lastTurnId})` | `ForkThreadRequest` 字节（thread_id + last_turn_id） | `Thread` 字节（**新会话**） | 有意未接（见 §8） |
+| 41 | `rollbackThread` | `Future<Thread> rollbackThread(String threadId, int numTurns)` | `RollbackThreadRequest` 字节（thread_id + num_turns） | `Thread` 字节（回滚后真值） | 有意未接（见 §8） |
+| 42 | `setThreadGoal` | `Future<Thread> setThreadGoal(String threadId, String goal)` | `SetThreadGoalRequest` 字节（thread_id + goal） | `Thread` 字节（落库后真值） | 有意未接（见 §8） |
+| 43 | `startReview` | `Future<StartReviewResponse> startReview(String threadId, {String focus})` | `StartReviewRequest` 字节（thread_id + focus） | `StartReviewResponse` 字节（review_id + started） | 有意未接（见 §8） |
+| 44 | `exportThreadHtml` | `Future<ExportThreadHtmlResponse> exportThreadHtml(String threadId)` | `ExportThreadHtmlRequest` 字节（thread_id） | `ExportThreadHtmlResponse` 字节（path） | 有意未接（见 §8） |
+| 45 | `optimizePrompt` | `Future<OptimizePromptResponse> optimizePrompt({required String text, String style, String agentId, String modelId, String effort})` | `OptimizePromptRequest` 字节（text + style + agent_id + model_id + effort） | `OptimizePromptResponse` 字节（optimized） | 有意未接（见 §8） |
+
+> **末列「宿主桥」的口径**（`pa_audit` 的 `channel_contract_sync` 规则逐行对账）：
+>
+> - `已接` = `BridgeMethods.dispatch` 有同名分支（共 30 条，其中 `startTurn` 是
+>   **故意抛 HOST_UNAVAILABLE** 的死入口，理由见 §3.6）；
+> - `有意未接` = 契约声明了方法名、Dart 侧也在调，但宿主桥**故意不注册**
+>   （共 15 条）。调用结果是 `HOST_UNAVAILABLE`，**不是**契约漂移——理由与
+>   逐条清单见 §8。
+>
+> 对账式：`{已接} == Kotlin dispatch 分支集` 且 `{已接 ∪ 有意未接} == Dart 通道面
+> 方法集` 且 `{已接 ∪ 有意未接} == 本表`。任一不等即红线。
 
 ### 3.1 `getHostInfo` —— proto `HostService.GetHostInfo`（proto/v1/host.proto）
 
@@ -126,12 +160,22 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 
 ### 3.6 `startTurn(input)` —— proto `TurnService.StartTurn` 首帧
 
+- **现状 = 方法名已登记、宿主分支存在但故意抛 `HOST_UNAVAILABLE`**（§3 表末列
+  `已接（故意拒）`；真源 `BridgeMethods.kt:438`）。它是本表唯一的「有分支即拒绝」
+  条目，与 §8 的「有意未接」是两种不同的缺席：本条占位并给理由，那 15 条连分支
+  都不注册。
 - arguments = `TurnInput`（thread_id + blocks + background + model_id + effort）
-  的 wire 字节；宿主自行包成 `TurnClientMessage{input}` 进双向流。空消息字段
-  规则同 proto（空 = 沿用/默认）。
-- 返回 null；轮次过程帧（增量/审批/完成/失败）**不走本方法**——那是
-  Turn 双向流的 Dart 形态，B3 波次另行接入（本波只有发起，没有消费面）。
-- 错误码：`NOT_CONNECTED` / `AUTH_REQUIRED` / `INTERNAL`（宿主）。
+  的 wire 字节。**设计形态**（未启用）：宿主包成 `TurnClientMessage{input}` 送进
+  双向流。空消息字段规则同 proto（空 = 沿用/默认）。
+- **为什么不接**：unary 只发首帧、没有消费面，「发了首帧却看不到任何过程帧」比
+  不接更糟（假象）。轮次的完整形态是双向流 `turnStreamStart` + `turnStreamSend` +
+  `turnStreamCancel`（§3 表 #25–#27，已接）。
+- Dart 侧 `PaBridge.startTurn`（`pa_bridge.dart:373`）保留为**零生产调用方**的兼容
+  入口：`flutter/lib` 内唯一同名调用点是 `chat_page.dart:143` 的
+  `TurnSession.startTurn`（页层类，内部走双流），不是本方法。
+- 错误码（当前实际）：`HOST_UNAVAILABLE`（宿主唯一抛出的码，message 点名「无消费面
+  的 unary 首帧入口」并指引改用双流）。Dart 解码侧：`NOT_CONNECTED` /
+  `AUTH_REQUIRED` / `INTERNAL` 三码在本方法**不会到达**（宿主不实现、不透传）。
 
 ### 3.7 `listThreads([request])` —— proto `ThreadService.ListThreads`（proto/v1/thread.proto:18，B3-3 追加）
 
@@ -241,11 +285,17 @@ Dart 侧常量：`kPaBridgeMethodChannel` / `kPaBridgeEventChannel`（`pa_bridge
 
 ### 3.16 runtime 域 RPC 全集与本波取舍（B5 Settings ③ 记账）
 
-已接只读（6）：`getRuntimeState`（§3.11）/ `getRuntimePolicy`（§3.12）/
+Dart 侧已实现（6）：`getRuntimeState`（§3.11）/ `getRuntimePolicy`（§3.12）/
 `getControlPlane`（§3.13）/ `listUnknownEvents`（§3.14）/ `getUnknownEvent`
-（§3.15）+ `getCollabPolicy`（§3.20 协同波次，同域只读面）。
+（§3.15）+ `getCollabPolicy`（§3 表 #20，协同波次先落的同域只读面）。
 
-未接（7，留后续波次，注释交接）：
+⚠️ 「已实现」说的只是 **Dart 面**；宿主桥接线状态一律看 §3 表末列——其中 5 条
+runtime 只读（`getRuntimeState` / `getRuntimePolicy` / `getControlPlane` /
+`listUnknownEvents` / `getUnknownEvent`）标 `有意未接`（理由见 §8），在 Android
+壳里调会拿到 `HOST_UNAVAILABLE`；`getCollabPolicy` 是 `已接`。
+
+**不列入 §3 契约表的 proto RPC（7，留后续波次，注释交接）**——它们既没有方法名、
+Dart 面也没有调用点，与 §8 的「有意未接」不是一回事：
 
 | RPC | 类别 | 为什么本波不接 |
 |---|---|---|
@@ -284,6 +334,24 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 - 宿主 `EventSink.error` → 流错误，code 原样透传。
 - 宿主缺席（通道无 handler）**不产生流错误**（见 §2.5）——宿主存活探针走方法面。
 
+### 4.1 另两条事件通道：裸 wire 字节（**不走**上面的 Envelope Map）
+
+`dev.pocketagent/bridge/turn_events` 与 `dev.pocketagent/bridge/terminal_events`
+每一帧就是**一条 proto 消息的 wire 字节**（`Uint8List`）——没有 `type` 判别、没有
+Map 包装：
+
+| 通道 | 帧 | Dart 解码点 | 宿主推送点 |
+|---|---|---|---|
+| `bridge/turn_events` | `TurnServerMessage` wire 字节 | `chat_turn_stream.dart` 的 `_decodeFrame`（:202）→ `bytesOrThrow` | `BridgeEventChannels` 的 StartTurn 会话（裸字节直推） |
+| `bridge/terminal_events` | `TerminalServerMessage` wire 字节 | `terminal_stream.dart` 的 `_decodeEvent`（:196）→ `bytesOrThrow` | `BridgeEventChannels` 的 Attach 会话（裸字节直推） |
+
+- **为什么不套 Envelope**：内容类型由**通道名**唯一确定（一通道一消息），再包一层
+  `type` 判别等于把同一条信息写两遍；判别位只留给「一条通道多种载荷」的主事件面。
+- **坏帧一样不毒化流**：载荷违约 → 流错误 `DECODE_FAILED`，流保持打开（与本节
+  「坏事件不毒化流」同纪律），后续帧照收。
+- **续传水位**：`turn_events` 的 `TurnServerMessage.sequence` 与 `turnResync`
+  （`GetThreadEventsSince` 的 `after_sequence`，§3 表 #28）同一序列空间。
+
 ## 5. 错误码（`PaBridgeErrorCodes`，UI 按 code 分支）
 
 | 码 | 产生方 | 触发 |
@@ -298,30 +366,51 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 
 宿主 code 不在表内时 Dart 原样保留（透传不改写）；新增宿主错误码必须回填本表。
 
-## 6. Kotlin 宿主侧待实现（B4 波次清单）
+## 6. Kotlin 宿主侧接线状态（B4 波次：**已落地**）
 
-- [ ] 在 FlutterEngine 挂载时注册 MethodChannel `dev.pocketagent/bridge`
-      handler：35 个方法按 §3 签名（method 名字符串逐字对齐）。
-- [ ] 返回值一律走 proto `writeToBuffer()` 字节（与 gRPC 契约同源，复用
+装配入口 `installBridge`（`bridge/BridgeMethods.kt`）由
+`flutterhost/FlutterHostEngine.installChannelShell` 在 FlutterEngine 挂载时调用，
+三件套一次装好：事件面 `BridgeEventChannels` → 双向流 `BridgeStreamWiring` →
+方法面 `BridgeMethods`（顺序不可换：methods 的 dispatch 要经 wiring 取 stub 与
+sink；wiring 又要持 channels 的建流 machinery）。
+
+- [x] 在 FlutterEngine 挂载时注册 MethodChannel `dev.pocketagent/bridge`
+      handler：方法名按 §3 表逐字对齐（**30 条 dispatch 分支**；另 15 条「有意未接」
+      见 §8）。
+- [x] 返回值一律走 proto `writeToBuffer()` 字节（与 gRPC 契约同源，复用
       `HostInfo`/`HostEvent`/`TurnInput`/`ListThreadsResponse` 的既有 Kotlin 生成类）。
-- [ ] `getConnectionState`：直接取 `AgentConnection` 五条 StateFlow 当前值拼
-      §3.4 五键 Map（键名 = 字段名）。
-- [ ] `listThreads` / `listDirectory` / `listBranches`：转发对应 daemon RPC，
+- [x] `getConnectionState`：直接取 `AgentConnection` 五条 StateFlow 当前值拼
+      §3.4 五键 Map（键名 = 字段名；五键恒有值，StateFlow 语义）。
+- [x] `listThreads` / `listDirectory` / `listBranches`：转发对应 daemon RPC，
       `repeated` 字段按 proto 原样字节回传（不给手机端做投影/筛选，那是页端的事）。
-- [ ] runtime 域 5 条只读（§3.11–§3.15）：转发 `RuntimeService.GetRuntimeState` /
-      `GetRuntimePolicy` / `GetControlPlane` / `ListUnknownEvents` /
-      `GetUnknownEvent`，字节原样回传。**写操作四件套本波不注册**
-      （SetRuntimePolicy / SetCollabPolicy / AcknowledgeUnknownEvent /
-      ExecuteUnknownEventAction，见 §3.16）。
-- [ ] `readFile`：proto 是 server stream，宿主只回**首块** `FileChunk`（§3.9）；
-      分块流的完整消费面留 B5，本波不实现。
-- [ ] 注册 EventChannel `dev.pocketagent/bridge/events` StreamHandler：
-      五条 StateFlow 合流（任一变化 → `conn_state` 全量快照帧）、
-      `hostEvents`（WatchEvents）逐帧 → `host_event`（字节直转）；
-      `HostInfo` 变化 → `host_info`。
-- [ ] 错误码对齐 §5（宿主侧只抛表内 code + 人话 message）。
-- [ ] `pairCode` 复用 `GetPairingInfo` 的回环来源自检（安全语义不得放松）。
-- 本波不做：Turn 双向流的 Dart 消费面（`TurnServerMessage` 增量/审批）——B3。
+- [x] 双向流六条（`turnStreamStart`/`Send`/`Cancel` + `terminalAttach`/`Write`/
+      `Close`）：经 `BridgeStreamWiring` seam 取 async stub 与 sink；seam 未注入或
+      sink 不在即 `HOST_UNAVAILABLE` **点名缺什么**，不建「建了流却收不到帧」的假流；
+      建流后有界等待请求 observer 就绪（`STREAM_READY_TIMEOUT_MS`），保证紧随的首帧
+      有落点。
+- [x] `turnResync`：`GetThreadEventsSince` 是 server stream，收齐后一次性返回
+      `List<Uint8List>`（§3 表 #28；空数组 = 无新帧）。
+- [x] `readFile`：proto 是 server stream，宿主只回**首块** `FileChunk`（§3.9）；
+      空流按 §5 `INTERNAL` 显式失败，不拿空消息冒充首块。
+- [x] 注册三条 EventChannel 的 StreamHandler：`bridge/events`（`conn_state`
+      全量快照帧 + `host_info` + `host_event`，三条各走独立协程 + `supervisorScope`，
+      一源挂不杀全流）、`bridge/turn_events`、`bridge/terminal_events`（后两条按 §4.1
+      推裸 wire 字节）。
+- [x] 错误码对齐 §5：宿主侧只抛表内 code + 人话 message；`BridgeErrors.contractCodeOf`
+      是唯一映射表（7 码逐条钉死在 `BridgeErrorsTest`），`pairCode` 走
+      `pairCodeContractCodeOf` 专属覆盖（PERMISSION_DENIED → `PAIR_DISABLED`）。
+- [x] `pairCode` 复用 `GetPairingInfo` 的回环来源自检（安全语义不得放松）；
+      配对未开启或码为空一律 `PAIR_DISABLED`，不用空返回代替错误。
+- [x] 方法面与事件面**共享同一个 `AgentConnection` 实例**：`host_info` 帧只来自
+      「经本实例的 `updateHostInfo` 成功路径」，两个连接各走各的会让 `host_info` 帧
+      永远静默。
+- [x] 未知方法名走 `else` 分支：`HOST_UNAVAILABLE` + 把「Android 桥有意未接（§8）」
+      与「契约漂移（§3 未同步）」两种可能并列写出，指向本文档，由排查者裁决
+      （不替人下结论、也不在代码里写死方法名单）。
+- [ ] **真机验证待设备**：以上装配与链路目前只有 JVM 单测（`BridgeMethodsTest` /
+      `BridgeErrorsTest` / `BridgeEventChannelsTest` / `FlutterHostBridgeInstallTest`）
+      与 Dart 侧 mock 宿主 wire 覆盖；`adb devices` 当前**无设备**，真机冷启、事件面
+      实推、双向流首帧落地均未在真机验过（2026-10-17）。
 
 ## 7. 类型来源总表（哪些直接用 gen 消息 / 哪些是小类）
 
@@ -332,6 +421,34 @@ payload 统一为 Envelope Map：`type` 判别 + 载荷字段：
 | `PaConnEvent` | 本契约小类 | 事件 Envelope（`type` + 三种载荷） |
 | `PaBridgeException` / `PaBridgeErrorCodes` | 本契约小类 | 错误模型（§5） |
 | `RuntimeStateResponse` / `RuntimePolicyResponse` / `ControlPlane` / `ListUnknownEventsResponse` / `UnknownEventResponse` / 五条请求消息 | gen stub（`lib/gen/pocketagent/v1/runtime.pb.dart`） | runtime 域 5 条只读方法（§3.11–§3.15）的返回/入参；**零小类包装**——这些消息就是契约本身，页面侧的展示投影（额度行/标签词表）是页端纯函数，不进通道层 |
+
+## 8. 宿主桥「有意未接」清单（15 条 —— D-1 的文档半）
+
+§3 表末列标 `有意未接` 的方法名：**Dart 侧可以调**（代码在、测试在、UI 在用），
+**Android 宿主桥故意不注册** —— 调用会拿到 `HOST_UNAVAILABLE`。这不是契约漂移，
+也不是「忘了做」；把它标出来是为了让 Dart 调用方与排查者一眼分得清。
+
+**共同原因（一条）**：Android 自有 UI 走 `AgentConnection.<service>()` 直接打 gRPC
+stub，根本不经过 MethodChannel。同一个 daemon RPC 在两个壳里各有一条调用路径，
+桥上再注册一份只会多出一条当前零消费者的路径 —— 加分支等于扩 RPC 契约面
+（甲级面，无消费者不摆假入口，红线：不新增写死的名单 / 不摆假入口）。
+
+| 组 | 方法 | Android 侧实际路径（不过桥） |
+|---|---|---|
+| runtime 域只读 5 条 | `getRuntimeState` / `getRuntimePolicy` / `getControlPlane` / `listUnknownEvents` / `getUnknownEvent` | `AgentConnection.runtimeService()`（settings_console 的 console 页直接消费） |
+| Chat 周边动作 10 条 | `submitApproval` / `cancelTurn` / `clearQueuedInputs` / `compactThread` / `forkThread` / `rollbackThread` / `setThreadGoal` / `startReview` / `exportThreadHtml` / `optimizePrompt` | `AgentConnection.threadService()`（`ChatViewModel` 的同名 suspend 函数） |
+
+**处置纪律**：
+
+1. **不加分支**。要接就走 §3 其余 30 条的同款写法（`parseProto` 收字节 → `rpc(method)`
+   转发 → `toByteArray()` 回传），并在 §3 表把末列改成 `已接`；**改完机器立刻红**
+   ——那是提醒你顺手把 §8 的对应行删掉，不是提醒你补文档。
+2. **兜底文案不许替人下结论**。`BridgeMethods` 的 `else` 分支拿不到「这是有意未接
+   还是真漂移」的信息（区分它就得在代码里写死方法名单），所以它把两种可能**并列**
+   写出来并指向本文档，由排查者对照 §3 末列与本节裁决。
+3. **这两组方法的 Dart 面仍然要真接**。它们是 Flutter UI 的活路径（如 console 页的
+   总览、Chat 的审批/压缩/导出按钮），在 Flutter 自己的壳里走独立宿主，走 Android
+   壳时才拿 `HOST_UNAVAILABLE`——UI 必须有诚实占位，不许拿空态冒充成功。
 
 ## 附录 A：Dart gen stub 重生成（2026-10-14 本机实测）
 

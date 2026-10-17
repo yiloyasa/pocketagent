@@ -111,9 +111,17 @@ class BridgeMethods(
      * 方法分发主体（挂起函数：测试用 runBlocking 驱动，生产在 IO 线程执行）。
      *
      * 【为什么未知方法也回 HOST_UNAVAILABLE】双端同 APK 同 versionCode（§2.6），
-     * 未知方法名只能是契约漂移（一端改了另一端没改），与「本波未实现」同样表现为
-     * 「这个 method 没有可用实现」。但**消息分开**：契约内未实现点名留后事项，
-     * 契约外点名漂移——排查时一眼可辨，且都不写死任何方法名单数据结构。
+     * 两种「这个 method 没有可用实现」都必须显式失败，不许静默吞：
+     *  - §3 表末列标 `有意未接` 的方法名（§8 清单）：Android 自有 UI 走
+     *    `AgentConnection.<service>()` 直连 gRPC，**故意**不注册桥分支；
+     *  - 契约外的方法名：真·契约漂移（一端改了另一端没改）。
+     *
+     * 【为什么消息并列写出两种可能，而不是替人下结论】宿主这边**拿不到**判定所需的
+     * 信息——要区分只能把方法名写死成一张名单，那是红线 4（不新增写死的名单），
+     * 而且名单本身会立刻变成第二份真源。故此处把两种可能连同定位锚点一起交出去，
+     * 由排查者对照 `flutter/docs/channel-contract.md` §3 表末列与 §8 裁决。
+     * 文案仍保留「未知方法」与「契约漂移」两个可 grep 的定位词（既有断言钉的就是
+     * 这两个，不因改文案而弱化）。
      */
     internal suspend fun dispatch(call: BridgeMethodCall): Any? {
         val method = call.method
@@ -443,13 +451,19 @@ class BridgeMethods(
                 // ── 契约内、本波不实现（如实缺席，不伪造返回）────────────────
                 //
                 // terminalClose 已实现（见上「终端」节：Map → CloseTerminal
-                // unary RPC）。双向流六条已接（见上）。此处仅剩未知方法名。
-
-                // 双端同版政策：未知方法名只能是契约漂移（一端改了另一端没改）。
+                // unary RPC）。双向流六条已接（见上）。§3 表标 `有意未接` 的 15 条
+                // **故意**不注册（理由见 channel-contract.md §8：Android 自有 UI
+                // 直连 gRPC 不过桥）。此处只剩「这个方法名在桥上没有任何实现」。
+                //
+                // 消息把两种可能并列写出（有意未接 / 契约漂移）并指向契约文档：
+                // 宿主无法自行区分（区分需写死方法名单 = 红线 4），不替人下结论。
                 else -> throw BridgePlatformException(
                     BridgeErrorCodes.HOST_UNAVAILABLE,
-                    "未知方法 $method（契约漂移：双端同 APK 同版本，未知方法名只能是" +
-                        "channel-contract.md §3 与宿主实现未同步，请同步改契约而非静默吞掉）",
+                    "未知方法 $method（dev.pocketagent/bridge 上没有宿主实现，两种可能请对照" +
+                        "flutter/docs/channel-contract.md 核实：① Android 桥有意未接——§3 表" +
+                        "「宿主桥」列标「有意未接」的那批，Android 自有 UI 直连 gRPC 不过桥，" +
+                        "见 §8；② 契约漂移——§3 方法名与宿主 dispatch 未同步，需双端同改，" +
+                        "不得静默吞掉）",
                 )
             }
         }
