@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-"""PocketAgent 真机验收 - 阶段2: 构建门禁 (方案 §5.1)"""
-import subprocess, os, datetime, time, json
+"""PocketAgent 真机验收 - 阶段2: 构建门禁 (方案 §5.1)
+
+退出码: 0=四道门禁全过; 1=任一门禁失败。此前算出 allok 后只 print
+就自然退 0（CI/编排里 `python _pa_audit_gate.py && 下一步` 会在 FAIL 后照样继续 = 永绿）。
+全仓已核: 无任何 subprocess/脚本调用方（仅 tools/ops/cleanup_cdrive.py 的文件名清单、
+tools/device/README.md 与评审文档提及），故无需 --strict 开关，直接收口退出码。
+"""
+import subprocess, os, sys, datetime, time, json
 
 ROOT = r'G:\项目1\pocketagent'
 DAEMON = os.path.join(ROOT, 'daemon')
@@ -125,3 +131,7 @@ save('gate-summary.md', '\n'.join([
 ] + lines + ['', '**门禁总判定: %s**' % ('PASS' if allok else 'FAIL')]))
 print()
 print('门禁总判定: %s' % ('PASS' if allok else 'FAIL'))
+
+# 假绿根治: 判定必须进退出码。上文仍保留“打印 FAIL 后退 0”的旧行为；
+# 本行使 CI/编排能在非 0 时停下（无调用方可能依赖旧的恒 0，已全仓核实）。
+sys.exit(0 if allok else 1)

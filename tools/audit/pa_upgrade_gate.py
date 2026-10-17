@@ -10,7 +10,10 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
                            summary     → redline/warn/pass
   git rev-parse/status   commit + 工作区干净度
   结果 XML 直读           tests/failures/errors + 最新 mtime 年龄
-                         （fake_green 同口径：>10 分钟=陈旧=疑似 Gradle UP-TO-DATE 假绿）
+                         （fake_green 同判据：>10 分钟=陈旧=疑似 Gradle UP-TO-DATE 假绿；
+                           另加「无 XML」「有 XML 解析失败」两条件）
+                         2026-10-17 起：这三条与 pa_audit.FakeGreenRule **同严重级别**
+                         （那边也判 FAIL），不再存在「报告说提示、门禁说阻断」的双口径。
   dist 双资产 mtime      daemon.exe + pocketagent.apk 是否晚于 release.ps1 / 打包脚本
                          （2026-10-13 起改指总包，不再看 windows 中间 zip）
   tools/release 门禁     check_version.py / check_release.py 子进程直调（只判退出码）
@@ -32,6 +35,11 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
   python tools/audit/pa_upgrade_gate.py --stage release --skip android_tests
   python tools/audit/pa_upgrade_gate.py --stage feature --go C:\\Go\\bin\\go.exe
 
+结果 XML 目录优先级：**--test-results 显式参数 > 环境变量 PA_MIRROR >
+默认主镜像 G:\\pa\\android**（相对路径与 _pa_gradle.py 的镜像布局一致；
+子代理用 PA_MIRROR=G:\\pa_x 隔离镜像跑测试后若不设它，会拿主镜像旧 XML 判新鲜度
+→ 假绿）。
+
 退出码：0=ALLOW（可进入下一阶段）；1=BLOCK；参数错误=argparse SystemExit(2)。
 所有 subprocess 带 CREATE_NO_WINDOW（Windows 无窗红线；POSIX 无此常量退化为 0）。
 纯标准库；单测见 test_pa_upgrade_gate.py。本脚本只读：无 git 写操作、不 commit。
@@ -39,6 +47,7 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -55,12 +64,25 @@ PASS, FAIL, WARN, SKIPPED, NOT_IMPLEMENTED = (
     "PASS", "FAIL", "WARN", "SKIPPED", "NOT_IMPLEMENTED")
 ALLOW, BLOCK = "ALLOW", "BLOCK"
 
-STALE_MINUTES = 10      # 与 pa_audit.FakeGreenRule.STALE_MINUTES 同口径（改需同步）
+STALE_MINUTES = 10      # 与 pa_audit.FakeGreenRule.STALE_MINUTES 同口径（改需同步；2026-10-17
+                        # 起两边严重级别也同口径：陈旧一律阻断，见 fix-infra-verdict-align.md）
 AUDIT_TIMEOUT = 1500    # pa_audit 内部 go build/vet 各 600s 上限 + 扫描余量
 GIT_TIMEOUT = 60
 
-# 与 pa_audit 默认一致（镜像盘）；两处字面量需同改（见 pa_audit.build_ctx）
-TEST_RESULTS_DEFAULT = r"G:\pa\android\app\build\test-results\testDebugUnitTest"
+# 结果 XML 默认目录与 pa_audit 同口径（见 pa_audit.default_test_results）：
+# 优先级 = 显式 --test-results > 环境变量 PA_MIRROR > 主镜像。PA_MIRROR 与
+# tools/device/_pa_gradle.py 同名同义（隔离镜像根）；以前只认主镜像，
+# 子代理在隔离镜像下跑完测试再跑本门禁 = 读主镜像旧 XML 判新鲜度
+# → 假绿。相对路径与镜像布局同源，不得一处改一处改。
+MAIN_MIRROR_DEFAULT = r"G:\pa\android"
+MIRROR_APP_TEST_RESULTS = ("app", "build", "test-results", "testDebugUnitTest")
+
+
+def default_test_results() -> Path:
+    """默认结果 XML 目录：PA_MIRROR 隔离镜像，未设则回落主镜像。"""
+    mirror = os.environ.get("PA_MIRROR") or MAIN_MIRROR_DEFAULT
+    return Path(mirror).joinpath(*MIRROR_APP_TEST_RESULTS)
+
 
 # go 环境异常标注的识别串（pa_audit.GoBaselineRule.ENV_ABNORMAL_MSG 的稳定子串）
 ENV_ABNORMAL_MARK = "异常退出码"
@@ -139,7 +161,12 @@ def default_cmd_runner(args: List[str], cwd: Optional[str] = None,
 
 
 def fetch_audit_json(g: GateCtx) -> dict:
-    """subprocess 调 pa_audit.py --json（退出码 0/1 均有效：1=有 redline，JSON 仍完整）。"""
+    """subprocess 调 pa_audit.py --json（退出码 0/1 均有效：1=有 redline，JSON 仍完整）。
+
+    rc=1 现在**更常见**了：2026-10-17 起 pa_audit 的 fake_green 对「陈旧/无 XML/解析失败」
+    也判红线。这里必须继续照收 rc=1 的 JSON（否则审计类检查会因取不到 JSON 而全降级
+    NOT_IMPLEMENTED，反而成了新的假绿通道）——**不要**因为 rc=1 变常见就收紧成只收 0。
+    """
     script = Path(__file__).resolve().parent / "pa_audit.py"
     cmd = [sys.executable, str(script), "--json", "--repo", str(g.repo),
            "--test-results", str(g.test_results)]
@@ -273,6 +300,12 @@ def check_proto_sync(g: GateCtx) -> Check:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check_android_tests(g: GateCtx) -> Check:
+    """失败 / 有 XML 解析失败 / 陈旧 / 无 XML —— 一律 FAIL。
+
+    这四个 FAIL 条件与 pa_audit.FakeGreenRule 的四个红线条件一一对应（2026-10-17
+    起两边同判据、同严重级别）。改任一边必须同改另一边，否则又会退回「同一份 XML、
+    两种口径」的老问题。
+    """
     cid, title = "android_tests", CHECK_TITLES["android_tests"]
     d = g.test_results
     files = sorted(d.glob("*.xml")) if d.exists() else []
@@ -576,7 +609,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--go", help="go 可执行文件（转发给 pa_audit；默认由 pa_audit 解析）")
     ap.add_argument("--repo", help="仓库根目录（默认：脚本上两级）")
     ap.add_argument("--test-results",
-                    help="testDebugUnitTest 结果 XML 目录（默认镜像盘 G:\\pa\\...）")
+                    help="testDebugUnitTest 结果 XML 目录（默认：先看环境变量 PA_MIRROR 拼 <PA_MIRROR>\\app\\build\\test-results\\testDebugUnitTest，未设则回落 G:\\pa\\android；本参数优先级最高）")
     ap.add_argument("--dist", help="dist 目录（双资产所在，默认 --repo/dist）")
     return ap.parse_args(argv)
 
@@ -587,7 +620,7 @@ def build_gate_ctx(args: argparse.Namespace) -> GateCtx:
         repo=repo,
         stage=args.stage,
         test_results=Path(args.test_results) if args.test_results
-        else Path(TEST_RESULTS_DEFAULT),
+        else default_test_results(),
         dist_dir=Path(args.dist) if args.dist else repo / "dist",
         go_cmd=args.go or "",
     )

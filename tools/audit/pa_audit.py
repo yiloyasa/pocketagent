@@ -17,9 +17,12 @@ v1 规则（每条独立开关，--only / --skip 可选）：
   unknown_ui      UI「未知」字符串：android main 源码非注释区出现「未知」→ 提示
                   （机器无法判定是否用户可见，交人裁决；注释豁免，Kotlin 块注释
                   可嵌套——README §12 坑 3，词法已处理）
-  fake_green      假绿哨兵：解析 testDebugUnitTest 结果 XML，failures/errors>0 →
-                  红线；最新 XML 距今 >10 分钟 → 提示疑似 Gradle UP-TO-DATE，
-                  需 --rerun（本夜 7 次实锤的规则化，README §9 口径）
+  fake_green      假绿哨兵：解析 testDebugUnitTest 结果 XML，四条判据**全部阻断**
+                  （红线 → 退出码 1）：failures/errors>0；最新 XML 距今 >10 分钟
+                  （疑似 Gradle UP-TO-DATE，需 --rerun）；目录里一份 XML 都没有；
+                  有 XML 解析失败（计数不完整）。一律按「证据缺失/证据陈旧不得放行」
+                  处理（AGENTS 红线 5 不留假绿），且与 pa_upgrade_gate.check_android_tests
+                  逐条同口径同严重级别 —— 详见 fix-infra-verdict-align.md 的裁决。
   go_baseline     daemon 基线：go build ./...（失败 → 红线）+ go vet ./...
                   （有发现 → 提示；存量 protobuf 值拷贝噪音见 README §11。
                   go 以非语义退出码(<0 或 >2，如 0xC0000142)结束 → 环境异常
@@ -27,6 +30,13 @@ v1 规则（每条独立开关，--only / --skip 可选）：
   proto_sync      契约同步：proto/v1 与 android/app/src/main/proto/v1 两副本
                   逐文件 MD5 比对（README §3：MD5 必须一致），不一致 → 红线
                   （AUDIT §3.1 红线 3）
+  channel_contract_sync
+                  跨域通道契约同步（flutter/docs/channel-contract.md ↔ Kotlin
+                  bridge ↔ Dart 通道面）：六项集合/标记对账，任何一项对不上
+                  → 红线（方法名、arguments 列、通道名、错误码、§X.Y 交叉引用、
+                  「待实现」滞后措辞）。**全项只读**：不写任何被检查的文件；
+                  **零内嵌名单**：方法名/通道名/错误码一律从真源推导
+                  （红线 4：检查器不得持有第二份真源）
 
 用法：
   python tools/audit/pa_audit.py                    # 全仓扫描，三栏文本报告
@@ -35,6 +45,17 @@ v1 规则（每条独立开关，--only / --skip 可选）：
   python tools/audit/pa_audit.py --skip go_baseline
   python tools/audit/pa_audit.py --test-results <dir> --go <path/to/go>
 
+结果 XML 目录优先级：**--test-results 显式参数 > 环境变量 PA_MIRROR >
+默认主镜像 G:\\pa\\android**。PA_MIRROR 与 tools/device/_pa_gradle.py 同名同义
+（隔离镜像根；该脚本把 android/ 模块树整体铺在镜像下，故 app 模块相对路径恒为
+app/build/test-results/testDebugUnitTest）。子代理在 PA_MIRROR=G:\\pa_x 下跑完测试后若走默认主镜像，
+读到的就是主镜像的上一轮旧 XML → 假绿（AGENTS 红线 5），故在此写明优先级。
+
+退出码：**0 = 无红线；1 = 有红线**（含 fake_green 的陈旧/缺失/解析失败/失败用例）。
+本工具与 pa_upgrade_gate 对「同一份结果 XML」已统一为同一判据、同一严重级别：
+两边都不再出现「一边提示放行、一边阻断」的双口径。与 Android 测试无关的局部排查，
+请显式 --skip fake_green —— 显式跳过可见于命令行/审计日志，好过一个 exit 0 的假绿。
+
 纯标准库；单测见 test_pa_audit.py（python -m unittest tools/audit/test_pa_audit.py -v）。
 本脚本不接 CI、不进计划任务；不做 git commit。
 """
@@ -42,6 +63,7 @@ v1 规则（每条独立开关，--only / --skip 可选）：
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -512,7 +534,19 @@ class UnknownUiRule:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FakeGreenRule:
-    """解析 testDebugUnitTest 结果 XML：计数 + 最新 mtime（>10 分钟提示 --rerun）。"""
+    """解析 testDebugUnitTest 结果 XML：计数 + 最新 mtime。
+
+    严重级别口径（2026-10-17 裁决，与 pa_upgrade_gate.check_android_tests 对齐）：
+    下面四种「拿不到可信测试结论」的情形一律判**红线（阻断，退出码 1）**，不是提示：
+      1. failures/errors > 0            —— 真失败
+      2. 最新 XML 距今 > STALE_MINUTES   —— 疑似 Gradle UP-TO-DATE 假绿，需 --rerun
+      3. 目录里一份 XML 都没有          —— 证据缺失，不得当作「没跑测试也没事」
+      4. 有 XML 解析失败                —— 计数不完整，不能据此宣称 0 失败
+    之前 2/3/4 判 WARN、只有 1 判红线，于是 `pa_audit.py --only fake_green`
+    拿着 41 小时前的旧 XML 仍 exit 0，而同一份 XML 在 pa_upgrade_gate 侧被 BLOCK ——
+    一个 exit 0 的提示就是一条假绿通道（AGENTS 红线 5）。
+    与本次无关的局部排查请显式 --skip fake_green，不要靠「它只提示」放行。
+    """
 
     id = "fake_green"
     title = "假绿哨兵（测试结果 XML 计数 + 时间戳，防 Gradle UP-TO-DATE）"
@@ -523,8 +557,9 @@ class FakeGreenRule:
         d = ctx.test_results
         files = sorted(d.glob("*.xml")) if d.exists() else []
         if not files:
-            return [Finding(WARN, self.id,
-                            f"未找到测试结果 XML：{d}（L1 未跑、目录不对、或构建未落盘）")]
+            return [Finding(RED, self.id,
+                            f"未找到测试结果 XML：{d}（L1 未跑、目录不对、或构建未落盘）"
+                            f"——无测试证据不得放行，与 pa_upgrade_gate 同口径（阻断）")]
         total = fails = errors = 0
         latest = 0.0
         bad_suites = []
@@ -553,12 +588,14 @@ class FakeGreenRule:
                                     f"测试结果 XML 有 {fails} failures / {errors} errors"
                                     f"（共 {total} 用例）", bad_suites))
         if age_min > self.STALE_MINUTES:
-            findings.append(Finding(WARN, self.id,
+            findings.append(Finding(RED, self.id,
                                     f"最新结果 XML 距今 {age_min:.0f} 分钟（>{self.STALE_MINUTES}），"
-                                    f"疑似 Gradle UP-TO-DATE 假绿，需 --rerun 重跑后再下结论"))
+                                    f"疑似 Gradle UP-TO-DATE 假绿：阻断，需 --rerun 重跑后再下结论"
+                                    f"（与 pa_upgrade_gate android_tests 同口径）"))
         if parse_notes:
-            findings.append(Finding(WARN, self.id,
-                                    f"{len(parse_notes)} 份 XML 解析失败，计数可能不完整", parse_notes))
+            findings.append(Finding(RED, self.id,
+                                    f"{len(parse_notes)} 份 XML 解析失败，计数不完整，"
+                                    f"不得据此宣称 0 失败：阻断", parse_notes))
         if not findings:
             findings.append(Finding(PASS, self.id,
                                     f"{len(files)} 份 XML / {total} 用例 / 0 失败 0 错误，"
@@ -673,11 +710,436 @@ class ProtoSyncRule:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 规则 7：跨域通道契约同步（channel-contract.md ↔ Kotlin bridge ↔ Dart 通道面）
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 本规则在源码里出现的字符串**只有两类**：① 文件/列的定位词（路径、Markdown 单元格
+# 位置、表头字样）；② 文档的机器标记词（「有意未接」/「已接」这类**格式标记**）。
+# 领域数据（§3 全部方法名、§1 全部通道名、§5 全部错误码、§4 全部事件 type）**一个
+# 字都不写死**：全部从 §1/§3/§5 与 Dart/Kotlin 源码现场推导（红线 4：不新增写死
+# 名单）。连这里的注释都不写条数——注释里的数字一样会过期成新的漂移源。
+
+# 契约文档里标记「宿主桥故意不注册」的单元格关键词。契约 §3 表末列用它逐行声明
+# 接线状态；检查器据此把「文档要求接」与「文档声明有意未接」分成两集合求差。
+HOST_CELL_UNWIRED = "有意未接"
+# 文档时效哨兵：`installBridge` 已有真实调用点（即桥已装配）时，契约文档若还写
+# 「待实现 / 待落盘」即为滞后漂移（clean-cross-domain D-4）。桥一旦摘掉装配，
+# 本项自动放行 —— 判据是「有没有调用点」，不是「文档写了什么」。
+STALE_MARKERS = ("待实现", "待落盘")
+
+
+@dataclass
+class ContractRow:
+    """契约 §3 表的一行（方法名 + arguments 列 + 宿主桥列）。"""
+
+    name: str
+    args: str
+    host: str
+
+
+def _md_section(md: str, number: str) -> str:
+    """取 `## <number>.` 到下一个 `## ` 之间的正文（不含二级标题行本身）。"""
+    start = md.find("\n## " + number + ".")
+    if start < 0:
+        return ""
+    rest = md[start + 1:]
+    nxt = rest.find("\n## ", 1)
+    return rest if nxt < 0 else rest[:nxt]
+
+
+def _table_cells(line: str) -> List[str]:
+    if not line.startswith("|"):
+        return []
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _backticked_tokens(cell: str) -> set:
+    """单元格反引号片段里的标识符 token 集合（§3 表 arguments 列的名实对账用）。"""
+    toks = set()
+    for span in re.findall(r"`([^`]*)`", cell):
+        toks.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", span))
+    return toks
+
+
+def _contract_rows(md: str) -> Tuple[List[ContractRow], bool]:
+    """解析 §3 方法表；返回（行列表, 是否有「宿主桥」列）。
+
+    列位置：`| # | 方法名 | Dart 签名 | arguments | 返回 | 宿主桥 |`。
+    表头缺末列时 host 一律取空串（等价于「文档要求接」= 更严的一侧），
+    由调用方另行报「缺列」问题——不因列缺失而静默放行。
+    """
+    sec = _md_section(md, "3")
+    rows: List[ContractRow] = []
+    has_host_col = any("宿主桥" in c for line in sec.splitlines()
+                       for c in _table_cells(line))
+    for line in sec.splitlines():
+        cells = _table_cells(line)
+        if len(cells) < 2:
+            continue
+        m = re.fullmatch(r"`([A-Za-z][A-Za-z0-9]*)`", cells[1])
+        if not m:
+            continue
+        host = cells[5].strip() if has_host_col and len(cells) >= 6 else ""
+        rows.append(ContractRow(m.group(1),
+                                cells[3] if len(cells) >= 4 else "", host))
+    return rows, has_host_col
+
+
+def _contract_codes(md: str) -> set:
+    """§5 错误码表第一列的反引号大写码集合。"""
+    out = set()
+    for line in _md_section(md, "5").splitlines():
+        cells = _table_cells(line)
+        if cells:
+            m = re.fullmatch(r"`([A-Z][A-Z0-9_]*)`", cells[0])
+            if m:
+                out.add(m.group(1))
+    return out
+
+
+def _contract_channels(md: str) -> set:
+    """§1 通道表「名称」列里的反引号通道名。
+
+    列位置**由表头推导**（取表头里含「名称」的那一列），不写死下标：这样 §1
+    正文里出现的仓库路径（`pages/xxx_transport.dart`，也含 `/`）不会被误当通道名。
+    错误码不含 `/`，据此与错误码分流。
+    """
+    out = set()
+    col, seen_header = 2, False
+    for line in _md_section(md, "1").splitlines():
+        cells = _table_cells(line)
+        if not cells:
+            continue
+        if not seen_header:
+            seen_header = True
+            for i, c in enumerate(cells):
+                if "名称" in c:
+                    col = i
+            continue
+        if col < len(cells):
+            out.update(s for s in re.findall(r"`([^`]*)`", cells[col]) if "/" in s)
+    return out
+
+
+def _doc_anchors(md: str) -> set:
+    """文档内可被 §X.Y 指到的锚点：全部二/三级标题号 + §2 编码总则的编号条目。
+
+    §2 是「1./2./3.」有序列表而非子标题，但正文按 §2.5 这样引用 —— 故把有序列表
+    条目号一并收进锚点集，否则 §2.1/§2.5/§2.6 会被误报成悬挂引用。
+    """
+    anchors = set(re.findall(r"^#{2,3}\s+(\d+(?:\.\d+)?)[.．]?\s", md, re.M))
+    sec2 = _md_section(md, "2")
+    for n in re.findall(r"^(\d+)\.\s", sec2, re.M):
+        anchors.add("2." + n)
+    return anchors
+
+
+def _dart_consts(dart_lib: Path) -> Tuple[dict, set, set]:
+    """扫 flutter/lib 全树：返回（标识符→字符串值, 通道名集合, 错误码集合）。
+
+    分流只按**值的形状**（含 `/` = 通道名；全大写下划线 = 错误码），不按所在类名
+    ——新增一条错误码或一条通道都会自动落进对应集合，漏不掉也不必改本规则。
+    """
+    consts, channels, codes = {}, set(), set()
+    for p in sorted(dart_lib.rglob("*.dart")):
+        src = p.read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r"(?:static\s+)?const\s+String\s+(\w+)\s*=\s*'([^']*)'", src):
+            ident, val = m.group(1), m.group(2)
+            consts.setdefault(ident, val)
+            if "/" in val:
+                channels.add(val)
+            elif re.fullmatch(r"[A-Z][A-Z0-9_]*", val):
+                codes.add(val)
+    return consts, channels, codes
+
+
+def _kotlin_consts(bridge_dir: Path) -> Tuple[set, set]:
+    """扫 bridge 包全部 .kt：返回（通道名集合, 错误码集合）。同样按值形状分流。"""
+    channels, codes = set(), set()
+    for p in sorted(bridge_dir.rglob("*.kt")):
+        src = p.read_text(encoding="utf-8", errors="replace")
+        masked = mask(src, "kotlin", mask_strings=False, mask_comments=True)
+        for m in re.finditer(r"\bconst\s+val\s+\w+(?:\s*:\s*\w+)?\s*=\s*\"([^\"]*)\"", masked):
+            val = m.group(1)
+            if "/" in val:
+                channels.add(val)
+            elif re.fullmatch(r"[A-Z][A-Z0-9_]*", val):
+                codes.add(val)
+    return channels, codes
+
+
+_INVOKE_RE = re.compile(r"\b(?:invokeMethod|_invoke|_invokeExpectNull)(?:<[^>]*>)?\(")
+_ARG_TOKEN_RE = re.compile(r"'[^']+'|[A-Za-z_$][A-Za-z0-9_$]*")
+
+
+def _split_args(src: str, open_idx: int) -> List[str]:
+    """把 `f(` 之后的实参按顶层逗号切开（`open_idx` 指向紧跟 `(` 的位置）。
+
+    深度记 ()[]{}；`<` 只在紧跟标识符/`>` 且不是 `<=` 时算泛型括号 ——
+    否则 `Map<String, Object?>` 里那个逗号会把实参切碎（args[1] 变半个泛型）。
+    遇到匹配闭括号即停（返回体里的 `{}` 已由 depth 计入）。
+    """
+    args: List[str] = []
+    buf: List[str] = []
+    level, angle = 1, 0
+    i, n = open_idx, len(src)
+    while i < n:
+        c = src[i]
+        prev = src[i - 1] if i else ""
+        nxt = src[i + 1] if i + 1 < n else ""
+        if c in "([{":
+            level += 1
+        elif c in ")]}":
+            level -= 1
+            if level == 0:
+                args.append("".join(buf))
+                return args
+        elif c == "<" and level == 1 and nxt != "=" and (prev.isalnum() or prev in "_>"):
+            angle += 1
+        elif c == ">" and level == 1 and angle > 0:
+            angle -= 1
+        elif c == "," and level == 1 and angle == 0:
+            args.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    return args
+
+
+def _dart_methods(dart_lib: Path, consts: dict) -> Tuple[dict, List[str]]:
+    """返回（方法名 → arguments 实参原文, 用到方法通道的 Dart 文件清单）。
+
+    文件集不写死：先从常量里认出**被 `MethodChannel(...)` 用的那个标识符**，再取
+    全树里真正用 `MethodChannel(<该标识符>)` 建通道的文件 —— 新增一个 transport
+    面会自动进来，无需改本规则。方法名同理：字面量直取，常量引用经 `consts` 解引用
+    （`chat_turn_stream.dart` 的 `kTurnStreamStartMethod` 这类必须解，否则整条漏掉）。
+    """
+    files = sorted(dart_lib.rglob("*.dart"))
+    srcs = {p: p.read_text(encoding="utf-8", errors="replace") for p in files}
+    method_ident = next(
+        (ident for ident, val in sorted(consts.items())
+         if "/" in val and any(re.search(r"MethodChannel\(\s*" + ident + r"\b", s)
+                               for s in srcs.values())),
+        None)
+    if method_ident is None:
+        return {}, []
+    used, methods = [], {}
+    for p, src in srcs.items():
+        if not re.search(r"MethodChannel\(\s*" + method_ident + r"\b", src):
+            continue
+        used.append(str(p))
+        for m in _INVOKE_RE.finditer(src):
+            args = _split_args(src, m.end())
+            if not args:
+                continue
+            name_tok = _ARG_TOKEN_RE.fullmatch(" ".join(args[0].split()))
+            if not name_tok:
+                continue  # 形参声明（`_invoke<T>(String method, ...)`）不是调用点
+            name = name_tok.group(0)
+            if name.startswith("'"):
+                name = name[1:-1]
+            else:
+                name = consts.get(name, "")
+            if not name or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name):
+                continue
+            methods[name] = " ".join(args[1].split()) if len(args) > 1 else ""
+    return methods, used
+
+
+def _dart_arg_ctors(expr: str) -> set:
+    """arguments 表达式里**被构造**的大写类型名（`XxxRequest(...)` 形态）。
+
+    只认「大写标识符 + 紧跟左括号」：`Map<String, String>` 里的 `String` 后面跟的是
+    `,`/`>`，不会被误当成请求消息类型。
+    """
+    return set(re.findall(r"\b([A-Z][A-Za-z0-9]*)\s*\(", expr))
+
+
+def _kotlin_dispatch(bridge_dir: Path):
+    """BridgeMethods.dispatch 的 `when (method)` 分支名集合。
+
+    定位走结构不走注释：从 `fun dispatch(` 到 `else ->`（未知方法兜底）之间的
+    字符串字面量分支。掩码只掩注释（`mask_strings=False`），因为方法名本身就是
+    字符串字面量 —— 掩掉字符串就什么也看不见了。
+    """
+    src_path = bridge_dir / "BridgeMethods.kt"
+    if not src_path.exists():
+        return None
+    masked = mask(src_path.read_text(encoding="utf-8", errors="replace"),
+                  "kotlin", mask_strings=False, mask_comments=True)
+    i = masked.find("fun dispatch(")
+    if i < 0:
+        return None
+    j = re.search(r"when\s*\(\s*\w*\.?method\s*\)", masked[i:])
+    if j is None:
+        return None
+    j = i + j.start()
+    k = masked.find("else ->", j)
+    if k < 0:
+        return None
+    return set(re.findall(r'"([A-Za-z][A-Za-z0-9]*)"\s*->', masked[j:k]))
+
+
+class ChannelContractSyncRule:
+    """跨域通道契约同步：文档 ↔ Kotlin dispatch ↔ Dart 通道面 六项对账。
+
+    六项（任一非空 → 红线；proto_sync 同级：契约失真不许放行）：
+      1 方法名：§3 表 == Dart 通道面方法集；§3「已接」== Kotlin dispatch 分支集
+      2 arguments 列：§3 该列与 Dart 实际发出的形态/请求消息类型对账
+      3 通道名：§1 表 == Dart 常量 == Kotlin 常量
+      4 错误码：§5 表 == Dart PaBridgeErrorCodes == Kotlin BridgeErrorCodes
+      5 交叉引用：文档内 §X.Y 必须解析到真实锚点
+      6 文档时效：`installBridge` 有真实调用点时，文档不得再写「待实现/待落盘」
+
+    【只读】本规则只 `read_text`，不写任何被检查的文件（红线：不留假绿不能靠改源）。
+    【零内嵌名单】方法名/通道名/错误码全部现场推导，改真源即改结论，无需改本规则。
+    """
+
+    id = "channel_contract_sync"
+    title = "跨域通道契约同步（channel-contract.md ↔ Kotlin dispatch ↔ Dart 通道面）"
+
+    CONTRACT_MD = ("flutter", "docs", "channel-contract.md")
+    DART_LIB = ("flutter", "lib")
+    BRIDGE_PKG = ("dev", "pocketagent", "app", "bridge")
+
+    def run(self, ctx: Ctx) -> List[Finding]:
+        md_path = ctx.repo.joinpath(*self.CONTRACT_MD)
+        dart_lib = ctx.repo.joinpath(*self.DART_LIB)
+        bridge_dir = ctx.android_main.joinpath(*self.BRIDGE_PKG)
+        for label, p in (("契约文档", md_path), ("Dart 源码树", dart_lib),
+                         ("Kotlin bridge 包", bridge_dir)):
+            if not p.exists():
+                return [Finding(RED, self.id, f"{label}不存在：{p}（无法对账，按证据缺失阻断）")]
+        md = md_path.read_text(encoding="utf-8", errors="replace")
+
+        problems: List[str] = []
+        rows, has_host_col = _contract_rows(md)
+        doc_methods = [r.name for r in rows]
+        if not doc_methods:
+            return [Finding(RED, self.id, f"契约 §3 方法表解析不出任何行：{md_path}")]
+        if not has_host_col:
+            problems.append("契约 §3 表缺「宿主桥」列：无法逐行声明接线状态，"
+                            "本轮按「文档要求接」从严对账（加列前所有行都算应接）")
+
+        consts, dart_channels, dart_codes = _dart_consts(dart_lib)
+        dart_methods, dart_files = _dart_methods(dart_lib, consts)
+        kt_channels, kt_codes = _kotlin_consts(bridge_dir)
+        dispatch = _kotlin_dispatch(bridge_dir)
+        if dispatch is None:
+            return [Finding(RED, self.id,
+                            f"解析不到 Kotlin dispatch 分支：{bridge_dir / 'BridgeMethods.kt'}")]
+
+        # ── 1 方法名三方对账 ────────────────────────────────────────────────
+        wired = {r.name for r in rows if HOST_CELL_UNWIRED not in r.host}
+        unwired = {r.name for r in rows if HOST_CELL_UNWIRED in r.host}
+        doc_set, dart_set, disp_set = set(doc_methods), set(dart_methods), dispatch
+        for name in sorted(doc_set - dart_set):
+            problems.append(f"{name}: 契约 §3 有此方法，Dart 通道面无任何调用点"
+                            f"（僵尸行：要么删，要么接）")
+        for name in sorted(dart_set - doc_set):
+            problems.append(f"{name}: Dart 通道面会调此方法，契约 §3 未登记"
+                            f"（未登记方法名 = 对账空洞，Dart 可调但契约无面）")
+        for name in sorted(wired - disp_set):
+            problems.append(f"{name}: 契约 §3 标「已接」但 Kotlin dispatch 无同名分支")
+        for name in sorted(disp_set - wired):
+            why = "标为有意未接却有分支" if name in unwired else "契约 §3 未登记"
+            problems.append(f"{name}: Kotlin dispatch 有分支但{why}")
+
+        # ── 2 arguments 列 ↔ Dart wire ─────────────────────────────────────
+        for r in rows:
+            expr = dart_methods.get(r.name)
+            if expr is None:
+                continue  # 方法未被 Dart 调用（如 startTurn 死入口）：无 wire 事实可比
+            doc_null = r.args.strip() == "null"
+            dart_null = expr.strip() == "null"
+            if doc_null and not dart_null:
+                problems.append(f"{r.name}: 契约 §3 arguments 列写 null，"
+                                f"Dart 实际发 {expr[:60]}")
+            elif doc_null != dart_null and dart_null and not doc_null:
+                problems.append(f"{r.name}: 契约 §3 arguments 列写 {r.args[:40]}，"
+                                f"Dart 实际发 null")
+            named = _backticked_tokens(r.args)
+            if named:
+                miss = sorted(_dart_arg_ctors(expr) - named)
+                if miss:
+                    problems.append(f"{r.name}: Dart 实际封装 {', '.join(miss)}，"
+                                    f"契约 §3 arguments 列未写这层请求消息")
+
+        # ── 3 通道名三方对账 ────────────────────────────────────────────────
+        doc_channels = _contract_channels(md)
+        for label, got, want in (("Dart", doc_channels, dart_channels),
+                                 ("Kotlin", doc_channels, kt_channels),
+                                 ("Dart ↔ Kotlin", dart_channels, kt_channels)):
+            for name in sorted(want - got):
+                problems.append(f"通道 {name}: {label} 有，契约 §1 表无")
+            for name in sorted(got - want):
+                problems.append(f"通道 {name}: 契约 §1 表有，{label} 无")
+
+        # ── 4 错误码三方对账 ────────────────────────────────────────────────
+        doc_codes = _contract_codes(md)
+        for label, got, want in (("Dart", doc_codes, dart_codes),
+                                 ("Kotlin", doc_codes, kt_codes),
+                                 ("Dart ↔ Kotlin", dart_codes, kt_codes)):
+            for name in sorted(want - got):
+                problems.append(f"错误码 {name}: {label} 有，契约 §5 表无（新增码必须回填 §5）")
+            for name in sorted(got - want):
+                problems.append(f"错误码 {name}: 契约 §5 表有，{label} 无")
+
+        # ── 5 交叉引用锚点 ──────────────────────────────────────────────────
+        anchors = _doc_anchors(md)
+        for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)?)", md))):
+            if ref not in anchors:
+                problems.append(f"§{ref}: 文档内无此锚点（悬挂引用）")
+
+        # ── 6 文档时效：桥已装配却仍写「待实现」 ────────────────────────────
+        mounted = self._bridge_mounted(ctx, bridge_dir)
+        if mounted:
+            for marker in STALE_MARKERS:
+                for i, line in enumerate(md.splitlines(), 1):
+                    if marker in line:
+                        problems.append(f"契约文档:{i}: installBridge 已有调用点"
+                                        f"（{mounted}），文档仍写「{marker}」")
+
+        if problems:
+            return [Finding(RED, self.id,
+                            f"跨域通道契约漂移：{len(problems)} 项"
+                            f"（文档 ↔ Kotlin dispatch ↔ Dart 通道面；一票否决）", problems)]
+        return [Finding(PASS, self.id,
+                        f"方法名 {len(doc_set)} 条三方相等（契约 §3 = Dart 通道面 = "
+                        f"Kotlin dispatch {len(disp_set)} + 有意未接 {len(unwired)}）；"
+                        f"通道名 {len(doc_channels)} 条、错误码 {len(doc_codes)} 个三方相等；"
+                        f"§X.Y 引用全部解析到真实锚点",
+                        [f"Dart 通道面 {len(dart_files)} 个文件："
+                         + "、".join(Path(f).name for f in dart_files),
+                         f"有意未接 {len(unwired)} 条（见契约 §8）："
+                         + "、".join(sorted(unwired))])]
+
+    @staticmethod
+    def _bridge_mounted(ctx: Ctx, bridge_dir: Path) -> str:
+        """桥是否已被真实装配：`installBridge(` 在 bridge 包**外**有调用点才算数。
+
+        判据来自调用点而不是文档措辞 —— 桥摘掉装配后本项自动放行，文档再写
+        「待实现」就不再算漂移。
+        """
+        for p in sorted(ctx.android_main.rglob("*.kt")):
+            if bridge_dir in p.parents:
+                continue
+            src = p.read_text(encoding="utf-8", errors="replace")
+            masked = mask(src, "kotlin", mask_strings=False, mask_comments=True)
+            if re.search(r"(?<![A-Za-z0-9_.])installBridge\s*\(", masked):
+                return str(p.relative_to(ctx.repo))
+        return ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 装配与报告
 # ─────────────────────────────────────────────────────────────────────────────
 
 RULE_CLASSES = [SheetOverflowRule, RosterRule, UnknownUiRule,
-                FakeGreenRule, GoBaselineRule, ProtoSyncRule]
+                FakeGreenRule, GoBaselineRule, ProtoSyncRule,
+                ChannelContractSyncRule]
 RULE_IDS = [c.id for c in RULE_CLASSES]
 
 
@@ -703,6 +1165,21 @@ def default_go() -> str:
     return shutil.which("go") or r"C:\go\bin\go.exe"
 
 
+# 结果 XML 默认目录解析（优先级：显式 --test-results > PA_MIRROR > 主镜像）。
+# 以前这里只写死主镜像 G:\pa\android：子代理用 PA_MIRROR=G:\pa_x 隔离镜像跑完
+# testDebugUnitTest 后再跑本脚本仍去主镜像算定产，拿到的是旧 XML → 假绿。
+# 相对路径与 _pa_gradle.py 的镜像布局同源（那里把 android/ 整树铺到镜像根，
+# app 模块位于 <PA_MIRROR>\app\build\... —— 此处不得改成其他相对路径）。
+MAIN_MIRROR_DEFAULT = r"G:\pa\android"
+MIRROR_APP_TEST_RESULTS = ("app", "build", "test-results", "testDebugUnitTest")
+
+
+def default_test_results() -> Path:
+    """未显式指定 --test-results 时的默认目录：PA_MIRROR 隔离镜像，未设则回落主镜像。"""
+    mirror = os.environ.get("PA_MIRROR") or MAIN_MIRROR_DEFAULT
+    return Path(mirror).joinpath(*MIRROR_APP_TEST_RESULTS)
+
+
 def build_ctx(args: argparse.Namespace) -> Ctx:
     repo = Path(args.repo or Path(__file__).resolve().parents[2]).resolve()
     return Ctx(
@@ -711,8 +1188,8 @@ def build_ctx(args: argparse.Namespace) -> Ctx:
         daemon_dir=Path(args.daemon or repo / "daemon"),
         proto_main=Path(args.proto_main or repo / "proto/v1"),
         proto_copy=Path(args.proto_copy or repo / "android/app/src/main/proto/v1"),
-        test_results=Path(args.test_results or
-                          r"G:\pa\android\app\build\test-results\testDebugUnitTest"),
+        test_results=Path(args.test_results) if args.test_results
+        else default_test_results(),
         go_cmd=args.go or default_go(),
     )
 
@@ -730,7 +1207,8 @@ def render_text(rep: dict) -> str:
         "",
     ]
     for sev, head, note in (
-        (RED, "【红线】", "一票否决 —— 人裁决（AUDIT §3.1 / §3.3 白名单只减不增）"),
+        (RED, "【红线】", "一票否决 —— 人裁决（AUDIT §3.1 / §3.3 白名单只减不增；"
+                          "假绿哨兵的陈旧/缺失/解析失败同样归此栏，退出码 1）"),
         (WARN, "【提示】", "不阻塞 —— 限期处理（AUDIT §3.2 / §3.3）"),
         (PASS, "【过】", ""),
     ):
@@ -759,7 +1237,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--proto-main", help="proto 真源目录（默认 --repo 下推 proto/v1）")
     ap.add_argument("--proto-copy", help="proto 副本目录（默认 android/app/src/main/proto/v1）")
     ap.add_argument("--test-results",
-                    help="testDebugUnitTest 结果 XML 目录（默认镜像盘 G:\\pa\\...）")
+                    help="testDebugUnitTest 结果 XML 目录（默认：先看环境变量 PA_MIRROR "
+                         "拼 <PA_MIRROR>\\app\\build\\test-results\\testDebugUnitTest，未设则回落 "
+                         "G:\\pa\\android\uff1b本参数优先级最高）")
     ap.add_argument("--go", help="go 可执行文件（默认 PATH 里找，退 C:\\go\\bin\\go.exe）")
     ap.add_argument("--only", help="只跑这些规则（逗号分隔，可选：" + ",".join(RULE_IDS) + "）")
     ap.add_argument("--skip", help="跳过这些规则（逗号分隔）")
