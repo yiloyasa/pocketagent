@@ -312,10 +312,13 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 	//   - 重挂载会话(内存缓存命中 / ExternalSession 重挂载,历史已按旧强度
 	//     落库):创建时刻已过 → 仍"下轮会话生效"。
 	// 重挂载判定与 ensureSession 的分路同源(缓存命中且适配器活着,或
-	// ExternalSession 在场)。用户在手机上显式选了强度 → 写该键(与手动编辑
-	// config.yaml 等价,hermes 官方配置面)。空串 = 用户选"默认" = 删键回
-	// hermes 默认。白名单校验(VALID_REASONING_EFFORTS)在写入前做,非法档
-	// 宁可不写。
+	// ExternalSession 在场)。用户在手机上显式选了强度 → 写该键(hermes 官方
+	// 配置面)。空串 = 用户选"默认" = 删键回 hermes 默认。白名单校验
+	// (VALID_REASONING_EFFORTS)在写入前做,非法档宁可不写。
+	// 【写入落点(红线 2,2026-10-17 收紧)】只写 %HERMES_HOME% 下的
+	// config.yaml(hermes 自己的家);该变量未设时 hermesapp 拒写并回报原因
+	// —— daemon 绝不回落改写用户家 ~/.hermes(与 ~/.codex/~/.dsh/~/.pi 同款
+	// 只读红线)。此时本轮按 hermes 现值跑,并如实把"未固定"透给手机端。
 	if req.Thread != nil {
 		if e := req.Thread.Effort; e != "" {
 			resumed := false // 重挂载判定(与 ensureSession 三分支同源)
@@ -326,7 +329,17 @@ func (p *HermesProvider) Run(ctx context.Context, req TurnRequest, sink Sink, ap
 			}
 			if hermesapp.IsValidReasoningEffort(e) {
 				if werr := hermesapp.SetReasoningEffort(e); werr != nil {
-					log.Printf("[hermes] 写强度 %s 失败(沿用 config 现值): %v", e, werr)
+					// 【诚实缺席】写不进去就说"没写进去" —— 只 log 不透出,用户
+					// 请求的强度被静默忽略、手机端只会以为设置成功(红线 5「不留假绿」;
+					// 诚实缺席纪律)。日志留痕(运维面)+ 发一条 STATUS 把原因原样
+					// 带给手机端,绝不谎报"已设为"。
+					log.Printf("[hermes] 强度 %s 未固定(写 config.yaml 失败,本轮沿用 hermes 现值): %v", e, werr)
+					sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
+						Kind:    pb.CodexEvent_STATUS,
+						Code:    "reasoning_effort_not_pinned",
+						Title:   "hermes · 思考强度",
+						Message: fmt.Sprintf("未固定为 %s:%v(本轮沿用 hermes 现值)", e, werr),
+					}}})
 				} else {
 					effortTiming := "下轮会话生效"
 					if !resumed {

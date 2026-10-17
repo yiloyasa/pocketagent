@@ -13,6 +13,11 @@
 // DEEPSEEK_API_KEY 等(env-seeded)。daemon **只读不改**用户家配置(与
 // ~/.codex 同一红线);未配置时 ACP initialize 的 authMethods 如实上报,
 // 首轮 prompt 以明确错误回给手机端。
+//
+// 【"只读"的确切口径】读面 ConfigPath() 允许回落用户家 ~/.hermes(读用户
+// 真实配置,只读红线禁的是写);写面只认 %HERMES_HOME%(WritableConfigPath),
+// 未设即拒写并如实回报,绝不回落用户家目录 —— 见 config.go 文件头
+// 「读放宽 / 写收紧」。
 package hermesapp
 
 import (

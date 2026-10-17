@@ -35,6 +35,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pocketagent/daemon/internal/agent"
@@ -406,19 +407,57 @@ func selectionEqual(a, b *TurnSnapshot) bool {
 // 【为什么是包级而不是 Server 字段】Task 2 的可改文件圈定不含 server.go,新增
 // Server 字段会外溢;进程内缓存对"变化广播"这一通知语义已足够(事实真相在
 // store/provider,不在缓存)。
-var lastTurnSelections sync.Map // threadID -> *TurnSnapshot
+//
+// 【为什么要老化淘汰】这张表原本只增不减、也没有 TTL:跑过一轮的线程会永久
+// 留在表里,删掉的线程更是连线程都没了、快照还留着(删除路径见 DeleteThread)。
+// 补齐口径与同仓短命登记一致(codex_subagent_history.go:配对 LoadOrStore +
+// defer Delete):登记项必须自己到期消失,而不是"读起来过期、内存里常驻"。
+var lastTurnSelections sync.Map // threadID -> *turnSelectionEntry
+
+// lastTurnSelectionTTL 快照的可用期限。取 24h 的理由:这张表的唯一用途是
+// "比较相邻两轮",超长间隔之后它已经承担不了这个语义 —— 与其拿一天前的快照
+// 去判定"这一轮算不算变化",不如按"首次观察"处理(daemon 重启后本来就是这个
+// 行为,见上注释),免得在用户重新打开一个隔夜会话时补一条迟到一天多的
+// "选择变了"通知。同时它就是这张表的人口上限:留下的必然是 24h 内跑过轮的
+// 线程,所以下面 noteSelectionChanged 里的全表扫描永远只在这批活会话上跑。
+const lastTurnSelectionTTL = 24 * time.Hour
+
+// turnSelectionEntry 快照 + 落库时刻。值从 *TurnSnapshot 改成它,只为多带一个
+// "什么时候写的":老化判定要靠它,而 sync.Map 无法按值反查键。
+type turnSelectionEntry struct {
+	snap *TurnSnapshot
+	at   time.Time
+}
 
 // selectionChangedHook selection_changed 的接线钩子(既有事件通路结论:
 // HostEvent 的 oneof 目前只有 turn_finished,TurnServerMessage 也没有对应帧,
 // proto 层暂无载体 —— steward 需在 host.proto 增配分支后,把真实广播实现挂进
 // 本钩子;届时调用点一处不改)。生产为 nil = 只落日志留痕,不影响任何行为。
-var selectionChangedHook func(threadID string, prev, cur *pb.EffectiveModelSelection)
+//
+// 【为什么是原子指针,而不是裸函数变量/一把锁】访问形态是"写极少、读极多":
+// 写方只有 setSelectionChangedHook 一处(测试 + 未来的启动期接线,进程一生
+// 写不了几次),读方是每一轮流式 goroutine(noteSelectionChanged)。原子指针
+// 让读侧一次 Load 就拿到一个不可变的函数值快照,此后无论谁换钩子,本轮执行
+// 的都还是同一个函数 —— 既不需要锁,也没有"判空与调用之间被人换掉"的时序缝。
+// 裸函数变量是确凿的数据竞争(同一个函数里 lastTurnSelections 用 sync.Map
+// 而紧邻的钩子是裸变量,两种纪律并存本身就是信号)。RWMutex 也能用,但要把
+// "取出来"和"调用"拆开才安全(钩子回调里若再写钩子,持读锁调用会自锁),
+// 指针没有这个坑 —— 钩子的语义一个字没改,只是拿它的方式变同步了。
+type selectionChangedHookFn func(threadID string, prev, cur *pb.EffectiveModelSelection)
+
+var selectionChangedHook atomic.Pointer[selectionChangedHookFn]
 
 // setSelectionChangedHook 供测试/未来接线临时替换钩子;返回恢复函数。
+// h == nil = 摘掉钩子(存 nil 指针,而不是"指向 nil 函数的指针")。
 func setSelectionChangedHook(h func(threadID string, prev, cur *pb.EffectiveModelSelection)) func() {
-	prev := selectionChangedHook
-	selectionChangedHook = h
-	return func() { selectionChangedHook = prev }
+	prev := selectionChangedHook.Load()
+	if h == nil {
+		selectionChangedHook.Store(nil)
+	} else {
+		fn := selectionChangedHookFn(h)
+		selectionChangedHook.Store(&fn)
+	}
+	return func() { selectionChangedHook.Store(prev) }
 }
 
 // resetSelectionTracking 清空进程内"上一次选择"缓存(测试隔离用)。
@@ -432,24 +471,42 @@ func resetSelectionTracking() {
 // noteSelectionChanged 轮次边界调用:与该线程上一次冻结的选择比较,变化则经
 // 钩子广播。首次观察不算变化(没有"上一次");相等不广播 —— "每次选择变化广播
 // selection_changed,但不改已开始的 Turn"(计划规则,广播是纯通知)。
+// 上一轮久远到超出 TTL 时也按"首次观察"处理并顺带丢掉那条过期快照(见
+// lastTurnSelectionTTL);全表老化扫描与 slashCachePut 同款:到期即删。
 func noteSelectionChanged(threadID string, snap *TurnSnapshot) {
 	if snap == nil || threadID == "" {
 		return
 	}
+	now := time.Now()
 	prevAny, loaded := lastTurnSelections.Load(threadID)
-	lastTurnSelections.Store(threadID, snap)
+	lastTurnSelections.Store(threadID, &turnSelectionEntry{snap: snap, at: now})
+	// 老化扫描:删掉"到期且这个线程不会再碰"的条目(刚 Store 进来的这条是新的,
+	// 扫不到)。因为 TTL 给了这张表人口上限,全表扫描不会随历史增长变慢。
+	lastTurnSelections.Range(func(key, v any) bool {
+		if e, ok := v.(*turnSelectionEntry); ok && now.Sub(e.at) > lastTurnSelectionTTL {
+			lastTurnSelections.Delete(key)
+		}
+		return true
+	})
 	if !loaded {
 		return // 首次观察:UI 从 TurnStarted 帧直接拿真值
 	}
-	prev, _ := prevAny.(*TurnSnapshot)
-	if prev == nil || selectionEqual(prev, snap) {
+	prev, _ := prevAny.(*turnSelectionEntry)
+	if prev == nil || prev.snap == nil {
+		return
+	}
+	if now.Sub(prev.at) > lastTurnSelectionTTL {
+		return // 上一轮太久远:与 daemon 重启后同语义,不补发迟到的变化通知
+	}
+	if selectionEqual(prev.snap, snap) {
 		return
 	}
 	log.Printf("[selection] %s 生效选择变化: model=%q effort=%q source=%s → model=%q effort=%q source=%s",
-		threadID, prev.ModelID, prev.Effort, prev.Source, snap.ModelID, snap.Effort, snap.Source)
-	if selectionChangedHook != nil {
-		selectionChangedHook(threadID,
-			&pb.EffectiveModelSelection{AgentId: prev.AgentID, ModelId: prev.ModelID, Effort: prev.Effort, Source: prev.Source},
+		threadID, prev.snap.ModelID, prev.snap.Effort, prev.snap.Source,
+		snap.ModelID, snap.Effort, snap.Source)
+	if hook := selectionChangedHook.Load(); hook != nil {
+		(*hook)(threadID,
+			&pb.EffectiveModelSelection{AgentId: prev.snap.AgentID, ModelId: prev.snap.ModelID, Effort: prev.snap.Effort, Source: prev.snap.Source},
 			&pb.EffectiveModelSelection{AgentId: snap.AgentID, ModelId: snap.ModelID, Effort: snap.Effort, Source: snap.Source})
 	}
 }

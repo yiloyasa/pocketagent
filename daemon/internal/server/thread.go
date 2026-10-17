@@ -426,6 +426,14 @@ func (s *Server) DeleteThread(ctx context.Context, req *pb.DeleteThreadRequest) 
 	// 猜),DeleteSession 连事件文件一并清。失败不阻塞线程删除(与上面原生删除
 	// 同口径:残留可再处置),但必须出声。
 	s.deleteCollabSessionsForThread(t.ID)
+
+	// 【顺手带走进程内选择快照】lastTurnSelections 是"上一次冻结的轮次选择"的
+	// 包级缓存(见 model_selection.go),线程没了它就没有下一次可比的"上一次"。
+	// 不清的后果不是脏数据而是常驻:条目带 TTL 但只在有轮次写入时才被扫到,一个
+	// 再也不会跑轮的线程其快照会一直留在表里,删得越多留得越多。与上面的
+	// deleteChildStubs / deleteCollabSessionsForThread 同口径(删会话的连带清理
+	// 都在这一段),失败无副作用,故不判错。
+	lastTurnSelections.Delete(t.ID)
 	return &pb.Empty{}, nil
 }
 

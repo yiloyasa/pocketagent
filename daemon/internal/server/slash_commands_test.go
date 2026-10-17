@@ -279,6 +279,68 @@ func TestZcodeSupplementDedupesNativeEntries(t *testing.T) {
 	}
 }
 
+// ---- 缓存淘汰(clean-daemon-server P1-1a:TTL 只在读时判断,条目永久驻留)----
+// 这两条钉的是"内存真的被释放",不是"读起来过期" —— 判据是包级 map 的大小。
+
+// 读到的过期条目当场删:命中判否的同时把这条不再可服务的清单释放掉。
+func TestSlashCacheGetEvictsExpiredEntry(t *testing.T) {
+	slashCacheFlush()
+	defer slashCacheFlush()
+	slashCachePut("sess_gone", []*pb.SlashCommand{{Name: "goal"}})
+	// 手工做旧(与 TestListSlashCommandsCacheExpires 同手法,不真等 10 分钟)。
+	slashMu.Lock()
+	slashCache["sess_gone"] = slashCacheEntry{
+		commands: slashCache["sess_gone"].commands,
+		at:       time.Now().Add(-slashCacheTTL - time.Second),
+	}
+	n := len(slashCache)
+	slashMu.Unlock()
+	if n != 1 {
+		t.Fatalf("前置条件:应有 1 条缓存,得到 %d", n)
+	}
+
+	if cmds, hit := slashCacheGet("sess_gone"); hit || cmds != nil {
+		t.Fatalf("过期条目不应命中: hit=%v cmds=%v", hit, cmds)
+	}
+	slashMu.Lock()
+	_, still := slashCache["sess_gone"]
+	slashMu.Unlock()
+	if still {
+		t.Fatal("过期条目只应\"不返回\",必须从 map 里删掉(否则永久驻留)")
+	}
+}
+
+// 写入时扫全表:开了面板就再也没回来的会话,没人会再去读它,只能靠写入侧老化。
+func TestSlashCachePutSweepsExpiredEntries(t *testing.T) {
+	slashCacheFlush()
+	defer slashCacheFlush()
+	// 直接塞一条过期条目(不能用 Put:Put 自己会扫,那样测不到"扫掉了谁")。
+	slashMu.Lock()
+	slashCache["sess_dormant"] = slashCacheEntry{
+		commands: []*pb.SlashCommand{{Name: "goal"}},
+		at:       time.Now().Add(-slashCacheTTL - time.Minute),
+	}
+	slashCache["sess_live"] = slashCacheEntry{
+		commands: []*pb.SlashCommand{{Name: "goal"}},
+		at:       time.Now(),
+	}
+	slashMu.Unlock()
+
+	slashCachePut("sess_fresh", []*pb.SlashCommand{{Name: "fork"}})
+
+	slashMu.Lock()
+	_, dormant := slashCache["sess_dormant"]
+	_, live := slashCache["sess_live"]
+	_, fresh := slashCache["sess_fresh"]
+	slashMu.Unlock()
+	if dormant {
+		t.Fatal("写入时应顺手扫掉已过期且无人再读的条目(表按会话数无界增长)")
+	}
+	if !live || !fresh {
+		t.Fatalf("未过期条目与新写入条目都必须留下: live=%v fresh=%v", live, fresh)
+	}
+}
+
 // 原生清单为"显式空"(会话没有任何命令)时补充仍然生效:内建文本命令与
 // 工作区自定义命令互不依赖,空只是没有 custom,不代表 fork/rewind 不可用。
 func TestZcodeSupplementAppliesToEmptyNativeList(t *testing.T) {

@@ -8,6 +8,11 @@
 //
 // 写入成功必经 sink 发一条 CodexEvent_STATUS(hermes · 思考强度)。写入经
 // HERMES_HOME 沙箱,绝不碰真实家目录(config_test.go 同款)。
+//
+// 【2026-10-17 红线 2 收紧】写面只认 HERMES_HOME:未设时 daemon 拒写(绝不
+// 回落用户家 ~/.hermes),此时必须**如实把「未固定 + 原因」透给手机端**
+// (Code "reasoning_effort_not_pinned"),不许静默忽略用户的强度请求、更不许
+// 谎报"已设为" —— 见本文件末 TestHermesEffortUnpinnedReasonReachesClient。
 package agent
 
 import (
@@ -183,5 +188,54 @@ func TestHermesEffortStatusOnRemountedSessionSaysNextRound(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(os.Getenv("HERMES_HOME"), "config.yaml"))
 	if err != nil || !strings.Contains(string(raw), "reasoning_effort: high") {
 		t.Fatalf("重挂载场景写入也应落地: %v\n%s", err, raw)
+	}
+}
+
+// 【红线 2 判决·诚实缺席】HERMES_HOME 未设 → daemon 拒写(绝不回落改写
+// 用户家 ~/.hermes)。此时这一轮必须:
+//   - 不在用户家目录落下任何文件(家目录指向临时目录,前后逐条比对);
+//   - 给手机端发一条 STATUS 如实说「未固定」+ 原因(不是静默,更不是
+//     谎报"已设为 high")—— 用户的强度请求被忽略时他必须看得见。
+func TestHermesEffortUnpinnedReasonReachesClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", "") // 写面无合法落点:daemon 无权写的地方
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+
+	p := NewHermesProvider()
+	base := newFakeHermesClient(true)
+	p.newClient = func() (hermesClient, error) { return base, nil }
+
+	events := runEffortTurn(t, p, base, &store.Thread{ID: "t4", Effort: "high"})
+
+	status := effortStatusOf(events)
+	if status == nil {
+		t.Fatalf("写不进去也必须发一条 STATUS 如实透出(不许静默),实际 %d 帧", len(events))
+	}
+	if status.Code != "reasoning_effort_not_pinned" {
+		t.Errorf("未固定的事件代码 = %q,期望 reasoning_effort_not_pinned", status.Code)
+	}
+	// 文案必须说清「未固定」和**为什么**(否则用户无从下手);并说明本轮
+	// 沿用现值,不许让人以为已生效。
+	for _, want := range []string{"未固定", "HERMES_HOME", "现值"} {
+		if !strings.Contains(status.Message, want) {
+			t.Errorf("未固定说明应含 %q,实际 %q", want, status.Message)
+		}
+	}
+	if strings.Contains(status.Message, "已设为") {
+		t.Errorf("写失败时不得出现「已设为」(那是谎报成功): %q", status.Message)
+	}
+
+	// 家目录零改动。
+	ents, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatalf("读家目录: %v", err)
+	}
+	if len(ents) != 0 {
+		names := make([]string, 0, len(ents))
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("用户家目录被创建了内容(红线 2 违反): %v", names)
 	}
 }

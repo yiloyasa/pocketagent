@@ -285,6 +285,14 @@ func fetchViaZcode(ctx context.Context, sessionID string) ([]*pb.SlashCommand, e
 // ---- 按 sessionId 的命令列表缓存(TTL)----
 // 【为什么是包级而不是 Server 字段】server.go 归并行智能体占用,本文件只增不改;
 // 缓存键是 zcode sessionId(全局唯一),包级 map 语义等价,单测用 slashCacheFlush 清场。
+//
+// 【为什么包级 map 需要淘汰】条目只增不减:用户开过的每个 zcode 会话都会把整份
+// []*pb.SlashCommand 永久钉在 map 里。TTL 只让读取方"读起来过期",不释放内存。
+// 本仓对"在飞单飞"这类短命登记的写法是配对删除(codex_subagent_history.go 的
+// LoadOrStore + defer Delete);缓存的对应物就是"条目可服务的期限到了就删掉",
+// 于是下面两条路径各担一半:读到的过期条目当场删(被复用的会话),写入时扫一遍
+// 全表删掉没人再碰的条目(开了就再没回来的会话)。两者都在既有 slashMu 下,
+// 没有引入新的同步原语。
 
 var (
 	slashMu       sync.Mutex
@@ -301,7 +309,13 @@ func slashCacheGet(sessionID string) ([]*pb.SlashCommand, bool) {
 	slashMu.Lock()
 	defer slashMu.Unlock()
 	e, ok := slashCache[sessionID]
-	if !ok || time.Since(e.at) > slashCacheTTL {
+	if !ok {
+		return nil, false
+	}
+	if time.Since(e.at) > slashCacheTTL {
+		// 过期即释放(不是"不返回"而已):这条命令清单已经不再可服务,
+		// 留着只是等 GC 之外的老化扫描来收,不如就地删。
+		delete(slashCache, sessionID)
 		return nil, false
 	}
 	return e.commands, true
@@ -310,7 +324,16 @@ func slashCacheGet(sessionID string) ([]*pb.SlashCommand, bool) {
 func slashCachePut(sessionID string, cmds []*pb.SlashCommand) {
 	slashMu.Lock()
 	defer slashMu.Unlock()
-	slashCache[sessionID] = slashCacheEntry{commands: cmds, at: time.Now()}
+	// 老化扫描:删掉"到期且再也不会被读到"的条目。只在写入时做(读路径已就地
+	// 删自己那一条),表大小是"开过面板的 zcode 会话数",量级很小,O(n) 可以
+	// 接受;不引入后台 ticker —— 那样要多一条 goroutine 生命周期去养。
+	now := time.Now()
+	for id, e := range slashCache {
+		if now.Sub(e.at) > slashCacheTTL {
+			delete(slashCache, id)
+		}
+	}
+	slashCache[sessionID] = slashCacheEntry{commands: cmds, at: now}
 }
 
 // slashCacheFlush 清空缓存(单测隔离用)。

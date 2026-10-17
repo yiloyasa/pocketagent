@@ -60,11 +60,9 @@ func ListCodexSessions() ([]CodexSessionInfo, error) {
 			return nil
 		}
 		sess := CodexSessionInfo{Path: path, UpdatedAt: info.ModTime()}
-		// 文件名:rollout-2026-09-13T04-41-54-<uuid>.jsonl(前缀时间恰好 19 字符)
-		base := strings.TrimSuffix(strings.TrimPrefix(name, "rollout-"), ".jsonl")
-		if len(base) > 20 {
-			sess.ID = base[20:]
-		}
+		// 文件名:rollout-2026-09-13T04-41-54-<uuid>.jsonl;id 段的取法与删除闸
+		// 第 ④ 道共用 codexRolloutNameID(见那里的理由:两处必须同一份真值)。
+		sess.ID = codexRolloutNameID(name)
 		open := func() *os.File {
 			f, err := os.Open(path)
 			if err != nil {
@@ -138,38 +136,188 @@ func scanFirstUserMessage(f *os.File) string {
 // DeleteCodexSession 删除 codex 会话在电脑上的 rollout 文件。
 // 手机端"删除会话"若要真正落到电脑上,删除本地线程时需一并调用它。
 func DeleteCodexSession(id string) error {
+	return deleteCodexSessionFrom(CodexSessionsDir(), id)
+}
+
+// deleteCodexSessionFrom 是 DeleteCodexSession 的可注入内核(测试用临时目录),
+// 与 pi 侧 deletePiSessionFrom 同一形态:真源目录只出现在导出的那一层。
+func deleteCodexSessionFrom(root, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("空的 codex 会话 id")
 	}
-	path, err := FindCodexSession(id)
+	path, err := findCodexSessionFrom(root, id)
 	if err != nil {
 		return err
 	}
-	// 【幂等】文件在"找到"与"删除"之间被别的进程删掉是可能的(用户在桌面端
-	// 同时清理),此时目标状态已达成,不该报错。
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	// 删除本体走共享闸门(session_delete_guard.go):包含性 + 扩展名 + 身份,
+	// 与 pi 同一条代码路径、同一个判定顺序。codex 侧只提供"这个 rollout 怎么自称
+	// 是这条会话"的判定(codexRolloutIdentityMatches)。幂等语义(文件在"找到"与
+	// "删除"之间被别人清掉 ⇒ 不报错)由闸门统一承担。
+	return deleteCodexRolloutFile(root, path, id)
+}
+
+// deleteCodexRolloutFile 是 codex 侧接共享删除闸的载体。抽出来是为了让用例能像
+// pi 侧那样直接对"闸门本身"发起调用(而不是只能从 findCodexSessionFrom 的
+// 成功路径绕进去),钉住 ①②③ 三道与身份判定连在一起时的判决。
+func deleteCodexRolloutFile(root, path, expectID string) error {
+	return deleteNativeSessionFileWithIdentity(root, path, expectID, "codex", codexRolloutIdentityMatches)
 }
 
 // FindCodexSession 按 id 定位 rollout 文件。找不到返回 ErrCodexSessionNotFound
 // 的包装(调用方用 errors.Is 判定,把它当"已经没有了"而不是故障)。
 func FindCodexSession(id string) (string, error) {
-	var hit string
-	filepath.WalkDir(CodexSessionsDir(), func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || hit != "" {
-			return nil
+	return findCodexSessionFrom(CodexSessionsDir(), id)
+}
+
+// findCodexSessionFrom 是 FindCodexSession 的可注入内核(root = sessions 目录)。
+//
+// 【为什么多于一个命中就报错,不"挑一个删"】按文件名定位本来就只是"像";命中多于
+// 一个说明磁盘上躺着多条尾巴相同的 rollout(手工复制/改名/同步盘残留)。这时挑一个
+// 删 = 猜,而猜错的代价是**另一个会话的完整历史不可恢复地没了**。宁可报错让上层软
+// 失败 —— 删除会话的既定语义是"删本地 + 尽力清原生,原生侧失败只记日志不阻塞"
+// (见 server/thread.go 的软失败纪律),残留文件用户还能在"电脑上的会话"里再处置。
+//
+// 【为什么这种错误不包 ErrCodexSessionNotFound】"有多个候选"与"没有这条会话"是
+// 相反的事实:调用方必须能分开处置 —— nativeSessionMissing 只在 errors.Is 命中
+// 哨兵时才提示用户"这个会话在电脑上已经找不到了",其余读故障一律按"还在"处理
+// (宁可漏报失联,不可谎报失联)。
+func findCodexSessionFrom(root, id string) (string, error) {
+	var hits []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil // 单个条目读不动不挡全局(与 ListCodexSessions 同纪律)
+		}
+		if len(hits) >= 2 {
+			return filepath.SkipAll // 已经能判定"多命中",不必把整个目录扫完
 		}
 		if strings.HasSuffix(d.Name(), "-"+id+".jsonl") {
-			hit = path
+			hits = append(hits, path)
 		}
 		return nil
 	})
-	if hit == "" {
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
 		return "", fmt.Errorf("%w: %s", ErrCodexSessionNotFound, id)
+	default:
+		return "", fmt.Errorf("codex 会话 %s 命中多个 rollout 文件(如 %s),无法确定该删哪一个", id, hits[0])
 	}
-	return hit, nil
+}
+
+// codexRolloutHeadLineCap 是删除闸读 rollout 文件头的行数上限:codex rollout 的第一
+// 行就是 session_meta(2026-10-17 逐份核对本机 ~/.codex/sessions 下 16 份 rollout,
+// 首行全部是 type=session_meta),给 64 行只为容忍将来版本把头挪后几行;读不到就放弃
+// (拒删),绝不为一个 id 扫完可能几十 MB 的会话。
+const codexRolloutHeadLineCap = 64
+
+// codexRolloutSessionID 读 rollout 文件头里的会话 id,供共享闸门的第 ④ 道使用。
+//
+// 【第 ④ 道闸可用:文件头确有 id】2026-10-17 逐份核对本机 ~/.codex/sessions 的真实
+// rollout:首行是 {"type":"session_meta","payload":{...,"id":"<uuid>","session_id":
+// "<同一 uuid>",...}},头里的 id 与文件名末段 uuid 一致(16 份里 6 份非分叉文件全部
+// 一致)。所以"删之前把头里的 id 读回来与请求 id 比对"是真检查,不是臆造的校验。
+//
+// 【只认 type=="session_meta" 行】rollout 里别的行也带 payload.id(如
+// response_item 的 msg_xxx);不按行类型限定就会把消息 id 当成会话 id,那道闸等于
+// 没有。坏行跳过(单行损坏不该让整份会话不可删),与同文件里的 scanMeta 同款处理。
+//
+// 【分叉 rollout:头里的 id 是父会话 —— 判定因此不能只比"头 == 请求 id"】codex 的
+// 分叉/续写文件命名为 rollout-<时间>-<父id>_<子id>.jsonl,首行 session_meta 里的 id
+// 是**父**会话 id(本机 16 份里 10 份是这种形状,且 10/10 都是父段)。而 PocketAgent
+// 存进 CodexThreadID 的是 ListCodexSessions 合成出来的那个 id 段,对这 10 份就是
+// `<父>_<子>` 复合串 —— 两者本来就不可能相等。判定见 codexRolloutIdentityMatches。
+//
+// 【不复用 scanMeta】它取的是 payload.cwd(列表页要显示的工作目录),与身份判定无关;
+// 合成一个函数会让"为了取 id 顺带解析 cwd"变成隐式耦合。两者共用的是同一套
+// 逐行 jsonl 读法(同样的 Scanner 缓冲上限、同样的坏行跳过)。
+//
+// 【它只是身份判定的零件,不是判定本身】codex 的分叉 rollout 文件头存的是父 id,
+// 所以最终判定在 codexRolloutIdentityMatches 里做,本函数只负责"把头里的 id 读出来"。
+func codexRolloutSessionID(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for i := 0; sc.Scan() && i < codexRolloutHeadLineCap; i++ {
+		var line struct {
+			Type    string `json:"type"`
+			Payload struct {
+				ID string `json:"id"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) != nil {
+			continue
+		}
+		if line.Type == "session_meta" && line.Payload.ID != "" {
+			return line.Payload.ID
+		}
+	}
+	return ""
+}
+
+// codexRolloutStampLen 是 rollout 文件名里时间戳前缀的字符数("2026-09-13T04-41-54-"。
+const codexRolloutStampLen = 20
+
+// codexRolloutNameID 从 rollout 文件名解析出**这个文件自称的会话 id**。
+//
+// 【为什么必须与 ListCodexSessions 共用同一份实现】列表页展示、导入落库
+// (server.ImportCodexThread 把它存进 CodexThreadID)、以及删除闸第 ④ 道要核对的
+// "文件名里的 id",讲的都是同一句话。这三处若各写一份切片,改其中一处就会悄悄把
+// "用户看到的 id"和"删除时校验的 id"掰开 —— 那时删除要么永远不命中,要么命中了却
+// 被自己判成"不是它"。故给唯一实现,三处共用。
+func codexRolloutNameID(name string) string {
+	if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
+		return ""
+	}
+	base := strings.TrimSuffix(strings.TrimPrefix(name, "rollout-"), ".jsonl")
+	if len(base) <= codexRolloutStampLen {
+		return ""
+	}
+	return base[codexRolloutStampLen:]
+}
+
+// codexRolloutIdentityMatches 是 codex 侧删除闸第 ④ 道的身份判定:
+// 这个文件是不是请求删除的那条会话?
+//
+// 【两条证据必须同时成立】
+//  1. 文件名里的 id 段**全等**于请求 id(不是后缀 —— 定位那一步的后缀匹配只是"像",
+//     这里是"是",比定位更严);
+//  2. 文件头里写下的 id 与那个 id 段**自洽**:要么相等(普通 rollout),要么 ——
+//     仅对 codex 那种恰好两段 `<父>_<子>` 的分叉/续写命名 —— 等于**父段**。
+//
+// 【为什么分叉形态必须放行:这是实测的主流形态,不是边角】2026-10-17 逐份核对本机
+// ~/.codex/sessions 的 16 份 rollout:6 份文件名 id 段与文件头 id 相等;10 份文件名是
+// rollout-<时间>-<父id>_<子id>.jsonl 而文件头 session_meta.payload.id 存的是**父** id
+// (10/10 都等于父段)。PocketAgent 侧 CodexThreadID 存的正是 ListCodexSessions
+// 合成出来的那个 id 段 —— 对这 10 份就是 `<父>_<子>` 复合串。所以"手机端在
+// '电脑上的会话'里导入一条再删掉它"这条主路径上,10/16 的会话会被"头 id == 请求 id"
+// 判成不是它而拒删,记录留在电脑上再也清不掉。那是拿"防误删"换"删不掉",方向反了。
+//
+// 【放行的是"约定",不是"信任"】这条分支要求:名字恰好两段、两段都非空、且头里的 id
+// 恰好等于父段。改名/复制出来的文件(头里是第三个 id)、头读不到的坏文件、三段以上
+// 的畸形名,一律落到 false —— 无法自证 = 不删(fail closed)。
+//
+// 【为什么仍然挡得住"删错文件"】名字维度上"删 A 绝不会删到 B"是按名定位给的:
+// 请求 `<父>_<子>` 时父会话自己那份 rollout-<时间>-<父id>.jsonl 的文件名并不以
+// -<父>_<子>.jsonl 结尾(它以 _<子> 结尾),连候选都进不了;请求 `<父>` 时分叉文件
+// 同样进不了候选。本判定只额外要求"文件内容与它的文件名不打架",不放宽名字这一维。
+func codexRolloutIdentityMatches(path, expectID string) bool {
+	nameID := codexRolloutNameID(filepath.Base(path))
+	if nameID == "" || nameID != expectID {
+		return false
+	}
+	head := codexRolloutSessionID(path)
+	if head == nameID {
+		return true
+	}
+	if parts := strings.Split(nameID, "_"); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return head == parts[0]
+	}
+	return false
 }
 
 // codexInjectedUserPrefixes 是新格式 rollout(codex ≥0.16x)里 codex 自己注入到
