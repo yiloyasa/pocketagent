@@ -38,9 +38,9 @@
 
 | 项 | 值 |
 |---|---|
-| Git | 分支 `main`，**代码基线** `316e6ac`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
+| Git | 分支 `main`，**代码基线** `1cba568`（2026-10-07：真机 L2 验收入库）。2026-10-04→07 主线五段：**全库审查+修复轮**（9 路审查 5 P0/29 P1 当日全修 + 工作区 798→482MB 清理）→ **深度优化波**（pi 看门狗假修坐实真修 / panel CSRF 双 P1 / oaHTTP 空闲看门狗）→ **字段适配轮**（六家 codex 0.160.0 / pi 1.0.2 / zcode / dsh / hermes 通知与字段全量对账，pi cost 纯数字 P0 修复）→ **预收编+清理轮**（v4 同族+四件套收编 PASSTHROUGH / 删 6 死符号）→ **真机 L2**（USB 通道全自动化验收）；工作树干净，当前提交以 `git log` 为准 |
 | 六家 agent 版本基线 | codex **0.160.0**、pi **1.0.2**、zcode（桌面当前版，fork 7 型 union 已适配）、dsh **0.2.0-rc.2**、hermes（定位修复后全接入）、Claude 会话只读导入（externalconv） |
-| 测试基线 | Android **1844 用例 / 0 失败 / 0 错误**（2026-10-14，196 份 XML，`--rerun`，本轮新增 5 例：hermes 运行中提交 Toast 改帧驱动(Steered/Queued 回执裁定)）；daemon `go test ./... -count=1` **30 个有测试包通过**（其中 internal 27 包，含新增 selfguard）；**12 包 race 全通过**；RPC **7 服务 / 93 RPC**。本轮记录：`docs/verify/ui-polish-2026-10-11.md` |
+| 测试基线 | Android **2002 用例 / 0 失败 / 0 错误 / 0 跳过**（2026-10-17，206 份 XML，`--rerun`，本轮新增 5 例：hermes 运行中提交 Toast 改帧驱动(Steered/Queued 回执裁定)）；daemon `go test ./... -count=1` **30 个有测试包通过**（其中 internal 27 包，含新增 selfguard）；**12 包 race 全通过**；RPC **7 服务 / 93 RPC**。本轮记录：`docs/verify/ui-polish-2026-10-11.md` |
 | UI 收尾 | 2026-10-11：撤销操作互斥、共享触控区/动态减弱动画、键盘避让、Agent 网格及设置大字适配、主机状态可见性、底部运行条实测让位；模拟器 1080×2400 与 840×1600/1.5 倍字体复验。当日 21:51 已无窗热部署生产 daemon（含 oaHTTP 竞态修复）；本轮改动已入库 |
 | 真机 | 小米 13（`8e0e7bbe`）USB `adb reverse` 通道：**最终真机验收 2026-10-11（14 PASS）**，pi thinking 全链/dsh 写文件工具链/胶囊抑制跟底/zcode fork 点选 真机全通过（证据 `docs/verify/evidence/l2-final-20261011/`）；上一轮 L2 2026-10-07（15 项 13 PASS，`docs/verify/evidence/l2-20261007/`）。1 BLOCKED=语音须真人手指；codex 真实轮次待桌面 DEX Router 账号重同步后补考（App 侧错误链路已验） |
 | **下一刀（交接待办）★** | ① 语音 L2 真人手指补验 ② 桌面 DEX Router 账号重同步后补考 codex 真实轮次 ③ zcode fork 新会话落地形态桌面端复核（fork 已点通，见 L2-final F2）。原②(zcode fork)已销案 ④ 其余已销案（详见 `docs/verify/handoff-2026-10-09.md` §8）。明细与背景 → **`docs/verify/handoff-2026-10-09.md`（交接总档）** |
@@ -57,7 +57,7 @@
 ### 0.5 铁律（红线，违反即打回）
 
 - **绝不替用户做审批决定**（伪造 decision）；没能力的原生请求回 error，**绝不伪造**。
-- **绝不改写用户桌面配置**：`~/.codex/config.toml`、`~/.dsh/`、`~/.pi/`、`~/.codex/` 一律只读。
+- **绝不改写用户桌面配置**：`~/.codex/config.toml`、`~/.dsh/`、`~/.pi/` 的**配置**一律只读。**会话数据例外**：`~/.codex/sessions/**/rollout-*.jsonl` 等**原生会话文件**按「删会话联动删除」设计可删（软失败不阻塘），但必须过四道闸（符号链接包含性 / 扩展名 / 文件头 id 一致 / 多命中即报错）；目录级删除不得越过这四道闸。
 - **契约两副本必须同步**（改一份 proto 必须同步另一份）。
 - **不新增写死的名单 / 顺序 / 版本二分**（模型白名单、agent 顺序、`isLegacy*`）；未知输入走「透传」，UI 禁显「未知 / 错误」。
 - **不留假绿**：测试必须 `--rerun` 并核验结果 XML 时间戳；产物自证（apkanalyzer / 二进制 grep 新符号）。
@@ -69,7 +69,7 @@
 - **本文件（README）** = 项目整体上下文（唯一）。
 - **`AUDIT.md`** = 唯一审核标准（甲乙丙丁分级 / L0–L2 三层 / 红线一票否决）。
 - **`docs/verify/handoff-2026-10-09.md`** = 交接总档（最近一次交接：现状全景 / 同日五轮纪要 §8 / 待办明细 / 验证基线复现 / 坑库）。
-- 审核入口脚本 `tools/audit/pa_audit.py`（六条规则，`--json` 机器可读）；真机驱动 `tools/device/`。
+- 审核入口脚本 `tools/audit/pa_audit.py`（七条规则，`--json` 机器可读）；真机驱动 `tools/device/`。
 - 工作区根 `_archives/` = 冷数据归档（只搬不删）；`apk-analysis/` = MobileCodex 生态逆向对比（项目前身调研）。两者均在仓库外 `G:\项目1\` 下。
 
 ---
@@ -203,7 +203,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 | daemon 入口 | `daemon/cmd/pocketagentd/main.go` | 见 §3 flag 表；运行参数：`-addr 0.0.0.0:7246 -workspace G:\项目1\pocketagent`，env `CODEX_BIN=G:\Claude Code\codex.cmd`。⚠ **pi/dsh 的定位已改为按用户环境派生**（2026-09-23，`internal/hostenv`）：node 走 随包目录 → `%LOCALAPPDATA%`/`%ProgramFiles%` → PATH；pi/dsh 入口走 **npm 实际配置的全局根**（`.npmrc` 的 `prefix=` 或 `NPM_CONFIG_PREFIX`，其次才是 `%APPDATA%\npm` 等默认位置）→ PATH。本机 `.npmrc` 写着 `prefix=G:\Claude Code`，故 pi/dsh 均已实测命中、**无需重装**；仅在既无 env 覆盖、又装在别处时才须显式设 `PI_NODE`/`PI_CLI`（pi）或 `DSH_NODE`/`DSH_BIN`（dsh） |
 | daemon 数据目录 | `~/.pocketagentd/` | `threads.json`(会话真值)、`events.jsonl`(+轮转)、`devices.json`(配对设备)、`pair-code.txt`(配对码，0600，重启复用不换码)、`certs/`(自签证书)、`dsh-home/`(dsh 隔离 HOME) |
 | App 入口 | `MainActivity.kt` → NavHost | 冷启 Splash → onboarding(未配对)/home |
-| App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.3.0/6）；sherpa AAR 由构建脚本下载+哈希校验 |
+| App 构建 | `android/app/build.gradle.kts` | versionCode/versionName 与 daemon `internal/version` 同步（现 0.4.0/8）；sherpa AAR 由构建脚本下载+哈希校验 |
 | 构建脚本 | `tools/device/_pa_gradle.py`、`android/build-ascii.ps1` | 中文路径 Gradle 处理不了 → robocopy 镜像到 `G:\pa\android` 再 gradlew |
 | 看门狗 | `daemon/cmd/paguard` | 计划任务 PocketAgentDaemonGuard 每分钟**直跑 paguard.exe**（windowsgui 子系统物理无窗口）→ 探测 7246 死了才以同参数拉起 daemon（4s 内拉起）。旧链「计划任务 → wscript → watchdog_hidden.vbs → WMI → paguard」已于 2026-09-25 弃用（`6077295`：wscript 每分钟调度触发 VBScript 弃用弹窗，事件日志实锤），`watchdog.bat`/`watchdog_hidden.vbs` 两脚本已随之删除。⚠ daemon 启动参数由 paguard **硬编码**（`-addr`/`-workspace`/同目录 exe 名）→ 加 flag 必须重编译 paguard.exe。2026-09-23 起 paguard **不再注入 `CODEX_BIN` 默认值**。0.4.0 起标准分发只剩 daemon.exe 单文件，看门狗由 daemon 内建 selfguard 自己拉（-guard-child），paguard/计划任务退为高级路径；paguard 认 daemon.exe 优先。（旧行为注入写死的开发机路径，会覆盖 daemon 自己的定位链，把「能找到 codex」变成「找不到」） |
 | 分发 | `dist/windows/build.ps1` | 打包 daemon+paguard+version.txt+install/uninstall/使用说明 → `PocketAgent桌面端.zip`。0.4.0 起 `dist/release.ps1` 另产标准双资产 `dist/daemon.exe` + `dist/apk/pocketagent.apk`，发 GitHub Releases（总 zip 退役）。。2026-09-23 修：原脚本在 go build **之后**执行 `Remove-Item $StageDir -Recurse`，把刚构建的两个 exe 删掉，产出的 zip 缺 pocketagentd.exe/paguard.exe（提交 `42813da` 引入的回归）；现顺序为 清理 → 创建 → 构建 → 痕迹扫描 → 压缩，扫描命中开发机痕迹即中止不出包 |
@@ -452,7 +452,7 @@ ChatScreen 输入 → AgentConnection stub(token metadata)
 - **红线一票否决**：伪造 decision / 假绿 / 契约不同步 / 产物不对；**提示项不阻塞**：锚点漂移、证据缺项限期补录。
 - **设计原则合规**：新增硬编码名单即报警（存量挂牌仅剩 1 处 `isLegacyApproval`；豁免登记项见 AUDIT 附录 A，只减不增）；UI 禁显「未知/错误」。
 - **缺陷即测试**：修复不附回归用例 = 没修完；**审核资产只增不减**。
-- 入口脚本 `tools/audit/pa_audit.py`（六条规则独立开关，`--json` 机器可读）；完整标准、checklist、linter 规则、准出 DoD、度量回流 → **`AUDIT.md`**。
+- 入口脚本 `tools/audit/pa_audit.py`（七条规则独立开关，`--json` 机器可读）；完整标准、checklist、linter 规则、准出 DoD、度量回流 → **`AUDIT.md`**。
 
 ---
 

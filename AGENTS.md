@@ -14,14 +14,14 @@
 
 | 项 | 值 |
 |---|---|
-| Git 基线 | `main` @ `3de26bf`（2026-10-16/17：B4 宿主桥全链路打通——Flutter module 集成+30 方法面全接（24 unary+6 双向流）+三条事件通道实时推流+installBridge 三件套装配+Flutter UI 导航入口；Android 2002 用例、flutter 949 测试全绿，APK dex 五符号自证；真机冷启待设备。同日早前 B3 全波次、daemon 收敛、hermes slash 位化、P1 补位等） |
+| Git 基线 | `main` @ `1cba568`（2026-10-16/17：B4 宿主桥全链路打通——Flutter module 集成+30 方法面全接（24 unary+6 双向流）+三条事件通道实时推流+installBridge 三件套装配+Flutter UI 导航入口；Android 2002 用例、flutter 958 测试全绿，APK dex 五符号自证；真机冷启待设备。同日早前 B3 全波次、daemon 收敛、hermes slash 位化、P1 补位等） | **本行指向「上一个代码提交」**——只改锚点的文档提交本身不计入（否则文档无法引用自身提交，会每轮反复横跳）。
 | 版本 | daemon **0.4.0** / App **versionCode 8** |
 | 契约 | 7 服务 / **93 RPC**，`proto/v1/` 与 `android/app/src/main/proto/v1/` 双副本 MD5 全一致 |
-| 测试水位 | Android **1844 用例 0 失败 / 0 错误**（2026-10-14，196 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
+| 测试水位 | Android **2002 用例 0 失败 / 0 错误 / 0 跳过**（2026-10-17，206 份新鲜 XML）；daemon 全量 **30 个有测试包通过**(internal 27 包，含新增 selfguard)**12 包 race 通过**。证据与验收边界见 `docs/verify/ui-polish-2026-10-11.md` |
 | agent 版本 | codex 0.160.0 / pi 1.0.2 / dsh 0.2.0-rc.2 / zcode 桌面当前版 / hermes 全接入 |
 | 真机 | 小米 13 `8e0e7bbe`，USB `adb reverse`：最终真机验收 14 PASS（2026-10-11，`docs/verify/evidence/l2-final-20261011/`）；上轮 15 项 13 PASS（2026-10-07）。语音需真人；codex 真实轮次待 DEX Router 账号重同步 |
 
-> 接手后第一件事：`git log --oneline -5` 核对基线；若与上表不符，以 git 与 `README.md` §0.3 为准并更新本表。
+> 接手后第一件事：`git log --oneline -5` 核对基线；若与上表不符，以 git 与 **`DEVELOPING.md` §0.3（真值锚点，测试基线行）** 为准并更新本表（旧指针 `README.md` §0.3 已核实不存在）。
 
 ## 2. 常用命令（Git Bash，Windows）
 
@@ -44,8 +44,8 @@ python tools/proto/gen_proto.py            # 同步 android 副本 + 生成 Go
 python tools/proto/gen_proto.py --check    # 只校验双副本 MD5（AUDIT 红线）
 
 # ── 审核门禁 ──
-python tools/audit/pa_audit.py --json      # 六条规则机器可读
-python tools/audit/pa_upgrade_gate.py      # 升级门禁
+python tools/audit/pa_audit.py --json      # 七条规则机器可读（红项 exit 1：假绿哨兵已升为阻断项）
+python tools/audit/pa_upgrade_gate.py --stage baseline|contract|feature|release   # 升级门禁（**--stage 必填**，省略就退 2）
 
 # ── 桌面分发包 ──
 dist/windows/build.ps1                     # daemon + paguard 打 zip
@@ -58,6 +58,7 @@ ls daemon/cmd/                             # chatprobe/modelprobe/smoketest 等�
 ## 3. 本机环境事实（Windows 11 + Git Bash）
 
 - **中文路径**：仓库在 `G:\项目1\`，Gradle 处理不了 → **APK 构建必须走 `_pa_gradle.py` / `build-ascii.ps1` 镜像包装器**（自动镜像到 ASCII 路径）。
+- **`PA_MIRROR` 隔离镜像**：多个 android 子代理并发时 `set PA_MIRROR=G:\pa_c1` 各占一个 ASCII 镜像，避免 robocopy/gradle 互踩。它与 `_pa_gradle.py` 同名同义，且 `_pa_gradle.py` / `pa_audit.py` / `pa_upgrade_gate.py` / `_pa_test_report.py` **都认它**：结果 XML 默认目录 = `<PA_MIRROR>\app\build\test-results\testDebugUnitTest`。**优先级：显式 `--test-results`/位置参数 > `PA_MIRROR` > 默认 `G:\pa\android`**——用隔离镜像跑完测试却不设它，就会报主镜像的旧 XML（假绿）。；`_pa_audit_gate3b.py`未设 `PA_MIRROR` 则**拒绝执行并退 2**（它会 rename 目录 + 真跑 gradlew，默认落点在共享主镜像上即“沉默地动手”）。陈旧 XML 现在**两个工具都阻断**（与旧行为“打孏并退 0”相反）：要看真实水位就必须指对镜像或先 `--rerun`。⚠ **新旧 10 分钟窗口**（`pa_audit.py:547` 与 `pa_upgrade_gate.py:67` 同值 `STALE_MINUTES=10`，**勿分开定义**）：验证顺序不可倒置——先 `test` 生成新 XML，再**立即**跑门禁；两者之间超过 10 分钟就会红（与代码是否改动无关）。
 - **go**：装在 `C:\Go\bin`，Git Bash PATH 常不带 → 命令前缀 `PATH="/c/Go/bin:$PATH"`。
 - **Android SDK/JDK**：不在默认位置时用 `build-ascii.ps1` 的 `-SdkDir` / `-JbrDir` 指定（默认值见脚本 param 块）。
 - **语音资产不入库**：sherpa-onnx AAR 与 SenseVoice 模型构建时自动下载校验（`android/app/libs/README` 与 `android/app/src/main/assets/sensevoice/README`）。
@@ -68,7 +69,7 @@ ls daemon/cmd/                             # chatprobe/modelprobe/smoketest 等�
 ## 4. 红线速查（违反即打回，全文见 DEVELOPING.md §0.5 + AUDIT.md）
 
 1. **绝不替用户做审批决定**；没能力的原生请求回 error，**绝不伪造**。
-2. **绝不改写用户桌面配置**：`~/.codex/`、`~/.dsh/`、`~/.pi/` 等一律只读。
+2. **绝不改写用户桌面配置**：`~/.codex/config.toml`、`~/.dsh/`、`~/.pi/` 的**配置**一律只读。**会话数据**（如 `~/.codex/sessions/**/rollout-*.jsonl`）按「删会话联动删除」设计可删（软失败不阻塘，见 ### 9.1 数据落点全表（2026-09-21 实测）），但**必须过四道闸**：符号链接包含性 + 扩展名 + 文件头 id 一致 + 多命中即报错（容易混淆）。
 3. **proto 双副本必须同步**（改一份必须同步另一份，`gen_proto.py --check` 必须过）。
 4. **不新增写死的名单/顺序/版本二分**；未知输入走透传，UI 禁显「未知/错误」。
 5. **不留假绿**：测试 `--rerun` 并核验结果 XML 时间戳；产物自证（apkanalyzer / 二进制 grep 新符号）。
