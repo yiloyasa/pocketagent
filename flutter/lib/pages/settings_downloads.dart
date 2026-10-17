@@ -28,6 +28,8 @@
 // [getRuntimeState] 真通道，三态齐全：宿主缺席（HOST_UNAVAILABLE）→ 未就绪
 // 错误态；读成功但字段空 → 未报告；与「空态」三分，不互相冒充。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../gen/pocketagent/v1/runtime.pb.dart';
@@ -244,15 +246,40 @@ class _SettingsDownloadsPageState extends State<SettingsDownloadsPage> {
   RuntimeStateResponse? _hostState;
   String _hostErrorText = '';
 
+  /// store 广播流的订阅句柄：`initState` 建、`dispose` 拆。
+  ///
+  /// 【为什么必须拆】事件源是 store 那条**广播**流（不 close，允许别的 owner 继续
+  /// `add`），监听者注册后不会因为页面没了而自动摘掉。本页与任务中心读的是同一份
+  /// app 级本地真值（`settings.dart` 把它往下透传），所以 store 的寿命一旦长过页面
+  /// （B4 提 app 级单例正是这一步），本页每一条任务事件都会继续打进已销毁的 State：
+  /// 监听闭包抓住 State → State 抓住 widget → 整棵子树永不回收，且监听者只增不减。
+  ///
+  /// 【与 listener 里那道 `mounted` 闸的关系】前者决定「事件到了要不要动 setState」，
+  /// 退订决定「事件还要不要送过来」。只留前者屏幕上看不出破绽（这正是它容易被当成
+  /// 已修好的原因），但死 State 仍在被戳、仍在被 store 抓着。
+  StreamSubscription<List<TaskItem>>? _tasksSub;
+
   @override
   void initState() {
     super.initState();
     _tasks = _store.snapshot;
-    _store.tasks.listen((List<TaskItem> next) {
+    _tasksSub = _store.tasks.listen((List<TaskItem> next) {
       if (!mounted) return;
       setState(() => _tasks = next);
     });
     _loadHost();
+  }
+
+  @override
+  void dispose() {
+    // 只退订本页自己那条订阅，**不碰 store 的任何内容**：store 是外部注入的共享
+    // 真值，退订（收摊）与清空（毁数据）不是同一件事。
+    // `cancel()` 异步而 dispose 里不能 await（框架契约），调起即可 —— 它对广播流
+    // 做的就是「摘掉本监听者」；万一有一帧内已排队的事件穿过来，listener 的
+    // `mounted` 闸也会把它降级成 no-op，不会崩、也不会写脏 State。
+    // 句柄可空：initState 未跑完就 dispose 的极端路径下判空而不是崩。
+    _tasksSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadHost() async {

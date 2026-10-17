@@ -32,6 +32,8 @@
 //   → 这些出口用可空回调表达：**不注入就不渲染对应按钮**（无位不显示假入口），
 //     行内文案也同步切换成「去会话找回 / 恢复连接后再试」（不指向不存在的按钮）。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../components/pa_button.dart';
@@ -112,16 +114,44 @@ class _TaskCenterPageState extends State<TaskCenterPage> {
   /// 当前时钟（生产 = 系统时钟；测试注入可控时钟，见 [TaskCenterPage.nowMs]）。
   int _now() => (widget.nowMs ?? _systemNowMs)();
 
+  /// store 广播流的订阅句柄：`initState` 建、`dispose` 拆。
+  ///
+  /// 【为什么必须拆】store 的事件源是一条**广播**流（`task_center_data.dart`
+  /// 明确不 close：它默认与页面同生共死，但有别的 owner 时必须能继续 `add`），
+  /// 监听者注册进去之后不会因为页面没了而自动摘掉。今天 store 是页面内建的，
+  /// 两者一起进 GC，看不出问题；但 [TaskCenterPage.store] 是公开的构造注入口
+  /// （B4 提 app 级单例后装配点一行不改）——**store 一旦比页面活得久，每一条
+  /// 任务事件都会继续打进这个已销毁的 State**：监听闭包抓住 State → State 抓住
+  /// widget → 整棵已销毁的页面子树永不回收，且 store 的监听者列表只增不减。
+  ///
+  /// 【与 listener 里那道 `mounted` 闸的关系】两者不是二选一，是两道不同的闸：
+  /// `mounted` 闸决定「事件到了要不要动 setState」，退订决定「事件还要不要送过来」。
+  /// 只留前者，屏幕上确实看不出破绽（这正是它容易被当成已修好的原因），但死 State
+  /// 仍在被事件戳、仍在被 store 抓着不放。
+  StreamSubscription<List<TaskItem>>? _tasksSub;
+
   static int _systemNowMs() => DateTime.now().millisecondsSinceEpoch;
 
   @override
   void initState() {
     super.initState();
     // 订阅 store 变更（本地操作与后续真写入方都走这条通知）。
-    _store.tasks.listen((List<TaskItem> next) {
+    _tasksSub = _store.tasks.listen((List<TaskItem> next) {
       if (!mounted) return;
       setState(() => _tasks = next);
     });
+  }
+
+  @override
+  void dispose() {
+    // 只退订本页自己那条订阅，**不碰 store 的任何内容**：store 可能是外部注入的
+    // app 级单例，退订（收摊）与清空（毁数据）不是同一件事。
+    // `cancel()` 是异步的，而 dispose 里不能 await（框架契约），调起即可 ——
+    // 它对广播流做的就是「摘掉本监听者」；万一有一帧内已排队的事件穿过来，
+    // listener 的 `mounted` 闸也会把它降级成一次 no-op，不会崩、也不会写脏 State。
+    // 句柄用可空字段：initState 未跑完就 dispose 的极端路径下判空而不是崩。
+    _tasksSub?.cancel();
+    super.dispose();
   }
 
   /// 顶部未读徽标点按 = 全部标为已读（见文件头「已读策略」）。

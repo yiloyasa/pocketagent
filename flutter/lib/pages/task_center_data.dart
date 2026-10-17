@@ -548,7 +548,31 @@ class TaskRetryGate {
 /// 【为什么不是全局单例】Kotlin 是 app 级 object（AppDrawer 徽章 / Home /
 /// TurnSession 共享）；Flutter 侧共享装配要等 B4（根组件注入或 InheritedWidget），
 /// 本波先给**可注入的类**——页面用构造注入（同 ThreadsPage 的 source 注入模式），
-/// 测试各拿各的实例互不串味。届时把实例提到 app 级即可，方法面不动。
+/// 测试各拿各的实例互不串味。
+///
+/// 【生命周期 = 实例；刻意**不**提供 close】原注释此处写的是「届时把实例提到
+/// app 级即可，方法面不动」——那句是错的，已改正：提到 app 级**必然要改方法面**
+/// （见下面【唯一的增长向量】）。当前树上**没有任何 app 级持有者**：两个消费方
+/// 都自己建（`task_center.dart:101` / `settings_downloads.dart:236` 的
+/// `widget.store ?? TaskCenterStore()`），`main.dart` 的壳也没持任务中心实例，
+/// 所以 store 与它的通知流一起随页面变垃圾，没有任何跨实例的保留引用 → 现在
+/// **既不存在泄漏、也不需要 close**。不给它加 `dispose()` 还有一条对位理由：
+/// Kotlin 那个 `object TaskCenter` 的通知面是 `MutableStateFlow`
+/// （`android/.../ui/component/TaskCenter.kt:82-88`），**StateFlow 根本没有
+/// close**——Kotlin 侧同样没有「拆通知流」这一步；Dart 侧凭空补一个 `dispose()`
+/// 会造出一个没有 Kotlin 对应物、又没有任何调用方的假接口（谁调它？页面 dispose
+/// 只该退订，退订后 store 本身无人持有，`close` 纯属多余动作）。
+///
+/// 【唯一的增长向量：订阅者不取消】未 close 的 broadcast controller 只按**活跃
+/// 订阅**占内存，**不按事件条数**占：没有监听者时 `add()` 的事件直接丢弃，不进
+/// 任何队列（这正是下面【通知语义】里「订阅前不补」那条测试钉的语义）。今天两个
+/// 页面在 `initState` 里 `listen` 且从不 `cancel`（`task_center.dart:121` /
+/// `settings_downloads.dart:251`），但 store 随页面一起被回收，那个环
+/// （State → store → controller → 订阅 → 闭包 → State）是**无外部根的引用环**，
+/// 追踪 GC 整体回收，无泄漏。**B4 真把 store 提为 app 级单例的那天**，每开一次
+/// 页面就往一个进程级 controller 上永久挂一个监听，那才是真泄漏——修法在页面侧
+/// （`listen` 的返回值存字段、`dispose` 里 `cancel`，同 `BridgeTerminalSession.close`
+/// 的 owner-关流纪律），不在本文件，故登记移交、不在这里加没人调的 close 方法。
 ///
 /// 【通知语义】broadcast 流：订阅即收、订阅前推过的不补——快照用 [snapshot] 同步读
 /// （本地 store 没有「加载中」可言，见页面文件头）。没有变化（逐条 `==` 相等）时
@@ -573,6 +597,12 @@ class TaskCenterStore {
   }
 
   final TaskCenterPrefs? _prefs;
+
+  /// 变更通知的 broadcast controller。
+  ///
+  /// 【为什么没有 close】见类头【生命周期 = 实例；刻意不提供 close】：本 store
+  /// 随实例存活，不跨页面、不跨进程；Kotlin 对位的 `MutableStateFlow` 同样没有
+  /// close 可调。未 close 的代价为零——无监听者时 `add` 不缓冲（见 [tasks]）。
   final StreamController<List<TaskItem>> _controller =
       StreamController<List<TaskItem>>.broadcast();
 
@@ -583,6 +613,11 @@ class TaskCenterStore {
   bool _viewing = false;
 
   /// 变更通知流（broadcast）。
+  ///
+  /// 【订阅者的义务】不订阅没人受影响；但**订了就要 `cancel`**（页面在
+  /// `dispose` 里退订）——见类头【唯一的增长向量：订阅者不取消】。这是本页唯一
+  /// 与流相关的生命周期动作，也是 `BridgeTerminalSession` 那条 owner-关流纪律在
+  /// 订阅侧的形状：**退订由订阅方做，关闭由流的所有者做，而 store 不拥有页面**。
   Stream<List<TaskItem>> get tasks => _controller.stream;
 
   /// 当前清单快照（同步可读；首帧即可渲染，无加载态）。

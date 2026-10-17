@@ -5,6 +5,8 @@
 // MaterialApp 的情况下被钉死；widget 测试（task_center_page_test.dart）只负责
 // 渲染与交互。两层都绿才算任务中心没坏。
 
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/components/pa_status_chip.dart';
 import 'package:pocketagent_ui/pages/task_center_data.dart';
@@ -349,6 +351,80 @@ void main() {
       expect(seen, isEmpty, reason: '订阅即收、订阅前不补——与 Kotlin StateFlow 不同，');
       // 快照是同步真值（本地 store 没有加载态可言）。
       expect(store.snapshot, hasLength(1));
+    });
+  });
+
+  // 判决组：把「为什么 TaskCenterStore 不需要 close」钉成可回归的断言。
+  // 依据在 task_center_data.dart 类头【生命周期 = 实例；刻意不提供 close】
+  // 与【唯一的增长向量：订阅者不取消】：未 close 的 broadcast controller 只按
+  // 活跃订阅占内存、不按事件条数占；store 随实例存活，与页面一起回收。
+  // 下面三条各钉住这条依据的一块，任何人把它改成「会积累」的形态都会红。
+  group('TaskCenterStore：通知流的生命周期契约（无 close 的依据）', () {
+    test('无人监听时的连续变更不留存：新订阅者只收后续那一次，不补旧账', () async {
+      final TaskCenterStore store = TaskCenterStore();
+
+      // 先不订阅：连续 50 次变更，每次 _commit 都会走到 _controller.add。
+      for (int i = 0; i < 50; i++) {
+        store.trackMessage('th-$i', 'T$i', nowMs: t0 + i);
+      }
+
+      final List<List<TaskItem>> seen = <List<TaskItem>>[];
+      store.tasks.listen(seen.add);
+      store.trackMessage('after', '订阅之后', nowMs: t0 + 999);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(seen, hasLength(1),
+          reason: '缺席的监听者不缓冲：未 close 因此不会按事件条数堆积'
+              '（若改成带重放/缓冲的流，这里会收到 51 条）');
+      expect(seen.single, hasLength(51));
+      expect(seen.single.map((TaskItem t) => t.id), contains('msg:after'),
+          reason: '收到的那一条就是订阅之后的变更');
+      expect(store.snapshot, hasLength(51),
+          reason: '「不留存」说的是通知流，不是清单真值——快照一条不丢');
+    });
+
+    test('退订后不再收通知；后续订阅者照常收（可释放的是订阅，不是历史）', () async {
+      final TaskCenterStore store = TaskCenterStore();
+      final List<List<TaskItem>> first = <List<TaskItem>>[];
+      final StreamSubscription<List<TaskItem>> sub = store.tasks.listen(first.add);
+
+      store.trackMessage('a', 'A', nowMs: t0);
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+
+      store.trackMessage('b', 'B', nowMs: t0);
+      await Future<void>.delayed(Duration.zero);
+      expect(first.map((List<TaskItem> next) => next.last.id), <String>['msg:a'],
+          reason: '退订 = 订阅方释放自己那一份；store 不需要替它做任何关闭动作');
+
+      final List<List<TaskItem>> second = <List<TaskItem>>[];
+      store.tasks.listen(second.add);
+      store.trackMessage('c', 'C', nowMs: t0);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(second.map((List<TaskItem> next) => next.last.id), <String>['msg:c'],
+          reason: '新订阅者照常收，且不补退订期间的变化（要全量真值走 store.snapshot）');
+    });
+
+    test('两个实例互不串味：通知流随实例走，不是隐式 app 级单例', () async {
+      final TaskCenterStore one = TaskCenterStore();
+      final TaskCenterStore two = TaskCenterStore();
+      final List<List<TaskItem>> a = <List<TaskItem>>[];
+      final List<List<TaskItem>> b = <List<TaskItem>>[];
+      one.tasks.listen(a.add);
+      two.tasks.listen(b.add);
+
+      one.trackMessage('x', 'X', nowMs: t0);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(a, hasLength(1));
+      expect(b, isEmpty,
+          reason: '生命周期 = 实例。B4 若真把 store 提为 app 级单例（通知流挂到进程'
+              '级 controller），这条必须先改：届时「无 close」的前提就变了，'
+              '得同时补 owner 侧退订与 close 契约，不许悄悄改绿');
+      expect(two.snapshot, isEmpty);
     });
   });
 

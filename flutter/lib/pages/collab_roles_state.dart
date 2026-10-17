@@ -59,21 +59,36 @@ class CollabRolesStore {
   ///
   /// 【为什么 fire-and-forget（返回 void 而不是 Future）】Kotlin 的 load()
   /// 是 `scope.launch`（页面 LaunchedEffect 不等它）；Dart 侧页面同样在
-  /// initState 里调，状态变化经 setState 落 UI。测试要等它，直接 await 内部
-  /// 的 [_load] 路径——不，测试要确定性：见 [_loadFuture]（进行中的加载只
-  /// 保留一个，重复调用返回同一个 Future，测试可 await）。
+  /// initState 里调，状态变化经 setState 落 UI。测试要等它，不靠 sleep 碰运气：
+  /// 见 [_loadFuture]（**每次调用各起一个 Future**，[loadCompleted] 指向最近
+  /// 那次；重试就是再调一次 load 再 await 一次——不合并、不去重）。
   void load() {
     _loadState = CollabRolesLoadState.loading;
     _loadError = null;
-    // 记录在飞加载：并发调用共享同一个 Future（Kotlin 侧由 LaunchedEffect 的
-    // 单次性天然保证，Dart 侧显式记录）。
+    // 记录在飞加载（每次调用各起一个；谁最近发起，[loadCompleted] 就跟谁）。
     _loadFuture = _doLoad();
   }
 
-  late Future<void> _loadFuture = _doLoad();
-
   /// 当前（或最近一次）加载的 Future——测试据此 await 到状态收敛，
   /// 不用 sleep 碰运气。
+  ///
+  /// 【为什么初值是「已完成的空 Future」，而不是 late 字段 + 初始化器】
+  /// `late` 字段的初始化器在**首次读取**时才求值，所以「late 声明 + 初始化器调
+  /// `_doLoad()`」等于把一次 `listCollabRoles` RPC 藏在 getter 后面：任何人
+  /// （包括探查代码）只要**读一下** [loadCompleted]，就悄悄发起了一次加载，且表现
+  /// 为「多了一次 listCollabRoles 调用」这种极难查的幽灵行为。
+  /// 改成**显式意图**：字段本身零副作用（初值是一个已完成的占位 Future，读它什么
+  /// 也不会发生），发起加载只有 [load] 这一个动作，要等收敛就
+  /// `await loadCompleted`。
+  ///
+  /// 【时序不变的依据】全仓所有读点都是「先 load 后 await」，无一例外：
+  /// 生产 `collab_roles.dart:101-102` 与 `collab_bridge.dart:456-457`；
+  /// 测试 `collab_roles_state_test.dart` 13 处、`collab_role_editor_page_test.dart`
+  /// 1 处。因此把初值改成已完成占位后，**每条既有路径拿到的仍是它自己那次加载的
+  /// Future**，加载次数与顺序逐条不变（原本那条 `late` 初始化器在全仓**从未**被
+  /// 触发过——它只在「忘了调 load」时才现身）。
+  Future<void> _loadFuture = Future<void>.value();
+
   Future<void> get loadCompleted => _loadFuture;
 
   Future<void> _doLoad() async {

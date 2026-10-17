@@ -9,6 +9,8 @@
 // 就在本机，唯一能错的是 store 自身（其行为在 task_center_data_test.dart）。
 // 这里测的是「给定 store，页面渲染什么、点了发生什么」。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketagent_ui/components/pa_status_chip.dart';
@@ -59,6 +61,31 @@ TaskItem dlTask(
       read: read,
       sourceTitle: sourceTitle,
     );
+
+/// 计数 store：写入面与事件源都是 store 本体（`_controller` 那条真广播流一个
+/// 字节没换），只在 [TaskCenterStore.tasks] 的**出口**挂一只计数器。
+///
+/// 【为什么非要这只计数器】「dispose 时到底退订了没有」从 UI 侧看不见：listener
+/// 里那道 `mounted` 闸会把已销毁的页面挡在 `setState` 之前，所以退订与否，
+/// 屏幕上的像素一模一样。要判决订阅纪律，唯一诚实的观测量是**事件到底送进了几个
+/// 监听者**——这里数的正是它。覆写走的是 store 的公开可覆写面（事件真源仍是它
+/// 自己的私有广播流），`trackMessage`/`trackDownload` 照常打到真流上，不是另造
+/// 一条假数据源。
+///
+/// 【为什么计数器只能数「本 store 实例的页面订阅」】`get tasks` 每次返回一条新的
+/// 映射流，页面只在 `initState` 里订阅一次，测试自己不再订阅——所以 `deliveries`
+/// 就是「页面这条订阅收到的事件条数」。
+class _CountingStore extends TaskCenterStore {
+  /// 已经投递给页面那条订阅的任务事件条数。
+  int deliveries = 0;
+
+  @override
+  Stream<List<TaskItem>> get tasks =>
+      super.tasks.map((List<TaskItem> next) {
+        deliveries += 1;
+        return next;
+      });
+}
 
 void main() {
   /// 预置任务清单：经公开方法面写入（不是页面私有假数据源）——本地 store 的写入
@@ -688,6 +715,55 @@ void main() {
       expect(find.text('图.png'), findsOneWidget);
       expect(find.text('未完成'), findsWidgets);
       expect(find.text('还没有下载任务'), findsNothing);
+    });
+  });
+
+  // 订阅生命周期：`store` 是外部注入的构造参数，本组让 store 活得比页面久
+  // （store 握在测试手里），复现的是 B4「store 提成 app 级单例」之后的真实拓扑。
+  group('订阅生命周期（store 活得比页面久）', () {
+    testWidgets('dispose 之后再推任务事件：页面已退订，不碰已销毁的 State',
+        (tester) async {
+      final _CountingStore store = _CountingStore();
+
+      await pumpPage(tester, store: store);
+      expect(store.deliveries, 0, reason: '首帧是同步读快照，没有任何事件可投');
+
+      // 换掉整棵树 → 页面被 dispose；store 由测试持有，仍然活着、仍能推事件。
+      await tester.pumpWidget(const SizedBox());
+      final int afterDispose = store.deliveries;
+
+      store.trackMessage('th-after-dispose', '页面走了才来的任务');
+      store.trackDownload(r'C:\tmp\late.zip', 'late.zip', threadId: 'th-1');
+      await tester.pump();
+
+      expect(tester.takeException(), isNull,
+          reason: '已销毁的页面不许再被事件驱动（setState after dispose）');
+      expect(store.deliveries, afterDispose,
+          reason: 'dispose 必须 cancel store 订阅：否则每条事件都继续打进死 '
+              'State（广播流的监听闭包抓住 State → 页面连同子树永不回收，'
+              '且 store 的监听者列表只增不减）');
+    });
+
+    testWidgets('反复进出页面：每轮都退订，监听者不会跨轮累积（无残留）',
+        (tester) async {
+      final _CountingStore store = _CountingStore();
+
+      await pumpPage(tester, store: store);
+      // 第一轮页面还在场时推一条：这条**必须**送到（证明计数不是恒 0 的摆设）。
+      store.trackMessage('th-live', '页面在场时来的任务');
+      await tester.pump();
+      expect(store.deliveries, 1, reason: '页面在场时事件必达（对照组）');
+
+      await tester.pumpWidget(const SizedBox());
+      final int afterDispose = store.deliveries;
+
+      await pumpPage(tester, store: store);
+      store.trackMessage('th-round2', '第二轮页面在场时来的任务');
+      await tester.pump();
+
+      expect(store.deliveries, afterDispose + 1,
+          reason: '第二轮只该收到 1 条：上一轮那条残留订阅若还在，会变成 2');
+      expect(tester.takeException(), isNull);
     });
   });
 }

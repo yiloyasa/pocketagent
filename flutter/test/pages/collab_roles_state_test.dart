@@ -159,6 +159,78 @@ void main() {
     });
   });
 
+  // 判决组：查询不得有副作用。原实现是 `late Future<void> _loadFuture =
+  // _doLoad();`——late 初始化器在首次读取时求值，于是「只是读一下 loadCompleted
+  // 探查一下」就会悄悄打一次 listCollabRoles。下面两条把它钉死。
+  group('loadCompleted：查询不带副作用', () {
+    test('只读 loadCompleted / 其余只读面 = 零 RPC；load() 才恰好发一次', () async {
+      final List<String> calls = <String>[];
+      messenger.setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+        calls.add(call.method);
+        return ListCollabRolesResponse().writeToBuffer();
+      });
+
+      final CollabRolesStore store = CollabRolesStore();
+
+      // 构造后不发任何 RPC（构造只 restore 字段，不加载）。
+      expect(calls, isEmpty, reason: '构造即加载 = 幽灵 RPC，本仓不做（见类注释）');
+
+      // 纯查询：await 一个已完成的 Future 是最典型的「探查」用法。
+      await store.loadCompleted;
+      expect(calls, isEmpty,
+          reason: '只读查询不许发起 listCollabRoles（幽灵初始化已消除）');
+      await store.loadCompleted;
+      // 状态三件套 / 只读投影也一并读一遍（都不能触发加载）。
+      expect(store.loadState, CollabRolesLoadState.loading,
+          reason: '还没 load 就停在构造初值 loading，不自动开跑');
+      expect(store.loadError, isNull);
+      expect(store.roles, isEmpty);
+      expect(store.findById('ghost'), isNull);
+      expect(calls, isEmpty, reason: '连续多次只读仍然零 RPC');
+
+      // 显式意图：load() 是唯一的发起动作，恰好一次。
+      store.load();
+      await store.loadCompleted;
+
+      expect(calls, <String>['listCollabRoles']);
+      expect(store.loadState, CollabRolesLoadState.ready);
+      expect(store.roles, isEmpty);
+    });
+
+    test('每次 load() 各起一次加载；loadCompleted 跟随最近那次（不去重）', () async {
+      int served = 0;
+      messenger.setMockMethodCallHandler(methodChannel, (MethodCall call) async {
+        served += 1;
+        return ListCollabRolesResponse(
+          roles: <CollabRole>[protoRole(id: 'r$served')],
+        ).writeToBuffer();
+      });
+
+      final CollabRolesStore store = CollabRolesStore();
+
+      store.load();
+      final Future<void> first = store.loadCompleted;
+      await first;
+      expect(store.roles.single.id, 'r1');
+      expect(served, 1);
+
+      // 第二次 load：并发调用**不**复用第一次的 Future（Kotlin 侧靠
+      // LaunchedEffect(Unit) 的单次性，Dart 侧靠调用点自己只调一次）。
+      store.load();
+      final Future<void> second = store.loadCompleted;
+      await second;
+
+      expect(identical(first, second), isFalse,
+          reason: 'loadCompleted 指向最近一次加载，不是第一个 Future');
+      expect(served, 2, reason: '两次 load = 两次 RPC，不合并、不去重');
+      expect(store.roles.single.id, 'r2');
+
+      // 已收敛的 Future 仍可重复 await（测试与页面都可能 await 多次）。
+      await store.loadCompleted;
+      expect(served, 2, reason: '重复 await 一个 Future 不产生新加载');
+    });
+  });
+
   group('save：upsert 往返', () {
     test('成功 → null + 本地列表用 daemon 回显真值刷新（trim 过的 id）', () async {
       SetCollabRoleRequest? seenRequest;
