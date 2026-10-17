@@ -10,10 +10,14 @@ pa_upgrade_gate v1 单测（plan Task 4 Step 1：每个 gate 状态一个 fixtur
   pa_audit GoBaselineRule 退出码口径（Task 1）：异常码→环境异常 warn；0/1/2 语义不变
   gate 检查项：git 脏 / proto 不一致 / XML 陈旧 / vet 异常码 / dist 陈旧 / 审计不可用
   阶段闸：全绿→ALLOW；各必须项失守→BLOCK；检查项表可注入可替换
+  dist 新鲜度基准点②（2026-10-17 补洞）：源码提交后资产陈旧→红；仅文档提交→不红；
+  git 取不到基准（失败/浅克隆/输出不可解析）→NOT_IMPLEMENTED 阻断（不静默放行）；
+  显式豁免 --accept-stale-dist →放行且输出含理由与被豁免年龄，默认关闭
 """
 
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -103,13 +107,36 @@ def write_dist(tmp: Path, zip_age=None, script_age=None) -> Path:
     return d
 
 
-def git_stub(commit="fc45567", dirty=""):
-    """假 git：args[1] 路由 rev-parse / status。"""
+SRC_TS_ANCIENT = 1000000000.0   # 2001-09-09：比任何夹具里的 dist 资产都老
+
+
+def git_stub(commit="fc45567", dirty="", src_ts=None, docs_ts=None, shallow=False):
+    """假 git：args[1] 路由 rev-parse / status / log（2026-10-17 起 +log、+shallow）。
+
+    src_ts ：`git log -1 -- <打包相关路径>` 的提交时间；默认 SRC_TS_ANCIENT，
+             使夹具里 now 附近的 dist 资产判为「晚于源码提交」。
+    docs_ts：`-- docs/` 路径的提交时间（默认同 src_ts）。用来证明**文档提交不推进基准**：
+             打包路径的 log 仍旧、文档路径的 log 很新时，判据仍不得变红。
+    shallow：模拟浅克隆（git 历史不完整 → 基准不可验证 → 阻断而非放行）。
+    """
+    if src_ts is None:
+        src_ts = SRC_TS_ANCIENT
+    if docs_ts is None:
+        docs_ts = src_ts
+
     def run(args, cwd=None, timeout=None):
         if args[1] == "rev-parse":
+            if "--is-shallow-repository" in args:
+                return 0, ("true" if shallow else "false") + "\n", ""
             return 0, commit + "\n", ""
         if args[1] == "status":
             return 0, dirty, ""
+        if args[1] == "log":
+            is_docs = "docs/" in args          # 注意：":(exclude)docs/**" 不是 "docs/"
+            ts = docs_ts if is_docs else src_ts
+            short = "cafe123" if is_docs else "deadbee"
+            subj = "fixture 文档提交" if is_docs else "fixture 源码提交"
+            return 0, f"{'c' * 40}\x1f{int(ts)}\x1f{short}\x1f{subj}", ""
         return 1, "", f"unexpected: {args}"
     return run
 
@@ -406,6 +433,14 @@ class CheckAuditRedlineTest(unittest.TestCase):
 
 # ── 检查项 f：发布包新鲜度 ────────────────────────────────────────────────────
 
+class DistSrcTsCase(unittest.TestCase):
+    """dist 夹具：脚本旧、资产中等、源码提交时间可任意摆（验证基准点②）。"""
+
+    def _ctx(self, tmp, src_ts, zip_age=600, script_age=86400, **kw):
+        write_dist(tmp, zip_age=zip_age, script_age=script_age)
+        return mkg(tmp, cmd_runner=git_stub(src_ts=src_ts), **kw)
+
+
 class CheckDistReleaseTest(unittest.TestCase):
     def test_fresh_zip_is_pass(self):
         with tempfile.TemporaryDirectory() as td:
@@ -439,6 +474,227 @@ class CheckDistReleaseTest(unittest.TestCase):
             (tmp / "dist" / "daemon.exe").unlink()
             c = gate.check_dist_release(mkg(tmp))
             self.assertEqual(c.status, gate.FAIL)
+
+
+# ── 检查项 f·基准点②：dist 资产 vs 打包相关源码提交（2026-10-17 补的洞）───────
+
+class CheckDistSourceRefTest(DistSrcTsCase):
+    def test_source_commit_newer_than_asset_is_fail(self):
+        """源码提交晚于资产 → 红（旧判据此刻是绿的：脚本比资产还老）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_dist(tmp, zip_age=600, script_age=86400)   # 脚本 1 天前 → 基准①很老
+            c = gate.check_dist_release(
+                mkg(tmp, now=now, cmd_runner=git_stub(src_ts=now - 30)))
+            self.assertEqual(c.status, gate.FAIL)
+            self.assertIn("deadbee", " ".join(c.detail))
+            self.assertTrue(any("重新打包" in d for d in c.detail))
+            self.assertTrue(any("基准点②源码提交" in d for d in c.detail))
+
+    def test_source_commit_older_than_asset_is_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_dist(tmp, zip_age=600, script_age=86400)
+            c = gate.check_dist_release(
+                mkg(tmp, now=now, cmd_runner=git_stub(src_ts=now - 5000)))
+            self.assertEqual(c.status, gate.PASS)
+            self.assertIn("daemon.exe", c.value)
+            self.assertTrue(any("源码提交 deadbee" in d for d in c.detail))
+
+    def test_docs_only_commit_does_not_red(self):
+        """HEAD 上的文档提交比产物新，但打包路径的提交更旧 → 不得变红（不许误报）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_dist(tmp, zip_age=600, script_age=86400)
+            c = gate.check_dist_release(mkg(tmp, now=now, cmd_runner=git_stub(
+                src_ts=now - 5000, docs_ts=now - 5)))
+            self.assertEqual(c.status, gate.PASS)
+            joined = " ".join(c.detail)
+            self.assertIn("源码提交 deadbee", joined)
+            self.assertNotIn("cafe123", joined)          # 文档提交没进基准
+
+    def test_equal_mtime_is_fail(self):
+        """边界：mtime == 基准即陈旧（与基准点①旧口径同为严格大于才新鲜）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_dist(tmp, zip_age=600, script_age=86400)
+            # git %ct 是**整秒**：把资产 mtime 对齐到同一整秒，才能真正测到 "==" 边界
+            edge = float(int(time.time()) - 600)
+            for a in ("daemon.exe", "apk/pocketagent.apk"):
+                os.utime(tmp / "dist" / a, (edge, edge))
+            c = gate.check_dist_release(
+                mkg(tmp, cmd_runner=git_stub(src_ts=edge)))
+            self.assertEqual(c.status, gate.FAIL)
+
+    def test_git_log_failure_is_not_implemented(self):
+        """取不到基准 = 无法验证 → 阻断，绝不静默退回旧判据放行。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_dist(tmp, zip_age=30, script_age=600)
+
+            def run(args, cwd=None, timeout=None):
+                if args[1] == "rev-parse":
+                    return 0, "false\n", ""
+                if args[1] == "log":
+                    return 128, "", "fatal: bad revision"
+                return 0, "", ""
+            c = gate.check_dist_release(mkg(tmp, cmd_runner=run))
+            self.assertEqual(c.status, gate.NOT_IMPLEMENTED)
+            self.assertTrue(any("未验证不放行" in d for d in c.detail))
+
+    def test_malformed_git_output_is_not_implemented(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_dist(tmp, zip_age=30, script_age=600)
+
+            def run(args, cwd=None, timeout=None):
+                if args[1] == "rev-parse":
+                    return 0, "false\n", ""
+                if args[1] == "log":
+                    return 0, "garbage-without-separator\n", ""
+                return 0, "", ""
+            c = gate.check_dist_release(mkg(tmp, cmd_runner=run))
+            self.assertEqual(c.status, gate.NOT_IMPLEMENTED)
+            self.assertTrue(any("不可解析" in d for d in c.detail))
+
+    def test_shallow_repo_is_not_implemented(self):
+        """浅克隆时「无命中」分不清真没提交/历史被截断 → 阻断而非降级放行。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_dist(tmp, zip_age=30, script_age=600)
+            c = gate.check_dist_release(
+                mkg(tmp, cmd_runner=git_stub(shallow=True)))
+            self.assertEqual(c.status, gate.NOT_IMPLEMENTED)
+            self.assertTrue(any("浅克隆" in d for d in c.detail))
+
+    def test_no_source_commit_degrades_visibly(self):
+        """git 可用但打包路径零提交 → 退回基准点①，且必须在报告里显式写出降级。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_dist(tmp, zip_age=30, script_age=600)
+
+            def run(args, cwd=None, timeout=None):
+                if args[1] == "rev-parse":
+                    return 0, "false\n", ""
+                if args[1] == "log":
+                    return 0, "\n", ""
+                return 0, "", ""
+            c = gate.check_dist_release(mkg(tmp, cmd_runner=run))
+            self.assertEqual(c.status, gate.PASS)
+            self.assertTrue(any("降级" in d and "无任何提交" in d for d in c.detail))
+
+    def test_packaging_pathspec_covers_artifacts_and_excludes_docs_tests(self):
+        """口径自证：源码面必须含产物依赖，排除面必须含文档与测试（防有人删排除项）。"""
+        src_paths = " ".join(gate.PACKAGING_SOURCE_PATHS)
+        for must in ("daemon/", "android/", "proto/", "flutter/",
+                     "tools/proto/gen_proto.py", "tools/device/_pa_gradle.py"):
+            self.assertIn(must, src_paths)
+        self.assertNotIn("docs/", src_paths)          # 文档不进基准
+        self.assertNotIn("flutter/test", src_paths)   # 测试不进基准
+        self.assertNotIn("dist/", src_paths)          # 打包脚本已由 mtime 口径覆盖
+        exc = gate.PACKAGING_PATH_EXCLUDES
+        for must in (":(exclude)docs/**", ":(exclude,glob)**/*.md",
+                     ":(exclude,glob)**/README*", ":(exclude,glob)flutter/test/**",
+                     ":(exclude,glob)flutter/docs/**",
+                     ":(exclude,glob)android/app/src/test/**",
+                     ":(exclude,glob)daemon/**/*_test.go"):
+            self.assertIn(must, exc)
+
+    def test_report_prints_packaging_pathspec(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_dist(tmp, zip_age=30, script_age=600)
+            c = gate.check_dist_release(mkg(tmp, cmd_runner=git_stub()))
+            joined = " ".join(c.detail)
+            self.assertIn("打包相关路径·进", joined)
+            self.assertIn("daemon/", joined)
+            self.assertIn("flutter/test/**", joined)
+
+
+# ── 检查项 f·豁免通道：--accept-stale-dist（默认关闭 / 必须给理由）──────────────
+
+class DistWaiverTest(DistSrcTsCase):
+    REASON = "紧急热修：dist 双资产已含 fix 7b7a549，仅待重跑 release.ps1 对齐时间戳"
+
+    def test_waiver_allows_and_prints_reason_and_age(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_dist(tmp, zip_age=600, script_age=86400)
+            c = gate.check_dist_release(mkg(tmp, now=now, accept_stale_dist=self.REASON,
+                                            cmd_runner=git_stub(src_ts=now - 30)))
+            self.assertEqual(c.status, gate.PASS)      # 豁免放行
+            self.assertTrue(c.waived)
+            self.assertEqual(c.waiver, self.REASON)
+            self.assertIn("豁免放行", c.value)
+            self.assertIn(self.REASON, " ".join(c.detail))
+            # 被豁免的具体年龄必须可读（天/小时/分钟/秒四档之一）
+            self.assertTrue(any(re.search(r"被豁免的具体年龄: [0-9.]+ (天|小时|分钟|秒)", d)
+                                for d in c.detail))
+            # 豁免不改判据：陈旧事实与重打包要求照旧打印
+            self.assertTrue(any("原判据仍为 FAIL" in d for d in c.detail))
+            self.assertTrue(any("重新打包" in d for d in c.detail))
+
+    def test_without_waiver_stale_is_fail(self):
+        """默认关闭：不传豁免就是 FAIL（不许靠默认放行）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_dist(tmp, zip_age=600, script_age=86400)
+            c = gate.check_dist_release(
+                mkg(tmp, now=now, cmd_runner=git_stub(src_ts=now - 30)))
+            self.assertEqual(c.status, gate.FAIL)
+            self.assertFalse(c.waived)
+            self.assertEqual(c.waiver, "")
+
+    def test_waiver_not_needed_is_visible_noop(self):
+        """产物不陈旧时豁免是空操作，但要留痕（不能静默吞掉一条命令行参数）。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_dist(tmp, zip_age=600, script_age=86400)
+            c = gate.check_dist_release(mkg(tmp, now=now, accept_stale_dist=self.REASON,
+                                            cmd_runner=git_stub(src_ts=now - 5000)))
+            self.assertEqual(c.status, gate.PASS)
+            self.assertFalse(c.waived)
+            self.assertTrue(any("未用到" in d and self.REASON in d for d in c.detail))
+
+    def test_waiver_flag_off_by_default(self):
+        args = gate.parse_args(["--stage", "release"])
+        self.assertFalse(args.accept_stale_dist)
+        self.assertEqual(gate.GateCtx(repo=Path("."), stage="release",
+                                      test_results=Path("."), dist_dir=Path("."))
+                         .accept_stale_dist, "")
+
+    def test_waiver_flag_takes_reason(self):
+        args = gate.parse_args(["--stage", "release", "--accept-stale-dist", self.REASON])
+        self.assertEqual(args.accept_stale_dist, self.REASON)
+        self.assertEqual(gate.build_gate_ctx(args).accept_stale_dist, self.REASON)
+
+    def test_empty_reason_rejected(self):
+        for bad in ("", "   "):
+            with self.assertRaises(SystemExit):
+                gate.parse_args(["--stage", "release", "--accept-stale-dist", bad])
+
+    def test_report_records_waiver(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_suite(tmp, "TEST-A.xml", tests=517, mtime=now - 60)
+            write_dist(tmp, zip_age=600, script_age=86400)
+            g = mkg(tmp, stage="release", now=now, audit_json=green_audit(),
+                    accept_stale_dist=self.REASON,
+                    cmd_runner=git_stub(src_ts=now - 30))
+            stubs = {cid: green_check(cid) for cid in ("release_version", "release_preflight")}
+            with patch.dict(gate.CHECK_FUNCS, stubs):
+                rep = gate.build_report(g, gate.run_checks(g))
+            self.assertEqual(rep["decision"], gate.ALLOW)
+            self.assertEqual(rep["waivers"],
+                             [{"check": "dist_release", "reason": self.REASON}])
+            self.assertIn(self.REASON, gate.render_text(rep))
 
 
 # ── 阶段闸（真检查 + 注入 git / audit 源）─────────────────────────────────────
@@ -534,6 +790,24 @@ class StageDecisionTest(unittest.TestCase):
                 rep = gate.build_report(g, gate.run_checks(g))
             self.assertEqual(rep["decision"], gate.BLOCK)
             self.assertEqual(rep["required_failed"], ["dist_release"])
+
+    def test_source_commit_stale_blocks_release(self):
+        """2026-10-17 补的洞：产物比打包相关源码提交旧 → release 必须 BLOCK。"""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            now = time.time()
+            write_suite(tmp, "TEST-A.xml", tests=517, mtime=now - 60)
+            write_dist(tmp, zip_age=600, script_age=86400)   # 旧口径：绿
+            g = mkg(tmp, stage="release", now=now, audit_json=green_audit(),
+                    cmd_runner=git_stub(src_ts=now - 30))
+            stubs = {cid: green_check(cid) for cid in ("release_version", "release_preflight")}
+            with patch.dict(gate.CHECK_FUNCS, stubs):
+                checks = gate.run_checks(g)
+            rep = gate.build_report(g, checks)
+            self.assertEqual(by_id(checks)["dist_release"].status, gate.FAIL)
+            self.assertEqual(rep["decision"], gate.BLOCK)
+            self.assertEqual(rep["required_failed"], ["dist_release"])
+            self.assertEqual(rep["waivers"], [])
 
     def test_vet_env_abnormal_does_not_block(self):
         # vet 恒为信息项：环境异常 WARN 不进任何阶段的必须集

@@ -14,8 +14,12 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
                            另加「无 XML」「有 XML 解析失败」两条件）
                          2026-10-17 起：这三条与 pa_audit.FakeGreenRule **同严重级别**
                          （那边也判 FAIL），不再存在「报告说提示、门禁说阻断」的双口径。
-  dist 双资产 mtime      daemon.exe + pocketagent.apk 是否晚于 release.ps1 / 打包脚本
-                         （2026-10-13 起改指总包，不再看 windows 中间 zip）
+  dist 双资产新鲜度      daemon.exe + pocketagent.apk 是否晚于「打包基准」：
+                         ① 打包脚本 mtime（release.ps1 / dist/windows/*.bat|ps1）
+                         ② 最后一次触及打包相关路径的提交时间（git log -1）
+                         两个基准点取较晚者。② 是 2026-10-17 补的洞：只比 ① 时
+                         「脚本没动、源码改了」的陈旧产物照样 PASS。
+                         （2026-10-13 起改指双资产总包，不再看 windows 中间 zip）
   tools/release 门禁     check_version.py / check_release.py 子进程直调（只判退出码）
 
 阶段闸（表驱动，逐级收敛）：
@@ -23,7 +27,7 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
   contract = baseline + proto 两副本 MD5 一致
   feature  = contract + Android 测试新鲜 0 失败 + pa_audit redline=0
   release  = feature + check_version 必过 + check_release 预检必过
-             + dist 双资产 mtime 新于打包脚本
+             + dist 双资产晚于打包基准（打包脚本 mtime ⊕ 打包相关源码提交时间）
 
 检查项状态：PASS / FAIL / WARN（有保留：go 环境异常等）/ SKIPPED（--skip 跳过）
             / NOT_IMPLEMENTED（无法验证——绝不假装通过）。
@@ -34,11 +38,18 @@ pa_upgrade_gate v1 —— PocketAgent 升级批次标准验收入口（plan Task
   python tools/audit/pa_upgrade_gate.py --stage feature --json
   python tools/audit/pa_upgrade_gate.py --stage release --skip android_tests
   python tools/audit/pa_upgrade_gate.py --stage feature --go C:\\Go\\bin\\go.exe
+  python tools/audit/pa_upgrade_gate.py --stage release --accept-stale-dist "紧急热修理由…"
 
 结果 XML 目录优先级：**--test-results 显式参数 > 环境变量 PA_MIRROR >
 默认主镜像 G:\\pa\\android**（相对路径与 _pa_gradle.py 的镜像布局一致；
 子代理用 PA_MIRROR=G:\\pa_x 隔离镜像跑测试后若不设它，会拿主镜像旧 XML 判新鲜度
 → 假绿）。
+
+dist 陈旧豁免（2026-10-17 新增）：--accept-stale-dist "<理由>"，**默认关闭、理由不可为空**
+（空理由 = 无声豁免，argparse 直接退 2）。豁免**不改判据**：陈旧照样判出来，只是把该项
+从 FAIL 抬成 PASS，同时把「理由 + 被豁免的具体年龄 + 基准提交」逐条打印进文本报告、并
+登记进 JSON 报告的 waivers 字段。唯一能让判据本身变绿的办法是重打包；豁免是留给人签字的
+通道，不是给判据开后门——放宽判据换绿是本项目的红线。
 
 退出码：0=ALLOW（可进入下一阶段）；1=BLOCK；参数错误=argparse SystemExit(2)。
 所有 subprocess 带 CREATE_NO_WINDOW（Windows 无窗红线；POSIX 无此常量退化为 0）。
@@ -88,11 +99,42 @@ def default_test_results() -> Path:
 ENV_ABNORMAL_MARK = "异常退出码"
 
 DIST_SCRIPTS = ("build.ps1", "install.bat", "uninstall.bat")
-# 标准双资产新鲜度比对基准（0.4.0 起改指双资产，不再产总 zip）：
-#   dist/daemon.exe + dist/apk/pocketagent.apk 双双晚于打包脚本才算新鲜；
-#   参考脚本（dist 根相对路径）。
+# 标准双资产（0.4.0 起改指双资产，不再产总 zip）：
+#   dist/daemon.exe + dist/apk/pocketagent.apk 双双晚于**打包基准**才算新鲜。
+#   打包基准 = 打包脚本 mtime（dist 根相对路径）⊕ 打包相关源码提交时间，
+#   两个基准点取较晚者；见本文件 check_dist_release 的口径说明。
 DUAL_ASSETS = ("daemon.exe", "apk/pocketagent.apk")
 RELEASE_PS1_REF = "release.ps1"   # dist 根下总装配脚本
+
+# ── 打包相关路径（dist 新鲜度基准点②的口径，**报告里逐条打印**）──────────────
+# 进：产物内容与打包过程真正依赖的源码/脚本。改这张表 = 改判据，必须同改单测与文档。
+PACKAGING_SOURCE_PATHS = (
+    "daemon/",                    # → dist/daemon.exe
+    "android/",                   # → dist/apk/pocketagent.apk（含 build-ascii.ps1 等构建脚本）
+    "proto/",                     # → 双端 gRPC 契约
+    "flutter/",                   # B4 起 :flutter 子工程：Dart 编成 libapp.so 进 APK
+    "tools/proto/gen_proto.py",   # 契约同步器（产物内容的前置）
+    "tools/device/_pa_gradle.py",  # APK 构建包装器（中文路径必需，ASCII 镜像）
+    "tools/release/check_version.py",   # 发版链门禁：版本双副本
+    "tools/release/check_release.py",   # 发版链门禁：签名早验/预检/产物对账
+)
+# 排除：文档与测试**不进产物**。不排除的后果不是「多红一点」，而是每轮文档提交都把
+# 基准推到未来 → 产物恒判陈旧；反过来源码提交必须能推动基准。判据要能区分这两者。
+# pathspec magic 需 git ≥ 1.9（本机 2.55 实测）。
+PACKAGING_PATH_EXCLUDES = (
+    ":(exclude)docs/**",
+    ":(exclude,glob)**/*.md",
+    ":(exclude,glob)**/README*",
+    ":(exclude,glob)flutter/docs/**",
+    ":(exclude,glob)flutter/test/**",
+    ":(exclude,glob)flutter/tools/**",
+    ":(exclude,glob)android/app/src/test/**",
+    ":(exclude,glob)android/app/src/androidTest/**",
+    ":(exclude,glob)daemon/**/*_test.go",
+)
+SRC_OK, SRC_ABSENT, SRC_UNAVAILABLE = "ok", "absent", "unavailable"
+SOURCE_REF_FORMAT = "%H%x1f%ct%x1f%h%x1f%s"   # 提交|提交时间|短哈希|标题（\x1f 分隔，标题可含任意字符）
+SOURCE_REF_SEP = "\x1f"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +148,8 @@ class Check:
     status: str            # PASS | FAIL | WARN | SKIPPED | NOT_IMPLEMENTED
     value: str             # 机器可读一行值（commit / 计数 / mtime 结论）
     detail: List[str] = field(default_factory=list)
+    waived: bool = False   # 本项是否走了显式豁免（--accept-stale-dist）；进报告 waivers
+    waiver: str = ""       # 豁免理由原文（文本与 JSON 都带，可追）
 
 
 @dataclass
@@ -115,6 +159,8 @@ class GateCtx:
     test_results: Path
     dist_dir: Path
     go_cmd: str = ""       # 空 = 不转发，由 pa_audit 自行解析默认 go
+    # dist 双资产陈旧的**显式豁免理由**（空 = 不豁免，默认关闭）
+    accept_stale_dist: str = ""
     now: float = field(default_factory=time.time)
     # 可注入命令执行器：args -> (rc, stdout, stderr)；默认真 subprocess + CREATE_NO_WINDOW
     cmd_runner: Callable[..., Tuple[int, str, str]] = field(
@@ -434,8 +480,87 @@ def check_release_preflight(g: GateCtx) -> Check:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 检查项 f：双资产新鲜度（daemon.exe + pocketagent.apk 新于打包脚本）
+# 检查项 f：双资产新鲜度（daemon.exe + pocketagent.apk 晚于「打包基准」）
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# 基准 = 两个基准点里**较晚**的那个：
+#   ① 打包脚本 mtime：dist/release.ps1 + dist/windows/{build.ps1,install.bat,uninstall.bat}
+#      —— 原判据，逐字保留；
+#   ② 最后一次触及「打包相关路径」的提交时间（git log -1 -- <pathspec>，见上表）
+#      —— 2026-10-17 补的洞。
+#
+# 为什么必须有 ②：① 只回答「产物 vs 脚本」。脚本没动而源码改了，① 照样 PASS。
+# 实证（2026-10-17）：本轮修了 daemon/internal/hermesapp（红线：停止改写用户
+# ~/.hermes/config.yaml）与 android/.../BridgeMethods.kt，① 仍判 PASS ——
+# 从 dist/ 发版会发出一个**仍然写用户家目录**的二进制，正是本项目最在意的假绿形态。
+#
+# 为什么基准点②不含 dist/ 的打包脚本：它们已由 ① 的 mtime 比对覆盖；再进 git 基准会
+# 在「先打包、后提交脚本」时误报（提交时间必然晚于构建时间），那是自造的假红。
+#
+# 严重级别：判陈旧一律 FAIL（release 阶段必须项 → BLOCK），不做「分级放行」。
+# 唯一出口是**显式豁免** --accept-stale-dist "<理由>"（默认关闭）：豁免不碰判据，
+# 只把「已经判陈旧」这个事实连同理由与具体年龄抬到报告最显眼处，供人签字与追责。
+
+@dataclass
+class SourceRef:
+    """打包相关路径的最后一次提交 —— dist 新鲜度基准点②。"""
+    state: str            # SRC_OK | SRC_ABSENT（该路径集无提交）| SRC_UNAVAILABLE（取不到）
+    ts: float = 0.0
+    commit: str = ""
+    short: str = ""
+    subject: str = ""
+    note: str = ""
+
+    def line(self) -> str:
+        if self.state == SRC_OK:
+            return f"源码提交 {self.short} @ {_fmt_ts(self.ts)}"
+        if self.state == SRC_ABSENT:
+            return "无源码提交（该路径集在 git 历史里没有提交）"
+        return f"源码提交不可用（{self.note}）"
+
+
+def paths_lines() -> List[str]:
+    """判据自述：把「打包相关路径」的两张表原样打进报告，避免口径只存在于源码里。"""
+    return ["打包相关路径·进（产物内容与构建过程依赖）: " + " ".join(PACKAGING_SOURCE_PATHS),
+            "打包相关路径·排除（文档与测试不进产物）: " + " ".join(PACKAGING_PATH_EXCLUDES)]
+
+
+def dist_source_ref(g: GateCtx) -> SourceRef:
+    """取打包相关路径的最后一次提交。取不到时如实交出原因（调用方判 NOT_IMPLEMENTED）。"""
+    rc, out, _ = g.cmd_runner(["git", "rev-parse", "--is-shallow-repository"],
+                              cwd=str(g.repo))
+    if rc == 0 and (out or "").strip().lower() == "true":
+        # 浅克隆：无命中时无法区分「真没提交」与「历史被截断」→ 不许静默降级放行
+        return SourceRef(SRC_UNAVAILABLE,
+                         note="仓库是浅克隆（shallow），git 历史不完整，无法据此判断产物新旧")
+    rc, out, err = g.cmd_runner(
+        ["git", "log", "-1", "--format=" + SOURCE_REF_FORMAT, "--"]
+        + list(PACKAGING_SOURCE_PATHS) + list(PACKAGING_PATH_EXCLUDES),
+        cwd=str(g.repo))
+    if rc != 0:
+        return SourceRef(SRC_UNAVAILABLE,
+                         note=(err or out).strip()[:160] or f"git log 退出码 {rc}")
+    line = (out or "").strip()
+    if not line:
+        return SourceRef(SRC_ABSENT)
+    parts = line.split(SOURCE_REF_SEP)
+    if len(parts) != 4 or not parts[1].strip().isdigit():
+        return SourceRef(SRC_UNAVAILABLE, note=f"git log 输出不可解析：{line[:120]}")
+    return SourceRef(SRC_OK, ts=float(parts[1]), commit=parts[0], short=parts[2],
+                     subject=parts[3])
+
+
+def age_str(sec: float) -> str:
+    """人读年龄（豁免时必须打印「被豁免的具体年龄」）。"""
+    sec = max(0.0, float(sec))
+    if sec < 90:
+        return f"{sec:.0f} 秒"
+    if sec < 5400:
+        return f"{sec / 60:.0f} 分钟"
+    if sec < 172800:
+        return f"{sec / 3600:.1f} 小时"
+    return f"{sec / 86400:.1f} 天"
+
 
 def check_dist_release(g: GateCtx) -> Check:
     cid, title = "dist_release", CHECK_TITLES["dist_release"]
@@ -444,26 +569,62 @@ def check_dist_release(g: GateCtx) -> Check:
     missing = [str(r) for r in refs if not r.exists()]
     if missing:
         return Check(cid, title, FAIL, "",
-                     [f"缺少打包脚本：{'; '.join(missing)}——无法比对新鲜度"])
+                     [f"缺少打包脚本：{'; '.join(missing)}——无法比对新鲜度"] + paths_lines())
     assets = [d / a for a in DUAL_ASSETS]
     gone = [str(a) for a in assets if not a.is_file()]
     if gone:
         return Check(cid, title, FAIL, "",
-                     [f"双资产缺失：{'; '.join(gone)}——需先跑 dist/release.ps1"])
+                     [f"双资产缺失：{'; '.join(gone)}——需先跑 dist/release.ps1"] + paths_lines())
     newest_ref = max(refs, key=lambda r: r.stat().st_mtime)
     max_ref = newest_ref.stat().st_mtime
-    stale = [a for a in assets if a.stat().st_mtime <= max_ref]
+    src = dist_source_ref(g)
+    if src.state == SRC_UNAVAILABLE:
+        # 取不到基准 = **无法验证**产物是否含最新源码。按「未验证不放行」阻断；
+        # 既不放行，也不把判据改绿（注意与 SRC_ABSENT 的显式降级不同）。
+        return Check(cid, title, NOT_IMPLEMENTED, "",
+                     [f"取不到打包相关路径的提交历史：{src.note}",
+                      "无法验证产物是否含最新源码 → 按「未验证不放行」阻断"
+                      "（不放行，也不改判据）"] + paths_lines())
+    base_ts, base_desc = max_ref, f"打包脚本 {newest_ref.name} @ {_fmt_ts(max_ref)}"
+    if src.state == SRC_OK and src.ts > base_ts:
+        base_ts, base_desc = src.ts, src.line()
+    det = [f"打包基准（两基准点取较晚者）: {base_desc}",
+           f"基准点①打包脚本: {newest_ref.name} @ {_fmt_ts(max_ref)}",
+           f"基准点②源码提交: {src.line()}"]
+    if src.state == SRC_ABSENT:
+        det.append("⚠ 降级：git 可用但打包相关路径无任何提交 → 本次只按基准点①比对"
+                   "（该状态无法验证产物是否含最新源码，故在报告里显式记录）")
+    if src.subject:
+        det.append(f"基准提交标题: {src.subject}")
+    waiver = (g.accept_stale_dist or "").strip()
+    stale = [a for a in assets if a.stat().st_mtime <= base_ts]
+    oldest = min(assets, key=lambda a: a.stat().st_mtime)
     if not stale:
-        oldest = min(assets, key=lambda a: a.stat().st_mtime)
+        if waiver:
+            det.append(f"（注：本次未用到 --accept-stale-dist 豁免——产物并不陈旧；"
+                       f"传入理由留痕：{waiver}）")
+        det.append(f"最老资产 {oldest.name} @ {_fmt_ts(oldest.stat().st_mtime)}")
         return Check(cid, title, PASS,
-                     f"双资产（{', '.join(a.name for a in assets)}）均晚于全部打包脚本"
-                     f"（最老 {oldest.name} {_fmt_ts(oldest.stat().st_mtime)}）", [])
-    det = [f"{a.name} mtime={_fmt_ts(a.stat().st_mtime)}" for a in assets]
-    det += [f"{newest_ref.name} mtime={_fmt_ts(max_ref)}",
-            "需重跑 dist/release.ps1 重新打包"]
+                     f"双资产（{', '.join(a.name for a in assets)}）均晚于打包基准"
+                     f"（{base_desc}）", det + paths_lines())
+    worst = base_ts - oldest.stat().st_mtime
+    det += [f"{a.name} mtime={_fmt_ts(a.stat().st_mtime)}"
+            f"（比基准早 {age_str(base_ts - a.stat().st_mtime)}）" for a in assets]
+    det += ["陈旧判定：产物 mtime ≤ 打包基准（AGENTS 红线 6：源码改对 ≠ 跑着的是新的）",
+            "需重跑 dist/release.ps1 重新打包后重跑本门禁"] + paths_lines()
+    if waiver:
+        # 豁免：不改判据，只把「已判陈旧」连同理由与年龄抬到最显眼处（文本 + waivers 字段）
+        return Check(cid, title, PASS,
+                     f"⚠豁免放行：双资产陈旧（{', '.join(a.name for a in stale)} 早于基准 "
+                     f"{age_str(worst)}），理由：{waiver}",
+                     [f"⚠ 显式豁免（--accept-stale-dist）: {waiver}",
+                      f"⚠ 被豁免的具体年龄: {age_str(worst)}（最陈旧资产 "
+                      f"{oldest.name} @ {_fmt_ts(oldest.stat().st_mtime)} vs 基准 {base_desc}）",
+                      "⚠ 豁免只是人签字：原判据仍为 FAIL（陈旧成立），未改判据"] + det,
+                     waived=True, waiver=waiver)
     return Check(cid, title, FAIL,
-                 f"双资产不新鲜（{', '.join(a.name for a in stale)} 不晚于"
-                 f" {newest_ref.name}）", det)
+                 f"双资产陈旧（{', '.join(a.name for a in stale)} 不晚于 {base_desc}，"
+                 f"最陈旧差 {age_str(worst)}）", det)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -479,7 +640,7 @@ CHECK_TITLES: Dict[str, str] = {
     "audit_redline": "pa_audit 红线（redline=0）",
     "release_version": "版本双副本同步（check_version.py 必过）",
     "release_preflight": "发版前预检（check_release.py 必过：签名早验/PS5.1/痕迹针白名单/产物对账）",
-    "dist_release": "双资产新鲜度（daemon.exe + pocketagent.apk 晚于打包脚本）",
+    "dist_release": "双资产新鲜度（daemon.exe + pocketagent.apk 晚于打包基准：打包脚本 mtime ⊕ 打包相关源码提交）",
 }
 
 CHECK_ORDER: List[str] = ["git_clean", "daemon_build", "daemon_vet", "proto_sync",
@@ -560,6 +721,8 @@ def build_report(g: GateCtx, checks: List[Check]) -> dict:
         "required": list(required),
         "required_failed": required_failed,
         "skipped": sorted(c.id for c in checks if c.status == SKIPPED),
+        # 显式豁免登记：让「本次放行靠人签字」在机器可读报告里也留痕
+        "waivers": [{"check": c.id, "reason": c.waiver} for c in checks if c.waived],
         "checks": [{**asdict(c), "required": c.id in required} for c in checks],
     }
 
@@ -581,6 +744,12 @@ def render_text(rep: dict) -> str:
         for d in c["detail"]:
             lines.append(f"        {d}")
     lines.append("-" * 72)
+    if rep.get("waivers"):
+        lines.append("!" * 72)
+        lines.append("显式豁免（本次放行不是判据通过，是人签字；年龄与基准见上方该项明细）：")
+        for w in rep["waivers"]:
+            lines.append(f"  ! {w['check']}: {w['reason']}")
+        lines.append("!" * 72)
     if rep["skipped"]:
         lines.append(f"跳过（未验证不假装通过）: {', '.join(rep['skipped'])}")
     if rep["decision"] == ALLOW:
@@ -611,7 +780,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--test-results",
                     help="testDebugUnitTest 结果 XML 目录（默认：先看环境变量 PA_MIRROR 拼 <PA_MIRROR>\\app\\build\\test-results\\testDebugUnitTest，未设则回落 G:\\pa\\android；本参数优先级最高）")
     ap.add_argument("--dist", help="dist 目录（双资产所在，默认 --repo/dist）")
-    return ap.parse_args(argv)
+    ap.add_argument("--accept-stale-dist", metavar="理由",
+                    help="显式豁免 dist 双资产陈旧（**默认关闭**；理由不可为空）。"
+                         "只在 dist_release 已判陈旧时生效：判据原样保留并照常打印，"
+                         "该项改判 PASS，理由与被豁免的具体年龄登记进报告 waivers")
+    args = ap.parse_args(argv)
+    if args.accept_stale_dist is not None and not args.accept_stale_dist.strip():
+        ap.error("--accept-stale-dist 必须给非空理由（空理由 = 无声豁免，禁止）")
+    return args
 
 
 def build_gate_ctx(args: argparse.Namespace) -> GateCtx:
@@ -623,6 +799,7 @@ def build_gate_ctx(args: argparse.Namespace) -> GateCtx:
         else default_test_results(),
         dist_dir=Path(args.dist) if args.dist else repo / "dist",
         go_cmd=args.go or "",
+        accept_stale_dist=args.accept_stale_dist or "",
     )
 
 

@@ -115,7 +115,7 @@
 ## 7. 执行入口与度量回流
 
 - **入口脚本 `tools/audit/pa_audit.py`**（v1 已建，批10 T-PA，2026-09-21）：七条规则独立开关（`--only`/`--skip`，`--json` 机器可读）——名单 linter（对照附录 A，未登记命中即红线）、UI「未知」扫描（注释豁免）、sheet 溢出巡检（逐站处置清单）、假绿哨兵（XML 计数 + mtime）——**2026-10-17 起升为阻断项（RED → exit 1）**：四条判据（测试失败 / XML 陈旧 / 无 XML / 解析失败）与 `pa_upgrade_gate` 逐条同口径（不再是只打字的 WARN）。、daemon `go build`+`go vet` 基线、proto 两副本逐文件 MD5 核验、跨域通道契约对账（`channel_contract_sync`：契约文档 ↔ Kotlin dispatch ↔ Dart 通道面，方法名 / arguments 列 / 通道名 / 错误码 / §X.Y 交叉引用 / 文档时效六项；全项只读、零内嵌名单）；输出过/红线/提示三栏报告。定级、L1 全量、产物自证仍按 §1/§2 人工/既有脚本执行。人拿到报告只做：真机用例 + 红线裁决。
-- **升级门禁 `tools/audit/pa_upgrade_gate.py`**（批次 0 新增，2026-10-04）：`--stage baseline|contract|feature|release [--json]` 只读编排器——汇总 git 干净度/proto sync/daemon build+vet/Android 测试新鲜度/audit redline/dist 新鲜度七检查项，按阶段闸表输出 ALLOW/BLOCK；升级工作（roadmap P1~P5）每批次完成以此验收，非语义 go 退出码按环境异常提示不误报。
+- **升级门禁 `tools/audit/pa_upgrade_gate.py`**（批次 0 新增，2026-10-04）：`--stage baseline|contract|feature|release [--json]` 只读编排器——汇总 git 干净度/proto sync/daemon build+vet/Android 测试新鲜度/audit redline/dist 新鲜度七检查项，按阶段闸表输出 ALLOW/BLOCK。**分发资产新鲜度**：`dist_release` 比的是「资产 vs 最后触及打包路径的提交」（不含文档/测试提交，避免文档轮造成假红），取不到基准（浅克隆/深克隆/git 失败）则 BLOCK；带理由跳过用 `--accept-stale-dist "理由"`，理由与被豁免年龄记入 JSON `waivers[]`（2026-10-17 补：旧口径只比「资产 vs 打包脚本」，源码改了不重建产物也会脉）。；升级工作（roadmap P1~P5）每批次完成以此验收，非语义 go 退出码按环境异常提示不误报。
 - **度量四数**（每轮记录）：BLOCKED 积压数、缺陷逃逸率（自动化未拦住、真机/用户才发现的）、每轮审核耗时、回归用例累积数。
 - **框架自审**（每里程碑一次）：从没抓到过问题的检查降级；反复出现的问题加固化（变脚本/变用例）。自审结论追加到本文件附录。
 

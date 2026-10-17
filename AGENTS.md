@@ -49,6 +49,7 @@ python tools/audit/pa_upgrade_gate.py --stage baseline|contract|feature|release 
 
 # ── 桌面分发包 ──
 dist/windows/build.ps1                     # daemon + paguard 打 zip
+# 分发资产新鲜度由门禁判：dist_release 比的是「资产 vs 最后触及打包路径的提交」（daemon/android/proto/flutter 实现 + 打包脚本，**不含文档/测试**），`dist/*.exe|apk|zip` 被 gitignore → 重建零仓库影响；取不到基准（浅克隆/深克隆/git 失败）→ BLOCK，不退化放行；确需带理由跳过用 `--accept-stale-dist "理由"`（默认关、空理由退 2、理由+年龄记 JSON waivers[]）。↳ **序列约束**：改代码→ 提交 → **重建 dist** → 才跑 `pa_upgrade_gate --stage release`（另则每一个代码提交都会把它重新推陈为陈旧）
 
 # ── 热部署/探针 ──
 python tools/device/_pa_rebuild_daemon.py  # daemon 热部署
