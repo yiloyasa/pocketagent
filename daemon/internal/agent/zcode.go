@@ -1029,6 +1029,7 @@ func subagentResultClip(ids map[string]bool, toolCallID string) int {
 //     工具开始拆成 kind="scheduled"(带 input/inputByteLength/inputOmitted 等)
 //     与 kind="started"(仅 startedAt)。旧映射只认 "tool_call",fork 上工具
 //     起始卡整帧静默丢失(用户只看到结果、看不到"正在跑什么")。
+//
 // 三种 kind 都映射 STARTED:同 id 的重复卡由手机端按 callId 原地替换,
 // scheduled→started 连发等价于一次刷新。
 func mapZcodeToolCall(payload json.RawMessage) (pb.ToolCallUpdate, bool) {
@@ -1811,14 +1812,22 @@ func parseZcodeHistory(raw json.RawMessage) []HistoryMsg {
 // ---- 一轮 ----
 
 // Run 执行完整一轮:session/send → 消费 session/event → turn.completed/failed 收尾。
+//
+// 【失败出口的结构化(P1-1)】除 ctx 类出口(手机断连/停止任务,见等待循环的
+// ctx.Done 分支)外,本函数每个失败出口都过 zcodeRunErrorFrom / zcodeTurnFailedError
+// 归一成结构化错误:server/thread.go 的类型断言拿得到 ErrorInfoCarrier 时,把
+// 分类、重试语义与上游细节原样透进终局 TurnFailed 帧(此前一律退化成
+// AGENT_ERROR + 裸字符串)。人话文案逐字节不变,详见 zcode_errors.go。
 func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, approve ApprovalHook) ([]pb.ContentBlock, *pb.Usage, error) {
 	p.turnMu.Lock() // 同一时刻只跑一轮(与 codex 同款;手机端本来也是单会话交互)
 	defer p.turnMu.Unlock()
 	p.turnActive.Store(true)
 	defer p.turnActive.Store(false)
 
+	// 忙哨兵/子进程未启动/拉起失败都从这里出去(启动闪退重试也在 withClientCtx
+	// 内部完成,重试仍死才到这里)。
 	if err := p.withClient(func(*zcodeapp.Client) error { return nil }); err != nil {
-		return nil, nil, err
+		return nil, nil, zcodeRunErrorFrom(err)
 	}
 
 	// 【输入收集】文本拼接(零裁剪约定不变,与 codex 同款);图片字节暂存,
@@ -1841,12 +1850,12 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	// created 不再分流(P1-3 修复后新建/resume 一律下发模型)。
 	sid, _, snapRaw, err := p.ensureSession(ctx, req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, zcodeRunErrorFrom(err)
 	}
 	if mode := p.nativeModeFor(req.Thread); mode != "" {
 		effective, err := applyZcodeNativeMode(ctx, p.client, sid, mode)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, zcodeRunErrorFrom(err)
 		}
 		sink(&pb.TurnServerMessage{Msg: &pb.TurnServerMessage_CodexEvent{CodexEvent: &pb.CodexEvent{
 			Kind: pb.CodexEvent_STATUS, Code: "native_notification", Title: "zcode · mode", Message: "原生权限模式: " + effective,
@@ -1861,7 +1870,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	// 【P2-8】桌面默认 effort 走线程快照语义(desktopEffortFor):有快照的会话
 	// 强度按快照装配,老会话不再随设置页全局漂移;与 codex 三级优先级一致。
 	if err := p.applyModel(ctx, sid, req.Thread.ModelID, req.Thread.Effort, p.desktopEffortFor(req.Thread)); err != nil {
-		return nil, nil, err
+		return nil, nil, zcodeRunErrorFrom(err)
 	}
 
 	// 2) 事件路由:readLoop → 带缓冲 channel → 单消费者保序分发(慢 sink 不背压管道)
@@ -1874,11 +1883,14 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	notifDone := make(chan struct{})
 
 	var (
-		mu              sync.Mutex
-		streamText      strings.Builder // text_delta 实时拼接(主来源,和手机看到的逐字一致)
-		finalText       string          // turn.completed.response 兜底
-		lastUsage       *pb.Usage
-		lastErr         string
+		mu         sync.Mutex
+		streamText strings.Builder // text_delta 实时拼接(主来源,和手机看到的逐字一致)
+		finalText  string          // turn.completed.response 兜底
+		lastUsage  *pb.Usage
+		lastErr    string
+		// lastErrDetail 是 lastErr 的**诊断细节**(上游 error.type/code/turnPhase
+		// 或 resultType),只进 pb.Error.Details,不进人话 Message。
+		lastErrDetail   string
 		lastNotif       atomic.Int64 // 最近一次收到通知的时间(看门狗用)
 		approvalWaiting atomic.Bool  // 正在等手机审批:合法静默,看门狗跳过
 		// subagentCalls 本轮识别出的子代理委派工具调用 id 集合(Run 的 notifCh
@@ -2059,8 +2071,11 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 						lastUsage = usage
 						if zcodeTurnCompletedIsSuccess(ev.Payload) {
 							lastErr = ""
+							lastErrDetail = ""
 						} else {
-							lastErr = "轮次未成功结束(resultType=" + zcodeTurnCompletedResultType(ev.Payload) + ")"
+							resultType := zcodeTurnCompletedResultType(ev.Payload)
+							lastErr = "轮次未成功结束(resultType=" + resultType + ")"
+							lastErrDetail = "resultType=" + resultType
 						}
 						mu.Unlock()
 						// 窗口来自会话快照的 projection(recordProjection 记账),
@@ -2077,6 +2092,9 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					if ok {
 						mu.Lock()
 						lastErr = msg
+						// 上游 error.type/code/turnPhase 原样带走(P1-1:此前这三
+						// 个字段在 mapZcodeTurnFailed 里被丢掉,只剩一句人话)。
+						lastErrDetail = zcodeTurnFailedDetail(ev.Payload)
 						mu.Unlock()
 					}
 					finish()
@@ -2104,7 +2122,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 		log.Printf("[zcode] session/send session=%s 输入=%d字 图片=%d张 imageOK=%v", sid, userText.Len(), len(userImgs), imageOK)
 	}
 	if _, err := p.client.CallCtx(ctx, "session/send", sendParams); err != nil {
-		return nil, nil, fmt.Errorf("session/send: %w", err)
+		return nil, nil, zcodeRunErrorFrom(fmt.Errorf("session/send: %w", err))
 	}
 
 	// 4) 等结束 + 看门狗(与 codex 同口径:150s 无事件且不在等审批 = 失败)
@@ -2137,17 +2155,22 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					mu.Lock()
 					partial := streamText.String()
 					mu.Unlock()
-					err := fmt.Errorf("zcode %s 无任何事件(任务可能未被接收,session=%s)", zcodeWatchdogSilence, sid)
+					// 【为什么两个 return 各构造一次,而不是先建一个局部变量再复用】
+					// 与 codex.go 同处形态一致(同一句文案写两遍),也让"每个失败出口
+					// 自带结构化构造器"这件事在代码上一眼可见、可被静态钉子核对
+					// (zcode_errorinfo_test.go 的 TestZcodeRunFailureExitsAreStructured)。
 					if partial != "" {
-						return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: partial}}}}, &pb.Usage{}, err
+						return []pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextBlock{Text: partial}}}}, &pb.Usage{}, zcodeErrorf(zcodeErrWatchdogSilent, true, errZcodeWatchdogSilent,
+							"zcode %s 无任何事件(任务可能未被接收,session=%s)", zcodeWatchdogSilence, sid)
 					}
-					return nil, nil, err
+					return nil, nil, zcodeErrorf(zcodeErrWatchdogSilent, true, errZcodeWatchdogSilent,
+						"zcode %s 无任何事件(任务可能未被接收,session=%s)", zcodeWatchdogSilence, sid)
 				}
 			}
 			if time.Since(turnStart) > 60*time.Minute {
 				_, _ = p.client.Call("session/stop", map[string]string{"sessionId": sid})
 				log.Printf("[zcode] 轮次超时(60 分钟),已打断 session=%s", sid)
-				return nil, nil, fmt.Errorf("zcode 超时(60 分钟)")
+				return nil, nil, zcodeErrorf(zcodeErrTurnTimeout, false, errZcodeTurnTimeout, "zcode 超时(60 分钟)")
 			}
 		}
 	}
@@ -2166,7 +2189,7 @@ func (p *ZcodeProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	mu.Lock()
 	defer mu.Unlock()
 	if lastErr != "" {
-		return nil, nil, fmt.Errorf("zcode: %s", lastErr)
+		return nil, nil, zcodeTurnFailedError(lastErr, lastErrDetail)
 	}
 	text := streamText.String()
 	if text == "" {

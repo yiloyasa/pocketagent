@@ -391,6 +391,33 @@ func (p *CodexProvider) withClient(fn func(*codexapp.Client) error) error {
 // 10s 足够正常应答,又能在 codex 卡死时快速释放 lifeMu,避免连环 ErrBusy。
 const statusBudget = 10 * time.Second
 
+// ---- 轮次看门狗三闸(对齐基准源,P1-2 提取)----
+//
+// 【为什么现在才有名字】此前这三个值是 Run 内的裸字面量(10s / 150_000ms /
+// 60min),而 dsh(`dshSilenceWatchdog`/`dshTurnCap`)、hermes
+// (`hermesSilenceWatchdog`/`hermesTurnCap`/`hermesWatchdogTick`)、pi
+// (`piSilenceWatchdog`/`piTurnCap`)、zcode(`zcodeWatchdogSilence`)
+// 四家的注释都写着"对齐 codex" —— 基准源自己却没有具名常量可对账,且同段注释
+// 把静默阈值写成"90 秒"(实值一直是 150 秒)。基准错了,四家一起跟着错。
+// 现在 codex 有了与四家同名的三个常量,"对齐"这句话第一次有了可核对的真源:
+// 见 codex_watchdog_consts_test.go 的默认值 + 跨家对齐断言(注释/文案里的秒数
+// 与常量值的一致性也由该用例守住)。
+const (
+	// codexWatchdogTick 看门狗巡检节奏:只是取时差,便宜 —— 本家 10 秒。
+	// 【不在"对齐"口径内】pi 的巡检节奏更短(见 pi.go piWatchdogTick),各家
+	// 自定;只有静默上界与单轮上限是全家的共同口径。
+	codexWatchdogTick = 10 * time.Second
+	// codexSilenceWatchdog 轮次静默上界:连续这么久没有任何通知且不在等审批,
+	// 判定任务未被接收/上游卡死。判定式按单调毫秒相减,150 秒即 150000 毫秒,
+	// 毫秒写法只出现在同处判定里(真值只有本常量这一份)。
+	// 【对齐基准】dsh/hermes/pi/zcode 四家同值 150 秒。
+	codexSilenceWatchdog = 150 * time.Second
+	// codexTurnCap 单轮总时长上限(静默豁免救不了"慢而不断"的轮):超限真的
+	// 打断 codex,否则子进程继续跑、turnMu 之外的算力被白白占用。
+	// 【对齐基准】dsh/hermes/pi 四家同值 60 分钟。
+	codexTurnCap = 60 * time.Minute
+)
+
 // withStatusClient 是**只读状态查询**专用入口。生命周期锁只保护“确保
 // app-server 已初始化”这一小段;初始化完成后 fn 不再持有 lifeMu,因此 MCP、
 // skills、hooks、plugins、用量等查询可以在同一客户端上并发执行。每个调用仍
@@ -1735,8 +1762,12 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 	}
 
 	// 4) 等结束。不能只干等:codex 对未知 threadId 会静默吞掉 turn/start
-	// (无报错、无事件),90 秒收不到任何通知就判失败,让手机端看到明确报错。
-	tick := time.NewTicker(10 * time.Second)
+	// (无报错、无事件),codexSilenceWatchdog(150 秒)收不到任何通知就判失败,
+	// 让手机端看到明确报错。【P1-2】此前此注释写的是"90 秒",实值一直是 150 秒
+	// —— 注释与代码互相矛盾,而 dsh/hermes/pi/zcode 四家都拿这里当"对齐"基准。
+	// 阈值真值见上方 codexSilenceWatchdog(文案里的"150 秒"同样受
+	// codex_watchdog_consts_test.go 守:文案与常量不一致即红)。
+	tick := time.NewTicker(codexWatchdogTick)
 	defer tick.Stop()
 	waitDone := false
 	for !waitDone {
@@ -1760,7 +1791,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 				// 免疫墙钟 NTP 跳变。ms>=0:初喂在等待循环前必然发生,旧 ms>0
 				// 防的"未喂值"态已不可达;且喂值恰落在参照同一毫秒(0 值)时
 				// 不再被误判成未喂 —— 判定恒生效,与旧实现行为一致。
-				if ms := lastNotif.Load(); ms >= 0 && time.Since(turnStartRef).Milliseconds()-ms > 150_000 {
+				if ms := lastNotif.Load(); ms >= 0 && time.Since(turnStartRef).Milliseconds()-ms > codexSilenceWatchdog.Milliseconds() {
 					_, _ = p.client.Call("turn/interrupt", map[string]string{"threadId": codexTID})
 					mu.Lock()
 					partial := streamText.String()
@@ -1771,7 +1802,7 @@ func (p *CodexProvider) Run(ctx context.Context, req TurnRequest, sink Sink, app
 					return nil, nil, fmt.Errorf("codex 150 秒无任何事件(任务可能未被接收,thread=%s)", codexTID)
 				}
 			}
-			if time.Since(turnStart) > 60*time.Minute {
+			if time.Since(turnStart) > codexTurnCap {
 				// 超时必须真的打断 codex,否则子进程继续跑、turnMu 之外的算力被白白占用
 				_, _ = p.client.Call("turn/interrupt", map[string]string{"threadId": codexTID})
 				log.Printf("[codex] 轮次超时(60 分钟),已打断 thread=%s", codexTID)
